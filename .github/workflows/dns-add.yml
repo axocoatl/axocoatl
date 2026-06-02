@@ -1,0 +1,62 @@
+name: dns-add
+
+# Tries to write the missing CNAMEs for docs + www directly to the
+# Cloudflare zone, and reports the token's actual scopes so we know
+# whether the API has Zone:DNS:Edit permission.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  add:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          T: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          A: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          API="https://api.cloudflare.com/client/v4"
+          H="Authorization: Bearer $T"
+
+          echo "=== Token scopes ==="
+          curl -sS "$API/user/tokens/verify" -H "$H" | jq '{success, errors, result: {status: .result.status, policies: .result.policies}}'
+
+          echo
+          echo "=== Find zone ==="
+          ZR=$(curl -sS "$API/zones?name=axocoatl.ai" -H "$H")
+          echo "$ZR" | jq '{success, errors}'
+          ZID=$(echo "$ZR" | jq -r '.result[0].id // empty')
+          echo "zone id: ${ZID:-<<not visible to this token>>}"
+
+          if [ -z "$ZID" ]; then
+            echo
+            echo "Token cannot read zones — manual DNS record needed."
+            exit 0
+          fi
+
+          add_cname() {
+            local sub="$1" target="$2"
+            local resp
+            resp=$(curl -sS -X POST "$API/zones/$ZID/dns_records" \
+              -H "$H" -H "Content-Type: application/json" \
+              -d "{\"type\":\"CNAME\",\"name\":\"$sub\",\"content\":\"$target\",\"proxied\":true,\"ttl\":1}")
+            local ok
+            ok=$(echo "$resp" | jq -r '.success')
+            if [ "$ok" = "true" ]; then
+              echo "  ✓ $sub → $target"
+            else
+              local msg
+              msg=$(echo "$resp" | jq -r '.errors[0].message // empty')
+              # Already-exists errors are fine
+              if echo "$msg" | grep -qi "identical\|already\|exists"; then
+                echo "  ✓ $sub → $target (already)"
+              else
+                echo "  ✗ $sub: $msg"
+              fi
+            fi
+          }
+
+          echo
+          echo "=== Adding CNAMEs ==="
+          add_cname "docs" "axocoatl-docs.pages.dev"
+          add_cname "www"  "axocoatl-marketing.pages.dev"
