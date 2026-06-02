@@ -5,10 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Axocoatl — the agentic runtime for teams that ship</title>
   <meta name="description" content="Open-source Rust runtime for self-coordinating multi-agent systems. Real workflows. Local-first. One 13 MB binary.">
+  <meta name="author" content="Axocoatl Contributors">
+  <meta name="theme-color" content="#3E7C5C">
+  <link rel="canonical" href="https://axocoatl.ai/">
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Axocoatl">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:url" content="https://axocoatl.ai/">
   <meta property="og:title" content="Axocoatl — the agentic runtime for teams that ship">
   <meta property="og:description" content="Real workflows. No theater. One 13 MB Rust binary.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Axocoatl — the agentic runtime for teams that ship">
+  <!-- Twitter / X -->
   <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@axocoatl">
+  <meta name="twitter:title" content="Axocoatl — the agentic runtime for teams that ship">
+  <meta name="twitter:description" content="Real workflows. No theater. One 13 MB Rust binary.">
+  <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
+  <meta name="twitter:image:alt" content="Axocoatl — the agentic runtime for teams that ship">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -27,6 +44,72 @@
   <script type="module" src="/components/ax-install-bar.js"></script>
   <script type="module" src="/components/ax-footer.js"></script>
   <script type="module" src="/components/ax-theme-toggle.js"></script>
+  <!-- JSON-LD: Organization + WebSite + SoftwareApplication.  Same
+       positioning the brand uses ("agentic runtime for teams that
+       ship"), Apache-2.0, Rust, open source. -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://axocoatl.ai/#organization",
+        "name": "Axocoatl",
+        "alternateName": "Axocoatl Contributors",
+        "url": "https://axocoatl.ai/",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://axocoatl.ai/assets/mark.png",
+          "width": 512,
+          "height": 512
+        },
+        "description": "Open-source Rust runtime for self-coordinating multi-agent systems. Real workflows. Local-first.",
+        "sameAs": [
+          "https://github.com/axocoatl/axocoatl",
+          "https://docs.axocoatl.ai/",
+          "https://crates.io/crates/axocoatl-cli",
+          "https://www.npmjs.com/org/axocoatl"
+        ]
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://axocoatl.ai/#website",
+        "url": "https://axocoatl.ai/",
+        "name": "Axocoatl",
+        "description": "Real workflows. No theater. One 13 MB Rust binary.",
+        "publisher": { "@id": "https://axocoatl.ai/#organization" },
+        "inLanguage": "en-US"
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://axocoatl.ai/#software",
+        "name": "Axocoatl",
+        "url": "https://axocoatl.ai/",
+        "downloadUrl": "https://axocoatl.ai/install",
+        "softwareVersion": "0.1.0",
+        "applicationCategory": "DeveloperApplication",
+        "applicationSubCategory": "AI agent runtime",
+        "operatingSystem": "Linux, macOS",
+        "fileSize": "13 MB",
+        "programmingLanguage": "Rust",
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "softwareRequirements": "Rust 1.82+ (build-from-source path) or a supported binary release",
+        "image": "https://axocoatl.ai/assets/og-home.png",
+        "screenshot": "https://axocoatl.ai/assets/og-home.png",
+        "description": "Open-source agentic runtime: persistent multi-agent systems coordinated through a stigmergic event lattice. Local-first. Provider-agnostic (Ollama, OpenAI, Anthropic, Mistral, Gemini, OpenRouter).",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD",
+          "availability": "https://schema.org/InStock"
+        },
+        "publisher": { "@id": "https://axocoatl.ai/#organization" },
+        "creator": { "@id": "https://axocoatl.ai/#organization" },
+        "isAccessibleForFree": true
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
 
@@ -278,16 +361,16 @@
     </section>
 
     <!-- ─────────────── CTA strip ─────────────── -->
-    <section class="container section" style="padding-bottom: var(--s-10);">
-      <div style="display: grid; grid-template-columns: 1fr auto; gap: var(--s-5); align-items: center; padding: var(--s-7); background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);">
-        <div>
-          <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Ship work, not screenshots.</h2>
-          <p class="muted" style="margin: 0;">
+    <section class="container section cta-tail">
+      <div class="cta-strip">
+        <div class="cta-strip-text">
+          <h2>Ship work, not screenshots.</h2>
+          <p class="muted">
             Install once. Walk through the demo session. Wire your first
             workflow. The fastest path is the one in the docs.
           </p>
         </div>
-        <div style="display: flex; gap: var(--s-3);">
+        <div class="cta-strip-actions">
           <a class="btn btn-primary" href="/install">Install →</a>
           <a class="btn btn-ghost" href="https://docs.axocoatl.ai" target="_blank" rel="noopener">Read the docs</a>
         </div>

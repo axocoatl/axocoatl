@@ -148,10 +148,21 @@ em { font-style: italic; color: var(--fg); }
 
 /* ── Hero ── */
 .hero {
-  padding: var(--s-10) 0 var(--s-9);
+  /* Keep the horizontal padding from .container so the headline + studio
+     mock + lede all share the same left/right edge.  Earlier this was
+     `var(--s-10) 0 var(--s-9)` which zeroed the horizontal padding —
+     it made the hero mock touch the viewport edge on mobile. */
+  padding: var(--s-10) var(--s-5) var(--s-9);
   display: flex;
   flex-direction: column;
   gap: var(--s-5);
+}
+@media (max-width: 720px) {
+  /* 10px outer breathing room on every section on mobile — applies to
+     both .container and .container-narrow plus inset hero padding. */
+  .container,
+  .container-narrow { padding-left: 10px; padding-right: 10px; }
+  .hero { padding: var(--s-8) 10px var(--s-7); }
 }
 .hero-tagline {
   display: inline-flex;
@@ -283,6 +294,59 @@ footer {
   grid-template-columns: 1.5fr repeat(4, 1fr);
   gap: var(--s-7);
 }
+/* ── CTA strip (last call-to-action above the footer) ────────────── */
+.cta-tail { padding-bottom: var(--s-10); }
+.cta-strip {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--s-5);
+  align-items: center;
+  padding: var(--s-7);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.cta-strip-text h2 {
+  font-size: var(--t-32);
+  margin: 0 0 var(--s-2);
+  /* Keep the headline on one line on desktop — wrapping
+     `screenshots.` to its own line reads as broken copy. */
+  white-space: nowrap;
+}
+.cta-strip-text p { margin: 0; max-width: none; }
+.cta-strip-actions {
+  display: flex;
+  gap: var(--s-3);
+  flex-shrink: 0;
+}
+
+/* Mobile: stack vertically, keep the headline on one line (clamped so
+   it always fits the card width), buttons on their own row.  The
+   inner padding tightens so "Ship work, not screenshots." has room. */
+@media (max-width: 720px) {
+  .cta-strip {
+    grid-template-columns: 1fr;
+    padding: var(--s-4) var(--s-3);
+    gap: var(--s-4);
+  }
+  .cta-strip-text h2 {
+    /* clamp so the headline never wraps mid-word — 18px floor at
+       360-wide viewport, scales up to 22px at 720. */
+    font-size: clamp(18px, 5.4vw, 22px);
+    white-space: nowrap;
+    letter-spacing: -.015em;
+  }
+  .cta-strip-actions { flex-wrap: wrap; }
+}
+
+/* ── Install bar (fixed bottom) — tighten for narrow viewports ──── */
+@media (max-width: 720px) {
+  .install-bar { padding: 8px 12px; }
+  .install-bar-inner { gap: 8px; }
+  .install-bar code { font-size: 12px; }
+  .install-bar [data-action="dismiss"] { display: none; }
+}
+
 @media (max-width: 880px) {
   .footer-grid { grid-template-columns: 1fr 1fr; }
 }
