@@ -1,0 +1,38 @@
+name: publish-missing-crates
+
+# One-shot: publish the 6 crates that didn't make it to crates.io
+# during the v0.1.0 release (axocoatl-memory failed at the 10 MiB upload
+# cap with bundled model weights, cascading to its dependents).  Run
+# manually from the Actions tab after the memory fix lands.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish missing crates in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          set -u
+          # axocoatl-memory first (was the 10 MiB upload failure root).
+          # Sleep generously between to let the crates.io index refresh.
+          crates="
+            axocoatl-memory
+            axocoatl-actor
+            axocoatl-coordination
+            axocoatl-daemon
+            axocoatl-server
+            axocoatl-cli
+          "
+          for c in $crates; do
+            echo "::group::publish $c"
+            cargo publish -p "$c" --no-verify --allow-dirty || \
+              echo "skip $c (already published or transient) — continuing"
+            sleep 30
+            echo "::endgroup::"
+          done

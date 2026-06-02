@@ -12,6 +12,11 @@ keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
 description = "4-tier memory system and agent state checkpointing for Axocoatl"
+# Local Tier-4 model weights are 88 MiB — far over the 10 MiB crates.io
+# upload cap.  They're downloaded at runtime via axocoatl-memory's model
+# fetcher, never required at compile time, so exclude them from the
+# published crate tarball.
+exclude = ["data/", "data/**"]
 
 [dependencies]
 axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
