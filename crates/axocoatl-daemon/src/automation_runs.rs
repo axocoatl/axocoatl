@@ -214,7 +214,7 @@ impl AutomationRunStore {
                 }
             }
         }
-        runs.sort_by(|a, b| b.started_at_unix.cmp(&a.started_at_unix));
+        runs.sort_by_key(|x| std::cmp::Reverse(x.started_at_unix));
         Ok(runs)
     }
 

@@ -194,7 +194,7 @@ impl FileStore {
     /// All files, newest first.
     pub fn list(&self) -> Vec<FileEntry> {
         let mut v: Vec<FileEntry> = self.entries.values().cloned().collect();
-        v.sort_by(|a, b| b.uploaded_at.cmp(&a.uploaded_at));
+        v.sort_by_key(|x| std::cmp::Reverse(x.uploaded_at));
         v
     }
 
@@ -222,7 +222,7 @@ impl FileStore {
             })
             .cloned()
             .collect();
-        hits.sort_by(|a, b| b.uploaded_at.cmp(&a.uploaded_at));
+        hits.sort_by_key(|x| std::cmp::Reverse(x.uploaded_at));
         hits
     }
 

@@ -413,7 +413,7 @@ impl ChatStore {
             })
             .cloned()
             .collect();
-        hits.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+        hits.sort_by_key(|x| std::cmp::Reverse(x.last_active));
         hits
     }
 

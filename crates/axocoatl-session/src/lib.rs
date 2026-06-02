@@ -238,7 +238,7 @@ impl SessionStore {
     /// All sessions, newest first.
     pub fn list(&self) -> Vec<Session> {
         let mut v: Vec<Session> = self.sessions.values().cloned().collect();
-        v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        v.sort_by_key(|x| std::cmp::Reverse(x.created_at));
         v
     }
 
