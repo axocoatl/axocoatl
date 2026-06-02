@@ -49,8 +49,7 @@ impl ProviderRegistry {
             self.fallback_chains
                 .get(primary_provider)
                 .cloned()
-                .unwrap_or_default()
-                .into_iter(),
+                .unwrap_or_default(),
         );
 
         let mut last_err = None;
