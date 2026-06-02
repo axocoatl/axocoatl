@@ -1,0 +1,81 @@
+---
+title: CLI
+description: Every axocoatl subcommand.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution">
+This page is currently hand-written. A future build step will auto-generate
+it from the `clap` definitions in `axocoatl-cli/src/main.rs`.
+</Aside>
+
+## Lifecycle
+
+| Command | Purpose |
+|---------|---------|
+| `axocoatl onboard` | Interactive setup wizard. Picks a provider, scaffolds a project. |
+| `axocoatl doctor` | Environment health check (Rust, config, Ollama, podman, data dir, daemon reachable). |
+| `axocoatl init <name>` | Scaffold a project non-interactively. Drops `axocoatl.yaml`, `.env.example`, `data/`. |
+| `axocoatl validate <config>` | Validate a config file without booting. |
+| `axocoatl dev` | Start the daemon, IPC, and dashboard for local development. |
+| `axocoatl serve` | Start the daemon, IPC, and dashboard for production. |
+
+## Service (always-on)
+
+| Command | Purpose |
+|---------|---------|
+| `axocoatl service install` | Install the daemon as a system service (systemd on Linux, launchd on macOS). |
+| `axocoatl service start` | Start the installed service. |
+| `axocoatl service stop` | Stop it. |
+| `axocoatl service uninstall` | Remove the service unit. |
+
+## Chat
+
+| Command | Purpose |
+|---------|---------|
+| `axocoatl chat -a <agent>` | Interactive chat against a single agent. |
+| `axocoatl chat list` | List chat threads. |
+
+## Workflows
+
+| Command | Purpose |
+|---------|---------|
+| `axocoatl workflow list` | List configured workflows. |
+| `axocoatl workflow run <id> -i "<input>"` | Fire a workflow with an input. |
+
+## Sessions
+
+| Command | Purpose |
+|---------|---------|
+| `axocoatl session new <dir> --mode <mode> --agent <agent>` | Start a new session in a directory. |
+| `axocoatl session list` | List active sessions. |
+
+## Agents
+
+| Command | Purpose |
+|---------|---------|
+| `axocoatl agents list` | List every agent. |
+| `axocoatl agents status` | Per-agent status. |
+| `axocoatl agents restart <id>` | Restart one agent under the supervisor. |
+
+## Tokens
+
+| Command | Purpose |
+|---------|---------|
+| `axocoatl tokens report` | Per-agent token usage since boot. |
+
+## MCP
+
+| Command | Purpose |
+|---------|---------|
+| `axocoatl mcp servers` | List connected MCP servers. |
+| `axocoatl mcp tools` | List every tool exposed by every connected MCP server. |
+
+## Help
+
+| Command | Purpose |
+|---------|---------|
+| `axocoatl --help` | List all subcommands. |
+| `axocoatl <subcommand> --help` | Help for a specific subcommand. |
+| `axocoatl --version` | Print the binary version. |

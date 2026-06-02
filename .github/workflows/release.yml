@@ -1,0 +1,135 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-gate:
+    name: Test gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: test-gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cross linker (aarch64 linux)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p .cargo
+          printf '[target.aarch64-unknown-linux-gnu]\nlinker = "aarch64-linux-gnu-gcc"\n' >> .cargo/config.toml
+      - name: Build
+        run: cargo build --release -p axocoatl-cli --target ${{ matrix.target }}
+      - name: Package (unix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          name="axocoatl-${tag}-${{ matrix.target }}"
+          tar -czf "${name}.tar.gz" -C "target/${{ matrix.target }}/release" axocoatl
+          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+      - name: Package (windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          name="axocoatl-${tag}-${{ matrix.target }}"
+          7z a "${name}.zip" "./target/${{ matrix.target }}/release/axocoatl.exe"
+          certutil -hashfile "${name}.zip" SHA256 > "${name}.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            axocoatl-*.tar.gz*
+            axocoatl-*.zip*
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body_path: CHANGELOG.md
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          set -u
+          # Dependency-ordered. Each may already exist for this version — tolerate that.
+          crates="
+            axocoatl-core
+            axocoatl-token
+            axocoatl-llm
+            axocoatl-config
+            axocoatl-memory
+            axocoatl-graph
+            axocoatl-isolation
+            axocoatl-a2a
+            axocoatl-llm-openai
+            axocoatl-llm-anthropic
+            axocoatl-llm-ollama
+            axocoatl-llm-mistral
+            axocoatl-llm-gemini
+            axocoatl-mcp
+            axocoatl-tools
+            axocoatl-actor
+            axocoatl-coordination
+            axocoatl-daemon
+            axocoatl-server
+            axocoatl-cli
+          "
+          for c in $crates; do
+            echo "::group::publish $c"
+            cargo publish -p "$c" --no-verify --allow-dirty || \
+              echo "skip $c (already published or transient) — continuing"
+            sleep 15
+            echo "::endgroup::"
+          done

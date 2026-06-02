@@ -1,0 +1,75 @@
+{
+  "name": "@axocoatl/lattice",
+  "version": "1.1.0",
+  "description": "Vanilla Web Components graph canvas — drag nodes, draw edges, live execution state, undo/redo, copy/paste, minimap, auto-layout, virtualization. No build step, no framework. The visual DAG editor for self-coordinating agent systems.",
+  "type": "module",
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "exports": {
+    ".": {
+      "import": "./src/index.js",
+      "default": "./src/index.js"
+    },
+    "./viewport": "./src/viewport.js",
+    "./selection": "./src/selection.js",
+    "./geometry": "./src/geometry.js",
+    "./history": "./src/history.js",
+    "./layout": "./src/layout.js",
+    "./elements/lattice": "./src/lattice.js",
+    "./elements/node": "./src/node.js",
+    "./elements/handle": "./src/handle.js",
+    "./elements/edge": "./src/edge.js",
+    "./elements/minimap": "./src/minimap.js",
+    "./elements/controls": "./src/controls.js"
+  },
+  "files": [
+    "src/",
+    "demo/",
+    "docs/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/unit.mjs && node test/integration.mjs",
+    "test:unit": "node --test test/unit.mjs",
+    "test:integration": "node test/integration.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  },
+  "keywords": [
+    "web-components",
+    "custom-elements",
+    "graph",
+    "flow",
+    "dag",
+    "canvas",
+    "agent",
+    "axocoatl",
+    "lattice",
+    "no-build",
+    "vanilla"
+  ],
+  "homepage": "https://github.com/axocoatl/axocoatl/tree/main/packages/lattice",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/axocoatl/axocoatl.git",
+    "directory": "packages/lattice"
+  },
+  "bugs": {
+    "url": "https://github.com/axocoatl/axocoatl/issues"
+  },
+  "license": "Apache-2.0",
+  "author": "Axocoatl Contributors",
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": [
+    "./src/index.js",
+    "./src/lattice.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

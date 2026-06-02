@@ -1,0 +1,10 @@
+/* Small display-type overrides on top of Starlight's defaults. */
+
+h1, h2, h3, h4 {
+  font-family: var(--sl-font);
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+
+.site-title { font-weight: 600; letter-spacing: -.01em; }
+.card .icon { color: var(--axo-jade); }

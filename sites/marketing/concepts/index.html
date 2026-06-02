@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Concepts — Axocoatl</title>
+  <meta name="description" content="The mental model in five minutes: the event lattice, supervised agents, lattice-aware skills, directory sessions.">
+  <meta property="og:title" content="Axocoatl — Concepts">
+  <meta property="og:description" content="The mental model in five minutes: the event lattice, supervised agents, lattice-aware skills, directory sessions.">
+  <meta property="og:image" content="https://axocoatl.ai/assets/og-concepts.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles/tokens.css">
+  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/finder.css">
+  <script type="module" src="/components/ax-site-nav.js"></script>
+  <script type="module" src="/components/ax-finder-window.js"></script>
+  <script type="module" src="/components/ax-scripted-lattice.js"></script>
+  <script type="module" src="/components/ax-install-bar.js"></script>
+  <script type="module" src="/components/ax-footer.js"></script>
+  <script type="module" src="/components/ax-theme-toggle.js"></script>
+</head>
+<body>
+  <ax-site-nav active="concepts"></ax-site-nav>
+
+  <main>
+
+    <section class="container hero" style="padding-bottom: var(--s-7);">
+      <span class="eyebrow">Mental model · 5 minutes</span>
+      <h1>The lattice does<br>the routing.</h1>
+      <p class="lede">
+        Every other agentic framework puts a scheduler at the center:
+        "now run agent B." Axocoatl puts a coordination fabric at the
+        center and lets the agents decide for themselves when they're
+        ready. Here's what that means.
+      </p>
+    </section>
+
+    <section class="container section">
+      <div class="split">
+        <div>
+          <span class="eyebrow">1 · The event lattice</span>
+          <h2>A bulletin board for events.</h2>
+          <p>
+            Agents publish events when they finish work — or fail, or
+            get interrupted. Every other agent watches for events it
+            cares about. When an agent's threshold is crossed (usually
+            one event from each dependency), it wakes up and runs.
+          </p>
+          <p>
+            There's no orchestrator deciding the order. The order is
+            whatever the dependency graph implies. The lattice is what
+            makes the ordering work.
+          </p>
+        </div>
+        <ax-finder-window title="research-and-summarize · running" no-sidebar>
+          <div class="lattice-stage" data-mount="lattice"></div>
+        </ax-finder-window>
+      </div>
+    </section>
+
+    <section class="container section">
+      <div class="container-narrow" style="padding: 0;">
+        <span class="eyebrow">2 · Agents are actors</span>
+        <h2>Supervised, checkpointed, budgeted.</h2>
+        <p>
+          Each agent is a <a href="https://github.com/slawlor/ractor" target="_blank" rel="noopener">ractor</a>
+          actor: an isolated unit of computation with its own mailbox,
+          memory tier, token budget, and supervised lifecycle. Crashes
+          get restarted from the last checkpoint. State survives the
+          process.
+        </p>
+        <p>
+          Agents talk to LLMs through a provider trait. Ollama, OpenAI,
+          Anthropic, Mistral, Gemini, OpenRouter — all swappable per
+          agent. Local model for one agent, frontier model for another,
+          same workflow.
+        </p>
+      </div>
+    </section>
+
+    <section class="container section">
+      <div class="container-narrow" style="padding: 0;">
+        <span class="eyebrow">3 · Skills are lattice-aware</span>
+        <h2>Capabilities that route themselves.</h2>
+        <p>
+          A Skill declares the events it <strong>emits</strong> and the
+          events it <strong>reacts to</strong>. The lattice wires it
+          automatically: any agent that holds the right Skill can be
+          the one that fires when the matching event lands. Two agents
+          hold the same Skill? An auction picks the best fit.
+        </p>
+        <p>
+          You don't wire Skills to agents. You declare what each Skill
+          listens for, and the lattice does the routing.
+        </p>
+      </div>
+    </section>
+
+    <section class="container section">
+      <div class="container-narrow" style="padding: 0;">
+        <span class="eyebrow">4 · Sessions are directories</span>
+        <h2>Build with your agents.</h2>
+        <p>
+          A Session is an agent — or a lattice of agents — running in a
+          single directory. The session sandbox is a container (podman)
+          bind-mounted to your folder. The agent reads, writes, and
+          runs commands inside. You see every action stream into the
+          dashboard.
+        </p>
+        <p>
+          Close the laptop. Open it tomorrow. The session is still
+          there. Hot-restart from the last checkpoint. The agent picks
+          up where it left off.
+        </p>
+      </div>
+    </section>
+
+    <section class="container section">
+      <div class="container-narrow" style="padding: 0;">
+        <span class="eyebrow">5 · Memory has tiers</span>
+        <h2>Hot to cold, local to neural.</h2>
+        <p>
+          Four tiers: session (in-process), checkpoint (durable
+          snapshot), long-term (key/value), and a neural Tier 4 backed
+          by an embedded BERT model running through Candle — pure Rust,
+          no ONNX, no C++ runtime. Agents retrieve from whichever tier
+          matches the query's locality.
+        </p>
+        <p>
+          All four tiers are local-first. None call out unless you tell
+          them to.
+        </p>
+      </div>
+    </section>
+
+    <section class="container section" style="padding-bottom: var(--s-10);">
+      <div style="display: grid; grid-template-columns: 1fr auto; gap: var(--s-5); align-items: center; padding: var(--s-7); background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);">
+        <div>
+          <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Read the full docs.</h2>
+          <p class="muted" style="margin: 0;">
+            Every concept above has a full reference in the docs, with
+            embedded code and a live lattice demo on the page.
+          </p>
+        </div>
+        <div style="display: flex; gap: var(--s-3);">
+          <a class="btn btn-primary" href="https://docs.axocoatl.ai" target="_blank" rel="noopener">Open the docs →</a>
+          <a class="btn btn-ghost" href="/showcase">See workflows</a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <ax-footer></ax-footer>
+  <ax-install-bar></ax-install-bar>
+
+  <script type="module">
+    customElements.whenDefined('ax-finder-window').then(() => {
+      const mount = document.querySelector('[data-mount="lattice"]');
+      if (mount) mount.innerHTML = '<ax-scripted-lattice></ax-scripted-lattice>';
+    });
+  </script>
+</body>
+</html>

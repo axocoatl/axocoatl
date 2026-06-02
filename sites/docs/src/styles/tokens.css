@@ -1,0 +1,89 @@
+/* Axocoatl docs theme — kept in lockstep with the marketing site's
+   tokens.css and the dashboard's brand-derived palette.  Dark mode is
+   the Apple-style pure-neutral scale (#000 → #1C1C1E → #2C2C2E);
+   light mode is warm parchment cream.  No off-brand blue or brown
+   tints — the only color in the page is the brand jade accent.        */
+
+:root {
+  /* Brand */
+  --axo-jade:        #3E7C5C;
+  --axo-jade-rgb:    62, 124, 92;
+  --axo-jade-glow:   #4FCB8E;
+  --axo-bronze:      #B5904A;
+  --axo-bronze-glow: #E8C275;
+  --axo-blue:        #3FA9C8;
+
+  --axo-ink:        #000000;
+  --axo-parchment:  #F4ECDA;
+  --axo-vellum:     #FFFFFF;
+
+  /* Fonts */
+  --sl-font:               'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --sl-font-system:        system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --sl-font-system-mono:   'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ── Dark mode is the default :root block in Starlight ────────────── */
+:root {
+  /* Accent — jade across both modes */
+  --sl-color-accent-low:    rgba(var(--axo-jade-rgb), .18);
+  --sl-color-accent:        var(--axo-jade);
+  --sl-color-accent-high:   var(--axo-jade-glow);
+
+  /* Apple-style pure-neutral gray scale.  gray-1 is highest contrast
+     against the background (used for primary text), gray-6 is the
+     darkest (used for page bg).  In between scales card / raised /
+     border surfaces, identical to the dashboard's --bg / --bg-2 /
+     --bg-3 / --panel / --panel-2 / --border tokens.                  */
+  --sl-color-white:   #FFFFFF;
+  --sl-color-gray-1:  #ECECEC;
+  --sl-color-gray-2:  #C8CBD1;
+  --sl-color-gray-3:  #8E8E93;
+  --sl-color-gray-4:  #636366;
+  --sl-color-gray-5:  #2C2C2E;
+  --sl-color-gray-6:  #1C1C1E;
+  --sl-color-gray-7:  #0A0A0A;
+  --sl-color-black:   #000000;
+
+  /* Surface tokens — explicit overrides so Starlight's chained
+     derivations land on brand neutrals, not blue-cast defaults. */
+  --sl-color-bg:           #000000;
+  --sl-color-bg-nav:       #0A0A0A;
+  --sl-color-bg-sidebar:   #0A0A0A;
+  --sl-color-bg-inline-code: #2C2C2E;
+  --sl-color-hairline-light: #2C2C2E;
+  --sl-color-hairline:       #2C2C2E;
+  --sl-color-hairline-shade: #1C1C1E;
+  --sl-color-text:           #ECECEC;
+  --sl-color-text-accent:    var(--axo-jade-glow);
+  --sl-color-text-invert:    #000000;
+}
+
+/* ── Light mode — warm parchment palette (matches marketing site) ── */
+:root[data-theme='light'] {
+  --sl-color-accent-low:    rgba(var(--axo-jade-rgb), .14);
+  --sl-color-accent:        var(--axo-jade);
+  --sl-color-accent-high:   #2F6649;
+
+  /* gray-1 (darkest = text) → gray-7 (lightest = bg) */
+  --sl-color-white:   #1B2027;
+  --sl-color-gray-1:  #1B2027;
+  --sl-color-gray-2:  #2A2F3A;
+  --sl-color-gray-3:  #5B6068;
+  --sl-color-gray-4:  #8B9099;
+  --sl-color-gray-5:  #E3DCCB;
+  --sl-color-gray-6:  #ECE3CB;
+  --sl-color-gray-7:  #F4ECDA;
+  --sl-color-black:   #FFFFFF;
+
+  --sl-color-bg:             #F7F1E3;
+  --sl-color-bg-nav:         #F4ECDA;
+  --sl-color-bg-sidebar:     #F4ECDA;
+  --sl-color-bg-inline-code: #ECE3CB;
+  --sl-color-hairline-light: #DCD2B6;
+  --sl-color-hairline:       #DCD2B6;
+  --sl-color-hairline-shade: #ECE3CB;
+  --sl-color-text:           #1B2027;
+  --sl-color-text-accent:    var(--axo-jade);
+  --sl-color-text-invert:    #FFFFFF;
+}

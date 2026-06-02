@@ -1,0 +1,29 @@
+[package]
+name = "axocoatl-llm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "LLM provider abstraction layer for Axocoatl — core traits, types, and registry"
+
+[dependencies]
+axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
+axocoatl-token = { version = "0.1.0", path = "../axocoatl-token" }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+mockall = { workspace = true }

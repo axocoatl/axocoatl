@@ -1,0 +1,36 @@
+[package]
+name = "axocoatl-llm-anthropic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Anthropic Claude provider for Axocoatl LLM abstraction"
+
+[dependencies]
+axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
+axocoatl-llm = { version = "0.1.0", path = "../axocoatl-llm" }
+reqwest = { workspace = true }
+reqwest-eventsource = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+async-stream = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+wiremock = { workspace = true }
+
+[features]
+default = []
+llm-integration-tests = []

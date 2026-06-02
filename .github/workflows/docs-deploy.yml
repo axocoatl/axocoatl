@@ -1,0 +1,50 @@
+name: docs-deploy
+
+# Build sites/docs/ with Astro Starlight and publish to Cloudflare Pages
+# whenever the docs tree, the markdown source under docs/, or the brand
+# assets change on main.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sites/docs/**'
+      - 'docs/**'
+      - 'branding/**'
+      - '.github/workflows/docs-deploy.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    defaults:
+      run:
+        working-directory: sites/docs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: sites/docs/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Sync brand assets into public/
+        run: |
+          chmod +x prebuild.sh
+          ./prebuild.sh
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy sites/docs/dist --project-name=axocoatl-docs --branch=main

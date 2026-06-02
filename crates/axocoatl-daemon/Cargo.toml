@@ -1,0 +1,43 @@
+[package]
+name = "axocoatl-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Persistent agent daemon runtime for Axocoatl — bootstraps and orchestrates all subsystems"
+
+[dependencies]
+axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
+axocoatl-config = { version = "0.1.0", path = "../axocoatl-config" }
+axocoatl-llm = { version = "0.1.0", path = "../axocoatl-llm" }
+axocoatl-llm-openai = { version = "0.1.0", path = "../axocoatl-llm-openai" }
+axocoatl-llm-anthropic = { version = "0.1.0", path = "../axocoatl-llm-anthropic" }
+axocoatl-llm-ollama = { version = "0.1.0", path = "../axocoatl-llm-ollama" }
+axocoatl-actor = { version = "0.1.0", path = "../axocoatl-actor" }
+axocoatl-token = { version = "0.1.0", path = "../axocoatl-token" }
+axocoatl-memory = { version = "0.1.0", path = "../axocoatl-memory" }
+axocoatl-tools = { version = "0.1.0", path = "../axocoatl-tools" }
+axocoatl-coordination = { version = "0.1.0", path = "../axocoatl-coordination" }
+axocoatl-graph = { version = "0.1.0", path = "../axocoatl-graph" }
+axocoatl-mcp = { version = "0.1.0", path = "../axocoatl-mcp" }
+axocoatl-session = { version = "0.1.0", path = "../axocoatl-session" }
+axocoatl-isolation = { version = "0.1.0", path = "../axocoatl-isolation" }
+dashmap = { workspace = true }
+uuid = { workspace = true }
+ractor = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

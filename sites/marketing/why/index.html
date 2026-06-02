@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Why Axocoatl — the runtime for teams that ship</title>
+  <meta name="description" content="The agent-tooling industry has a theater problem. Axocoatl is for the teams that ship.">
+  <meta property="og:title" content="Why Axocoatl">
+  <meta property="og:description" content="The agent-tooling industry has a theater problem. Axocoatl is for the teams that ship.">
+  <meta property="og:image" content="https://axocoatl.ai/assets/og-why.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles/tokens.css">
+  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/finder.css">
+  <style>
+    /* /why — one centered ~720px narrative column, consistent left/right
+       edges from hero through CTA.  Comparison table breaks out wider. */
+    .why-article { padding: var(--s-9) var(--s-5); }
+    .why-article-tail { padding-top: var(--s-9); padding-bottom: var(--s-9); }
+    .why-hero { display: flex; flex-direction: column; gap: var(--s-4); margin-bottom: var(--s-9); }
+    .why-hero h1 { margin: var(--s-3) 0 0; font-size: var(--t-44); line-height: 1.1; letter-spacing: -.02em; }
+    .why-hero .lede { max-width: none; font-size: clamp(1.05rem, 1.25vw, 1.18rem); }
+    .why-block + .why-block { margin-top: var(--s-9); }
+    .why-block h2 { font-size: var(--t-32); letter-spacing: -.018em; margin: 0 0 var(--s-4); }
+    .why-block p { max-width: none; }
+    .why-block p + p { margin-top: var(--s-4); }
+    .why-divider { border: 0; border-top: 1px solid var(--border); margin: var(--s-9) 0; }
+    /* Comparison section uses the wider container — visual breakout
+       between narrative blocks.  Constrain to the same horizontal axis
+       as the article by lining up with .container-narrow's centerline. */
+    .why-compare { padding: var(--s-8) 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--panel-2); }
+    .why-compare .section-head { margin-bottom: var(--s-6); }
+  </style>
+  <script type="module" src="/components/ax-site-nav.js"></script>
+  <script type="module" src="/components/ax-comparison-row.js"></script>
+  <script type="module" src="/components/ax-install-bar.js"></script>
+  <script type="module" src="/components/ax-footer.js"></script>
+  <script type="module" src="/components/ax-theme-toggle.js"></script>
+</head>
+<body>
+  <ax-site-nav active="why"></ax-site-nav>
+
+  <main>
+
+    <!-- Narrative is one centered ~720px column from top to CTA so the
+         left edge stays put as the reader scrolls.  The comparison
+         table breaks out wider, the CTA strip is full container.  -->
+    <article class="container-narrow why-article">
+
+      <header class="why-hero">
+        <span class="eyebrow">Positioning</span>
+        <h1>The AI industry has<br>a theater problem.</h1>
+        <p class="lede">
+          Mac mini farms. Glowing terminals. "I'm vibe-coding while my
+          agents run my business." The optics have eaten the output.
+          Watch any timeline for ten minutes and you'll see a thousand
+          demos of agents doing nothing, gracefully. Axocoatl is for the
+          opposite kind of team — the one with actual work to ship.
+        </p>
+      </header>
+
+      <section class="why-block">
+        <h2>What we're not.</h2>
+        <p>
+          We are not a personal coding copilot. We are not a chat
+          interface with a hidden agent loop. We are not a framework
+          you wire up in Python notebooks. We are not optimized for
+          screenshots.
+        </p>
+        <p>
+          Most of what gets called "agent tooling" today is a wrapper
+          around a single chat completion with a tool-calling loop on
+          top. It looks productive in a demo. It falls apart in a real
+          business because the agent has no memory, no persistence, no
+          supervision, no coordination, no schedule. The first time the
+          process crashes — or the laptop sleeps — the work disappears.
+        </p>
+      </section>
+
+      <section class="why-block">
+        <h2>What we are.</h2>
+        <p>
+          Axocoatl is a <strong>runtime</strong>. A single 13 MB Rust
+          binary that runs on your box, supervises a constellation of
+          agents, and routes work between them through a coordination
+          layer called the event lattice. Agents declare what they
+          depend on; the lattice cascades work without an orchestrator.
+          They survive process restarts via checkpointing. They run on
+          your LLM of choice. They execute on schedules and react to
+          events without you in the loop.
+        </p>
+        <p>
+          The dashboard is a real control panel: live agent telemetry,
+          a directory-scoped session sandbox, an automations editor,
+          an MCP server gallery, and a chat surface for the moments
+          you do want to be in the loop. None of it leaves the box
+          unless you wire it to.
+        </p>
+      </section>
+
+      <section class="why-block">
+        <h2>What it's actually for.</h2>
+        <p>
+          The teams we're building for are the ones who already
+          automate the boring parts of their business and want agents
+          that do the same. Release pulse. Support triage. Daily
+          briefings. Bug bisection. Customer follow-up. Contract
+          review. The unglamorous, recurring work that adds up to a
+          margin. Not the work that makes a video.
+        </p>
+        <p>
+          If that's the work you're trying to do, we built this for
+          you. The rest of this page is the comparison frame — what
+          changes, concretely, when you pick a runtime over a
+          framework, and a local binary over a cloud platform.
+        </p>
+      </section>
+
+    </article>
+
+    <section class="why-compare">
+      <div class="container-narrow">
+        <div class="section-head">
+          <span class="eyebrow">Anonymous comparison</span>
+          <h2>Where we differ from the field.</h2>
+          <p class="muted">
+            We don't name names. Pick your tool and slot it in mentally —
+            you'll know which row applies.
+          </p>
+        </div>
+        <div class="comparison">
+          <ax-comparison-row header label="Dimension" them="Most AI tooling" us="Axocoatl"></ax-comparison-row>
+          <ax-comparison-row label="What it is" them="A framework you wire up" us="A runtime that runs."></ax-comparison-row>
+          <ax-comparison-row label="Where it runs" them="On your laptop, while awake" us="Anywhere. As a service. Always on."></ax-comparison-row>
+          <ax-comparison-row label="Persistence" them="Process dies, state dies" us="Checkpointed. Resumes."></ax-comparison-row>
+          <ax-comparison-row label="Coordination" them="Central scheduler" us="Stigmergic event lattice"></ax-comparison-row>
+          <ax-comparison-row label="LLM" them="Their cloud" us="Your choice. Local if you want."></ax-comparison-row>
+          <ax-comparison-row label="Footprint" them="100s of MB + a venv" us="One 13 MB binary"></ax-comparison-row>
+          <ax-comparison-row label="Data flow" them="Telemetry on by default" us="No telemetry. Air-gappable."></ax-comparison-row>
+          <ax-comparison-row label="Looks like" them="A demo" us="A tool."></ax-comparison-row>
+        </div>
+      </div>
+    </section>
+
+    <article class="container-narrow why-article why-article-tail">
+      <section class="why-block">
+        <h2>Open source, on purpose.</h2>
+        <p>
+          Axocoatl is Apache-2.0. The code is the product; we don't
+          gate features behind a paid plan because there is no paid
+          plan. If you need support, you can pay for it. If you need
+          a feature, you can build it or fund someone to build it.
+          The runtime itself is yours.
+        </p>
+        <p>
+          This isn't a strategic loss-leader funnel into a hosted
+          version. We don't plan to ship one. Local-first is part of
+          the brand, not a launch tactic. The promise that nothing
+          leaves your box unless you wire it to is the whole point —
+          flipping that later would invalidate the original choice.
+        </p>
+      </section>
+    </article>
+
+    <section class="container section" style="padding-bottom: var(--s-10);">
+      <div style="display: grid; grid-template-columns: 1fr auto; gap: var(--s-5); align-items: center; padding: var(--s-7); background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);">
+        <div>
+          <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Stop performing AI. Start running it.</h2>
+          <p class="muted" style="margin: 0;">
+            One command. Sixty seconds. The runtime is on your box.
+          </p>
+        </div>
+        <div style="display: flex; gap: var(--s-3);">
+          <a class="btn btn-primary" href="/install">Install →</a>
+          <a class="btn btn-ghost" href="/concepts">How it works</a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <ax-footer></ax-footer>
+  <ax-install-bar></ax-install-bar>
+</body>
+</html>

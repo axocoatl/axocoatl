@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenRouter integration — Axocoatl</title>
+  <meta name="description" content="Use OpenRouter as your LLM provider in Axocoatl. One config block, every model in one place.">
+  <meta property="og:title" content="Axocoatl × OpenRouter">
+  <meta property="og:description" content="Every model on OpenRouter, available to every agent in Axocoatl.">
+  <meta property="og:image" content="https://axocoatl.ai/assets/og-openrouter.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles/tokens.css">
+  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/finder.css">
+  <script type="module" src="/components/ax-site-nav.js"></script>
+  <script type="module" src="/components/ax-cli-snippet.js"></script>
+  <script type="module" src="/components/ax-pillar.js"></script>
+  <script type="module" src="/components/ax-install-bar.js"></script>
+  <script type="module" src="/components/ax-footer.js"></script>
+  <script type="module" src="/components/ax-theme-toggle.js"></script>
+</head>
+<body>
+  <ax-site-nav></ax-site-nav>
+
+  <main>
+
+    <section class="container hero" style="padding-bottom: var(--s-7);">
+      <span class="eyebrow">Integration</span>
+      <h1>Axocoatl × OpenRouter.</h1>
+      <p class="lede">
+        Every model on OpenRouter, available to every agent in Axocoatl.
+        One API key, one config block. Per-agent model pinning, fallback
+        chains, and the rest of the runtime — unchanged.
+      </p>
+    </section>
+
+    <section class="container section">
+      <div class="container-narrow" style="padding: 0;">
+
+        <h2>Why pair them.</h2>
+        <p>
+          OpenRouter routes your request to the right LLM provider:
+          OpenAI, Anthropic, Mistral, DeepSeek, Llama hosts, dozens
+          more. One API key, one URL, every model. You pay per token,
+          you switch models without touching billing, and you can A/B
+          two models on the same workflow without two integrations.
+        </p>
+        <p>
+          Axocoatl handles the orchestration. OpenRouter handles the
+          inference. Pair them and you get a self-supervising runtime
+          on your hardware that can ask any frontier model when it
+          needs to, and a local model when it doesn't.
+        </p>
+
+        <h2 style="margin-top: var(--s-8);">Set it up in 30 seconds.</h2>
+        <p>
+          Add an <code>openrouter</code> block to your <code>axocoatl.yaml</code>:
+        </p>
+
+<pre><code><span class="code-key">providers:</span>
+  <span class="code-key">openrouter:</span>
+    <span class="code-key">api_key:</span> <span class="code-string">"${OPENROUTER_API_KEY}"</span>
+
+<span class="code-key">agents:</span>
+  - <span class="code-key">id:</span> <span class="code-string">researcher</span>
+    <span class="code-key">provider:</span> <span class="code-string">openrouter</span>
+    <span class="code-key">model:</span> <span class="code-string">"anthropic/claude-3.5-sonnet"</span>
+  - <span class="code-key">id:</span> <span class="code-string">summarizer</span>
+    <span class="code-key">provider:</span> <span class="code-string">openrouter</span>
+    <span class="code-key">model:</span> <span class="code-string">"openai/gpt-4o-mini"</span>      <span class="code-comment"># Mixed-model workflow, one config.</span></code></pre>
+
+        <p style="margin-top: var(--s-5);">
+          Put <code>OPENROUTER_API_KEY=…</code> in your <code>.env</code>.
+          Restart the daemon. That's the whole integration.
+        </p>
+
+        <h2 style="margin-top: var(--s-8);">Or do it through onboard.</h2>
+        <p>
+          The interactive setup wizard picks OpenRouter for you when
+          you select <em>"cloud, model of my choice"</em>:
+        </p>
+
+        <ax-cli-snippet>axocoatl onboard</ax-cli-snippet>
+
+      </div>
+    </section>
+
+    <section class="container section">
+      <div class="section-head">
+        <span class="eyebrow">Patterns</span>
+        <h2>Three setups we recommend.</h2>
+      </div>
+      <div class="pillars">
+        <ax-pillar glyph="·">
+          <h3>Cost-tier routing</h3>
+          <p>
+            Use <code>openai/gpt-4o-mini</code> on every agent by
+            default. Promote individual agents to
+            <code>anthropic/claude-3.5-sonnet</code> when they need
+            heavy reasoning. The lattice picks the right one per task.
+          </p>
+        </ax-pillar>
+        <ax-pillar glyph="·">
+          <h3>Local + cloud hybrid</h3>
+          <p>
+            Ollama for cheap, repetitive agents (summarization,
+            classification). OpenRouter for the one agent that needs
+            frontier intelligence. Same workflow, two providers.
+          </p>
+        </ax-pillar>
+        <ax-pillar glyph="·">
+          <h3>Failover chain</h3>
+          <p>
+            Primary provider = OpenRouter. Fallback = direct Anthropic
+            credentials. If OpenRouter degrades, the daemon switches
+            without dropping the run.
+          </p>
+        </ax-pillar>
+      </div>
+    </section>
+
+    <section class="container section">
+      <div class="container-narrow" style="padding: 0;">
+
+        <h2>About OpenRouter's leaderboard.</h2>
+        <p>
+          OpenRouter publishes an
+          <a href="https://openrouter.ai/apps" target="_blank" rel="noopener">app directory</a>
+          ranking the tools that route the most traffic through it.
+          Axocoatl is listed there. If you set up your daemon with
+          OpenRouter, your usage shows up under the Axocoatl entry —
+          you don't have to do anything special.
+        </p>
+        <p>
+          We're not optimizing for that leaderboard at the expense of
+          the local-first commitment. Ollama remains the default
+          recommendation in <code>axocoatl onboard</code>. OpenRouter
+          is the cloud option for teams who don't want to manage their
+          own LLM keys per provider.
+        </p>
+
+      </div>
+    </section>
+
+    <section class="container section" style="padding-bottom: var(--s-10);">
+      <div style="display: grid; grid-template-columns: 1fr auto; gap: var(--s-5); align-items: center; padding: var(--s-7); background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);">
+        <div>
+          <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Get an API key. Set the config. Done.</h2>
+          <p class="muted" style="margin: 0;">
+            OpenRouter's signup is free. The Axocoatl daemon is one
+            curl-pipe-sh away.
+          </p>
+        </div>
+        <div style="display: flex; gap: var(--s-3);">
+          <a class="btn btn-primary" href="https://openrouter.ai/keys" target="_blank" rel="noopener">OpenRouter key →</a>
+          <a class="btn btn-ghost" href="/install">Install Axocoatl</a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <ax-footer></ax-footer>
+  <ax-install-bar></ax-install-bar>
+</body>
+</html>

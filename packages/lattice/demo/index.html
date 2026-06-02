@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>@axocoatl/lattice — Phase C demo</title>
+<style>
+  :root {
+    --bg: #0a0c11;
+    --panel: #161a23;
+    --border: #232a37;
+    --text: #e8ecf3;
+    --muted: #8893a5;
+    --accent: #7c5cff;
+    --accent-2: #00d9b1;
+    --warn: #ffb454;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, system-ui, sans-serif; height: 100vh; overflow: hidden; }
+  .layout { display: grid; grid-template-columns: 1fr 320px; grid-template-rows: 52px 1fr; grid-template-areas: 'top top' 'canvas rail'; height: 100vh; }
+  .top { grid-area: top; display: flex; align-items: center; padding: 0 18px; gap: 12px; background: #10131a; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .top .name { font-weight: 600; }
+  .top .v { color: var(--muted); font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+  .top .spacer { flex: 1; }
+  .top a { color: var(--accent-2); text-decoration: none; }
+
+  .canvas-wrap { grid-area: canvas; position: relative; }
+  ax-lattice {
+    position: absolute; inset: 0;
+    --ax-bg: #0a0c11;
+    --ax-grid: #232a37;
+    --ax-accent: #7c5cff;
+    --ax-accent-2: #00d9b1;
+    --ax-marquee-fill: rgba(124,92,255,.10);
+    --ax-edge-color: #4a536a;
+    --ax-edge-color-sel: #7c5cff;
+    --ax-edge-width: 2;
+  }
+  /* Overlays float over the lattice. */
+  ax-controls { position: absolute; top: 14px; left: 14px; z-index: 5; }
+  ax-minimap  { position: absolute; bottom: 14px; right: 14px; z-index: 5; }
+
+  ax-node {
+    --ax-node-bg: #181d27;
+    --ax-node-fg: #e8ecf3;
+    --ax-node-border: #2e3645;
+    --ax-node-border-hover: #4a536a;
+    --ax-node-border-sel: var(--accent);
+    min-width: 150px;
+  }
+  ax-node[data-team="research"]  { --ax-node-border: rgba(0,217,177,.55); --ax-node-border-hover: var(--accent-2); }
+  ax-node[data-team="ops"]       { --ax-node-border: rgba(255,180,84,.55); --ax-node-border-hover: var(--warn); }
+  ax-node .title { font-weight: 600; font-size: 13px; }
+  ax-node .sub   { color: var(--muted); font-size: 11px; margin-top: 3px; }
+
+  .rail { grid-area: rail; background: #10131a; border-left: 1px solid var(--border); padding: 16px; overflow-y: auto; font-size: 13px; }
+  .rail h3 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin: 14px 0 8px; font-weight: 600; }
+  .rail h3:first-child { margin-top: 0; }
+  .btn { background: var(--accent); color: white; border: 0; padding: 7px 12px; border-radius: 6px; font: inherit; cursor: pointer; margin: 3px 4px 3px 0; font-size: 12px; }
+  .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn.danger { background: #ff6b6b; }
+  .btn:hover { opacity: .9; }
+  .vp { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; background: #161a23; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--muted); }
+  .vp .num { color: var(--accent-2); }
+  .helpkey { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; background: #161a23; border: 1px solid var(--border); border-bottom-width: 2px; padding: 1px 6px; border-radius: 4px; color: var(--text); white-space: nowrap; }
+  .help-row { display: flex; justify-content: space-between; padding: 3px 0; color: var(--muted); font-size: 11.5px; gap: 8px; }
+  .sel-list { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--accent-2); background: #161a23; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; min-height: 28px; }
+  .sel-empty { color: var(--muted-2); }
+  .callout { background: rgba(0,217,177,.08); border: 1px solid rgba(0,217,177,.3); border-radius: 7px; padding: 10px 12px; font-size: 12px; line-height: 1.5; color: var(--text); }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="top">
+    <div class="name">@axocoatl/lattice</div>
+    <div class="v" id="version">v1.0.0</div>
+    <div class="spacer"></div>
+    <span style="color:var(--muted);font-size:12px">v1.0 · auto-layout, virtualization, a11y — API frozen</span>
+    <a href="https://github.com/axocoatl/axocoatl/tree/main/packages/lattice" target="_blank">source ↗</a>
+  </div>
+
+  <div class="canvas-wrap">
+  <ax-lattice id="lat" background="dots" snap="20" min-zoom="0.25" max-zoom="4" fit-view-on-init>
+    <ax-node id="architect" data-x="0" data-y="0">
+      <div class="title">architect</div>
+      <div class="sub">ollama · llama3.2</div>
+      <ax-handle type="target" handle-id="in" position="left"></ax-handle>
+      <ax-handle type="source" handle-id="out" position="right"></ax-handle>
+    </ax-node>
+    <ax-node id="planner" data-x="280" data-y="-120">
+      <div class="title">planner</div>
+      <div class="sub">depends_on architect</div>
+      <ax-handle type="target" handle-id="in" position="left"></ax-handle>
+      <ax-handle type="source" handle-id="out" position="right"></ax-handle>
+    </ax-node>
+    <ax-node id="coder" data-x="280" data-y="120">
+      <div class="title">coder</div>
+      <div class="sub">depends_on architect</div>
+      <ax-handle type="target" handle-id="in" position="left"></ax-handle>
+      <ax-handle type="source" handle-id="out" position="right"></ax-handle>
+    </ax-node>
+    <ax-node id="reviewer" data-x="560" data-y="0">
+      <div class="title">reviewer</div>
+      <div class="sub">depends_on planner + coder</div>
+      <ax-handle type="target" handle-id="in" position="left"></ax-handle>
+      <ax-handle type="source" handle-id="out" position="right"></ax-handle>
+    </ax-node>
+    <ax-node id="researcher" data-x="0" data-y="260" data-team="research">
+      <div class="title">researcher</div>
+      <div class="sub">research team</div>
+      <ax-handle type="source" handle-id="out" position="right"></ax-handle>
+    </ax-node>
+    <ax-node id="summarizer" data-x="280" data-y="300" data-team="research">
+      <div class="title">summarizer</div>
+      <div class="sub">depends_on researcher</div>
+      <ax-handle type="target" handle-id="in" position="left"></ax-handle>
+    </ax-node>
+
+    <!-- Pre-wired edges (declarative). -->
+    <ax-edge from="architect:out" to="planner:in"></ax-edge>
+    <ax-edge from="architect:out" to="coder:in"></ax-edge>
+    <ax-edge from="planner:out" to="reviewer:in"></ax-edge>
+    <ax-edge from="coder:out" to="reviewer:in"></ax-edge>
+    <ax-edge from="researcher:out" to="summarizer:in" label="research"></ax-edge>
+  </ax-lattice>
+  <ax-controls for="lat"></ax-controls>
+  <ax-minimap for="lat"></ax-minimap>
+  </div>
+
+  <aside class="rail">
+    <div class="callout">
+      <strong>Drag from a purple dot</strong> on a node's right edge to a green-glowing target dot on another node — that creates an edge. Click an edge to select it, then press Delete.
+    </div>
+
+    <h3>Camera &amp; layout</h3>
+    <button class="btn ghost" id="btn-fit">↘ Fit view</button>
+    <button class="btn ghost" id="btn-reset">↺ Reset</button>
+    <button class="btn" id="btn-layout">⇄ Auto-layout</button>
+    <button class="btn" id="btn-run" style="background:var(--accent-2);color:#06231d">▶ Simulate run</button>
+    <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:var(--muted)">
+      <input type="checkbox" id="chk-virt" /> virtualize off-screen nodes
+    </label>
+
+    <h3>Selection</h3>
+    <button class="btn" id="btn-sel-all">Select all nodes</button>
+    <button class="btn ghost" id="btn-sel-none">Deselect</button>
+    <button class="btn danger" id="btn-del">Delete selected</button>
+    <div class="sel-list" id="sel-list"><span class="sel-empty">none</span></div>
+
+    <h3>Counts</h3>
+    <div class="vp">nodes: <span class="num" id="c-nodes">0</span> · edges: <span class="num" id="c-edges">0</span> · handles: <span class="num" id="c-handles">0</span></div>
+
+    <h3>Viewport</h3>
+    <div class="vp">x: <span class="num" id="vp-x">0</span> · y: <span class="num" id="vp-y">0</span> · k: <span class="num" id="vp-k">1.000</span></div>
+
+    <h3>Input</h3>
+    <div class="help-row"><span>Connect</span><span class="helpkey">drag dot → dot</span></div>
+    <div class="help-row"><span>Select edge</span><span class="helpkey">click the curve</span></div>
+    <div class="help-row"><span>Delete edge/node</span><span class="helpkey">Del / Backspace</span></div>
+    <div class="help-row"><span>Pan</span><span class="helpkey">drag empty</span></div>
+    <div class="help-row"><span>Zoom</span><span class="helpkey">wheel / pinch</span></div>
+    <div class="help-row"><span>Box select</span><span class="helpkey">shift+drag</span></div>
+    <div class="help-row"><span>Group drag</span><span class="helpkey">select + drag node</span></div>
+    <div class="help-row"><span>Undo / redo</span><span class="helpkey">⌘Z / ⌘⇧Z</span></div>
+    <div class="help-row"><span>Copy / paste</span><span class="helpkey">⌘C / ⌘V</span></div>
+    <div class="help-row"><span>Fit view</span><span class="helpkey">0 / dblclick</span></div>
+    <div class="help-row"><span>Navigate</span><span class="helpkey">click minimap</span></div>
+  </aside>
+</div>
+
+<script type="module">
+  import '../src/index.js';
+
+  const lat = document.getElementById('lat');
+  const $ = (id) => document.getElementById(id);
+
+  function syncViewport() {
+    const v = lat.getViewport();
+    $('vp-x').textContent = v.x.toFixed(0);
+    $('vp-y').textContent = v.y.toFixed(0);
+    $('vp-k').textContent = v.k.toFixed(3);
+  }
+  function syncCounts() {
+    $('c-nodes').textContent = lat.nodes.size;
+    $('c-edges').textContent = lat.edges.size;
+    $('c-handles').textContent = document.querySelectorAll('ax-handle').length;
+  }
+  function syncSelection(e) {
+    const ids = e?.detail?.ids ?? lat.selectedIds();
+    $('sel-list').innerHTML = ids.length ? '' : '<span class="sel-empty">none</span>';
+    if (ids.length) $('sel-list').textContent = ids.join(', ');
+  }
+
+  lat.addEventListener('viewport-change', () => { syncViewport(); });
+  lat.addEventListener('selection-change', syncSelection);
+  lat.addEventListener('edge-connect', (e) => {
+    console.log('edge-connect', e.detail);
+  });
+  lat.addEventListener('edge-selection-change', (e) => {
+    console.log('edge-selection-change', e.detail.ids);
+  });
+  lat.addEventListener('edges-deleted', (e) => {
+    console.log('edges-deleted', e.detail.ids); syncCounts();
+  });
+  lat.addEventListener('nodes-deleted', () => syncCounts());
+
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    syncViewport(); syncCounts(); syncSelection();
+  }));
+
+  $('btn-fit').onclick = () => lat.fitView();
+  $('btn-reset').onclick = () => lat.setViewport({ x: 0, y: 0, k: 1 });
+  $('btn-layout').onclick = () => lat.autoLayout({ direction: 'LR' });
+
+  // Simulate a workflow run — drives the native execution state (node status
+  // + active flowing edges) the same way the Axocoatl dashboard does live.
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  let running = false;
+  $('btn-run').onclick = async () => {
+    if (running) return;
+    running = true;
+    lat.resetStatuses();
+    const order = ['architect', 'planner', 'coder', 'reviewer', 'researcher', 'summarizer'];
+    const edgesFrom = (id) =>
+      [...lat.edges].filter((e) => (e.getAttribute('from') || '').split(':')[0] === id);
+    for (const id of order) {
+      lat.setNodeStatus(id, 'running');
+      edgesFrom(id).forEach((e) => e.setAttribute('active', ''));
+      await sleep(750);
+      lat.setNodeStatus(id, 'success');
+      edgesFrom(id).forEach((e) => e.removeAttribute('active'));
+    }
+    running = false;
+  };
+  $('chk-virt').onchange = (e) => {
+    if (e.target.checked) lat.setAttribute('virtualize', '');
+    else lat.removeAttribute('virtualize');
+  };
+  $('btn-sel-all').onclick = () => lat.selectAll();
+  $('btn-sel-none').onclick = () => lat.deselectAll();
+  $('btn-del').onclick = () => { lat.deleteSelectedEdges(); lat.deleteSelected(); syncCounts(); };
+</script>
+</body>
+</html>

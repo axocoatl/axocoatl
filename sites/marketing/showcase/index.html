@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Showcase — real workflows · Axocoatl</title>
+  <meta name="description" content="Real workflows. Not demos. Release pulse, support triage, daily briefings, bug bisection — the recurring work that adds up to a margin.">
+  <meta property="og:title" content="Axocoatl — Showcase">
+  <meta property="og:description" content="Real workflows. Not demos. The recurring work that adds up to a margin.">
+  <meta property="og:image" content="https://axocoatl.ai/assets/og-showcase.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles/tokens.css">
+  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/finder.css">
+  <style>
+    /* Showcase-specific: workflow card list. Linear-tight. */
+    .workflow {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: var(--s-4);
+      padding: var(--s-7);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      transition: border-color .15s;
+    }
+    .workflow + .workflow { margin-top: var(--s-5); }
+    .workflow:hover { border-color: var(--border-strong); }
+    .workflow-trigger {
+      font-family: var(--font-mono);
+      font-size: var(--t-13);
+      color: var(--accent);
+      letter-spacing: -.005em;
+    }
+    .workflow h3 { font-size: var(--t-24); margin: 0; }
+    .workflow .meta {
+      display: flex;
+      gap: var(--s-4);
+      font-family: var(--font-mono);
+      font-size: var(--t-13);
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+    .workflow .meta span::before { content: '·'; margin-right: var(--s-4); color: var(--border-strong); }
+    .workflow .meta span:first-child::before { content: none; margin: 0; }
+  </style>
+  <script type="module" src="/components/ax-site-nav.js"></script>
+  <script type="module" src="/components/ax-install-bar.js"></script>
+  <script type="module" src="/components/ax-footer.js"></script>
+  <script type="module" src="/components/ax-theme-toggle.js"></script>
+</head>
+<body>
+  <ax-site-nav active="showcase"></ax-site-nav>
+
+  <main>
+
+    <section class="container hero" style="padding-bottom: var(--s-7);">
+      <span class="eyebrow">Showcase</span>
+      <h1>Real workflows. Not demos.</h1>
+      <p class="lede">
+        These are the recurring workflows our users run every day. None
+        of them make for a viral video. All of them save someone two
+        hours. The compound interest of automating the boring parts is
+        the whole product thesis.
+      </p>
+    </section>
+
+    <section class="container section">
+
+      <div class="workflow">
+        <span class="workflow-trigger">▶ Trigger: schedule, every Monday 9am</span>
+        <h3>Release pulse</h3>
+        <p>
+          A coordinator agent pulls the past week of git activity,
+          opens issues for the next 72 hours, and produces a paragraph
+          of release notes. It posts the draft to a team channel for
+          review. If no one objects within four hours, the draft is
+          committed to <code>CHANGELOG.md</code> automatically.
+        </p>
+        <div class="meta">
+          <span>activity-collector → issue-summarizer → release-writer → reviewer</span>
+        </div>
+      </div>
+
+      <div class="workflow">
+        <span class="workflow-trigger">⊛ Trigger: lattice event NewSupportEmail</span>
+        <h3>Support triage</h3>
+        <p>
+          A proactive agent listens for incoming support email. For
+          each new message it classifies the request, attaches the
+          relevant history from the customer's previous tickets, and
+          routes the thread to the right teammate with a one-line
+          summary at the top. It also drafts an acknowledgement reply.
+        </p>
+        <div class="meta">
+          <span>classifier → history-retriever → responder</span>
+        </div>
+      </div>
+
+      <div class="workflow">
+        <span class="workflow-trigger">▶ Trigger: schedule, every weekday 8am</span>
+        <h3>Daily briefing</h3>
+        <p>
+          A planner agent reads the team's calendar, the last 24 hours
+          of activity, and any unresolved interrupts in the lattice. It
+          produces a five-bullet morning briefing that lands in your
+          inbox at 8am — what shipped, what's blocked, what needs you
+          today.
+        </p>
+        <div class="meta">
+          <span>calendar-reader → activity-summarizer → briefing-writer</span>
+        </div>
+      </div>
+
+      <div class="workflow">
+        <span class="workflow-trigger">▣ Trigger: session-mode, on demand</span>
+        <h3>Bug bisection</h3>
+        <p>
+          When a test starts failing, you open a directory session and
+          tell the agent which test is broken. It runs
+          <code>git bisect</code> inside the sandbox, identifies the
+          offending commit, opens the diff in the dashboard, and
+          proposes a fix. You review and merge.
+        </p>
+        <div class="meta">
+          <span>bisector (single-agent session)</span>
+        </div>
+      </div>
+
+      <div class="workflow">
+        <span class="workflow-trigger">◇ Trigger: Skill fires on ContractUploaded</span>
+        <h3>Contract review</h3>
+        <p>
+          A reviewer agent watches a folder for new contracts. When one
+          lands, it parses the document, flags non-standard clauses,
+          summarizes payment terms, and posts the findings to a review
+          channel. Legal reads the summary, not the contract.
+        </p>
+        <div class="meta">
+          <span>parser → clause-reviewer → summary-writer</span>
+        </div>
+      </div>
+
+    </section>
+
+    <section class="container section" style="padding-bottom: var(--s-10);">
+      <div class="container-narrow" style="padding: 0;">
+        <h2>Build your own.</h2>
+        <p>
+          Every workflow above is a few dozen lines of YAML and a
+          couple of Skill declarations. The dashboard ships an editor
+          that lets you wire agents visually, then commits the result
+          back to disk.
+        </p>
+        <p style="margin-top: var(--s-5);">
+          <a class="btn btn-primary" href="/install">Install →</a>
+          <a class="btn btn-ghost" href="https://docs.axocoatl.ai/getting-started/" target="_blank" rel="noopener" style="margin-left: var(--s-3);">Quickstart guide</a>
+        </p>
+      </div>
+    </section>
+
+  </main>
+
+  <ax-footer></ax-footer>
+  <ax-install-bar></ax-install-bar>
+</body>
+</html>

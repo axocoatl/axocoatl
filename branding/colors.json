@@ -1,0 +1,29 @@
+{
+  "_": "Axocoatl identity palette — starting hex values translated from the CMYK numbers on the identity card. Tweak these once we see them in the dashboard. Each entry has a CSS variable name for use in the app and the marketing site.",
+
+  "jade_green": {
+    "hex":    "#3E7C5C",
+    "cmyk":   "C80 M20 Y60 K10",
+    "css_var": "--axo-jade",
+    "role":   "Primary. The serpent body. App primary action color (could replace --accent over time)."
+  },
+  "bronze_gold": {
+    "hex":    "#B5904A",
+    "cmyk":   "C25 M45 Y80 K10",
+    "css_var": "--axo-bronze",
+    "role":   "Secondary. Metalwork, Greek-key borders, accents. Warm contrast to the jade."
+  },
+  "circuit_blue": {
+    "hex":    "#3FA9C8",
+    "cmyk":   "C70 M30 Y5 K5",
+    "css_var": "--axo-blue",
+    "role":   "Accent. Eye glow, circuit traces, 'tech inside myth' moments. Sparingly."
+  },
+
+  "neutrals": {
+    "ink":        "#0E1218",
+    "stone":      "#1B2027",
+    "parchment":  "#F4ECDA",
+    "vellum":     "#FFFFFF"
+  }
+}

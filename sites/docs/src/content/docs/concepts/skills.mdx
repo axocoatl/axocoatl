@@ -1,0 +1,68 @@
+---
+title: Skills
+description: Lattice-aware capability declarations that route between agents automatically.
+---
+
+A **Skill** is a named, lattice-aware unit of capability. Where most
+frameworks tie a "skill" or "tool" to one agent that calls it directly,
+Axocoatl Skills are routed *by the lattice* — they declare what events
+they emit and react to, and the system wires them automatically.
+
+## Anatomy
+
+```yaml
+- id: code-review-checklist
+  name: "Code Review Checklist"
+  description: "Structured 12-point review."
+  emits: ["ReviewComplete", "BlockingIssueFound"]
+  reacts_to: ["CodeReady", "PullRequestOpened"]
+  agents: [reviewer, coder]
+  prompt: |
+    Review the code against: correctness, edge cases, error handling,
+    performance, security, style, naming, tests. Return JSON with
+    `issues` and `severity`.
+```
+
+Five knobs:
+
+- **`emits`** — events this Skill publishes when it completes.
+- **`reacts_to`** — events that, when published by anyone, fire this
+  Skill.
+- **`agents`** — which agents *hold* this Skill. Any of them can win the
+  auction when the Skill fires.
+- **`prompt`** — what the agent gets told when this Skill activates.
+- **`description`** — surfaces in the dashboard.
+
+## The auction
+
+When `PullRequestOpened` lands on the lattice, every Skill that lists it
+in `reacts_to` is a candidate. For `code-review-checklist`, the lattice
+finds two holders (`reviewer`, `coder`). It runs a quick auction:
+
+- Which holder has the lower current token usage?
+- Which holder's status is `idle` vs. `running`?
+- Which holder's model has higher capability?
+
+The winner fires the Skill. The loser stays idle. You don't pre-assign.
+
+## Manual fire
+
+In the dashboard's **Skills** tab, click any Skill → **Fire this Skill**.
+This publishes the Skill's emit events to the lattice. Anything that
+reacts to them activates.
+
+From the CLI:
+
+```sh
+curl -X POST http://localhost:8080/api/skills/code-review-checklist/fire
+```
+
+## Why this matters
+
+The lattice routing is what makes Axocoatl composable. Add a new agent
+that also holds an existing Skill — no rewiring. Move a Skill from one
+agent to another — the lattice routes there next time. Add a new event
+that someone reacts to — fires automatically.
+
+You're not assembling a graph by hand. You're declaring intent, and the
+lattice does the routing.

@@ -1,0 +1,430 @@
+use std::pin::Pin;
+
+use reqwest::header::CONTENT_TYPE;
+use tokio_stream::Stream;
+
+use axocoatl_core::{MessageContent, MessageRole, TokenUsageStats};
+use axocoatl_llm::{
+    ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError,
+    StreamEvent, ToolCall,
+};
+
+const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// Translate multimodal `Parts` into Anthropic's content-block array. Text
+/// parts become `{"type":"text"}` blocks; data-URL images become native
+/// `{"type":"image","source":{"type":"base64",…}}` blocks. URLs that aren't
+/// data: are skipped (Anthropic only accepts inline base64).
+fn anthropic_content_blocks(parts: &[axocoatl_core::ContentPart]) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for p in parts {
+        match p {
+            axocoatl_core::ContentPart::Text(s) => {
+                out.push(serde_json::json!({"type": "text", "text": s}));
+            }
+            axocoatl_core::ContentPart::Image { url, .. } => {
+                if let Some(idx) = url.find("base64,") {
+                    let head = &url[..idx];
+                    let media_type = head
+                        .trim_start_matches("data:")
+                        .trim_end_matches(';')
+                        .to_string();
+                    let data = &url[idx + "base64,".len()..];
+                    out.push(serde_json::json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": data,
+                        }
+                    }));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Anthropic Claude provider using the Messages API directly via reqwest.
+pub struct AnthropicProvider {
+    client: reqwest::Client,
+    api_key: String,
+    model: String,
+}
+
+impl AnthropicProvider {
+    pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            api_key: api_key.into(),
+            model: model.into(),
+        }
+    }
+
+    fn build_request_body(&self, request: &ChatRequest) -> serde_json::Value {
+        // Anthropic Messages API: system is a top-level field, not a message role
+        let mut system_prompt = None;
+        let mut messages = Vec::new();
+
+        for msg in &request.messages {
+            // For User messages with multimodal parts we emit Anthropic's
+            // native content-array (text + image blocks). Other roles flatten.
+            if matches!(msg.role, MessageRole::User) {
+                if let MessageContent::Parts(parts) = &msg.content {
+                    let blocks = anthropic_content_blocks(parts);
+                    if !blocks.is_empty() {
+                        messages.push(serde_json::json!({"role": "user", "content": blocks}));
+                        continue;
+                    }
+                }
+            }
+            let text = match &msg.content {
+                MessageContent::Text(s) => s.clone(),
+                MessageContent::Parts(parts) => parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        axocoatl_core::ContentPart::Text(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            };
+
+            match msg.role {
+                MessageRole::System => {
+                    system_prompt = Some(text);
+                }
+                MessageRole::User => {
+                    messages.push(serde_json::json!({"role": "user", "content": text}));
+                }
+                MessageRole::Assistant => {
+                    messages.push(serde_json::json!({"role": "assistant", "content": text}));
+                }
+                MessageRole::Tool => {
+                    // Anthropic tool results use "user" role with tool_result content block
+                    messages.push(serde_json::json!({
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": msg.name.clone().unwrap_or_default(), "content": text}]
+                    }));
+                }
+            }
+        }
+
+        let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
+        let mut body = serde_json::json!({
+            "model": model_for_call,
+            "messages": messages,
+            "max_tokens": request.max_tokens.unwrap_or(4096),
+        });
+
+        if let Some(sys) = system_prompt {
+            body["system"] = serde_json::json!(sys);
+        }
+        if let Some(temp) = request.temperature {
+            body["temperature"] = serde_json::json!(temp);
+        }
+
+        body
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for AnthropicProvider {
+    fn provider_id(&self) -> &str {
+        "anthropic"
+    }
+
+    fn model_id(&self) -> &str {
+        &self.model
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            streaming: true,
+            tool_calling: true,
+            structured_output: true,
+            vision: self.model.contains("sonnet") || self.model.contains("opus"),
+            reasoning: self.model.contains("opus"),
+            embeddings: false,
+            max_context_tokens: 200_000,
+            max_output_tokens: 64_000,
+        }
+    }
+
+    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+        let body = self.build_request_body(&request);
+
+        let response = self
+            .client
+            .post(ANTHROPIC_API_URL)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header(CONTENT_TYPE, "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Network(e.to_string()))?;
+
+        let status = response.status();
+        if status == 429 {
+            return Err(ProviderError::RateLimited {
+                provider: "anthropic".to_string(),
+                retry_after_secs: None,
+            });
+        }
+        if status == 401 {
+            return Err(ProviderError::AuthError {
+                provider: "anthropic".to_string(),
+            });
+        }
+
+        let resp_body: serde_json::Value =
+            response.json().await.map_err(|e| ProviderError::ApiError {
+                provider: "anthropic".to_string(),
+                status: status.as_u16(),
+                message: e.to_string(),
+            })?;
+
+        if !status.is_success() {
+            return Err(ProviderError::ApiError {
+                provider: "anthropic".to_string(),
+                status: status.as_u16(),
+                message: resp_body["error"]["message"]
+                    .as_str()
+                    .unwrap_or("Unknown error")
+                    .to_string(),
+            });
+        }
+
+        // Extract content from response
+        let content = resp_body["content"]
+            .as_array()
+            .and_then(|arr| {
+                arr.iter()
+                    .filter_map(|block| {
+                        if block["type"] == "text" {
+                            block["text"].as_str().map(String::from)
+                        } else {
+                            None
+                        }
+                    })
+                    .next()
+            })
+            .unwrap_or_default();
+
+        // Extract tool calls
+        let tool_calls = resp_body["content"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|block| {
+                        if block["type"] == "tool_use" {
+                            Some(ToolCall {
+                                id: block["id"].as_str().unwrap_or("").to_string(),
+                                name: block["name"].as_str().unwrap_or("").to_string(),
+                                arguments: block["input"].clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let finish_reason = match resp_body["stop_reason"].as_str() {
+            Some("end_turn") => FinishReason::Stop,
+            Some("tool_use") => FinishReason::ToolUse,
+            Some("max_tokens") => FinishReason::MaxTokens,
+            _ => FinishReason::Stop,
+        };
+
+        Ok(ChatResponse {
+            content,
+            tool_calls,
+            finish_reason,
+            usage: TokenUsageStats {
+                input_tokens: resp_body["usage"]["input_tokens"].as_u64().unwrap_or(0) as usize,
+                output_tokens: resp_body["usage"]["output_tokens"].as_u64().unwrap_or(0) as usize,
+                reasoning_tokens: None,
+            },
+            model: resp_body["model"]
+                .as_str()
+                .unwrap_or(&self.model)
+                .to_string(),
+            provider: "anthropic".to_string(),
+        })
+    }
+
+    async fn chat_stream(
+        &self,
+        request: ChatRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
+    {
+        use reqwest_eventsource::{Event, EventSource};
+        use tokio_stream::StreamExt;
+
+        let mut body = self.build_request_body(&request);
+        body["stream"] = serde_json::json!(true);
+
+        let req = self
+            .client
+            .post(ANTHROPIC_API_URL)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header(CONTENT_TYPE, "application/json")
+            .json(&body);
+
+        let mut es = EventSource::new(req).map_err(|e| ProviderError::Stream(e.to_string()))?;
+
+        let stream = async_stream::try_stream! {
+            // Track current tool call state for streaming tool_use deltas
+            let mut current_tool_id = String::new();
+            let mut current_tool_name: Option<String>;
+
+            while let Some(event) = es.next().await {
+                match event {
+                    Ok(Event::Open) => {}
+                    Ok(Event::Message(msg)) => {
+                        let data: serde_json::Value = serde_json::from_str(&msg.data)
+                            .map_err(|e| ProviderError::Stream(format!("JSON parse: {e}")))?;
+
+                        match data["type"].as_str() {
+                            Some("content_block_start") => {
+                                let block = &data["content_block"];
+                                if block["type"] == "tool_use" {
+                                    current_tool_id = block["id"].as_str().unwrap_or("").to_string();
+                                    current_tool_name = block["name"].as_str().map(String::from);
+                                    yield StreamEvent::ToolCallDelta {
+                                        id: current_tool_id.clone(),
+                                        name: current_tool_name.clone(),
+                                        args_delta: String::new(),
+                                    };
+                                }
+                            }
+                            Some("content_block_delta") => {
+                                let delta = &data["delta"];
+                                match delta["type"].as_str() {
+                                    Some("text_delta") => {
+                                        if let Some(text) = delta["text"].as_str() {
+                                            yield StreamEvent::TextDelta {
+                                                delta: text.to_string(),
+                                            };
+                                        }
+                                    }
+                                    Some("thinking_delta") => {
+                                        if let Some(text) = delta["thinking"].as_str() {
+                                            yield StreamEvent::ReasoningDelta {
+                                                delta: text.to_string(),
+                                            };
+                                        }
+                                    }
+                                    Some("input_json_delta") => {
+                                        if let Some(json) = delta["partial_json"].as_str() {
+                                            yield StreamEvent::ToolCallDelta {
+                                                id: current_tool_id.clone(),
+                                                name: None,
+                                                args_delta: json.to_string(),
+                                            };
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            Some("message_delta") => {
+                                // Usage stats
+                                if let Some(usage) = data.get("usage") {
+                                    let output_tokens = usage["output_tokens"].as_u64().unwrap_or(0) as usize;
+                                    yield StreamEvent::Usage(TokenUsageStats {
+                                        input_tokens: 0,
+                                        output_tokens,
+                                        reasoning_tokens: None,
+                                    });
+                                }
+                                // Stop reason comes in message_delta, NOT message_stop
+                                if let Some(stop_reason) = data["delta"]["stop_reason"].as_str() {
+                                    let finish = match stop_reason {
+                                        "tool_use" => FinishReason::ToolUse,
+                                        "max_tokens" => FinishReason::MaxTokens,
+                                        _ => FinishReason::Stop,
+                                    };
+                                    yield StreamEvent::Done { finish_reason: finish };
+                                }
+                            }
+                            Some("message_start") => {
+                                if let Some(usage) = data["message"]["usage"].as_object() {
+                                    let input_tokens = usage.get("input_tokens")
+                                        .and_then(|v| v.as_u64())
+                                        .unwrap_or(0) as usize;
+                                    yield StreamEvent::Usage(TokenUsageStats {
+                                        input_tokens,
+                                        output_tokens: 0,
+                                        reasoning_tokens: None,
+                                    });
+                                }
+                            }
+                            Some("message_stop") => {
+                                // Stream is complete — break out
+                                break;
+                            }
+                            Some("error") => {
+                                let msg = data["error"]["message"]
+                                    .as_str()
+                                    .unwrap_or("Unknown streaming error")
+                                    .to_string();
+                                Err(ProviderError::Stream(msg))?;
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(reqwest_eventsource::Error::StreamEnded) => {
+                        break;
+                    }
+                    Err(e) => {
+                        Err(ProviderError::Stream(e.to_string()))?;
+                    }
+                }
+            }
+        };
+
+        Ok(Box::pin(stream))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_request_body_with_system() {
+        let provider = AnthropicProvider::new("test-key", "claude-sonnet-4-6");
+        let request = ChatRequest::with_system("You are helpful.", "Hello");
+        let body = provider.build_request_body(&request);
+
+        assert_eq!(body["system"], "You are helpful.");
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "Hello");
+        assert_eq!(body["model"], "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn build_request_body_no_system() {
+        let provider = AnthropicProvider::new("test-key", "claude-haiku-4-5-20251001");
+        let request = ChatRequest::simple("Hi");
+        let body = provider.build_request_body(&request);
+
+        assert!(body.get("system").is_none());
+        assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn capabilities_correct() {
+        let provider = AnthropicProvider::new("key", "claude-sonnet-4-6");
+        let caps = provider.capabilities();
+        assert!(caps.vision);
+        assert!(caps.tool_calling);
+        assert_eq!(caps.max_context_tokens, 200_000);
+    }
+}

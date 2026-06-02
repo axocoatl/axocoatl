@@ -1,0 +1,101 @@
+# Axocoatl — Rust-Native Agentic AI Framework
+> Coordination-first, actor-based, always-on agents in Rust
+
+Axocoatl is an open-source agentic AI framework for building self-coordinating
+multi-agent systems. Agents activate via stigmergic pheromone signals — no central
+orchestrator. Built on ractor actors with per-agent token budgets, 4-tier persistent
+memory, and checkpointing for crash recovery.
+
+## Quick Start
+
+### YAML Configuration (recommended)
+```yaml
+agents:
+  - id: researcher
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a research assistant. Provide detailed factual answers."
+    depends_on: []
+
+  - id: summarizer
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Summarize the input in 1-2 sentences."
+    depends_on: [researcher]
+
+workflows:
+  - id: research-and-summarize
+    name: "Research and Summarize"
+    agents: [researcher, summarizer]
+    entry_point: researcher
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+```
+
+### CLI
+```bash
+axocoatl init my-project          # Create project
+axocoatl validate                  # Check config
+axocoatl dev                       # Development mode (IPC + HTTP)
+axocoatl serve                     # Production HTTP server
+axocoatl chat --agent assistant    # Interactive chat
+axocoatl workflow list             # List configured workflows
+axocoatl workflow run <id> -i "…"  # Execute a workflow
+```
+
+## Core Concepts
+
+### Agents
+Persistent ractor actors that process tasks. Each agent has: a provider (LLM), tools (MCP),
+memory (4-tier), and a token budget. Agents survive restarts via checkpointing.
+
+### Providers
+OpenAI, Anthropic, Ollama/LM Studio, Mistral, Gemini. Provider-agnostic — no vendor lock-in.
+Automatic fallback chains on rate limiting.
+
+### Workflows
+Multi-agent pipelines defined in YAML. Agents declare `depends_on` to form a DAG.
+Execution is driven by the EventLattice — no polling, no central scheduler.
+
+### Coordination
+Stigmergic EventLattice: agents self-activate via pheromone signals with exponential decay.
+When an agent completes, it publishes a TaskCompleted event. Downstream agents accumulate
+signal until their threshold is crossed, then activate automatically with upstream outputs
+as context.
+
+- HTN symbolic planning decomposes compound tasks without LLM calls
+- Auction-based agent selection scores candidates by tool capability, load, and token budget
+- No central orchestrator — coordination emerges from the environment
+
+### Token Efficiency
+- TOON format: 20-35% fewer tokens than minified JSON for tabular data
+- Per-agent budgets with overflow policies (summarize/abort/warn)
+- Real-time cost tracking per provider
+
+### Protocols
+- MCP: Connect to any MCP tool server. Expose agents as MCP tools.
+- A2A: Agent-to-Agent protocol (v1.0) for cross-framework interoperability.
+
+### Memory
+4-tier: session (in-memory) → daily log (JSONL) → long-term (bincode) → semantic (vector).
+Checkpointing after every LLM call for crash recovery.
+
+### Isolation
+Wasmtime WASM sandbox for tool execution with fuel metering.
+
+## HTTP API
+
+```
+GET  /health                              # Health check
+GET  /api/agents                          # List agents
+POST /api/agents/{id}/execute             # Execute single agent
+GET  /api/agents/{id}/status              # Agent status
+GET  /api/workflows                       # List workflows
+POST /api/workflows/{id}/execute          # Execute workflow
+GET  /ws                                  # WebSocket streaming
+```
+
+## API Reference
+See: https://github.com/axocoatl-ai/axocoatl

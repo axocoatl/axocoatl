@@ -1,0 +1,78 @@
+---
+title: Memory
+description: Four-tier persistent memory with local neural embeddings.
+---
+
+Every agent in Axocoatl has access to a **four-tier memory system**, hot
+to cold:
+
+| Tier | Lives in | Latency | Used for |
+|------|----------|---------|----------|
+| 1 — Session | In-process state | µs | Current conversation, current turn |
+| 2 — Checkpoint | Disk (durable) | ms | Survives restarts; replay on crash |
+| 3 — Long-term | Disk (key/value) | ms | Cross-session facts the agent learned |
+| 4 — Semantic | Neural embeddings + cosine search | tens of ms | Retrieve by meaning, not by key |
+
+All four tiers are **local-first**. None call out unless you configure
+them to (e.g. swapping in a remote vector DB for Tier 4).
+
+## Tier 4: neural embeddings
+
+Tier 4 is backed by `all-MiniLM-L6-v2` — a 384-dimension BERT model that
+runs via [Candle](https://github.com/huggingface/candle), pure-Rust, no
+ONNX, no C++ runtime. The model auto-downloads the first time an agent
+asks for a semantic retrieval, then caches under `{data_dir}/models/`.
+
+When you store a memory:
+
+```rust
+agent.memory_4.store("Customer reported the API hangs on >50MB uploads.")
+              .await?;
+```
+
+The store embeds the text into a 384-dim vector and writes it to disk.
+
+When you retrieve:
+
+```rust
+let hits = agent.memory_4.search("uploads stalling", top_k=5).await?;
+```
+
+The query is embedded, cosine-similarity is computed against every stored
+vector, top-k by score returns. Real recall — semantically related text
+with no shared words still scores high.
+
+## Embed-or-hash
+
+If you build with `--no-default-features` (omitting `neural-embeddings`),
+Tier 4 falls back to a pure-Rust feature-hashing embedder. Recall is
+weaker but the binary stays tiny and there's no model download. The
+store records which embedder produced its vectors and automatically
+re-embeds on a model change.
+
+## Checkpoints
+
+Tier 2 is the checkpoint — a periodic disk snapshot of the agent's
+message history, memory state, and pending mailbox. The supervisor uses
+it to restore an agent after a crash. You can also fork a session from a
+checkpoint via the dashboard's **time travel** UI: pick a point in
+history, fork it into a new session, see how a different choice plays
+out.
+
+## Where the data lives
+
+By default, under `./data/`:
+
+```
+data/
+  memory/
+    session-{uuid}/
+    checkpoints/
+    long-term/
+    semantic/
+  models/
+    all-MiniLM-L6-v2/
+```
+
+The `data/` directory is gitignored by default. Move it to your home,
+back it up, sync it with Syncthing — your call.

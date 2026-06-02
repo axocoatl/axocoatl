@@ -1,0 +1,34 @@
+name: marketing-deploy
+
+# Publish sites/marketing/ to Cloudflare Pages whenever the marketing
+# tree or its brand-asset source changes on main. Manual workflow_dispatch
+# trigger is also exposed for forced redeploys.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sites/marketing/**'
+      - 'branding/**'
+      - '.github/workflows/marketing-deploy.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync brand assets into sites/marketing/assets/
+        run: |
+          chmod +x sites/marketing/scripts/sync-assets.sh
+          sites/marketing/scripts/sync-assets.sh
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy sites/marketing --project-name=axocoatl-marketing --branch=main

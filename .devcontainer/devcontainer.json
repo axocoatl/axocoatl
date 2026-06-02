@@ -1,0 +1,30 @@
+{
+  "name": "Axocoatl Dev",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-bullseye",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    }
+  },
+  "postCreateCommand": "bash scripts/setup-dev.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "serayuzgur.crates",
+        "vadimcn.vscode-lldb"
+      ],
+      "settings": {
+        "rust-analyzer.cargo.features": "all",
+        "rust-analyzer.check.command": "clippy",
+        "editor.formatOnSave": true
+      }
+    }
+  },
+  "containerEnv": {
+    "CARGO_HOME": "/usr/local/cargo",
+    "RUSTUP_HOME": "/usr/local/rustup"
+  },
+  "remoteUser": "vscode"
+}

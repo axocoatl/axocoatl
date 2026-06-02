@@ -1,0 +1,84 @@
+---
+title: The event lattice
+description: The coordination model that makes Axocoatl different from every other agentic framework.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every other agentic framework puts a **scheduler** at the center: "now
+run agent B." Axocoatl puts a **coordination fabric** at the center, and
+lets the agents decide for themselves when they're ready.
+
+That fabric is the **event lattice**.
+
+## How it works
+
+The lattice is a shared bulletin board for events. Agents publish events
+when they finish work (or fail, or get interrupted). Every other agent
+watches for events it cares about. When an agent's threshold is crossed
+— usually one event from each dependency — it wakes up and runs.
+
+There's no orchestrator deciding the order. The order is whatever the
+dependency graph implies. The lattice is what makes the ordering happen.
+
+## A two-agent example
+
+```yaml
+agents:
+  - id: researcher
+    provider: ollama
+    model: llama3.2
+    depends_on: []
+  - id: summarizer
+    provider: ollama
+    model: llama3.2
+    depends_on: [researcher]
+```
+
+1. You fire the workflow. The lattice publishes a `WorkflowStarted` event
+   tagged with the workflow id.
+2. `researcher` has no dependencies, so its threshold (zero events
+   needed) is already met. It activates immediately.
+3. When `researcher` finishes, the actor publishes a `TaskCompleted`
+   event with `agent_id: researcher`.
+4. `summarizer`'s threshold is "one `TaskCompleted` from `researcher`."
+   That's now met. The lattice activates `summarizer`. Its input is the
+   output `researcher` published.
+5. `summarizer` runs, publishes its own `TaskCompleted`, and the workflow
+   ends.
+
+No scheduler. No central state machine. Just events on a shared lattice.
+
+## Why this matters
+
+<Aside type="tip" title="The win is composability">
+You can add a third agent that depends on both `researcher` and
+`summarizer`, and the lattice will route its activation automatically. You
+don't rewire anything. The DAG is whatever the `depends_on` declarations
+imply.
+</Aside>
+
+The lattice also unlocks:
+
+- **Multi-agent for the same skill.** If two agents both hold a Skill
+  that reacts to `BugReportFiled`, the lattice runs an auction and picks
+  the best fit. You don't pre-assign.
+- **Proactive agents.** An agent can declare it reacts to a system event
+  (`EveryMorningAt8am`, `NewSupportEmail`). The lattice activates it
+  without you doing anything.
+- **Skills routing.** A Skill declares the events it emits and reacts
+  to; the lattice wires it to whichever agent holds it. Move the Skill
+  to a different agent, and the lattice routes there instead.
+- **Interrupts.** An agent can pause itself, publish an `Interrupted`
+  event, and wait for human input. The lattice picks it back up on
+  `Resumed`.
+
+## Watch it happen
+
+In the dashboard, open **Studio**. The whole lattice is the canvas; every
+agent is a node. When an event fires that activates an agent, the node
+pulses. Drag the canvas around, click nodes to inspect, and use the left
+rail to filter by team or jump to a specific agent.
+
+Every pulse you see is a real lattice event. Studio is a window onto the
+actual coordination layer — not a rendering layer that lies for the demo.

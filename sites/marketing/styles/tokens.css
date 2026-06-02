@@ -1,0 +1,114 @@
+/* Axocoatl design tokens — keep in sync with branding/colors.json.
+   Deeper, quieter neutrals (Linear-influenced) so the jade reads as a
+   single confident accent against a calm field. */
+
+:root {
+  /* Brand */
+  --axo-jade:      #3E7C5C;
+  --axo-jade-rgb:  62, 124, 92;
+  --axo-jade-lift: #4d9270;
+  --axo-jade-glow: #4FCB8E;
+  --axo-jade-glow-rgb: 79, 203, 142;
+  --axo-bronze:    #B5904A;
+  --axo-bronze-glow: #E8C275;
+  --axo-bronze-glow-rgb: 232, 194, 117;
+  --axo-blue:      #3FA9C8;
+  --axo-blue-rgb:  63, 169, 200;
+
+  /* Authoritative brand neutrals — match the dashboard's Apple-style palette
+     so the marketing site and product are visually one. Pure neutrals on
+     dark, warm cream on light. */
+  --ink:        #000000;
+  --stone:      #1C1C1E;
+  --parchment:  #F4ECDA;
+  --vellum:     #FFFFFF;
+
+  /* Type */
+  --font-display: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-body:    system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Modular scale (1.25 ratio) */
+  --t-13:  13px;
+  --t-14:  14px;
+  --t-16:  15.5px;
+  --t-20:  20px;
+  --t-24:  24px;
+  --t-32:  32px;
+  --t-44:  44px;
+  --t-64:  clamp(2.6rem, 5.5vw, 4rem);
+
+  /* 4-pixel space scale */
+  --s-1:    4px;
+  --s-2:    8px;
+  --s-3:   12px;
+  --s-4:   16px;
+  --s-5:   24px;
+  --s-6:   32px;
+  --s-7:   48px;
+  --s-8:   64px;
+  --s-9:   96px;
+  --s-10: 128px;
+
+  /* Semantic — dark theme by default. Matches the dashboard's Apple-style
+     pure-neutral scale exactly. */
+  --bg:           #000000;
+  --bg-2:         #0A0A0A;
+  --bg-3:         #141414;
+  --panel:        #1C1C1E;
+  --panel-2:      #232325;
+  --fg:           #ECECEC;
+  --fg-soft:      #C8CBD1;
+  --muted:        #8E8E93;
+  --muted-2:      #636366;
+  --border:       #2C2C2E;
+  --border-strong:#3A3A3C;
+  --accent:       var(--axo-jade);
+  --accent-2:     var(--axo-blue);
+  --accent-lift:  var(--axo-jade-lift);
+
+  --radius:       10px;
+  --radius-sm:    6px;
+  --radius-lg:    14px;
+
+  --shadow-1:     0 1px 0 rgba(255,255,255,.03), 0 8px 24px rgba(0,0,0,.32);
+  --shadow-2:     0 1px 0 rgba(255,255,255,.04), 0 18px 48px rgba(0,0,0,.42);
+}
+
+[data-theme="light"] {
+  --bg:           #F7F1E3;
+  --bg-2:         #F4ECDA;
+  --bg-3:         #ECE3CB;
+  --panel:        #FFFFFF;
+  --panel-2:      #FBF7EC;
+  --fg:           #1B2027;
+  --fg-soft:      #2A2F3A;
+  --muted:        #5B6068;
+  --muted-2:      #8B9099;
+  --border:       #DCD2B6;
+  --border-strong:#C8C0AD;
+  --accent-lift:  #2F6649;
+
+  --shadow-1:     0 1px 0 rgba(0,0,0,.04), 0 8px 24px rgba(20,24,31,.08);
+  --shadow-2:     0 1px 0 rgba(0,0,0,.05), 0 18px 48px rgba(20,24,31,.12);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg:           #F7F1E3;
+    --bg-2:         #F4ECDA;
+    --bg-3:         #ECE3CB;
+    --panel:        #FFFFFF;
+    --panel-2:      #FBF7EC;
+    --fg:           #1B2027;
+    --fg-soft:      #2A2F3A;
+    --muted:        #5B6068;
+    --muted-2:      #8B9099;
+    --border:       #DCD2B6;
+    --border-strong:#C8C0AD;
+    --accent-lift:  #2F6649;
+
+    --shadow-1:     0 1px 0 rgba(0,0,0,.04), 0 8px 24px rgba(20,24,31,.08);
+    --shadow-2:     0 1px 0 rgba(0,0,0,.05), 0 18px 48px rgba(20,24,31,.12);
+  }
+}
