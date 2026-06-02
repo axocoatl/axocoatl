@@ -1,0 +1,44 @@
+name: debug-pages
+
+# Lists current Pages projects + their domains + DNS records.
+# Helps diagnose why docs.axocoatl.ai isn't routing.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect
+        env:
+          T: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          A: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -e
+          API="https://api.cloudflare.com/client/v4"
+          H="Authorization: Bearer $T"
+
+          echo "=== Pages projects ==="
+          curl -sS "$API/accounts/$A/pages/projects" -H "$H" \
+            | jq '.result[] | {name, subdomain, production_branch, canonical_deployment: .canonical_deployment.url}'
+
+          echo
+          echo "=== domains on axocoatl-marketing ==="
+          curl -sS "$API/accounts/$A/pages/projects/axocoatl-marketing/domains" -H "$H" \
+            | jq '.result[] | {name, status, certificate_status: .certificate_authority}'
+
+          echo
+          echo "=== domains on axocoatl-docs ==="
+          curl -sS "$API/accounts/$A/pages/projects/axocoatl-docs/domains" -H "$H" \
+            | jq '.result[] | {name, status, certificate_status: .certificate_authority}'
+
+          echo
+          echo "=== zones ==="
+          ZONE_ID=$(curl -sS "$API/zones?name=axocoatl.ai" -H "$H" | jq -r '.result[0].id')
+          echo "axocoatl.ai zone id: $ZONE_ID"
+
+          echo
+          echo "=== DNS records for axocoatl.ai (CNAME/A only) ==="
+          curl -sS "$API/zones/$ZONE_ID/dns_records?per_page=50" -H "$H" \
+            | jq '.result[] | select(.type == "CNAME" or .type == "A") | {type, name, content, proxied}'
