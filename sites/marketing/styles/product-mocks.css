@@ -774,12 +774,23 @@
   .sessions-mock .studio-mock-strip { display: none; }
 }
 
-/* Mobile shrink: hide the strip + side, just show the canvas. */
+/* Mobile shrink: hide the strip + side, just show the canvas.  The
+   toolbar's centred title (`fix-bug-273 · running`) collapses to
+   nothing and the inspector overlay hides — both fight with the
+   demo's three nodes for the narrow canvas.  Pearls scale down so
+   they don't crowd the corner. */
 @media (max-width: 720px) {
-  .studio-mock { grid-template-columns: 1fr; min-height: 320px; }
+  .studio-mock { grid-template-columns: 1fr; min-height: 360px; border-radius: var(--radius); }
   .studio-mock-strip { display: none; }
-  .studio-mock-shell { grid-template-columns: 1fr; }
+  .studio-mock-shell { grid-template-columns: 1fr; min-height: 360px; }
   .studio-mock-side  { display: none; }
+  .studio-mock-toolbar { padding: 8px 10px; gap: 6px; flex-wrap: wrap; }
+  .studio-mock-toolbar-help { display: none; }
+  .studio-mock-mode-btn,
+  .studio-mock-toolbar-btn { padding: 4px 8px; font-size: 11px; }
+  .studio-mock-canvas { min-height: 280px; }
+  .studio-mock-inspector { display: none !important; }
+  .studio-mock-pearls { transform: scale(.85); transform-origin: bottom right; bottom: 8px; right: 8px; gap: 4px; }
 }
 
 
