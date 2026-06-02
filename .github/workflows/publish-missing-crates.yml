@@ -21,10 +21,11 @@ jobs:
           set -u
           # axocoatl-memory first (was the 10 MiB upload failure root).
           # Sleep generously between to let the crates.io index refresh.
+          # axocoatl-session was missing from release.yml entirely, which
+          # is why daemon (depends on session) couldn't publish.  60s sleep
+          # between crates so the crates.io sparse index has time to refresh.
           crates="
-            axocoatl-memory
-            axocoatl-actor
-            axocoatl-coordination
+            axocoatl-session
             axocoatl-daemon
             axocoatl-server
             axocoatl-cli
@@ -33,6 +34,6 @@ jobs:
             echo "::group::publish $c"
             cargo publish -p "$c" --no-verify --allow-dirty || \
               echo "skip $c (already published or transient) — continuing"
-            sleep 30
+            sleep 60
             echo "::endgroup::"
           done

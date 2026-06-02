@@ -123,6 +123,7 @@ jobs:
             axocoatl-tools
             axocoatl-actor
             axocoatl-coordination
+            axocoatl-session
             axocoatl-daemon
             axocoatl-server
             axocoatl-cli
