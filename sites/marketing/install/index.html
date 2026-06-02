@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install — Axocoatl</title>
+  <meta name="description" content="Install Axocoatl in 60 seconds. Curl, Cargo, Docker, or from source. Linux and macOS, x86_64 and aarch64.">
+  <meta property="og:title" content="Install Axocoatl">
+  <meta property="og:description" content="One binary. Sixty seconds.">
+  <meta property="og:image" content="https://axocoatl.ai/assets/og-install.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles/tokens.css">
+  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/finder.css">
+  <script type="module" src="/components/ax-site-nav.js"></script>
+  <script type="module" src="/components/ax-cli-snippet.js"></script>
+  <script type="module" src="/components/ax-footer.js"></script>
+  <script type="module" src="/components/ax-theme-toggle.js"></script>
+</head>
+<body>
+  <ax-site-nav></ax-site-nav>
+
+  <main>
+
+    <section class="container hero" style="padding-bottom: var(--s-7);">
+      <span class="eyebrow">Install</span>
+      <h1>One binary.<br>Sixty seconds.</h1>
+      <p class="lede">
+        Prebuilt binaries for Linux and macOS, x86_64 and aarch64. The
+        install script verifies a SHA-256 checksum before installing
+        anywhere on your PATH.
+      </p>
+    </section>
+
+    <section class="container section">
+      <div class="container-narrow" style="padding: 0;">
+
+        <h2>Prebuilt binary</h2>
+        <p class="muted">Recommended path. No Rust toolchain required.</p>
+        <ax-cli-snippet>curl -fsSL https://axocoatl.ai/install.sh | sh</ax-cli-snippet>
+
+        <h2 style="margin-top: var(--s-8);">Cargo</h2>
+        <p class="muted">If you'd rather compile. Requires Rust 1.82+.</p>
+        <ax-cli-snippet>cargo install axocoatl-cli</ax-cli-snippet>
+
+        <h2 style="margin-top: var(--s-8);">From source</h2>
+        <p class="muted">The release binary lands at <code>target/release/axocoatl</code>.</p>
+        <ax-cli-snippet>git clone https://github.com/axocoatl/axocoatl && cd axocoatl && cargo build --release</ax-cli-snippet>
+
+      </div>
+    </section>
+
+    <section class="container section">
+      <div class="container-narrow" style="padding: 0;">
+        <h2>After install</h2>
+        <ol style="padding-left: 1.4rem; line-height: 1.85; color: var(--fg-soft); margin: var(--s-3) 0 0;">
+          <li><code>axocoatl doctor</code> — verify Ollama, podman, and the data dir are reachable.</li>
+          <li><code>axocoatl onboard</code> — interactive setup wizard. Picks a provider, scaffolds a project.</li>
+          <li><code>axocoatl dev</code> — start the daemon, IPC, and dashboard on <code>:8080</code>.</li>
+          <li>Open <code>http://localhost:8080</code>. Switch to Sessions. Click the seeded <strong>demo-counters</strong> session.</li>
+        </ol>
+        <p style="margin-top: var(--s-7);">
+          <a class="btn btn-primary" href="https://docs.axocoatl.ai" target="_blank" rel="noopener">Open the docs →</a>
+          <a class="btn btn-ghost" href="https://docs.axocoatl.ai/guides/troubleshooting/" target="_blank" rel="noopener" style="margin-left: var(--s-3);">Troubleshooting</a>
+        </p>
+      </div>
+    </section>
+
+    <section class="container section" style="padding-bottom: var(--s-10);">
+      <div class="container-narrow" style="padding: 0;">
+        <h2>Bring your own LLM</h2>
+        <p>
+          Axocoatl runs against Ollama (local), OpenAI, Anthropic,
+          Mistral, Gemini, and OpenRouter. Pick one in <code>onboard</code>
+          or set it manually in <code>axocoatl.yaml</code>. Each agent
+          picks its provider independently — local model for one, cloud
+          for another, same workflow.
+        </p>
+        <p>
+          <a href="/integrations/openrouter">OpenRouter setup →</a>
+        </p>
+      </div>
+    </section>
+
+  </main>
+
+  <ax-footer></ax-footer>
+</body>
+</html>

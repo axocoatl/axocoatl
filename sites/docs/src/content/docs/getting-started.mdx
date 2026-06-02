@@ -1,0 +1,93 @@
+---
+title: Getting started
+description: Install Axocoatl, run doctor, open the dashboard, fire your first workflow.
+---
+
+import { Steps, Tabs, TabItem, Code } from '@astrojs/starlight/components';
+
+This is the 5-minute path from "nothing installed" to "a workflow ran on
+my box." If anything breaks, see [Troubleshooting](/guides/troubleshooting/).
+
+## Prerequisites
+
+- macOS or Linux (x86_64 or aarch64).
+- [Ollama](https://ollama.com) for local LLM use (recommended for first
+  contact). Cloud providers — OpenAI, Anthropic, Mistral, Gemini — work
+  too; set the right key in `.env`.
+- (Optional) `podman` if you want sandboxed directory sessions.
+
+<Steps>
+
+1. **Install Axocoatl.**
+
+   <Tabs syncKey="install">
+     <TabItem label="Curl (recommended)">
+       ```sh
+       curl -fsSL https://axocoatl.ai/install.sh | sh
+       ```
+     </TabItem>
+     <TabItem label="Cargo">
+       ```sh
+       cargo install axocoatl-cli
+       ```
+     </TabItem>
+     <TabItem label="From source">
+       ```sh
+       git clone https://github.com/axocoatl/axocoatl && cd axocoatl
+       cargo build --release
+       ```
+     </TabItem>
+   </Tabs>
+
+2. **Pull a model.**
+
+   ```sh
+   ollama serve &
+   ollama pull llama3.2
+   ```
+
+3. **Run `axocoatl doctor` to confirm everything is reachable.**
+
+   ```sh
+   axocoatl doctor
+   ```
+
+   You should see ✓ on Rust toolchain, config, Ollama, model, data dir, and
+   (if installed) podman.
+
+4. **Start the daemon.**
+
+   ```sh
+   axocoatl dev
+   ```
+
+   This brings up the daemon, IPC, and the dashboard on `http://localhost:8080`.
+
+5. **Open the dashboard and fire a workflow.**
+
+   In your browser, open `http://localhost:8080`. Switch to **Studio**.
+   In the left rail, expand **Quick fire** and click **▶ Fire all
+   workflows**. Watch the lattice cascade through every agent on the
+   canvas.
+
+</Steps>
+
+## What just happened?
+
+The daemon spawned a supervised actor for every agent in your config. The
+lattice published a `WorkflowStarted` event. Every agent that lists the
+workflow's entry point in its `depends_on` chain woke up and ran. Their
+outputs published `TaskCompleted` events; downstream agents activated as
+their thresholds were crossed. Nobody scheduled anything.
+
+Open a [directory session](/concepts/sessions/) to see the agent actually
+read, write, and execute commands inside a sandboxed copy of one of your
+folders.
+
+## Next
+
+- [The event lattice](/concepts/lattice/) — the coordination model.
+- [Agents](/concepts/agents/) — actor lifecycle, supervision, budgets.
+- [Skills](/concepts/skills/) — how the lattice routes work automatically.
+- [Sessions](/concepts/sessions/) — Claude-Code-style directory work,
+  locally.

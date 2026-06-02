@@ -1,0 +1,57 @@
+# Axocoatl — minimal starter config
+#
+# Two agents, one workflow, one skill. Fits on a screen. Designed for a
+# first run with Ollama + llama3.2 (≈2 GB pull, no API key needed).
+#
+# To use:
+#   cp axocoatl.example.yaml axocoatl.yaml
+#   ollama serve &
+#   ollama pull llama3.2
+#   axocoatl dev
+#
+# Then open http://localhost:8080 and try `/api/workflows/hello-world/execute`
+# from the dashboard's Automations tab — or just click "Fire all workflows"
+# in Studio's sidebar.
+#
+# The full demo config (12 agents, 5 workflows, scheduled runs, MCP servers)
+# lives in axocoatl.yaml. Use that once you're past first contact.
+
+# ─── Agents ─────────────────────────────────────────────────────────
+agents:
+  - id: researcher
+    name: "Researcher"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You research a question and return 3 bullet-pointed facts."
+    depends_on: []
+    token_budget: { per_execution: 2000, per_call: 1000, overflow_policy: warn }
+
+  - id: summarizer
+    name: "Summarizer"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You take research bullets and write a single 2-sentence summary."
+    depends_on: [researcher]
+    token_budget: { per_execution: 2000, per_call: 1000, overflow_policy: warn }
+
+# ─── Workflow ───────────────────────────────────────────────────────
+# Two-step cascade: researcher activates first, summarizer activates once
+# researcher emits TaskCompleted via the event lattice. No orchestrator.
+workflows:
+  - id: hello-world
+    name: "Hello world"
+    description: "Research → summarize. The simplest possible cascade."
+    agents: [researcher, summarizer]
+    entry_point: researcher
+
+# ─── Skill ──────────────────────────────────────────────────────────
+# Skills declare what events they EMIT and REACT TO. The lattice wires
+# them automatically — no manual binding.
+skills:
+  - id: quick-research
+    name: "Quick research"
+    description: "Fire a one-shot research request into the lattice."
+    emits: ["ResearchRequested"]
+    reacts_to: []
+    agents: [researcher]
+    prompt: "Research this topic in 3 bullets."

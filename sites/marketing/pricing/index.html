@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pricing — Axocoatl</title>
+  <meta name="description" content="Free. Open source. Self-hosted. Apache-2.0. The runtime is the product; there is no paid plan.">
+  <meta property="og:title" content="Axocoatl — Pricing">
+  <meta property="og:description" content="Free. Open source. Self-hosted. There is no paid plan.">
+  <meta property="og:image" content="https://axocoatl.ai/assets/og-pricing.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles/tokens.css">
+  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/finder.css">
+  <script type="module" src="/components/ax-site-nav.js"></script>
+  <script type="module" src="/components/ax-cli-snippet.js"></script>
+  <script type="module" src="/components/ax-pillar.js"></script>
+  <script type="module" src="/components/ax-install-bar.js"></script>
+  <script type="module" src="/components/ax-footer.js"></script>
+  <script type="module" src="/components/ax-theme-toggle.js"></script>
+</head>
+<body>
+  <ax-site-nav></ax-site-nav>
+
+  <main>
+
+    <section class="container hero" style="padding-bottom: var(--s-7);">
+      <span class="eyebrow">Pricing</span>
+      <h1>Free. Open source.<br>Self-hosted.</h1>
+      <p class="lede">
+        Apache-2.0. The runtime is the product; we don't gate features
+        behind a paid plan because there is no paid plan. Run it on
+        your hardware, fork it, ship it. The promise of local-first is
+        the whole point.
+      </p>
+    </section>
+
+    <section class="container section">
+      <div class="container-narrow" style="padding: 0;">
+
+        <h2>What you pay for.</h2>
+        <p>
+          The runtime is free. Two things are not, and they're not ours
+          to sell:
+        </p>
+        <ol style="padding-left: 1.4rem; line-height: 1.85; color: var(--fg-soft); margin: var(--s-3) 0 0;">
+          <li>
+            <strong>LLM inference.</strong> Whatever you pay your
+            chosen provider — OpenAI tokens, Anthropic credits,
+            <a href="/integrations/openrouter">OpenRouter</a>
+            credits — flows through your account, not ours.
+          </li>
+          <li>
+            <strong>The hardware.</strong> Your laptop, your server,
+            your homelab, your AWS instance. We touch none of it.
+          </li>
+        </ol>
+
+        <h2 style="margin-top: var(--s-8);">No tiers, on purpose.</h2>
+        <p>
+          We don't ship a "team" tier with cloud sync, a "business"
+          tier with single sign-on, or an "enterprise" tier with
+          procurement-friendly pricing. The runtime is the same
+          whether one person uses it or a thousand. If your
+          organization needs SSO, you wire it in front of the
+          dashboard yourself; the code is yours to modify.
+        </p>
+
+        <h2 style="margin-top: var(--s-8);">No hosted version planned.</h2>
+        <p>
+          We're not running a hosted Axocoatl product. Local-first is
+          a brand commitment, not a launch tactic. The promise that
+          nothing leaves your box unless you wire it to is the whole
+          thesis — flipping that later would invalidate the original
+          choice.
+        </p>
+
+        <h2 style="margin-top: var(--s-8);">If you need help.</h2>
+        <p>
+          GitHub Discussions are the support channel. They're public,
+          searchable, and free. If you'd rather pay for direct help,
+          the project maintainers are reachable for paid engagements;
+          contact details are in <code>SECURITY.md</code> and the
+          contributor list. That's a side arrangement, not a product.
+        </p>
+
+      </div>
+    </section>
+
+    <section class="container section" style="padding-bottom: var(--s-10);">
+      <div style="display: grid; grid-template-columns: 1fr auto; gap: var(--s-5); align-items: center; padding: var(--s-7); background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);">
+        <div>
+          <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Use it for free.</h2>
+          <p class="muted" style="margin: 0;">
+            The only cost is your time to install and the inference
+            tokens you choose to pay for.
+          </p>
+        </div>
+        <div style="display: flex; gap: var(--s-3);">
+          <a class="btn btn-primary" href="/install">Install →</a>
+          <a class="btn btn-ghost" href="https://github.com/axocoatl/axocoatl" target="_blank" rel="noopener">View the source</a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <ax-footer></ax-footer>
+  <ax-install-bar></ax-install-bar>
+</body>
+</html>

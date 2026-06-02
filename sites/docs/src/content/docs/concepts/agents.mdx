@@ -1,0 +1,89 @@
+---
+title: Agents
+description: Actors, supervision, token budgets, and per-agent provider configuration.
+---
+
+An Axocoatl agent is a [`ractor`](https://github.com/slawlor/ractor) actor:
+an isolated unit of computation with its own mailbox, lifecycle, memory,
+and token budget. Each agent runs in its own task. Crashes get supervised
+restarts. State survives the process through periodic checkpoints.
+
+## Anatomy of an agent
+
+Every agent has six knobs you control in YAML:
+
+```yaml
+- id: coder
+  name: "Coder"
+  provider: ollama
+  model: qwen2.5-coder:14b
+  system_prompt: |
+    You are a senior software engineer working in a directory session.
+    Write to disk with the write_file tool; never paste code as chat.
+  depends_on: [planner]
+  token_budget:
+    per_execution: 8000
+    per_call:      4000
+    overflow_policy: warn
+```
+
+- **`id`** — the agent's name in the lattice. Other agents `depends_on`
+  this id.
+- **`provider`** + **`model`** — which LLM backs this agent. Each agent
+  can use a different one. Local for cheap tasks, frontier for hard ones,
+  same workflow.
+- **`system_prompt`** — the agent's role and operating instructions.
+- **`depends_on`** — which agents must complete before this one
+  activates. Drives the DAG.
+- **`token_budget`** — enforced *before* every LLM call. The agent can't
+  spend more than `per_call` in any single call or more than
+  `per_execution` across one full activation. `overflow_policy: warn` logs
+  + emits an event; `block` refuses the call.
+
+## Lifecycle
+
+1. **Spawn** — on daemon boot, every agent in the config gets a
+   `ractor::Actor` spawned under the daemon's supervisor.
+2. **Idle** — the actor sits in its mailbox loop, waiting for messages.
+3. **Activate** — the lattice routes work to it via an `Execute` message
+   when its dependencies fire.
+4. **Stream** — the LLM call streams tokens (when supported by the
+   provider). The dashboard's Studio rail reflects them live.
+5. **Checkpoint** — periodically the actor writes its message history and
+   memory state to disk so a crash + restart can resume from where it
+   left off.
+6. **Complete** — publishes `TaskCompleted` to the lattice with the
+   output. Other agents activate.
+
+## Supervision
+
+If an agent panics or its LLM provider returns an unrecoverable error,
+the supervisor restarts it from its last checkpoint. The agent's mailbox
+is preserved across the restart — pending work continues. The dashboard
+shows the restart in the agent's status line and emits a `RestartedAgent`
+event so other parts of the system can react.
+
+## Providers
+
+Provider trait lets every agent pick its backend independently:
+
+- `ollama` — local Ollama daemon (default).
+- `openai` — OpenAI chat completions.
+- `anthropic` — Anthropic messages API.
+- `mistral` — Mistral chat.
+- `gemini` — Google Gemini.
+
+Keys live in `.env`. The dashboard's onboarding wizard fills the right
+keys for you.
+
+## Restart, manually
+
+If you change an agent's config (system prompt, model, budget) and want
+the running actor to pick it up without restarting the whole daemon:
+
+```sh
+axocoatl agents restart coder
+```
+
+The supervisor stops the actor, re-reads its config, and respawns it.
+Memory survives.

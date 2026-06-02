@@ -1,0 +1,99 @@
+---
+title: HTTP API
+description: Every HTTP endpoint exposed by the Axocoatl daemon.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The daemon exposes a small REST + WebSocket surface on port 8080 by
+default. All endpoints assume the daemon is running locally; CORS is
+permissive on `localhost` and locked down elsewhere.
+
+<Aside type="caution">
+This page is currently hand-written. A future build step will auto-generate
+it from `axocoatl-server/src/routes.rs` so it never drifts.
+</Aside>
+
+## Health
+
+| Method | Path | Returns |
+|--------|------|---------|
+| GET | `/health` | `{ status, agents }` — overall daemon health + agent count. |
+| GET | `/health/ready` | 200 if at least one agent is spawned; else 503. |
+| GET | `/health/live` | Always 200 — used by load balancers. |
+| GET | `/api/llm-health` | `{ ollama: { reachable, base_url, missing_models } }` — checked by the dashboard's first-run toast. |
+
+## Agents
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/agents` | List every agent in the config with provider/model/status. |
+| GET | `/api/agents/{id}/status` | Just the status string. |
+| POST | `/api/agents/{id}/execute` | Send the agent a single input; await the full output. |
+| POST | `/api/agents/{id}/restart` | Restart the actor under the supervisor; memory survives. |
+| PATCH | `/api/agents/{id}` | Update model / system prompt at runtime. |
+
+## Workflows + automations
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/workflows` | List configured workflows. |
+| POST | `/api/workflows/{id}/execute` | Fire a workflow; body `{ input }`. |
+| GET | `/api/automations` | List automations (workflows + schedules + proactive, unified). |
+| POST | `/api/automations/{id}/run` | Fire an automation by id. |
+
+## Skills
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/skills` | List every Skill in the config. |
+| POST | `/api/skills/{id}/fire` | Publish the Skill's `emits` events to the lattice. |
+
+## Sessions
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/sessions` | List active + recent sessions. |
+| POST | `/api/sessions` | Start a new session in an authorized folder. |
+| GET | `/api/sessions/{id}/tree` | Get the session's file tree. |
+| POST | `/api/sessions/{id}/execute` | Send the session a user message. |
+
+## MCP
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/mcp/servers` | List connected MCP servers. |
+| GET | `/api/mcp/catalog` | List installable MCP servers from the bundled catalog. |
+| GET | `/api/mcp/tools` | List every tool exposed by every connected server. |
+| POST | `/api/mcp/install` | Install a catalog entry. Body `{ slug, values }`. |
+| POST | `/api/mcp/servers/{name}` | Reconnect a server. |
+| DELETE | `/api/mcp/servers/{name}` | Disconnect a server. |
+| GET | `/api/mcp/permissions` | List recorded permission decisions. |
+| DELETE | `/api/mcp/permissions` | Revoke a recorded permission (query params: server, agent_id, tool). |
+
+## Live WebSocket
+
+`/ws` — bidirectional. Frames are JSON, all with a `kind` discriminator.
+Streams the dashboard consumes:
+
+- `event` — a lattice coordination event (agent activated, task
+  completed, agent failed, …)
+- `token` / `reasoning` — streamed LLM tokens for an active workflow or
+  session.
+- `tool-call` — agent invoked a tool; arrives in two phases.
+- `workflow-done` / `workflow-error` — terminal frames for a workflow
+  run.
+- `session-start` / `session-done` / `session-error` — terminal frames
+  for a session run.
+- `chat-start` / `chat-token` / `chat-tool-start` / `chat-tool-result` /
+  `chat-done` / `chat-stopped` / `chat-error` — chat streaming frames.
+- `mcp-approval-required` / `mcp-approval-resolved` — MCP permission gate.
+
+Client-to-server frames include `run-workflow`, `mcp-approve`, `chat-stop`.
+
+## Static assets
+
+- `/` — the dashboard HTML.
+- `/brand/{file}` — canonical brand assets (`mark.png`, `wordmark.png`, `favicon.png`, `colors.json`).
+- `/lattice/{file}` — the `@axocoatl/lattice` Web Component source.
+- `/vendor/{*file}` — vendored libs (Monaco, highlight.js, xterm, codicons).

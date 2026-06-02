@@ -1,0 +1,27 @@
+[package]
+name = "axocoatl-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "YAML/TOML configuration parser with validation for Axocoatl"
+
+[dependencies]
+axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

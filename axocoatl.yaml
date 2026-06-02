@@ -1,0 +1,233 @@
+# Axocoatl — Populated demo organization (Acme Software Co.)
+#
+# 12 agents in 4 teams · 5 workflows · 3 scheduled runs · 4 Skills
+# All running locally via Ollama + llama3.2 — your data never leaves the box.
+
+# ─────────────────────────── AGENTS ───────────────────────────
+
+agents:
+  # ── Engineering team ─────────────────────────────────────
+  - id: architect
+    name: "Architect"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a senior software architect. Break tasks into clear technical specifications. Be concise."
+    depends_on: []
+    token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
+
+  - id: planner
+    name: "Planner"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a project planner. Turn specs into actionable, ordered task lists."
+    depends_on: [architect]
+    token_budget: { per_execution: 4000, per_call: 2000, overflow_policy: warn }
+
+  - id: coder
+    name: "Coder"
+    provider: ollama
+    model: qwen2.5-coder:14b
+    system_prompt: "You are a senior software engineer working in a directory session. The user describes tasks to ACCOMPLISH, not to describe. When code needs to exist on disk, you MUST call the write_file tool with the full file contents — never paste code as chat. Use edit_file for targeted changes, bash for running tests/builds, read_file/list_dir/grep/glob to navigate. After each tool call, do not narrate at length — let the tool result speak. Only after the work is done, give a brief summary of what you built and how to run it."
+    depends_on: [planner]
+    token_budget: { per_execution: 8000, per_call: 4000, overflow_policy: warn }
+
+  - id: reviewer
+    name: "Code Reviewer"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a strict code reviewer. Find bugs, edge cases, and style issues. Be specific."
+    depends_on: [coder]
+    token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
+
+  - id: tester
+    name: "Tester"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a QA engineer. Generate test cases including edge cases and adversarial inputs."
+    depends_on: [reviewer]
+    token_budget: { per_execution: 5000, per_call: 2500, overflow_policy: warn }
+
+  - id: doc-writer
+    name: "Doc Writer"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a technical writer. Produce clear, friendly documentation with examples."
+    depends_on: [reviewer]
+    token_budget: { per_execution: 4000, per_call: 2000, overflow_policy: warn }
+
+  # ── Research team ────────────────────────────────────────
+  - id: researcher
+    name: "Researcher"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a research assistant. Provide detailed, factual answers with supporting context."
+    depends_on: []
+    token_budget: { per_execution: 8000, per_call: 4000, overflow_policy: warn }
+
+  - id: summarizer
+    name: "Summarizer"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a summarizer. Condense input into 2-3 sentences."
+    depends_on: [researcher]
+    token_budget: { per_execution: 3000, per_call: 1500, overflow_policy: warn }
+
+  - id: analyst
+    name: "Data Analyst"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a data analyst. Extract insights from numeric or textual data."
+    depends_on: []
+    token_budget: { per_execution: 5000, per_call: 2500, overflow_policy: warn }
+
+  # ── Ops team ─────────────────────────────────────────────
+  - id: ops
+    name: "Ops Engineer"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a site reliability engineer. Produce deployment plans and incident responses."
+    depends_on: [tester]
+    token_budget: { per_execution: 4000, per_call: 2000, overflow_policy: warn }
+
+  # ── Customer-facing team ─────────────────────────────────
+  - id: support
+    name: "Support Agent"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a friendly customer support agent. Triage incoming issues and propose next steps."
+    depends_on: []
+    token_budget: { per_execution: 4000, per_call: 2000, overflow_policy: warn }
+
+  - id: secretary
+    name: "Secretary"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are an executive secretary. Prepare daily briefings, summarize meetings, draft messages."
+    depends_on: []
+    token_budget: { per_execution: 4000, per_call: 2000, overflow_policy: warn }
+
+# ─────────────────────────── WORKFLOWS ────────────────────────
+
+workflows:
+  - id: feature-dev
+    name: "Feature Development"
+    agents: [architect, planner, coder, reviewer, tester, doc-writer]
+    entry_point: architect
+
+  - id: bug-triage
+    name: "Bug Triage"
+    agents: [support, analyst, planner, coder]
+    entry_point: support
+
+  - id: research-and-summarize
+    name: "Research & Summarize"
+    agents: [researcher, summarizer]
+    entry_point: researcher
+
+  - id: release-checklist
+    name: "Release Readiness"
+    agents: [tester, reviewer, ops]
+    entry_point: tester
+
+  - id: daily-briefing
+    name: "Daily Briefing"
+    agents: [secretary]
+    entry_point: secretary
+
+# ─────────────────────────── SCHEDULES (cron) ─────────────────
+# Background-fired workflows. The daemon's scheduler wakes them up.
+
+schedules:
+  - id: morning-briefing
+    name: "Morning Briefing"
+    workflow: daily-briefing
+    every: "1h"
+    input: "Produce a 5-bullet briefing on what's likely on the team's plate today."
+    enabled: true
+
+  - id: release-pulse
+    name: "Release Pulse Check"
+    workflow: release-checklist
+    every: "6h"
+    input: "Run the standard release readiness checks for the current build."
+    enabled: false
+
+  - id: research-sync
+    name: "Weekly Research Sync"
+    workflow: research-and-summarize
+    every: "24h"
+    input: "Summarize the latest developments in self-coordinating multi-agent AI systems."
+    enabled: true
+
+# ─────────────────────────── GLYPHS ───────────────────────────
+# Axocoatl's differentiator. Skills are lattice-aware units of capability:
+# they declare what events they emit and react to, so the lattice routes
+# work without manual wiring. Multiple agents can hold the same Skill;
+# the auction picks the best one for each invocation.
+
+skills:
+  - id: code-review-checklist
+    name: "Code Review Checklist"
+    description: "Structured 12-point review across correctness, style, performance, security."
+    emits: ["ReviewComplete", "BlockingIssueFound"]
+    reacts_to: ["CodeReady", "PullRequestOpened"]
+    agents: [reviewer, coder]
+    prompt: "Review the code against: correctness, edge cases, error handling, performance, security, style, naming, tests. Return JSON with `issues` and `severity`."
+
+  - id: incident-postmortem
+    name: "Incident Postmortem"
+    description: "Drafts a blameless postmortem from incident events."
+    emits: ["PostmortemDraft"]
+    reacts_to: ["IncidentResolved", "AgentFailed"]
+    agents: [ops, analyst]
+    prompt: "Draft a blameless postmortem with: timeline, root cause, impact, mitigation, action items."
+
+  - id: customer-summary
+    name: "Customer Summary"
+    description: "Distills a support thread into a one-paragraph customer voice summary."
+    emits: ["CustomerInsight"]
+    reacts_to: ["SupportThreadClosed"]
+    agents: [support, summarizer]
+    prompt: "Summarize this conversation from the customer's perspective in one paragraph. Highlight the underlying need."
+
+  - id: release-notes
+    name: "Release Notes Formatter"
+    description: "Formats merged PR titles into user-facing release notes."
+    emits: ["ReleaseNotesReady"]
+    reacts_to: ["ReleaseReady"]
+    agents: [doc-writer]
+    prompt: "Convert the given PR list into release notes grouped as: New, Improved, Fixed."
+
+# ─────────────────────────── PROVIDERS / SERVER ───────────────
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+
+server:
+  port: 8080
+  host: "0.0.0.0"
+
+# ─────────────────────────── PROACTIVE AGENTS ──────────────────
+# Agents that act on their own — no prompt needed. The Always-On Service
+# (axocoatl service install) keeps the daemon process alive; these make the
+# agents act autonomously while it runs.
+
+proactive:
+  - id: hourly-briefing
+    name: "Hourly Briefing"
+    agent: secretary
+    trigger:
+      type: schedule
+      every: 1h
+    input: "Give a concise one-paragraph briefing on recent activity and anything that needs attention."
+    enabled: true
+
+  - id: failure-watch
+    name: "Failure Watcher"
+    agent: ops
+    trigger:
+      type: on_event
+      event: AgentFailed
+    input: "An agent just failed. Diagnose the likely cause and suggest a concrete fix."
+    enabled: true

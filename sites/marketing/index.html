@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Axocoatl — the agentic runtime for teams that ship</title>
+  <meta name="description" content="Open-source Rust runtime for self-coordinating multi-agent systems. Real workflows. Local-first. One 13 MB binary.">
+  <meta property="og:title" content="Axocoatl — the agentic runtime for teams that ship">
+  <meta property="og:description" content="Real workflows. No theater. One 13 MB Rust binary.">
+  <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles/tokens.css">
+  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/finder.css">
+  <link rel="stylesheet" href="/styles/product-mocks.css">
+  <script type="module" src="/components/ax-site-nav.js"></script>
+  <script type="module" src="/components/ax-pillar.js"></script>
+  <script type="module" src="/components/ax-cli-snippet.js"></script>
+  <script type="module" src="/components/ax-scripted-lattice.js"></script>
+  <script type="module" src="/components/ax-studio-mock.js"></script>
+  <script type="module" src="/components/ax-sessions-mock.js"></script>
+  <script type="module" src="/components/ax-automation-card.js"></script>
+  <script type="module" src="/components/ax-install-bar.js"></script>
+  <script type="module" src="/components/ax-footer.js"></script>
+  <script type="module" src="/components/ax-theme-toggle.js"></script>
+</head>
+<body>
+
+  <ax-site-nav></ax-site-nav>
+
+  <main>
+
+    <!-- ─────────────── Hero ─────────────── -->
+    <section class="container hero">
+      <span class="hero-tagline">
+        <span class="hero-tagline-dot"></span>
+        v0.1.0 · Rust · Apache-2.0
+      </span>
+      <h1>Real workflows.<br>No theater.</h1>
+      <p class="lede">
+        Axocoatl is the open-source agentic runtime for teams that ship.
+        Agents that run, supervise themselves, persist their state, and
+        finish what you start. One 13 MB Rust binary. Your hardware.
+        Your LLM. Your data.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="/install">Install →</a>
+        <a class="btn btn-ghost" href="/why">Why Axocoatl</a>
+      </div>
+
+      <div style="margin-top: var(--s-6);">
+        <ax-studio-mock></ax-studio-mock>
+      </div>
+
+      <div class="trust-row" style="margin-top: var(--s-6);">
+        <span>318 tests</span>
+        <span>13 MB binary</span>
+        <span>Zero telemetry</span>
+        <span>Ollama · OpenAI · Anthropic · Mistral · Gemini</span>
+        <span>Apache-2.0</span>
+      </div>
+    </section>
+
+    <!-- ─────────────── Three pillars ─────────────── -->
+    <section class="container section">
+      <div class="section-head">
+        <span class="eyebrow">What's different</span>
+        <h2>A runtime, not a framework.</h2>
+        <p class="muted">
+          Most agent tooling optimizes for the aesthetic of AI work. We
+          optimize for the unglamorous reality — the work that ships.
+        </p>
+      </div>
+      <div class="pillars">
+        <ax-pillar glyph="◉">
+          <h3>Built for production</h3>
+          <p>
+            Actor-supervised, checkpointed, sandboxed. Survives restarts.
+            Runs as a system service. Never asks you to keep your laptop
+            awake.
+          </p>
+        </ax-pillar>
+        <ax-pillar glyph="◇">
+          <h3>Yours by default</h3>
+          <p>
+            Your hardware, your LLM, your data. Air-gappable. The only
+            network call is the one you wired.
+          </p>
+        </ax-pillar>
+        <ax-pillar glyph="⌬">
+          <h3>Real workflows, not chat</h3>
+          <p>
+            A stigmergic event lattice cascades work between agents
+            automatically. Schedules, proactive triggers, multi-step
+            automations. Not "ask the chatbot and hope."
+          </p>
+        </ax-pillar>
+      </div>
+    </section>
+
+    <!-- ─────────────── The lattice does the routing ─────────────── -->
+    <section class="container section">
+      <div class="split">
+        <div>
+          <span class="eyebrow">Concept · 30 seconds</span>
+          <h2>The lattice does the routing.</h2>
+          <p>
+            Every other framework has a scheduler at its center deciding
+            "next, run agent B." Axocoatl doesn't. Agents declare
+            <code>depends_on</code> and an event lattice accumulates
+            pheromone-style signals; when an agent's threshold is
+            crossed, it activates itself.
+          </p>
+          <p>
+            There's no orchestrator. The order is whatever the
+            dependency graph implies. Multi-agent for the same Skill?
+            The lattice runs an auction. New agent that depends on
+            two others? Just declare it. Nothing gets rewired.
+          </p>
+          <a class="btn btn-ghost" href="/concepts" style="margin-top: var(--s-4);">
+            How it works →
+          </a>
+        </div>
+        <div class="code-pane">
+          <div class="code-pane-head">
+            <span class="finder-lights">
+              <span class="finder-light red"></span>
+              <span class="finder-light amber"></span>
+              <span class="finder-light green"></span>
+            </span>
+            <span>axocoatl.yaml</span>
+          </div>
+<pre><code><span class="code-key">agents:</span>
+  - <span class="code-key">id:</span> <span class="code-string">researcher</span>
+    <span class="code-key">provider:</span> <span class="code-string">ollama</span>
+    <span class="code-key">model:</span> <span class="code-string">llama3.2</span>
+    <span class="code-key">depends_on:</span> []
+  - <span class="code-key">id:</span> <span class="code-string">summarizer</span>
+    <span class="code-key">provider:</span> <span class="code-string">ollama</span>
+    <span class="code-key">model:</span> <span class="code-string">llama3.2</span>
+    <span class="code-key">depends_on:</span> [<span class="code-string">researcher</span>]   <span class="code-comment"># activates when researcher completes</span>
+
+<span class="code-key">workflows:</span>
+  - <span class="code-key">id:</span> <span class="code-string">research-and-summarize</span>
+    <span class="code-key">agents:</span> [<span class="code-string">researcher</span>, <span class="code-string">summarizer</span>]
+    <span class="code-key">entry_point:</span> <span class="code-string">researcher</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────────── Sessions · the builder ─────────────── -->
+    <section class="container section">
+      <div class="section-head">
+        <span class="eyebrow">Sessions</span>
+        <h2>Build with your agents.</h2>
+        <p class="muted">
+          The Sessions cockpit is where the work happens. Pick a
+          directory, pick an agent — or a whole lattice — and watch
+          them operate inside a sandboxed copy of your folder. Reading,
+          writing, running commands, with every action streaming into
+          the dashboard. Real products get built here: SaaS,
+          internal apps, libraries, games. The lattice routes; the
+          cockpit executes.
+        </p>
+      </div>
+
+      <ax-sessions-mock></ax-sessions-mock>
+
+      <div class="pillars" style="margin-top: var(--s-7);">
+        <ax-pillar glyph="▣">
+          <h3>Sandboxed by default</h3>
+          <p>
+            Every session runs inside a podman container bind-mounted
+            to your folder. The agent sees your code, you see every
+            file it touches. Close the laptop, open it tomorrow —
+            session resumes from the last checkpoint.
+          </p>
+        </ax-pillar>
+        <ax-pillar glyph="⌬">
+          <h3>One agent or a whole lattice</h3>
+          <p>
+            Single-agent for focused work, lattice mode when the
+            workflow needs more than one. Same cockpit. The
+            coordination model from Studio extends into the
+            workspace.
+          </p>
+        </ax-pillar>
+        <ax-pillar glyph="◫">
+          <h3>Real tools, real outputs</h3>
+          <p>
+            Read, write, edit, glob, grep. Run commands. Spawn
+            background processes. Open PTY terminals. Every tool
+            call shows up as a chip in the Activity pane with the
+            output collapsible inline.
+          </p>
+        </ax-pillar>
+      </div>
+    </section>
+
+    <!-- ─────────────── Install ─────────────── -->
+    <section class="container section">
+      <div class="section-head">
+        <span class="eyebrow">Install</span>
+        <h2>One binary. Sixty seconds.</h2>
+        <p class="muted">
+          Prebuilt for Linux and macOS, x86_64 and aarch64. The script
+          verifies a SHA-256 checksum before installing anywhere on your
+          PATH.
+        </p>
+      </div>
+      <ax-cli-snippet>curl -fsSL https://axocoatl.ai/install.sh | sh</ax-cli-snippet>
+      <p class="muted small" style="margin-top: var(--s-4);">
+        Prefer Cargo? <code>cargo install axocoatl-cli</code>. See the
+        <a href="/install">install page</a> for Docker and
+        from-source paths.
+      </p>
+    </section>
+
+    <!-- ─────────────── Automations · what users actually run ─────────────── -->
+    <section class="container section">
+      <div class="section-head">
+        <span class="eyebrow">Automations</span>
+        <h2>Real workflows. Not demos.</h2>
+        <p class="muted">
+          These are real workflows running on the platform today,
+          rendered as they look inside the dashboard's Automations
+          tab. The recurring work that adds up to a margin — not the
+          work that makes a video.
+        </p>
+      </div>
+      <div class="automations-grid">
+        <ax-automation-card
+          trigger="schedule"
+          trigger-detail="every Monday 9am"
+          name="Release pulse"
+          agents="activity-collector → issue-summarizer → release-writer → reviewer"
+          status="enabled">
+          <p>
+            Reads the past week of git activity, opens issues for the
+            next 72 hours, drafts release notes, and posts the draft
+            to a team channel for review.
+          </p>
+        </ax-automation-card>
+
+        <ax-automation-card
+          trigger="event"
+          trigger-detail="on NewSupportEmail"
+          name="Support triage"
+          agents="classifier → history-retriever → responder"
+          status="enabled">
+          <p>
+            For each incoming support email: classifies the request,
+            attaches the customer's previous ticket history, and
+            routes the thread with a one-line summary on top.
+          </p>
+        </ax-automation-card>
+
+        <ax-automation-card
+          trigger="schedule"
+          trigger-detail="weekdays 8am"
+          name="Daily briefing"
+          agents="calendar-reader → activity-summarizer → briefing-writer"
+          status="enabled">
+          <p>
+            Reads the team's calendar and the last 24 hours of lattice
+            events. Produces a five-bullet briefing that lands in
+            your inbox at 8am sharp.
+          </p>
+        </ax-automation-card>
+      </div>
+      <p style="margin-top: var(--s-7);">
+        <a class="btn btn-ghost" href="/showcase">See more workflows →</a>
+      </p>
+    </section>
+
+    <!-- ─────────────── CTA strip ─────────────── -->
+    <section class="container section" style="padding-bottom: var(--s-10);">
+      <div style="display: grid; grid-template-columns: 1fr auto; gap: var(--s-5); align-items: center; padding: var(--s-7); background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);">
+        <div>
+          <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Ship work, not screenshots.</h2>
+          <p class="muted" style="margin: 0;">
+            Install once. Walk through the demo session. Wire your first
+            workflow. The fastest path is the one in the docs.
+          </p>
+        </div>
+        <div style="display: flex; gap: var(--s-3);">
+          <a class="btn btn-primary" href="/install">Install →</a>
+          <a class="btn btn-ghost" href="https://docs.axocoatl.ai" target="_blank" rel="noopener">Read the docs</a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <ax-footer></ax-footer>
+  <ax-install-bar></ax-install-bar>
+
+</body>
+</html>

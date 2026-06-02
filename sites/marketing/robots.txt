@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /_brand/
+
+Sitemap: https://axocoatl.ai/sitemap.xml

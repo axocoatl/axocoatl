@@ -1,0 +1,252 @@
+{
+  "_comment": "Curated MCP catalog. Each entry describes a popular Model Context Protocol server that Axocoatl users can install in one click. Updated manually — bump the version when entries change so the dashboard can detect a refresh. Source of truth: https://github.com/modelcontextprotocol/servers (Anthropic) plus widely-used third-party servers. `args_template` and `env_template` use {{PLACEHOLDER}} markers; the install modal collects values and substitutes them before writing to the running mcp_servers list.",
+  "version": "2026.05.26",
+  "servers": [
+    {
+      "slug": "filesystem",
+      "name": "Filesystem",
+      "description": "Read, write, list, and edit files within explicitly allowlisted directories. Safer than giving an agent shell access — every path is constrained to roots you pre-declare.",
+      "category": "Development",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-filesystem", "{{ALLOWED_DIR}}"],
+      "env_template": {},
+      "requires": [
+        { "key": "ALLOWED_DIR", "label": "Directory the agent may access", "kind": "path", "placeholder": "/home/you/projects" }
+      ],
+      "recommended": true,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem"
+      }
+    },
+    {
+      "slug": "brave-search",
+      "name": "Brave Search",
+      "description": "Web search via Brave's API. A free tier covers ~2k queries/month — useful when you want real-time information without Tavily's pricing.",
+      "category": "Web",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env_template": { "BRAVE_API_KEY": "{{BRAVE_API_KEY}}" },
+      "requires": [
+        { "key": "BRAVE_API_KEY", "label": "Brave Search API key", "kind": "secret", "placeholder": "BSAxxx…", "help": "Get one at https://api.search.brave.com/" }
+      ],
+      "recommended": true,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
+        "docs": "https://api.search.brave.com/"
+      }
+    },
+    {
+      "slug": "github",
+      "name": "GitHub",
+      "description": "Read repos, browse issues + PRs, search code, create comments, manage branches. Personal access token defines scope.",
+      "category": "Development",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-github"],
+      "env_template": { "GITHUB_PERSONAL_ACCESS_TOKEN": "{{GITHUB_TOKEN}}" },
+      "requires": [
+        { "key": "GITHUB_TOKEN", "label": "GitHub personal access token", "kind": "secret", "placeholder": "ghp_…", "help": "github.com → Settings → Developer settings → Personal access tokens. Grant only the repos + scopes you want the agent to see." }
+      ],
+      "recommended": true,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/github"
+      }
+    },
+    {
+      "slug": "postgres",
+      "name": "Postgres",
+      "description": "Read-only SQL access to a Postgres database. The agent can introspect schema and run SELECTs but never mutates.",
+      "category": "Data",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-postgres", "{{POSTGRES_URL}}"],
+      "env_template": {},
+      "requires": [
+        { "key": "POSTGRES_URL", "label": "Postgres connection string", "kind": "secret", "placeholder": "postgresql://user:pass@host:5432/db" }
+      ],
+      "recommended": false,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/postgres"
+      }
+    },
+    {
+      "slug": "sqlite",
+      "name": "SQLite",
+      "description": "Read and write a local SQLite database. Tools: schema introspection, parameterized queries, table-create. Great for agent-managed scratch databases.",
+      "category": "Data",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-sqlite", "{{DB_PATH}}"],
+      "env_template": {},
+      "requires": [
+        { "key": "DB_PATH", "label": "Path to .sqlite file", "kind": "path", "placeholder": "/home/you/data/agent.sqlite" }
+      ],
+      "recommended": false,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite"
+      }
+    },
+    {
+      "slug": "memory",
+      "name": "Knowledge Graph Memory",
+      "description": "Persistent agent memory in a local knowledge graph. Tools to create entities, link relations, query — the LLM builds its own structured recall on top of Axocoatl's tier-4 semantic memory.",
+      "category": "Memory",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-memory"],
+      "env_template": {},
+      "requires": [],
+      "recommended": false,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory"
+      }
+    },
+    {
+      "slug": "sequential-thinking",
+      "name": "Sequential Thinking",
+      "description": "A scratch-pad tool for the model to lay out multi-step reasoning before acting. Particularly useful for non-reasoning models that benefit from explicit chain-of-thought.",
+      "category": "Reasoning",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "env_template": {},
+      "requires": [],
+      "recommended": true,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking"
+      }
+    },
+    {
+      "slug": "time",
+      "name": "Time",
+      "description": "Current time and timezone conversion. Sounds small; it's the difference between an agent guessing what 'tomorrow' means and being right.",
+      "category": "Utilities",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-time"],
+      "env_template": {},
+      "requires": [],
+      "recommended": true,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/time"
+      }
+    },
+    {
+      "slug": "fetch",
+      "name": "Fetch",
+      "description": "HTTP GET (and turn HTML into clean markdown). The minimal web-browsing primitive — pairs well with a search server.",
+      "category": "Web",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-fetch"],
+      "env_template": {},
+      "requires": [],
+      "recommended": true,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
+      }
+    },
+    {
+      "slug": "puppeteer",
+      "name": "Puppeteer",
+      "description": "Real browser automation — navigate pages, click, screenshot, fill forms. Heavier than Fetch; use when the target site needs JavaScript.",
+      "category": "Web",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "env_template": {},
+      "requires": [],
+      "recommended": false,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer"
+      }
+    },
+    {
+      "slug": "google-maps",
+      "name": "Google Maps",
+      "description": "Geocoding, places search, directions, distance matrix. Requires a Google Maps API key with the Places + Directions APIs enabled.",
+      "category": "Utilities",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-google-maps"],
+      "env_template": { "GOOGLE_MAPS_API_KEY": "{{GOOGLE_MAPS_API_KEY}}" },
+      "requires": [
+        { "key": "GOOGLE_MAPS_API_KEY", "label": "Google Maps API key", "kind": "secret", "placeholder": "AIza…" }
+      ],
+      "recommended": false,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/google-maps"
+      }
+    },
+    {
+      "slug": "slack",
+      "name": "Slack",
+      "description": "Read channels, post messages, list users. Scope is whatever your Slack bot token allows — pin it down on creation.",
+      "category": "Productivity",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-slack"],
+      "env_template": {
+        "SLACK_BOT_TOKEN": "{{SLACK_BOT_TOKEN}}",
+        "SLACK_TEAM_ID": "{{SLACK_TEAM_ID}}"
+      },
+      "requires": [
+        { "key": "SLACK_BOT_TOKEN", "label": "Slack bot token", "kind": "secret", "placeholder": "xoxb-…" },
+        { "key": "SLACK_TEAM_ID", "label": "Slack team/workspace id", "kind": "text", "placeholder": "T01…" }
+      ],
+      "recommended": false,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/slack"
+      }
+    },
+    {
+      "slug": "gdrive",
+      "name": "Google Drive",
+      "description": "Search and read Google Drive files. Read-only — agents can't accidentally delete things. OAuth flow runs once at first connect.",
+      "category": "Productivity",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-gdrive"],
+      "env_template": {},
+      "requires": [],
+      "recommended": false,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/gdrive"
+      }
+    },
+    {
+      "slug": "git",
+      "name": "Git",
+      "description": "Local git operations on an allowlisted repo — log, diff, blame, status. Read-only by default; explicit args enable commit/push.",
+      "category": "Development",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-git", "--repository", "{{REPO_PATH}}"],
+      "env_template": {},
+      "requires": [
+        { "key": "REPO_PATH", "label": "Repository path", "kind": "path", "placeholder": "/home/you/repos/myrepo" }
+      ],
+      "recommended": false,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/git"
+      }
+    },
+    {
+      "slug": "everything",
+      "name": "Everything (reference server)",
+      "description": "Anthropic's reference implementation showcasing every MCP feature — resources, tools, prompts, sampling. Useful for testing your wiring, not for production.",
+      "category": "Reference",
+      "transport": "stdio",
+      "command": "npx",
+      "args_template": ["-y", "@modelcontextprotocol/server-everything"],
+      "env_template": {},
+      "requires": [],
+      "recommended": false,
+      "links": {
+        "source": "https://github.com/modelcontextprotocol/servers/tree/main/src/everything"
+      }
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+name: CI
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Unit + integration tests
+        run: cargo test --workspace
+      - name: Doc tests
+        run: cargo test --doc --workspace
+      - name: Release build smoke
+        run: cargo build --release -p axocoatl-cli

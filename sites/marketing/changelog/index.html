@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Changelog — Axocoatl</title>
+  <meta name="description" content="Every shipped release of Axocoatl. Keep-a-Changelog format. Open for reading at any time.">
+  <meta property="og:title" content="Axocoatl — Changelog">
+  <meta property="og:description" content="Every shipped release.">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles/tokens.css">
+  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/finder.css">
+  <style>
+    .release {
+      padding: var(--s-7) 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .release:last-of-type { border-bottom: 0; }
+    .release-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--s-2);
+      padding: 4px 10px;
+      font-family: var(--font-mono);
+      font-size: var(--t-13);
+      color: var(--accent);
+      background: rgba(var(--axo-jade-rgb), .12);
+      border: 1px solid rgba(var(--axo-jade-rgb), .25);
+      border-radius: 999px;
+    }
+    .release-date {
+      font-family: var(--font-mono);
+      font-size: var(--t-13);
+      color: var(--muted);
+      margin-left: var(--s-3);
+    }
+    .release h2 {
+      font-size: var(--t-32);
+      margin: var(--s-4) 0 var(--s-2);
+    }
+    .release h3 {
+      font-family: var(--font-display);
+      font-size: var(--t-14);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin-top: var(--s-5);
+      margin-bottom: var(--s-3);
+    }
+    .release ul {
+      padding-left: 1.4rem;
+      color: var(--fg-soft);
+      line-height: 1.85;
+      margin: 0;
+    }
+  </style>
+  <script type="module" src="/components/ax-site-nav.js"></script>
+  <script type="module" src="/components/ax-install-bar.js"></script>
+  <script type="module" src="/components/ax-footer.js"></script>
+  <script type="module" src="/components/ax-theme-toggle.js"></script>
+</head>
+<body>
+  <ax-site-nav></ax-site-nav>
+
+  <main>
+
+    <section class="container hero" style="padding-bottom: var(--s-7);">
+      <span class="eyebrow">Changelog</span>
+      <h1>What shipped.</h1>
+      <p class="lede">
+        Every release of Axocoatl. Keep-a-Changelog format. Curated
+        release notes live as blog posts; this is the bullet record.
+        The canonical source is
+        <a href="https://github.com/axocoatl/axocoatl/blob/main/CHANGELOG.md" target="_blank" rel="noopener"><code>CHANGELOG.md</code></a>
+        in the repo.
+      </p>
+    </section>
+
+    <section class="container container-narrow" style="padding-bottom: var(--s-10);">
+
+      <article class="release">
+        <span class="release-tag">v0.1.0</span>
+        <span class="release-date">2026-04-24 · first public release</span>
+        <h2>The runtime that runs.</h2>
+
+        <h3>Added</h3>
+        <ul>
+          <li>Stigmergic multi-agent coordination via EventLattice, HTN
+              symbolic planning, and auction-based agent selection.</li>
+          <li>Workflow execution — CLI, HTTP, and IPC paths. Entry
+              agents activate directly; downstream agents cascade via
+              <code>TaskCompleted</code> events.</li>
+          <li>Per-agent token budgets, four-tier persistent memory
+              with neural Tier 4, and checkpointed agent state.</li>
+          <li>Directory sessions with podman-sandboxed bind-mounts,
+              full PTY terminal support, and resumable state.</li>
+          <li>MCP integration: bundled server catalog, install flow,
+              permission gate, and a Tools view in the dashboard.</li>
+          <li>Provider matrix: Ollama, OpenAI, Anthropic, Mistral,
+              Gemini. Per-agent selection.</li>
+          <li>Always-on system service (systemd / launchd) via
+              <code>axocoatl service install</code>.</li>
+          <li>Interactive <code>axocoatl onboard</code> + <code>axocoatl doctor</code>.</li>
+          <li>Dashboard: Sessions cockpit, Studio lattice canvas,
+              Automations editor, Chat, Files, Skills, MCP, Agents.</li>
+          <li>318 tests passing across the workspace.</li>
+        </ul>
+
+        <h3>Known follow-ups</h3>
+        <ul>
+          <li>Lattice-mode directory sessions — single-agent mode is
+              fully wired; lattice mode returns a clear "not yet
+              available" message and is the next fast-follow.</li>
+          <li>OpenRouter as a first-class provider block in
+              <code>axocoatl.yaml</code> (currently usable through the
+              OpenAI-compatible path).</li>
+        </ul>
+      </article>
+
+    </section>
+
+  </main>
+
+  <ax-footer></ax-footer>
+  <ax-install-bar></ax-install-bar>
+</body>
+</html>

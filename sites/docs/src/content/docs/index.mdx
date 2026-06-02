@@ -1,0 +1,50 @@
+---
+title: Axocoatl
+description: The open-source Rust runtime for self-coordinating multi-agent systems.
+template: splash
+hero:
+  tagline: Real workflows. No theater.
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: GitHub
+      link: https://github.com/axocoatl/axocoatl
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Axocoatl is a Rust runtime for **self-coordinating multi-agent systems**.
+Agents persist their state, run as a system service, route work through a
+stigmergic event lattice, and finish what you start. One 13 MB binary.
+Your hardware. Your LLM. Your data.
+
+## Quick links
+
+<CardGrid>
+  <Card title="Get started in 60 seconds" icon="rocket">
+    Install, run `axocoatl doctor`, open the dashboard. [Quickstart →](/getting-started/)
+  </Card>
+  <Card title="How the lattice works" icon="puzzle">
+    The coordination model that makes Axocoatl different. [Concepts →](/concepts/lattice/)
+  </Card>
+  <Card title="Bring your own LLM" icon="setting">
+    Ollama for local, or any cloud provider. [Provider setup →](/guides/ollama-quickstart/)
+  </Card>
+  <Card title="Troubleshooting" icon="warning">
+    What `axocoatl doctor` checks, and how to fix common failures. [Open →](/guides/troubleshooting/)
+  </Card>
+</CardGrid>
+
+## What's the wedge?
+
+The agent-tooling industry has a theater problem. Mac mini farms, glowing
+terminals, demo videos. The optics have eaten the output. Axocoatl is for
+the opposite kind of team: the one with actual work to ship.
+
+We're a **runtime**, not a framework. A single binary that runs on your
+box, supervises a constellation of agents, persists their state through
+crashes and restarts, and lets you watch every step in the dashboard. The
+LLM is your choice. Nothing leaves the box unless you wire it to.

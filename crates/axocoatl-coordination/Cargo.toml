@@ -1,0 +1,35 @@
+[package]
+name = "axocoatl-coordination"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Adaptive stigmergic task lattice coordination for Axocoatl multi-agent systems"
+
+[dependencies]
+axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
+axocoatl-llm = { version = "0.1.0", path = "../axocoatl-llm" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dashmap = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+axocoatl-actor = { version = "0.1.0", path = "../axocoatl-actor" }
+axocoatl-llm = { version = "0.1.0", path = "../axocoatl-llm" }
+axocoatl-token = { version = "0.1.0", path = "../axocoatl-token" }
+ractor = { workspace = true }
+async-trait = { workspace = true }
+tokio-stream = { workspace = true }

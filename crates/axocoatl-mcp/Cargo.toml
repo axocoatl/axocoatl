@@ -1,0 +1,30 @@
+[package]
+name = "axocoatl-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "MCP (Model Context Protocol) client and server integration for Axocoatl"
+
+[dependencies]
+axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
+axocoatl-llm = { version = "0.1.0", path = "../axocoatl-llm" }
+rmcp = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+tempfile = "3.27"

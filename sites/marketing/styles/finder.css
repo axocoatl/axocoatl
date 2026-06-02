@@ -1,0 +1,239 @@
+/* Window chrome + sticky nav + lattice stage. Lighter shadows, tighter
+   borders. The window's job is to feel like a window in a desktop OS,
+   not a flashy demo card. */
+
+/* ── Sticky top nav ── */
+.site-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border);
+}
+.site-nav-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--s-7);
+  padding: 14px 0;
+}
+.site-nav-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--t-16);
+  color: var(--fg);
+  letter-spacing: -.005em;
+  border-bottom: 0;
+}
+.site-nav-brand:hover { border-bottom: 0; }
+.site-nav-brand img {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 10px rgba(var(--axo-jade-rgb), .45));
+}
+.site-nav-links {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  margin-left: auto;
+  font-family: var(--font-display);
+  font-size: var(--t-14);
+}
+.site-nav-links a {
+  color: var(--muted);
+  border-bottom: 0;
+  transition: color .12s;
+}
+.site-nav-links a:hover { color: var(--fg); }
+.site-nav-links a.active { color: var(--fg); }
+.site-nav-cta {
+  padding: 7px 14px;
+  background: var(--accent);
+  color: var(--vellum) !important;
+  border-radius: var(--radius-sm);
+  border-bottom: 0 !important;
+  transition: background .12s;
+}
+.site-nav-cta:hover { background: var(--accent-lift); }
+
+/* Mobile nav hint */
+@media (max-width: 720px) {
+  .site-nav-links { gap: var(--s-4); font-size: var(--t-13); }
+  .site-nav-links a:not(.site-nav-cta):not(:last-of-type) { display: none; }
+}
+
+/* ── Finder window chrome ── */
+ax-finder-window {
+  display: block;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-2);
+}
+.finder-titlebar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 38px;
+  padding: 0 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+.finder-lights { display: inline-flex; gap: 6px; }
+.finder-light {
+  width: 11px; height: 11px; border-radius: 50%;
+  background: var(--border-strong);
+}
+.finder-light.red    { background: #ff5f57; }
+.finder-light.amber  { background: #febc2e; }
+.finder-light.green  { background: #28c840; }
+.finder-title {
+  flex: 1;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--t-13);
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0;
+}
+.finder-body {
+  display: grid;
+  grid-template-columns: var(--finder-side-w, 240px) 1fr;
+  min-height: var(--finder-min-h, 360px);
+}
+.finder-body.no-sidebar { grid-template-columns: 1fr; }
+.finder-sidebar {
+  background: var(--bg-2);
+  border-right: 1px solid var(--border);
+  padding: var(--s-4) var(--s-2);
+  overflow-y: auto;
+}
+.finder-main { min-width: 0; }
+
+/* ── Lattice stage ── */
+.lattice-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  background: var(--panel);
+}
+.lattice-stage ax-lattice {
+  position: absolute;
+  inset: 0;
+}
+
+/* ── CLI snippet ── */
+ax-cli-snippet {
+  display: block;
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--s-4) var(--s-7) var(--s-4) 52px;
+  font-family: var(--font-mono);
+  font-size: var(--t-14);
+  color: var(--fg);
+  cursor: pointer;
+  user-select: all;
+  transition: border-color .12s;
+}
+ax-cli-snippet:hover { border-color: var(--accent); }
+ax-cli-snippet::before {
+  content: "$";
+  position: absolute;
+  left: 22px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted-2);
+  user-select: none;
+}
+ax-cli-snippet::after {
+  content: "copy";
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted-2);
+  user-select: none;
+}
+ax-cli-snippet[data-copied]::after { content: "copied"; color: var(--accent); }
+
+/* ── Comparison rows ── */
+.comparison {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+ax-comparison-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) 1fr 1fr;
+  background: var(--panel);
+  padding: var(--s-4) var(--s-5);
+  font-size: var(--t-14);
+  align-items: center;
+  gap: var(--s-4);
+}
+ax-comparison-row[header] {
+  background: var(--panel-2);
+  font-family: var(--font-display);
+  font-size: var(--t-13);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted-2);
+}
+ax-comparison-row .label { font-weight: 500; color: var(--fg); }
+ax-comparison-row .them { color: var(--muted); }
+ax-comparison-row .us   { color: var(--accent); font-weight: 500; }
+
+/* ── Sticky install bar (mobile + scroll past hero) ── */
+.install-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: center;
+  padding: var(--s-3) var(--s-4);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid var(--border);
+  transform: translateY(100%);
+  transition: transform .25s ease-out;
+}
+.install-bar.show { transform: translateY(0); }
+.install-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  max-width: 720px;
+}
+.install-bar code {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--t-14);
+  background: transparent;
+  color: var(--fg);
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

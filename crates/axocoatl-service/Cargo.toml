@@ -1,0 +1,18 @@
+[package]
+name = "axocoatl-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "OS background-service management (systemd / launchd) for the Axocoatl daemon"
+
+[dependencies]
+thiserror = { workspace = true }
+tracing = { workspace = true }

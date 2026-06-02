@@ -1,0 +1,43 @@
+[package]
+name = "axocoatl-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Axum HTTP/WebSocket API server for Axocoatl"
+
+[dependencies]
+axocoatl-core = { version = "0.1.0", path = "../crates/axocoatl-core" }
+axocoatl-config = { version = "0.1.0", path = "../crates/axocoatl-config" }
+axocoatl-daemon = { version = "0.1.0", path = "../crates/axocoatl-daemon" }
+axocoatl-actor = { version = "0.1.0", path = "../crates/axocoatl-actor" }
+axocoatl-coordination = { version = "0.1.0", path = "../crates/axocoatl-coordination" }
+axocoatl-llm = { version = "0.1.0", path = "../crates/axocoatl-llm" }
+axocoatl-session = { version = "0.1.0", path = "../crates/axocoatl-session" }
+axocoatl-memory = { version = "0.1.0", path = "../crates/axocoatl-memory", default-features = false }
+axocoatl-mcp = { version = "0.1.0", path = "../crates/axocoatl-mcp" }
+axum = { workspace = true }
+tokio-stream = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { version = "0.6", features = ["cors"] }
+dashmap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+uuid = { workspace = true }
+bytes = "1"
+rust-embed = "8"
+mime_guess = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

@@ -1,0 +1,58 @@
+# Rust build artifacts
+/target
+**/target
+**/*.rs.bk
+*.pdb
+
+# Runtime data & secrets
+/data
+**/data/checkpoints
+**/data/memory
+.env
+*.sock
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+*:Zone.Identifier
+
+# Image dumps — keep canonical brand assets, exclude everything else
+*.png
+*.jpg
+*.jpeg
+*.gif
+!branding/**
+!axocoatl-server/static/**
+!docs/img/**
+!sites/marketing/_brand/**
+!sites/docs/src/assets/**
+
+# Brand-iteration artifacts (internal)
+branding/generated/
+
+# User-local config (split from axocoatl.yaml)
+*.local.yaml
+axocoatl.local.yaml
+
+# Sites — generated / synced artifacts
+sites/marketing/assets/
+sites/marketing/vendor/
+sites/marketing/_drafts/
+sites/docs/dist/
+sites/docs/node_modules/
+sites/docs/.astro/
+sites/docs/public/mark.png
+sites/docs/public/wordmark.png
+sites/docs/public/favicon.png
+sites/docs/public/colors.json
+
+# Internal planning docs — kept locally, never shipped to the public repo
+research-docs/
+
+# Misc
+files.zip
+*.tar.gz

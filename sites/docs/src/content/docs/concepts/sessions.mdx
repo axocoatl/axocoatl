@@ -1,0 +1,68 @@
+---
+title: Sessions
+description: Sandboxed directory sessions, locally, with persistent state.
+---
+
+A **Session** is an agent (or a lattice of agents) running inside a
+single directory. The session sandbox is a container (podman)
+bind-mounted to your directory.
+The agent reads, writes, and runs commands inside. You see every action
+stream into the dashboard.
+
+## Starting a session
+
+From the dashboard:
+
+1. Open **Sessions**.
+2. Click **+ Add folder** in the sidebar to authorize a directory.
+3. Pick the folder, choose **Single agent**, pick an agent (`coder`
+   works for most coding tasks), click **Use this folder**.
+
+A new session boots in a fresh container with your folder bind-mounted.
+The cockpit opens with Files / Activity / Lattice / Browser panes plus a
+Terminals pane at the bottom.
+
+From the CLI:
+
+```sh
+axocoatl session new ./my-repo --mode single_agent --agent coder
+```
+
+## What the agent can do
+
+Once running, the agent has tools to operate inside the sandbox:
+
+- `read_file` / `write_file` / `edit_file` / `list_dir` / `glob` / `grep`
+- `bash` — run a one-shot command and capture stdout/stderr.
+- `bash_background` — run a long-lived process in the background (e.g.,
+  `python3 serve.py`). Lives until you kill it or the session ends.
+- `spawn_terminal` — open a PTY-backed terminal in the dashboard's
+  Terminals pane. You see the output live.
+- `read_terminal` / `kill_terminal` — let the agent inspect or stop
+  terminals it spawned.
+
+Every tool call shows up in the Activity pane as a chip with collapsible
+output.
+
+## State survives
+
+Close the laptop. Open it tomorrow. The session is still there. The
+container is gone (it'll respawn), but the agent's state — message
+history, memory, open files — is checkpointed. Hot-restart and the agent
+picks up where it left off.
+
+## The seeded demo
+
+On daemon boot, a demo session called `demo-counters` is auto-created in
+`{data_dir}/demos/counters` (if it doesn't already exist). It's a tiny
+folder you can experiment in safely. From the Sessions tab, click the
+`demo-counters` row to enter it. Ask the agent to make some counter
+files in Python; watch the bash terminal run them.
+
+## Lattice mode
+
+`SessionMode::Lattice` runs *multiple agents* together inside one
+directory. The full lattice cascades work between them — exactly like a
+multi-agent workflow, but bounded to a folder. Currently this returns a
+clear "not yet available" message in v0.1 and is the post-launch
+fast-follow.

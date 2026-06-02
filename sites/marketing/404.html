@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lost in the lattice — Axocoatl</title>
+  <meta name="description" content="The page you wanted isn't here. The lattice didn't route this one.">
+  <meta name="robots" content="noindex">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles/tokens.css">
+  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/finder.css">
+  <script type="module" src="/components/ax-site-nav.js"></script>
+  <script type="module" src="/components/ax-footer.js"></script>
+  <script type="module" src="/components/ax-theme-toggle.js"></script>
+</head>
+<body>
+  <ax-site-nav></ax-site-nav>
+
+  <main>
+    <section class="container" style="padding: var(--s-10) 0; display: flex; flex-direction: column; align-items: center; gap: var(--s-5); text-align: center;">
+      <span class="hero-tagline">
+        <span class="hero-tagline-dot" style="background: var(--accent-2); box-shadow: 0 0 8px rgba(var(--axo-blue-rgb), .6);"></span>
+        404 · No event matched this path
+      </span>
+      <h1 style="font-size: clamp(2.5rem, 7vw, 5rem); margin: 0;">Lost in the lattice.</h1>
+      <p class="lede" style="text-align: center;">
+        The page you wanted isn't here. The lattice didn't route this
+        one. Try the homepage, or jump to the docs — the routes that
+        exist are linked from there.
+      </p>
+      <div style="display: flex; gap: var(--s-3); margin-top: var(--s-4);">
+        <a class="btn btn-primary" href="/">Back to home →</a>
+        <a class="btn btn-ghost" href="https://docs.axocoatl.ai" target="_blank" rel="noopener">Open the docs</a>
+      </div>
+    </section>
+  </main>
+
+  <ax-footer></ax-footer>
+</body>
+</html>

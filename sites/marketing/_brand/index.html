@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brand · Axocoatl</title>
+  <meta name="robots" content="noindex">
+  <meta name="description" content="Internal style guide — palette, marks, typography. Not linked from the main marketing nav.">
+  <link rel="icon" type="image/png" href="/assets/favicon.png">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles/tokens.css">
+  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/finder.css">
+  <style>
+    /* Brand-inspector–only styles, ported from the dashboard's old Brand tab.
+       Removes the generations gallery + comparison-row styles (no daemon). */
+    .brand-page { display: flex; flex-direction: column; gap: 20px; padding: 30px 0 60px; }
+    .brand-page-head { display: flex; align-items: flex-end; gap: 16px; justify-content: space-between; flex-wrap: wrap; }
+    .brand-page-tools { display: flex; gap: 10px; align-items: center; }
+    .brand-block { display: flex; flex-direction: column; gap: 10px; margin-top: 28px; }
+    .brand-h2 { font-size: 11.5px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); margin: 0; padding-bottom: 6px; border-bottom: 1px solid var(--border); font-family: var(--font-display); font-weight: 600; }
+
+    .brand-swatch-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .brand-swatch { background: var(--panel); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; cursor: pointer; transition: transform .12s, border-color .12s; }
+    .brand-swatch:hover { transform: translateY(-1px); border-color: var(--accent); }
+    .brand-swatch-chip { height: 84px; }
+    .brand-swatch-meta { padding: 9px 12px; }
+    .brand-swatch-name { font-size: 13px; font-weight: 600; color: var(--fg); text-transform: capitalize; }
+    .brand-swatch-hex { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+    .brand-swatch-cmyk { font-family: ui-monospace, monospace; font-size: 10.5px; color: var(--muted-2); margin-top: 1px; }
+
+    .brand-bg { border: 1px solid var(--border); border-radius: 9px; padding: 18px; min-height: 180px; }
+    .brand-bg[data-bg="panel"]    { background: var(--panel); }
+    .brand-bg[data-bg="dark"]     { background: #000; }
+    .brand-bg[data-bg="light"]    { background: #F4ECDA; }
+    .brand-bg[data-bg="white"]    { background: #fff; }
+    .brand-bg[data-bg="checker"]  {
+      background:
+        linear-gradient(45deg, #20242e 25%, transparent 25%) 0 0 / 20px 20px,
+        linear-gradient(-45deg, #20242e 25%, transparent 25%) 0 10px / 20px 20px,
+        linear-gradient(45deg, transparent 75%, #20242e 75%) 10px -10px / 20px 20px,
+        linear-gradient(-45deg, transparent 75%, #20242e 75%) -10px 0px / 20px 20px,
+        #2a2f3a;
+    }
+
+    .brand-size-control { display: flex; align-items: center; gap: 12px; padding: 4px 0 8px; }
+    .brand-size-control input[type=range] { flex: 1; max-width: 320px; accent-color: var(--axo-jade); }
+
+    .brand-tile-grid { display: flex; flex-wrap: wrap; gap: 22px; align-items: center; justify-content: center; }
+    .brand-tile { display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: zoom-in; }
+    .brand-tile-frame { display: flex; align-items: center; justify-content: center; padding: 6px; border: 1px dashed transparent; border-radius: 6px; transition: border-color .12s; }
+    .brand-tile:hover .brand-tile-frame { border-color: var(--accent); }
+    .brand-tile-frame img { display: block; max-width: 100%; max-height: 100%; }
+    .brand-tile-label { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); }
+
+    .brand-type { display: flex; flex-direction: column; gap: 18px; padding: 18px 22px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; }
+    .brand-type-row { display: flex; flex-direction: column; gap: 6px; }
+
+    .brand-lightbox { position: fixed; inset: 0; z-index: 800; background: rgba(0,0,0,.85); display: flex; flex-direction: column; }
+    .brand-lightbox.hide { display: none; }
+    .brand-lightbox-head { display: flex; align-items: center; gap: 9px; padding: 10px 14px; background: var(--panel-2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .brand-lightbox-title { font-size: 13px; color: var(--fg); font-weight: 600; }
+    .brand-lightbox-meta { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11.5px; }
+    .brand-lb-btn { background: var(--bg-3); border: 1px solid var(--border); color: var(--fg); width: 30px; height: 28px; border-radius: 5px; font-size: 14px; line-height: 1; cursor: pointer; }
+    .brand-lb-btn:hover { background: var(--bg-2); border-color: var(--accent); color: var(--accent); }
+    #brand-lb-zoom { accent-color: var(--axo-jade); }
+    .brand-lightbox-body { flex: 1; overflow: auto; position: relative; }
+    .brand-lightbox-body[data-bg="panel"]   { background: var(--panel); }
+    .brand-lightbox-body[data-bg="dark"]    { background: #000; }
+    .brand-lightbox-body[data-bg="light"]   { background: #F4ECDA; }
+    .brand-lightbox-body[data-bg="white"]   { background: #fff; }
+    .brand-lightbox-body[data-bg="checker"] {
+      background:
+        linear-gradient(45deg, #20242e 25%, transparent 25%) 0 0 / 20px 20px,
+        linear-gradient(-45deg, #20242e 25%, transparent 25%) 0 10px / 20px 20px,
+        linear-gradient(45deg, transparent 75%, #20242e 75%) 10px -10px / 20px 20px,
+        linear-gradient(-45deg, transparent 75%, #20242e 75%) -10px 0px / 20px 20px,
+        #2a2f3a;
+    }
+    .brand-lightbox-canvas { display: flex; align-items: center; justify-content: center; min-width: 100%; min-height: 100%; padding: 40px; box-sizing: border-box; }
+    .brand-lightbox-canvas img { transform-origin: center; transition: transform .12s; }
+
+    /* Tiny toast for "copied hex" feedback */
+    .copied-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--accent); color: var(--vellum); padding: 10px 18px; border-radius: 8px; font-size: 13px; font-family: var(--font-display); opacity: 0; transition: opacity .15s, transform .15s; pointer-events: none; z-index: 900; }
+    .copied-toast.show { opacity: 1; transform: translateX(-50%) translateY(-6px); }
+
+    .select { background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; color: var(--fg); font-size: 13px; font-family: var(--font-body); }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <div class="brand-page">
+      <header class="brand-page-head">
+        <div>
+          <h1 style="margin:0; font-size: 2rem;">Brand inspector</h1>
+          <p class="muted" style="margin: 6px 0 0; font-size: 14px;">Internal style guide — every mark, every color, every asset at every size. Click any tile to inspect.</p>
+        </div>
+        <div class="brand-page-tools">
+          <label style="display: flex; gap: 8px; align-items: center; font-size: 13px;">
+            <span class="muted">Background</span>
+            <select id="brand-bg-pick" class="select" style="max-width:140px;">
+              <option value="panel">Dark panel</option>
+              <option value="dark">Pure black</option>
+              <option value="light">Light cream</option>
+              <option value="white">Pure white</option>
+              <option value="checker">Checkerboard</option>
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <section class="brand-block">
+        <h2 class="brand-h2">Palette</h2>
+        <p class="muted small" style="margin: 0;">Click any swatch to copy the hex.</p>
+        <div class="brand-swatch-row" id="brand-swatches"></div>
+      </section>
+
+      <section class="brand-block">
+        <h2 class="brand-h2">Marks</h2>
+        <p class="muted small" style="margin: 0;">Resize the slider to see every mark scale together. Click a tile to open the inspector.</p>
+        <div class="brand-size-control">
+          <span class="muted small">Tile size</span>
+          <input type="range" id="brand-size" min="48" max="320" value="128" step="8">
+          <span class="small mono" id="brand-size-val">128px</span>
+        </div>
+        <div class="brand-bg" id="brand-marks-bg">
+          <div class="brand-tile-grid" id="brand-marks"></div>
+        </div>
+      </section>
+
+      <section class="brand-block">
+        <h2 class="brand-h2">Typography</h2>
+        <div class="brand-type">
+          <div class="brand-type-row">
+            <div class="muted small">Display · Space Grotesk</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 48px; letter-spacing: -.01em;">Axocoatl</div>
+            <div style="font-family: 'Space Grotesk', sans-serif; font-weight: 500; font-size: 24px; letter-spacing: 0;">Axocoatl</div>
+          </div>
+          <div class="brand-type-row">
+            <div class="muted small">Body · system-ui</div>
+            <div style="font-size: 18px;">The water serpent threads runtime, mind, and workspace into one.</div>
+            <div style="font-size: 13px; color: var(--muted);">Bring your own LLM. Bring your own keys. Bring your own runtime.</div>
+          </div>
+          <div class="brand-type-row">
+            <div class="muted small">Mono · JetBrains Mono</div>
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 13px;">axocoatl session new ./repo --mode lattice</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="brand-lightbox hide" id="brand-lightbox">
+      <div class="brand-lightbox-head">
+        <span class="brand-lightbox-title" id="brand-lb-title">—</span>
+        <span class="brand-lightbox-meta" id="brand-lb-meta"></span>
+        <span class="grow"></span>
+        <button class="brand-lb-btn" id="brand-lb-zoom-out" title="Zoom out">−</button>
+        <input type="range" id="brand-lb-zoom" min="25" max="500" value="100" step="5" style="width:160px;">
+        <button class="brand-lb-btn" id="brand-lb-zoom-in" title="Zoom in">+</button>
+        <span class="small mono" id="brand-lb-zoom-val">100%</span>
+        <button class="brand-lb-btn" id="brand-lb-fit" title="Fit (0)">⤧</button>
+        <button class="brand-lb-btn" id="brand-lb-bg" title="Cycle background">▣</button>
+        <button class="brand-lb-btn" id="brand-lb-fs" title="Fullscreen (f)">⛶</button>
+        <button class="brand-lb-btn" id="brand-lb-close" title="Close (Esc)">×</button>
+      </div>
+      <div class="brand-lightbox-body" id="brand-lb-body">
+        <div class="brand-lightbox-canvas" id="brand-lb-canvas"></div>
+      </div>
+    </div>
+
+    <div class="copied-toast" id="copy-toast">Copied</div>
+  </main>
+
+<script>
+  // Standalone brand-inspector script. Mirrors the dashboard's old
+  // renderBrand path but reads from /assets/* (synced from branding/)
+  // instead of the daemon's /brand/* endpoints. Drops the generations +
+  // promote features — those were experimental brand-iteration tools
+  // and the brand is locked.
+
+  const $ = s => document.querySelector(s);
+  const el = (tag, cls, txt) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (txt != null) n.textContent = txt;
+    return n;
+  };
+
+  const state = {
+    colors: null,
+    tileSize: parseInt(localStorage.getItem('axo.brand.size') || '128', 10),
+    bg: localStorage.getItem('axo.brand.bg') || 'panel',
+    lb: { zoom: 100, bg: null, src: null },
+  };
+
+  async function loadColors() {
+    try { state.colors = await fetch('/assets/colors.json').then(r => r.json()); }
+    catch { state.colors = {}; }
+  }
+
+  function flashCopied(text) {
+    const toast = $('#copy-toast');
+    toast.textContent = 'Copied ' + text;
+    toast.classList.add('show');
+    clearTimeout(flashCopied._t);
+    flashCopied._t = setTimeout(() => toast.classList.remove('show'), 1100);
+  }
+
+  function renderSwatches() {
+    const host = $('#brand-swatches'); host.innerHTML = '';
+    const palette = state.colors || {};
+    const items = [];
+    ['jade_green', 'bronze_gold', 'circuit_blue'].forEach(k => {
+      if (palette[k]) items.push({ key: k, ...palette[k] });
+    });
+    if (palette.neutrals) {
+      Object.entries(palette.neutrals).forEach(([k, hex]) =>
+        items.push({ key: k, hex, role: 'Neutral · ' + k, cmyk: '' }));
+    }
+    items.forEach(it => {
+      const card = el('div', 'brand-swatch');
+      const chip = el('div', 'brand-swatch-chip');
+      chip.style.background = it.hex;
+      card.appendChild(chip);
+      const meta = el('div', 'brand-swatch-meta');
+      meta.appendChild(el('div', 'brand-swatch-name', it.key.replace(/_/g, ' ')));
+      meta.appendChild(el('div', 'brand-swatch-hex', it.hex));
+      if (it.cmyk) meta.appendChild(el('div', 'brand-swatch-cmyk', it.cmyk));
+      if (it.role) {
+        const r = el('div'); r.style.cssText = 'font-size:10.5px;margin-top:4px;color:var(--muted-2)';
+        r.textContent = it.role;
+        meta.appendChild(r);
+      }
+      card.appendChild(meta);
+      card.title = 'Click to copy ' + it.hex;
+      card.addEventListener('click', () => {
+        navigator.clipboard?.writeText(it.hex);
+        flashCopied(it.hex);
+      });
+      host.appendChild(card);
+    });
+  }
+
+  function renderMarks() {
+    const host = $('#brand-marks'); host.innerHTML = '';
+    const size = state.tileSize;
+    const tiles = [
+      { src: '/assets/mark.png',           label: 'mark.png — canonical brand mark' },
+      { src: '/assets/favicon.png',        label: 'favicon.png — 128 px tab icon' },
+      { src: '/assets/wordmark.png',       label: 'wordmark.png — primary wordmark' },
+      { src: '/assets/wordmark-ink.png',   label: 'wordmark-ink.png — on parchment', lightBg: true },
+      { src: '/assets/wordmark-vellum.png',label: 'wordmark-vellum.png — on ink',    darkBg: true },
+    ];
+    tiles.forEach(t => {
+      const tile = el('div', 'brand-tile');
+      const frame = el('div', 'brand-tile-frame');
+      frame.style.width = size + 'px';
+      frame.style.height = size + 'px';
+      if (t.lightBg) { frame.style.background = '#0E1218'; frame.style.borderRadius = '8px'; }
+      else if (t.darkBg) { frame.style.background = '#F4ECDA'; frame.style.borderRadius = '8px'; }
+      const img = document.createElement('img');
+      img.src = t.src; img.alt = t.label;
+      img.onerror = () => tile.remove();
+      frame.appendChild(img);
+      tile.appendChild(frame);
+      tile.appendChild(el('div', 'brand-tile-label', t.label + ' · ' + size + 'px'));
+      tile.addEventListener('click', () => openLightbox(t.label, t.src));
+      host.appendChild(tile);
+    });
+    // Canonical small sizes — favicon, sidebar, file row.
+    [16, 24, 32, 48].forEach(px => {
+      const tile = el('div', 'brand-tile');
+      const frame = el('div', 'brand-tile-frame');
+      frame.style.width = (px + 16) + 'px';
+      frame.style.height = (px + 16) + 'px';
+      const img = document.createElement('img');
+      img.src = '/assets/mark.png';
+      img.alt = 'mark @ ' + px + 'px';
+      img.style.width = px + 'px';
+      img.style.height = px + 'px';
+      frame.appendChild(img);
+      tile.appendChild(frame);
+      tile.appendChild(el('div', 'brand-tile-label', 'mark · ' + px + 'px'));
+      tile.addEventListener('click', () => openLightbox('mark @ ' + px + 'px', '/assets/mark.png'));
+      host.appendChild(tile);
+    });
+  }
+
+  // ── Lightbox ──
+  function openLightbox(title, src) {
+    state.lb.src = src;
+    state.lb.zoom = 100;
+    state.lb.bg = state.bg;
+    $('#brand-lb-title').textContent = title;
+    $('#brand-lb-meta').textContent = src;
+    $('#brand-lightbox').classList.remove('hide');
+    renderLightbox();
+    document.addEventListener('keydown', onLightboxKey);
+  }
+  function closeLightbox() {
+    $('#brand-lightbox').classList.add('hide');
+    document.removeEventListener('keydown', onLightboxKey);
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  }
+  function onLightboxKey(e) {
+    if (e.key === 'Escape') closeLightbox();
+    else if (e.key === '+' || (e.key === '=' && !e.shiftKey)) zoom(+25);
+    else if (e.key === '-') zoom(-25);
+    else if (e.key === '0') zoomSet(100);
+    else if (e.key === 'f') toggleFullscreen();
+  }
+  function renderLightbox() {
+    const canvas = $('#brand-lb-canvas'); canvas.innerHTML = '';
+    if (!state.lb.src) return;
+    const img = document.createElement('img');
+    img.src = state.lb.src;
+    const z = state.lb.zoom / 100;
+    img.style.width = (480 * z) + 'px';
+    img.style.height = 'auto';
+    canvas.appendChild(img);
+    $('#brand-lb-body').setAttribute('data-bg', state.lb.bg || 'panel');
+    $('#brand-lb-zoom').value = String(state.lb.zoom);
+    $('#brand-lb-zoom-val').textContent = state.lb.zoom + '%';
+  }
+  function zoom(d) { zoomSet(state.lb.zoom + d); }
+  function zoomSet(v) { state.lb.zoom = Math.max(25, Math.min(500, v | 0)); renderLightbox(); }
+  function cycleBg() {
+    const order = ['panel', 'dark', 'light', 'white', 'checker'];
+    const i = order.indexOf(state.lb.bg || 'panel');
+    state.lb.bg = order[(i + 1) % order.length];
+    renderLightbox();
+  }
+  function toggleFullscreen() {
+    const el = $('#brand-lightbox');
+    if (!document.fullscreenElement) el.requestFullscreen().catch(() => {});
+    else document.exitFullscreen();
+  }
+
+  // ── Wire up + initial render ──
+  (async function init() {
+    await loadColors();
+    $('#brand-bg-pick').value = state.bg;
+    $('#brand-size').value = String(state.tileSize);
+    $('#brand-size-val').textContent = state.tileSize + 'px';
+    $('#brand-marks-bg').setAttribute('data-bg', state.bg);
+    renderSwatches();
+    renderMarks();
+
+    $('#brand-size').addEventListener('input', e => {
+      state.tileSize = parseInt(e.target.value, 10);
+      localStorage.setItem('axo.brand.size', String(state.tileSize));
+      $('#brand-size-val').textContent = state.tileSize + 'px';
+      renderMarks();
+    });
+    $('#brand-bg-pick').addEventListener('change', e => {
+      state.bg = e.target.value;
+      localStorage.setItem('axo.brand.bg', state.bg);
+      $('#brand-marks-bg').setAttribute('data-bg', state.bg);
+    });
+    $('#brand-lb-close').addEventListener('click', closeLightbox);
+    $('#brand-lb-bg').addEventListener('click', cycleBg);
+    $('#brand-lb-fs').addEventListener('click', toggleFullscreen);
+    $('#brand-lb-fit').addEventListener('click', () => zoomSet(100));
+    $('#brand-lb-zoom-in').addEventListener('click', () => zoom(+25));
+    $('#brand-lb-zoom-out').addEventListener('click', () => zoom(-25));
+    $('#brand-lb-zoom').addEventListener('input', e => zoomSet(parseInt(e.target.value, 10)));
+  })();
+</script>
+</body>
+</html>
