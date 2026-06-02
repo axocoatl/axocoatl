@@ -16,7 +16,12 @@
   display: flex;
   align-items: center;
   gap: var(--s-7);
-  padding: 14px 0;
+  /* Vertical only — the .container parent owns horizontal padding so the
+     logo and CTA always sit inside the same outer breathing room as the
+     rest of the page.  Using the `padding` shorthand here would reset
+     left/right to 0 and the header would go flush on mobile. */
+  padding-top: 14px;
+  padding-bottom: 14px;
 }
 .site-nav-brand {
   display: inline-flex;
