@@ -124,6 +124,7 @@ jobs:
             axocoatl-actor
             axocoatl-coordination
             axocoatl-session
+            axocoatl-service
             axocoatl-daemon
             axocoatl-server
             axocoatl-cli

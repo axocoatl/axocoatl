@@ -25,9 +25,7 @@ jobs:
           # is why daemon (depends on session) couldn't publish.  60s sleep
           # between crates so the crates.io sparse index has time to refresh.
           crates="
-            axocoatl-session
-            axocoatl-daemon
-            axocoatl-server
+            axocoatl-service
             axocoatl-cli
           "
           for c in $crates; do
