@@ -1,0 +1,102 @@
+name: setup-cloudflare
+
+# One-shot bootstrap: creates the two Cloudflare Pages projects and
+# attaches their custom domains using the existing CLOUDFLARE_API_TOKEN
+# and CLOUDFLARE_ACCOUNT_ID secrets.  Idempotent — re-running is safe.
+#
+# Trigger from the Actions tab → "setup-cloudflare" → Run workflow.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Create Pages projects + custom domains
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -e
+          API="https://api.cloudflare.com/client/v4"
+          ACCT="$CLOUDFLARE_ACCOUNT_ID"
+          AUTH="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+
+          create_project() {
+            local name="$1"
+            echo "── Creating Pages project: $name"
+            local response
+            response=$(curl -sS -X POST "$API/accounts/$ACCT/pages/projects" \
+              -H "$AUTH" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\":\"$name\",\"production_branch\":\"main\"}")
+            local success
+            success=$(echo "$response" | jq -r '.success')
+            if [ "$success" = "true" ]; then
+              echo "  ✓ created"
+              echo "$response" | jq -r '.result | "    subdomain: " + .subdomain'
+              return 0
+            fi
+            # Idempotent: already-exists is fine
+            local code
+            code=$(echo "$response" | jq -r '.errors[0].code // empty')
+            if [ "$code" = "8000007" ]; then
+              echo "  ✓ already exists"
+              return 0
+            fi
+            echo "  ✗ failed:"
+            echo "$response" | jq .
+            return 1
+          }
+
+          add_domain() {
+            local project="$1"
+            local domain="$2"
+            echo "── Attaching custom domain: $domain → $project"
+            local response
+            response=$(curl -sS -X POST "$API/accounts/$ACCT/pages/projects/$project/domains" \
+              -H "$AUTH" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\":\"$domain\"}")
+            local success
+            success=$(echo "$response" | jq -r '.success')
+            if [ "$success" = "true" ]; then
+              echo "  ✓ attached"
+              return 0
+            fi
+            # Domain may already be attached
+            local msg
+            msg=$(echo "$response" | jq -r '.errors[0].message // empty')
+            if echo "$msg" | grep -qi "already\|duplicate"; then
+              echo "  ✓ already attached"
+              return 0
+            fi
+            echo "  ✗ failed:"
+            echo "$response" | jq .
+            return 1
+          }
+
+          # Step 1 — projects
+          create_project axocoatl-marketing
+          create_project axocoatl-docs
+
+          # Step 2 — custom domains
+          add_domain axocoatl-marketing axocoatl.ai
+          add_domain axocoatl-marketing www.axocoatl.ai
+          add_domain axocoatl-docs     docs.axocoatl.ai
+
+          echo
+          echo "── Done. Now re-run marketing-deploy + docs-deploy."
+
+      - name: Re-fire deploy workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run marketing-deploy.yml --ref main || true
+          gh workflow run docs-deploy.yml      --ref main || true
+        # We don't fail the job if gh workflow run is rate-limited or
+        # the workflow doesn't accept dispatch — the user can re-run
+        # manually if needed.
