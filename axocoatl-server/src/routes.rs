@@ -3115,7 +3115,12 @@ async fn dispatch_ws_command(
         // Session — stream the agent's work (tokens, reasoning, tool calls)
         // onto the bus, so the cockpit + lattice panel see it and the run is
         // reconnectable.
-        WsCommand::Session { id, input, model_override, target_agent } => {
+        WsCommand::Session {
+            id,
+            input,
+            model_override,
+            target_agent,
+        } => {
             let state = state.clone();
             tokio::spawn(async move {
                 let bus = { state.read().await.stream_bus.clone() };
