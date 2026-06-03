@@ -26,7 +26,10 @@ axocoatl-server = { version = "0.1.0", path = "../axocoatl-server" }
 axocoatl-memory = { version = "0.1.0", path = "../crates/axocoatl-memory" }
 axocoatl-service = { version = "0.1.0", path = "../crates/axocoatl-service" }
 axocoatl-isolation = { version = "0.1.0", path = "../crates/axocoatl-isolation" }
+axocoatl-mcp = { version = "0.1.0", path = "../crates/axocoatl-mcp" }
 clap = { workspace = true }
+rmcp = { workspace = true }
+async-trait = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

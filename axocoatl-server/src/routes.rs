@@ -3694,3 +3694,69 @@ pub async fn session_browser_proxy_root(
 ) -> Response {
     session_browser_proxy(State(state), Path((session_id, port, String::new())), req).await
 }
+
+// --- A2A protocol (agent-to-agent interop) ---------------------------------
+//
+// Exposes this Axocoatl instance over the A2A protocol so other agent systems
+// can discover its agents and dispatch tasks to them. Both routes sit behind
+// the server's auth layer (see build_router).
+
+/// A2A discovery card (`GET /.well-known/agent.json`): describes this instance
+/// and lists its agents as capabilities. Address one via a task's `receiver_id`.
+pub async fn a2a_agent_card(State(state): State<AppState>) -> Json<axocoatl_a2a::AgentCard> {
+    let daemon = state.read().await;
+    let capabilities: Vec<String> = daemon.config.agents.iter().map(|a| a.id.clone()).collect();
+    Json(axocoatl_a2a::AgentCard {
+        id: "axocoatl".to_string(),
+        name: "Axocoatl".to_string(),
+        description: "Axocoatl agent runtime — address an agent by id via a task's receiver_id."
+            .to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        endpoint: "/a2a/tasks".to_string(),
+        capabilities,
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": { "input": { "type": "string" } },
+            "required": ["input"]
+        }),
+        output_schema: serde_json::json!({
+            "type": "object",
+            "properties": { "content": { "type": "string" } }
+        }),
+        authentication: axocoatl_a2a::AuthSpec {
+            scheme: "bearer".to_string(),
+            endpoint: None,
+        },
+    })
+}
+
+/// A2A task intake (`POST /a2a/tasks`): dispatch an inbound task to the named
+/// agent (`receiver_id`) and return its result.
+pub async fn a2a_receive_task(
+    State(state): State<AppState>,
+    Json(task): Json<axocoatl_a2a::A2ATask>,
+) -> Json<axocoatl_a2a::A2ATaskResult> {
+    // Accept either {"input": "..."} or a bare value; fall back to the raw JSON.
+    let input = task
+        .input
+        .get("input")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| task.input.to_string());
+
+    let daemon = state.read().await;
+    match daemon.execute_agent(&task.receiver_id, &input).await {
+        Ok(output) => Json(axocoatl_a2a::A2ATaskResult {
+            task_id: task.id,
+            status: axocoatl_a2a::TaskStatus::Completed,
+            output: Some(serde_json::json!({ "content": output.content })),
+            error: None,
+        }),
+        Err(e) => Json(axocoatl_a2a::A2ATaskResult {
+            task_id: task.id,
+            status: axocoatl_a2a::TaskStatus::Failed,
+            output: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}

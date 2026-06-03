@@ -20,6 +20,8 @@ axocoatl-llm = { version = "0.1.0", path = "../axocoatl-llm" }
 axocoatl-llm-openai = { version = "0.1.0", path = "../axocoatl-llm-openai" }
 axocoatl-llm-anthropic = { version = "0.1.0", path = "../axocoatl-llm-anthropic" }
 axocoatl-llm-ollama = { version = "0.1.0", path = "../axocoatl-llm-ollama" }
+axocoatl-llm-gemini = { version = "0.1.0", path = "../axocoatl-llm-gemini" }
+axocoatl-llm-mistral = { version = "0.1.0", path = "../axocoatl-llm-mistral" }
 axocoatl-actor = { version = "0.1.0", path = "../axocoatl-actor" }
 axocoatl-token = { version = "0.1.0", path = "../axocoatl-token" }
 axocoatl-memory = { version = "0.1.0", path = "../axocoatl-memory" }

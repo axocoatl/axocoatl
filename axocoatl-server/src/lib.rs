@@ -177,6 +177,9 @@ pub fn build_router(state: AppState, auth: auth::AuthConfig, cors_origins: Vec<S
         .route("/api/fs/list", get(routes::fs_list_dirs))
         .route("/api/fs/project", get(routes::fs_project_probe))
         .route("/ws", get(routes::ws))
+        // A2A protocol — discovery card + task intake (behind auth).
+        .route("/.well-known/agent.json", get(routes::a2a_agent_card))
+        .route("/a2a/tasks", post(routes::a2a_receive_task))
         // Layers run outermost-first on the request. CORS handles preflight,
         // then logging (so 401s are recorded), then auth right before handlers.
         .layer(axum::middleware::from_fn(
