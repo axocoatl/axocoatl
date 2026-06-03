@@ -104,7 +104,11 @@ pub async fn request_logging(request: Request, next: Next) -> Response {
 pub fn cors_layer(origins: &[String]) -> tower_http::cors::CorsLayer {
     let layer = tower_http::cors::CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::HeaderName::from_static("x-api-key")]);
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            header::HeaderName::from_static("x-api-key"),
+        ]);
 
     if origins.is_empty() {
         return layer; // no cross-origin access; same-origin requests are unaffected by CORS
