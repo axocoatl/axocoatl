@@ -1144,12 +1144,23 @@ impl AxocoatlDaemon {
         if let Some(sb) = boxes.get(&session.id) {
             return Ok(sb.clone());
         }
+        let sc = &self.config.sandbox;
+        let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
+            allow_post_create: sc.allow_post_create_command,
+            allow_untrusted_image: sc.allow_untrusted_images,
+            network: match sc.network.as_str() {
+                "none" => axocoatl_isolation::session_sandbox::SandboxNetwork::None,
+                _ => axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge,
+            },
+            require_resource_limits: sc.require_resource_limits,
+        };
         let sandbox = SessionSandbox::start(
             &session.id,
             &session.working_dir,
             session.image.as_deref(),
             &session.exposed_ports,
             &session.post_create_commands,
+            &policy,
         )
         .await
         .map_err(|e| DaemonError::Session(format!("starting session sandbox: {e}")))?;
