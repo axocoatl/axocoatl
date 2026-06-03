@@ -24,7 +24,7 @@ them through a coordination layer called the event lattice.
 
 Concretely:
 
-- One 13 MB Rust binary. No Python venv, no Docker compose, no cloud
+- One 25 MB Rust binary. No Python venv, no Docker compose, no cloud
   account. `curl … | sh`, `axocoatl doctor`, `axocoatl dev`, open the
   dashboard.
 - Agents are `ractor` actors. Each has its own mailbox, token budget,
@@ -34,8 +34,7 @@ Concretely:
   publish `TaskCompleted` events. The lattice wakes downstream agents
   when their threshold is crossed. No central scheduler.
 - Skills declare what events they emit and react to; the lattice
-  routes them automatically and runs an auction when two agents both
-  hold the same Skill.
+  routes them automatically.
 - Directory sessions: a sandboxed work surface, locally, inside a
   podman container. Close the laptop, open it tomorrow, the session
   is still there.
@@ -59,7 +58,7 @@ Stack:
 - Rust workspace: `ractor` for actors, `axum` for the server, `candle`
   for neural Tier-4 memory (pure-Rust BERT embeddings, no ONNX), the
   dashboard is vanilla HTML + Web Components + Monaco.
-- Test coverage: 318 tests across the workspace, all green.
+- Test coverage: 340+ tests across the workspace, all green.
 
 Tried to ship something that looks like a tool, not a demo. Comments
 and code review very welcome.

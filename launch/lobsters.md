@@ -18,7 +18,7 @@ Author here. Axocoatl is a multi-agent runtime that takes a different
 shape than the usual framework — agents are supervised `ractor` actors
 with checkpointed state, and coordination happens through a stigmergic
 event lattice rather than a central scheduler. Local-first, runs as a
-system service, one 13 MB binary.
+system service, one 25 MB binary.
 
 The lattice piece is the bit I'd most welcome critique on. Agents
 declare `depends_on` and publish `TaskCompleted` events; downstream

@@ -61,8 +61,9 @@ imply.
 The lattice also unlocks:
 
 - **Multi-agent for the same skill.** If two agents both hold a Skill
-  that reacts to `BugReportFiled`, the lattice runs an auction and picks
-  the best fit. You don't pre-assign.
+  that reacts to `BugReportFiled`, the lattice activates every holder —
+  you don't pre-assign. A *planned* auction layer (roadmap) will refine
+  this to pick a single best-fit holder when several contend.
 - **Proactive agents.** An agent can declare it reacts to a system event
   (`EveryMorningAt8am`, `NewSupportEmail`). The lattice activates it
   without you doing anything.
