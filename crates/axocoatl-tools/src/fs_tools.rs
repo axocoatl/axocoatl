@@ -5,7 +5,14 @@
 //! boundary: the session directory is bind-mounted, nothing else is reachable.
 //! Paths supplied by the model are passed as positional arguments to `sh`, not
 //! interpolated into a script, so they cannot inject shell syntax.
+//!
+//! As defense-in-depth, the structured file tools (`read_file`, `write_file`,
+//! `edit_file`, `list_dir`, `grep`) additionally confine model-supplied paths
+//! to the session root via [`confine`], so `../../` and absolute paths can't
+//! reach beyond the project even inside the container. The `bash` tool is the
+//! explicit escape hatch for anything outside that.
 
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,6 +57,55 @@ fn str_arg<'a>(args: &'a serde_json::Value, key: &str, tool: &str) -> Result<&'a
             tool: tool.to_string(),
             reason: format!("expected string field '{key}'"),
         })
+}
+
+/// Lexically resolve `.` and `..` segments without touching the filesystem.
+fn lexical_normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Confine a model-supplied path to the session root. Returns the original path
+/// (to hand to the in-container command) when it stays inside the session
+/// directory, or an `InvalidArgs` error when it would escape.
+///
+/// Defense-in-depth on top of the container boundary: a confused or adversarial
+/// model can otherwise read or write through `../../` or an absolute path
+/// (`/etc/passwd`) that resolves inside the container. The structured file
+/// tools have no legitimate need to leave the project root; the `bash` tool
+/// remains the explicit escape hatch for anything else.
+///
+/// Resolution is lexical, so it does not follow symlinks — those stay contained
+/// by the sandbox's filesystem namespace.
+fn confine<'a>(root: &Path, path: &'a str, tool: &str) -> Result<&'a str, ToolError> {
+    let candidate = if Path::new(path).is_absolute() {
+        PathBuf::from(path)
+    } else {
+        root.join(path)
+    };
+    let normalized = lexical_normalize(&candidate);
+    let root_norm = lexical_normalize(root);
+    if normalized.starts_with(&root_norm) {
+        Ok(path)
+    } else {
+        Err(ToolError::InvalidArgs {
+            tool: tool.to_string(),
+            reason: format!(
+                "path '{path}' escapes the session directory; file tools are \
+                 confined to the project root. Use the bash tool for paths \
+                 outside it."
+            ),
+        })
+    }
 }
 
 /// Register the full session toolset (file ops + shell) into `executor`,
@@ -149,6 +205,7 @@ impl BuiltinTool for ReadFileTool {
     }
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let path = str_arg(&args, "path", "read_file")?;
+        let path = confine(self.sandbox.root(), path, "read_file")?;
         let r = self
             .sandbox
             .exec(&["cat", path], FS_TIMEOUT)
@@ -182,6 +239,7 @@ impl BuiltinTool for WriteFileTool {
     }
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let path = str_arg(&args, "path", "write_file")?;
+        let path = confine(self.sandbox.root(), path, "write_file")?;
         let content = str_arg(&args, "content", "write_file")?;
         // `sh -c 'cat > "$1"' sh <path>` — path is $1, never interpolated.
         let r = self
@@ -222,6 +280,7 @@ impl BuiltinTool for EditFileTool {
     }
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let path = str_arg(&args, "path", "edit_file")?;
+        let path = confine(self.sandbox.root(), path, "edit_file")?;
         let old = str_arg(&args, "old", "edit_file")?;
         let new = str_arg(&args, "new", "edit_file")?;
 
@@ -274,6 +333,7 @@ impl BuiltinTool for ListDirTool {
     }
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let path = confine(self.sandbox.root(), path, "list_dir")?;
         let r = self
             .sandbox
             .exec(&["ls", "-la", path], FS_TIMEOUT)
@@ -308,6 +368,7 @@ impl BuiltinTool for GrepTool {
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let pattern = str_arg(&args, "pattern", "grep")?;
         let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let path = confine(self.sandbox.root(), path, "grep")?;
         let r = self
             .sandbox
             .exec(&["grep", "-rn", "-e", pattern, path], FS_TIMEOUT)
@@ -607,5 +668,53 @@ impl BuiltinTool for KillTerminalTool {
         let id = str_arg(&args, "terminal_id", "kill_terminal")?;
         let killed = self.sandbox.kill_terminal(id);
         Ok(serde_json::json!({ "terminal_id": id, "ok": killed }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{confine, lexical_normalize};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn lexical_normalize_collapses_dot_segments() {
+        assert_eq!(
+            lexical_normalize(Path::new("/proj/./src/../lib/x.rs")),
+            PathBuf::from("/proj/lib/x.rs")
+        );
+    }
+
+    #[test]
+    fn confine_allows_paths_inside_root() {
+        let root = Path::new("/home/u/proj");
+        // Relative paths resolve against the root.
+        assert!(confine(root, "src/main.rs", "read_file").is_ok());
+        assert!(confine(root, ".", "list_dir").is_ok());
+        assert!(confine(root, "a/b/../c.txt", "read_file").is_ok());
+        // An absolute path that is genuinely inside the root is fine.
+        assert!(confine(root, "/home/u/proj/src/main.rs", "read_file").is_ok());
+    }
+
+    #[test]
+    fn confine_rejects_escapes() {
+        let root = Path::new("/home/u/proj");
+        // Absolute escape.
+        assert!(confine(root, "/etc/passwd", "read_file").is_err());
+        // Parent-dir traversal out of the root.
+        assert!(confine(root, "../other/secret", "read_file").is_err());
+        assert!(confine(root, "../../../../etc/shadow", "read_file").is_err());
+        // Traversal that dips out then back in still escapes lexically.
+        assert!(confine(root, "src/../../proj-evil/x", "write_file").is_err());
+        // A sibling directory sharing a prefix must not be treated as inside.
+        assert!(confine(root, "/home/u/proj-evil/x", "read_file").is_err());
+    }
+
+    #[test]
+    fn confine_returns_the_original_path() {
+        let root = Path::new("/home/u/proj");
+        assert_eq!(
+            confine(root, "src/main.rs", "read_file").unwrap(),
+            "src/main.rs"
+        );
     }
 }

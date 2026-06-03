@@ -135,6 +135,9 @@ struct BgTaskHandle {
 pub struct SessionSandbox {
     /// Container name — `axo-ses-{session_id}`.
     container: String,
+    /// The session's working directory — bind-mounted at the same path inside
+    /// the container, and the confinement root for the structured file tools.
+    working_dir: std::path::PathBuf,
     /// Background tasks started in this container.
     tasks: std::sync::Mutex<Vec<BgTaskHandle>>,
     /// Interactive PTY-backed terminals.
@@ -302,9 +305,15 @@ impl SessionSandbox {
 
         Ok(Self {
             container,
+            working_dir: working_dir.to_path_buf(),
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
         })
+    }
+
+    /// The session's working directory — the confinement root for file tools.
+    pub fn root(&self) -> &Path {
+        &self.working_dir
     }
 
     /// Run `apk add` for the toolchain users expect when they pop open a
