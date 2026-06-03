@@ -216,6 +216,13 @@ enum McpCommands {
         #[arg(short, long)]
         server: Option<String>,
     },
+    /// Run Axocoatl AS an MCP server over stdio, exposing each agent as an MCP
+    /// tool (`agent_<id>`). Point any MCP client (Claude Desktop, etc.) at
+    /// `axocoatl mcp serve`.
+    Serve {
+        #[arg(short, long, default_value = "axocoatl.yaml")]
+        config: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -253,8 +260,11 @@ enum TokenCommands {
 async fn main() {
     let cli = Cli::parse();
 
-    // Initialize tracing
+    // Initialize tracing. Logs go to stderr so they never collide with a
+    // command's stdout output — in particular `mcp serve`, whose stdout is the
+    // MCP JSON-RPC channel.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -299,6 +309,7 @@ async fn main() {
         Commands::Mcp { command } => match command {
             McpCommands::Servers { config } => cmd_mcp_servers(&config).await,
             McpCommands::Tools { config, server } => cmd_mcp_tools(&config, server).await,
+            McpCommands::Serve { config } => cmd_mcp_serve(&config).await,
         },
         Commands::Tokens { command } => match command {
             TokenCommands::Report { config } => cmd_tokens_report(&config).await,
@@ -1064,6 +1075,9 @@ async fn cmd_dev(config_path: &std::path::Path) {
         println!("  Proactive agents: {proactive_count} active");
     }
 
+    // Supervise agents: restart any that crash, from their last checkpoint.
+    axocoatl_daemon::supervision::start_supervision(state.clone());
+
     // Start IPC server for CLI clients
     let socket_path = axocoatl_daemon::ipc::default_socket_path();
     match axocoatl_daemon::ipc::start_ipc_server(state.clone(), &socket_path).await {
@@ -1134,9 +1148,78 @@ async fn cmd_serve(config_path: &std::path::Path) {
         lattice,
     );
 
+    // Supervise agents: restart any that crash, from their last checkpoint.
+    axocoatl_daemon::supervision::start_supervision(state.clone());
+
     if let Err(e) = axocoatl_server::serve_shared(state, &host, port).await {
         eprintln!("Server error: {e}");
         std::process::exit(1);
+    }
+}
+
+/// Run Axocoatl AS an MCP server over stdio. Bootstraps the daemon so agents
+/// exist, then speaks the MCP protocol on stdin/stdout, exposing each agent as
+/// an `agent_<id>` tool any MCP client can list and call.
+async fn cmd_mcp_serve(config_path: &std::path::Path) {
+    use rmcp::ServiceExt;
+
+    let config = match axocoatl_config::load_config(config_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Configuration error:\n{e}");
+            std::process::exit(1);
+        }
+    };
+
+    let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap(config).await {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Failed to bootstrap daemon: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let state = std::sync::Arc::new(tokio::sync::RwLock::new(daemon));
+    let executor = std::sync::Arc::new(DaemonAgentExecutor { state });
+    let server = axocoatl_mcp::AxocoatlMcpServer::new(executor);
+
+    eprintln!("Axocoatl MCP server ready on stdio — exposing agents as tools.");
+
+    // stdout is the MCP JSON-RPC channel (logs are on stderr — see main()).
+    let running = match server
+        .serve((tokio::io::stdin(), tokio::io::stdout()))
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("MCP serve error: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = running.waiting().await {
+        eprintln!("MCP server stopped: {e}");
+        std::process::exit(1);
+    }
+}
+
+/// Bridges MCP tool calls to the daemon's agents.
+struct DaemonAgentExecutor {
+    state: std::sync::Arc<tokio::sync::RwLock<axocoatl_daemon::AxocoatlDaemon>>,
+}
+
+#[async_trait::async_trait]
+impl axocoatl_mcp::AgentExecutor for DaemonAgentExecutor {
+    async fn list_agent_ids(&self) -> Vec<String> {
+        let d = self.state.read().await;
+        d.config.agents.iter().map(|a| a.id.clone()).collect()
+    }
+
+    async fn execute_agent(&self, agent_id: &str, input: &str) -> Result<String, String> {
+        let d = self.state.read().await;
+        d.execute_agent(agent_id, input)
+            .await
+            .map(|o| o.content)
+            .map_err(|e| e.to_string())
     }
 }
 

@@ -23,6 +23,7 @@ axocoatl-llm = { version = "0.1.0", path = "../crates/axocoatl-llm" }
 axocoatl-session = { version = "0.1.0", path = "../crates/axocoatl-session" }
 axocoatl-memory = { version = "0.1.0", path = "../crates/axocoatl-memory", default-features = false }
 axocoatl-mcp = { version = "0.1.0", path = "../crates/axocoatl-mcp" }
+axocoatl-a2a = { version = "0.1.0", path = "../crates/axocoatl-a2a" }
 axum = { workspace = true }
 tokio-stream = { workspace = true }
 tokio = { workspace = true }

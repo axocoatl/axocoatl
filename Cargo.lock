@@ -277,17 +277,20 @@ dependencies = [
 name = "axocoatl-cli"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axocoatl-actor",
  "axocoatl-config",
  "axocoatl-core",
  "axocoatl-daemon",
  "axocoatl-isolation",
+ "axocoatl-mcp",
  "axocoatl-memory",
  "axocoatl-server",
  "axocoatl-service",
  "clap",
  "dialoguer",
  "reqwest 0.12.28",
+ "rmcp",
  "serde_json",
  "tokio",
  "tracing",
@@ -353,6 +356,8 @@ dependencies = [
  "axocoatl-isolation",
  "axocoatl-llm",
  "axocoatl-llm-anthropic",
+ "axocoatl-llm-gemini",
+ "axocoatl-llm-mistral",
  "axocoatl-llm-ollama",
  "axocoatl-llm-openai",
  "axocoatl-mcp",
@@ -553,6 +558,7 @@ dependencies = [
 name = "axocoatl-server"
 version = "0.1.0"
 dependencies = [
+ "axocoatl-a2a",
  "axocoatl-actor",
  "axocoatl-config",
  "axocoatl-coordination",

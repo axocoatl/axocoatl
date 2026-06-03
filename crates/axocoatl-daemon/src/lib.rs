@@ -11,6 +11,7 @@ pub mod proactive;
 pub mod scheduler;
 pub mod skill_tool;
 pub mod stream;
+pub mod supervision;
 pub mod workflow;
 
 pub use bootstrap::*;

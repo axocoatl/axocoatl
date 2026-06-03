@@ -43,6 +43,16 @@ impl AgentRegistry {
         }
     }
 
+    /// Whether the agent's actor is still running. Returns false if the agent
+    /// is unknown or its actor has stopped (crashed or shut down) — the signal
+    /// the daemon's supervision loop uses to trigger a restart-from-checkpoint.
+    pub async fn is_alive(&self, id: &AgentId) -> bool {
+        match self.get(id).await {
+            Some(actor) => !matches!(actor.get_status(), ractor::ActorStatus::Stopped),
+            None => false,
+        }
+    }
+
     pub async fn list_ids(&self) -> Vec<AgentId> {
         self.agents.read().await.keys().cloned().collect()
     }
@@ -154,6 +164,33 @@ mod tests {
         ref2.stop(None);
         h1.await.unwrap();
         h2.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn is_alive_tracks_actor_lifecycle() {
+        let registry = AgentRegistry::new();
+        let id = AgentId::new("liveness");
+
+        let (actor_ref, handle) = AgentActor::spawn(
+            Some("liveness-test".to_string()),
+            AgentActor,
+            (
+                AgentConfig::default(),
+                Box::new(NoopBehavior) as Box<dyn AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        registry.register(id.clone(), actor_ref.clone()).await;
+
+        // Unknown agent is never alive; a running one is.
+        assert!(!registry.is_alive(&AgentId::new("ghost")).await);
+        assert!(registry.is_alive(&id).await);
+
+        // Once stopped, the registry reports it dead (the supervision signal).
+        actor_ref.stop(None);
+        handle.await.unwrap();
+        assert!(!registry.is_alive(&id).await);
     }
 
     #[tokio::test]
