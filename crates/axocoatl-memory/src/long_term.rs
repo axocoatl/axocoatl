@@ -61,12 +61,16 @@ impl LongTermMemory {
     pub async fn save(&self) -> Result<(), MemoryError> {
         if let Some(parent) = self.storage_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
+            crate::perms::restrict_dir(parent);
         }
         let bytes = bincode::encode_to_vec(&self.entries, bincode::config::standard())
             .map_err(|e| MemoryError::Serialization(e.to_string()))?;
 
+        // Long-term memory can contain anything the agent chose to remember —
+        // owner-only on disk.
         let tmp_path = self.storage_path.with_extension("tmp");
         tokio::fs::write(&tmp_path, &bytes).await?;
+        crate::perms::restrict_file(&tmp_path);
         tokio::fs::rename(&tmp_path, &self.storage_path).await?;
         Ok(())
     }

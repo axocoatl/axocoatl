@@ -129,6 +129,7 @@ impl TranscriptWriter {
         // Ensure parent directory exists
         if let Some(parent) = file_path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
+            crate::perms::restrict_dir(parent);
         }
 
         let mut file = match tokio::fs::OpenOptions::new()
@@ -143,6 +144,9 @@ impl TranscriptWriter {
                 return;
             }
         };
+        // Transcripts persist every message + tool args/results verbatim —
+        // owner-only on disk.
+        crate::perms::restrict_file(&file_path);
 
         while let Some(entry) = rx.recv().await {
             match serde_json::to_string(&entry) {

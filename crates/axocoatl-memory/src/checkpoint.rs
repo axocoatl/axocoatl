@@ -52,13 +52,18 @@ impl CheckpointStore {
     pub async fn save(&self, checkpoint: &AgentCheckpoint) -> Result<(), MemoryError> {
         let dir = self.base_dir.join(&checkpoint.agent_id);
         tokio::fs::create_dir_all(&dir).await?;
+        crate::perms::restrict_dir(&dir);
 
         let path = Self::checkpoint_path(&dir, checkpoint.version);
         let bytes = bincode::encode_to_vec(checkpoint, bincode::config::standard())
             .map_err(|e| MemoryError::Serialization(e.to_string()))?;
 
+        // Checkpoints hold full message + tool I/O verbatim — keep them
+        // owner-only. Restrict the temp file before the rename so the final
+        // file is never briefly world-readable.
         let tmp = path.with_extension("tmp");
         tokio::fs::write(&tmp, &bytes).await?;
+        crate::perms::restrict_file(&tmp);
         tokio::fs::rename(&tmp, &path).await?;
 
         self.prune_old(&dir, 3).await.ok();

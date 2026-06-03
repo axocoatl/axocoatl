@@ -130,6 +130,13 @@ impl AxocoatlDaemon {
 
         // 2. Set up checkpoint store
         let data_dir = std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+        // Harden the data root up front: 0700 so no other local user can
+        // traverse into the persisted checkpoints / transcripts / memory below
+        // it. This is the umbrella over the per-file 0600 modes in the stores.
+        if let Err(e) = std::fs::create_dir_all(&data_dir) {
+            tracing::warn!(path = %data_dir, error = %e, "could not create data dir");
+        }
+        axocoatl_memory::perms::restrict_dir(std::path::Path::new(&data_dir));
         let checkpoint_store = Arc::new(CheckpointStore::new(
             format!("{data_dir}/checkpoints"),
             CheckpointPolicy::EveryLlmCall,
