@@ -395,13 +395,14 @@ mod tests {
     }
 
     fn tmpdir() -> PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "axo-store-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        // Unique per call: a process-wide atomic counter (plus the pid) so two
+        // tests running in parallel can never land on the same directory. A
+        // bare timestamp used to collide at the same nanosecond under the test
+        // harness, making a couple of these tests flaky.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let p = std::env::temp_dir().join(format!("axo-store-test-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&p).unwrap();
         p
     }
