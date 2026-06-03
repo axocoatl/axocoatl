@@ -69,7 +69,8 @@ execute_workflow → activate entry agent
 A cycle guard (`max_activations = agents × 3`) and acyclic-DAG validation make
 runaway activation impossible.
 
-Supporting primitives (sub-microsecond, in `axocoatl-coordination`):
+**On the roadmap** — additional coordination primitives are built and tested in
+`axocoatl-coordination` (sub-microsecond) but not yet wired into the runtime:
 
 - **HTN planner** — symbolic task decomposition without LLM calls.
 - **Auction** — deterministic agent selection by tool capability, load, and
@@ -82,14 +83,20 @@ Supporting primitives (sub-microsecond, in `axocoatl-coordination`):
 | 1 — Session | conversation transcript | in-memory |
 | 2 — Checkpoint | agent state snapshots | disk (pruned to 3) |
 | 3 — Long-term | distilled facts | disk (bincode) |
-| 4 — Semantic | vector recall | optional feature |
+| 4 — Semantic | neural vector recall | disk (embeddings) |
+
+Tier 4 runs a pure-Rust neural embedding model (`all-MiniLM-L6-v2`, 384-dim) on
+Candle — the ~90 MB model is downloaded once, with a feature-hash fallback when
+it's unavailable. No external service, no network at inference time.
 
 ## Protocols
 
 - **MCP** — the daemon connects to configured `mcp_servers` (stdio or
-  streamable-http) at bootstrap and exposes their tools to agents; agents can
-  also be exposed *as* MCP tools.
-- **A2A** — agent-to-agent interop for cross-framework workflows.
+  streamable-http) at bootstrap and exposes their tools to agents. Axocoatl is
+  also an MCP **server**: `axocoatl mcp serve` runs over stdio and exposes each
+  agent as an `agent_<id>` tool.
+- **A2A** — agent-to-agent interop for cross-framework workflows, reachable over
+  `GET /.well-known/agent.json` and `POST /a2a/tasks`.
 
 ## Crate map
 

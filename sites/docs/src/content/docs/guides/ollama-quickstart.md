@@ -439,7 +439,7 @@ Expect: All endpoints work identically to dev mode.
 ```bash
 cargo test -p axocoatl-coordination -- --nocapture
 ```
-Expect: All tests pass — event lattice publish/subscribe, pheromone decay, threshold activation, HTN decomposition, auction scoring.
+Expect: All tests pass — event lattice publish/subscribe, pheromone decay, threshold activation. The crate also unit-tests the HTN decomposition and auction-scoring primitives; these are built and tested but **not yet integrated** into the running coordination (roadmap).
 
 ---
 
@@ -462,6 +462,10 @@ Expect: MCP server frame and tool discovery tests pass.
 ---
 
 ## Phase 15: WASM Isolation (Unit Tests)
+
+The shipped directory-session sandbox is a **hardened rootless podman
+container**. The WASM isolation tier exercised below is a **roadmap** tier in
+`axocoatl-isolation` — built and unit-tested, but not the default sandbox.
 
 ```bash
 cargo test -p axocoatl-isolation -- --nocapture
@@ -523,7 +527,7 @@ Expect: Handled gracefully (error or empty response, no panic).
 ```bash
 cargo test --workspace
 ```
-Expect: 258+ tests, 0 failures.
+Expect: 340+ tests, 0 failures.
 
 ---
 
@@ -535,7 +539,8 @@ cargo bench --bench routing_latency
 cargo bench --bench actor_throughput
 cargo bench --bench isolation_startup
 ```
-Expect: Benchmarks complete. TOON shows 20-35% token savings vs JSON.
+Expect: Benchmarks complete and report token-budget, routing-latency,
+actor-throughput, and sandbox-startup numbers.
 
 ---
 

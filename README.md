@@ -45,8 +45,8 @@ Prefer Cargo? `cargo install axocoatl-cli` (requires Rust 1.82+).
 |---|:--:|:--:|:--:|
 | Language / runtime | Rust / actors | Rust / actors | Python |
 | **Stigmergic coordination** (no orchestrator) | ✅ | ❌ | ❌ |
-| HTN symbolic planning | ✅ | ❌ | ❌ |
-| Auction-based agent selection | ✅ | ❌ | ❌ |
+| HTN symbolic planning | roadmap | ❌ | ❌ |
+| Auction-based agent selection | roadmap | ❌ | ❌ |
 | Per-agent token budgets | ✅ | ❌ | partial |
 | 4-tier persistent memory + checkpointing | ✅ | partial | partial |
 | MCP client + server | ✅ | partial | ✅ |
@@ -88,7 +88,7 @@ axocoatl workflow run research-and-summarize -i "What is photosynthesis?"
   `EventLattice` accumulates pheromone signals and activates downstream agents
   when thresholds are crossed. No scheduler, no glue code.
 - **Workflows** — declarative multi-agent DAGs via `depends_on` / `entry_point`.
-- **Providers** — Ollama, OpenAI, Anthropic, Mistral, Gemini. No lock-in.
+- **Providers** — Ollama, OpenAI, Anthropic, Mistral, Gemini, OpenRouter. No lock-in.
 - **Protocols** — MCP (consume & expose tools) and A2A (agent interop).
 
 See the [docs site](https://docs.axocoatl.ai) for the full picture, the
@@ -96,6 +96,20 @@ See the [docs site](https://docs.axocoatl.ai) for the full picture, the
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and
 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for the in-repo
 quick reference.
+
+---
+
+## Roadmap
+
+Built and tested in the `axocoatl-coordination` crate, but not yet wired into
+the shipped runtime:
+
+- **HTN symbolic planning** — task decomposition without LLM calls.
+- **Auction-based agent selection** — pick agents by tool capability, load, and
+  remaining token budget.
+- **Stronger sandbox isolation tiers** — the shipped sandbox is a hardened
+  rootless Podman container (capabilities dropped, no-new-privileges,
+  network-isolatable); microVM-class isolation (Firecracker) is planned.
 
 ---
 
@@ -136,7 +150,7 @@ Runnable, mock-LLM (no keys needed) — see [`examples/`](examples/):
 git clone https://github.com/axocoatl/axocoatl
 cd axocoatl
 cargo build --release          # binary: target/release/axocoatl
-cargo test --workspace         # 318+ tests
+cargo test --workspace         # 340+ tests
 ```
 
 ## License

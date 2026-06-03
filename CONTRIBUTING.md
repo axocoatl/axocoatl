@@ -8,8 +8,8 @@ dashboard, and CLI live in one workspace.
 ```bash
 git clone https://github.com/axocoatl/axocoatl
 cd axocoatl
-cargo build --release          # ~13 MB binary in target/release/axocoatl
-cargo test --workspace         # 318+ tests
+cargo build --release          # ~25 MB binary in target/release/axocoatl
+cargo test --workspace         # 340+ tests
 ./target/release/axocoatl doctor
 ```
 

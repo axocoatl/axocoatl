@@ -12,7 +12,7 @@ Rust.
 
 Real workflows. No theater.
 
-One 13 MB binary. Your hardware, your LLM, your data.
+One 25 MB binary. Your hardware, your LLM, your data.
 
 https://axocoatl.ai
 
