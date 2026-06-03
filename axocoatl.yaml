@@ -217,6 +217,24 @@ server:
   #   # allow_unauthenticated: true   # only if an upstream proxy enforces auth
   # cors_origins: ["https://your-dashboard.example.com"]
 
+# ─────────────────────────── SESSION SANDBOX ───────────────────
+# Trust + isolation policy for the per-session podman containers. Defaults are
+# secure: opening a repository will NOT run its setup scripts or pull an
+# attacker-chosen image. Loosen these only for repositories you trust.
+sandbox:
+  # Run a repo's devcontainer postCreateCommand automatically on session open.
+  # Off by default — otherwise a hostile repo gets code execution on open.
+  allow_post_create_command: false
+  # Honor a repo/UI base image other than the trusted default (alpine).
+  allow_untrusted_images: false
+  # "bridge" (default: outbound + published dev ports) or "none" (no network —
+  # blocks exfiltration for untrusted code, but also installs and dev servers).
+  network: "bridge"
+  # Refuse to start a session if memory/CPU/pid caps can't be applied, instead
+  # of silently running uncapped. Leave false on hosts without cgroup delegation
+  # (e.g. rootless podman on WSL2).
+  require_resource_limits: false
+
 # ─────────────────────────── PROACTIVE AGENTS ──────────────────
 # Agents that act on their own — no prompt needed. The Always-On Service
 # (axocoatl service install) keeps the daemon process alive; these make the

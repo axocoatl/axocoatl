@@ -14,6 +14,8 @@ pub struct AxocoatlConfig {
     #[serde(default)]
     pub server: ServerConfigYaml,
     #[serde(default)]
+    pub sandbox: SandboxConfigYaml,
+    #[serde(default)]
     pub daemon: DaemonConfigYaml,
     #[serde(default)]
     pub hooks: Vec<HookConfigYaml>,
@@ -308,6 +310,46 @@ fn default_host() -> String {
     // Loopback by default. Binding to all interfaces is opt-in and, without
     // auth, refused at startup. See axocoatl-server::serve.
     "127.0.0.1".to_string()
+}
+
+/// Session sandbox (podman container) trust + isolation policy. Defaults are
+/// secure: a freshly-opened repository cannot run its own setup scripts or pull
+/// an attacker-chosen image. Loosen these only for repositories you trust.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxConfigYaml {
+    /// Run a repo's `postCreateCommand` automatically when a session opens.
+    /// Off by default — otherwise opening a hostile repo is remote code
+    /// execution.
+    #[serde(default)]
+    pub allow_post_create_command: bool,
+    /// Honor a repo/UI-specified base image other than the trusted default.
+    #[serde(default)]
+    pub allow_untrusted_images: bool,
+    /// Container networking: `"bridge"` (default, outbound + published ports)
+    /// or `"none"` (no network — blocks exfiltration for untrusted code, but
+    /// also package installs and dev servers).
+    #[serde(default = "default_sandbox_network")]
+    pub network: String,
+    /// Refuse to start a session if memory/CPU/pid limits can't be applied,
+    /// instead of silently running uncapped. Off by default because some hosts
+    /// (rootless podman on WSL2) can't delegate cgroups.
+    #[serde(default)]
+    pub require_resource_limits: bool,
+}
+
+impl Default for SandboxConfigYaml {
+    fn default() -> Self {
+        Self {
+            allow_post_create_command: false,
+            allow_untrusted_images: false,
+            network: default_sandbox_network(),
+            require_resource_limits: false,
+        }
+    }
+}
+
+fn default_sandbox_network() -> String {
+    "bridge".to_string()
 }
 
 /// Daemon configuration.

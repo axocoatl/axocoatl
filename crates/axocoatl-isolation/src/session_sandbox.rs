@@ -27,6 +27,74 @@ const PODMAN: &str = "podman";
 /// the busybox coreutils/grep/find the file + shell tools rely on.
 pub const DEFAULT_IMAGE: &str = "docker.io/library/alpine:3.20";
 
+/// Linux capabilities dropped from every session container. These are escape /
+/// recon primitives that normal dev workflows (apk/apt/npm/pip, dev servers)
+/// never need, so dropping them is safe and meaningfully shrinks the blast
+/// radius — especially under rootful podman, where the container would
+/// otherwise run with the full default cap set. The package-manager caps
+/// (CHOWN, SETUID/SETGID, DAC_OVERRIDE, FOWNER, …) are deliberately kept.
+const DROPPED_CAPS: &[&str] = &[
+    "SYS_ADMIN",       // mount, namespace ops — the classic escape lever
+    "SYS_PTRACE",      // inspect/inject other processes
+    "SYS_MODULE",      // load kernel modules
+    "SYS_RAWIO",       // raw device I/O
+    "SYS_BOOT",        // reboot
+    "SYS_TIME",        // set system clock
+    "NET_ADMIN",       // reconfigure networking / firewall
+    "NET_RAW",         // raw/packet sockets — spoofing, scanning
+    "DAC_READ_SEARCH", // bypass file read/traverse permission checks
+    "MKNOD",           // create device nodes
+    "AUDIT_WRITE",     // write to the kernel audit log
+];
+
+/// Per-session container fork-bomb cap. Generous enough for parallel installs
+/// and build tools, low enough to bound a runaway. Applied with the other
+/// cgroup-backed limits (see `with_limits`).
+const PIDS_LIMIT: &str = "512";
+
+/// Network posture for a session container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SandboxNetwork {
+    /// Default bridge networking — outbound access for package installs and
+    /// reachable published dev-server ports. Required for the normal flow.
+    #[default]
+    Bridge,
+    /// No network at all (`--network none`). Cuts off exfiltration / C2 / SSRF
+    /// for untrusted code, at the cost of package installs and dev servers.
+    None,
+}
+
+/// Trust decisions for a session sandbox. Defaults are secure: project-author
+/// setup scripts and non-default images are **not** trusted unless explicitly
+/// allowed, so merely opening a hostile repository cannot run code or pull an
+/// attacker-chosen image.
+#[derive(Debug, Clone)]
+pub struct SandboxPolicy {
+    /// Run a repo's `postCreateCommand` (and analogues) automatically. Off by
+    /// default — otherwise a malicious repo achieves RCE just by being opened.
+    pub allow_post_create: bool,
+    /// Honor a repo/UI-specified base image other than [`DEFAULT_IMAGE`]. Off
+    /// by default — an attacker-chosen image is attacker-controlled code.
+    pub allow_untrusted_image: bool,
+    /// Container network posture. [`SandboxNetwork::Bridge`] by default.
+    pub network: SandboxNetwork,
+    /// Refuse to start if memory/CPU/pid limits can't be applied, instead of
+    /// silently continuing uncapped. Off by default because some hosts
+    /// (rootless podman on WSL2) genuinely can't delegate cgroups.
+    pub require_resource_limits: bool,
+}
+
+impl Default for SandboxPolicy {
+    fn default() -> Self {
+        Self {
+            allow_post_create: false,
+            allow_untrusted_image: false,
+            network: SandboxNetwork::Bridge,
+            require_resource_limits: false,
+        }
+    }
+}
+
 /// The outcome of running a command inside the sandbox.
 #[derive(Debug, Clone)]
 pub struct ExecResult {
@@ -86,12 +154,28 @@ impl SessionSandbox {
         image: Option<&str>,
         exposed_ports: &[u16],
         post_create_commands: &[String],
+        policy: &SandboxPolicy,
     ) -> Result<Self, IsolationError> {
         podman::ensure_ready().await?;
 
         let container = format!("axo-ses-{session_id}");
         let dir = working_dir.to_string_lossy().to_string();
-        let image = image.unwrap_or(DEFAULT_IMAGE);
+
+        // Gate non-default base images behind explicit trust. An attacker-chosen
+        // image is attacker-controlled code; without consent, fall back to the
+        // trusted default rather than pulling and running it.
+        let image = match image {
+            Some(img) if img != DEFAULT_IMAGE && !policy.allow_untrusted_image => {
+                tracing::warn!(
+                    "session requested non-default image '{img}', but \
+                     sandbox.allow_untrusted_images is off — using the trusted \
+                     default ({DEFAULT_IMAGE}). Enable it to opt in."
+                );
+                DEFAULT_IMAGE
+            }
+            Some(img) => img,
+            None => DEFAULT_IMAGE,
+        };
 
         // Best-effort: clear a stale container with the same name.
         let _ = Command::new(PODMAN)
@@ -112,9 +196,23 @@ impl SessionSandbox {
         // retries without losing the original list.
         let mut publish: Vec<u16> = exposed_ports.to_vec();
         loop {
-            match Self::run_container(&container, &mount, &dir, image, with_limits, &publish).await
+            match Self::run_container(
+                &container, &mount, &dir, image, with_limits, &publish, policy,
+            )
+            .await
             {
                 Ok(()) => break,
+                Err(e) if e.contains("cgroup") && with_limits && policy.require_resource_limits => {
+                    // Fail closed: the operator asked for guaranteed caps and we
+                    // can't provide them. Surface the error instead of silently
+                    // running an uncapped (fork-bomb / OOM-prone) container.
+                    return Err(IsolationError::OciContainerFailed(format!(
+                        "resource limits required but unavailable on this host \
+                         (cgroup delegation missing): {e}. Set \
+                         sandbox.require_resource_limits = false to allow an \
+                         uncapped sandbox."
+                    )));
+                }
                 Err(e) if e.contains("cgroup") && with_limits => {
                     tracing::warn!(
                         "this host cannot apply container resource limits \
@@ -169,7 +267,21 @@ impl SessionSandbox {
         // collect later). These are project-author setup scripts — `npm ci`,
         // `pip install -r requirements.txt`, etc. Run once, best-effort: a
         // failure logs but doesn't kill the session.
-        for script in post_create_commands {
+        //
+        // SECURITY: these scripts come from the *opened repository*. Running
+        // them automatically means a hostile repo gets code execution just by
+        // being opened. They run only with explicit consent; otherwise we skip
+        // them and tell the user how to opt in.
+        if !post_create_commands.is_empty() && !policy.allow_post_create {
+            tracing::warn!(
+                "skipping {} project setup script(s) (postCreateCommand) for \
+                 session container ({container}): these come from the opened \
+                 repository and are not run automatically. Set \
+                 sandbox.allow_post_create_command = true to enable.",
+                post_create_commands.len()
+            );
+        }
+        for script in post_create_commands.iter().filter(|_| policy.allow_post_create) {
             tracing::info!(
                 "running post-create script in session container ({container}): {script}"
             );
@@ -252,17 +364,19 @@ impl SessionSandbox {
         None
     }
 
-    /// `podman run -d` the idle session container. `with_limits` adds
-    /// memory/CPU caps. `ports` are published 1:1 to the host. On failure
-    /// returns podman's stderr so the caller can decide how to recover.
-    async fn run_container(
+    /// Build the `podman run` argument vector (pure — no I/O, so it's unit
+    /// tested). Carries the always-on hardening (no-new-privileges, capability
+    /// drops), the policy-driven network posture, and the optional resource
+    /// caps.
+    fn build_run_args(
         container: &str,
         mount: &str,
         dir: &str,
         image: &str,
         with_limits: bool,
         ports: &[u16],
-    ) -> Result<(), String> {
+        policy: &SandboxPolicy,
+    ) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "run".into(),
             "-d".into(),
@@ -273,8 +387,38 @@ impl SessionSandbox {
             "-w".into(),
             dir.into(),
         ];
+
+        // Always-on hardening — safe for normal dev workflows:
+        //   * no-new-privileges: setuid binaries can't escalate beyond the
+        //     starting cap set.
+        //   * drop escape/recon capabilities the container never needs.
+        args.push("--security-opt=no-new-privileges".into());
+        for cap in DROPPED_CAPS {
+            args.push("--cap-drop".into());
+            args.push((*cap).into());
+        }
+
+        // Network posture. Bridge is podman's default (no flag needed); `none`
+        // cuts off all networking for untrusted code. Publishing ports requires
+        // a network, so drop port mapping when networking is off.
+        let ports: &[u16] = match policy.network {
+            SandboxNetwork::None => {
+                args.push("--network".into());
+                args.push("none".into());
+                &[]
+            }
+            SandboxNetwork::Bridge => ports,
+        };
+
         if with_limits {
-            args.extend(["--memory".into(), "2g".into(), "--cpus".into(), "2".into()]);
+            args.extend([
+                "--memory".into(),
+                "2g".into(),
+                "--cpus".into(),
+                "2".into(),
+                "--pids-limit".into(),
+                PIDS_LIMIT.into(),
+            ]);
         }
         for p in ports {
             args.push("-p".into());
@@ -283,6 +427,22 @@ impl SessionSandbox {
         args.push(image.into());
         args.push("sleep".into());
         args.push("infinity".into());
+        args
+    }
+
+    /// `podman run -d` the idle session container. `with_limits` adds
+    /// memory/CPU caps. `ports` are published 1:1 to the host. On failure
+    /// returns podman's stderr so the caller can decide how to recover.
+    async fn run_container(
+        container: &str,
+        mount: &str,
+        dir: &str,
+        image: &str,
+        with_limits: bool,
+        ports: &[u16],
+        policy: &SandboxPolicy,
+    ) -> Result<(), String> {
+        let args = Self::build_run_args(container, mount, dir, image, with_limits, ports, policy);
 
         let out = Command::new(PODMAN)
             .args(&args)
@@ -532,14 +692,82 @@ mod tests {
         assert!(!r.ok());
     }
 
+    #[test]
+    fn default_policy_is_secure() {
+        let p = SandboxPolicy::default();
+        assert!(!p.allow_post_create, "post-create must be off by default");
+        assert!(
+            !p.allow_untrusted_image,
+            "untrusted images must be off by default"
+        );
+        assert_eq!(p.network, SandboxNetwork::Bridge);
+        assert!(!p.require_resource_limits);
+    }
+
+    #[test]
+    fn run_args_always_apply_hardening() {
+        let args = SessionSandbox::build_run_args(
+            "axo-ses-x",
+            "/w:/w:rw",
+            "/w",
+            DEFAULT_IMAGE,
+            true,
+            &[3000],
+            &SandboxPolicy::default(),
+        );
+        // no-new-privileges and every dropped capability are present.
+        assert!(args.iter().any(|a| a == "--security-opt=no-new-privileges"));
+        for cap in DROPPED_CAPS {
+            assert!(
+                args.windows(2).any(|w| w[0] == "--cap-drop" && w[1] == *cap),
+                "missing --cap-drop {cap}"
+            );
+        }
+        // with_limits adds the fork-bomb / memory / cpu caps.
+        assert!(args.windows(2).any(|w| w[0] == "--pids-limit"));
+        assert!(args.iter().any(|a| a == "--memory"));
+        // Bridge network publishes the port and adds no `--network none`.
+        assert!(args.windows(2).any(|w| w[0] == "-p" && w[1] == "3000:3000"));
+        assert!(!args.windows(2).any(|w| w[0] == "--network" && w[1] == "none"));
+    }
+
+    #[test]
+    fn run_args_network_none_cuts_off_publishing() {
+        let policy = SandboxPolicy {
+            network: SandboxNetwork::None,
+            ..SandboxPolicy::default()
+        };
+        let args = SessionSandbox::build_run_args(
+            "axo-ses-x",
+            "/w:/w:rw",
+            "/w",
+            DEFAULT_IMAGE,
+            false,
+            &[3000, 5173],
+            &policy,
+        );
+        assert!(args.windows(2).any(|w| w[0] == "--network" && w[1] == "none"));
+        // No ports may be published when the network is off.
+        assert!(!args.iter().any(|a| a == "-p"));
+        // with_limits=false → no caps.
+        assert!(!args.iter().any(|a| a == "--pids-limit"));
+    }
+
     /// End-to-end: needs podman installed. Run with `--ignored`.
     #[tokio::test]
     #[ignore = "requires podman; run with: cargo test -p axocoatl-isolation -- --ignored"]
     async fn sandbox_runs_commands_and_jails_the_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let sb = SessionSandbox::start("test", dir.path(), None, &[], &[])
-            .await
-            .expect("sandbox should start");
+        let sb = SessionSandbox::start(
+            "test",
+            dir.path(),
+            None,
+            &[],
+            &[],
+            &SandboxPolicy::default(),
+        )
+        .await
+        .expect("sandbox should start");
 
         // A command runs inside the container.
         let r = sb
