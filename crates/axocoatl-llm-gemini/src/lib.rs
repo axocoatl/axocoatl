@@ -55,11 +55,11 @@ impl GeminiProvider {
         }
     }
 
+    /// REST endpoint for a model. The API key is **not** in the URL — it's sent
+    /// in the `x-goog-api-key` header (see [`chat`]) so it can't leak into
+    /// reqwest's network-error strings or any log line that prints the URL.
     fn endpoint_for(&self, model: &str) -> String {
-        format!(
-            "{}/{}:generateContent?key={}",
-            GEMINI_API_BASE, model, self.api_key
-        )
+        format!("{}/{}:generateContent", GEMINI_API_BASE, model)
     }
 }
 
@@ -151,6 +151,7 @@ impl LlmProvider for GeminiProvider {
         let response = self
             .client
             .post(self.endpoint_for(model_for_call))
+            .header("x-goog-api-key", &self.api_key)
             .json(&body)
             .send()
             .await
@@ -245,6 +246,9 @@ mod tests {
         let p = GeminiProvider::new("test-key", "gemini-2.0-flash");
         let url = p.endpoint_for("gemini-2.0-flash");
         assert!(url.contains("gemini-2.0-flash:generateContent"));
-        assert!(url.contains("key=test-key"));
+        // The key must NOT be in the URL — it travels in the x-goog-api-key
+        // header so it can't leak via error strings or logs.
+        assert!(!url.contains("test-key"));
+        assert!(!url.contains("key="));
     }
 }

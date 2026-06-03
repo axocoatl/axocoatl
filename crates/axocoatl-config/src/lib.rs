@@ -1,10 +1,12 @@
 pub mod automation;
 mod convert;
 pub mod error;
+pub mod secret;
 pub mod types;
 
 pub use automation::*;
 pub use error::*;
+pub use secret::SecretString;
 pub use types::*;
 
 use std::path::Path;
@@ -94,7 +96,63 @@ fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
         }
     }
 
+    // MCP servers: validate the transport so a malformed or tampered config is
+    // rejected up front rather than silently spawning the wrong process or
+    // reaching an unexpected endpoint at connect time. The config file is a
+    // trust boundary — this is the consistency gate on it.
+    for mcp in &config.mcp_servers {
+        let field = |suffix: &str| format!("mcp_servers[{}].{suffix}", mcp.name);
+        match mcp.transport.as_str() {
+            "stdio" => {
+                let cmd = mcp.command.as_deref().unwrap_or("");
+                if cmd.trim().is_empty() {
+                    return Err(ConfigError::InvalidField {
+                        field: field("command"),
+                        value: "\"\"".to_string(),
+                        reason: "stdio MCP servers must specify a non-empty 'command'".to_string(),
+                        suggestion: "Set command to the server launcher, e.g. command: npx"
+                            .to_string(),
+                    });
+                }
+            }
+            "streamable_http" | "http" => {
+                let url = mcp.url.as_deref().unwrap_or("");
+                if !is_http_url(url) {
+                    return Err(ConfigError::InvalidField {
+                        field: field("url"),
+                        value: format!("{url:?}"),
+                        reason: "http MCP servers require a 'url' with an http:// or https:// \
+                                 scheme and a host"
+                            .to_string(),
+                        suggestion: "Set url like: url: https://mcp.example.com/sse".to_string(),
+                    });
+                }
+            }
+            other => {
+                return Err(ConfigError::InvalidField {
+                    field: field("transport"),
+                    value: format!("{other:?}"),
+                    reason: "unknown MCP transport".to_string(),
+                    suggestion: "Use transport: stdio | streamable_http | http".to_string(),
+                });
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// Lightweight check that a string is an `http`/`https` URL with a host — used
+/// to reject scheme confusion (`file://`, …) and hostless URLs in MCP config
+/// without pulling in a full URL parser.
+fn is_http_url(u: &str) -> bool {
+    match u
+        .strip_prefix("http://")
+        .or_else(|| u.strip_prefix("https://"))
+    {
+        Some(rest) => !rest.is_empty() && !rest.starts_with('/'),
+        None => false,
+    }
 }
 
 fn generate_parse_suggestion(error_msg: &str) -> String {
@@ -220,6 +278,69 @@ agents:
 "#;
         let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
         assert!(err.to_string().contains("Duplicate ID"));
+    }
+
+    #[test]
+    fn is_http_url_accepts_http_and_https_with_host() {
+        assert!(is_http_url("http://localhost:6334"));
+        assert!(is_http_url("https://mcp.example.com/sse"));
+        // Wrong scheme, hostless, or empty must be rejected.
+        assert!(!is_http_url("file:///etc/passwd"));
+        assert!(!is_http_url("ftp://host"));
+        assert!(!is_http_url("http://"));
+        assert!(!is_http_url("http:///path"));
+        assert!(!is_http_url(""));
+        assert!(!is_http_url("mcp.example.com"));
+    }
+
+    #[test]
+    fn validate_mcp_stdio_requires_command() {
+        let yaml = r#"
+mcp_servers:
+  - name: tools
+    transport: stdio
+"#;
+        let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
+        assert!(err.to_string().contains("non-empty 'command'"));
+    }
+
+    #[test]
+    fn validate_mcp_http_rejects_bad_url() {
+        let yaml = r#"
+mcp_servers:
+  - name: remote
+    transport: http
+    url: "file:///etc/passwd"
+"#;
+        let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
+        assert!(err.to_string().contains("http:// or https://"));
+    }
+
+    #[test]
+    fn validate_mcp_unknown_transport() {
+        let yaml = r#"
+mcp_servers:
+  - name: weird
+    transport: carrier-pigeon
+"#;
+        let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
+        assert!(err.to_string().contains("unknown MCP transport"));
+    }
+
+    #[test]
+    fn validate_mcp_well_formed_passes() {
+        let yaml = r#"
+mcp_servers:
+  - name: local
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem"]
+  - name: remote
+    transport: streamable_http
+    url: "https://mcp.example.com/sse"
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        assert_eq!(config.mcp_servers.len(), 2);
     }
 
     #[test]

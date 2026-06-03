@@ -93,12 +93,39 @@ pub async fn request_logging(request: Request, next: Next) -> Response {
     response
 }
 
-/// CORS headers for the Axocoatl API.
-pub fn cors_headers() -> tower_http::cors::CorsLayer {
-    tower_http::cors::CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
+/// CORS layer for the Axocoatl API.
+///
+/// `origins` is the explicit allow-list from `server.cors_origins`. When empty
+/// (the default) the API is **same-origin only** — the dashboard, which is
+/// served from the same origin, keeps working, while arbitrary web pages cannot
+/// drive the API from a victim's browser. Previously this allowed `Any` origin,
+/// which let any site reach a loopback-bound server (DNS-rebinding / CSRF-style
+/// attacks). Origins that fail to parse are skipped with a warning.
+pub fn cors_layer(origins: &[String]) -> tower_http::cors::CorsLayer {
+    let layer = tower_http::cors::CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            header::HeaderName::from_static("x-api-key"),
+        ]);
+
+    if origins.is_empty() {
+        return layer; // no cross-origin access; same-origin requests are unaffected by CORS
+    }
+
+    let parsed: Vec<header::HeaderValue> = origins
+        .iter()
+        .filter_map(|o| match o.parse::<header::HeaderValue>() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                tracing::warn!(origin = %o, "ignoring invalid CORS origin");
+                None
+            }
+        })
+        .collect();
+
+    layer.allow_origin(parsed)
 }
 
 #[cfg(test)]

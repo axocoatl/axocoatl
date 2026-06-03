@@ -465,7 +465,7 @@ providers:
 
 server:
   port: 8080
-  host: "0.0.0.0"
+  host: "127.0.0.1"
 "#;
 
 const ENV_EXAMPLE: &str =
@@ -629,16 +629,16 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
             }
         };
         if let Some(c) = &config.providers.openai {
-            cred_check("OpenAI", &c.api_key);
+            cred_check("OpenAI", c.api_key.expose_secret());
         }
         if let Some(c) = &config.providers.anthropic {
-            cred_check("Anthropic", &c.api_key);
+            cred_check("Anthropic", c.api_key.expose_secret());
         }
         if let Some(c) = &config.providers.gemini {
-            cred_check("Gemini", &c.api_key);
+            cred_check("Gemini", c.api_key.expose_secret());
         }
         if let Some(c) = &config.providers.mistral {
-            cred_check("Mistral", &c.api_key);
+            cred_check("Mistral", c.api_key.expose_secret());
         }
     }
 
@@ -808,7 +808,7 @@ providers:
 
 server:
   port: 8080
-  host: "0.0.0.0"
+  host: "127.0.0.1"
 "#
             );
             (cfg, String::from("# No API keys needed for local Ollama\n"))
@@ -846,7 +846,7 @@ providers:
 
 server:
   port: 8080
-  host: "0.0.0.0"
+  host: "127.0.0.1"
 "#
             );
             let env = if key.is_empty() {
@@ -881,7 +881,7 @@ providers:
 
 server:
   port: 8080
-  host: "0.0.0.0"
+  host: "127.0.0.1"
 "#
             .to_string();
             let env = if key.is_empty() {

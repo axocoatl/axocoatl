@@ -7,6 +7,7 @@ pub mod files;
 pub mod long_term;
 #[cfg(feature = "neural-embeddings")]
 pub mod neural;
+pub mod perms;
 pub mod semantic;
 pub mod session;
 pub mod transcript;
