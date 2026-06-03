@@ -249,8 +249,21 @@ pub struct OllamaCredentials {
 pub struct ServerConfigYaml {
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Bind address. Defaults to loopback (`127.0.0.1`) — the server is
+    /// unauthenticated-friendly only for local, single-user use. Exposing it on
+    /// a non-loopback address (e.g. `0.0.0.0`) requires `auth` to be configured;
+    /// see `serve` for the fail-closed guard.
     #[serde(default = "default_host")]
     pub host: String,
+    /// API authentication. Empty by default (fine on loopback). Required before
+    /// the server will bind to a non-loopback address.
+    #[serde(default)]
+    pub auth: ServerAuthYaml,
+    /// Cross-origin allow-list for the HTTP API. Empty means **same-origin
+    /// only** (the dashboard keeps working; arbitrary web pages cannot call the
+    /// API from a user's browser). Add explicit origins to opt in.
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
 }
 
 impl Default for ServerConfigYaml {
@@ -258,7 +271,33 @@ impl Default for ServerConfigYaml {
         Self {
             port: default_port(),
             host: default_host(),
+            auth: ServerAuthYaml::default(),
+            cors_origins: Vec::new(),
         }
+    }
+}
+
+/// API authentication for the HTTP/WS server. Tokens support `${ENV_VAR}`
+/// interpolation so they need not be committed in plaintext.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ServerAuthYaml {
+    /// Accepted `x-api-key` values.
+    #[serde(default)]
+    pub api_keys: Vec<String>,
+    /// Accepted `Authorization: Bearer <token>` values.
+    #[serde(default)]
+    pub bearer_tokens: Vec<String>,
+    /// Escape hatch: bind a non-loopback address **without** auth (e.g. when an
+    /// upstream proxy enforces it). The operator takes responsibility — the
+    /// fail-closed guard is skipped only when this is explicitly `true`.
+    #[serde(default)]
+    pub allow_unauthenticated: bool,
+}
+
+impl ServerAuthYaml {
+    /// Auth is enforced when at least one credential is configured.
+    pub fn is_enabled(&self) -> bool {
+        !self.api_keys.is_empty() || !self.bearer_tokens.is_empty()
     }
 }
 
@@ -266,7 +305,9 @@ fn default_port() -> u16 {
     8080
 }
 fn default_host() -> String {
-    "0.0.0.0".to_string()
+    // Loopback by default. Binding to all interfaces is opt-in and, without
+    // auth, refused at startup. See axocoatl-server::serve.
+    "127.0.0.1".to_string()
 }
 
 /// Daemon configuration.
