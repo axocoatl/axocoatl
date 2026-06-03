@@ -599,6 +599,18 @@ impl AxocoatlDaemon {
         Ok(())
     }
 
+    /// Configured agents whose actor is no longer running (crashed or stopped).
+    /// The supervision loop restarts these from their last checkpoint.
+    pub async fn dead_agents(&self) -> Vec<String> {
+        let mut dead = Vec::new();
+        for agent in &self.config.agents {
+            if !self.agent_registry.is_alive(&AgentId::new(&agent.id)).await {
+                dead.push(agent.id.clone());
+            }
+        }
+        dead
+    }
+
     fn setup_providers(
         config: &AxocoatlConfig,
         registry: &mut ProviderRegistry,
@@ -650,6 +662,30 @@ impl AxocoatlDaemon {
                 );
                 registry.register(Arc::new(provider));
                 tracing::info!("Registered Anthropic provider");
+            }
+        }
+
+        // Gemini
+        if let Some(gemini) = &config.providers.gemini {
+            if !gemini.api_key.is_empty() {
+                let provider = axocoatl_llm_gemini::GeminiProvider::new(
+                    gemini.api_key.expose_secret(),
+                    "gemini-2.0-flash",
+                );
+                registry.register(Arc::new(provider));
+                tracing::info!("Registered Gemini provider");
+            }
+        }
+
+        // Mistral
+        if let Some(mistral) = &config.providers.mistral {
+            if !mistral.api_key.is_empty() {
+                let provider = axocoatl_llm_mistral::MistralProvider::new(
+                    mistral.api_key.expose_secret(),
+                    "mistral-large-latest",
+                );
+                registry.register(Arc::new(provider));
+                tracing::info!("Registered Mistral provider");
             }
         }
 

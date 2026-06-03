@@ -41,7 +41,7 @@ The runtime is a workspace of ~20 crates. Highlights:
 - **Dashboard** at `localhost:8080` served by Axum + `rust_embed`.
   Vanilla HTML + Web Components + Monaco. No React.
 
-Total release binary: 13 MB stripped. 318 tests across the workspace.
+Total release binary: 25 MB stripped. 340+ tests across the workspace.
 `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test
 --workspace` all green in CI.
 
@@ -92,7 +92,7 @@ Concrete use cases people are running:
 - Bug bisection: open a directory session, point at a failing test,
   let the agent run `git bisect` inside the sandbox.
 
-13 MB Rust binary. Apache-2.0.
+25 MB Rust binary. Apache-2.0.
 
 https://axocoatl.ai · https://github.com/axocoatl/axocoatl
 
@@ -123,17 +123,23 @@ thresholds are crossed. The system has no global plan — agents
 self-organize through the shared event space, similar in spirit to ant
 pheromone trails (where the name comes from).
 
-Concrete properties:
+Concrete properties (shipped today):
 
 - Composability without rewiring. Add an agent that listens for
   `TaskCompleted{researcher}` and it joins the workflow automatically.
+  No global plan, no central scheduler — agents self-organize through
+  the shared event space.
+
+On the roadmap (built, not yet wired into the runtime):
+
 - Multi-agent auctions for the same Skill. When two agents hold a
-  Skill that reacts to the same event, the lattice runs a quick
+  Skill that reacts to the same event, the runtime would run a quick
   auction based on token budget remaining, current status, and model
-  capability.
-- HTN symbolic planning is layered on top for cases where you want
-  hierarchical task decomposition; agents can publish sub-tasks back
-  into the lattice.
+  capability. The auction mechanism exists in the codebase but isn't
+  integrated into the shipped coordination path yet.
+- HTN symbolic planning for hierarchical task decomposition, with
+  agents publishing sub-tasks back into the lattice. Also built but
+  not yet integrated — it doesn't run in today's runtime.
 
 Memory: four tiers (session / checkpoint / long-term / semantic).
 Tier 4 is a 384-dim BERT (`all-MiniLM-L6-v2`) running through Candle —
@@ -144,17 +150,16 @@ keywords.
 Local-first: runs against Ollama by default, swaps to OpenAI /
 Anthropic / Mistral / Gemini / OpenRouter per agent.
 
-We've been running it in production for ~6 weeks on small workflows
-(release notes, support triage, daily briefings). The supervised actor
-model + checkpointing means agents survive crashes that would tear
-down a Python-based system.
+We run it ourselves on real workflows (release notes, support triage,
+daily briefings). The supervised actor model + checkpointing means
+agents survive crashes that would tear down a Python-based system.
 
 Code: https://github.com/axocoatl/axocoatl
 Architecture deep-dive: https://docs.axocoatl.ai/guides/architecture
 Concepts page (with a live lattice demo):
 https://axocoatl.ai/concepts
 
-318 tests in CI. Apache-2.0. Welcome critique on the coordination
+340+ tests in CI. Apache-2.0. Welcome critique on the coordination
 model in particular — I'm aware it doesn't generalize to every
 multi-agent topology and would be curious where you think it breaks
 down.

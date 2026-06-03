@@ -518,7 +518,7 @@ Expect: Handled gracefully (error or empty response, no panic).
 ```bash
 cargo test --workspace
 ```
-Expect: 258+ tests, 0 failures.
+Expect: 340+ tests, 0 failures.
 
 ---
 
@@ -530,7 +530,7 @@ cargo bench --bench routing_latency
 cargo bench --bench actor_throughput
 cargo bench --bench isolation_startup
 ```
-Expect: Benchmarks complete. TOON shows 20-35% token savings vs JSON.
+Expect: Benchmarks complete and report timing/throughput results.
 
 ---
 

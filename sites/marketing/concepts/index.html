@@ -134,12 +134,16 @@
           A Skill declares the events it <strong>emits</strong> and the
           events it <strong>reacts to</strong>. The lattice wires it
           automatically: any agent that holds the right Skill can be
-          the one that fires when the matching event lands. Two agents
-          hold the same Skill? An auction picks the best fit.
+          the one that fires when the matching event lands.
         </p>
         <p>
           You don't wire Skills to agents. You declare what each Skill
           listens for, and the lattice does the routing.
+        </p>
+        <p class="muted">
+          <strong>On the roadmap:</strong> when two agents hold the same
+          Skill, an auction picks the best fit. The selector is built but
+          not yet wired into the lattice — planned, not shipped.
         </p>
       </div>
     </section>

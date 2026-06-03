@@ -74,11 +74,24 @@ execute_workflow → activate entry agent
 A cycle guard (`max_activations = agents × 3`) and acyclic-DAG validation make
 runaway activation impossible.
 
-Supporting primitives (sub-microsecond, in `axocoatl-coordination`):
+This stigmergic event lattice is the **shipped** coordination layer. There is
+no scheduler and no central orchestrator — coordination is entirely emergent
+from `depends_on` declarations and `TaskCompleted` signal strength.
 
-- **HTN planner** — symbolic task decomposition without LLM calls.
-- **Auction** — deterministic agent selection by tool capability, load, and
-  remaining token budget.
+### Planned layers (roadmap)
+
+Two further primitives are **built but not yet integrated** into the running
+system. They live in `axocoatl-coordination` (sub-microsecond, fully
+unit-tested), but the daemon does not invoke them today. Both are planned to
+sit *on top of* the shipped lattice:
+
+- **HTN planner** (roadmap) — symbolic task decomposition without LLM calls.
+  Would sit *above* the lattice: decompose a goal into subtasks that publish
+  into the lattice, which then fans them out as usual.
+- **Auction** (roadmap) — deterministic agent selection by tool capability,
+  load, and remaining token budget. Would refine *dispatch*: when several
+  agents contend for the same activation, pick one instead of fanning out to
+  all.
 
 ## Memory tiers
 
@@ -87,7 +100,7 @@ Supporting primitives (sub-microsecond, in `axocoatl-coordination`):
 | 1 — Session | conversation transcript | in-memory |
 | 2 — Checkpoint | agent state snapshots | disk (pruned to 3) |
 | 3 — Long-term | distilled facts | disk (bincode) |
-| 4 — Semantic | vector recall | optional feature |
+| 4 — Neural | semantic vector recall (Candle + all-MiniLM-L6-v2, 384-dim embeddings, ~90 MB model, hash fallback) | disk |
 
 ## Protocols
 
@@ -96,11 +109,18 @@ Supporting primitives (sub-microsecond, in `axocoatl-coordination`):
   also be exposed *as* MCP tools.
 - **A2A** — agent-to-agent interop for cross-framework workflows.
 
+## Sandbox isolation
+
+Directory sessions run inside a **hardened rootless podman container** — this
+is the shipped isolation tier. Additional tiers (a Wasmtime/WASM tier and
+OCI/Firecracker-class microVM isolation) are **roadmap**, not shipped today.
+
 ## Crate map
 
 `axocoatl-core` (types) · `axocoatl-token` (budgets) · `axocoatl-llm*`
 (providers) · `axocoatl-config` · `axocoatl-actor` (runtime) ·
-`axocoatl-memory` · `axocoatl-coordination` (lattice/HTN/auction) ·
-`axocoatl-graph` · `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` ·
-`axocoatl-isolation` (WASM) · `axocoatl-daemon` · `axocoatl-server` ·
+`axocoatl-memory` · `axocoatl-coordination` (shipped lattice; HTN/auction
+primitives built, not yet integrated) · `axocoatl-graph` · `axocoatl-mcp` ·
+`axocoatl-a2a` · `axocoatl-tools` · `axocoatl-isolation` (rootless podman
+sandbox; WASM tier roadmap) · `axocoatl-daemon` · `axocoatl-server` ·
 `axocoatl-cli`.

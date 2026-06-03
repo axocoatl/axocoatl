@@ -33,7 +33,7 @@ its meaning, the copy is wrong.
 
 > Axocoatl is the open-source agentic runtime for teams that ship.
 > Real workflows. Local-first. Your hardware, your LLM, your data.
-> One 13 MB Rust binary that runs, supervises, and survives.
+> One 25 MB Rust binary that runs, supervises, and survives.
 
 Three pillars. Every page should reinforce one or more:
 
@@ -63,7 +63,7 @@ heavy, futuristic, mystical, urgent, hyperbolic.
 
 > "Real workflows. Not demos."
 
-> "One 13 MB binary. Your hardware. Your LLM. Your data."
+> "One 25 MB binary. Your hardware. Your LLM. Your data."
 
 > "Close the laptop. Open it tomorrow. The session is still there."
 
@@ -293,8 +293,8 @@ We don't fabricate. Until we have real testimonials, real customer
 logos, real download numbers, real GitHub stars — we don't put them on
 the site. The slot stays empty, or we use a *factual* trust signal:
 
-- "v0.1 · 318 tests · Apache 2.0"
-- "13 MB Rust binary · zero telemetry"
+- "v0.1 · 340+ tests · Apache 2.0"
+- "25 MB Rust binary · zero telemetry"
 - "Runs against Ollama, OpenAI, Anthropic, Mistral, Gemini"
 - "MIT/Apache dual license"
 
