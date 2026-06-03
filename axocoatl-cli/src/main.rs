@@ -465,7 +465,7 @@ providers:
 
 server:
   port: 8080
-  host: "0.0.0.0"
+  host: "127.0.0.1"
 "#;
 
 const ENV_EXAMPLE: &str =
@@ -808,7 +808,7 @@ providers:
 
 server:
   port: 8080
-  host: "0.0.0.0"
+  host: "127.0.0.1"
 "#
             );
             (cfg, String::from("# No API keys needed for local Ollama\n"))
@@ -846,7 +846,7 @@ providers:
 
 server:
   port: 8080
-  host: "0.0.0.0"
+  host: "127.0.0.1"
 "#
             );
             let env = if key.is_empty() {
@@ -881,7 +881,7 @@ providers:
 
 server:
   port: 8080
-  host: "0.0.0.0"
+  host: "127.0.0.1"
 "#
             .to_string();
             let env = if key.is_empty() {
