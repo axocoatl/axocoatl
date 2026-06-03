@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::secret::SecretString;
+
 /// Root configuration — parses axocoatl.yaml.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AxocoatlConfig {
@@ -38,7 +40,7 @@ pub struct WebSearchConfigYaml {
     pub provider: String,
     /// Provider API key.
     #[serde(default)]
-    pub api_key: String,
+    pub api_key: SecretString,
 }
 
 /// A **proactive agent** — an agent that acts on its own, with no user prompt,
@@ -235,7 +237,9 @@ pub struct ProvidersConfigYaml {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderCredentials {
-    pub api_key: String,
+    pub api_key: SecretString,
+    /// Fallback provider/model identifier for the registry's fallback chain —
+    /// not a credential.
     pub fallback: Option<String>,
 }
 

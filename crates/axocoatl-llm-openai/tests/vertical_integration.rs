@@ -70,7 +70,7 @@ fn config_to_provider_registry() {
     let mut registry = ProviderRegistry::new();
 
     if let Some(openai_creds) = &config.providers.openai {
-        let provider = OpenAiProvider::new(&openai_creds.api_key, "gpt-4o");
+        let provider = OpenAiProvider::new(openai_creds.api_key.expose_secret(), "gpt-4o");
         registry.register(Arc::new(provider));
     }
 
