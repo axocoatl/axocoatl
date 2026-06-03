@@ -629,16 +629,16 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
             }
         };
         if let Some(c) = &config.providers.openai {
-            cred_check("OpenAI", &c.api_key);
+            cred_check("OpenAI", c.api_key.expose_secret());
         }
         if let Some(c) = &config.providers.anthropic {
-            cred_check("Anthropic", &c.api_key);
+            cred_check("Anthropic", c.api_key.expose_secret());
         }
         if let Some(c) = &config.providers.gemini {
-            cred_check("Gemini", &c.api_key);
+            cred_check("Gemini", c.api_key.expose_secret());
         }
         if let Some(c) = &config.providers.mistral {
-            cred_check("Mistral", &c.api_key);
+            cred_check("Mistral", c.api_key.expose_secret());
         }
     }
 

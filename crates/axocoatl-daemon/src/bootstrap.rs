@@ -600,7 +600,7 @@ impl AxocoatlDaemon {
         if let Some(openai) = &config.providers.openai {
             if !openai.api_key.is_empty() {
                 let provider = axocoatl_llm_openai::OpenAiProvider::new(
-                    &openai.api_key,
+                    openai.api_key.expose_secret(),
                     "gpt-4o", // Default model — agents specify their own
                 );
                 registry.register(Arc::new(provider));
@@ -620,7 +620,7 @@ impl AxocoatlDaemon {
         if let Some(openrouter) = &config.providers.openrouter {
             if !openrouter.api_key.is_empty() {
                 let provider = axocoatl_llm_openai::OpenAiProvider::with_base_url(
-                    &openrouter.api_key,
+                    openrouter.api_key.expose_secret(),
                     "openai/gpt-4o-mini", // Default — agents pick their own
                     "https://openrouter.ai/api/v1",
                 )
@@ -638,7 +638,7 @@ impl AxocoatlDaemon {
         if let Some(anthropic) = &config.providers.anthropic {
             if !anthropic.api_key.is_empty() {
                 let provider = axocoatl_llm_anthropic::AnthropicProvider::new(
-                    &anthropic.api_key,
+                    anthropic.api_key.expose_secret(),
                     "claude-sonnet-4-6",
                 );
                 registry.register(Arc::new(provider));
@@ -1535,7 +1535,8 @@ impl AxocoatlDaemon {
 
         // Web search — offered when a provider is configured.
         if let Some(ws) = &self.config.web_search {
-            let tool = axocoatl_tools::WebSearchTool::from_config(&ws.provider, &ws.api_key);
+            let tool =
+                axocoatl_tools::WebSearchTool::from_config(&ws.provider, ws.api_key.expose_secret());
             executor.register_builtin("web_search", Arc::new(tool));
         }
 

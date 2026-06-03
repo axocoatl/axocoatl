@@ -1,10 +1,12 @@
 pub mod automation;
 mod convert;
 pub mod error;
+pub mod secret;
 pub mod types;
 
 pub use automation::*;
 pub use error::*;
+pub use secret::SecretString;
 pub use types::*;
 
 use std::path::Path;
