@@ -61,7 +61,10 @@ mod tests {
 
     #[test]
     fn debug_distinguishes_empty() {
-        assert_eq!(format!("{:?}", SecretString::default()), r#"SecretString("")"#);
+        assert_eq!(
+            format!("{:?}", SecretString::default()),
+            r#"SecretString("")"#
+        );
     }
 
     #[test]

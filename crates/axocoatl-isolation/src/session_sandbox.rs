@@ -200,7 +200,13 @@ impl SessionSandbox {
         let mut publish: Vec<u16> = exposed_ports.to_vec();
         loop {
             match Self::run_container(
-                &container, &mount, &dir, image, with_limits, &publish, policy,
+                &container,
+                &mount,
+                &dir,
+                image,
+                with_limits,
+                &publish,
+                policy,
             )
             .await
             {
@@ -284,7 +290,10 @@ impl SessionSandbox {
                 post_create_commands.len()
             );
         }
-        for script in post_create_commands.iter().filter(|_| policy.allow_post_create) {
+        for script in post_create_commands
+            .iter()
+            .filter(|_| policy.allow_post_create)
+        {
             tracing::info!(
                 "running post-create script in session container ({container}): {script}"
             );
@@ -728,7 +737,8 @@ mod tests {
         assert!(args.iter().any(|a| a == "--security-opt=no-new-privileges"));
         for cap in DROPPED_CAPS {
             assert!(
-                args.windows(2).any(|w| w[0] == "--cap-drop" && w[1] == *cap),
+                args.windows(2)
+                    .any(|w| w[0] == "--cap-drop" && w[1] == *cap),
                 "missing --cap-drop {cap}"
             );
         }
@@ -737,7 +747,9 @@ mod tests {
         assert!(args.iter().any(|a| a == "--memory"));
         // Bridge network publishes the port and adds no `--network none`.
         assert!(args.windows(2).any(|w| w[0] == "-p" && w[1] == "3000:3000"));
-        assert!(!args.windows(2).any(|w| w[0] == "--network" && w[1] == "none"));
+        assert!(!args
+            .windows(2)
+            .any(|w| w[0] == "--network" && w[1] == "none"));
     }
 
     #[test]
@@ -755,7 +767,9 @@ mod tests {
             &[3000, 5173],
             &policy,
         );
-        assert!(args.windows(2).any(|w| w[0] == "--network" && w[1] == "none"));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--network" && w[1] == "none"));
         // No ports may be published when the network is off.
         assert!(!args.iter().any(|a| a == "-p"));
         // with_limits=false → no caps.

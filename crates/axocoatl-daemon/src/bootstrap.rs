@@ -1542,8 +1542,10 @@ impl AxocoatlDaemon {
 
         // Web search — offered when a provider is configured.
         if let Some(ws) = &self.config.web_search {
-            let tool =
-                axocoatl_tools::WebSearchTool::from_config(&ws.provider, ws.api_key.expose_secret());
+            let tool = axocoatl_tools::WebSearchTool::from_config(
+                &ws.provider,
+                ws.api_key.expose_secret(),
+            );
             executor.register_builtin("web_search", Arc::new(tool));
         }
 
