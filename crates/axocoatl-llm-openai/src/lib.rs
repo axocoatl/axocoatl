@@ -40,9 +40,20 @@ impl OpenAiProvider {
         model: impl Into<String>,
         base_url: impl Into<String>,
     ) -> Self {
-        let config = OpenAIConfig::new()
+        let base_url = base_url.into();
+        let mut config = OpenAIConfig::new()
             .with_api_key(api_key)
-            .with_api_base(base_url);
+            .with_api_base(base_url.as_str());
+        // OpenRouter app attribution (https://openrouter.ai/docs/app-attribution):
+        // identifies Axocoatl in OpenRouter's app rankings. Set only for the
+        // OpenRouter endpoint; other OpenAI-compatible vendors ignore them. The
+        // values are static and always valid, so `with_header` never errs here.
+        if base_url.contains("openrouter.ai") {
+            config = config
+                .with_header("HTTP-Referer", "https://axocoatl.ai")
+                .and_then(|c| c.with_header("X-Title", "Axocoatl"))
+                .expect("static OpenRouter attribution headers are valid");
+        }
         Self {
             client: Client::with_config(config),
             model: model.into(),
