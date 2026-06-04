@@ -6,6 +6,12 @@
 [![crates.io](https://img.shields.io/crates/v/axocoatl-cli.svg)](https://crates.io/crates/axocoatl-cli)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
+<p align="center">
+  <img src="docs/img/demo.gif" alt="Axocoatl crash-restart — kill the server mid-run and the agent resumes from its last checkpoint, fully local" width="760">
+</p>
+
+<p align="center"><em>Kill the server mid-task — the agent restarts from its last checkpoint, not from zero. 100% local.</em></p>
+
 Axocoatl runs persistent AI agents that coordinate through a **stigmergic event
 lattice** — agents activate when their dependencies complete, driven by
 pheromone-style signals with no central orchestrator. Built in Rust on the
