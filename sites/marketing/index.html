@@ -38,8 +38,6 @@
   <script type="module" src="/components/ax-pillar.js"></script>
   <script type="module" src="/components/ax-cli-snippet.js"></script>
   <script type="module" src="/components/ax-scripted-lattice.js"></script>
-  <script type="module" src="/components/ax-studio-mock.js"></script>
-  <script type="module" src="/components/ax-sessions-mock.js"></script>
   <script type="module" src="/components/ax-automation-card.js"></script>
   <script type="module" src="/components/ax-install-bar.js"></script>
   <script type="module" src="/components/ax-footer.js"></script>
@@ -136,7 +134,9 @@
       </div>
 
       <div style="margin-top: var(--s-6);">
-        <ax-studio-mock></ax-studio-mock>
+        <video src="/assets/lattice.mp4" autoplay loop muted playsinline preload="metadata"
+          style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
+          aria-label="The Axocoatl lattice — agents coordinating as a live graph"></video>
       </div>
 
       <div class="trust-row" style="margin-top: var(--s-6);">
@@ -250,7 +250,9 @@
         </p>
       </div>
 
-      <ax-sessions-mock></ax-sessions-mock>
+      <video src="/assets/session.mp4" autoplay loop muted playsinline preload="metadata"
+        style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
+        aria-label="The Axocoatl Sessions cockpit — an agent building in a sandboxed folder"></video>
 
       <div class="pillars" style="margin-top: var(--s-7);">
         <ax-pillar glyph="▣">
