@@ -18,7 +18,7 @@ class AxFooter extends HTMLElement {
                 <span>Axocoatl</span>
               </div>
               <p class="muted small" style="max-width: 28ch; margin: 0;">
-                The open-source agentic runtime for teams that ship.
+                An open-source agentic runtime, written in Rust.
                 Apache-2.0.
               </p>
             </div>
