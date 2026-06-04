@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500&display=swap" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1200px; height: 630px; }
+  .card {
+    position: relative;
+    width: 1200px; height: 630px;
+    overflow: hidden;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 92px;
+    background:
+      radial-gradient(58% 86% at 79% 50%, rgba(62, 124, 92, 0.22), transparent 62%),
+      radial-gradient(130% 120% at 50% 128%, rgba(63, 169, 200, 0.06), transparent 55%),
+      #050709;
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* faint metalwork hairline, bottom — a nod to the bronze Greek-key border */
+  .card::after {
+    content: "";
+    position: absolute; left: 0; bottom: 0; width: 100%; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(181, 144, 74, 0.55), transparent);
+  }
+  .copy { position: relative; z-index: 2; max-width: 600px; }
+  .eyebrow {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 19px; font-weight: 500; letter-spacing: 3.5px;
+    color: #E8C275; margin-bottom: 22px;
+  }
+  h1 {
+    font-size: 92px; font-weight: 700; letter-spacing: -1.5px;
+    color: #F4ECDA; line-height: 1; margin-bottom: 24px;
+  }
+  .sub {
+    font-size: 26px; font-weight: 500; line-height: 1.42;
+    color: #C8CBD1; max-width: 560px; margin-bottom: 34px;
+  }
+  .meta {
+    display: flex; align-items: center; gap: 14px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 20px; font-weight: 500; letter-spacing: 0.3px; color: #ECECEC;
+  }
+  .meta .dot { width: 10px; height: 10px; border-radius: 50%; background: #4FCB8E;
+               box-shadow: 0 0 12px rgba(79, 203, 142, 0.8); }
+  .meta .sep { color: #636366; }
+  .meta .dim { color: #8E8E93; }
+
+  .markwrap { position: relative; z-index: 2; flex: none; display: grid; place-items: center; }
+  .markwrap .glow {
+    position: absolute; width: 520px; height: 520px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(62, 124, 92, 0.45), rgba(62,124,92,0.0) 65%);
+    filter: blur(26px);
+  }
+  .markwrap img { position: relative; width: 452px; height: 452px; display: block; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="copy">
+      <div class="eyebrow">OPEN-SOURCE AGENTIC RUNTIME</div>
+      <h1>Axocoatl</h1>
+      <p class="sub">Persistent, supervised agents, written in Rust. Self-hosted, local-first, zero telemetry.</p>
+      <div class="meta">
+        <span class="dot"></span>axocoatl.ai
+        <span class="sep">·</span><span class="dim">Apache 2.0</span>
+        <span class="sep">·</span><span class="dim">v0.1</span>
+      </div>
+    </div>
+    <div class="markwrap">
+      <div class="glow"></div>
+      <img src="mark.png" alt="Axocoatl" />
+    </div>
+  </div>
+</body>
+</html>
