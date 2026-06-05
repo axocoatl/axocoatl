@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Anthropic provider's `reqwest_eventsource` pattern, with unit-tested chunk
   parsers. Both providers' `capabilities()` now report `tool_calling: false`
   honestly (tool-calling for them is tracked as a follow-up).
+- **Gemini was non-functional against the current API.** The provider used the
+  `v1beta` endpoint, which 404s every current Google model, and defaulted to the
+  retired `gemini-2.0-flash`; the `v1` API also rejects the `systemInstruction`
+  field. Switched the base URL to `v1`, bumped the default model to
+  `gemini-2.5-flash`, and fold any system prompt into the first user turn.
+  Verified end-to-end against the live Gemini API.
 
 ## [0.1.0] — 2026-04-24
 
