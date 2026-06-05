@@ -37,7 +37,8 @@ fn gemini_parts(parts: &[axocoatl_core::ContentPart]) -> Vec<serde_json::Value> 
     out
 }
 
-const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+// The `v1` API serves current models; `v1beta` 404s them (e.g. gemini-2.5-flash).
+const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1/models";
 
 /// Parse one Gemini streaming chunk (a `GenerateContentResponse`) into stream
 /// events. Pure + synchronous so it is unit-tested without the network.
@@ -111,12 +112,15 @@ impl GeminiProvider {
         )
     }
 
-    /// Build the Gemini request body (`contents` + `system_instruction` +
-    /// `generationConfig`) shared by `chat` and `chat_stream`.
+    /// Build the Gemini request body (`contents` + `generationConfig`), shared
+    /// by `chat` and `chat_stream`.
+    ///
+    /// The Gemini `v1` API has no `systemInstruction` field, so any system
+    /// message is folded into the first user turn's text.
     fn build_request_body(&self, request: &ChatRequest) -> serde_json::Value {
         // Gemini uses a different message format: "contents" with "parts".
-        let mut system_instruction = None;
-        let mut contents = Vec::new();
+        let mut system_text: Option<String> = None;
+        let mut contents: Vec<serde_json::Value> = Vec::new();
 
         for msg in &request.messages {
             // For User messages with multimodal Parts, build Gemini's native
@@ -147,7 +151,17 @@ impl GeminiProvider {
 
             match msg.role {
                 MessageRole::System => {
-                    system_instruction = Some(serde_json::json!({ "parts": parts_json }));
+                    // `v1` has no systemInstruction field; accumulate and fold
+                    // into the first user turn below.
+                    let text = parts_json
+                        .iter()
+                        .filter_map(|p| p["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    system_text = Some(match system_text {
+                        Some(prev) => format!("{prev}\n{text}"),
+                        None => text,
+                    });
                 }
                 MessageRole::User => {
                     contents.push(serde_json::json!({ "role": "user", "parts": parts_json }));
@@ -161,10 +175,22 @@ impl GeminiProvider {
             }
         }
 
-        let mut body = serde_json::json!({ "contents": contents });
-        if let Some(sys) = system_instruction {
-            body["system_instruction"] = sys;
+        // Fold the system prompt into the first user turn (Gemini v1 has no
+        // systemInstruction field).
+        if let Some(sys) = system_text {
+            if let Some(first_user) = contents.iter_mut().find(|c| c["role"] == "user") {
+                if let Some(parts) = first_user["parts"].as_array_mut() {
+                    parts.insert(0, serde_json::json!({ "text": format!("{sys}\n\n") }));
+                }
+            } else {
+                contents.insert(
+                    0,
+                    serde_json::json!({ "role": "user", "parts": [{ "text": sys }] }),
+                );
+            }
         }
+
+        let mut body = serde_json::json!({ "contents": contents });
         let mut gen_config = serde_json::Map::new();
         if let Some(max) = request.max_tokens {
             gen_config.insert("maxOutputTokens".to_string(), serde_json::json!(max));
@@ -319,14 +345,14 @@ mod tests {
 
     #[test]
     fn provider_identity() {
-        let p = GeminiProvider::new("key", "gemini-2.0-flash");
+        let p = GeminiProvider::new("key", "gemini-2.5-flash");
         assert_eq!(p.provider_id(), "gemini");
-        assert_eq!(p.model_id(), "gemini-2.0-flash");
+        assert_eq!(p.model_id(), "gemini-2.5-flash");
     }
 
     #[test]
     fn capabilities() {
-        let p = GeminiProvider::new("key", "gemini-2.0-flash");
+        let p = GeminiProvider::new("key", "gemini-2.5-flash");
         let caps = p.capabilities();
         assert!(caps.streaming);
         assert!(caps.vision);
@@ -337,15 +363,15 @@ mod tests {
 
     #[test]
     fn endpoint_format() {
-        let p = GeminiProvider::new("test-key", "gemini-2.0-flash");
-        let url = p.endpoint_for("gemini-2.0-flash");
-        assert!(url.contains("gemini-2.0-flash:generateContent"));
+        let p = GeminiProvider::new("test-key", "gemini-2.5-flash");
+        let url = p.endpoint_for("gemini-2.5-flash");
+        assert!(url.contains("gemini-2.5-flash:generateContent"));
         // The key must NOT be in the URL — it travels in the x-goog-api-key
         // header so it can't leak via error strings or logs.
         assert!(!url.contains("test-key"));
         assert!(!url.contains("key="));
 
-        let surl = p.stream_endpoint_for("gemini-2.0-flash");
+        let surl = p.stream_endpoint_for("gemini-2.5-flash");
         assert!(surl.contains("streamGenerateContent?alt=sse"));
         assert!(!surl.contains("test-key"));
     }
@@ -383,5 +409,20 @@ mod tests {
                 finish_reason: FinishReason::Stop
             }
         )));
+    }
+
+    #[test]
+    fn system_prompt_folds_into_first_user_turn() {
+        let p = GeminiProvider::new("key", "gemini-2.5-flash");
+        let req = ChatRequest::with_system("Be brief.", "Hi");
+        let body = p.build_request_body(&req);
+        // Gemini v1 rejects a systemInstruction field — it must NOT be present.
+        assert!(body.get("system_instruction").is_none());
+        assert!(body.get("systemInstruction").is_none());
+        // The system text is folded into the first user turn instead.
+        let contents = body["contents"].as_array().unwrap();
+        assert_eq!(contents[0]["role"], "user");
+        let first_text = contents[0]["parts"][0]["text"].as_str().unwrap();
+        assert!(first_text.contains("Be brief."));
     }
 }
