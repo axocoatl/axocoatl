@@ -67,6 +67,40 @@ impl OpenAiProvider {
         self.provider_id = id.into();
         self
     }
+
+    /// Build the async-openai chat request shared by `chat` and `chat_stream`.
+    ///
+    /// Critically this attaches `request.tools` so the model receives the tool
+    /// definitions and can emit tool calls. Both entry points go through here so
+    /// the two paths can never drift on what gets sent.
+    fn build_chat_request(
+        &self,
+        request: &ChatRequest,
+    ) -> Result<async_openai::types::chat::CreateChatCompletionRequest, ProviderError> {
+        use async_openai::types::chat::CreateChatCompletionRequestArgs;
+
+        let openai_messages = convert::to_openai_messages(&request.messages)?;
+
+        let mut req_builder = CreateChatCompletionRequestArgs::default();
+        let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
+        req_builder.model(model_for_call).messages(openai_messages);
+
+        if let Some(max) = request.max_tokens {
+            req_builder.max_completion_tokens(max as u32);
+        }
+        if let Some(temp) = request.temperature {
+            req_builder.temperature(temp);
+        }
+        if !request.tools.is_empty() {
+            req_builder.tools(convert::to_openai_tools(&request.tools));
+        }
+
+        req_builder.build().map_err(|e| ProviderError::ApiError {
+            provider: "openai".to_string(),
+            status: 0,
+            message: format!("Failed to build request: {e}"),
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -97,26 +131,7 @@ impl LlmProvider for OpenAiProvider {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
-        use async_openai::types::chat::CreateChatCompletionRequestArgs;
-
-        let openai_messages = convert::to_openai_messages(&request.messages)?;
-
-        let mut req_builder = CreateChatCompletionRequestArgs::default();
-        let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
-        req_builder.model(model_for_call).messages(openai_messages);
-
-        if let Some(max) = request.max_tokens {
-            req_builder.max_completion_tokens(max as u32);
-        }
-        if let Some(temp) = request.temperature {
-            req_builder.temperature(temp);
-        }
-
-        let openai_request = req_builder.build().map_err(|e| ProviderError::ApiError {
-            provider: "openai".to_string(),
-            status: 0,
-            message: format!("Failed to build request: {e}"),
-        })?;
+        let openai_request = self.build_chat_request(&request)?;
 
         let response = self
             .client
@@ -166,27 +181,9 @@ impl LlmProvider for OpenAiProvider {
         request: ChatRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
     {
-        use async_openai::types::chat::CreateChatCompletionRequestArgs;
         use tokio_stream::StreamExt;
 
-        let openai_messages = convert::to_openai_messages(&request.messages)?;
-
-        let mut req_builder = CreateChatCompletionRequestArgs::default();
-        let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
-        req_builder.model(model_for_call).messages(openai_messages);
-
-        if let Some(max) = request.max_tokens {
-            req_builder.max_completion_tokens(max as u32);
-        }
-        if let Some(temp) = request.temperature {
-            req_builder.temperature(temp);
-        }
-
-        let openai_request = req_builder.build().map_err(|e| ProviderError::ApiError {
-            provider: "openai".to_string(),
-            status: 0,
-            message: format!("Failed to build request: {e}"),
-        })?;
+        let openai_request = self.build_chat_request(&request)?;
 
         let mut openai_stream = self
             .client
@@ -255,5 +252,50 @@ impl LlmProvider for OpenAiProvider {
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axocoatl_llm::ToolDefinition;
+
+    fn weather_tool() -> ToolDefinition {
+        ToolDefinition {
+            name: "get_weather".to_string(),
+            description: "Get current weather".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": { "location": { "type": "string" } },
+                "required": ["location"]
+            }),
+            concurrency: Default::default(),
+        }
+    }
+
+    #[test]
+    fn build_chat_request_attaches_tools() {
+        let provider = OpenAiProvider::new("test-key", "gpt-4o");
+        let mut request = ChatRequest::simple("What's the weather in NYC?");
+        request.tools = vec![weather_tool()];
+
+        let built = provider.build_chat_request(&request).unwrap();
+        let json = serde_json::to_value(&built).unwrap();
+
+        // Regression: the tool definitions must reach the outbound request.
+        assert!(json["tools"].is_array(), "tools must be sent to the model");
+        assert_eq!(json["tools"][0]["type"], "function");
+        assert_eq!(json["tools"][0]["function"]["name"], "get_weather");
+    }
+
+    #[test]
+    fn build_chat_request_omits_tools_when_none() {
+        let provider = OpenAiProvider::new("test-key", "gpt-4o");
+        let request = ChatRequest::simple("Hello");
+
+        let built = provider.build_chat_request(&request).unwrap();
+        let json = serde_json::to_value(&built).unwrap();
+
+        assert!(json.get("tools").is_none() || json["tools"].is_null());
     }
 }
