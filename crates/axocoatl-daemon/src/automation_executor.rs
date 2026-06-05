@@ -623,6 +623,12 @@ fn activate_all_outgoing(
 
 /// Snapshot the executor's current state to the run store. Called after
 /// each node finishes. Non-fatal on error — execution proceeds.
+///
+/// The arguments are cohesive — the checkpoint destination (`daemon`,
+/// `automation_id`, `run_id`) plus the state to snapshot — so a context struct
+/// would just thread the same run-scoped values through the executor loop for
+/// no real gain. `clippy::too_many_arguments` is suppressed deliberately.
+#[allow(clippy::too_many_arguments)]
 async fn write_checkpoint(
     daemon: &AxocoatlDaemon,
     automation_id: &str,
