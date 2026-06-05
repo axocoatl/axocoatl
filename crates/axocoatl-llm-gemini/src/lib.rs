@@ -39,6 +39,47 @@ fn gemini_parts(parts: &[axocoatl_core::ContentPart]) -> Vec<serde_json::Value> 
 
 const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
+/// Parse one Gemini streaming chunk (a `GenerateContentResponse`) into stream
+/// events. Pure + synchronous so it is unit-tested without the network.
+fn parse_gemini_chunk(data: &serde_json::Value) -> Vec<StreamEvent> {
+    let mut events = Vec::new();
+    let candidate = &data["candidates"][0];
+
+    if let Some(parts) = candidate["content"]["parts"].as_array() {
+        for part in parts {
+            if let Some(text) = part["text"].as_str() {
+                if !text.is_empty() {
+                    events.push(StreamEvent::TextDelta {
+                        delta: text.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    if let Some(usage) = data.get("usageMetadata") {
+        events.push(StreamEvent::Usage(TokenUsageStats {
+            input_tokens: usage["promptTokenCount"].as_u64().unwrap_or(0) as usize,
+            output_tokens: usage["candidatesTokenCount"].as_u64().unwrap_or(0) as usize,
+            reasoning_tokens: None,
+        }));
+    }
+
+    if let Some(reason) = candidate["finishReason"].as_str() {
+        let finish = match reason {
+            "STOP" => FinishReason::Stop,
+            "MAX_TOKENS" => FinishReason::MaxTokens,
+            "SAFETY" => FinishReason::ContentFilter,
+            _ => FinishReason::Stop,
+        };
+        events.push(StreamEvent::Done {
+            finish_reason: finish,
+        });
+    }
+
+    events
+}
+
 /// Google Gemini provider using the generateContent REST API.
 pub struct GeminiProvider {
     client: reqwest::Client,
@@ -61,31 +102,19 @@ impl GeminiProvider {
     fn endpoint_for(&self, model: &str) -> String {
         format!("{}/{}:generateContent", GEMINI_API_BASE, model)
     }
-}
 
-#[async_trait::async_trait]
-impl LlmProvider for GeminiProvider {
-    fn provider_id(&self) -> &str {
-        "gemini"
-    }
-    fn model_id(&self) -> &str {
-        &self.model
-    }
-    fn capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities {
-            streaming: true,
-            tool_calling: true,
-            structured_output: true,
-            vision: true,
-            reasoning: self.model.contains("thinking"),
-            embeddings: false,
-            max_context_tokens: 1_000_000, // Gemini 1.5 Pro
-            max_output_tokens: 8_192,
-        }
+    /// SSE streaming endpoint (`streamGenerateContent?alt=sse`).
+    fn stream_endpoint_for(&self, model: &str) -> String {
+        format!(
+            "{}/{}:streamGenerateContent?alt=sse",
+            GEMINI_API_BASE, model
+        )
     }
 
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
-        // Gemini uses a different message format: "contents" with "parts"
+    /// Build the Gemini request body (`contents` + `system_instruction` +
+    /// `generationConfig`) shared by `chat` and `chat_stream`.
+    fn build_request_body(&self, request: &ChatRequest) -> serde_json::Value {
+        // Gemini uses a different message format: "contents" with "parts".
         let mut system_instruction = None;
         let mut contents = Vec::new();
 
@@ -132,7 +161,7 @@ impl LlmProvider for GeminiProvider {
             }
         }
 
-        let mut body = serde_json::json!({"contents": contents});
+        let mut body = serde_json::json!({ "contents": contents });
         if let Some(sys) = system_instruction {
             body["system_instruction"] = sys;
         }
@@ -146,8 +175,37 @@ impl LlmProvider for GeminiProvider {
         if !gen_config.is_empty() {
             body["generationConfig"] = serde_json::Value::Object(gen_config);
         }
+        body
+    }
+}
 
+#[async_trait::async_trait]
+impl LlmProvider for GeminiProvider {
+    fn provider_id(&self) -> &str {
+        "gemini"
+    }
+    fn model_id(&self) -> &str {
+        &self.model
+    }
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            streaming: true,
+            // Tool-calling is not yet wired for Gemini (no functionDeclarations
+            // sent, no functionCall parsed). Tracked as a follow-up to #3.
+            tool_calling: false,
+            structured_output: true,
+            vision: true,
+            reasoning: self.model.contains("thinking"),
+            embeddings: false,
+            max_context_tokens: 1_000_000, // Gemini 1.5 Pro
+            max_output_tokens: 8_192,
+        }
+    }
+
+    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+        let body = self.build_request_body(&request);
         let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
+
         let response = self
             .client
             .post(self.endpoint_for(model_for_call))
@@ -194,6 +252,7 @@ impl LlmProvider for GeminiProvider {
 
         Ok(ChatResponse {
             content,
+            // Tool-call parsing for Gemini is a follow-up (see capabilities()).
             tool_calls: vec![],
             finish_reason,
             usage: TokenUsageStats {
@@ -212,12 +271,45 @@ impl LlmProvider for GeminiProvider {
 
     async fn chat_stream(
         &self,
-        _: ChatRequest,
+        request: ChatRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
     {
-        Err(ProviderError::Stream(
-            "Streaming not yet implemented for Gemini".to_string(),
-        ))
+        use reqwest_eventsource::{Event, EventSource};
+        use tokio_stream::StreamExt;
+
+        let body = self.build_request_body(&request);
+        let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
+
+        let req = self
+            .client
+            .post(self.stream_endpoint_for(model_for_call))
+            .header("x-goog-api-key", &self.api_key)
+            .json(&body);
+
+        let mut es = EventSource::new(req).map_err(|e| ProviderError::Stream(e.to_string()))?;
+
+        let stream = async_stream::try_stream! {
+            while let Some(event) = es.next().await {
+                match event {
+                    Ok(Event::Open) => {}
+                    Ok(Event::Message(msg)) => {
+                        let data: serde_json::Value = serde_json::from_str(&msg.data)
+                            .map_err(|e| ProviderError::Stream(format!("JSON parse: {e}")))?;
+                        for ev in parse_gemini_chunk(&data) {
+                            yield ev;
+                        }
+                    }
+                    // Gemini closes the connection when generation completes;
+                    // that surfaces as StreamEnded, not an error.
+                    Err(reqwest_eventsource::Error::StreamEnded) => break,
+                    Err(e) => {
+                        Err(ProviderError::Stream(e.to_string()))?;
+                    }
+                }
+            }
+        };
+
+        Ok(Box::pin(stream))
     }
 }
 
@@ -236,8 +328,10 @@ mod tests {
     fn capabilities() {
         let p = GeminiProvider::new("key", "gemini-2.0-flash");
         let caps = p.capabilities();
+        assert!(caps.streaming);
         assert!(caps.vision);
-        assert!(caps.tool_calling);
+        // Tool-calling is not implemented for Gemini yet.
+        assert!(!caps.tool_calling);
         assert_eq!(caps.max_context_tokens, 1_000_000);
     }
 
@@ -250,5 +344,44 @@ mod tests {
         // header so it can't leak via error strings or logs.
         assert!(!url.contains("test-key"));
         assert!(!url.contains("key="));
+
+        let surl = p.stream_endpoint_for("gemini-2.0-flash");
+        assert!(surl.contains("streamGenerateContent?alt=sse"));
+        assert!(!surl.contains("test-key"));
+    }
+
+    #[test]
+    fn parse_chunk_text_delta() {
+        let chunk = serde_json::json!({
+            "candidates": [{ "content": { "parts": [{ "text": "Hello" }] } }]
+        });
+        let events = parse_gemini_chunk(&chunk);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StreamEvent::TextDelta { delta } => assert_eq!(delta, "Hello"),
+            _ => panic!("expected TextDelta"),
+        }
+    }
+
+    #[test]
+    fn parse_chunk_finish_and_usage() {
+        let chunk = serde_json::json!({
+            "candidates": [{
+                "content": { "parts": [{ "text": "!" }] },
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": { "promptTokenCount": 12, "candidatesTokenCount": 7 }
+        });
+        let events = parse_gemini_chunk(&chunk);
+        assert!(matches!(events[0], StreamEvent::TextDelta { .. }));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Usage(u) if u.output_tokens == 7)));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            StreamEvent::Done {
+                finish_reason: FinishReason::Stop
+            }
+        )));
     }
 }

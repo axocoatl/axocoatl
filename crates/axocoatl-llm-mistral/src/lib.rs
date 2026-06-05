@@ -13,6 +13,45 @@ use axocoatl_llm::{
 
 const MISTRAL_API_URL: &str = "https://api.mistral.ai/v1/chat/completions";
 
+/// Parse one Mistral streaming chunk (OpenAI-compatible) into stream events.
+/// Pure + synchronous so it is unit-tested without the network.
+fn parse_mistral_chunk(data: &serde_json::Value) -> Vec<StreamEvent> {
+    let mut events = Vec::new();
+    let choice = &data["choices"][0];
+
+    if let Some(text) = choice["delta"]["content"].as_str() {
+        if !text.is_empty() {
+            events.push(StreamEvent::TextDelta {
+                delta: text.to_string(),
+            });
+        }
+    }
+
+    // With `stream_options.include_usage`, the final chunk carries usage and an
+    // empty `choices` array.
+    if let Some(usage) = data.get("usage").filter(|u| !u.is_null()) {
+        events.push(StreamEvent::Usage(TokenUsageStats {
+            input_tokens: usage["prompt_tokens"].as_u64().unwrap_or(0) as usize,
+            output_tokens: usage["completion_tokens"].as_u64().unwrap_or(0) as usize,
+            reasoning_tokens: None,
+        }));
+    }
+
+    if let Some(reason) = choice["finish_reason"].as_str() {
+        let finish = match reason {
+            "stop" => FinishReason::Stop,
+            "length" => FinishReason::MaxTokens,
+            "tool_calls" => FinishReason::ToolUse,
+            _ => FinishReason::Stop,
+        };
+        events.push(StreamEvent::Done {
+            finish_reason: finish,
+        });
+    }
+
+    events
+}
+
 /// Mistral AI provider using their OpenAI-compatible API.
 pub struct MistralProvider {
     client: reqwest::Client,
@@ -28,30 +67,9 @@ impl MistralProvider {
             model: model.into(),
         }
     }
-}
 
-#[async_trait::async_trait]
-impl LlmProvider for MistralProvider {
-    fn provider_id(&self) -> &str {
-        "mistral"
-    }
-    fn model_id(&self) -> &str {
-        &self.model
-    }
-    fn capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities {
-            streaming: true,
-            tool_calling: true,
-            structured_output: true,
-            vision: self.model.contains("pixtral"),
-            reasoning: false,
-            embeddings: false,
-            max_context_tokens: 128_000,
-            max_output_tokens: 4_096,
-        }
-    }
-
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+    /// Build the OpenAI-compatible request body shared by `chat` and `chat_stream`.
+    fn build_request_body(&self, request: &ChatRequest) -> serde_json::Value {
         let messages: Vec<serde_json::Value> = request
             .messages
             .iter()
@@ -110,6 +128,35 @@ impl LlmProvider for MistralProvider {
         if let Some(temp) = request.temperature {
             body["temperature"] = serde_json::json!(temp);
         }
+        body
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for MistralProvider {
+    fn provider_id(&self) -> &str {
+        "mistral"
+    }
+    fn model_id(&self) -> &str {
+        &self.model
+    }
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            streaming: true,
+            // Tool-calling is not yet wired for Mistral (no tools sent, no
+            // tool_calls parsed). Tracked as a follow-up to #3.
+            tool_calling: false,
+            structured_output: true,
+            vision: self.model.contains("pixtral"),
+            reasoning: false,
+            embeddings: false,
+            max_context_tokens: 128_000,
+            max_output_tokens: 4_096,
+        }
+    }
+
+    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+        let body = self.build_request_body(&request);
 
         let response = self
             .client
@@ -149,6 +196,7 @@ impl LlmProvider for MistralProvider {
                 .as_str()
                 .unwrap_or("")
                 .to_string(),
+            // Tool-call parsing for Mistral is a follow-up (see capabilities()).
             tool_calls: vec![],
             finish_reason: match resp["choices"][0]["finish_reason"].as_str() {
                 Some("stop") => FinishReason::Stop,
@@ -168,12 +216,50 @@ impl LlmProvider for MistralProvider {
 
     async fn chat_stream(
         &self,
-        _: ChatRequest,
+        request: ChatRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
     {
-        Err(ProviderError::Stream(
-            "Streaming not yet implemented for Mistral".to_string(),
-        ))
+        use reqwest_eventsource::{Event, EventSource};
+        use tokio_stream::StreamExt;
+
+        let mut body = self.build_request_body(&request);
+        body["stream"] = serde_json::json!(true);
+        body["stream_options"] = serde_json::json!({ "include_usage": true });
+
+        let req = self
+            .client
+            .post(MISTRAL_API_URL)
+            .header(AUTHORIZATION, format!("Bearer {}", self.api_key))
+            .header(CONTENT_TYPE, "application/json")
+            .json(&body);
+
+        let mut es = EventSource::new(req).map_err(|e| ProviderError::Stream(e.to_string()))?;
+
+        let stream = async_stream::try_stream! {
+            while let Some(event) = es.next().await {
+                match event {
+                    Ok(Event::Open) => {}
+                    Ok(Event::Message(msg)) => {
+                        // OpenAI-compatible streams terminate with a literal
+                        // `[DONE]` sentinel rather than valid JSON.
+                        if msg.data.trim() == "[DONE]" {
+                            break;
+                        }
+                        let data: serde_json::Value = serde_json::from_str(&msg.data)
+                            .map_err(|e| ProviderError::Stream(format!("JSON parse: {e}")))?;
+                        for ev in parse_mistral_chunk(&data) {
+                            yield ev;
+                        }
+                    }
+                    Err(reqwest_eventsource::Error::StreamEnded) => break,
+                    Err(e) => {
+                        Err(ProviderError::Stream(e.to_string()))?;
+                    }
+                }
+            }
+        };
+
+        Ok(Box::pin(stream))
     }
 }
 
@@ -192,7 +278,45 @@ mod tests {
     fn capabilities() {
         let p = MistralProvider::new("key", "mistral-large-latest");
         let caps = p.capabilities();
-        assert!(caps.tool_calling);
+        assert!(caps.streaming);
         assert!(!caps.vision);
+        // Tool-calling is not implemented for Mistral yet.
+        assert!(!caps.tool_calling);
+    }
+
+    #[test]
+    fn parse_chunk_text_delta() {
+        let chunk = serde_json::json!({ "choices": [{ "delta": { "content": "Hello" } }] });
+        let events = parse_mistral_chunk(&chunk);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StreamEvent::TextDelta { delta } => assert_eq!(delta, "Hello"),
+            _ => panic!("expected TextDelta"),
+        }
+    }
+
+    #[test]
+    fn parse_chunk_finish() {
+        let chunk = serde_json::json!({ "choices": [{ "delta": {}, "finish_reason": "stop" }] });
+        let events = parse_mistral_chunk(&chunk);
+        assert!(events.iter().any(|e| matches!(
+            e,
+            StreamEvent::Done {
+                finish_reason: FinishReason::Stop
+            }
+        )));
+    }
+
+    #[test]
+    fn parse_chunk_usage_final() {
+        // Final chunk (include_usage): empty choices + usage.
+        let chunk = serde_json::json!({
+            "choices": [],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 5 }
+        });
+        let events = parse_mistral_chunk(&chunk);
+        assert!(events.iter().any(
+            |e| matches!(e, StreamEvent::Usage(u) if u.input_tokens == 10 && u.output_tokens == 5)
+        ));
     }
 }
