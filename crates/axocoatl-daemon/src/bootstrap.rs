@@ -670,7 +670,7 @@ impl AxocoatlDaemon {
             if !gemini.api_key.is_empty() {
                 let provider = axocoatl_llm_gemini::GeminiProvider::new(
                     gemini.api_key.expose_secret(),
-                    "gemini-2.0-flash",
+                    "gemini-2.5-flash",
                 );
                 registry.register(Arc::new(provider));
                 tracing::info!("Registered Gemini provider");
