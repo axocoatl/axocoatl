@@ -5,6 +5,17 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Tool calling on the OpenAI and Anthropic providers.** Both built the
+  outbound chat request without attaching the tool definitions, so models on
+  these providers never received the available tools and could not make tool
+  calls — only the Ollama provider sent tools. OpenAI now attaches converted
+  tools via a shared `build_chat_request` used by both `chat` and `chat_stream`;
+  Anthropic attaches `tools` in `build_request_body`. Adds regression tests
+  asserting the tool definitions reach the request.
+
 ## [0.1.0] — 2026-04-24
 
 First public release. The framework is functional end-to-end with a real LLM
