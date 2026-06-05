@@ -24,6 +24,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
+reqwest-eventsource = { workspace = true }
+async-stream = { workspace = true }
 
 [features]
 default = []

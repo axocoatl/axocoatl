@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tools via a shared `build_chat_request` used by both `chat` and `chat_stream`;
   Anthropic attaches `tools` in `build_request_body`. Adds regression tests
   asserting the tool definitions reach the request.
+- **Gemini and Mistral providers were non-functional for agents.** The agent
+  runtime always streams (`stream_chat` → `provider.chat_stream`, no fallback),
+  but both providers' `chat_stream` returned "Streaming not yet implemented", so
+  any agent on `provider: gemini` or `provider: mistral` failed on its first
+  turn. Implemented real token-by-token SSE streaming for both — Gemini via
+  `streamGenerateContent?alt=sse`, Mistral via `stream: true` — matching the
+  Anthropic provider's `reqwest_eventsource` pattern, with unit-tested chunk
+  parsers. Both providers' `capabilities()` now report `tool_calling: false`
+  honestly (tool-calling for them is tracked as a follow-up).
 
 ## [0.1.0] — 2026-04-24
 
