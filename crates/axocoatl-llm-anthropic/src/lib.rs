@@ -124,6 +124,23 @@ impl AnthropicProvider {
         if let Some(temp) = request.temperature {
             body["temperature"] = serde_json::json!(temp);
         }
+        if !request.tools.is_empty() {
+            // Anthropic Messages API tool format: {name, description, input_schema}.
+            // Without this the model never receives the tools and can't call them.
+            body["tools"] = serde_json::Value::Array(
+                request
+                    .tools
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "name": t.name,
+                            "description": t.description,
+                            "input_schema": t.parameters,
+                        })
+                    })
+                    .collect(),
+            );
+        }
 
         body
     }
@@ -417,6 +434,37 @@ mod tests {
 
         assert!(body.get("system").is_none());
         assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn build_request_body_includes_tools() {
+        let provider = AnthropicProvider::new("test-key", "claude-sonnet-4-6");
+        let mut request = ChatRequest::simple("What's the weather in NYC?");
+        request.tools = vec![axocoatl_llm::ToolDefinition {
+            name: "get_weather".to_string(),
+            description: "Get current weather".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": { "location": { "type": "string" } },
+                "required": ["location"]
+            }),
+            concurrency: Default::default(),
+        }];
+        let body = provider.build_request_body(&request);
+
+        // Regression: tools must reach the outbound Anthropic request.
+        assert!(body["tools"].is_array());
+        assert_eq!(body["tools"][0]["name"], "get_weather");
+        assert_eq!(body["tools"][0]["input_schema"]["required"][0], "location");
+    }
+
+    #[test]
+    fn build_request_body_omits_tools_when_none() {
+        let provider = AnthropicProvider::new("test-key", "claude-sonnet-4-6");
+        let request = ChatRequest::simple("Hello");
+        let body = provider.build_request_body(&request);
+
+        assert!(body.get("tools").is_none());
     }
 
     #[test]

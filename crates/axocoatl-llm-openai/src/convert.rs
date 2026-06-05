@@ -1,7 +1,7 @@
 //! Conversion between Axocoatl types and async-openai 0.33 types.
 
 use axocoatl_core::{ChatMessage, ContentPart, MessageContent, MessageRole};
-use axocoatl_llm::{FinishReason, ProviderError, ToolCall};
+use axocoatl_llm::{FinishReason, ProviderError, ToolCall, ToolDefinition};
 
 use async_openai::types::chat::{
     ChatCompletionMessageToolCalls, ChatCompletionRequestAssistantMessage,
@@ -9,7 +9,8 @@ use async_openai::types::chat::{
     ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessage,
     ChatCompletionRequestToolMessage, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-    ImageDetail as OaiImageDetail, ImageUrl,
+    ChatCompletionTool, ChatCompletionTools, FunctionObject, ImageDetail as OaiImageDetail,
+    ImageUrl,
 };
 
 /// Convert Axocoatl ChatMessages to async-openai request messages.
@@ -132,6 +133,27 @@ pub fn map_finish_reason(choice: &async_openai::types::chat::ChatChoice) -> Fini
     }
 }
 
+/// Convert Axocoatl tool definitions into async-openai request tools.
+///
+/// Without attaching these to the outbound request the model never sees the
+/// tools and can never emit a tool call — the bug this fixes (previously only
+/// the Ollama provider sent tools).
+pub fn to_openai_tools(tools: &[ToolDefinition]) -> Vec<ChatCompletionTools> {
+    tools
+        .iter()
+        .map(|t| {
+            ChatCompletionTools::Function(ChatCompletionTool {
+                function: FunctionObject {
+                    name: t.name.clone(),
+                    description: Some(t.description.clone()),
+                    parameters: Some(t.parameters.clone()),
+                    strict: None,
+                },
+            })
+        })
+        .collect()
+}
+
 /// Map async-openai errors to Axocoatl ProviderError.
 pub fn map_openai_error(err: async_openai::error::OpenAIError) -> ProviderError {
     let msg = err.to_string();
@@ -150,5 +172,35 @@ pub fn map_openai_error(err: async_openai::error::OpenAIError) -> ProviderError 
             status: 0,
             message: msg,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_openai_tools_produces_function_tools() {
+        let tools = vec![ToolDefinition {
+            name: "get_weather".to_string(),
+            description: "Get current weather".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": { "location": { "type": "string" } },
+                "required": ["location"]
+            }),
+            concurrency: Default::default(),
+        }];
+
+        let json = serde_json::to_value(to_openai_tools(&tools)).unwrap();
+        assert_eq!(json[0]["type"], "function");
+        assert_eq!(json[0]["function"]["name"], "get_weather");
+        assert_eq!(json[0]["function"]["description"], "Get current weather");
+        assert_eq!(json[0]["function"]["parameters"]["required"][0], "location");
+    }
+
+    #[test]
+    fn to_openai_tools_empty_is_empty() {
+        assert!(to_openai_tools(&[]).is_empty());
     }
 }
