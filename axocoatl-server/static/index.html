@@ -2636,6 +2636,7 @@
 <link rel="stylesheet" href="/vendor/codicons/codicon.css">
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/highlight.min.js"></script>
+<script src="/vendor/markdown-it.min.js"></script>
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/xterm-addon-fit.js"></script>
 </head>
@@ -3680,30 +3681,43 @@ function axoPrompt({ title, label, value = '', placeholder, multiline = false, o
 }
 
 // ───── Markdown ─────
+// markdown-it instance — GitHub-grade formatting (tables, task lists, nested
+// lists, blockquotes). `html:false` escapes any raw HTML in model output, so
+// it's strictly safer than the old hand-rolled renderer. Code blocks with a
+// known language are highlighted inline via highlight.js (and pre-marked
+// `.hljs` so the scheduled pass below skips them); unlabeled blocks fall
+// through to highlight.js auto-detection in `scheduleHighlight`.
+const MD = window.markdownit({
+  html: false,
+  linkify: true,
+  breaks: false,
+  highlight(code, lang) {
+    if (window.hljs && lang && window.hljs.getLanguage(lang)) {
+      try {
+        const v = window.hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+        return `<pre class="hljs"><code class="hljs language-${lang}">${v}</code></pre>`;
+      } catch {}
+    }
+    return ''; // let markdown-it escape + wrap; scheduleHighlight() colors it
+  },
+});
+// Open links in a new tab (safely) — matches the manual citation links.
+const _mdLinkOpen = MD.renderer.rules.link_open
+  || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
+MD.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  tokens[idx].attrSet('target', '_blank');
+  tokens[idx].attrSet('rel', 'noopener noreferrer');
+  return _mdLinkOpen(tokens, idx, options, env, self);
+};
 function mdRender(text) {
   if (!text) return '';
-  const codeBlocks = [];
-  text = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-    codeBlocks.push(`<pre><code class="language-${escHtml(lang)}">${escHtml(code)}</code></pre>`);
-    return ` _CB${codeBlocks.length-1}_ `;
-  });
-  text = escHtml(text);
-  text = text.replace(/`([^`\n]+)`/g, (_, c) => `<code>${c}</code>`);
-  text = text.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  text = text.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  text = text.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  text = text.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
-  text = text.replace(/^([ \t]*)[-•*] (.+)$/gm, '<li>$2</li>');
-  text = text.replace(/(<li>(?:.|\n)*?<\/li>(?:\n<li>(?:.|\n)*?<\/li>)*)/g, m => `<ul>${m.replace(/\n/g,'')}</ul>`);
-  text = text.split(/\n{2,}/).map(p => p.trim() ? (p.startsWith('<') ? p : `<p>${p.replace(/\n/g, '<br>')}</p>`) : '').join('');
-  text = text.replace(/ _CB(\d+)_ /g, (_, i) => codeBlocks[+i]);
-  // Schedule a syntax-highlight pass for any code blocks rendered into the
-  // DOM via this string. Microtask + ":not(.hljs)" guard means we only ever
-  // highlight each block once, even if mdRender runs many times per second
-  // during streaming.
+  const html = MD.render(text);
+  // Microtask + ":not(.hljs)" guard means we only ever highlight each block
+  // once (labeled blocks arrive pre-highlighted) and decorate chat fenced
+  // blocks with copy / open-in-artifact toolbars — even if mdRender runs many
+  // times per second during streaming.
   scheduleHighlight();
-  return text;
+  return html;
 }
 let _hlScheduled = false;
 function scheduleHighlight() {
