@@ -10603,14 +10603,37 @@ function sessionAppendText(delta) {
   if (!S.session.streamEl) {
     const wrap = el('div', 'smsg');
     wrap.appendChild(el('div', 'smsg-role', 'agent'));
-    const body = el('div', 'smsg-body md');
+    // Same `.prose` body as Chat → identical markdown styling in both tabs.
+    const body = el('div', 'smsg-body prose');
     wrap.appendChild(body);
     S.session.streamEl = body;
     S.session.streamBuf = '';
+    S.session.reasoningEl = null; // text after reasoning closes that block
     appendSessionEl(wrap);
   }
   S.session.streamBuf += delta;
   S.session.streamEl.innerHTML = mdRender(S.session.streamBuf);
+  const msgs = $('#session-msgs'); msgs.scrollTop = msgs.scrollHeight;
+}
+// Extended-thinking output in the Sessions pane — a collapsible "Thinking…"
+// block, the same affordance Chat has. The `reasoning` frame already reaches
+// the client; previously it was dropped on the floor.
+function sessionAppendReasoning(delta) {
+  setThinking($('#session-msgs'), false);
+  if (!S.session.reasoningEl) {
+    const det = document.createElement('details');
+    det.className = 'chat-reasoning';
+    const sum = document.createElement('summary');
+    sum.textContent = 'Thinking…';
+    det.appendChild(sum);
+    const body = el('pre', 'chat-reasoning-body');
+    det.appendChild(body);
+    appendSessionEl(det);
+    S.session.reasoningEl = body;
+    S.session.reasoningBuf = '';
+  }
+  S.session.reasoningBuf += delta;
+  S.session.reasoningEl.textContent = S.session.reasoningBuf;
   const msgs = $('#session-msgs'); msgs.scrollTop = msgs.scrollHeight;
 }
 function sendSessionMessage() {
@@ -10630,6 +10653,7 @@ function sendSessionMessage() {
   appendSessionEl(wrap);
   setThinking($('#session-msgs'), true);
   S.session.streamEl = null;
+  S.session.reasoningEl = null;
   // Per-turn pickers: model override + (optional) agent target.
   const modelSel  = $('#session-model');
   const targetSel = $('#session-target');
@@ -12276,6 +12300,7 @@ function handleWsFrame(d) {
       if (S.session.id && d.workflow === S.session.id) sessionAppendText(d.delta);
       break;
     case 'reasoning':
+      if (S.session.id && d.workflow === S.session.id) sessionAppendReasoning(d.delta);
       break;
 
     // A tool call from a running agent.
