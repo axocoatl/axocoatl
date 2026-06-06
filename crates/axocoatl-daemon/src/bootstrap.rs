@@ -1439,15 +1439,46 @@ impl AxocoatlDaemon {
             .map(|r| if r.ok() { r.stdout } else { String::new() })
             .unwrap_or_default();
         let full = format!("{dir}/{path}");
-        let new = sandbox
-            .exec(&["cat", full.as_str()], Duration::from_secs(30))
+        // Size-gate the working file before reading it — don't pull a huge blob
+        // through the sandbox just to discard it. `wc -c` prints "<bytes> <path>".
+        let new_size = sandbox
+            .exec(&["wc", "-c", full.as_str()], Duration::from_secs(10))
             .await
-            .map(|r| if r.ok() { r.stdout } else { String::new() })
-            .unwrap_or_default();
+            .ok()
+            .filter(|r| r.ok())
+            .and_then(|r| {
+                r.stdout
+                    .split_whitespace()
+                    .next()
+                    .and_then(|n| n.parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        let too_large =
+            old.len() > crate::git::DIFF_MAX_BYTES || new_size > crate::git::DIFF_MAX_BYTES;
+        let new = if too_large {
+            String::new()
+        } else {
+            sandbox
+                .exec(&["cat", full.as_str()], Duration::from_secs(30))
+                .await
+                .map(|r| if r.ok() { r.stdout } else { String::new() })
+                .unwrap_or_default()
+        };
+        let binary =
+            !too_large && (crate::git::looks_binary(&old) || crate::git::looks_binary(&new));
+        // When the file can't be shown inline, blank both sides so neither raw
+        // bytes nor a megabyte blob ride along in the response.
+        let (old, new) = if too_large || binary {
+            (String::new(), String::new())
+        } else {
+            (old, new)
+        };
         Ok(crate::git::GitDiff {
             path: path.to_string(),
             old,
             new,
+            binary,
+            too_large,
         })
     }
 
