@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Variants — run one prompt several ways in parallel.** A new **Variants**
+  cockpit preset runs N agents at once, each on its own `git worktree` +
+  branch (`axo/variant-{i}`) inside the session's container, isolated from each
+  other and from the primary checkout. Each variant streams to its own live
+  lane (text, tool calls, a changed-files summary, a status dot); you **Adopt**
+  the one you like — it merges that branch into your working tree and tears the
+  rest down — or **Discard** them all. The agent's `bash` tools now run rooted
+  at the variant's worktree, so a variant's shell edits stay in its own branch.
+  New routes under `/api/sessions/{id}/variants` (start, status, adopt,
+  discard); `SessionSandbox::attach` reuses one container across worktrees.
 - **A flexible cockpit layout with mode presets.** The session cockpit's
   hardwired three-pane grid is now an N-surface layout engine: a registry of
   surfaces (Files, Activity, Browser, Agent graph, Terminal) the engine tiles,
