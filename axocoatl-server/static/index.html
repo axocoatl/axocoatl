@@ -709,6 +709,10 @@
                 padding: 3px 10px; border-radius: 5px; cursor: pointer; line-height: 1.4; }
   .preset-btn:hover { color: var(--text); }
   .preset-btn.active { background: var(--accent); color: #fff; }
+  .trace-body { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; }
+  .trace-body ax-lattice { width: 100%; height: 100%; display: block; }
+  .terminal-surface-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .terminal-surface-body > .terminals-body { flex: 1; min-height: 0; }
   /* Pin every grid child to its column so `display:none` leaves an empty
      track instead of triggering CSS-grid auto-placement (which would shift
      Activity into a zero-width resizer slot). */
@@ -3234,6 +3238,30 @@
                 </div>
               </div>
             </div>
+          </div>
+          <!-- Agent graph (the Studio lattice, scoped to this session) — the
+               "glass box" trace surface, shown by the Debug preset. -->
+          <div class="cockpit-pane" id="cockpit-trace">
+            <div class="pane-head" data-pane="trace" draggable="true">
+              <span class="pane-head-title">Agent graph</span>
+              <span class="pane-head-meta" id="pane-meta-trace"></span>
+              <button class="pane-btn" data-pane="trace" data-act="focus" title="Focus">⛶</button>
+              <button class="pane-btn" data-pane="trace" data-act="collapse" title="Collapse">▶</button>
+            </div>
+            <div class="trace-body" id="session-lattice-host"></div>
+          </div>
+          <!-- Terminal as a first-class grid surface (Debug preset).  The live
+               terminal body (#terminals-body) is re-parented here from the
+               overlay drawer when a preset puts the terminal in the grid. -->
+          <div class="cockpit-pane" id="cockpit-terminal">
+            <div class="pane-head" data-pane="terminal" draggable="true">
+              <span class="pane-head-title">Terminal</span>
+              <span class="pane-head-meta" id="pane-meta-terminal-surface"></span>
+              <button class="pane-btn" id="term-surface-new-btn" title="New terminal">＋</button>
+              <button class="pane-btn" data-pane="terminal" data-act="focus" title="Focus">⛶</button>
+              <button class="pane-btn" data-pane="terminal" data-act="collapse" title="Collapse">▶</button>
+            </div>
+            <div class="terminal-surface-body" id="terminal-surface-body"></div>
           </div>
         </div>
         <!-- Terminals drawer: lives outside the column grid as an
@@ -7663,9 +7691,11 @@ function loadPersistedLayout() {
 // register here and presets just choose which are visible and in what order.
 // Terminals is NOT a grid surface (it's the overlay drawer).
 const SURFACES = {
-  files:   { el: '#cockpit-files',   title: 'Files',    defaultW: 260, min: 150, max: 1200, collapsible: true },
-  stream:  { el: '#cockpit-stream',  title: 'Activity', defaultW: 420, min: 280, max: 1200, collapsible: false },
-  browser: { el: '#cockpit-browser', title: 'Browser',  defaultW: 240, min: 180, max: 1100, collapsible: true },
+  files:   { el: '#cockpit-files',   title: 'Files',       defaultW: 260, min: 150, max: 1200, collapsible: true },
+  stream:  { el: '#cockpit-stream',  title: 'Activity',    defaultW: 420, min: 280, max: 1200, collapsible: false },
+  browser: { el: '#cockpit-browser', title: 'Browser',     defaultW: 240, min: 180, max: 1100, collapsible: true },
+  trace:   { el: '#cockpit-trace',   title: 'Agent graph', defaultW: 420, min: 240, max: 1200, collapsible: true },
+  terminal:{ el: '#cockpit-terminal',title: 'Terminal',    defaultW: 360, min: 220, max: 1100, collapsible: true },
 };
 const DEFAULT_PANE_ORDER = ['files', 'stream', 'browser'];
 // Which surface stretches to fill (1fr) is a property of the active layout,
@@ -7740,7 +7770,18 @@ function applyCockpitLayout() {
   // After the grid relayouts, tell embedded editors to remeasure.  Without
   // this Monaco renders at the old container size (visually broken file
   // pane) and xterm gets stuck on the old rows/cols.
-  requestAnimationFrame(() => relayoutEmbeddedEditors());
+  requestAnimationFrame(() => { relayoutEmbeddedEditors(); relayoutTrace(); });
+}
+
+// Re-fit the session's agent-graph (lattice) when the trace surface is
+// visible.  The lattice is built on cockpit open into a host that may be
+// hidden (size 0), so it needs an autoLayout once it actually has room.
+function relayoutTrace() {
+  const lat = S.session && S.session.lattice;
+  if (!lat) return;
+  const pane = document.querySelector('#cockpit-trace');
+  if (!pane || getComputedStyle(pane).display === 'none') return;
+  try { if (typeof lat.autoLayout === 'function') lat.autoLayout({ direction: 'LR' }); } catch {}
 }
 
 // Keep exactly `n` resizer handles in the grid (create + wire as needed).
@@ -7768,11 +7809,34 @@ const TERM_DRAWER_MIN  = 280;
 const TERM_DRAWER_MAX  = 900;
 const TERM_INNER_MIN   = 80;
 
+// Re-home the live terminal body: into the grid surface when a preset puts
+// `terminal` in the grid (Debug), otherwise back into the overlay drawer.
+// The xterm instances + WebSockets ride along with the moved subtree; a fit()
+// follows via relayoutEmbeddedEditors.
+function syncTerminalHome() {
+  const body = document.getElementById('terminals-body');
+  if (!body) return;
+  const inGrid = visibleSurfaces().includes('terminal');
+  const slot   = document.getElementById('terminal-surface-body');
+  const drawerBody = document.getElementById('term-drawer-body');
+  if (inGrid && slot && body.parentElement !== slot) slot.appendChild(body);
+  else if (!inGrid && drawerBody && body.parentElement !== drawerBody) drawerBody.appendChild(body);
+}
+
 function applyTerminalsDrawer() {
   const drawer = document.getElementById('cockpit-terminals');
   const shell  = document.getElementById('cockpit-shell');
   if (!drawer || !shell) return;
   const L = S.cockpitLayout;
+  syncTerminalHome();
+  // When the terminal is a grid surface, retire the overlay drawer entirely
+  // (no rail, no reserved margin).
+  if (visibleSurfaces().includes('terminal')) {
+    drawer.style.display = 'none';
+    shell.style.setProperty('--term-rail-w', '0px');
+    return;
+  }
+  drawer.style.display = '';
   // Reserve rail space on the grid's right margin.
   shell.style.setProperty('--term-rail-w', TERM_RAIL_W + 'px');
   shell.style.setProperty('--term-open-w', (L.termOpenW || 460) + 'px');
@@ -7935,8 +7999,23 @@ const PRESETS = {
     widths: { stream: 460 },
     after: () => { try { setExplorerTab('git'); } catch {} },
   },
+  build: {
+    // Conversation on the left, a big embedded browser/live-preview filling
+    // the rest, with the terminal drawer open to run a dev server.
+    label: 'Build',
+    order: ['stream', 'browser'], flex: 'browser',
+    widths: { stream: 460 },
+    after: () => { try { toggleTerminalsDrawer(true); } catch {} },
+  },
+  debug: {
+    // Conversation on the left, the live agent graph (Studio lattice) filling
+    // the rest, with the terminal in the grid.  The "glass box" view.
+    label: 'Debug',
+    order: ['stream', 'terminal', 'trace'], flex: 'trace',
+    widths: { stream: 380, terminal: 360 },
+  },
 };
-const PRESET_ORDER = ['classic', 'review'];
+const PRESET_ORDER = ['classic', 'review', 'build', 'debug'];
 
 function applyPreset(name) {
   const p = PRESETS[name] || PRESETS.classic;
@@ -8321,12 +8400,15 @@ function initCockpitChrome() {
   if (pbtn) pbtn.addEventListener('click', (e) => { e.stopPropagation(); openPanesMenu(); });
   // Terminals panel buttons
   const newBtn = $('#term-new-btn');
-  if (newBtn) newBtn.addEventListener('click', (e) => {
+  const onNewTermClick = (e) => {
     e.stopPropagation();
     const pop = $('#term-new-pop');
     if (pop && !pop.classList.contains('hide')) closeTerminalPop();
     else openTerminalPop();
-  });
+  };
+  if (newBtn) newBtn.addEventListener('click', onNewTermClick);
+  const newBtnSurface = $('#term-surface-new-btn');
+  if (newBtnSurface) newBtnSurface.addEventListener('click', onNewTermClick);
   const cancelBtn = $('#term-new-cancel');
   if (cancelBtn) cancelBtn.addEventListener('click', closeTerminalPop);
   const startBtn = $('#term-new-start');
@@ -9877,7 +9959,9 @@ function openTerminalPop() {
   pop.style.left = '-9999px';
   pop.classList.remove('hide');
   requestAnimationFrame(() => {
-    const btn = $('#term-new-btn');
+    // Anchor to whichever "new terminal" button is actually visible (the grid
+    // surface's button in Debug, the drawer's button otherwise).
+    const btn = [$('#term-surface-new-btn'), $('#term-new-btn')].find(b => b && b.offsetParent !== null) || $('#term-new-btn');
     if (!btn) return;
     const r = btn.getBoundingClientRect();
     const popRect = pop.getBoundingClientRect();
@@ -9902,7 +9986,8 @@ function closeTerminalPop() {
 function onTermPopOutside(e) {
   const pop = $('#term-new-pop');
   const btn = $('#term-new-btn');
-  if (!pop || pop.contains(e.target) || (btn && btn.contains(e.target))) return;
+  const btn2 = $('#term-surface-new-btn');
+  if (!pop || pop.contains(e.target) || (btn && btn.contains(e.target)) || (btn2 && btn2.contains(e.target))) return;
   closeTerminalPop();
 }
 
