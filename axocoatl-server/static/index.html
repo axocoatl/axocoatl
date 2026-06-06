@@ -9216,6 +9216,7 @@ function openCockpit(s) {
   $('#cockpit-status').textContent = '';
   setCockpitLive('idle', 'idle');
   $('#session-msgs').innerHTML = '';
+  reloadSessionTranscript(); // rehydrate prior turns from the persisted checkpoint
   $('#file-tabs').innerHTML = '';
   $('#file-viewer').innerHTML = '<div class="empty small">Select a file to view</div>';
   loadFileTree('', $('#file-tree'));
@@ -10728,6 +10729,114 @@ function sessionAppendReasoning(delta) {
   S.session.reasoningEl.textContent = S.session.reasoningBuf;
   const msgs = $('#session-msgs'); msgs.scrollTop = msgs.scrollHeight;
 }
+
+// ── Session transcript: rehydrate prior turns + Retry/Rewind ─────────
+// The cockpit's Activity feed is otherwise ephemeral; on reopen we fetch the
+// persisted transcript (GET /api/sessions/{id}/messages) and rebuild it so the
+// conversation isn't lost — and so each turn can be addressed for rewind.
+async function reloadSessionTranscript() {
+  if (!S.session.id) return;
+  try {
+    const r = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/messages');
+    if (r.ok) renderSessionTranscript(await r.json());
+  } catch {}
+}
+
+// Render an array of stored messages (user / assistant[+tool_calls] / tool)
+// into the Activity feed, reconstructing tool cards by pairing each assistant
+// tool_call with its following tool-result message.
+function renderSessionTranscript(messages) {
+  const host = $('#session-msgs');
+  host.innerHTML = '';
+  S.session.toolCards = {};
+  S.session.streamEl = null;
+  S.session.reasoningEl = null;
+  let lastUser = null; // { idx, content } — the prompt that drives the next reply
+  (messages || []).forEach((m, idx) => {
+    const role = String(m.role || '').toLowerCase();
+    if (role === 'user') {
+      lastUser = { idx, content: m.content || '' };
+      const wrap = el('div', 'smsg user');
+      wrap.appendChild(el('div', 'smsg-role', 'you'));
+      wrap.appendChild(el('div', 'smsg-body', m.content || ''));
+      // Rewind: drop this turn and everything after it.
+      wrap.appendChild(sessionActionRow({ role: 'user', text: m.content || '', keep: idx }));
+      host.appendChild(wrap);
+    } else if (role === 'assistant') {
+      for (const tc of (m.tool_calls || [])) {
+        let args = {};
+        try { args = JSON.parse(tc.arguments_json || '{}'); } catch {}
+        const { card } = buildToolCard({ name: tc.name, arguments: args, call_id: tc.id });
+        S.session.toolCards[tc.id] = { card };
+        host.appendChild(card);
+      }
+      if (m.content && m.content.trim()) {
+        const wrap = el('div', 'smsg');
+        wrap.appendChild(el('div', 'smsg-role', 'agent'));
+        const b = el('div', 'smsg-body prose');
+        b.innerHTML = mdRender(m.content);
+        wrap.appendChild(b);
+        // Retry: re-run the prompt that produced this reply.
+        wrap.appendChild(sessionActionRow({
+          role: 'agent', text: m.content,
+          retryKeep: lastUser ? lastUser.idx : null,
+          retryText: lastUser ? lastUser.content : null,
+        }));
+        host.appendChild(wrap);
+      }
+    } else if (role === 'tool') {
+      const tc = S.session.toolCards[m.tool_call_id];
+      if (tc) {
+        tc.card.classList.remove('running');
+        tc.card.classList.add('ok');
+        const body = tc.card.querySelector('.toolcard-body');
+        if (body) body.innerHTML = '<pre>' + escHtml(m.content || '') + '</pre>';
+      }
+    }
+  });
+  host.scrollTop = host.scrollHeight;
+}
+
+function sessionActionRow(opts) {
+  const acts = el('div', 'smsg-actions');
+  acts.appendChild(copyActionBtn(opts.text || ''));
+  if (opts.role === 'user' && opts.keep != null) {
+    const rewind = el('button', 'smsg-act', '⤺ Rewind');
+    rewind.title = 'Go back to this turn — drop everything after, then continue';
+    rewind.addEventListener('click', () => sessionRewind(opts.keep, null, opts.text));
+    acts.appendChild(rewind);
+  } else if (opts.role === 'agent' && opts.retryKeep != null) {
+    const retry = el('button', 'smsg-act', '⟳ Retry');
+    retry.title = 'Regenerate this response';
+    retry.addEventListener('click', () => sessionRewind(opts.retryKeep, opts.retryText, null));
+    acts.appendChild(retry);
+  }
+  return acts;
+}
+
+// Rewind the session to keep the first `keep` transcript messages. When
+// `resend` is set (Retry), re-send it; when `prefill` is set (Rewind), drop the
+// turn and put its text back in the composer to edit/re-ask.
+async function sessionRewind(keep, resend, prefill) {
+  const id = S.session.id;
+  if (!id) return;
+  try {
+    const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/rewind', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ keep }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    await reloadSessionTranscript();
+    if (resend != null && resend !== '') {
+      $('#session-text').value = resend;
+      sendSessionMessage();
+    } else if (prefill != null) {
+      $('#session-text').value = prefill;
+      $('#session-text').focus();
+    }
+  } catch (e) { toast('Rewind failed', String(e), 'err'); }
+}
+
 function sendSessionMessage() {
   if (!S.session.id) return;
   const text = ($('#session-text').value || '').trim(); if (!text) return;

@@ -75,6 +75,8 @@ pub fn build_router(state: AppState, auth: auth::AuthConfig, cors_origins: Vec<S
             get(routes::list_sessions).post(routes::create_session),
         )
         .route("/api/sessions/{id}/execute", post(routes::execute_session))
+        .route("/api/sessions/{id}/messages", get(routes::session_messages))
+        .route("/api/sessions/{id}/rewind", post(routes::rewind_session))
         .route("/api/sessions/{id}/tree", get(routes::session_tree))
         .route(
             "/api/sessions/{id}/file",
