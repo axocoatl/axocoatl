@@ -6668,41 +6668,112 @@ function chatMessageEl(role, content, index) {
   const body = el('div', 'smsg-body prose');
   body.innerHTML = mdRender(content);
   wrap.appendChild(body);
-  // Action row — Copy on every message, Edit-and-branch on user messages.
+  // Action row — Copy everywhere; Rewind on user turns; Retry + Fork on
+  // assistant turns. All branch via POST /api/chat/{id}/fork; the parent chat
+  // is never mutated.
+  wrap.appendChild(chatActionRow(role, content, index));
+  return wrap;
+}
+
+// Build the hover action toolbar for a chat message.
+function chatActionRow(role, content, index) {
   const acts = el('div', 'smsg-actions');
+  acts.appendChild(copyActionBtn(content));
+  if (typeof index === 'number') {
+    if (role === 'user') {
+      const rewind = el('button', 'smsg-act', '⤺ Rewind');
+      rewind.title = 'Go back to this turn — edit and re-run in a new chat (parent stays intact)';
+      rewind.addEventListener('click', () => editAndBranch(index, content));
+      acts.appendChild(rewind);
+    } else {
+      const retry = el('button', 'smsg-act', '⟳ Retry');
+      retry.title = 'Regenerate this response';
+      retry.addEventListener('click', () => {
+        const prev = (S.chat.openChat?.messages || [])[index - 1];
+        if (!prev || prev.role !== 'user') {
+          toast('Cannot retry', 'No user turn precedes this response.', 'err');
+          return;
+        }
+        chatRetryFrom(index - 1, prev.content);
+      });
+      acts.appendChild(retry);
+      const fork = el('button', 'smsg-act', '⑂ Fork');
+      fork.title = 'Branch a new chat from this point (parent stays intact)';
+      fork.addEventListener('click', () => chatForkThrough(index));
+      acts.appendChild(fork);
+    }
+  }
+  return acts;
+}
+
+function copyActionBtn(getText) {
   const copy = el('button', 'smsg-act', '⧉ Copy');
   copy.title = 'Copy message';
   copy.addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(content);
+      await navigator.clipboard.writeText(typeof getText === 'function' ? getText() : getText);
       copy.textContent = '✓ Copied';
       setTimeout(() => (copy.textContent = '⧉ Copy'), 1100);
     } catch { toast('Copy failed', '', 'err'); }
   });
-  acts.appendChild(copy);
-  if (role === 'user' && typeof index === 'number') {
-    const branch = el('button', 'smsg-act', '⑂ Edit & branch');
-    branch.title = 'Edit this turn and continue in a new chat (parent stays intact)';
-    branch.addEventListener('click', () => editAndBranch(index, content));
-    acts.appendChild(branch);
-  }
-  wrap.appendChild(acts);
-  return wrap;
+  return copy;
+}
+
+// Branch a new chat containing everything up to AND including message `idx`,
+// then open it. Used by Fork (parent stays intact).
+async function chatForkThrough(idx) {
+  const id = S.chat.openId;
+  if (!id) return;
+  try {
+    const r = await fetch(`/api/chat/${encodeURIComponent(id)}/fork`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ truncate_at: idx + 1 }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const nc = await r.json();
+    await refreshChats();
+    await openChat(nc.id);
+    toast('Forked', 'New chat branched from this point.', 'ok');
+  } catch (e) { toast('Fork failed', String(e), 'err'); }
+}
+
+// Re-run a user turn: fork the chat just before `userIdx`, then re-send the
+// user's content so the agent answers again. Used by Retry (parent intact).
+async function chatRetryFrom(userIdx, userContent) {
+  const id = S.chat.openId;
+  if (!id || userContent == null) return;
+  try {
+    const r = await fetch(`/api/chat/${encodeURIComponent(id)}/fork`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ truncate_at: userIdx }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const nc = await r.json();
+    await refreshChats();
+    await openChat(nc.id);
+    const msgs = $('#chat-msgs');
+    const empty = msgs.querySelector('.chat-msgs-empty');
+    if (empty) empty.remove();
+    msgs.appendChild(chatMessageEl('user', userContent, (nc.messages || []).length));
+    setThinking(msgs, true);
+    msgs.scrollTop = 1e9;
+    wsSend({ cmd: 'chat-turn', chat_id: nc.id, content: userContent });
+  } catch (e) { toast('Retry failed', String(e), 'err'); }
 }
 
 async function editAndBranch(idx, currentText) {
   const id = S.chat.openId;
   if (!id) return;
   const out = await axoModal({
-    title: 'Edit & branch',
-    body: 'A new chat will fork from here — the parent chat stays intact. The edited turn becomes the first user message in the new chat, then the agent re-answers.',
+    title: 'Rewind to this turn',
+    body: 'Go back to this point in a new chat — the parent stays intact. Edit the message if you like, then the agent re-answers from here.',
     fields: [{
       key: 'content',
-      label: 'Edited message',
+      label: 'Message',
       value: currentText,
       kind: 'textarea',
     }],
-    okLabel: 'Fork chat',
+    okLabel: 'Rewind',
   });
   if (out == null || !out.content.trim()) return;
   try {
@@ -7032,6 +7103,24 @@ function chatFinalize({ tokens_in, tokens_out, stopped, error }) {
   } else if (tokens_in != null || tokens_out != null) {
     s.wrap.appendChild(el('div', 'smsg-tokens', (tokens_in || 0) + ' in / ' + (tokens_out || 0) + ' out'));
   }
+  // Give the freshly-streamed assistant turn its Copy / Retry / Fork actions
+  // without re-rendering (a re-render would drop this turn's tool cards).
+  // History bubbles get theirs from chatMessageEl when the chat is reopened.
+  const pend = S.chat.pendingUser;
+  if (!stopped && !error && pend) {
+    const buffer = s.buffer;
+    const acts = el('div', 'smsg-actions');
+    acts.appendChild(copyActionBtn(() => buffer));
+    const retry = el('button', 'smsg-act', '⟳ Retry');
+    retry.title = 'Regenerate this response';
+    retry.addEventListener('click', () => chatRetryFrom(pend.idx, pend.content));
+    acts.appendChild(retry);
+    const fork = el('button', 'smsg-act', '⑂ Fork');
+    fork.title = 'Branch a new chat from this point (parent stays intact)';
+    fork.addEventListener('click', () => chatForkThrough(pend.idx + 1));
+    acts.appendChild(fork);
+    s.wrap.appendChild(acts);
+  }
   // Restore Send button.
   const sendBtn = $('#chat-send');
   sendBtn.textContent = 'Send';
@@ -7066,6 +7155,9 @@ async function sendChatTurn() {
   const empty = msgs.querySelector('.chat-msgs-empty');
   if (empty) empty.remove();
   const idx = (S.chat.openChat?.messages || []).length;
+  // Remember this turn so the streamed assistant bubble can offer Retry/Fork
+  // without a re-render (which would drop the turn's tool cards).
+  S.chat.pendingUser = { idx, content: text };
   msgs.appendChild(chatMessageEl('user', text, idx));
   setThinking(msgs, true);
   msgs.scrollTop = 1e9;
