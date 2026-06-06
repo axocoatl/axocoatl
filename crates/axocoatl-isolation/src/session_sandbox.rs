@@ -346,6 +346,56 @@ impl SessionSandbox {
             || lc.contains("address already in use")
             || lc.contains("bind: address")
             || lc.contains("rootlessport")
+            // Rootless podman's port-forwarding helper reports a port held by
+            // another container's proxy as "proxy already running" — no port
+            // number in the message, so `extract_conflicting_port` returns None
+            // and the caller drops all publishing and retries (the session
+            // still opens, just without dev-server port forwarding).
+            || lc.contains("proxy already running")
+    }
+
+    /// Remove orphaned session sandbox containers left by a prior run — any
+    /// `axo-ses-*` container whose session id is not in `known_ids`. These
+    /// accumulate when the daemon exits without cleanly closing sessions (a
+    /// crash, a `kill`, or a fresh data dir), and a lingering *running*
+    /// container holds its published host ports, blocking new sessions from
+    /// starting their port-forwarding proxy ("proxy already running").
+    ///
+    /// Best-effort and cheap: it does NOT start the podman VM (`ensure_ready`).
+    /// If podman is absent or its machine is stopped, the listing fails and
+    /// this is a silent no-op (a stopped VM holds no host ports anyway).
+    pub async fn reap_orphans(known_ids: &[String]) {
+        let out = match Command::new(PODMAN)
+            .args([
+                "ps",
+                "-a",
+                "--filter",
+                "name=axo-ses-",
+                "--format",
+                "{{.Names}}",
+            ])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => o,
+            _ => return,
+        };
+        let names = String::from_utf8_lossy(&out.stdout);
+        for name in names.lines().map(str::trim).filter(|n| !n.is_empty()) {
+            let Some(sid) = name.strip_prefix("axo-ses-") else {
+                continue;
+            };
+            if known_ids.iter().any(|k| k == sid) {
+                // Belongs to a known session — leave it. `start()` reuses or
+                // replaces it by name when that session is next opened.
+                continue;
+            }
+            tracing::info!(
+                container = name,
+                "reaping orphaned session sandbox container (no matching session)"
+            );
+            let _ = Command::new(PODMAN).args(["rm", "-f", name]).output().await;
+        }
     }
 
     /// Pull the offending host port out of a podman port-conflict message.
@@ -697,6 +747,28 @@ impl SessionSandbox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn port_conflict_detection_covers_proxy_already_running() {
+        // The variants podman emits for a held host port — all must route to
+        // the graceful "drop ports and retry" path, never a hard failure.
+        assert!(SessionSandbox::is_port_conflict(
+            "Error: something went wrong with the request: \"proxy already running\\n\""
+        ));
+        assert!(SessionSandbox::is_port_conflict(
+            "rootlessport listen tcp 0.0.0.0:3000: bind: address already in use"
+        ));
+        assert!(SessionSandbox::is_port_conflict(
+            "port is already allocated"
+        ));
+        // A non-port error must NOT be misread as a port conflict.
+        assert!(!SessionSandbox::is_port_conflict("no such image"));
+        // "proxy already running" carries no port number → caller drops all.
+        assert_eq!(
+            SessionSandbox::extract_conflicting_port("proxy already running"),
+            None
+        );
+    }
 
     #[test]
     fn exec_result_ok() {

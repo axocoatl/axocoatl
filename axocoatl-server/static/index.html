@@ -2636,6 +2636,7 @@
 <link rel="stylesheet" href="/vendor/codicons/codicon.css">
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/highlight.min.js"></script>
+<script src="/vendor/markdown-it.min.js"></script>
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/xterm-addon-fit.js"></script>
 </head>
@@ -3680,30 +3681,43 @@ function axoPrompt({ title, label, value = '', placeholder, multiline = false, o
 }
 
 // ───── Markdown ─────
+// markdown-it instance — GitHub-grade formatting (tables, task lists, nested
+// lists, blockquotes). `html:false` escapes any raw HTML in model output, so
+// it's strictly safer than the old hand-rolled renderer. Code blocks with a
+// known language are highlighted inline via highlight.js (and pre-marked
+// `.hljs` so the scheduled pass below skips them); unlabeled blocks fall
+// through to highlight.js auto-detection in `scheduleHighlight`.
+const MD = window.markdownit({
+  html: false,
+  linkify: true,
+  breaks: false,
+  highlight(code, lang) {
+    if (window.hljs && lang && window.hljs.getLanguage(lang)) {
+      try {
+        const v = window.hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+        return `<pre class="hljs"><code class="hljs language-${lang}">${v}</code></pre>`;
+      } catch {}
+    }
+    return ''; // let markdown-it escape + wrap; scheduleHighlight() colors it
+  },
+});
+// Open links in a new tab (safely) — matches the manual citation links.
+const _mdLinkOpen = MD.renderer.rules.link_open
+  || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
+MD.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  tokens[idx].attrSet('target', '_blank');
+  tokens[idx].attrSet('rel', 'noopener noreferrer');
+  return _mdLinkOpen(tokens, idx, options, env, self);
+};
 function mdRender(text) {
   if (!text) return '';
-  const codeBlocks = [];
-  text = text.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-    codeBlocks.push(`<pre><code class="language-${escHtml(lang)}">${escHtml(code)}</code></pre>`);
-    return ` _CB${codeBlocks.length-1}_ `;
-  });
-  text = escHtml(text);
-  text = text.replace(/`([^`\n]+)`/g, (_, c) => `<code>${c}</code>`);
-  text = text.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  text = text.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  text = text.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  text = text.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
-  text = text.replace(/^([ \t]*)[-•*] (.+)$/gm, '<li>$2</li>');
-  text = text.replace(/(<li>(?:.|\n)*?<\/li>(?:\n<li>(?:.|\n)*?<\/li>)*)/g, m => `<ul>${m.replace(/\n/g,'')}</ul>`);
-  text = text.split(/\n{2,}/).map(p => p.trim() ? (p.startsWith('<') ? p : `<p>${p.replace(/\n/g, '<br>')}</p>`) : '').join('');
-  text = text.replace(/ _CB(\d+)_ /g, (_, i) => codeBlocks[+i]);
-  // Schedule a syntax-highlight pass for any code blocks rendered into the
-  // DOM via this string. Microtask + ":not(.hljs)" guard means we only ever
-  // highlight each block once, even if mdRender runs many times per second
-  // during streaming.
+  const html = MD.render(text);
+  // Microtask + ":not(.hljs)" guard means we only ever highlight each block
+  // once (labeled blocks arrive pre-highlighted) and decorate chat fenced
+  // blocks with copy / open-in-artifact toolbars — even if mdRender runs many
+  // times per second during streaming.
   scheduleHighlight();
-  return text;
+  return html;
 }
 let _hlScheduled = false;
 function scheduleHighlight() {
@@ -6414,26 +6428,6 @@ function showAgentDetail(a) {
   refreshLive();
 }
 
-// ╔══════════════════════════════ TOOL CHIP (shared) ══════════════════════════════╗
-// Generic renderer for an inline "agent called tool X with args Y → result Z"
-// expandable chip. Used by Sessions, Automations, and (incoming) Chat.
-function renderToolChip(tc) {
-  const c = el('div', 'tool-chip');
-  const head = el('div', 'tc-head');
-  head.appendChild(el('span', 'tc-name', tc.name));
-  const args = JSON.stringify(tc.arguments || {});
-  head.appendChild(el('span', 'tc-args', args.length > 50 ? args.slice(0, 50) + '…' : args));
-  const tog = el('span', 'tc-toggle', '⮞ result');
-  head.appendChild(tog);
-  c.appendChild(head);
-  if (tc.result != null) {
-    const r = el('div', 'tc-result');
-    r.textContent = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2);
-    c.appendChild(r);
-  }
-  tog.addEventListener('click', () => c.classList.toggle('open'));
-  return c;
-}
 
 // ╔══════════════════════════════ CHAT ══════════════════════════════╗
 // Lightweight conversations — paired with the /api/chat backend (see
@@ -6674,41 +6668,112 @@ function chatMessageEl(role, content, index) {
   const body = el('div', 'smsg-body prose');
   body.innerHTML = mdRender(content);
   wrap.appendChild(body);
-  // Action row — Copy on every message, Edit-and-branch on user messages.
+  // Action row — Copy everywhere; Rewind on user turns; Retry + Fork on
+  // assistant turns. All branch via POST /api/chat/{id}/fork; the parent chat
+  // is never mutated.
+  wrap.appendChild(chatActionRow(role, content, index));
+  return wrap;
+}
+
+// Build the hover action toolbar for a chat message.
+function chatActionRow(role, content, index) {
   const acts = el('div', 'smsg-actions');
+  acts.appendChild(copyActionBtn(content));
+  if (typeof index === 'number') {
+    if (role === 'user') {
+      const rewind = el('button', 'smsg-act', '⤺ Rewind');
+      rewind.title = 'Go back to this turn — edit and re-run in a new chat (parent stays intact)';
+      rewind.addEventListener('click', () => editAndBranch(index, content));
+      acts.appendChild(rewind);
+    } else {
+      const retry = el('button', 'smsg-act', '⟳ Retry');
+      retry.title = 'Regenerate this response';
+      retry.addEventListener('click', () => {
+        const prev = (S.chat.openChat?.messages || [])[index - 1];
+        if (!prev || prev.role !== 'user') {
+          toast('Cannot retry', 'No user turn precedes this response.', 'err');
+          return;
+        }
+        chatRetryFrom(index - 1, prev.content);
+      });
+      acts.appendChild(retry);
+      const fork = el('button', 'smsg-act', '⑂ Fork');
+      fork.title = 'Branch a new chat from this point (parent stays intact)';
+      fork.addEventListener('click', () => chatForkThrough(index));
+      acts.appendChild(fork);
+    }
+  }
+  return acts;
+}
+
+function copyActionBtn(getText) {
   const copy = el('button', 'smsg-act', '⧉ Copy');
   copy.title = 'Copy message';
   copy.addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(content);
+      await navigator.clipboard.writeText(typeof getText === 'function' ? getText() : getText);
       copy.textContent = '✓ Copied';
       setTimeout(() => (copy.textContent = '⧉ Copy'), 1100);
     } catch { toast('Copy failed', '', 'err'); }
   });
-  acts.appendChild(copy);
-  if (role === 'user' && typeof index === 'number') {
-    const branch = el('button', 'smsg-act', '⑂ Edit & branch');
-    branch.title = 'Edit this turn and continue in a new chat (parent stays intact)';
-    branch.addEventListener('click', () => editAndBranch(index, content));
-    acts.appendChild(branch);
-  }
-  wrap.appendChild(acts);
-  return wrap;
+  return copy;
+}
+
+// Branch a new chat containing everything up to AND including message `idx`,
+// then open it. Used by Fork (parent stays intact).
+async function chatForkThrough(idx) {
+  const id = S.chat.openId;
+  if (!id) return;
+  try {
+    const r = await fetch(`/api/chat/${encodeURIComponent(id)}/fork`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ truncate_at: idx + 1 }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const nc = await r.json();
+    await refreshChats();
+    await openChat(nc.id);
+    toast('Forked', 'New chat branched from this point.', 'ok');
+  } catch (e) { toast('Fork failed', String(e), 'err'); }
+}
+
+// Re-run a user turn: fork the chat just before `userIdx`, then re-send the
+// user's content so the agent answers again. Used by Retry (parent intact).
+async function chatRetryFrom(userIdx, userContent) {
+  const id = S.chat.openId;
+  if (!id || userContent == null) return;
+  try {
+    const r = await fetch(`/api/chat/${encodeURIComponent(id)}/fork`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ truncate_at: userIdx }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const nc = await r.json();
+    await refreshChats();
+    await openChat(nc.id);
+    const msgs = $('#chat-msgs');
+    const empty = msgs.querySelector('.chat-msgs-empty');
+    if (empty) empty.remove();
+    msgs.appendChild(chatMessageEl('user', userContent, (nc.messages || []).length));
+    setThinking(msgs, true);
+    msgs.scrollTop = 1e9;
+    wsSend({ cmd: 'chat-turn', chat_id: nc.id, content: userContent });
+  } catch (e) { toast('Retry failed', String(e), 'err'); }
 }
 
 async function editAndBranch(idx, currentText) {
   const id = S.chat.openId;
   if (!id) return;
   const out = await axoModal({
-    title: 'Edit & branch',
-    body: 'A new chat will fork from here — the parent chat stays intact. The edited turn becomes the first user message in the new chat, then the agent re-answers.',
+    title: 'Rewind to this turn',
+    body: 'Go back to this point in a new chat — the parent stays intact. Edit the message if you like, then the agent re-answers from here.',
     fields: [{
       key: 'content',
-      label: 'Edited message',
+      label: 'Message',
       value: currentText,
       kind: 'textarea',
     }],
-    okLabel: 'Fork chat',
+    okLabel: 'Rewind',
   });
   if (out == null || !out.content.trim()) return;
   try {
@@ -6884,10 +6949,75 @@ async function chatPatch(patch) {
   }
 }
 
+// ── Shared conversation primitives (Chat + Sessions) ────────────────
+// One animated "thinking…" pill, shown from the moment a turn is sent until
+// the first token / tool / reasoning arrives, and again while a tool runs.
+// Both tabs call this against their own message host so the waiting state
+// feels identical everywhere.
+function setThinking(host, on) {
+  if (!host) return;
+  const existing = host.querySelector('.smsg-typing');
+  if (existing) existing.remove();
+  if (on) {
+    const pill = el('div', 'smsg-typing');
+    pill.innerHTML = '<span></span><span></span><span></span>';
+    host.appendChild(pill);
+    host.scrollTop = host.scrollHeight;
+  }
+}
+
+// One tool-call card, shared by Chat and the Sessions Activity pane: a
+// verb+icon header (toolVerb) over a collapsible result body
+// (renderToolResult), plus a web-search citation list. Replaces the old
+// chat `.tool-chip` so tool calls look identical in both tabs.
+function buildToolCard(d) {
+  const [ico, verb] = toolVerb(d.name, d.arguments);
+  const card = el('div', 'toolcard running');
+  card.dataset.callId = d.call_id || '';
+  const head = el('div', 'toolcard-head');
+  head.appendChild(el('span', 'toolcard-ico', ico));
+  head.appendChild(el('span', 'toolcard-verb', verb));
+  const body = el('div', 'toolcard-body hide');
+  head.addEventListener('click', () => body.classList.toggle('hide'));
+  card.appendChild(head);
+  card.appendChild(body);
+  return { card, body };
+}
+function fillToolCard(card, d) {
+  const body = card.querySelector('.toolcard-body');
+  card.classList.remove('running');
+  card.classList.add(d.is_error ? 'err' : 'ok');
+  if (body) {
+    body.innerHTML = renderToolResult(d.name, d.result);
+    if (d.is_error) body.classList.remove('hide');
+  }
+  // web_search → a clickable [1]/[2] bibliography under the card (was
+  // chat-only; now shown in both tabs).
+  if (d.name === 'web_search' && d.result && typeof d.result === 'object') {
+    const sources = extractWebSearchUrls(d.result);
+    if (sources.length) {
+      const cite = el('div', 'chat-citations');
+      cite.appendChild(el('div', 'chat-citations-head', 'Sources'));
+      sources.forEach((src, i) => {
+        const row = el('div', 'chat-citation');
+        row.appendChild(el('span', 'chat-citation-num', '[' + (i + 1) + ']'));
+        const a = document.createElement('a');
+        a.href = src.url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = src.title || src.url;
+        row.appendChild(a);
+        cite.appendChild(row);
+      });
+      card.appendChild(cite);
+    }
+  }
+}
+
 // ── Streaming primitives ────────────────────────────────────────────
 // Called from the chat-* WS frame handlers. Each turn opens one assistant
 // bubble that fills with tokens; reasoning rolls into a collapsible <details>;
-// tool calls render as inline cards (reuse renderToolChip).
+// tool calls render as inline cards (shared buildToolCard, same as Sessions).
 
 function chatBeginUserTurn(_d) {
   // The user message is rendered eagerly by sendChat() — chat-start signals
@@ -6910,6 +7040,7 @@ function chatBeginUserTurn(_d) {
 
 function chatAppendToken(delta) {
   const s = S.chat.streaming; if (!s) return;
+  setThinking($('#chat-msgs'), false);
   s.buffer += delta;
   s.bubble.innerHTML = mdRender(s.buffer) + '<span class="stream-cursor"></span>';
   $('#chat-msgs').scrollTop = 1e9;
@@ -6917,6 +7048,7 @@ function chatAppendToken(delta) {
 
 function chatAppendReasoning(delta) {
   const s = S.chat.streaming; if (!s) return;
+  setThinking($('#chat-msgs'), false);
   if (!s.reasoningEl) {
     const det = document.createElement('details');
     det.className = 'chat-reasoning';
@@ -6935,43 +7067,16 @@ function chatAppendReasoning(delta) {
 
 function chatAppendToolStart(d) {
   const s = S.chat.streaming; if (!s) return;
-  const chip = renderToolChip({ name: d.name, arguments: d.arguments, result: null });
-  chip.dataset.callId = d.call_id;
-  s.wrap.insertBefore(chip, s.bubble);
+  setThinking($('#chat-msgs'), false);
+  const { card } = buildToolCard(d);
+  // Tool cards render inline, just above the answer bubble for this turn.
+  s.wrap.insertBefore(card, s.bubble);
 }
 
 function chatAppendToolResult(d) {
   const s = S.chat.streaming; if (!s) return;
-  // Find the start chip for this call_id and fill in the result.
-  const chip = s.wrap.querySelector(`[data-call-id="${d.call_id}"]`);
-  if (chip) {
-    const r = el('div', 'tc-result');
-    r.textContent = typeof d.result === 'string' ? d.result : JSON.stringify(d.result, null, 2);
-    chip.appendChild(r);
-    chip.classList.toggle('error', !!d.is_error);
-    // Citations: for web_search, surface the URL list under the chip as a
-    // tidy bibliography. The LLM's reply will naturally reference [1], [2]
-    // etc. — this gives those numbers a clickable home.
-    if (d.name === 'web_search' && d.result && typeof d.result === 'object') {
-      const sources = extractWebSearchUrls(d.result);
-      if (sources.length) {
-        const cite = el('div', 'chat-citations');
-        cite.appendChild(el('div', 'chat-citations-head', 'Sources'));
-        sources.forEach((src, i) => {
-          const row = el('div', 'chat-citation');
-          row.appendChild(el('span', 'chat-citation-num', '[' + (i + 1) + ']'));
-          const a = document.createElement('a');
-          a.href = src.url;
-          a.target = '_blank';
-          a.rel = 'noopener noreferrer';
-          a.textContent = src.title || src.url;
-          row.appendChild(a);
-          cite.appendChild(row);
-        });
-        chip.appendChild(cite);
-      }
-    }
-  }
+  const card = s.wrap.querySelector(`.toolcard[data-call-id="${d.call_id}"]`);
+  if (card) fillToolCard(card, d);
 }
 
 // web_search result shapes vary by backend (Tavily, etc). Try the common
@@ -6987,6 +7092,7 @@ function extractWebSearchUrls(result) {
 }
 
 function chatFinalize({ tokens_in, tokens_out, stopped, error }) {
+  setThinking($('#chat-msgs'), false);
   const s = S.chat.streaming; if (!s) return;
   // Drop the streaming cursor.
   s.bubble.innerHTML = mdRender(s.buffer || (error ? `*Error: ${error}*` : '*(no response)*'));
@@ -6996,6 +7102,24 @@ function chatFinalize({ tokens_in, tokens_out, stopped, error }) {
     s.wrap.appendChild(el('div', 'smsg-tokens', 'error: ' + error));
   } else if (tokens_in != null || tokens_out != null) {
     s.wrap.appendChild(el('div', 'smsg-tokens', (tokens_in || 0) + ' in / ' + (tokens_out || 0) + ' out'));
+  }
+  // Give the freshly-streamed assistant turn its Copy / Retry / Fork actions
+  // without re-rendering (a re-render would drop this turn's tool cards).
+  // History bubbles get theirs from chatMessageEl when the chat is reopened.
+  const pend = S.chat.pendingUser;
+  if (!stopped && !error && pend) {
+    const buffer = s.buffer;
+    const acts = el('div', 'smsg-actions');
+    acts.appendChild(copyActionBtn(() => buffer));
+    const retry = el('button', 'smsg-act', '⟳ Retry');
+    retry.title = 'Regenerate this response';
+    retry.addEventListener('click', () => chatRetryFrom(pend.idx, pend.content));
+    acts.appendChild(retry);
+    const fork = el('button', 'smsg-act', '⑂ Fork');
+    fork.title = 'Branch a new chat from this point (parent stays intact)';
+    fork.addEventListener('click', () => chatForkThrough(pend.idx + 1));
+    acts.appendChild(fork);
+    s.wrap.appendChild(acts);
   }
   // Restore Send button.
   const sendBtn = $('#chat-send');
@@ -7031,7 +7155,11 @@ async function sendChatTurn() {
   const empty = msgs.querySelector('.chat-msgs-empty');
   if (empty) empty.remove();
   const idx = (S.chat.openChat?.messages || []).length;
+  // Remember this turn so the streamed assistant bubble can offer Retry/Fork
+  // without a re-render (which would drop the turn's tool cards).
+  S.chat.pendingUser = { idx, content: text };
   msgs.appendChild(chatMessageEl('user', text, idx));
+  setThinking(msgs, true);
   msgs.scrollTop = 1e9;
 
   if (!wsSend({ cmd: 'chat-turn', chat_id: S.chat.openId, content: text })) {
@@ -10542,25 +10670,16 @@ function renderToolResult(name, result) {
   return '<pre>' + escHtml(JSON.stringify(r, null, 2)) + '</pre>';
 }
 function sessionToolStart(d) {
+  setThinking($('#session-msgs'), false);
   S.session.streamEl = null;
-  const [ico, verb] = toolVerb(d.name, d.arguments);
-  const card = el('div', 'toolcard running');
-  const head = el('div', 'toolcard-head');
-  head.appendChild(el('span', 'toolcard-ico', ico));
-  head.appendChild(el('span', 'toolcard-verb', verb));
-  const body = el('div', 'toolcard-body hide');
-  head.addEventListener('click', () => body.classList.toggle('hide'));
-  card.appendChild(head); card.appendChild(body);
+  const { card, body } = buildToolCard(d);
   S.session.toolCards[d.call_id] = { card, body };
   appendSessionEl(card);
 }
 function sessionToolResult(d) {
   const tc = S.session.toolCards[d.call_id];
   if (!tc) return;
-  tc.card.classList.remove('running');
-  tc.card.classList.add(d.is_error ? 'err' : 'ok');
-  tc.body.innerHTML = renderToolResult(d.name, d.result);
-  if (d.is_error) tc.body.classList.remove('hide');
+  fillToolCard(tc.card, d);
   // A write changed the project — refresh the file tree and re-render any
   // open file that just changed (which makes the Preview iframe auto-reload).
   if (!d.is_error && (d.name === 'write_file' || d.name === 'edit_file' || d.name === 'bash')) {
@@ -10572,17 +10691,41 @@ function sessionToolResult(d) {
   }
 }
 function sessionAppendText(delta) {
+  setThinking($('#session-msgs'), false);
   if (!S.session.streamEl) {
     const wrap = el('div', 'smsg');
     wrap.appendChild(el('div', 'smsg-role', 'agent'));
-    const body = el('div', 'smsg-body md');
+    // Same `.prose` body as Chat → identical markdown styling in both tabs.
+    const body = el('div', 'smsg-body prose');
     wrap.appendChild(body);
     S.session.streamEl = body;
     S.session.streamBuf = '';
+    S.session.reasoningEl = null; // text after reasoning closes that block
     appendSessionEl(wrap);
   }
   S.session.streamBuf += delta;
   S.session.streamEl.innerHTML = mdRender(S.session.streamBuf);
+  const msgs = $('#session-msgs'); msgs.scrollTop = msgs.scrollHeight;
+}
+// Extended-thinking output in the Sessions pane — a collapsible "Thinking…"
+// block, the same affordance Chat has. The `reasoning` frame already reaches
+// the client; previously it was dropped on the floor.
+function sessionAppendReasoning(delta) {
+  setThinking($('#session-msgs'), false);
+  if (!S.session.reasoningEl) {
+    const det = document.createElement('details');
+    det.className = 'chat-reasoning';
+    const sum = document.createElement('summary');
+    sum.textContent = 'Thinking…';
+    det.appendChild(sum);
+    const body = el('pre', 'chat-reasoning-body');
+    det.appendChild(body);
+    appendSessionEl(det);
+    S.session.reasoningEl = body;
+    S.session.reasoningBuf = '';
+  }
+  S.session.reasoningBuf += delta;
+  S.session.reasoningEl.textContent = S.session.reasoningBuf;
   const msgs = $('#session-msgs'); msgs.scrollTop = msgs.scrollHeight;
 }
 function sendSessionMessage() {
@@ -10600,7 +10743,9 @@ function sendSessionMessage() {
   // the agent but isn't re-rendered in the transcript (keeps it clean).
   wrap.appendChild(el('div', 'smsg-body', text));
   appendSessionEl(wrap);
+  setThinking($('#session-msgs'), true);
   S.session.streamEl = null;
+  S.session.reasoningEl = null;
   // Per-turn pickers: model override + (optional) agent target.
   const modelSel  = $('#session-model');
   const targetSel = $('#session-target');
@@ -12247,6 +12392,7 @@ function handleWsFrame(d) {
       if (S.session.id && d.workflow === S.session.id) sessionAppendText(d.delta);
       break;
     case 'reasoning':
+      if (S.session.id && d.workflow === S.session.id) sessionAppendReasoning(d.delta);
       break;
 
     // A tool call from a running agent.
@@ -12276,6 +12422,7 @@ function handleWsFrame(d) {
     case 'session-done':
       if (S.session.id === d.session) {
         S.session.streamEl = null;
+        setThinking($('#session-msgs'), false);
         (S.session.agents || []).forEach(a => sessionLatticeStatus(a, 'success'));
         $('#cockpit-status').textContent =
           'done · ' + (d.input_tokens || 0) + ' in / ' + (d.output_tokens || 0) + ' out';
@@ -12291,6 +12438,7 @@ function handleWsFrame(d) {
     case 'session-error':
       if (S.session.id === d.session) {
         S.session.streamEl = null;
+        setThinking($('#session-msgs'), false);
         const e = el('div', 'smsg');
         e.appendChild(el('div', 'smsg-role', 'error'));
         e.appendChild(el('div', 'smsg-body', d.error || 'session failed'));
