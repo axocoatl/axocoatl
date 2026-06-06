@@ -1823,6 +1823,58 @@ impl AxocoatlDaemon {
         Ok(variants)
     }
 
+    /// The working-tree status of every live variant worktree — what each
+    /// Compare lane shows as its changes.
+    pub async fn variants_status(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<crate::git::VariantStatus>, DaemonError> {
+        let dir = self.session_dir(session_id).await?;
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let ls = sandbox
+            .exec(
+                &[
+                    "sh",
+                    "-c",
+                    &format!("ls -1 '{dir}/.axo-variants' 2>/dev/null"),
+                ],
+                Duration::from_secs(10),
+            )
+            .await
+            .ok();
+        let mut out = Vec::new();
+        if let Some(r) = ls {
+            for name in r.stdout.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+                let Ok(index) = name.parse::<usize>() else {
+                    continue;
+                };
+                let wt = format!("{dir}/.axo-variants/{index}");
+                let status = self
+                    .session_git_at(
+                        session_id,
+                        &wt,
+                        &["status", "--porcelain=v1", "-b", "--untracked-files=all"],
+                    )
+                    .await
+                    .ok()
+                    .map(|r| crate::git::parse_status(&r.stdout))
+                    .unwrap_or_else(|| crate::git::parse_status(""));
+                out.push(crate::git::VariantStatus {
+                    index,
+                    branch: format!("axo/variant-{index}"),
+                    worktree: wt,
+                    status,
+                });
+            }
+        }
+        out.sort_by_key(|v| v.index);
+        Ok(out)
+    }
+
     /// Adopt a variant: commit its worktree changes, merge its branch into the
     /// session's primary checkout, then tear down every variant. Returns the
     /// fresh primary status.

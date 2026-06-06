@@ -711,6 +711,31 @@
   .preset-btn.active { background: var(--accent); color: #fff; }
   .trace-body { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; }
   .trace-body ax-lattice { width: 100%; height: 100%; display: block; }
+  /* Variants / Compare */
+  .compare-bar { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .compare-input { flex: 1; min-width: 0; background: var(--bg-2); border: 1px solid var(--border);
+                   border-radius: 6px; color: var(--text); padding: 5px 9px; font-size: 13px; }
+  .compare-count { background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px;
+                   color: var(--text); padding: 0 6px; cursor: pointer; }
+  .compare-lanes { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 8px; overflow: auto; }
+  .vlane { flex: 1 1 0; min-width: 240px; display: flex; flex-direction: column; border: 1px solid var(--border);
+           border-radius: 8px; background: var(--panel); overflow: hidden; }
+  .vlane-head { display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-bottom: 1px solid var(--border);
+                font-size: 12px; flex-shrink: 0; }
+  .vlane-status { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .vlane-status.running { background: var(--axo-jade-glow, #4ade80); animation: vlane-pulse 1s ease-in-out infinite; }
+  .vlane-status.done    { background: var(--ok, #4ade80); }
+  .vlane-status.error   { background: var(--err, #ff6b6b); }
+  @keyframes vlane-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .vlane-branch { font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--accent-2, var(--axo-blue)); }
+  .vlane-adopt { margin-left: auto; }
+  .vlane-feed { flex: 1; min-height: 0; overflow: auto; padding: 9px; font-size: 12.5px; line-height: 1.5; }
+  .vlane-feed .prose { font-size: 12.5px; }
+  .vlane-tool { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; color: var(--muted); padding: 1px 0; }
+  .vlane-files { border-top: 1px solid var(--border); padding: 6px 9px; max-height: 34%; overflow: auto; flex-shrink: 0; }
+  .vlane-files-empty { color: var(--muted); font-size: 11px; }
+  .vlane-file { display: flex; gap: 7px; align-items: center; font-size: 11.5px; padding: 1px 0; }
+  .vlane-file .git-file-badge { width: 13px; }
   .terminal-surface-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
   .terminal-surface-body > .terminals-body { flex: 1; min-height: 0; }
   /* Pin every grid child to its column so `display:none` leaves an empty
@@ -3262,6 +3287,29 @@
               <button class="pane-btn" data-pane="terminal" data-act="collapse" title="Collapse">▶</button>
             </div>
             <div class="terminal-surface-body" id="terminal-surface-body"></div>
+          </div>
+          <!-- Variants (Compare preset): run one prompt N ways in parallel,
+               each on its own git worktree/branch, shown as lanes. -->
+          <div class="cockpit-pane" id="cockpit-compare">
+            <div class="pane-head" data-pane="compare" draggable="true">
+              <span class="pane-head-title">Variants</span>
+              <span class="pane-head-meta" id="pane-meta-compare"></span>
+              <button class="pane-btn" data-pane="compare" data-act="focus" title="Focus">⛶</button>
+            </div>
+            <div class="compare-bar">
+              <input type="text" class="compare-input" id="variant-input"
+                placeholder="Describe a task to explore several ways…" spellcheck="false" />
+              <select class="compare-count" id="variant-count" title="How many variants">
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+                <option value="4">4</option>
+              </select>
+              <button class="btn sm" id="variant-run">Run variants</button>
+              <button class="btn ghost sm" id="variant-discard" title="Discard all variants">Discard</button>
+            </div>
+            <div class="compare-lanes" id="compare-lanes">
+              <div class="empty small" style="padding:14px;">Run a prompt several ways at once. Each variant works on its own git branch — watch them live, then adopt the one you like.</div>
+            </div>
           </div>
         </div>
         <!-- Terminals drawer: lives outside the column grid as an
@@ -7696,6 +7744,7 @@ const SURFACES = {
   browser: { el: '#cockpit-browser', title: 'Browser',     defaultW: 240, min: 180, max: 1100, collapsible: true },
   trace:   { el: '#cockpit-trace',   title: 'Agent graph', defaultW: 420, min: 240, max: 1200, collapsible: true },
   terminal:{ el: '#cockpit-terminal',title: 'Terminal',    defaultW: 360, min: 220, max: 1100, collapsible: true },
+  compare: { el: '#cockpit-compare', title: 'Variants',    defaultW: 520, min: 360, max: 2000, collapsible: false },
 };
 const DEFAULT_PANE_ORDER = ['files', 'stream', 'browser'];
 // Which surface stretches to fill (1fr) is a property of the active layout,
@@ -8014,8 +8063,14 @@ const PRESETS = {
     order: ['stream', 'terminal', 'trace'], flex: 'trace',
     widths: { stream: 380, terminal: 360 },
   },
+  compare: {
+    // Run one prompt N ways in parallel — the Variants lanes fill the cockpit.
+    label: 'Variants',
+    order: ['compare'], flex: 'compare',
+    after: () => { try { toggleTerminalsDrawer(false); } catch {} },
+  },
 };
-const PRESET_ORDER = ['classic', 'review', 'build', 'debug'];
+const PRESET_ORDER = ['classic', 'review', 'build', 'debug', 'compare'];
 
 function applyPreset(name) {
   const p = PRESETS[name] || PRESETS.classic;
@@ -8373,6 +8428,11 @@ function initCockpitChrome() {
   if (gmsg) gmsg.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); gitCommit(); } });
   const gbranch = $('#git-branch');
   if (gbranch) gbranch.addEventListener('change', (e) => { gitCheckout(e.target.value); });
+  // Variants (Compare) wiring.
+  const vrun = $('#variant-run'); if (vrun) vrun.addEventListener('click', runVariants);
+  const vdisc = $('#variant-discard'); if (vdisc) vdisc.addEventListener('click', discardVariants);
+  const vinput = $('#variant-input');
+  if (vinput) vinput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runVariants(); } });
   // The "+ Add to chat" floating bubble now lives inside Monaco — see
   // onMonacoSelectionChange.  We still install a global mousedown
   // listener so a click outside the bubble hides it.
@@ -9459,6 +9519,11 @@ function openCockpit(s) {
   $('#session-msgs').innerHTML = '';
   reloadSessionTranscript(); // rehydrate prior turns from the persisted checkpoint
   S.session.gitDiff = null;
+  // Reset any prior session's Variants state.
+  S.session.variants = [];
+  if (typeof stopVariantStatusPoll === 'function') stopVariantStatusPoll();
+  const clanes = $('#compare-lanes');
+  if (clanes) clanes.innerHTML = '<div class="empty small" style="padding:14px;">Run a prompt several ways at once. Each variant works on its own git branch — watch them live, then adopt the one you like.</div>';
   setExplorerTab('files');   // default to the file tree; git refreshes lazily
   $('#file-tabs').innerHTML = '';
   $('#file-viewer').innerHTML = '<div class="empty small">Select a file to view</div>';
@@ -11313,6 +11378,160 @@ async function gitCheckout(ref) {
   }
 }
 
+// ── Variants (Compare preset) ───────────────────────────────────────────
+// Run one prompt N ways in parallel. Each variant streams over the WS keyed
+// `{session}#{i}`; the lanes demux those frames. Backed by /variants*.
+
+// If `key` is a variant run id (`{session}#{n}`), return n; else null.
+function variantLaneFor(key) {
+  if (!key || !S.session.id) return null;
+  const pre = S.session.id + '#';
+  if (!key.startsWith(pre)) return null;
+  const n = parseInt(key.slice(pre.length), 10);
+  return Number.isInteger(n) ? n : null;
+}
+function variantLane(n) { return (S.session.variants || [])[n]; }
+
+async function runVariants() {
+  if (!S.session.id) return;
+  const input = ($('#variant-input')?.value || '').trim();
+  if (!input) { toast('Variants', 'Type a task to explore first', 'err'); return; }
+  const n = parseInt($('#variant-count')?.value || '3', 10);
+  const runBtn = $('#variant-run'); if (runBtn) runBtn.disabled = true;
+  try {
+    const variants = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/variants', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ input, n }),
+    }).then(r => r.json());
+    if (!Array.isArray(variants)) { toast('Variants failed', (variants && variants.error) || 'error', 'err'); return; }
+    buildVariantLanes(variants);
+    toast('Variants running', n + ' agents on parallel branches', 'ok');
+    scheduleVariantStatusPoll();
+  } catch (e) { toast('Variants failed', String(e), 'err'); }
+  finally { if (runBtn) runBtn.disabled = false; }
+}
+
+function buildVariantLanes(variants) {
+  const host = $('#compare-lanes'); if (!host) return;
+  host.innerHTML = '';
+  S.session.variants = variants.map(v => {
+    const lane = el('div', 'vlane'); lane.dataset.index = String(v.index);
+    const head = el('div', 'vlane-head');
+    const dot = el('span', 'vlane-status running');
+    head.appendChild(dot);
+    head.appendChild(el('span', 'vlane-branch', v.branch));
+    const adopt = el('button', 'btn sm vlane-adopt', 'Adopt');
+    adopt.addEventListener('click', () => adoptVariant(v.branch));
+    head.appendChild(adopt);
+    lane.appendChild(head);
+    const feed = el('div', 'vlane-feed');
+    const prose = el('div', 'prose'); feed.appendChild(prose);
+    lane.appendChild(feed);
+    const files = el('div', 'vlane-files');
+    files.appendChild(el('div', 'vlane-files-empty', 'No changes yet'));
+    lane.appendChild(files);
+    host.appendChild(lane);
+    return { ...v, status: 'running', textBuf: '', dotEl: dot, proseEl: prose, feedEl: feed, filesEl: files };
+  });
+}
+
+function laneAppendText(n, delta) {
+  const v = variantLane(n); if (!v) return;
+  v.textBuf += delta;
+  if (typeof mdRender === 'function') v.proseEl.innerHTML = mdRender(v.textBuf);
+  else v.proseEl.textContent = v.textBuf;
+  v.feedEl.scrollTop = v.feedEl.scrollHeight;
+}
+
+function laneToolLine(n, d) {
+  const v = variantLane(n); if (!v || d.phase !== 'start') return;
+  v.feedEl.appendChild(el('div', 'vlane-tool', '🔧 ' + (d.name || 'tool')));
+  v.feedEl.scrollTop = v.feedEl.scrollHeight;
+}
+
+function laneStatus(n, status) {
+  const v = variantLane(n); if (!v) return;
+  v.status = status;
+  if (v.dotEl) v.dotEl.className = 'vlane-status ' + status;
+  // Stop polling once every lane has settled.
+  const live = (S.session.variants || []).some(x => x.status === 'running');
+  if (!live) { refreshVariantsStatus(); stopVariantStatusPoll(); }
+}
+
+function renderLaneFiles(v, st) {
+  const host = v.filesEl; if (!host) return;
+  host.innerHTML = '';
+  const files = (st && st.files) || [];
+  if (!files.length) { host.appendChild(el('div', 'vlane-files-empty', 'No changes yet')); return; }
+  const badgeChar = { modified: 'M', added: 'A', untracked: 'U', deleted: 'D', renamed: 'R' };
+  files.forEach(f => {
+    const row = el('div', 'vlane-file');
+    row.appendChild(el('span', 'git-file-badge ' + f.state, badgeChar[f.state] || '•'));
+    row.appendChild(el('span', 'git-file-name', f.path));
+    host.appendChild(row);
+  });
+}
+
+async function refreshVariantsStatus() {
+  if (!S.session.id || !(S.session.variants || []).length) return;
+  try {
+    const list = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/variants/status').then(r => r.json());
+    if (!Array.isArray(list)) return;
+    list.forEach(vs => { const v = variantLane(vs.index); if (v) renderLaneFiles(v, vs.status); });
+  } catch {}
+}
+
+let _variantPoll = null;
+function scheduleVariantStatusPoll() {
+  if (_variantPoll) clearInterval(_variantPoll);
+  refreshVariantsStatus();
+  _variantPoll = setInterval(refreshVariantsStatus, 3000);
+}
+function stopVariantStatusPoll() { if (_variantPoll) { clearInterval(_variantPoll); _variantPoll = null; } }
+
+async function adoptVariant(branch) {
+  if (!S.session.id || !branch) return;
+  const ok = await axoConfirm({
+    title: 'Adopt this variant?',
+    body: `Merge ${branch} into your working branch and discard the other variants. This can't be undone.`,
+    okLabel: 'Adopt', okKind: 'primary',
+  });
+  if (!ok) return;
+  try {
+    const st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/variants/adopt', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ branch }),
+    }).then(r => r.json());
+    if (st && st.error) { toast('Adopt failed', String(st.error), 'err'); return; }
+    stopVariantStatusPoll();
+    S.session.variants = [];
+    const host = $('#compare-lanes');
+    if (host) host.innerHTML = '<div class="empty small" style="padding:14px;">Adopted ' + branch + '. Opening Review to see the merged changes…</div>';
+    toast('Adopted', branch, 'ok');
+    refreshGitPane();
+    loadFileTree('', $('#file-tree'));
+    applyPreset('review');
+  } catch (e) { toast('Adopt failed', String(e), 'err'); }
+}
+
+async function discardVariants() {
+  if (!S.session.id) return;
+  const ok = await axoConfirm({
+    title: 'Discard all variants?',
+    body: 'Tear down every variant branch and worktree. Your working branch is untouched.',
+    okLabel: 'Discard', okKind: 'danger',
+  });
+  if (!ok) return;
+  try {
+    await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/variants/discard', { method: 'POST' });
+    stopVariantStatusPoll();
+    S.session.variants = [];
+    const host = $('#compare-lanes');
+    if (host) host.innerHTML = '<div class="empty small" style="padding:14px;">Variants discarded.</div>';
+    toast('Variants discarded', '', 'ok');
+  } catch (e) { toast('Discard failed', String(e), 'err'); }
+}
+
 function sendSessionMessage() {
   if (!S.session.id) return;
   const text = ($('#session-text').value || '').trim(); if (!text) return;
@@ -12973,20 +13192,26 @@ function handleWsFrame(d) {
     // the run id matches the open session. Workflows fire silently from the
     // Automations card or palette; their live stream is reflected by pulses
     // in Studio, not a separate transcript.
-    case 'token':
+    case 'token': {
+      const ln = variantLaneFor(d.workflow);
+      if (ln !== null) { laneAppendText(ln, d.delta); break; }
       if (S.session.id && d.workflow === S.session.id) sessionAppendText(d.delta);
       break;
+    }
     case 'reasoning':
       if (S.session.id && d.workflow === S.session.id) sessionAppendReasoning(d.delta);
       break;
 
     // A tool call from a running agent.
-    case 'tool-call':
+    case 'tool-call': {
+      const ln = variantLaneFor(d.workflow);
+      if (ln !== null) { laneToolLine(ln, d); break; }
       if (S.session.id && d.workflow === S.session.id) {
         if (d.phase === 'start') sessionToolStart(d);
         else sessionToolResult(d);
       }
       break;
+    }
 
     // Workflow run finished.
     case 'workflow-done':
@@ -13004,7 +13229,9 @@ function handleWsFrame(d) {
         sessionLatticeStatus(S.session.agents[0], 'running');
       }
       break;
-    case 'session-done':
+    case 'session-done': {
+      const ln = variantLaneFor(d.session);
+      if (ln !== null) { laneStatus(ln, 'done'); break; }
       if (S.session.id === d.session) {
         S.session.streamEl = null;
         setThinking($('#session-msgs'), false);
@@ -13021,7 +13248,10 @@ function handleWsFrame(d) {
         }
       }
       break;
-    case 'session-error':
+    }
+    case 'session-error': {
+      const lne = variantLaneFor(d.session);
+      if (lne !== null) { laneStatus(lne, 'error'); break; }
       if (S.session.id === d.session) {
         S.session.streamEl = null;
         setThinking($('#session-msgs'), false);
@@ -13033,6 +13263,7 @@ function handleWsFrame(d) {
         setCockpitLive('error', 'error');
       }
       break;
+    }
 
     // ── Chat streaming (Phase 1B) ────────────────────────────────────
     // Each frame carries chat_id so multiple chats can be open; we only

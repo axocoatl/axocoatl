@@ -1093,6 +1093,16 @@ pub async fn session_variants(
         .map_err(git_err)
 }
 
+/// GET /api/sessions/{id}/variants/status — per-lane changed-files for the
+/// Compare view.
+pub async fn session_variants_status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<axocoatl_daemon::git::VariantStatus>>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon.variants_status(&id).await.map(Json).map_err(git_err)
+}
+
 #[derive(serde::Deserialize)]
 pub struct AdoptBody {
     pub branch: String,

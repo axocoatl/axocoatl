@@ -91,6 +91,10 @@ pub fn build_router(state: AppState, auth: auth::AuthConfig, cors_origins: Vec<S
             post(routes::session_variants),
         )
         .route(
+            "/api/sessions/{id}/variants/status",
+            get(routes::session_variants_status),
+        )
+        .route(
             "/api/sessions/{id}/variants/adopt",
             post(routes::session_variant_adopt),
         )
