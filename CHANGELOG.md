@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Per-message actions on Chat turns** — Copy, Rewind (user turns), and
     Retry + Fork (assistant turns) — all branch via `POST /api/chat/{id}/fork`,
     leaving the parent chat intact.
+- **Persisted session transcripts with Retry and Rewind.** A directory
+  session's conversation now survives reopening the cockpit — it rehydrates
+  from the session agent's checkpoint via the new
+  `GET /api/sessions/{id}/messages` (user/agent turns + tool cards). Each turn
+  carries actions: **Copy**, **Rewind** (drop this turn onward and re-ask), and
+  **Retry** (regenerate the reply), backed by a new
+  `POST /api/sessions/{id}/rewind` that truncates the checkpoint and resumes the
+  next turn from the truncated state.
 
 ### Fixed
 - **A lingering session sandbox container no longer breaks new sessions.** A
