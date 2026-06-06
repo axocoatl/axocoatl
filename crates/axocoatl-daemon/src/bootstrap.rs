@@ -1257,6 +1257,85 @@ impl AxocoatlDaemon {
         Ok(output)
     }
 
+    /// The persisted conversation transcript for a session — read from the
+    /// session agent's latest checkpoint (keyed by the scoped `{session}:{agent}`
+    /// id). Lets the cockpit rehydrate prior turns when a session is reopened,
+    /// and makes the transcript addressable for rewind. Empty when the session
+    /// has never run a turn, or for multi-agent sessions (no single transcript).
+    pub async fn session_messages(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<axocoatl_memory::session::StoredMessage>, DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let agent_id = match &session.mode {
+            SessionMode::SingleAgent { agent_id } => agent_id.clone(),
+            _ => return Ok(Vec::new()),
+        };
+        let scoped = AgentId::new(format!("{}:{}", session.id, agent_id));
+        let ckpt = self
+            .checkpoint_store
+            .load_latest(&scoped)
+            .await
+            .map_err(|e| DaemonError::Session(e.to_string()))?;
+        Ok(ckpt.map(|c| c.session_messages).unwrap_or_default())
+    }
+
+    /// Rewind a session's conversation to keep only the first `keep` transcript
+    /// messages, dropping everything after. Persists a new checkpoint and drops
+    /// the live actor so the next turn re-spawns from the truncated state. The
+    /// caller computes `keep` from the transcript returned by `session_messages`
+    /// (a count of raw `StoredMessage`s), landing on a turn boundary.
+    pub async fn rewind_session(&self, session_id: &str, keep: usize) -> Result<(), DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let agent_id = match &session.mode {
+            SessionMode::SingleAgent { agent_id } => agent_id.clone(),
+            _ => {
+                return Err(DaemonError::Session(
+                    "rewind is only supported for single-agent sessions".to_string(),
+                ))
+            }
+        };
+        let scoped = AgentId::new(format!("{}:{}", session.id, agent_id));
+        let mut ckpt = self
+            .checkpoint_store
+            .load_latest(&scoped)
+            .await
+            .map_err(|e| DaemonError::Session(e.to_string()))?
+            .ok_or_else(|| DaemonError::Session("no checkpoint to rewind".to_string()))?;
+
+        if keep >= ckpt.session_messages.len() {
+            return Ok(()); // nothing to drop
+        }
+        ckpt.session_messages.truncate(keep);
+        ckpt.version += 1;
+        ckpt.checkpoint_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.checkpoint_store
+            .save(&ckpt)
+            .await
+            .map_err(|e| DaemonError::Session(e.to_string()))?;
+
+        // Drop the live actor (if any) so the next `execute_session` re-spawns
+        // it and restores from the truncated checkpoint. The scoped id isn't in
+        // `config.agents`, so `restart_agent` can't be reused here.
+        if let Some(actor) = self.agent_registry.get(&scoped).await {
+            let _ = actor
+                .stop_and_wait(None, Some(Duration::from_secs(10)))
+                .await;
+        }
+        self.agent_registry.remove(&scoped).await;
+        let _ = self.session_store.lock().await.touch(session_id);
+        Ok(())
+    }
+
     /// Execute an instruction inside a session, streaming the agent's output
     /// (text, reasoning, and tool calls) to `sink` as it is produced. Used by
     /// the `/ws` `session` command for a live cockpit.

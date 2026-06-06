@@ -915,6 +915,51 @@ pub async fn create_session(
         })
 }
 
+/// GET /api/sessions/{id}/messages — the session's persisted transcript, used
+/// to rehydrate the cockpit on reopen and to address turns for rewind.
+pub async fn session_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<axocoatl_memory::session::StoredMessage>>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon.session_messages(&id).await.map(Json).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })
+}
+
+#[derive(serde::Deserialize)]
+pub struct RewindSessionBody {
+    /// Number of leading transcript messages to keep; everything after is dropped.
+    pub keep: usize,
+}
+
+/// POST /api/sessions/{id}/rewind — truncate the transcript to `keep` messages
+/// and drop the live actor so the next turn resumes from the truncated state.
+pub async fn rewind_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<RewindSessionBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .rewind_session(&id, body.keep)
+        .await
+        .map(|_| Json(serde_json::json!({ "ok": true })))
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })
+}
+
 pub async fn execute_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
