@@ -1351,9 +1351,25 @@ impl AxocoatlDaemon {
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
-        let sandbox = self.ensure_sandbox(&session).await?;
         let dir = session.working_dir.to_string_lossy().to_string();
-        let mut argv: Vec<&str> = vec!["git", "-c", "safe.directory=*", "-C", dir.as_str()];
+        self.session_git_at(session_id, &dir, args).await
+    }
+
+    /// Run `git -C {cwd} <args>` inside the session's sandbox, where `cwd` is
+    /// any path under the session mount (the session root, or a variant
+    /// worktree). All git for a session goes through here.
+    pub async fn session_git_at(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        args: &[&str],
+    ) -> Result<ExecResult, DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let mut argv: Vec<&str> = vec!["git", "-c", "safe.directory=*", "-C", cwd];
         argv.extend_from_slice(args);
         sandbox
             .exec(&argv, Duration::from_secs(60))
@@ -1560,6 +1576,126 @@ impl AxocoatlDaemon {
             )));
         }
         self.git_status(session_id).await
+    }
+
+    // ── Variants: parallel branch exploration ───────────────────────────
+    // A variant is a `git worktree` on its own branch (`axo/variant-{i}`),
+    // living at `{working_dir}/.axo-variants/{i}` so it stays under the one
+    // session mount (the file tools confine to the mount). The dir is
+    // git-excluded so it never shows in the primary working tree's status.
+
+    /// Absolute working dir of a session, as a string.
+    async fn session_dir(&self, session_id: &str) -> Result<String, DaemonError> {
+        let s = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        Ok(s.working_dir.to_string_lossy().to_string())
+    }
+
+    /// Create `n` variant worktrees off HEAD, each on its own branch. Clears
+    /// any prior variants first so re-runs start clean.
+    pub async fn create_variant_worktrees(
+        &self,
+        session_id: &str,
+        n: usize,
+    ) -> Result<Vec<crate::git::Variant>, DaemonError> {
+        self.ensure_session_git(session_id).await?;
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let dir = session.working_dir.to_string_lossy().to_string();
+        // Keep the variants dir out of the primary status (idempotent).
+        let exclude = format!("{dir}/.git/info/exclude");
+        let script = format!(
+            "grep -qxF '.axo-variants/' '{exclude}' 2>/dev/null || echo '.axo-variants/' >> '{exclude}'"
+        );
+        let _ = sandbox
+            .exec(&["sh", "-c", &script], Duration::from_secs(10))
+            .await;
+        // Fresh start, then (re)create the parent dir.
+        self.remove_variant_worktrees(session_id).await.ok();
+        let vdir = format!("{dir}/.axo-variants");
+        let _ = sandbox
+            .exec(&["mkdir", "-p", vdir.as_str()], Duration::from_secs(10))
+            .await;
+        let mut variants = Vec::new();
+        for i in 0..n {
+            let branch = format!("axo/variant-{i}");
+            let wt = format!("{dir}/.axo-variants/{i}");
+            // Drop a stale branch of the same name so the worktree can take it.
+            let _ = self.session_git(session_id, &["branch", "-D", &branch]).await;
+            let r = self
+                .session_git(
+                    session_id,
+                    &["worktree", "add", "-q", "-b", &branch, &wt, "HEAD"],
+                )
+                .await?;
+            if !r.ok() {
+                return Err(DaemonError::Session(format!(
+                    "worktree add failed for variant {i}: {}",
+                    r.stderr.trim()
+                )));
+            }
+            variants.push(crate::git::Variant {
+                index: i,
+                branch,
+                worktree: wt,
+            });
+        }
+        Ok(variants)
+    }
+
+    /// Remove every variant worktree and its branch. Best-effort and
+    /// idempotent — safe to call when there are none.
+    pub async fn remove_variant_worktrees(&self, session_id: &str) -> Result<(), DaemonError> {
+        let dir = self.session_dir(session_id).await?;
+        // Unregister worktrees living under .axo-variants/.
+        if let Ok(list) = self
+            .session_git(session_id, &["worktree", "list", "--porcelain"])
+            .await
+        {
+            for line in list.stdout.lines() {
+                if let Some(p) = line.strip_prefix("worktree ") {
+                    if p.contains("/.axo-variants/") {
+                        let _ = self
+                            .session_git(session_id, &["worktree", "remove", "--force", p])
+                            .await;
+                    }
+                }
+            }
+        }
+        // Wipe the dir + prune dangling worktree metadata.
+        if let Some(session) = self.get_session(session_id).await {
+            if let Ok(sandbox) = self.ensure_sandbox(&session).await {
+                let vdir = format!("{dir}/.axo-variants");
+                let _ = sandbox
+                    .exec(&["rm", "-rf", vdir.as_str()], Duration::from_secs(15))
+                    .await;
+            }
+        }
+        let _ = self.session_git(session_id, &["worktree", "prune"]).await;
+        // Delete the variant branches.
+        if let Ok(br) = self
+            .session_git(
+                session_id,
+                &["branch", "--list", "axo/variant-*", "--format=%(refname:short)"],
+            )
+            .await
+        {
+            let branches: Vec<String> = br
+                .stdout
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            for b in &branches {
+                let _ = self.session_git(session_id, &["branch", "-D", b]).await;
+            }
+        }
+        Ok(())
     }
 
     /// Execute an instruction inside a session, streaming the agent's output

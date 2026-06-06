@@ -325,6 +325,26 @@ impl SessionSandbox {
         &self.working_dir
     }
 
+    /// The container this sandbox runs in (`axo-ses-{session_id}`).
+    pub fn container(&self) -> &str {
+        &self.container
+    }
+
+    /// Build a handle that **reuses an existing container** but roots the
+    /// structured file tools at `working_dir` — a subtree of the original
+    /// session mount, e.g. a `git worktree`. Does NOT start or stop a
+    /// container (the owning [`SessionSandbox`] controls that lifecycle); this
+    /// only re-points the confinement root. Used to run a "variant" agent
+    /// jailed to its own worktree inside the shared session container.
+    pub fn attach(container: &str, working_dir: &Path) -> Self {
+        Self {
+            container: container.to_string(),
+            working_dir: working_dir.to_path_buf(),
+            tasks: std::sync::Mutex::new(Vec::new()),
+            terminals: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
     /// Run `apk add` for the toolchain users expect when they pop open a
     /// terminal in a session: shell, editors, scripting languages, git.
     /// Specific to Alpine-based images; a no-op on other distros (the apk

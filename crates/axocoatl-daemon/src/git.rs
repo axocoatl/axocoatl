@@ -57,6 +57,19 @@ pub struct GitBranches {
     pub branches: Vec<String>,
 }
 
+/// One parallel exploration: a `git worktree` on its own branch where a
+/// variant agent runs, isolated from the other variants and from the
+/// session's primary checkout.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Variant {
+    /// 0-based lane index.
+    pub index: usize,
+    /// Branch name — `axo/variant-{index}`.
+    pub branch: String,
+    /// Absolute worktree path — `{working_dir}/.axo-variants/{index}`.
+    pub worktree: String,
+}
+
 /// Parse `git status --porcelain=v1 -b --untracked-files=all`.
 pub fn parse_status(stdout: &str) -> GitStatus {
     let mut branch = String::new();
