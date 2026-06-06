@@ -7,8 +7,39 @@ use tokio_stream::Stream;
 use axocoatl_core::{MessageContent, MessageRole, TokenUsageStats};
 use axocoatl_llm::{
     ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError,
-    StreamEvent,
+    StreamEvent, ToolCall, ToolDefinition,
 };
+
+/// Flatten a message's content down to plain text (Gemini system/assistant text
+/// and tool-result fallbacks).
+fn flatten_text(content: &MessageContent) -> String {
+    match content {
+        MessageContent::Text(s) => s.clone(),
+        MessageContent::Parts(parts) => parts
+            .iter()
+            .filter_map(|p| match p {
+                axocoatl_core::ContentPart::Text(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+/// Convert tool definitions into Gemini's `tools` array. Gemini groups all
+/// declarations under a single `functionDeclarations` entry.
+fn gemini_tools(tools: &[ToolDefinition]) -> serde_json::Value {
+    serde_json::json!([{
+        "functionDeclarations": tools
+            .iter()
+            .map(|t| serde_json::json!({
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
+            }))
+            .collect::<Vec<_>>()
+    }])
+}
 
 /// Translate `ContentPart`s into Gemini's native parts array. Text becomes
 /// `{"text": "..."}`; data-URL images become `{"inline_data": { mime_type, data }}`.
@@ -37,8 +68,12 @@ fn gemini_parts(parts: &[axocoatl_core::ContentPart]) -> Vec<serde_json::Value> 
     out
 }
 
-// The `v1` API serves current models; `v1beta` 404s them (e.g. gemini-2.5-flash).
-const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1/models";
+// Function calling (the `tools` / `functionDeclarations` field) and
+// `systemInstruction` are only served by the `v1beta` endpoint — the `v1`
+// endpoint rejects `tools` with `Unknown name "tools"`. `v1beta` serves the
+// current models too (verified against `gemini-2.5-flash`), so it's the right
+// base for a tool-capable provider.
+const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
 /// Parse one Gemini streaming chunk (a `GenerateContentResponse`) into stream
 /// events. Pure + synchronous so it is unit-tested without the network.
@@ -52,6 +87,22 @@ fn parse_gemini_chunk(data: &serde_json::Value) -> Vec<StreamEvent> {
                 if !text.is_empty() {
                     events.push(StreamEvent::TextDelta {
                         delta: text.to_string(),
+                    });
+                }
+            }
+            // Gemini emits each function call as a complete `functionCall` part
+            // (arguments are never fragmented), so one delta carries the whole
+            // call. No `index` and a possibly-empty `id` means the accumulator
+            // keeps each call as its own entry — exactly what we want.
+            if let Some(fc) = part.get("functionCall") {
+                let name = fc["name"].as_str().unwrap_or("").to_string();
+                if !name.is_empty() {
+                    events.push(StreamEvent::ToolCallDelta {
+                        index: None,
+                        id: fc["id"].as_str().unwrap_or("").to_string(),
+                        name: Some(name),
+                        args_delta: serde_json::to_string(&fc["args"])
+                            .unwrap_or_else(|_| "{}".to_string()),
                     });
                 }
             }
@@ -113,84 +164,84 @@ impl GeminiProvider {
     }
 
     /// Build the Gemini request body (`contents` + `generationConfig`), shared
-    /// by `chat` and `chat_stream`.
-    ///
-    /// The Gemini `v1` API has no `systemInstruction` field, so any system
-    /// message is folded into the first user turn's text.
+    /// by `chat` and `chat_stream`. System messages map to the native
+    /// `systemInstruction` field (supported by the `v1beta` endpoint).
     fn build_request_body(&self, request: &ChatRequest) -> serde_json::Value {
         // Gemini uses a different message format: "contents" with "parts".
         let mut system_text: Option<String> = None;
         let mut contents: Vec<serde_json::Value> = Vec::new();
 
         for msg in &request.messages {
-            // For User messages with multimodal Parts, build Gemini's native
-            // parts array: text + inline_data { mime_type, data }.
-            let parts_json: Vec<serde_json::Value> = if matches!(msg.role, MessageRole::User) {
-                if let MessageContent::Parts(parts) = &msg.content {
-                    gemini_parts(parts)
-                } else {
-                    vec![serde_json::json!({"text": match &msg.content {
-                        MessageContent::Text(s) => s.clone(),
-                        _ => String::new(),
-                    }})]
-                }
-            } else {
-                let text = match &msg.content {
-                    MessageContent::Text(s) => s.clone(),
-                    MessageContent::Parts(parts) => parts
-                        .iter()
-                        .filter_map(|p| match p {
-                            axocoatl_core::ContentPart::Text(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                };
-                vec![serde_json::json!({"text": text})]
-            };
-
             match msg.role {
                 MessageRole::System => {
-                    // `v1` has no systemInstruction field; accumulate and fold
-                    // into the first user turn below.
-                    let text = parts_json
-                        .iter()
-                        .filter_map(|p| p["text"].as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    // Accumulate; emitted as a top-level systemInstruction below.
+                    let text = flatten_text(&msg.content);
                     system_text = Some(match system_text {
                         Some(prev) => format!("{prev}\n{text}"),
                         None => text,
                     });
                 }
                 MessageRole::User => {
-                    contents.push(serde_json::json!({ "role": "user", "parts": parts_json }));
+                    // Native parts array for multimodal: text + inline_data.
+                    let parts = if let MessageContent::Parts(parts) = &msg.content {
+                        gemini_parts(parts)
+                    } else {
+                        vec![serde_json::json!({ "text": flatten_text(&msg.content) })]
+                    };
+                    contents.push(serde_json::json!({ "role": "user", "parts": parts }));
                 }
                 MessageRole::Assistant => {
-                    contents.push(serde_json::json!({ "role": "model", "parts": parts_json }));
+                    // A `model` turn: optional text, then a `functionCall` part
+                    // per requested tool call so the model sees its own calls.
+                    let mut parts: Vec<serde_json::Value> = Vec::new();
+                    let text = flatten_text(&msg.content);
+                    if !text.is_empty() {
+                        parts.push(serde_json::json!({ "text": text }));
+                    }
+                    for tc in &msg.tool_calls {
+                        let mut fc = serde_json::json!({ "name": tc.name, "args": tc.arguments });
+                        if !tc.id.is_empty() {
+                            fc["id"] = serde_json::json!(tc.id);
+                        }
+                        parts.push(serde_json::json!({ "functionCall": fc }));
+                    }
+                    // Gemini rejects an empty parts array; guarantee one part.
+                    if parts.is_empty() {
+                        parts.push(serde_json::json!({ "text": "" }));
+                    }
+                    contents.push(serde_json::json!({ "role": "model", "parts": parts }));
                 }
                 MessageRole::Tool => {
-                    contents.push(serde_json::json!({ "role": "user", "parts": parts_json }));
+                    // Gemini function results travel in a `user` turn as a
+                    // `functionResponse` part, correlated by function name. The
+                    // `response` field must be an object — wrap non-objects.
+                    let name = msg.name.clone().unwrap_or_default();
+                    let text = flatten_text(&msg.content);
+                    let parsed: serde_json::Value =
+                        serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text));
+                    let response_obj = if parsed.is_object() {
+                        parsed
+                    } else {
+                        serde_json::json!({ "result": parsed })
+                    };
+                    let mut fr = serde_json::json!({ "name": name, "response": response_obj });
+                    if let Some(id) = msg.tool_call_id.as_ref().filter(|s| !s.is_empty()) {
+                        fr["id"] = serde_json::json!(id);
+                    }
+                    contents.push(serde_json::json!({
+                        "role": "user",
+                        "parts": [{ "functionResponse": fr }]
+                    }));
                 }
-            }
-        }
-
-        // Fold the system prompt into the first user turn (Gemini v1 has no
-        // systemInstruction field).
-        if let Some(sys) = system_text {
-            if let Some(first_user) = contents.iter_mut().find(|c| c["role"] == "user") {
-                if let Some(parts) = first_user["parts"].as_array_mut() {
-                    parts.insert(0, serde_json::json!({ "text": format!("{sys}\n\n") }));
-                }
-            } else {
-                contents.insert(
-                    0,
-                    serde_json::json!({ "role": "user", "parts": [{ "text": sys }] }),
-                );
             }
         }
 
         let mut body = serde_json::json!({ "contents": contents });
+        // Native system prompt — `v1beta` accepts `systemInstruction` as a
+        // top-level field (a Content with text parts).
+        if let Some(sys) = system_text {
+            body["systemInstruction"] = serde_json::json!({ "parts": [{ "text": sys }] });
+        }
         let mut gen_config = serde_json::Map::new();
         if let Some(max) = request.max_tokens {
             gen_config.insert("maxOutputTokens".to_string(), serde_json::json!(max));
@@ -200,6 +251,11 @@ impl GeminiProvider {
         }
         if !gen_config.is_empty() {
             body["generationConfig"] = serde_json::Value::Object(gen_config);
+        }
+        // Without functionDeclarations the model never sees the tools and can't
+        // emit a functionCall.
+        if !request.tools.is_empty() {
+            body["tools"] = gemini_tools(&request.tools);
         }
         body
     }
@@ -216,9 +272,7 @@ impl LlmProvider for GeminiProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             streaming: true,
-            // Tool-calling is not yet wired for Gemini (no functionDeclarations
-            // sent, no functionCall parsed). Tracked as a follow-up to #3.
-            tool_calling: false,
+            tool_calling: true,
             structured_output: true,
             vision: true,
             reasoning: self.model.contains("thinking"),
@@ -264,10 +318,27 @@ impl LlmProvider for GeminiProvider {
                 message: e.to_string(),
             })?;
 
-        let content = resp["candidates"][0]["content"]["parts"][0]["text"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        // Walk every part: text parts concatenate into content, functionCall
+        // parts become tool calls.
+        let mut content = String::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+        if let Some(parts) = resp["candidates"][0]["content"]["parts"].as_array() {
+            for part in parts {
+                if let Some(text) = part["text"].as_str() {
+                    content.push_str(text);
+                }
+                if let Some(fc) = part.get("functionCall") {
+                    let name = fc["name"].as_str().unwrap_or("").to_string();
+                    if !name.is_empty() {
+                        tool_calls.push(ToolCall {
+                            id: fc["id"].as_str().unwrap_or("").to_string(),
+                            name,
+                            arguments: fc["args"].clone(),
+                        });
+                    }
+                }
+            }
+        }
 
         let finish_reason = match resp["candidates"][0]["finishReason"].as_str() {
             Some("STOP") => FinishReason::Stop,
@@ -278,8 +349,7 @@ impl LlmProvider for GeminiProvider {
 
         Ok(ChatResponse {
             content,
-            // Tool-call parsing for Gemini is a follow-up (see capabilities()).
-            tool_calls: vec![],
+            tool_calls,
             finish_reason,
             usage: TokenUsageStats {
                 input_tokens: resp["usageMetadata"]["promptTokenCount"]
@@ -356,9 +426,99 @@ mod tests {
         let caps = p.capabilities();
         assert!(caps.streaming);
         assert!(caps.vision);
-        // Tool-calling is not implemented for Gemini yet.
-        assert!(!caps.tool_calling);
+        assert!(caps.tool_calling);
         assert_eq!(caps.max_context_tokens, 1_000_000);
+    }
+
+    #[test]
+    fn build_request_body_includes_function_declarations() {
+        let p = GeminiProvider::new("key", "gemini-2.5-flash");
+        let mut request = ChatRequest::simple("weather in NYC?");
+        request.tools = vec![ToolDefinition {
+            name: "get_weather".to_string(),
+            description: "Get current weather".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": { "location": { "type": "string" } },
+                "required": ["location"]
+            }),
+            concurrency: Default::default(),
+        }];
+        let body = p.build_request_body(&request);
+        assert_eq!(
+            body["tools"][0]["functionDeclarations"][0]["name"],
+            "get_weather"
+        );
+    }
+
+    #[test]
+    fn assistant_and_tool_turns_become_function_call_and_response() {
+        use axocoatl_core::ChatMessage;
+        let p = GeminiProvider::new("key", "gemini-2.5-flash");
+        let mut request = ChatRequest::simple("weather in NYC?");
+        request
+            .messages
+            .push(ChatMessage::assistant_with_tool_calls(
+                "",
+                vec![ToolCall {
+                    id: "fc_1".to_string(),
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({ "location": "NYC" }),
+                }],
+            ));
+        request.messages.push(ChatMessage::tool_result(
+            "{\"temp\":72}",
+            "get_weather",
+            "fc_1",
+        ));
+        let body = p.build_request_body(&request);
+        let contents = body["contents"].as_array().unwrap();
+
+        // model turn carries the functionCall...
+        let model_turn = contents.iter().find(|c| c["role"] == "model").unwrap();
+        assert_eq!(
+            model_turn["parts"][0]["functionCall"]["name"],
+            "get_weather"
+        );
+        assert_eq!(
+            model_turn["parts"][0]["functionCall"]["args"]["location"],
+            "NYC"
+        );
+
+        // ...and the result is a functionResponse in a user turn, by name.
+        let fr_turn = contents
+            .iter()
+            .find(|c| c["parts"][0].get("functionResponse").is_some())
+            .unwrap();
+        assert_eq!(fr_turn["role"], "user");
+        assert_eq!(
+            fr_turn["parts"][0]["functionResponse"]["name"],
+            "get_weather"
+        );
+        assert_eq!(
+            fr_turn["parts"][0]["functionResponse"]["response"]["temp"],
+            72
+        );
+    }
+
+    #[test]
+    fn parse_chunk_function_call() {
+        let chunk = serde_json::json!({
+            "candidates": [{
+                "content": { "parts": [{
+                    "functionCall": { "name": "get_weather", "args": { "location": "NYC" } }
+                }] }
+            }]
+        });
+        let events = parse_gemini_chunk(&chunk);
+        let found = events.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ToolCallDelta { name: Some(n), args_delta, .. }
+                    if n == "get_weather" && args_delta.contains("NYC")
+            )
+        });
+        assert!(found, "expected a ToolCallDelta from the functionCall part");
     }
 
     #[test]
@@ -412,17 +572,24 @@ mod tests {
     }
 
     #[test]
-    fn system_prompt_folds_into_first_user_turn() {
+    fn system_prompt_uses_native_system_instruction() {
         let p = GeminiProvider::new("key", "gemini-2.5-flash");
         let req = ChatRequest::with_system("Be brief.", "Hi");
         let body = p.build_request_body(&req);
-        // Gemini v1 rejects a systemInstruction field — it must NOT be present.
-        assert!(body.get("system_instruction").is_none());
-        assert!(body.get("systemInstruction").is_none());
-        // The system text is folded into the first user turn instead.
+        // v1beta accepts systemInstruction natively — the user turn stays clean.
+        assert_eq!(body["systemInstruction"]["parts"][0]["text"], "Be brief.");
         let contents = body["contents"].as_array().unwrap();
         assert_eq!(contents[0]["role"], "user");
-        let first_text = contents[0]["parts"][0]["text"].as_str().unwrap();
-        assert!(first_text.contains("Be brief."));
+        assert_eq!(contents[0]["parts"][0]["text"], "Hi");
+    }
+
+    #[test]
+    fn endpoint_uses_v1beta() {
+        // Function calling + systemInstruction require the v1beta endpoint.
+        let p = GeminiProvider::new("key", "gemini-2.5-flash");
+        assert!(p.endpoint_for("gemini-2.5-flash").contains("/v1beta/"));
+        assert!(p
+            .stream_endpoint_for("gemini-2.5-flash")
+            .contains("/v1beta/"));
     }
 }

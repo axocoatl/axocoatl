@@ -102,8 +102,17 @@ impl DefaultAgentBehavior {
         let mut content = String::new();
         let mut usage = TokenUsageStats::default();
         let mut finish_reason = FinishReason::Stop;
-        // Tool calls arrive as deltas — accumulate by id: (id, name, args).
-        let mut tool_accum: Vec<(String, String, String)> = Vec::new();
+        // Tool calls arrive as deltas. OpenAI-compatible providers send the id
+        // only on the first chunk and key later argument fragments by `index`,
+        // so we correlate by index when present and fall back to a non-empty id
+        // (Anthropic repeats the id on every delta and omits an index).
+        struct ToolAccum {
+            index: Option<usize>,
+            id: String,
+            name: String,
+            args: String,
+        }
+        let mut tool_accum: Vec<ToolAccum> = Vec::new();
 
         while let Some(ev) = stream.next().await {
             match ev.map_err(|e| AgentError::Provider(e.to_string()))? {
@@ -119,19 +128,34 @@ impl DefaultAgentBehavior {
                     }
                 }
                 StreamEvent::ToolCallDelta {
+                    index,
                     id,
                     name,
                     args_delta,
                 } => {
-                    if let Some(t) = tool_accum.iter_mut().find(|t| t.0 == id) {
-                        if let Some(n) = name {
-                            if !n.is_empty() {
-                                t.1 = n;
+                    let pos = tool_accum.iter().position(|t| match (t.index, index) {
+                        (Some(a), Some(b)) => a == b,
+                        _ => !id.is_empty() && t.id == id,
+                    });
+                    match pos {
+                        Some(i) => {
+                            let t = &mut tool_accum[i];
+                            if t.id.is_empty() && !id.is_empty() {
+                                t.id = id;
                             }
+                            if let Some(n) = name {
+                                if !n.is_empty() {
+                                    t.name = n;
+                                }
+                            }
+                            t.args.push_str(&args_delta);
                         }
-                        t.2.push_str(&args_delta);
-                    } else {
-                        tool_accum.push((id, name.unwrap_or_default(), args_delta));
+                        None => tool_accum.push(ToolAccum {
+                            index,
+                            id,
+                            name: name.unwrap_or_default(),
+                            args: args_delta,
+                        }),
                     }
                 }
                 StreamEvent::Usage(u) => usage = u,
@@ -141,10 +165,10 @@ impl DefaultAgentBehavior {
 
         let tool_calls = tool_accum
             .into_iter()
-            .map(|(id, name, args)| ToolCall {
-                id,
-                name,
-                arguments: serde_json::from_str(&args).unwrap_or_else(|_| serde_json::json!({})),
+            .map(|t| ToolCall {
+                id: t.id,
+                name: t.name,
+                arguments: serde_json::from_str(&t.args).unwrap_or_else(|_| serde_json::json!({})),
             })
             .collect();
 
@@ -695,6 +719,19 @@ impl AgentBehavior for DefaultAgentBehavior {
             loop_count += 1;
 
             if let Some(executor) = &self.tool_executor {
+                // Record the assistant's tool-call turn in the session BEFORE its
+                // results. The conversation must read
+                // `[…, assistant(tool_calls), tool(result)…]`; without this turn
+                // the follow-up request carries orphaned tool results and every
+                // cloud provider rejects it (HTTP 400). `response.content` is
+                // usually empty here (the model returned only tool calls).
+                let assistant_tokens = self.counter.count_text(&response.content);
+                self.session.append_assistant_tool_calls(
+                    &response.content,
+                    &response.tool_calls,
+                    assistant_tokens,
+                );
+
                 // Phase 1: Run pre-hooks BEFORE dispatch — filter/transform tool calls
                 let mut approved_calls = Vec::new();
                 for tc in &response.tool_calls {
@@ -727,8 +764,12 @@ impl AgentBehavior for DefaultAgentBehavior {
                                 });
                                 let result_str = serde_json::json!({"error": reason}).to_string();
                                 let tool_tokens = self.counter.count_text(&result_str);
-                                self.session
-                                    .append(MessageRole::Tool, &result_str, tool_tokens);
+                                self.session.append_tool_result(
+                                    &tc.name,
+                                    &tc.id,
+                                    &result_str,
+                                    tool_tokens,
+                                );
                                 continue;
                             }
                             _ => {
@@ -790,7 +831,7 @@ impl AgentBehavior for DefaultAgentBehavior {
                     let result_str = serde_json::to_string(&result).unwrap_or_default();
                     let tool_tokens = self.counter.count_text(&result_str);
                     self.session
-                        .append(MessageRole::Tool, &result_str, tool_tokens);
+                        .append_tool_result(&tc.name, &tc.id, &result_str, tool_tokens);
                 }
 
                 // Make follow-up LLM call with tool results — streamed too.
@@ -1104,6 +1145,67 @@ mod tests {
         }
     }
 
+    /// Stateful mock: first stream returns a tool call, every later stream
+    /// returns a final text answer. Captures each request it receives so a test
+    /// can assert the follow-up replays the assistant tool-call turn + result.
+    struct ToolThenTextLlm {
+        calls: std::sync::atomic::AtomicUsize,
+        captured: Arc<std::sync::Mutex<Vec<ChatRequest>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for ToolThenTextLlm {
+        fn provider_id(&self) -> &str {
+            "tooltext"
+        }
+        fn model_id(&self) -> &str {
+            "tooltext-model"
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                streaming: true,
+                tool_calling: true,
+                ..Default::default()
+            }
+        }
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            unimplemented!("round-trip test uses chat_stream")
+        }
+        async fn chat_stream(
+            &self,
+            request: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            self.captured.lock().unwrap().push(request);
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let events = if n == 0 {
+                vec![
+                    Ok(StreamEvent::ToolCallDelta {
+                        index: Some(0),
+                        id: "call_1".to_string(),
+                        name: Some("echo".to_string()),
+                        args_delta: "{\"text\":\"hi\"}".to_string(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::ToolUse,
+                    }),
+                ]
+            } else {
+                vec![
+                    Ok(StreamEvent::TextDelta {
+                        delta: "final answer".to_string(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    }),
+                ]
+            };
+            Ok(Box::pin(tokio_stream::iter(events)))
+        }
+    }
+
     fn simple_counter() -> Arc<dyn TokenCounter> {
         struct SimpleCounter;
         impl TokenCounter for SimpleCounter {
@@ -1134,6 +1236,57 @@ mod tests {
             }),
             ..AgentConfig::default()
         }
+    }
+
+    #[tokio::test]
+    async fn tool_round_trip_records_assistant_call_and_result() {
+        use axocoatl_tools::{EchoTool, ToolExecutor};
+
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(ToolThenTextLlm {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            captured: captured.clone(),
+        });
+
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("echo", Arc::new(EchoTool));
+
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter())
+            .with_tool_executor(Arc::new(executor));
+        behavior.on_start(&AgentConfig::default()).await.unwrap();
+
+        let output = behavior
+            .execute(AgentInput::text("please echo hi"))
+            .await
+            .unwrap();
+
+        // The model's final turn (after seeing the tool result) is the output.
+        assert_eq!(output.content, "final answer");
+        assert_eq!(output.tool_calls.len(), 1);
+        assert_eq!(output.tool_calls[0].tool_name, "echo");
+
+        // The crux of the round-trip: the follow-up request must replay the
+        // assistant's tool-call turn followed by the correlated tool result.
+        // Without that sequence, real provider APIs reject the request.
+        let reqs = captured.lock().unwrap();
+        assert_eq!(reqs.len(), 2, "expected an initial call and one follow-up");
+        let followup = &reqs[1];
+
+        let assistant = followup
+            .messages
+            .iter()
+            .find(|m| m.role == MessageRole::Assistant && !m.tool_calls.is_empty())
+            .expect("assistant tool-call turn must be replayed in the follow-up");
+        assert_eq!(assistant.tool_calls[0].name, "echo");
+        assert_eq!(assistant.tool_calls[0].id, "call_1");
+
+        let tool_msg = followup
+            .messages
+            .iter()
+            .find(|m| m.role == MessageRole::Tool)
+            .expect("tool result must be present in the follow-up");
+        assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(tool_msg.name.as_deref(), Some("echo"));
     }
 
     #[tokio::test]

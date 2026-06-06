@@ -450,6 +450,9 @@ mod tests {
             content: content.into(),
             timestamp: now_secs(),
             token_count: content.split_whitespace().count(),
+            name: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
         }
     }
 

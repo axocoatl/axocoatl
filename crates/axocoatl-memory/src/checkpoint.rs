@@ -111,12 +111,26 @@ impl CheckpointStore {
             None => Ok(None),
             Some((_, path)) => {
                 let bytes = tokio::fs::read(&path).await?;
-                let (checkpoint, _) = bincode::decode_from_slice::<AgentCheckpoint, _>(
+                // A checkpoint is a local, regenerable cache of session state —
+                // never a source of truth. If the bytes don't decode (corruption,
+                // or a schema change across an Axocoatl upgrade), we must NOT
+                // brick the agent: log and start fresh instead of propagating a
+                // fatal deserialization error up through `on_start`.
+                match bincode::decode_from_slice::<AgentCheckpoint, _>(
                     &bytes,
                     bincode::config::standard(),
-                )
-                .map_err(|e| MemoryError::Deserialization(e.to_string()))?;
-                Ok(Some(checkpoint))
+                ) {
+                    Ok((checkpoint, _)) => Ok(Some(checkpoint)),
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "Checkpoint failed to decode (corrupt or from an older \
+                             Axocoatl version) — discarding it and starting fresh"
+                        );
+                        Ok(None)
+                    }
+                }
             }
         }
     }
@@ -167,6 +181,9 @@ mod tests {
                 content: format!("message v{version}"),
                 timestamp: 1234567890,
                 token_count: 10,
+                name: None,
+                tool_calls: Vec::new(),
+                tool_call_id: None,
             }],
             cumulative_token_usage: TokenUsageStats::new(100, 50),
             behavior_state: None,

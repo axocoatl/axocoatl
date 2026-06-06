@@ -4,13 +4,13 @@ use axocoatl_core::{ChatMessage, ContentPart, MessageContent, MessageRole};
 use axocoatl_llm::{FinishReason, ProviderError, ToolCall, ToolDefinition};
 
 use async_openai::types::chat::{
-    ChatCompletionMessageToolCalls, ChatCompletionRequestAssistantMessage,
-    ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
-    ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessage,
-    ChatCompletionRequestToolMessage, ChatCompletionRequestUserMessage,
-    ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-    ChatCompletionTool, ChatCompletionTools, FunctionObject, ImageDetail as OaiImageDetail,
-    ImageUrl,
+    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+    ChatCompletionRequestAssistantMessage, ChatCompletionRequestMessage,
+    ChatCompletionRequestMessageContentPartImage, ChatCompletionRequestMessageContentPartText,
+    ChatCompletionRequestSystemMessage, ChatCompletionRequestToolMessage,
+    ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent,
+    ChatCompletionRequestUserMessageContentPart, ChatCompletionTool, ChatCompletionTools,
+    FunctionCall, FunctionObject, ImageDetail as OaiImageDetail, ImageUrl,
 };
 
 /// Convert Axocoatl ChatMessages to async-openai request messages.
@@ -82,14 +82,52 @@ fn to_openai_message(msg: &ChatMessage) -> Result<ChatCompletionRequestMessage, 
             ChatCompletionRequestUserMessage::from(text.as_str()),
         ),
         MessageRole::Assistant => {
+            // Replay the assistant's tool-call requests so the model sees its
+            // own prior calls; without these the follow-up tool messages are
+            // orphaned and the API rejects the request.
+            let tool_calls = if msg.tool_calls.is_empty() {
+                None
+            } else {
+                Some(
+                    msg.tool_calls
+                        .iter()
+                        .map(|tc| {
+                            ChatCompletionMessageToolCalls::Function(
+                                ChatCompletionMessageToolCall {
+                                    id: tc.id.clone(),
+                                    function: FunctionCall {
+                                        name: tc.name.clone(),
+                                        arguments: serde_json::to_string(&tc.arguments)
+                                            .unwrap_or_else(|_| "{}".to_string()),
+                                    },
+                                },
+                            )
+                        })
+                        .collect(),
+                )
+            };
+            // When the turn is tool-calls-only the text is empty; send `None`
+            // rather than an empty string alongside `tool_calls`.
+            let content = if text.is_empty() && tool_calls.is_some() {
+                None
+            } else {
+                Some(text.into())
+            };
             ChatCompletionRequestMessage::Assistant(ChatCompletionRequestAssistantMessage {
-                content: Some(text.into()),
+                content,
+                tool_calls,
                 ..Default::default()
             })
         }
         MessageRole::Tool => ChatCompletionRequestMessage::Tool(ChatCompletionRequestToolMessage {
             content: text.into(),
-            tool_call_id: msg.name.clone().unwrap_or_default(),
+            // Correlate the result with the call. Falls back to `name` for any
+            // legacy message that predates the dedicated `tool_call_id` field.
+            tool_call_id: msg
+                .tool_call_id
+                .clone()
+                .or_else(|| msg.name.clone())
+                .unwrap_or_default(),
         }),
     })
 }
@@ -202,5 +240,44 @@ mod tests {
     #[test]
     fn to_openai_tools_empty_is_empty() {
         assert!(to_openai_tools(&[]).is_empty());
+    }
+
+    #[test]
+    fn assistant_tool_calls_serialize_into_request() {
+        let msg = ChatMessage::assistant_with_tool_calls(
+            "",
+            vec![axocoatl_core::ToolCall {
+                id: "call_1".to_string(),
+                name: "get_weather".to_string(),
+                arguments: serde_json::json!({ "location": "NYC" }),
+            }],
+        );
+        let converted = to_openai_messages(std::slice::from_ref(&msg)).unwrap();
+        let json = serde_json::to_value(&converted).unwrap();
+
+        assert_eq!(json[0]["role"], "assistant");
+        assert_eq!(json[0]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(json[0]["tool_calls"][0]["type"], "function");
+        assert_eq!(json[0]["tool_calls"][0]["function"]["name"], "get_weather");
+        // Arguments are serialized as a JSON string per the OpenAI schema.
+        let args = json[0]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(args).unwrap()["location"],
+            "NYC"
+        );
+        // Tool-call-only turn carries no content field.
+        assert!(json[0].get("content").is_none() || json[0]["content"].is_null());
+    }
+
+    #[test]
+    fn tool_result_message_carries_tool_call_id() {
+        let msg = ChatMessage::tool_result("{\"temp\":72}", "get_weather", "call_1");
+        let converted = to_openai_messages(std::slice::from_ref(&msg)).unwrap();
+        let json = serde_json::to_value(&converted).unwrap();
+
+        assert_eq!(json[0]["role"], "tool");
+        assert_eq!(json[0]["tool_call_id"], "call_1");
     }
 }
