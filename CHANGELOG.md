@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A flexible cockpit layout with mode presets.** The session cockpit's
+  hardwired three-pane grid is now an N-surface layout engine: a registry of
+  surfaces (Files, Activity, Browser, Agent graph, Terminal) the engine tiles,
+  resizes, focuses, collapses, and reorders generically. A **preset switcher**
+  in the cockpit bar (and ⌘⌥-number) swaps the arrangement:
+  - **Classic** — Files | Activity | Browser (the previous default, unchanged).
+  - **Review** — Activity as a sidebar with the file/diff surface filling the
+    rest, opened on Source Control, so a Monaco diff renders full-width and
+    side-by-side instead of collapsing in the slim files pane.
+  - **Build** — Activity + a large embedded browser/live-preview, terminal
+    drawer opened.
+  - **Debug** — Activity + Terminal + the live **agent graph** (the Studio
+    lattice scoped to the session), tiled side by side — watch an agent's
+    reasoning graph and its shell at once. The terminal is promoted from the
+    overlay drawer into a real grid surface for this view (the live xterm is
+    moved, not recreated). The active preset, sizes, and order persist.
 - **Unified, polished conversation UI across the Chat tab and the Sessions
   Activity pane.** The two surfaces now share one rendering layer:
   - Messages render with **markdown-it** (tables, nested/task lists,
