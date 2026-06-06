@@ -706,9 +706,7 @@
      track instead of triggering CSS-grid auto-placement (which would shift
      Activity into a zero-width resizer slot). */
   .cockpit-grid > #cockpit-files     { grid-column: 1; }
-  .cockpit-grid > [data-which="1"]   { grid-column: 2; }
   .cockpit-grid > #cockpit-stream    { grid-column: 3; }
-  .cockpit-grid > [data-which="2"]   { grid-column: 4; }
   .cockpit-grid > #cockpit-browser   { grid-column: 5; }
   body.axo-resizing, body.axo-resizing * { user-select: none !important; cursor: col-resize !important; }
   body.axo-vresizing, body.axo-vresizing * { user-select: none !important; cursor: row-resize !important; }
@@ -3167,7 +3165,6 @@
               </div>
             </div>
           </div>
-          <div class="col-resizer" data-which="1"></div>
           <div class="cockpit-pane" id="cockpit-stream">
             <div class="pane-head" data-pane="stream" draggable="true">
               <span class="pane-head-title">Activity</span>
@@ -3195,7 +3192,6 @@
               </div>
             </div>
           </div>
-          <div class="col-resizer" data-which="2"></div>
           <div class="cockpit-pane cockpit-browser-pane" id="cockpit-browser">
             <div class="pane-head" data-pane="browser" draggable="true">
               <span class="pane-head-title">Browser</span>
@@ -7590,12 +7586,15 @@ window.addEventListener('DOMContentLoaded', () => {
 S.session = { id: null, dir: '', name: '', streamEl: null, streamBuf: '', toolCards: {}, openFiles: [], activeFile: null };
 S.fpPath = '';
 S.cockpitLayout = {
-  // 2 widths for files / browser  (Activity = 1fr).  Lattice is no
-  // longer in Sessions — its canonical surface is Studio.  Terminals
-  // is the right-side overlay drawer (separate from the grid).
-  colWidths: [260, 240],
+  // The cockpit is a row of N "surfaces" (panes) drawn from the SURFACES
+  // registry.  `preset` names the active arrangement; `paneOrder` is the
+  // visible surfaces left→right; `widths` is the px size of each fixed
+  // surface (flex surfaces — e.g. Activity — take 1fr and ignore it).
+  // Terminals is the right-side overlay drawer (separate from the grid).
+  preset: 'classic',
+  widths: { files: 260, browser: 240 },
   collapsed: { files: false, browser: false },
-  focused: null,                // null | 'files' | 'stream' | 'browser'
+  focused: null,                // null | surface id
   paneOrder: ['files', 'stream', 'browser'],
   termOpen: false,        // false = thin rail, true = drawer expanded
   termOpenW: 460,         // drawer width when open (drag-resizable)
@@ -7604,9 +7603,9 @@ S.cockpitLayout = {
 S.sidebarMode = 'full';         // 'full' | 'mini' | 'hidden'
 
 // localStorage persistence — your custom workspace survives page reloads.
-// v4: lattice pane dropped from Sessions (now Studio-only).  v3:
-// terminals became an overlay drawer.  v2: terminals as a column.
-const LAYOUT_KEY = 'axo.cockpit.v4';
+// v5: N-surface layout engine (preset + widths map).  v4: lattice pane
+// dropped from Sessions.  v3: terminals became an overlay drawer.
+const LAYOUT_KEY = 'axo.cockpit.v5';
 const SIDEBAR_KEY = 'axo.sidebar.v1';
 function persistLayout() {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(S.cockpitLayout)); } catch {}
@@ -7619,25 +7618,22 @@ function loadPersistedLayout() {
     const s = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null');
     if (s && typeof s === 'object') {
       // Merge carefully so new fields land with sensible defaults.
-      if (Array.isArray(s.colWidths) && s.colWidths.length >= 2) {
-        const NEW = [260, 240];
-        const MIN = [200, 200];
-        const padded = s.colWidths.slice(0, 2);
-        while (padded.length < 2) padded.push(NEW[padded.length]);
-        for (let i = 0; i < 2; i++) {
-          if (padded[i] < MIN[i] || padded[i] > 600) padded[i] = NEW[i];
-        }
-        S.cockpitLayout.colWidths = padded;
+      if (typeof s.preset === 'string') S.cockpitLayout.preset = s.preset;
+      if (s.widths && typeof s.widths === 'object') {
+        Object.keys(SURFACES).forEach(id => {
+          const w = s.widths[id];
+          const mn = SURFACES[id].min || 120, mx = SURFACES[id].max || 1400;
+          if (typeof w === 'number' && w >= mn && w <= mx) S.cockpitLayout.widths[id] = w;
+        });
       }
       if (s.collapsed && typeof s.collapsed === 'object') {
-        ['files','browser'].forEach(k => {
+        Object.keys(S.cockpitLayout.collapsed).forEach(k => {
           if (typeof s.collapsed[k] === 'boolean') S.cockpitLayout.collapsed[k] = s.collapsed[k];
         });
       }
-      if (Array.isArray(s.paneOrder)) {
-        const want = ['files','stream','browser'].sort().join(',');
-        const got  = [...s.paneOrder].sort().join(',');
-        if (want === got) S.cockpitLayout.paneOrder = s.paneOrder;
+      // Accept any persisted order whose ids are all registered surfaces.
+      if (Array.isArray(s.paneOrder) && s.paneOrder.length && s.paneOrder.every(id => SURFACES[id])) {
+        S.cockpitLayout.paneOrder = s.paneOrder.slice();
       }
       if (typeof s.termOpen     === 'boolean') S.cockpitLayout.termOpen     = s.termOpen;
       if (typeof s.termOpenW    === 'number' && s.termOpenW    > 200) S.cockpitLayout.termOpenW    = s.termOpenW;
@@ -7651,93 +7647,97 @@ function loadPersistedLayout() {
   } catch {}
 }
 
-// Map pane key → element id and (for sized panes) index into L.colWidths.
-// Terminals is NOT in the grid (it's the overlay drawer); lattice is
-// gone from Sessions — its canonical surface is Studio.
-const PANE_ELS = {
-  files:   '#cockpit-files',
-  stream:  '#cockpit-stream',
-  browser: '#cockpit-browser',
+// Surface registry — each surface is a persistent pane element the layout
+// engine places into the grid.  `flex` surfaces take 1fr; the rest are
+// sized in px via S.cockpitLayout.widths[id].  New surfaces (diff, trace…)
+// register here and presets just choose which are visible and in what order.
+// Terminals is NOT a grid surface (it's the overlay drawer).
+const SURFACES = {
+  files:   { el: '#cockpit-files',   title: 'Files',    flex: false, defaultW: 260, min: 150, max: 900,  collapsible: true },
+  stream:  { el: '#cockpit-stream',  title: 'Activity', flex: true,                                       collapsible: false },
+  browser: { el: '#cockpit-browser', title: 'Browser',  flex: false, defaultW: 240, min: 180, max: 1100, collapsible: true },
 };
-const PANE_WIDTH_IDX = { files: 0, browser: 1 };
 const DEFAULT_PANE_ORDER = ['files', 'stream', 'browser'];
+const isFlexSurface = (id) => !!(SURFACES[id] && SURFACES[id].flex);
+const surfaceWidth = (id) =>
+  S.cockpitLayout.widths[id] ?? (SURFACES[id] ? SURFACES[id].defaultW : 260);
+// Visible surfaces, in order: registered, and (unless one is focused) not
+// collapsed.  Focus mode shows only the focused surface.
+function visibleSurfaces() {
+  const L = S.cockpitLayout;
+  const order = (Array.isArray(L.paneOrder) ? L.paneOrder : DEFAULT_PANE_ORDER).filter(id => SURFACES[id]);
+  return order.filter(id => (L.focused ? id === L.focused : !L.collapsed[id]));
+}
 
 function applyCockpitLayout() {
   const grid = document.querySelector('.cockpit-grid');
   if (!grid) return;
   const L = S.cockpitLayout;
-  const order = (L.paneOrder && L.paneOrder.length === 3)
-    ? L.paneOrder.slice()
-    : DEFAULT_PANE_ORDER.slice();
   const px = n => n + 'px';
+  const visible = visibleSurfaces();
+  const solo = visible.length === 1;            // focus mode / single surface fills
 
-  // Compute per-pane track size (1fr for stream, fixed px for the rest).
-  const trackFor = (key) => {
-    if (L.focused) return L.focused === key ? '1fr' : '0';
-    if (L.collapsed[key]) return '0';
-    if (key === 'stream') return '1fr';
-    return px(L.colWidths[PANE_WIDTH_IDX[key]]);
-  };
+  // One resizer between each pair of visible surfaces.
+  const nResizers = Math.max(0, visible.length - 1);
+  ensureResizerPool(nResizers);
+  const resizers = [...grid.querySelectorAll('.col-resizer')];
 
-  // Build 5-track template: pane, resizer, pane, resizer, pane.
+  // Build the track template: surface, 6px, surface, 6px, …  A solo surface
+  // fills (1fr); otherwise flex surfaces take 1fr and the rest their px width.
   const tracks = [];
-  for (let i = 0; i < 3; i++) {
-    tracks.push(trackFor(order[i]));
-    if (i < 2) {
-      // The resizer between i and i+1 collapses to 0 if either neighbor is
-      // hidden (focused/collapsed) — otherwise show the 6px handle.
-      const leftHidden  = (L.focused && L.focused !== order[i])     || L.collapsed[order[i]];
-      const rightHidden = (L.focused && L.focused !== order[i + 1]) || L.collapsed[order[i + 1]];
-      tracks.push((leftHidden || rightHidden) ? '0' : '6px');
-    }
-  }
-  grid.style.gridTemplateColumns = tracks.join(' ');
-
-  // Place each pane at its slot's grid column (odd slots: 1, 3, 5, 7, 9).
-  // Toggle display + the visual-rightmost class (used by CSS to strip the
-  // right border on whichever pane ends up last after reorder).
-  let lastVisibleIdx = -1;
-  order.forEach((key, i) => {
-    const hidden = (L.focused && L.focused !== key) || L.collapsed[key];
-    if (!hidden) lastVisibleIdx = i;
+  visible.forEach((id, i) => {
+    tracks.push(solo ? '1fr' : (isFlexSurface(id) ? '1fr' : px(surfaceWidth(id))));
+    if (i < visible.length - 1) tracks.push('6px');
   });
-  order.forEach((key, i) => {
-    const el = $(PANE_ELS[key]); if (!el) return;
+  grid.style.gridTemplateColumns = tracks.length ? tracks.join(' ') : '1fr';
+
+  // Hide every registered surface, then place + show the visible ones in order.
+  Object.keys(SURFACES).forEach(id => { const el = $(SURFACES[id].el); if (el) el.style.display = 'none'; });
+  visible.forEach((id, i) => {
+    const el = $(SURFACES[id].el); if (!el) return;
     el.style.gridColumn = String(i * 2 + 1);
-    const hidden = (L.focused && L.focused !== key) || L.collapsed[key];
-    el.style.display = hidden ? 'none' : 'flex';
-    el.classList.toggle('is-rightmost', i === lastVisibleIdx);
+    el.style.display = 'flex';
+    el.classList.toggle('is-rightmost', i === visible.length - 1);
   });
 
-  // Place each resizer (2, 4).  Hide collapsed-neighbour resizers and
-  // any stale data-which="3"/"4" handles from older layouts.
-  $$('.col-resizer').forEach(h => {
-    const w = parseInt(h.dataset.which, 10);
-    if (w > 2) { h.style.display = 'none'; return; }
-    h.style.gridColumn = String(w * 2);
-    const leftKey  = order[w - 1];
-    const rightKey = order[w];
-    const leftHidden  = (L.focused && L.focused !== leftKey)  || L.collapsed[leftKey];
-    const rightHidden = (L.focused && L.focused !== rightKey) || L.collapsed[rightKey];
-    h.style.display = (leftHidden || rightHidden) ? 'none' : '';
+  // Place resizers between consecutive visible panes; carry the boundary index.
+  resizers.forEach((h, b) => {
+    if (b < nResizers) {
+      h.style.display = '';
+      h.style.gridColumn = String(b * 2 + 2);
+      h.dataset.boundary = String(b);
+    } else {
+      h.style.display = 'none';
+    }
   });
 
   // Terminals drawer — open/closed, width, inner list/output split.
   applyTerminalsDrawer();
   $$('.pane-btn[data-act="focus"]').forEach(b => b.classList.toggle('active', L.focused === b.dataset.pane));
-  $$('.pane-btn[data-act="collapse"]').forEach(b => {
-    const which = b.dataset.pane;
-    b.classList.toggle('active', !!L.collapsed[which]);
-  });
-  // Defensive: any layout change clears stuck drag state (cursor, purple highlight).
+  $$('.pane-btn[data-act="collapse"]').forEach(b => b.classList.toggle('active', !!L.collapsed[b.dataset.pane]));
+  // Defensive: any layout change clears stuck drag state (cursor, highlight).
   document.body.classList.remove('axo-resizing', 'axo-vresizing');
-  $$('.col-resizer.dragging')
-    .forEach(h => h.classList.remove('dragging'));
+  grid.querySelectorAll('.col-resizer.dragging').forEach(h => h.classList.remove('dragging'));
   persistLayout();
   // After the grid relayouts, tell embedded editors to remeasure.  Without
   // this Monaco renders at the old container size (visually broken file
   // pane) and xterm gets stuck on the old rows/cols.
   requestAnimationFrame(() => relayoutEmbeddedEditors());
+}
+
+// Keep exactly `n` resizer handles in the grid (create + wire as needed).
+// Resizers are positioned by inline grid-column in applyCockpitLayout, so
+// DOM order among grid children doesn't matter.
+function ensureResizerPool(n) {
+  const grid = document.querySelector('.cockpit-grid');
+  if (!grid) return;
+  let pool = grid.querySelectorAll('.col-resizer');
+  for (let i = pool.length; i < n; i++) {
+    const h = document.createElement('div');
+    h.className = 'col-resizer';
+    attachColResizer(h);
+    grid.appendChild(h);
+  }
 }
 
 // ── Terminals overlay drawer ──────────────────────────────────────
@@ -7887,7 +7887,8 @@ function relayoutEmbeddedEditors() {
 
 // Panes menu — the safety net for "I collapsed a pane and now it's gone."
 const DEFAULT_LAYOUT = {
-  colWidths: [260, 240],
+  preset: 'classic',
+  widths: { files: 260, browser: 240 },
   collapsed: { files: false, browser: false },
   focused: null,
   paneOrder: ['files', 'stream', 'browser'],
@@ -7900,11 +7901,9 @@ function renderPanesMenu() {
   const menu = $('#panes-menu'); if (!menu) return;
   menu.innerHTML = '';
   const L = S.cockpitLayout;
-  const panes = [
-    { key: 'files',   label: 'Files',            sc: 'Ctrl+1' },
-    { key: 'stream',  label: 'Activity',         sc: 'Ctrl+2', stream: true },
-    { key: 'browser', label: 'Browser',          sc: 'Ctrl+3' },
-  ];
+  const panes = (L.paneOrder || DEFAULT_PANE_ORDER)
+    .filter(id => SURFACES[id])
+    .map((id, i) => ({ key: id, label: SURFACES[id].title, sc: 'Ctrl+' + (i + 1), stream: isFlexSurface(id) }));
   panes.forEach(p => {
     const row = el('div', 'pm-item');
     const cb = document.createElement('input');
@@ -7993,37 +7992,38 @@ function cycleSidebar() {
 // Sign convention:
 //   - Pane LEFT  of flex, drag-right → pane grows  (sign +1)
 //   - Pane RIGHT of flex, drag-right → pane shrinks (sign -1)
-function resizerTargetPane(which) {
-  const order = S.cockpitLayout.paneOrder || DEFAULT_PANE_ORDER;
-  const flexIdx = order.indexOf('stream');
-  const leftPos  = which - 1;
-  const rightPos = which;
-  if (rightPos === flexIdx) return { key: order[leftPos],  sign: +1 };
-  if (leftPos  === flexIdx) return { key: order[rightPos], sign: -1 };
-  if (rightPos < flexIdx)  return { key: order[leftPos],  sign: +1 };
-  if (leftPos  > flexIdx)  return { key: order[rightPos], sign: -1 };
-  return { key: order[leftPos], sign: +1 };
+// Which fixed surface does dragging the resizer at boundary `b` resize, and
+// in which direction?  A boundary sits between visible[b] and visible[b+1];
+// we resize the fixed neighbour on the far side from the flex (1fr) surface
+// so the flex pane absorbs the slack.
+function resizerTargetForBoundary(b) {
+  const visible = visibleSurfaces();
+  const flexIdx = visible.findIndex(isFlexSurface);
+  const left = visible[b], right = visible[b + 1];
+  if (flexIdx === -1)   return { key: left,  sign: +1 }; // no flex: grow left pane
+  if (b + 1 === flexIdx) return { key: left,  sign: +1 };
+  if (b === flexIdx)     return { key: right, sign: -1 };
+  if (b + 1 < flexIdx)   return { key: left,  sign: +1 };
+  return { key: right, sign: -1 };                       // b > flexIdx
 }
-const PANE_MINMAX = {
-  files:   { min: 150, max: 700 },
-  browser: { min: 180, max: 800 },
-};
 
-function attachColResizer(handle, which) {
+function attachColResizer(handle) {
   handle.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     e.preventDefault();
+    const b = parseInt(handle.dataset.boundary || '0', 10);
+    const tgt = resizerTargetForBoundary(b);
+    if (!tgt || !tgt.key || isFlexSurface(tgt.key)) return; // can't px-resize a flex pane
+    const sf = SURFACES[tgt.key] || {};
+    const mm = { min: sf.min || 150, max: sf.max || 1000 };
     try { handle.setPointerCapture(e.pointerId); } catch {}
     handle.classList.add('dragging');
     document.body.classList.add('axo-resizing');
     const startX = e.clientX;
-    const startW = [...S.cockpitLayout.colWidths];
-    const tgt = resizerTargetPane(which);
-    const idx = PANE_WIDTH_IDX[tgt.key];
-    const mm  = PANE_MINMAX[tgt.key] || { min: 150, max: 800 };
+    const startW = surfaceWidth(tgt.key);
     const onMove = (ev) => {
       const dx = ev.clientX - startX;
-      S.cockpitLayout.colWidths[idx] = Math.max(mm.min, Math.min(mm.max, startW[idx] + tgt.sign * dx));
+      S.cockpitLayout.widths[tgt.key] = Math.max(mm.min, Math.min(mm.max, startW + tgt.sign * dx));
       applyCockpitLayout();
     };
     const onEnd = () => {
@@ -8119,12 +8119,15 @@ function onCockpitKey(e) {
     S.cockpitLayout.focused = null; applyCockpitLayout(); return;
   }
   if (inField) return;
-  if ((e.ctrlKey || e.metaKey) && ['1','2','3','4'].includes(e.key)) {
+  if ((e.ctrlKey || e.metaKey) && ['1','2','3','4','5'].includes(e.key)) {
     e.preventDefault();
-    const map = { '1': 'files', '2': 'stream', '3': 'lattice', '4': 'browser' };
-    const which = map[e.key];
-    S.cockpitLayout.focused = S.cockpitLayout.focused === which ? null : which;
-    applyCockpitLayout();
+    // Focus the Nth surface in the current visible order.
+    const order = (S.cockpitLayout.paneOrder || DEFAULT_PANE_ORDER).filter(id => SURFACES[id]);
+    const which = order[parseInt(e.key, 10) - 1];
+    if (which) {
+      S.cockpitLayout.focused = S.cockpitLayout.focused === which ? null : which;
+      applyCockpitLayout();
+    }
   } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
     e.preventDefault();
     S.cockpitLayout.collapsed.files = !S.cockpitLayout.collapsed.files;
@@ -8183,7 +8186,8 @@ function setCockpitLive(state, label) {
 
 function initCockpitChrome() {
   if (_cockpitInited) return; _cockpitInited = true;
-  document.querySelectorAll('.col-resizer').forEach(h => attachColResizer(h, parseInt(h.dataset.which, 10)));
+  // Column resizers are created + wired on demand by ensureResizerPool()
+  // (called from applyCockpitLayout, at the end of this function).
   attachFilesInnerResizer();
   attachPaneDragReorder();
   attachTermDrawerOuterResizer();
