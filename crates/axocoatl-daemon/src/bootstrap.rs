@@ -12,7 +12,7 @@ use axocoatl_actor::{AgentActor, AgentBehavior, AgentRegistry, DefaultAgentBehav
 use axocoatl_config::AxocoatlConfig;
 use axocoatl_coordination::{EventId, EventLattice, EventType, LatticeEvent};
 use axocoatl_core::AgentId;
-use axocoatl_isolation::session_sandbox::SessionSandbox;
+use axocoatl_isolation::session_sandbox::{ExecResult, SessionSandbox};
 use axocoatl_llm::ProviderRegistry;
 use axocoatl_mcp::approval::{McpApprovalGate, SharedApprovalGate};
 use axocoatl_mcp::permissions::McpPermissionStore;
@@ -1334,6 +1334,201 @@ impl AxocoatlDaemon {
         self.agent_registry.remove(&scoped).await;
         let _ = self.session_store.lock().await.touch(session_id);
         Ok(())
+    }
+
+    // ── Git: a session is (optionally auto-) a git repo ─────────────────
+    // git runs INSIDE the session sandbox container; the working dir is bind-
+    // mounted there, so it operates on the real folder. `safe.directory=*`
+    // sidesteps podman's "dubious ownership" guard on the mounted tree.
+
+    /// Run `git -C {working_dir} <args>` inside the session's sandbox.
+    pub async fn session_git(
+        &self,
+        session_id: &str,
+        args: &[&str],
+    ) -> Result<ExecResult, DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let dir = session.working_dir.to_string_lossy().to_string();
+        let mut argv: Vec<&str> = vec!["git", "-c", "safe.directory=*", "-C", dir.as_str()];
+        argv.extend_from_slice(args);
+        sandbox
+            .exec(&argv, Duration::from_secs(60))
+            .await
+            .map_err(|e| DaemonError::Session(e.to_string()))
+    }
+
+    /// Ensure the session directory is a git repo — initialize it with a
+    /// baseline commit if it isn't. Idempotent; a no-op for existing repos.
+    pub async fn ensure_session_git(&self, session_id: &str) -> Result<(), DaemonError> {
+        let probe = self
+            .session_git(session_id, &["rev-parse", "--is-inside-work-tree"])
+            .await?;
+        if probe.ok() && probe.stdout.trim() == "true" {
+            return Ok(());
+        }
+        // Not a repo — initialize with a local identity + a baseline commit so
+        // HEAD always exists (diffs need a reference point).
+        self.session_git(session_id, &["init", "-q"]).await?;
+        self.session_git(
+            session_id,
+            &["config", "user.email", "agent@axocoatl.local"],
+        )
+        .await?;
+        self.session_git(session_id, &["config", "user.name", "Axocoatl"])
+            .await?;
+        self.session_git(session_id, &["add", "-A"]).await?;
+        self.session_git(
+            session_id,
+            &["commit", "-q", "-m", "axocoatl: baseline", "--allow-empty"],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Working-tree status (current branch + changed files).
+    pub async fn git_status(&self, session_id: &str) -> Result<crate::git::GitStatus, DaemonError> {
+        self.ensure_session_git(session_id).await?;
+        let r = self
+            .session_git(
+                session_id,
+                &["status", "--porcelain=v1", "-b", "--untracked-files=all"],
+            )
+            .await?;
+        Ok(crate::git::parse_status(&r.stdout))
+    }
+
+    /// Before/after content for one file (for the diff editor). `old` is the
+    /// HEAD version (empty for a new file); `new` is the working-tree content.
+    /// Both are read from inside the container so they match exactly what
+    /// `git status`/`checkout` see (the host↔container bind mount is only
+    /// eventually-consistent on macOS podman).
+    pub async fn git_diff(
+        &self,
+        session_id: &str,
+        path: &str,
+    ) -> Result<crate::git::GitDiff, DaemonError> {
+        if path.contains("..") {
+            return Err(DaemonError::Session("invalid path".to_string()));
+        }
+        self.ensure_session_git(session_id).await?;
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let dir = session.working_dir.to_string_lossy().to_string();
+        let head_ref = format!("HEAD:{path}");
+        let old = sandbox
+            .exec(
+                &[
+                    "git",
+                    "-c",
+                    "safe.directory=*",
+                    "-C",
+                    dir.as_str(),
+                    "show",
+                    head_ref.as_str(),
+                ],
+                Duration::from_secs(30),
+            )
+            .await
+            .map(|r| if r.ok() { r.stdout } else { String::new() })
+            .unwrap_or_default();
+        let full = format!("{dir}/{path}");
+        let new = sandbox
+            .exec(&["cat", full.as_str()], Duration::from_secs(30))
+            .await
+            .map(|r| if r.ok() { r.stdout } else { String::new() })
+            .unwrap_or_default();
+        Ok(crate::git::GitDiff {
+            path: path.to_string(),
+            old,
+            new,
+        })
+    }
+
+    /// Branch list + current branch.
+    pub async fn git_branches(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::git::GitBranches, DaemonError> {
+        self.ensure_session_git(session_id).await?;
+        let cur = self
+            .session_git(session_id, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .await?;
+        let list = self
+            .session_git(session_id, &["branch", "--format=%(refname:short)"])
+            .await?;
+        Ok(crate::git::parse_branches(&cur.stdout, &list.stdout))
+    }
+
+    /// Stage everything and commit. Returns the fresh status. A no-op commit
+    /// (nothing staged) is not an error — the status just comes back unchanged.
+    pub async fn git_commit(
+        &self,
+        session_id: &str,
+        message: &str,
+    ) -> Result<crate::git::GitStatus, DaemonError> {
+        self.ensure_session_git(session_id).await?;
+        self.session_git(session_id, &["add", "-A"]).await?;
+        let msg = if message.trim().is_empty() {
+            "axocoatl: snapshot"
+        } else {
+            message
+        };
+        let _ = self
+            .session_git(session_id, &["commit", "-q", "-m", msg])
+            .await;
+        self.git_status(session_id).await
+    }
+
+    /// Discard working changes — one file (`Some(path)`) or all (`None`,
+    /// including untracked). Returns the fresh status.
+    pub async fn git_discard(
+        &self,
+        session_id: &str,
+        path: Option<&str>,
+    ) -> Result<crate::git::GitStatus, DaemonError> {
+        self.ensure_session_git(session_id).await?;
+        match path {
+            Some(p) => {
+                if p.contains("..") {
+                    return Err(DaemonError::Session("invalid path".to_string()));
+                }
+                let _ = self.session_git(session_id, &["checkout", "--", p]).await;
+                let _ = self
+                    .session_git(session_id, &["clean", "-fd", "--", p])
+                    .await;
+            }
+            None => {
+                let _ = self.session_git(session_id, &["checkout", "--", "."]).await;
+                let _ = self.session_git(session_id, &["clean", "-fd"]).await;
+            }
+        }
+        self.git_status(session_id).await
+    }
+
+    /// Switch branches / checkout a ref. Returns the fresh status.
+    pub async fn git_checkout(
+        &self,
+        session_id: &str,
+        reference: &str,
+    ) -> Result<crate::git::GitStatus, DaemonError> {
+        self.ensure_session_git(session_id).await?;
+        let r = self
+            .session_git(session_id, &["checkout", reference])
+            .await?;
+        if !r.ok() {
+            return Err(DaemonError::Session(format!(
+                "checkout failed: {}",
+                r.stderr.trim()
+            )));
+        }
+        self.git_status(session_id).await
     }
 
     /// Execute an instruction inside a session, streaming the agent's output

@@ -4,6 +4,7 @@ pub mod automation_runs;
 pub mod automation_store;
 pub mod bootstrap;
 pub mod error;
+pub mod git;
 pub mod interrupt;
 pub mod ipc;
 pub mod mcp_approval_hook;
