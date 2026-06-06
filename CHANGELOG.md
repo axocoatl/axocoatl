@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Retry** (regenerate the reply), backed by a new
   `POST /api/sessions/{id}/rewind` that truncates the checkpoint and resumes the
   next turn from the truncated state.
+- **Git-native sessions: a live Source Control pane.** A directory session is
+  now (auto-)a git repo — `git init` + a baseline commit on first use if the
+  folder isn't already one (existing repos used as-is). git runs inside the
+  session sandbox, on the bind-mounted folder. A VS Code-style **Source
+  Control** tab in the cockpit's files pane shows the agent's working-tree
+  changes live (branch + changed files with A/M/D/U badges + a count badge),
+  opens each change as a **Monaco diff** (HEAD vs working), and supports
+  **commit** and per-file **discard**. New routes under `/api/sessions/{id}/git`:
+  `status`, `diff`, `branches`, `commit`, `discard`, `checkout`. This is the
+  substrate for parallel branch "Variants" (next).
 
 ### Fixed
 - **A lingering session sandbox container no longer breaks new sessions.** A

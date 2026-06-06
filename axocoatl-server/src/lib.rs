@@ -77,6 +77,15 @@ pub fn build_router(state: AppState, auth: auth::AuthConfig, cors_origins: Vec<S
         .route("/api/sessions/{id}/execute", post(routes::execute_session))
         .route("/api/sessions/{id}/messages", get(routes::session_messages))
         .route("/api/sessions/{id}/rewind", post(routes::rewind_session))
+        .route("/api/sessions/{id}/git/status", get(routes::git_status))
+        .route("/api/sessions/{id}/git/diff", get(routes::git_diff))
+        .route("/api/sessions/{id}/git/branches", get(routes::git_branches))
+        .route("/api/sessions/{id}/git/commit", post(routes::git_commit))
+        .route("/api/sessions/{id}/git/discard", post(routes::git_discard))
+        .route(
+            "/api/sessions/{id}/git/checkout",
+            post(routes::git_checkout),
+        )
         .route("/api/sessions/{id}/tree", get(routes::session_tree))
         .route(
             "/api/sessions/{id}/file",
