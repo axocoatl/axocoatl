@@ -702,6 +702,13 @@
   }
   .col-resizer { cursor: col-resize; background: transparent; transition: background .15s; user-select: none; touch-action: none; }
   .col-resizer:hover, .col-resizer.dragging { background: var(--accent); opacity: .55; }
+  /* Layout-preset switcher in the cockpit bar. */
+  .preset-switch { display: inline-flex; gap: 2px; background: var(--bg-2); border: 1px solid var(--border);
+                   border-radius: 7px; padding: 2px; margin-right: 6px; }
+  .preset-btn { background: transparent; border: none; color: var(--muted); font-size: 11.5px;
+                padding: 3px 10px; border-radius: 5px; cursor: pointer; line-height: 1.4; }
+  .preset-btn:hover { color: var(--text); }
+  .preset-btn.active { background: var(--accent); color: #fff; }
   /* Pin every grid child to its column so `display:none` leaves an empty
      track instead of triggering CSS-grid auto-placement (which would shift
      Activity into a zero-width resizer slot). */
@@ -3107,6 +3114,7 @@
           <span class="grow"></span>
           <span class="small muted" id="cockpit-status"></span>
           <span class="cockpit-live-pill idle" id="cockpit-live"><span class="cockpit-live-label">idle</span></span>
+          <span class="preset-switch" id="preset-switch"></span>
           <button class="btn ghost sm" id="panes-menu-btn" title="Show/hide panes">Panes ▾</button>
         </div>
         <div id="panes-menu" class="panes-menu hide"></div>
@@ -7592,6 +7600,7 @@ S.cockpitLayout = {
   // surface (flex surfaces — e.g. Activity — take 1fr and ignore it).
   // Terminals is the right-side overlay drawer (separate from the grid).
   preset: 'classic',
+  flex: 'stream',               // id of the surface that fills (1fr)
   widths: { files: 260, browser: 240 },
   collapsed: { files: false, browser: false },
   focused: null,                // null | surface id
@@ -7619,6 +7628,7 @@ function loadPersistedLayout() {
     if (s && typeof s === 'object') {
       // Merge carefully so new fields land with sensible defaults.
       if (typeof s.preset === 'string') S.cockpitLayout.preset = s.preset;
+      if (typeof s.flex === 'string' && SURFACES[s.flex]) S.cockpitLayout.flex = s.flex;
       if (s.widths && typeof s.widths === 'object') {
         Object.keys(SURFACES).forEach(id => {
           const w = s.widths[id];
@@ -7653,12 +7663,14 @@ function loadPersistedLayout() {
 // register here and presets just choose which are visible and in what order.
 // Terminals is NOT a grid surface (it's the overlay drawer).
 const SURFACES = {
-  files:   { el: '#cockpit-files',   title: 'Files',    flex: false, defaultW: 260, min: 150, max: 900,  collapsible: true },
-  stream:  { el: '#cockpit-stream',  title: 'Activity', flex: true,                                       collapsible: false },
-  browser: { el: '#cockpit-browser', title: 'Browser',  flex: false, defaultW: 240, min: 180, max: 1100, collapsible: true },
+  files:   { el: '#cockpit-files',   title: 'Files',    defaultW: 260, min: 150, max: 1200, collapsible: true },
+  stream:  { el: '#cockpit-stream',  title: 'Activity', defaultW: 420, min: 280, max: 1200, collapsible: false },
+  browser: { el: '#cockpit-browser', title: 'Browser',  defaultW: 240, min: 180, max: 1100, collapsible: true },
 };
 const DEFAULT_PANE_ORDER = ['files', 'stream', 'browser'];
-const isFlexSurface = (id) => !!(SURFACES[id] && SURFACES[id].flex);
+// Which surface stretches to fill (1fr) is a property of the active layout,
+// not the surface — a preset can make the diff or the editor the big one.
+const isFlexSurface = (id) => id === (S.cockpitLayout.flex || 'stream');
 const surfaceWidth = (id) =>
   S.cockpitLayout.widths[id] ?? (SURFACES[id] ? SURFACES[id].defaultW : 260);
 // Visible surfaces, in order: registered, and (unless one is focused) not
@@ -7693,8 +7705,13 @@ function applyCockpitLayout() {
 
   // Hide every registered surface, then place + show the visible ones in order.
   Object.keys(SURFACES).forEach(id => { const el = $(SURFACES[id].el); if (el) el.style.display = 'none'; });
+  // Pin every child to row 1 + its column.  Without an explicit grid-row,
+  // CSS grid auto-placement wraps a pane to a new row whenever DOM order
+  // doesn't ascend by column (e.g. a preset that puts Activity left of Files
+  // while Files is DOM-first) — which stacks the panes instead of tiling them.
   visible.forEach((id, i) => {
     const el = $(SURFACES[id].el); if (!el) return;
+    el.style.gridRow = '1';
     el.style.gridColumn = String(i * 2 + 1);
     el.style.display = 'flex';
     el.classList.toggle('is-rightmost', i === visible.length - 1);
@@ -7704,6 +7721,7 @@ function applyCockpitLayout() {
   resizers.forEach((h, b) => {
     if (b < nResizers) {
       h.style.display = '';
+      h.style.gridRow = '1';
       h.style.gridColumn = String(b * 2 + 2);
       h.dataset.boundary = String(b);
     } else {
@@ -7888,6 +7906,7 @@ function relayoutEmbeddedEditors() {
 // Panes menu — the safety net for "I collapsed a pane and now it's gone."
 const DEFAULT_LAYOUT = {
   preset: 'classic',
+  flex: 'stream',
   widths: { files: 260, browser: 240 },
   collapsed: { files: false, browser: false },
   focused: null,
@@ -7896,6 +7915,64 @@ const DEFAULT_LAYOUT = {
   termOpenW: 460,
   termInnerListW: 140,
 };
+
+// ── Layout presets ────────────────────────────────────────────────────
+// Named arrangements the user cycles (buttons in the cockpit bar, or
+// ⌘⌥<n>).  Each lists the visible surfaces left→right and which one fills
+// (flex).  Switching a preset resets sizes to the preset's intent; the user
+// can then resize and those tweaks persist.  `after` runs once applied.
+const PRESETS = {
+  classic: {
+    label: 'Classic',
+    order: ['files', 'stream', 'browser'], flex: 'stream',
+    widths: { files: 260, browser: 240 },
+  },
+  review: {
+    // Conversation on the left, the file/diff surface filling the rest —
+    // so a Monaco diff finally gets room.  Opens on Source Control.
+    label: 'Review',
+    order: ['stream', 'files'], flex: 'files',
+    widths: { stream: 460 },
+    after: () => { try { setExplorerTab('git'); } catch {} },
+  },
+};
+const PRESET_ORDER = ['classic', 'review'];
+
+function applyPreset(name) {
+  const p = PRESETS[name] || PRESETS.classic;
+  const L = S.cockpitLayout;
+  L.preset = PRESETS[name] ? name : 'classic';
+  L.paneOrder = p.order.slice();
+  L.flex = p.flex || 'stream';
+  L.focused = null;
+  // Reset every surface to its default width, then apply the preset's overrides.
+  const w = {};
+  Object.keys(SURFACES).forEach(id => { w[id] = SURFACES[id].defaultW || 260; });
+  Object.assign(w, p.widths || {});
+  L.widths = w;
+  // Visibility is controlled by `order`; clear any stale collapse flags.
+  Object.keys(L.collapsed).forEach(k => { L.collapsed[k] = false; });
+  applyCockpitLayout();
+  renderPresetSwitcher();
+  if (p.after) try { p.after(); } catch {}
+}
+
+function cyclePreset(dir) {
+  const i = PRESET_ORDER.indexOf(S.cockpitLayout.preset);
+  const n = PRESET_ORDER.length;
+  applyPreset(PRESET_ORDER[(((i < 0 ? 0 : i) + dir) % n + n) % n]);
+}
+
+function renderPresetSwitcher() {
+  const host = $('#preset-switch'); if (!host) return;
+  host.innerHTML = '';
+  PRESET_ORDER.forEach((name, i) => {
+    const b = el('button', 'preset-btn' + (S.cockpitLayout.preset === name ? ' active' : ''), PRESETS[name].label);
+    b.title = PRESETS[name].label + ' layout (⌘⌥' + (i + 1) + ')';
+    b.addEventListener('click', () => applyPreset(name));
+    host.appendChild(b);
+  });
+}
 
 function renderPanesMenu() {
   const menu = $('#panes-menu'); if (!menu) return;
@@ -8118,8 +8195,16 @@ function onCockpitKey(e) {
   if (e.key === 'Escape' && S.cockpitLayout.focused) {
     S.cockpitLayout.focused = null; applyCockpitLayout(); return;
   }
+  // ⌘⌥<n> — switch layout preset.  Allowed even while typing (not a
+  // typeable combo), so it works from the composer.
+  if ((e.ctrlKey || e.metaKey) && e.altKey && /^[1-9]$/.test(e.key)) {
+    e.preventDefault();
+    const name = PRESET_ORDER[parseInt(e.key, 10) - 1];
+    if (name) applyPreset(name);
+    return;
+  }
   if (inField) return;
-  if ((e.ctrlKey || e.metaKey) && ['1','2','3','4','5'].includes(e.key)) {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && ['1','2','3','4','5'].includes(e.key)) {
     e.preventDefault();
     // Focus the Nth surface in the current visible order.
     const order = (S.cockpitLayout.paneOrder || DEFAULT_PANE_ORDER).filter(id => SURFACES[id]);
@@ -8266,6 +8351,7 @@ function initCockpitChrome() {
     if (e.key === 'Enter') { e.preventDefault(); browserGo(bUrl.value); }
   });
   updateBrowserNavButtons();
+  renderPresetSwitcher();
   applyCockpitLayout();
 }
 
