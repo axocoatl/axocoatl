@@ -25,11 +25,29 @@ pub struct GitStatus {
 }
 
 /// One file's before/after content — fed straight to Monaco's diff editor.
+///
+/// `binary` / `too_large` are escape hatches: when either is set, `old` and
+/// `new` are blanked (the daemon never streams raw bytes or a multi-megabyte
+/// blob into the JSON response or Monaco) and the pane shows a sentinel instead
+/// of an inline diff.
 #[derive(Debug, Clone, Serialize)]
 pub struct GitDiff {
     pub path: String,
     pub old: String,
     pub new: String,
+    pub binary: bool,
+    pub too_large: bool,
+}
+
+/// Largest file (either side) the daemon will inline as a diff. Beyond this we
+/// report `too_large` rather than shipping the content. 512 KiB.
+pub const DIFF_MAX_BYTES: usize = 512 * 1024;
+
+/// Heuristic binary check: a NUL byte in the first 8 KiB. Matches how git
+/// itself decides "binary" for diffs, and survives the lossy-UTF-8 decode the
+/// sandbox applies to command output (a real NUL stays a NUL).
+pub fn looks_binary(s: &str) -> bool {
+    s.as_bytes().iter().take(8192).any(|&b| b == 0)
 }
 
 /// Branch list + the current branch.
@@ -152,6 +170,16 @@ mod tests {
                 state: "renamed".into()
             }
         );
+    }
+
+    #[test]
+    fn binary_heuristic() {
+        assert!(looks_binary("text\0more"));
+        assert!(looks_binary(&format!("{}\0", "a".repeat(8000))));
+        assert!(!looks_binary("fn main() {}\nlet x = 1;\n"));
+        assert!(!looks_binary(""));
+        // A NUL past the 8 KiB scan window is not flagged.
+        assert!(!looks_binary(&format!("{}\0", "a".repeat(9000))));
     }
 
     #[test]

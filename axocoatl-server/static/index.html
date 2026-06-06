@@ -1676,9 +1676,13 @@
              border-radius: 5px; color: var(--text); font-size: 12px; padding: 4px 7px; }
   .git-branchline { display: flex; align-items: center; gap: 6px; padding: 0 8px 6px;
                     font-size: 11px; color: var(--muted); flex-shrink: 0; border-bottom: 1px solid var(--border); }
-  .git-branch { font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--accent-2, var(--axo-blue)); }
-  .git-branch::before { content: '⎇ '; opacity: .7; }
-  .git-mini { margin-left: auto; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; }
+  .git-branch-glyph { opacity: .7; color: var(--accent-2, var(--axo-blue)); }
+  .git-branch-select { flex: 1; min-width: 0; max-width: 100%; background: var(--bg-2); border: 1px solid var(--border);
+                       border-radius: 5px; color: var(--accent-2, var(--axo-blue)); cursor: pointer; padding: 2px 5px;
+                       font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; }
+  .git-branch-select:hover { border-color: var(--accent-2, var(--axo-blue)); }
+  .git-branch-select:disabled { opacity: .6; cursor: default; }
+  .git-mini { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; flex-shrink: 0; }
   .git-mini:hover { color: var(--text); }
   .git-files { flex: 1; overflow: auto; padding: 4px; }
   .git-file { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border-radius: 5px;
@@ -3140,7 +3144,8 @@
                     <button class="btn sm" id="git-commit" title="Stage all + commit">Commit all</button>
                   </div>
                   <div class="git-branchline">
-                    <span class="git-branch" id="git-branch">—</span>
+                    <span class="git-branch-glyph" aria-hidden="true">⎇</span>
+                    <select class="git-branch-select" id="git-branch" title="Switch branch"></select>
                     <button class="git-mini" id="git-refresh" title="Refresh">⟳</button>
                   </div>
                   <div class="git-files" id="git-files"></div>
@@ -8195,9 +8200,11 @@ function initCockpitChrome() {
     const b = e.target.closest('.etab'); if (b) setExplorerTab(b.dataset.etab);
   });
   const gcommit = $('#git-commit'); if (gcommit) gcommit.addEventListener('click', gitCommit);
-  const grefresh = $('#git-refresh'); if (grefresh) grefresh.addEventListener('click', refreshGitPane);
+  const grefresh = $('#git-refresh'); if (grefresh) grefresh.addEventListener('click', () => { refreshGitPane(); loadGitBranches(); });
   const gmsg = $('#git-msg');
   if (gmsg) gmsg.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); gitCommit(); } });
+  const gbranch = $('#git-branch');
+  if (gbranch) gbranch.addEventListener('change', (e) => { gitCheckout(e.target.value); });
   // The "+ Add to chat" floating bubble now lives inside Monaco — see
   // onMonacoSelectionChange.  We still install a global mousedown
   // listener so a click outside the bubble hides it.
@@ -10912,7 +10919,7 @@ function setExplorerTab(tab) {
   $('#file-search')?.classList.toggle('hide', git);
   $('#file-tree')?.classList.toggle('hide', git);
   $('#git-view')?.classList.toggle('hide', !git);
-  if (git) refreshGitPane();
+  if (git) { refreshGitPane(); loadGitBranches(); }
 }
 
 async function refreshGitPane() {
@@ -10928,7 +10935,8 @@ async function refreshGitPane() {
         badge.textContent = String(n);
         badge.classList.toggle('hide', n === 0);
       }
-      const br = $('#git-branch'); if (br) br.textContent = st.branch || '—';
+      syncBranchSelect(st.branch);
+      refreshOpenDiff();
     }
   } catch {}
 }
@@ -10969,6 +10977,16 @@ async function openGitDiff(path) {
   const monaco = await loadMonacoOnce();
   // Tear down any prior diff editor + models.
   gitDisposeDiff(monaco);
+  S.session.activeFile = null; // keep renderActiveFile from clobbering the view
+  // Binary or oversized files have no inline diff — show a sentinel, but still
+  // remember the path so a live refresh can recover if it shrinks/changes.
+  if (d.binary || d.too_large) {
+    v.innerHTML = '<div class="empty small">' +
+      (d.binary ? 'Binary file — no inline diff.' : 'File too large to diff inline (over 512 KB).') +
+      '</div>';
+    S.session.gitDiff = { path, sentinel: true };
+    return;
+  }
   v.innerHTML = '';
   const host = el('div', 'monaco-host'); v.appendChild(host);
   const de = monaco.editor.createDiffEditor(host, {
@@ -10980,14 +10998,44 @@ async function openGitDiff(path) {
   const orig = monaco.editor.createModel(d.old || '', undefined, monaco.Uri.parse('axo://diff-old/' + stamp));
   const modd = monaco.editor.createModel(d.new || '', undefined, monaco.Uri.parse('axo://diff-new/' + stamp));
   de.setModel({ original: orig, modified: modd });
-  S.session.gitDiff = { editor: de, models: [orig, modd] };
-  S.session.activeFile = null; // keep renderActiveFile from clobbering the view
+  S.session.gitDiff = { editor: de, models: [orig, modd], path };
+}
+
+// Keep an already-open diff in sync as the agent keeps editing. Called from
+// refreshGitPane after the status list updates. Updates the Monaco models in
+// place (no scroll jump) when possible; clears the view once the file is no
+// longer changed; rebuilds across binary/oversize ↔ renderable transitions.
+async function refreshOpenDiff() {
+  const gd = S.session.gitDiff;
+  if (!gd || !gd.path || !S.session.id) return;
+  const path = gd.path;
+  const changed = (S.session.gitStatus?.files || []).some(f => f.path === path);
+  if (!changed) {
+    const monaco = await loadMonacoOnce();
+    gitDisposeDiff(monaco);
+    const v = $('#file-viewer');
+    if (v) v.innerHTML = '<div class="empty small">No changes — committed or reverted.</div>';
+    return;
+  }
+  let d;
+  try {
+    d = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/diff?path=' + encodeURIComponent(path)).then(r => r.json());
+  } catch { return; }
+  if (!d || d.error) return;
+  // Renderable and the editor is live → update in place (preserves scroll).
+  if (!d.binary && !d.too_large && gd.editor && gd.models) {
+    if (gd.models[0].getValue() !== (d.old || '')) gd.models[0].setValue(d.old || '');
+    if (gd.models[1].getValue() !== (d.new || '')) gd.models[1].setValue(d.new || '');
+    return;
+  }
+  // Sentinel ↔ renderable transition (or first render of a sentinel) → rebuild.
+  await openGitDiff(path);
 }
 
 function gitDisposeDiff(monaco) {
   const gd = S.session.gitDiff;
   if (!gd) return;
-  try { gd.editor.dispose(); } catch {}
+  try { gd.editor && gd.editor.dispose(); } catch {}
   (gd.models || []).forEach(m => { try { m.dispose(); } catch {} });
   S.session.gitDiff = null;
 }
@@ -11026,6 +11074,68 @@ async function gitDiscard(path) {
     loadFileTree('', $('#file-tree'));
     reloadOpenFileIfMatch(path);
   } catch (e) { toast('Discard failed', String(e), 'err'); }
+}
+
+// Populate the branch dropdown from /git/branches. Called on git-tab open and
+// after a commit/checkout (when the branch set can change). The lighter
+// per-edit refresh only re-syncs the *selected* branch via syncBranchSelect.
+async function loadGitBranches() {
+  const sel = $('#git-branch'); if (!sel || !S.session.id) return;
+  try {
+    const b = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/branches').then(r => r.json());
+    if (!b || b.error || !Array.isArray(b.branches)) return;
+    S.session.gitBranches = b.branches;
+    sel.innerHTML = '';
+    b.branches.forEach(name => {
+      const o = document.createElement('option');
+      o.value = name; o.textContent = name;
+      sel.appendChild(o);
+    });
+    syncBranchSelect(b.current);
+  } catch {}
+}
+
+// Reflect the current branch in the dropdown without a branches round-trip
+// (status already carries it). Inserts the branch as an option if the list is
+// stale — e.g. the agent created/switched a branch since the last full load.
+function syncBranchSelect(branch) {
+  const sel = $('#git-branch'); if (!sel || !branch) return;
+  if (![...sel.options].some(o => o.value === branch)) {
+    const o = document.createElement('option');
+    o.value = branch; o.textContent = branch;
+    sel.appendChild(o);
+  }
+  sel.value = branch;
+}
+
+async function gitCheckout(ref) {
+  if (!S.session.id || !ref) return;
+  const sel = $('#git-branch');
+  if (sel) sel.disabled = true;
+  try {
+    const st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/checkout', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ref }),
+    }).then(r => r.json());
+    if (st && st.error) {
+      // Most often: uncommitted changes would be overwritten. Surface git's
+      // message and snap the dropdown back to the branch we're actually on.
+      toast('Checkout blocked', String(st.error), 'err');
+      syncBranchSelect(S.session.gitStatus?.branch);
+      return;
+    }
+    S.session.gitStatus = st; renderGitFiles(st);
+    const badge = $('#git-badge'); if (badge) { const n = (st.files||[]).length; badge.textContent = String(n); badge.classList.toggle('hide', n === 0); }
+    syncBranchSelect(st.branch);
+    refreshOpenDiff();
+    loadFileTree('', $('#file-tree'));
+    toast('Switched branch', ref, 'ok');
+  } catch (e) {
+    toast('Checkout failed', String(e), 'err');
+    syncBranchSelect(S.session.gitStatus?.branch);
+  } finally {
+    if (sel) sel.disabled = false;
+  }
 }
 
 function sendSessionMessage() {
