@@ -7,7 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Unified, polished conversation UI across the Chat tab and the Sessions
+  Activity pane.** The two surfaces now share one rendering layer:
+  - Messages render with **markdown-it** (tables, nested/task lists,
+    blockquotes, highlighted code) instead of the old hand-rolled renderer.
+  - One **tool-call card** with a verb header ("▸ Bash: …", "◆ Read …",
+    "◍ Search the web: …"), a collapsible result, and web-search citations —
+    identical in both tabs.
+  - A shared **"thinking…" indicator** from the moment a turn is sent until
+    the first token, tool call, or reasoning chunk.
+  - Agent **reasoning** now renders in the Sessions pane (a collapsible block,
+    matching Chat), and session messages use the same prose styling as Chat.
+  - **Per-message actions on Chat turns** — Copy, Rewind (user turns), and
+    Retry + Fork (assistant turns) — all branch via `POST /api/chat/{id}/fork`,
+    leaving the parent chat intact.
+
 ### Fixed
+- **A lingering session sandbox container no longer breaks new sessions.** A
+  container left running by a prior daemon run (a crash, a kill, or a fresh
+  data dir) keeps holding its published host ports, so the next session that
+  publishes overlapping ports fails to start its rootless port-forwarding proxy
+  ("proxy already running") and hard-fails — e.g. the auto-started terminal
+  errors on open. The daemon now reaps orphaned `axo-ses-*` containers on
+  startup, and treats "proxy already running" as a recoverable port conflict
+  (the session opens without that port's forwarding rather than failing).
 - **Multi-turn tool-calling round-trip now works on every provider.** Agents
   could be handed tools, but the conversation could not continue after a tool
   ran: the agent loop never recorded the assistant's tool-call turn before the
