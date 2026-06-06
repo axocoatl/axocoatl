@@ -381,6 +381,21 @@ impl AxocoatlDaemon {
             Arc::new(tokio::sync::Mutex::new(store))
         };
 
+        // Reap orphaned session sandbox containers from prior runs before any
+        // session opens. A leftover container holds its published host ports
+        // and makes new sessions fail to start their port proxy ("proxy
+        // already running"). Best-effort — a no-op when podman isn't running.
+        {
+            let known: Vec<String> = session_store
+                .lock()
+                .await
+                .list()
+                .iter()
+                .map(|s| s.id.clone())
+                .collect();
+            SessionSandbox::reap_orphans(&known).await;
+        }
+
         // Lightweight chats — load any persisted chats from disk.
         // Distinct from sessions: no directory, no sandbox, just agent + history.
         let chat_store = {
