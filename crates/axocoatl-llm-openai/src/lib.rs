@@ -205,7 +205,9 @@ impl LlmProvider for OpenAiProvider {
                                 };
                             }
 
-                            // Tool call deltas
+                            // Tool call deltas. The `id` arrives only on the
+                            // first chunk; later argument fragments are keyed by
+                            // `index`, which we forward for correct accumulation.
                             if let Some(ref tool_calls) = choice.delta.tool_calls {
                                 for tc in tool_calls {
                                     let id = tc.id.clone().unwrap_or_default();
@@ -214,6 +216,7 @@ impl LlmProvider for OpenAiProvider {
                                         .and_then(|f| f.arguments.clone())
                                         .unwrap_or_default();
                                     yield StreamEvent::ToolCallDelta {
+                                        index: Some(tc.index as usize),
                                         id,
                                         name,
                                         args_delta,

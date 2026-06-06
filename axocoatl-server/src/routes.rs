@@ -1865,6 +1865,9 @@ pub async fn fork_chat(
                     .map(|d| d.as_secs())
                     .unwrap_or(0),
                 token_count: 0,
+                name: None,
+                tool_calls: Vec::new(),
+                tool_call_id: None,
             });
     daemon
         .fork_chat(&id, body.truncate_at, replacement)
@@ -2891,6 +2894,9 @@ async fn dispatch_ws_command(
                                 .map(|d| d.as_secs())
                                 .unwrap_or(0),
                             token_count: 0,
+                            name: None,
+                            tool_calls: Vec::new(),
+                            tool_call_id: None,
                         },
                     );
                 }
@@ -2976,6 +2982,8 @@ async fn dispatch_ws_command(
                         role: m.role.clone(),
                         content: axocoatl_core::MessageContent::Text(m.content.clone()),
                         name: None,
+                        tool_calls: Vec::new(),
+                        tool_call_id: None,
                     })
                     .collect();
                 // Resolve FileStore entries to AgentAttachments. `path` points
@@ -3045,6 +3053,9 @@ async fn dispatch_ws_command(
                                     .map(|d| d.as_secs())
                                     .unwrap_or(0),
                                 token_count: o.token_usage.output_tokens,
+                                name: None,
+                                tool_calls: Vec::new(),
+                                tool_call_id: None,
                             },
                         );
                         let _ = out.send(
@@ -3083,6 +3094,9 @@ async fn dispatch_ws_command(
                                         .map(|d| d.as_secs())
                                         .unwrap_or(0),
                                     token_count: 0,
+                                    name: None,
+                                    tool_calls: Vec::new(),
+                                    tool_call_id: None,
                                 },
                             );
                         }

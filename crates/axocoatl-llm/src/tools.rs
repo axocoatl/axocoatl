@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+/// The canonical tool-call request shape. Defined in `axocoatl-core` (because
+/// `ChatMessage` carries it) and re-exported here so `axocoatl_llm::ToolCall`
+/// keeps resolving for every existing call site.
+pub use axocoatl_core::ToolCall;
+
 /// How a tool may be executed concurrently with other tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ConcurrencyPolicy {
@@ -22,15 +27,6 @@ pub struct ToolDefinition {
     /// Concurrency policy for parallel tool execution.
     #[serde(default)]
     pub concurrency: ConcurrencyPolicy,
-}
-
-/// A tool call requested by the LLM.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCall {
-    pub id: String,
-    pub name: String,
-    /// Parsed arguments (already deserialized from the LLM's JSON string).
-    pub arguments: serde_json::Value,
 }
 
 #[cfg(test)]
