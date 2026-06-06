@@ -86,6 +86,18 @@ pub fn build_router(state: AppState, auth: auth::AuthConfig, cors_origins: Vec<S
             "/api/sessions/{id}/git/checkout",
             post(routes::git_checkout),
         )
+        .route(
+            "/api/sessions/{id}/variants",
+            post(routes::session_variants),
+        )
+        .route(
+            "/api/sessions/{id}/variants/adopt",
+            post(routes::session_variant_adopt),
+        )
+        .route(
+            "/api/sessions/{id}/variants/discard",
+            post(routes::session_variants_discard),
+        )
         .route("/api/sessions/{id}/tree", get(routes::session_tree))
         .route(
             "/api/sessions/{id}/file",

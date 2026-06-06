@@ -1626,7 +1626,9 @@ impl AxocoatlDaemon {
             let branch = format!("axo/variant-{i}");
             let wt = format!("{dir}/.axo-variants/{i}");
             // Drop a stale branch of the same name so the worktree can take it.
-            let _ = self.session_git(session_id, &["branch", "-D", &branch]).await;
+            let _ = self
+                .session_git(session_id, &["branch", "-D", &branch])
+                .await;
             let r = self
                 .session_git(
                     session_id,
@@ -1681,7 +1683,12 @@ impl AxocoatlDaemon {
         if let Ok(br) = self
             .session_git(
                 session_id,
-                &["branch", "--list", "axo/variant-*", "--format=%(refname:short)"],
+                &[
+                    "branch",
+                    "--list",
+                    "axo/variant-*",
+                    "--format=%(refname:short)",
+                ],
             )
             .await
         {
@@ -1696,6 +1703,171 @@ impl AxocoatlDaemon {
             }
         }
         Ok(())
+    }
+
+    /// The single agent each variant runs. Variants explore one agent's work
+    /// N ways in parallel; for multi-agent sessions we take the entry agent.
+    fn primary_session_agent(&self, session: &Session) -> Result<String, DaemonError> {
+        match &session.mode {
+            SessionMode::SingleAgent { agent_id } => Ok(agent_id.clone()),
+            SessionMode::Custom { agents } => agents
+                .first()
+                .cloned()
+                .ok_or_else(|| DaemonError::Session("session has no agents".into())),
+            SessionMode::Lattice { workflow_id } => {
+                let wf = match workflow_id {
+                    Some(wid) => self.config.workflows.iter().find(|w| &w.id == wid),
+                    None => self.config.workflows.first(),
+                };
+                wf.and_then(|w| w.agents.first().cloned())
+                    .ok_or_else(|| DaemonError::Session("no workflow agent for variants".into()))
+            }
+        }
+    }
+
+    /// Spawn (or reuse) a variant agent actor: jailed to its worktree via an
+    /// attached sandbox, with a variant-discriminated scoped id
+    /// `{session}#{i}:{agent}` so its actor + checkpoint don't collide with the
+    /// primary session or the other variants.
+    async fn variant_actor(
+        &self,
+        session: &Session,
+        agent_id: &str,
+        variant: &crate::git::Variant,
+        container: &str,
+    ) -> Result<ractor::ActorRef<axocoatl_actor::AgentMessage>, DaemonError> {
+        let scoped = format!("{}#{}:{}", session.id, variant.index, agent_id);
+        let sid = AgentId::new(&scoped);
+        if let Some(actor) = self.agent_registry.get(&sid).await {
+            return Ok(actor);
+        }
+        let agent_yaml = self
+            .config
+            .agents
+            .iter()
+            .find(|a| a.id == agent_id)
+            .ok_or_else(|| {
+                DaemonError::Session(format!("agent '{agent_id}' is not in the config"))
+            })?
+            .clone();
+        // Reuse the session's container but root the tools at the worktree.
+        let sandbox = Arc::new(SessionSandbox::attach(
+            container,
+            std::path::Path::new(&variant.worktree),
+        ));
+        let executor = self.build_session_executor(session, sandbox);
+        // Point context + project instructions at the worktree.
+        let mut vsession = session.clone();
+        vsession.working_dir = std::path::PathBuf::from(&variant.worktree);
+        self.spawn_session_agent(&vsession, &agent_yaml, &scoped, Arc::new(executor))
+            .await
+    }
+
+    /// Run `n` variants of a session's agent in parallel — one per git
+    /// worktree, each streamed to the bus under its own run key
+    /// `{session}#{i}` so the cockpit can show N live lanes. Returns the
+    /// variant list immediately; the runs stream asynchronously.
+    pub async fn execute_session_variants(
+        &self,
+        session_id: &str,
+        input: &str,
+        n: usize,
+        model_override: Option<String>,
+    ) -> Result<Vec<crate::git::Variant>, DaemonError> {
+        if !(1..=8).contains(&n) {
+            return Err(DaemonError::Session(
+                "variant count must be between 1 and 8".into(),
+            ));
+        }
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let agent_id = self.primary_session_agent(&session)?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let container = sandbox.container().to_string();
+        let variants = self.create_variant_worktrees(session_id, n).await?;
+
+        for v in &variants {
+            let run_id = format!("{}#{}", session.id, v.index);
+            let actor = self
+                .variant_actor(&session, &agent_id, v, &container)
+                .await?;
+            let bus = self.stream_bus.clone();
+            let rid = run_id.clone();
+            let aid = agent_id.clone();
+            let inp = input.to_string();
+            let mo = model_override.clone();
+            tokio::spawn(async move {
+                let _ = bus.send(crate::stream::StreamFrame::SessionStart {
+                    session: rid.clone(),
+                });
+                match Self::stream_agent_run(bus.clone(), actor, rid.clone(), aid, inp, mo).await {
+                    Ok(out) => {
+                        let _ = bus.send(crate::stream::StreamFrame::SessionDone {
+                            session: rid,
+                            input_tokens: out.token_usage.input_tokens as u64,
+                            output_tokens: out.token_usage.output_tokens as u64,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = bus.send(crate::stream::StreamFrame::SessionError {
+                            session: rid,
+                            error: e.to_string(),
+                        });
+                    }
+                }
+            });
+        }
+        let _ = self.session_store.lock().await.touch(session_id);
+        Ok(variants)
+    }
+
+    /// Adopt a variant: commit its worktree changes, merge its branch into the
+    /// session's primary checkout, then tear down every variant. Returns the
+    /// fresh primary status.
+    pub async fn adopt_variant(
+        &self,
+        session_id: &str,
+        branch: &str,
+    ) -> Result<crate::git::GitStatus, DaemonError> {
+        self.ensure_session_git(session_id).await?;
+        // Only ever adopt one of our own variant branches.
+        let idx = branch
+            .strip_prefix("axo/variant-")
+            .and_then(|s| s.parse::<usize>().ok())
+            .ok_or_else(|| DaemonError::Session(format!("not a variant branch: {branch}")))?;
+        let dir = self.session_dir(session_id).await?;
+        let wt = format!("{dir}/.axo-variants/{idx}");
+        // Capture the variant's working-tree edits as a commit on its branch
+        // (the agent may have edited without committing).
+        let _ = self.session_git_at(session_id, &wt, &["add", "-A"]).await;
+        let _ = self
+            .session_git_at(
+                session_id,
+                &wt,
+                &[
+                    "commit",
+                    "-q",
+                    "-m",
+                    &format!("axocoatl: adopt {branch}"),
+                    "--allow-empty",
+                ],
+            )
+            .await;
+        // Merge the variant branch into the primary checkout.
+        let r = self
+            .session_git(session_id, &["merge", "--no-edit", branch])
+            .await?;
+        if !r.ok() {
+            return Err(DaemonError::Session(format!(
+                "adopt failed to merge {branch}: {}",
+                r.stderr.trim()
+            )));
+        }
+        // Tear down all variants (worktrees + branches).
+        self.remove_variant_worktrees(session_id).await.ok();
+        self.git_status(session_id).await
     }
 
     /// Execute an instruction inside a session, streaming the agent's output
@@ -1883,13 +2055,35 @@ impl AxocoatlDaemon {
         input: &str,
         model_override: Option<String>,
     ) -> Result<axocoatl_core::AgentOutput, DaemonError> {
-        let bus = self.stream_bus.clone();
+        Self::stream_agent_run(
+            self.stream_bus.clone(),
+            actor.clone(),
+            run_id.to_string(),
+            agent_label.to_string(),
+            input.to_string(),
+            model_override,
+        )
+        .await
+    }
+
+    /// Drive one agent run, forwarding its stream chunks to the bus as frames
+    /// keyed by `run_id` and labelled `agent_label`. Standalone (no `&self`)
+    /// so it can run inside a spawned task — e.g. a variant lane keyed
+    /// `{session}#{i}`.
+    async fn stream_agent_run(
+        bus: tokio::sync::broadcast::Sender<crate::stream::StreamFrame>,
+        actor: ractor::ActorRef<axocoatl_actor::AgentMessage>,
+        run_id: String,
+        agent_label: String,
+        input: String,
+        model_override: Option<String>,
+    ) -> Result<axocoatl_core::AgentOutput, DaemonError> {
         let (sink_tx, mut sink_rx) =
             tokio::sync::mpsc::unbounded_channel::<axocoatl_actor::AgentStreamChunk>();
         let fwd = {
             let bus = bus.clone();
-            let rid = run_id.to_string();
-            let aid = agent_label.to_string();
+            let rid = run_id.clone();
+            let aid = agent_label.clone();
             tokio::spawn(async move {
                 use crate::stream::StreamFrame as F;
                 use axocoatl_actor::AgentStreamChunk as C;
@@ -1940,7 +2134,7 @@ impl AxocoatlDaemon {
             })
         };
         let out = axocoatl_actor::execute_agent_streaming(
-            actor,
+            &actor,
             axocoatl_core::AgentInput::text(input).with_model_override(model_override),
             sink_tx,
         )
@@ -2019,9 +2213,22 @@ impl AxocoatlDaemon {
             })?
             .clone();
         let sandbox = self.ensure_sandbox(session).await?;
+        let executor = self.build_session_executor(session, sandbox);
+        self.spawn_session_agent(session, &agent_yaml, &scoped, Arc::new(executor))
+            .await
+    }
+
+    /// Build the per-session tool executor: file/shell/terminal tools rooted
+    /// at `sandbox`, the session's allowlisted skills (callable as tools), and
+    /// web search when configured. Shared by the primary session actor and
+    /// per-variant actors (which pass a worktree-rooted attached sandbox).
+    fn build_session_executor(
+        &self,
+        session: &Session,
+        sandbox: Arc<SessionSandbox>,
+    ) -> ToolExecutor {
         let mut executor = ToolExecutor::new();
         axocoatl_tools::register_session_tools(&mut executor, sandbox);
-
         // Skills on the session's allowlist become callable tools — calling
         // one fires it into the lattice.
         for skill_id in &session.enabled_skills {
@@ -2031,7 +2238,6 @@ impl AxocoatlDaemon {
                 executor.register_builtin(tool.tool_name(), Arc::new(tool));
             }
         }
-
         // Web search — offered when a provider is configured.
         if let Some(ws) = &self.config.web_search {
             let tool = axocoatl_tools::WebSearchTool::from_config(
@@ -2040,9 +2246,7 @@ impl AxocoatlDaemon {
             );
             executor.register_builtin("web_search", Arc::new(tool));
         }
-
-        self.spawn_session_agent(session, &agent_yaml, &scoped, Arc::new(executor))
-            .await
+        executor
     }
 
     /// Spawn a session-scoped agent actor named `{session}:{agent}`, bound to
