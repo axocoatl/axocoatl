@@ -6428,26 +6428,6 @@ function showAgentDetail(a) {
   refreshLive();
 }
 
-// ╔══════════════════════════════ TOOL CHIP (shared) ══════════════════════════════╗
-// Generic renderer for an inline "agent called tool X with args Y → result Z"
-// expandable chip. Used by Sessions, Automations, and (incoming) Chat.
-function renderToolChip(tc) {
-  const c = el('div', 'tool-chip');
-  const head = el('div', 'tc-head');
-  head.appendChild(el('span', 'tc-name', tc.name));
-  const args = JSON.stringify(tc.arguments || {});
-  head.appendChild(el('span', 'tc-args', args.length > 50 ? args.slice(0, 50) + '…' : args));
-  const tog = el('span', 'tc-toggle', '⮞ result');
-  head.appendChild(tog);
-  c.appendChild(head);
-  if (tc.result != null) {
-    const r = el('div', 'tc-result');
-    r.textContent = typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2);
-    c.appendChild(r);
-  }
-  tog.addEventListener('click', () => c.classList.toggle('open'));
-  return c;
-}
 
 // ╔══════════════════════════════ CHAT ══════════════════════════════╗
 // Lightweight conversations — paired with the /api/chat backend (see
@@ -6915,10 +6895,58 @@ function setThinking(host, on) {
   }
 }
 
+// One tool-call card, shared by Chat and the Sessions Activity pane: a
+// verb+icon header (toolVerb) over a collapsible result body
+// (renderToolResult), plus a web-search citation list. Replaces the old
+// chat `.tool-chip` so tool calls look identical in both tabs.
+function buildToolCard(d) {
+  const [ico, verb] = toolVerb(d.name, d.arguments);
+  const card = el('div', 'toolcard running');
+  card.dataset.callId = d.call_id || '';
+  const head = el('div', 'toolcard-head');
+  head.appendChild(el('span', 'toolcard-ico', ico));
+  head.appendChild(el('span', 'toolcard-verb', verb));
+  const body = el('div', 'toolcard-body hide');
+  head.addEventListener('click', () => body.classList.toggle('hide'));
+  card.appendChild(head);
+  card.appendChild(body);
+  return { card, body };
+}
+function fillToolCard(card, d) {
+  const body = card.querySelector('.toolcard-body');
+  card.classList.remove('running');
+  card.classList.add(d.is_error ? 'err' : 'ok');
+  if (body) {
+    body.innerHTML = renderToolResult(d.name, d.result);
+    if (d.is_error) body.classList.remove('hide');
+  }
+  // web_search → a clickable [1]/[2] bibliography under the card (was
+  // chat-only; now shown in both tabs).
+  if (d.name === 'web_search' && d.result && typeof d.result === 'object') {
+    const sources = extractWebSearchUrls(d.result);
+    if (sources.length) {
+      const cite = el('div', 'chat-citations');
+      cite.appendChild(el('div', 'chat-citations-head', 'Sources'));
+      sources.forEach((src, i) => {
+        const row = el('div', 'chat-citation');
+        row.appendChild(el('span', 'chat-citation-num', '[' + (i + 1) + ']'));
+        const a = document.createElement('a');
+        a.href = src.url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = src.title || src.url;
+        row.appendChild(a);
+        cite.appendChild(row);
+      });
+      card.appendChild(cite);
+    }
+  }
+}
+
 // ── Streaming primitives ────────────────────────────────────────────
 // Called from the chat-* WS frame handlers. Each turn opens one assistant
 // bubble that fills with tokens; reasoning rolls into a collapsible <details>;
-// tool calls render as inline cards (reuse renderToolChip).
+// tool calls render as inline cards (shared buildToolCard, same as Sessions).
 
 function chatBeginUserTurn(_d) {
   // The user message is rendered eagerly by sendChat() — chat-start signals
@@ -6969,43 +6997,15 @@ function chatAppendReasoning(delta) {
 function chatAppendToolStart(d) {
   const s = S.chat.streaming; if (!s) return;
   setThinking($('#chat-msgs'), false);
-  const chip = renderToolChip({ name: d.name, arguments: d.arguments, result: null });
-  chip.dataset.callId = d.call_id;
-  s.wrap.insertBefore(chip, s.bubble);
+  const { card } = buildToolCard(d);
+  // Tool cards render inline, just above the answer bubble for this turn.
+  s.wrap.insertBefore(card, s.bubble);
 }
 
 function chatAppendToolResult(d) {
   const s = S.chat.streaming; if (!s) return;
-  // Find the start chip for this call_id and fill in the result.
-  const chip = s.wrap.querySelector(`[data-call-id="${d.call_id}"]`);
-  if (chip) {
-    const r = el('div', 'tc-result');
-    r.textContent = typeof d.result === 'string' ? d.result : JSON.stringify(d.result, null, 2);
-    chip.appendChild(r);
-    chip.classList.toggle('error', !!d.is_error);
-    // Citations: for web_search, surface the URL list under the chip as a
-    // tidy bibliography. The LLM's reply will naturally reference [1], [2]
-    // etc. — this gives those numbers a clickable home.
-    if (d.name === 'web_search' && d.result && typeof d.result === 'object') {
-      const sources = extractWebSearchUrls(d.result);
-      if (sources.length) {
-        const cite = el('div', 'chat-citations');
-        cite.appendChild(el('div', 'chat-citations-head', 'Sources'));
-        sources.forEach((src, i) => {
-          const row = el('div', 'chat-citation');
-          row.appendChild(el('span', 'chat-citation-num', '[' + (i + 1) + ']'));
-          const a = document.createElement('a');
-          a.href = src.url;
-          a.target = '_blank';
-          a.rel = 'noopener noreferrer';
-          a.textContent = src.title || src.url;
-          row.appendChild(a);
-          cite.appendChild(row);
-        });
-        chip.appendChild(cite);
-      }
-    }
-  }
+  const card = s.wrap.querySelector(`.toolcard[data-call-id="${d.call_id}"]`);
+  if (card) fillToolCard(card, d);
 }
 
 // web_search result shapes vary by backend (Tavily, etc). Try the common
@@ -10580,24 +10580,14 @@ function renderToolResult(name, result) {
 function sessionToolStart(d) {
   setThinking($('#session-msgs'), false);
   S.session.streamEl = null;
-  const [ico, verb] = toolVerb(d.name, d.arguments);
-  const card = el('div', 'toolcard running');
-  const head = el('div', 'toolcard-head');
-  head.appendChild(el('span', 'toolcard-ico', ico));
-  head.appendChild(el('span', 'toolcard-verb', verb));
-  const body = el('div', 'toolcard-body hide');
-  head.addEventListener('click', () => body.classList.toggle('hide'));
-  card.appendChild(head); card.appendChild(body);
+  const { card, body } = buildToolCard(d);
   S.session.toolCards[d.call_id] = { card, body };
   appendSessionEl(card);
 }
 function sessionToolResult(d) {
   const tc = S.session.toolCards[d.call_id];
   if (!tc) return;
-  tc.card.classList.remove('running');
-  tc.card.classList.add(d.is_error ? 'err' : 'ok');
-  tc.body.innerHTML = renderToolResult(d.name, d.result);
-  if (d.is_error) tc.body.classList.remove('hide');
+  fillToolCard(tc.card, d);
   // A write changed the project — refresh the file tree and re-render any
   // open file that just changed (which makes the Preview iframe auto-reload).
   if (!d.is_error && (d.name === 'write_file' || d.name === 'edit_file' || d.name === 'bash')) {
