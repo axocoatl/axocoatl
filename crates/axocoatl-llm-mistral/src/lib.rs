@@ -5,13 +5,137 @@ use std::pin::Pin;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use tokio_stream::Stream;
 
-use axocoatl_core::{MessageContent, MessageRole, TokenUsageStats};
+use axocoatl_core::{ChatMessage, MessageContent, MessageRole, TokenUsageStats};
 use axocoatl_llm::{
     ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError,
-    StreamEvent,
+    StreamEvent, ToolCall, ToolDefinition,
 };
 
 const MISTRAL_API_URL: &str = "https://api.mistral.ai/v1/chat/completions";
+
+/// Convert chat messages into Mistral's OpenAI-compatible `messages` array.
+/// Carries assistant `tool_calls` and each tool result's `name` + `tool_call_id`
+/// so a multi-turn tool round-trip replays as a well-formed conversation.
+/// (Mistral wants both `name` and `tool_call_id` on tool-result messages.)
+fn mistral_messages(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .map(|m| {
+            let role = match m.role {
+                MessageRole::System => "system",
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => "tool",
+            };
+
+            // User multimodal: emit Mistral's OpenAI-compatible content array
+            // (works with pixtral; non-vision models reject images, as expected).
+            if matches!(m.role, MessageRole::User) {
+                if let MessageContent::Parts(parts) = &m.content {
+                    let arr: Vec<serde_json::Value> = parts
+                        .iter()
+                        .map(|p| match p {
+                            axocoatl_core::ContentPart::Text(s) => {
+                                serde_json::json!({"type": "text", "text": s})
+                            }
+                            axocoatl_core::ContentPart::Image { url, .. } => {
+                                serde_json::json!({"type": "image_url", "image_url": url})
+                            }
+                        })
+                        .collect();
+                    return serde_json::json!({"role": role, "content": arr});
+                }
+            }
+
+            let content = match &m.content {
+                MessageContent::Text(s) => s.clone(),
+                MessageContent::Parts(parts) => parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        axocoatl_core::ContentPart::Text(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            };
+            let mut msg = serde_json::json!({"role": role, "content": content});
+
+            if matches!(m.role, MessageRole::Assistant) && !m.tool_calls.is_empty() {
+                msg["tool_calls"] = serde_json::Value::Array(
+                    m.tool_calls
+                        .iter()
+                        .map(|tc| {
+                            serde_json::json!({
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": serde_json::to_string(&tc.arguments)
+                                        .unwrap_or_else(|_| "{}".to_string()),
+                                }
+                            })
+                        })
+                        .collect(),
+                );
+            }
+            if matches!(m.role, MessageRole::Tool) {
+                if let Some(id) = m.tool_call_id.as_ref().or(m.name.as_ref()) {
+                    msg["tool_call_id"] = serde_json::json!(id);
+                }
+                if let Some(name) = &m.name {
+                    msg["name"] = serde_json::json!(name);
+                }
+            }
+            msg
+        })
+        .collect()
+}
+
+/// Convert tool definitions into Mistral's OpenAI-compatible `tools` array.
+fn mistral_tools(tools: &[ToolDefinition]) -> serde_json::Value {
+    serde_json::Value::Array(
+        tools
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    }
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Parse the non-streaming `message.tool_calls` array into [`ToolCall`]s.
+fn parse_tool_calls(message: &serde_json::Value) -> Vec<ToolCall> {
+    message["tool_calls"]
+        .as_array()
+        .map(|calls| {
+            calls
+                .iter()
+                .filter_map(|tc| {
+                    let id = tc["id"].as_str().unwrap_or("").to_string();
+                    let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+                    let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
+                    if name.is_empty() {
+                        None
+                    } else {
+                        Some(ToolCall {
+                            id,
+                            name,
+                            arguments: serde_json::from_str(args_str)
+                                .unwrap_or(serde_json::Value::Null),
+                        })
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// Parse one Mistral streaming chunk (OpenAI-compatible) into stream events.
 /// Pure + synchronous so it is unit-tested without the network.
@@ -23,6 +147,26 @@ fn parse_mistral_chunk(data: &serde_json::Value) -> Vec<StreamEvent> {
         if !text.is_empty() {
             events.push(StreamEvent::TextDelta {
                 delta: text.to_string(),
+            });
+        }
+    }
+
+    // Tool-call deltas. Mistral keys parallel calls by `index` and sends the id
+    // only on the first fragment, matching the OpenAI streaming contract.
+    if let Some(tool_calls) = choice["delta"]["tool_calls"].as_array() {
+        for tc in tool_calls {
+            let index = tc["index"].as_u64().map(|i| i as usize);
+            let id = tc["id"].as_str().unwrap_or("").to_string();
+            let name = tc["function"]["name"].as_str().map(String::from);
+            let args_delta = tc["function"]["arguments"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            events.push(StreamEvent::ToolCallDelta {
+                index,
+                id,
+                name,
+                args_delta,
             });
         }
     }
@@ -70,63 +214,21 @@ impl MistralProvider {
 
     /// Build the OpenAI-compatible request body shared by `chat` and `chat_stream`.
     fn build_request_body(&self, request: &ChatRequest) -> serde_json::Value {
-        let messages: Vec<serde_json::Value> = request
-            .messages
-            .iter()
-            .map(|m| {
-                let role = match m.role {
-                    MessageRole::System => "system",
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                    MessageRole::Tool => "tool",
-                };
-                // For User messages with multimodal parts, emit Mistral's
-                // OpenAI-compatible content array (works with pixtral models;
-                // non-vision models will reject the image — that's expected).
-                if matches!(m.role, MessageRole::User) {
-                    if let MessageContent::Parts(parts) = &m.content {
-                        let arr: Vec<serde_json::Value> = parts
-                            .iter()
-                            .map(|p| match p {
-                                axocoatl_core::ContentPart::Text(s) => {
-                                    serde_json::json!({"type": "text", "text": s})
-                                }
-                                axocoatl_core::ContentPart::Image { url, .. } => {
-                                    serde_json::json!({
-                                        "type": "image_url",
-                                        "image_url": url,
-                                    })
-                                }
-                            })
-                            .collect();
-                        return serde_json::json!({"role": role, "content": arr});
-                    }
-                }
-                let content = match &m.content {
-                    MessageContent::Text(s) => s.clone(),
-                    MessageContent::Parts(parts) => parts
-                        .iter()
-                        .filter_map(|p| match p {
-                            axocoatl_core::ContentPart::Text(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                };
-                serde_json::json!({"role": role, "content": content})
-            })
-            .collect();
-
         let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
         let mut body = serde_json::json!({
             "model": model_for_call,
-            "messages": messages,
+            "messages": mistral_messages(&request.messages),
         });
         if let Some(max) = request.max_tokens {
             body["max_tokens"] = serde_json::json!(max);
         }
         if let Some(temp) = request.temperature {
             body["temperature"] = serde_json::json!(temp);
+        }
+        // Without attaching tools the model never receives them and can't emit
+        // a tool call.
+        if !request.tools.is_empty() {
+            body["tools"] = mistral_tools(&request.tools);
         }
         body
     }
@@ -143,9 +245,7 @@ impl LlmProvider for MistralProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             streaming: true,
-            // Tool-calling is not yet wired for Mistral (no tools sent, no
-            // tool_calls parsed). Tracked as a follow-up to #3.
-            tool_calling: false,
+            tool_calling: true,
             structured_output: true,
             vision: self.model.contains("pixtral"),
             reasoning: false,
@@ -196,8 +296,7 @@ impl LlmProvider for MistralProvider {
                 .as_str()
                 .unwrap_or("")
                 .to_string(),
-            // Tool-call parsing for Mistral is a follow-up (see capabilities()).
-            tool_calls: vec![],
+            tool_calls: parse_tool_calls(&resp["choices"][0]["message"]),
             finish_reason: match resp["choices"][0]["finish_reason"].as_str() {
                 Some("stop") => FinishReason::Stop,
                 Some("length") => FinishReason::MaxTokens,
@@ -280,8 +379,76 @@ mod tests {
         let caps = p.capabilities();
         assert!(caps.streaming);
         assert!(!caps.vision);
-        // Tool-calling is not implemented for Mistral yet.
-        assert!(!caps.tool_calling);
+        assert!(caps.tool_calling);
+    }
+
+    #[test]
+    fn build_request_body_includes_tools() {
+        let p = MistralProvider::new("key", "mistral-large-latest");
+        let mut request = ChatRequest::simple("weather in NYC?");
+        request.tools = vec![ToolDefinition {
+            name: "get_weather".to_string(),
+            description: "Get current weather".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": { "location": { "type": "string" } },
+                "required": ["location"]
+            }),
+            concurrency: Default::default(),
+        }];
+        let body = p.build_request_body(&request);
+        assert_eq!(body["tools"][0]["type"], "function");
+        assert_eq!(body["tools"][0]["function"]["name"], "get_weather");
+    }
+
+    #[test]
+    fn messages_encode_assistant_tool_calls_and_tool_result() {
+        let msgs = vec![
+            ChatMessage::user("weather?"),
+            ChatMessage::assistant_with_tool_calls(
+                "",
+                vec![ToolCall {
+                    id: "D681PevKs".to_string(),
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({ "location": "NYC" }),
+                }],
+            ),
+            ChatMessage::tool_result("{\"temp\":72}", "get_weather", "D681PevKs"),
+        ];
+        let out = mistral_messages(&msgs);
+
+        assert_eq!(out[1]["role"], "assistant");
+        assert_eq!(out[1]["tool_calls"][0]["id"], "D681PevKs");
+        assert_eq!(out[1]["tool_calls"][0]["function"]["name"], "get_weather");
+
+        // Mistral wants both name and tool_call_id on the tool result.
+        assert_eq!(out[2]["role"], "tool");
+        assert_eq!(out[2]["tool_call_id"], "D681PevKs");
+        assert_eq!(out[2]["name"], "get_weather");
+    }
+
+    #[test]
+    fn parse_chunk_tool_call_delta() {
+        let chunk = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "abc123xyz",
+                        "function": { "name": "get_weather", "arguments": "{\"location\":\"NYC\"}" }
+                    }]
+                }
+            }]
+        });
+        let events = parse_mistral_chunk(&chunk);
+        let found = events.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ToolCallDelta { index: Some(0), id, name: Some(n), .. }
+                    if id == "abc123xyz" && n == "get_weather"
+            )
+        });
+        assert!(found, "expected a ToolCallDelta with index 0 and id");
     }
 
     #[test]

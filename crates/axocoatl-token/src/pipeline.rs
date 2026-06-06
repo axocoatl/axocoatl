@@ -239,6 +239,10 @@ impl CompressionPipeline {
                     role: msg.role,
                     content: MessageContent::Text(truncated),
                     name: msg.name,
+                    // Preserve tool-call correlation across truncation so the
+                    // assistant(tool_calls) ↔ tool(result) pairing stays valid.
+                    tool_calls: msg.tool_calls,
+                    tool_call_id: msg.tool_call_id,
                 }
             })
             .collect()
@@ -320,6 +324,8 @@ impl CompressionPipeline {
                         role: msg.role,
                         content: MessageContent::Text(format!("[summarized] {summary}")),
                         name: msg.name,
+                        tool_calls: msg.tool_calls,
+                        tool_call_id: msg.tool_call_id,
                     });
                 }
                 Err(e) => {
@@ -430,6 +436,8 @@ mod tests {
             role: MessageRole::Tool,
             content: MessageContent::Text(text),
             name: Some("big_tool".to_string()),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
         }
     }
 

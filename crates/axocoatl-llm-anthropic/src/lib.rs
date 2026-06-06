@@ -99,14 +99,53 @@ impl AnthropicProvider {
                     messages.push(serde_json::json!({"role": "user", "content": text}));
                 }
                 MessageRole::Assistant => {
-                    messages.push(serde_json::json!({"role": "assistant", "content": text}));
+                    if msg.tool_calls.is_empty() {
+                        messages.push(serde_json::json!({"role": "assistant", "content": text}));
+                    } else {
+                        // Assistant tool calls become `tool_use` content blocks
+                        // (preceded by a text block only when there's prose).
+                        let mut blocks: Vec<serde_json::Value> = Vec::new();
+                        if !text.is_empty() {
+                            blocks.push(serde_json::json!({"type": "text", "text": text}));
+                        }
+                        for tc in &msg.tool_calls {
+                            blocks.push(serde_json::json!({
+                                "type": "tool_use",
+                                "id": tc.id,
+                                "name": tc.name,
+                                "input": tc.arguments,
+                            }));
+                        }
+                        messages.push(serde_json::json!({"role": "assistant", "content": blocks}));
+                    }
                 }
                 MessageRole::Tool => {
-                    // Anthropic tool results use "user" role with tool_result content block
-                    messages.push(serde_json::json!({
-                        "role": "user",
-                        "content": [{"type": "tool_result", "tool_use_id": msg.name.clone().unwrap_or_default(), "content": text}]
-                    }));
+                    // Anthropic tool results are `tool_result` blocks inside a
+                    // *user* turn, correlated by `tool_use_id`. Multiple results
+                    // from one assistant turn must share a single user message —
+                    // the API requires user/assistant turns to alternate — so we
+                    // merge consecutive results into the preceding tool_result
+                    // turn rather than emitting a second user message.
+                    let tool_use_id = msg
+                        .tool_call_id
+                        .clone()
+                        .or_else(|| msg.name.clone())
+                        .unwrap_or_default();
+                    let block = serde_json::json!({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": text,
+                    });
+                    let merged = messages
+                        .last_mut()
+                        .filter(|last| last["role"] == "user")
+                        .and_then(|last| last["content"].as_array_mut())
+                        .filter(|arr| arr.iter().all(|b| b["type"] == "tool_result"))
+                        .map(|arr| arr.push(block.clone()))
+                        .is_some();
+                    if !merged {
+                        messages.push(serde_json::json!({"role": "user", "content": [block]}));
+                    }
                 }
             }
         }
@@ -313,7 +352,10 @@ impl LlmProvider for AnthropicProvider {
                                 if block["type"] == "tool_use" {
                                     current_tool_id = block["id"].as_str().unwrap_or("").to_string();
                                     current_tool_name = block["name"].as_str().map(String::from);
+                                    // Anthropic repeats the full id on every delta,
+                                    // so id-correlation suffices — no index needed.
                                     yield StreamEvent::ToolCallDelta {
+                                        index: None,
                                         id: current_tool_id.clone(),
                                         name: current_tool_name.clone(),
                                         args_delta: String::new(),
@@ -340,6 +382,7 @@ impl LlmProvider for AnthropicProvider {
                                     Some("input_json_delta") => {
                                         if let Some(json) = delta["partial_json"].as_str() {
                                             yield StreamEvent::ToolCallDelta {
+                                                index: None,
                                                 id: current_tool_id.clone(),
                                                 name: None,
                                                 args_delta: json.to_string(),
@@ -474,5 +517,73 @@ mod tests {
         assert!(caps.vision);
         assert!(caps.tool_calling);
         assert_eq!(caps.max_context_tokens, 200_000);
+    }
+
+    #[test]
+    fn assistant_tool_calls_become_tool_use_blocks() {
+        use axocoatl_core::{ChatMessage, ToolCall};
+        let provider = AnthropicProvider::new("key", "claude-sonnet-4-6");
+        let mut request = ChatRequest::simple("weather?");
+        request
+            .messages
+            .push(ChatMessage::assistant_with_tool_calls(
+                "",
+                vec![ToolCall {
+                    id: "toolu_1".to_string(),
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({ "location": "NYC" }),
+                }],
+            ));
+        let body = provider.build_request_body(&request);
+
+        let assistant = &body["messages"][1];
+        assert_eq!(assistant["role"], "assistant");
+        assert_eq!(assistant["content"][0]["type"], "tool_use");
+        assert_eq!(assistant["content"][0]["id"], "toolu_1");
+        assert_eq!(assistant["content"][0]["name"], "get_weather");
+        assert_eq!(assistant["content"][0]["input"]["location"], "NYC");
+    }
+
+    #[test]
+    fn consecutive_tool_results_merge_into_one_user_turn() {
+        use axocoatl_core::{ChatMessage, ToolCall};
+        let provider = AnthropicProvider::new("key", "claude-sonnet-4-6");
+        let mut request = ChatRequest::simple("compare NYC and LA");
+        request
+            .messages
+            .push(ChatMessage::assistant_with_tool_calls(
+                "",
+                vec![
+                    ToolCall {
+                        id: "toolu_1".to_string(),
+                        name: "get_weather".to_string(),
+                        arguments: serde_json::json!({ "location": "NYC" }),
+                    },
+                    ToolCall {
+                        id: "toolu_2".to_string(),
+                        name: "get_weather".to_string(),
+                        arguments: serde_json::json!({ "location": "LA" }),
+                    },
+                ],
+            ));
+        request
+            .messages
+            .push(ChatMessage::tool_result("72F", "get_weather", "toolu_1"));
+        request
+            .messages
+            .push(ChatMessage::tool_result("80F", "get_weather", "toolu_2"));
+        let body = provider.build_request_body(&request);
+
+        let msgs = body["messages"].as_array().unwrap();
+        // user, assistant(tool_use x2), user(tool_result x2) — exactly 3 turns,
+        // not 4: the two results share one user turn so roles still alternate.
+        assert_eq!(msgs.len(), 3);
+        let results_turn = &msgs[2];
+        assert_eq!(results_turn["role"], "user");
+        let blocks = results_turn["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "tool_result");
+        assert_eq!(blocks[0]["tool_use_id"], "toolu_1");
+        assert_eq!(blocks[1]["tool_use_id"], "toolu_2");
     }
 }

@@ -115,12 +115,41 @@ pub struct ToolCallRecord {
     pub result: Option<serde_json::Value>,
 }
 
+/// A tool call requested by the LLM. Canonical, provider-independent shape —
+/// every provider parses its native tool-call format into this and serializes
+/// it back out when replaying the conversation. Lives in `axocoatl-core` (not
+/// `axocoatl-llm`) because [`ChatMessage`] carries it; `axocoatl-llm`
+/// re-exports it so existing `axocoatl_llm::ToolCall` paths keep working.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCall {
+    /// Provider-assigned call id. Correlates a result back to its request
+    /// (OpenAI/Anthropic/Mistral key on this). Gemini keys on `name` instead.
+    pub id: String,
+    pub name: String,
+    /// Parsed arguments (already deserialized from the LLM's JSON string).
+    pub arguments: serde_json::Value,
+}
+
 /// A chat message in the universal format across all providers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: MessageRole,
     pub content: MessageContent,
+    /// For `Tool` results this carries the tool's function name (Gemini
+    /// correlates `functionResponse` by name); otherwise the optional
+    /// participant name. `#[serde(default)]` keeps older payloads loadable.
+    #[serde(default)]
     pub name: Option<String>,
+    /// Tool calls the assistant is requesting on this turn. Non-empty only for
+    /// `Assistant` messages that invoke tools; providers serialize these into
+    /// their native assistant-tool-call format so the model sees its own prior
+    /// request when the conversation is replayed.
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCall>,
+    /// For a `Tool` result message: the id of the originating tool call. Lets
+    /// providers correlate each result with the call that produced it.
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
 }
 
 impl ChatMessage {
@@ -129,6 +158,8 @@ impl ChatMessage {
             role: MessageRole::System,
             content: MessageContent::Text(content.into()),
             name: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
         }
     }
 
@@ -137,6 +168,8 @@ impl ChatMessage {
             role: MessageRole::User,
             content: MessageContent::Text(content.into()),
             name: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
         }
     }
 
@@ -145,6 +178,23 @@ impl ChatMessage {
             role: MessageRole::Assistant,
             content: MessageContent::Text(content.into()),
             name: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }
+    }
+
+    /// An assistant turn that requests one or more tool calls. `content` may be
+    /// empty (the model often returns only tool calls with no prose).
+    pub fn assistant_with_tool_calls(
+        content: impl Into<String>,
+        tool_calls: Vec<ToolCall>,
+    ) -> Self {
+        Self {
+            role: MessageRole::Assistant,
+            content: MessageContent::Text(content.into()),
+            name: None,
+            tool_calls,
+            tool_call_id: None,
         }
     }
 
@@ -153,6 +203,25 @@ impl ChatMessage {
             role: MessageRole::Tool,
             content: MessageContent::Text(content.into()),
             name: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }
+    }
+
+    /// A tool-result message answering a specific tool call. Carries both the
+    /// tool's function `name` (for name-keyed providers like Gemini) and the
+    /// originating `tool_call_id` (for id-keyed providers like OpenAI).
+    pub fn tool_result(
+        content: impl Into<String>,
+        name: impl Into<String>,
+        tool_call_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: MessageRole::Tool,
+            content: MessageContent::Text(content.into()),
+            name: Some(name.into()),
+            tool_calls: Vec::new(),
+            tool_call_id: Some(tool_call_id.into()),
         }
     }
 
@@ -254,10 +323,49 @@ mod tests {
                 },
             ]),
             name: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
         };
         assert!(msg.text_content().is_none()); // Parts, not Text
         let json = serde_json::to_string(&msg).unwrap();
         let back: ChatMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back.role, MessageRole::User);
+    }
+
+    #[test]
+    fn assistant_tool_call_message_roundtrip() {
+        let call = ToolCall {
+            id: "call_1".to_string(),
+            name: "get_weather".to_string(),
+            arguments: serde_json::json!({ "location": "NYC" }),
+        };
+        let msg = ChatMessage::assistant_with_tool_calls("", vec![call.clone()]);
+        assert_eq!(msg.role, MessageRole::Assistant);
+        assert_eq!(msg.tool_calls, vec![call]);
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: ChatMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.tool_calls.len(), 1);
+        assert_eq!(back.tool_calls[0].name, "get_weather");
+    }
+
+    #[test]
+    fn tool_result_message_carries_name_and_id() {
+        let msg = ChatMessage::tool_result("72F", "get_weather", "call_1");
+        assert_eq!(msg.role, MessageRole::Tool);
+        assert_eq!(msg.name.as_deref(), Some("get_weather"));
+        assert_eq!(msg.tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(msg.text_content(), Some("72F"));
+    }
+
+    #[test]
+    fn legacy_chat_message_without_tool_fields_deserializes() {
+        // Payloads serialized before tool_calls/tool_call_id existed must still
+        // load — the new fields are `#[serde(default)]`.
+        let legacy = r#"{"role":"User","content":{"Text":"hi"},"name":null}"#;
+        let msg: ChatMessage = serde_json::from_str(legacy).unwrap();
+        assert_eq!(msg.text_content(), Some("hi"));
+        assert!(msg.tool_calls.is_empty());
+        assert!(msg.tool_call_id.is_none());
     }
 }

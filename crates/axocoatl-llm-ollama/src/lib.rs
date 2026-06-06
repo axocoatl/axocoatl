@@ -41,6 +41,55 @@ fn ollama_split_content(content: &MessageContent) -> (String, Vec<String>) {
     (text, images)
 }
 
+/// Convert Axocoatl chat messages into the OpenAI-compatible `messages` array
+/// Ollama's `/v1/chat/completions` endpoint expects. Shared by `chat` and
+/// `chat_stream` so the two paths can't drift. Crucially this carries the
+/// assistant's `tool_calls` and each tool result's `tool_call_id` through, so a
+/// multi-turn tool round-trip replays as a well-formed conversation.
+fn ollama_messages(messages: &[axocoatl_core::ChatMessage]) -> Vec<serde_json::Value> {
+    messages
+        .iter()
+        .map(|m| {
+            let role = match m.role {
+                MessageRole::System => "system",
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => "tool",
+            };
+            let (content, images) = ollama_split_content(&m.content);
+            let mut msg = serde_json::json!({ "role": role, "content": content });
+            if !images.is_empty() {
+                msg["images"] = serde_json::json!(images);
+            }
+            if matches!(m.role, MessageRole::Assistant) && !m.tool_calls.is_empty() {
+                msg["tool_calls"] = serde_json::Value::Array(
+                    m.tool_calls
+                        .iter()
+                        .map(|tc| {
+                            serde_json::json!({
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    // OpenAI schema: arguments is a JSON string.
+                                    "arguments": serde_json::to_string(&tc.arguments)
+                                        .unwrap_or_else(|_| "{}".to_string()),
+                                }
+                            })
+                        })
+                        .collect(),
+                );
+            }
+            if matches!(m.role, MessageRole::Tool) {
+                if let Some(id) = m.tool_call_id.as_ref().or(m.name.as_ref()) {
+                    msg["tool_call_id"] = serde_json::json!(id);
+                }
+            }
+            msg
+        })
+        .collect()
+}
+
 /// Convert tool definitions into the OpenAI-compatible `tools` array that
 /// Ollama's `/v1/chat/completions` endpoint expects.
 fn tools_json(tools: &[axocoatl_llm::ToolDefinition]) -> serde_json::Value {
@@ -113,24 +162,7 @@ impl LlmProvider for OllamaProvider {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
-        let messages: Vec<serde_json::Value> = request
-            .messages
-            .iter()
-            .map(|m| {
-                let role = match m.role {
-                    MessageRole::System => "system",
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                    MessageRole::Tool => "tool",
-                };
-                let (content, images) = ollama_split_content(&m.content);
-                let mut msg = serde_json::json!({"role": role, "content": content});
-                if !images.is_empty() {
-                    msg["images"] = serde_json::json!(images);
-                }
-                msg
-            })
-            .collect();
+        let messages = ollama_messages(&request.messages);
 
         // `model_override` lets the Chat tab pick a different model per turn
         // without spinning up a new provider instance. Falls back to the
@@ -241,24 +273,7 @@ impl LlmProvider for OllamaProvider {
     {
         use tokio_stream::StreamExt;
 
-        let messages: Vec<serde_json::Value> = request
-            .messages
-            .iter()
-            .map(|m| {
-                let role = match m.role {
-                    MessageRole::System => "system",
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                    MessageRole::Tool => "tool",
-                };
-                let (content, images) = ollama_split_content(&m.content);
-                let mut msg = serde_json::json!({"role": role, "content": content});
-                if !images.is_empty() {
-                    msg["images"] = serde_json::json!(images);
-                }
-                msg
-            })
-            .collect();
+        let messages = ollama_messages(&request.messages);
 
         let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
         let mut body = serde_json::json!({
@@ -348,16 +363,18 @@ impl LlmProvider for OllamaProvider {
                                 }
                             }
 
-                            // Tool call deltas
+                            // Tool call deltas. OpenAI-compatible streams send the
+                            // id once and key later argument fragments by `index`.
                             if let Some(tool_calls) = choice["delta"]["tool_calls"].as_array() {
                                 for tc in tool_calls {
+                                    let index = tc["index"].as_u64().map(|i| i as usize);
                                     let id = tc["id"].as_str().unwrap_or("").to_string();
                                     let name = tc["function"]["name"].as_str().map(String::from);
                                     let args_delta = tc["function"]["arguments"]
                                         .as_str()
                                         .unwrap_or("")
                                         .to_string();
-                                    yield StreamEvent::ToolCallDelta { id, name, args_delta };
+                                    yield StreamEvent::ToolCallDelta { index, id, name, args_delta };
                                 }
                             }
 
@@ -428,5 +445,41 @@ mod tests {
         assert!(!caps.vision);
         assert!(caps.tool_calling);
         assert_eq!(caps.max_context_tokens, 128_000);
+    }
+
+    #[test]
+    fn messages_encode_assistant_tool_calls_and_tool_result() {
+        use axocoatl_core::{ChatMessage, ToolCall};
+
+        let msgs = vec![
+            ChatMessage::user("weather?"),
+            ChatMessage::assistant_with_tool_calls(
+                "",
+                vec![ToolCall {
+                    id: "call_1".to_string(),
+                    name: "get_weather".to_string(),
+                    arguments: serde_json::json!({ "location": "NYC" }),
+                }],
+            ),
+            ChatMessage::tool_result("{\"temp\":72}", "get_weather", "call_1"),
+        ];
+        let out = ollama_messages(&msgs);
+
+        // Assistant turn carries OpenAI-compatible tool_calls.
+        assert_eq!(out[1]["role"], "assistant");
+        assert_eq!(out[1]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(out[1]["tool_calls"][0]["type"], "function");
+        assert_eq!(out[1]["tool_calls"][0]["function"]["name"], "get_weather");
+        let args = out[1]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(args).unwrap()["location"],
+            "NYC"
+        );
+
+        // Tool result correlates via tool_call_id.
+        assert_eq!(out[2]["role"], "tool");
+        assert_eq!(out[2]["tool_call_id"], "call_1");
     }
 }

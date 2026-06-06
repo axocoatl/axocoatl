@@ -140,6 +140,11 @@ pub enum StreamEvent {
     ReasoningDelta { delta: String },
     /// A tool call being streamed.
     ToolCallDelta {
+        /// Provider stream index for this tool call. OpenAI-compatible APIs
+        /// (OpenAI, Mistral, OpenRouter, Ollama) send the `id` only on the
+        /// first chunk and stream subsequent argument fragments keyed by
+        /// `index`, so accumulation must correlate by index when present.
+        index: Option<usize>,
         id: String,
         name: Option<String>,
         args_delta: String,
