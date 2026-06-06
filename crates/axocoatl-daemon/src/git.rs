@@ -70,6 +70,16 @@ pub struct Variant {
     pub worktree: String,
 }
 
+/// A variant plus the working-tree status of its worktree — what the Compare
+/// lanes show as each variant's changes.
+#[derive(Debug, Clone, Serialize)]
+pub struct VariantStatus {
+    pub index: usize,
+    pub branch: String,
+    pub worktree: String,
+    pub status: GitStatus,
+}
+
 /// Parse `git status --porcelain=v1 -b --untracked-files=all`.
 pub fn parse_status(stdout: &str) -> GitStatus {
     let mut branch = String::new();
