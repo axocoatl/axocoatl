@@ -1661,6 +1661,42 @@
   .diff-add { background: rgba(74,222,128,.13); color: var(--ok); }
   .diff-del { background: rgba(255,107,107,.13); color: var(--err); }
 
+  /* ── Source Control (git) view in the files pane ── */
+  .explorer-tabs { display: flex; gap: 2px; padding: 4px 4px 0; flex-shrink: 0; }
+  .etab { flex: 1; background: transparent; border: none; border-bottom: 2px solid transparent;
+          color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em;
+          padding: 5px 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px; }
+  .etab:hover { color: var(--text); }
+  .etab.active { color: var(--text); border-bottom-color: var(--accent, var(--axo-jade-glow)); }
+  .etab-badge { background: var(--axo-jade-glow); color: #03110b; border-radius: 8px;
+                font-size: 9.5px; padding: 0 5px; min-width: 14px; text-align: center; font-weight: 600; }
+  .git-view { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .git-bar { display: flex; gap: 5px; padding: 6px; flex-shrink: 0; }
+  .git-msg { flex: 1; min-width: 0; background: var(--bg-2); border: 1px solid var(--border);
+             border-radius: 5px; color: var(--text); font-size: 12px; padding: 4px 7px; }
+  .git-branchline { display: flex; align-items: center; gap: 6px; padding: 0 8px 6px;
+                    font-size: 11px; color: var(--muted); flex-shrink: 0; border-bottom: 1px solid var(--border); }
+  .git-branch { font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--accent-2, var(--axo-blue)); }
+  .git-branch::before { content: '⎇ '; opacity: .7; }
+  .git-mini { margin-left: auto; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; }
+  .git-mini:hover { color: var(--text); }
+  .git-files { flex: 1; overflow: auto; padding: 4px; }
+  .git-file { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border-radius: 5px;
+              cursor: pointer; font-size: 12.5px; }
+  .git-file:hover { background: rgba(255,255,255,.04); }
+  .git-file:hover .git-file-discard { opacity: 1; }
+  .git-file-badge { width: 15px; text-align: center; font-weight: 700; font-size: 11px; flex-shrink: 0;
+                    font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .git-file-badge.modified  { color: var(--axo-bronze, #d6a55a); }
+  .git-file-badge.added,
+  .git-file-badge.untracked { color: var(--ok, #4ade80); }
+  .git-file-badge.deleted   { color: var(--err, #ff6b6b); }
+  .git-file-badge.renamed   { color: var(--axo-blue, #7aa2ff); }
+  .git-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .git-file-discard { opacity: 0; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 13px; }
+  .git-file-discard:hover { color: var(--err); }
+  .git-empty { color: var(--muted); font-size: 12px; padding: 14px 8px; text-align: center; }
+
   /* ── Chat tab ──
      Two-pane layout: sidebar (history) on the left, transcript on the right.
      Reuses .smsg / .smsg-role / .smsg-body from the Sessions cockpit for
@@ -3085,13 +3121,30 @@
               <!-- Left column: Explorer (search + tree).  Matches VS Code's
                    "Explorer" sidebar — fixed-default-width, resizable. -->
               <div class="files-explorer" id="files-explorer">
-                <div class="file-search">
+                <!-- Explorer / Source Control tabs (VS Code-style). -->
+                <div class="explorer-tabs" id="explorer-tabs">
+                  <button class="etab active" data-etab="files">Files</button>
+                  <button class="etab" data-etab="git">Source Control<span class="etab-badge hide" id="git-badge">0</span></button>
+                </div>
+                <div class="file-search" id="file-search">
                   <i class="codicon codicon-search ftn-ico tint-mute" aria-hidden="true"></i>
                   <input type="text" class="file-search-input" id="file-search-input"
                     placeholder="Search files…" spellcheck="false" autocomplete="off" />
                   <span class="file-search-clear hide" id="file-search-clear" title="Clear">×</span>
                 </div>
                 <div class="file-tree" id="file-tree"></div>
+                <!-- Source Control view — the agent's changes, live. -->
+                <div class="git-view hide" id="git-view">
+                  <div class="git-bar">
+                    <input type="text" class="git-msg" id="git-msg" placeholder="Commit message…" spellcheck="false" />
+                    <button class="btn sm" id="git-commit" title="Stage all + commit">Commit all</button>
+                  </div>
+                  <div class="git-branchline">
+                    <span class="git-branch" id="git-branch">—</span>
+                    <button class="git-mini" id="git-refresh" title="Refresh">⟳</button>
+                  </div>
+                  <div class="git-files" id="git-files"></div>
+                </div>
               </div>
               <!-- Horizontal resizer between explorer and editor. -->
               <div class="files-inner-resizer" id="files-inner-resizer" title="Drag to resize"></div>
@@ -8136,6 +8189,15 @@ function initCockpitChrome() {
   if (modes) modes.addEventListener('click', onViewerModeClick);
   const saveBtn = $('#viewer-save');
   if (saveBtn) saveBtn.addEventListener('click', (e) => { e.stopPropagation(); saveActiveFile(); });
+  // Source Control (git) wiring.
+  const etabs = $('#explorer-tabs');
+  if (etabs) etabs.addEventListener('click', (e) => {
+    const b = e.target.closest('.etab'); if (b) setExplorerTab(b.dataset.etab);
+  });
+  const gcommit = $('#git-commit'); if (gcommit) gcommit.addEventListener('click', gitCommit);
+  const grefresh = $('#git-refresh'); if (grefresh) grefresh.addEventListener('click', refreshGitPane);
+  const gmsg = $('#git-msg');
+  if (gmsg) gmsg.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); gitCommit(); } });
   // The "+ Add to chat" floating bubble now lives inside Monaco — see
   // onMonacoSelectionChange.  We still install a global mousedown
   // listener so a click outside the bubble hides it.
@@ -9217,6 +9279,8 @@ function openCockpit(s) {
   setCockpitLive('idle', 'idle');
   $('#session-msgs').innerHTML = '';
   reloadSessionTranscript(); // rehydrate prior turns from the persisted checkpoint
+  S.session.gitDiff = null;
+  setExplorerTab('files');   // default to the file tree; git refreshes lazily
   $('#file-tabs').innerHTML = '';
   $('#file-viewer').innerHTML = '<div class="empty small">Select a file to view</div>';
   loadFileTree('', $('#file-tree'));
@@ -10685,6 +10749,7 @@ function sessionToolResult(d) {
   // open file that just changed (which makes the Preview iframe auto-reload).
   if (!d.is_error && (d.name === 'write_file' || d.name === 'edit_file' || d.name === 'bash')) {
     loadFileTree('', $('#file-tree'));
+    refreshGitPane(); // the agent changed files — update Source Control live
     if (d.name === 'write_file' || d.name === 'edit_file') {
       const edited = d.result && d.result.path;
       if (edited) reloadOpenFileIfMatch(edited);
@@ -10835,6 +10900,132 @@ async function sessionRewind(keep, resend, prefill) {
       $('#session-text').focus();
     }
   } catch (e) { toast('Rewind failed', String(e), 'err'); }
+}
+
+// ── Source Control (git) pane ───────────────────────────────────────
+// A session is (auto-)a git repo; this view shows the agent's working-tree
+// changes live, lets you diff each one in the editor, commit, and discard.
+function setExplorerTab(tab) {
+  S.session.explorerTab = tab;
+  $$('#explorer-tabs .etab').forEach(b => b.classList.toggle('active', b.dataset.etab === tab));
+  const git = tab === 'git';
+  $('#file-search')?.classList.toggle('hide', git);
+  $('#file-tree')?.classList.toggle('hide', git);
+  $('#git-view')?.classList.toggle('hide', !git);
+  if (git) refreshGitPane();
+}
+
+async function refreshGitPane() {
+  if (!S.session.id) return;
+  try {
+    const st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/status').then(r => r.json());
+    if (st && !st.error) {
+      S.session.gitStatus = st;
+      renderGitFiles(st);
+      const badge = $('#git-badge');
+      if (badge) {
+        const n = (st.files || []).length;
+        badge.textContent = String(n);
+        badge.classList.toggle('hide', n === 0);
+      }
+      const br = $('#git-branch'); if (br) br.textContent = st.branch || '—';
+    }
+  } catch {}
+}
+
+function renderGitFiles(st) {
+  const host = $('#git-files'); if (!host) return;
+  host.innerHTML = '';
+  const files = st.files || [];
+  if (!files.length) {
+    host.appendChild(el('div', 'git-empty', st.clean ? 'No changes — working tree clean.' : ''));
+    return;
+  }
+  const badgeChar = { modified: 'M', added: 'A', untracked: 'U', deleted: 'D', renamed: 'R' };
+  files.forEach(f => {
+    const row = el('div', 'git-file');
+    row.appendChild(el('span', 'git-file-badge ' + f.state, badgeChar[f.state] || '•'));
+    row.appendChild(el('span', 'git-file-name', f.path));
+    const disc = el('button', 'git-file-discard', '↩');
+    disc.title = 'Discard changes to this file';
+    disc.addEventListener('click', (e) => { e.stopPropagation(); gitDiscard(f.path); });
+    row.appendChild(disc);
+    row.addEventListener('click', () => openGitDiff(f.path));
+    host.appendChild(row);
+  });
+}
+
+// Open a file's working-tree diff (HEAD vs current) in the editor area, using
+// Monaco's diff editor.
+async function openGitDiff(path) {
+  const v = $('#file-viewer'); if (!v || !S.session.id) return;
+  const modes = $('#viewer-modes'); if (modes) modes.style.display = 'none';
+  v.innerHTML = '<div class="empty small">Loading diff…</div>';
+  let d;
+  try {
+    d = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/diff?path=' + encodeURIComponent(path)).then(r => r.json());
+  } catch { v.innerHTML = '<div class="empty small">Diff failed to load.</div>'; return; }
+  if (!d || d.error) { v.innerHTML = '<div class="empty small">Diff failed to load.</div>'; return; }
+  const monaco = await loadMonacoOnce();
+  // Tear down any prior diff editor + models.
+  gitDisposeDiff(monaco);
+  v.innerHTML = '';
+  const host = el('div', 'monaco-host'); v.appendChild(host);
+  const de = monaco.editor.createDiffEditor(host, {
+    automaticLayout: true, readOnly: true, renderSideBySide: true,
+    minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false,
+  });
+  // Models keyed by a unique uri so Monaco infers the language from the path.
+  const stamp = path.replace(/[^a-zA-Z0-9._/-]/g, '_');
+  const orig = monaco.editor.createModel(d.old || '', undefined, monaco.Uri.parse('axo://diff-old/' + stamp));
+  const modd = monaco.editor.createModel(d.new || '', undefined, monaco.Uri.parse('axo://diff-new/' + stamp));
+  de.setModel({ original: orig, modified: modd });
+  S.session.gitDiff = { editor: de, models: [orig, modd] };
+  S.session.activeFile = null; // keep renderActiveFile from clobbering the view
+}
+
+function gitDisposeDiff(monaco) {
+  const gd = S.session.gitDiff;
+  if (!gd) return;
+  try { gd.editor.dispose(); } catch {}
+  (gd.models || []).forEach(m => { try { m.dispose(); } catch {} });
+  S.session.gitDiff = null;
+}
+
+async function gitCommit() {
+  if (!S.session.id) return;
+  const msg = ($('#git-msg')?.value || '').trim();
+  try {
+    const st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/commit', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: msg }),
+    }).then(r => r.json());
+    if (st && !st.error) {
+      $('#git-msg').value = '';
+      S.session.gitStatus = st; renderGitFiles(st);
+      const badge = $('#git-badge'); if (badge) { const n = (st.files||[]).length; badge.textContent = String(n); badge.classList.toggle('hide', n === 0); }
+      toast('Committed', msg || 'snapshot', 'ok');
+    }
+  } catch (e) { toast('Commit failed', String(e), 'err'); }
+}
+
+async function gitDiscard(path) {
+  if (!S.session.id) return;
+  const ok = await axoConfirm({
+    title: 'Discard changes?',
+    body: `Discard working changes to "${path}"? This can't be undone.`,
+    okLabel: 'Discard', okKind: 'danger',
+  });
+  if (!ok) return;
+  try {
+    await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/discard', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    await refreshGitPane();
+    loadFileTree('', $('#file-tree'));
+    reloadOpenFileIfMatch(path);
+  } catch (e) { toast('Discard failed', String(e), 'err'); }
 }
 
 function sendSessionMessage() {
@@ -12537,6 +12728,7 @@ function handleWsFrame(d) {
           'done · ' + (d.input_tokens || 0) + ' in / ' + (d.output_tokens || 0) + ' out';
         setCockpitLive('done', 'done');
         loadFileTree('', $('#file-tree'));
+        refreshGitPane();
         if (window.hljs) {
           $$('#session-msgs pre code').forEach(c => {
             try { if (!c.dataset.hl) { window.hljs.highlightElement(c); c.dataset.hl = '1'; } } catch {}
