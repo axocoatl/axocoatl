@@ -1,4 +1,4 @@
-use axocoatl_core::{ChatMessage, MessageContent, MessageRole};
+use axocoatl_core::{ChatMessage, MessageContent, MessageRole, ToolCall};
 use serde::{Deserialize, Serialize};
 
 /// In-memory session transcript — append-only.
@@ -8,12 +8,53 @@ pub struct SessionMemory {
     token_count: usize,
 }
 
+/// A tool call persisted alongside an assistant message. `bincode` has no
+/// representation for `serde_json::Value`, so the arguments are stored as their
+/// JSON text and parsed back when reconstructing a [`ToolCall`].
+#[derive(Debug, Clone, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
+pub struct StoredToolCall {
+    pub id: String,
+    pub name: String,
+    /// Tool-call arguments as a JSON string.
+    pub arguments_json: String,
+}
+
+impl StoredToolCall {
+    fn from_tool_call(tc: &ToolCall) -> Self {
+        Self {
+            id: tc.id.clone(),
+            name: tc.name.clone(),
+            arguments_json: serde_json::to_string(&tc.arguments).unwrap_or_else(|_| "{}".into()),
+        }
+    }
+
+    fn to_tool_call(&self) -> ToolCall {
+        ToolCall {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            arguments: serde_json::from_str(&self.arguments_json)
+                .unwrap_or(serde_json::Value::Null),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
 pub struct StoredMessage {
     pub role: MessageRole,
     pub content: String,
     pub timestamp: u64,
     pub token_count: usize,
+    /// For `Tool` results: the tool's function name (Gemini correlates by
+    /// name). Empty/`None` for plain text messages. `#[serde(default)]` and a
+    /// trailing position keep older checkpoints/JSON loadable.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Tool calls requested by an `Assistant` turn.
+    #[serde(default)]
+    pub tool_calls: Vec<StoredToolCall>,
+    /// For a `Tool` result: the id of the originating tool call.
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
 }
 
 impl SessionMemory {
@@ -24,7 +65,7 @@ impl SessionMemory {
         }
     }
 
-    /// Append a message, tracking its token count.
+    /// Append a plain text message, tracking its token count.
     /// `token_count` should be pre-computed by the caller using a TokenCounter.
     pub fn append(&mut self, role: MessageRole, content: impl Into<String>, token_count: usize) {
         let content = content.into();
@@ -34,17 +75,76 @@ impl SessionMemory {
             content,
             timestamp: now_timestamp(),
             token_count,
+            name: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
         });
     }
 
-    /// Get messages as LLM-ready ChatMessage vec.
+    /// Append an assistant turn that requested one or more tool calls. The
+    /// tool-call payload must be recorded so the follow-up request replays the
+    /// model's own `assistant(tool_calls)` turn — without it, providers reject
+    /// the subsequent tool-result messages as orphaned.
+    pub fn append_assistant_tool_calls(
+        &mut self,
+        content: impl Into<String>,
+        tool_calls: &[ToolCall],
+        token_count: usize,
+    ) {
+        let content = content.into();
+        self.token_count += token_count;
+        self.messages.push(StoredMessage {
+            role: MessageRole::Assistant,
+            content,
+            timestamp: now_timestamp(),
+            token_count,
+            name: None,
+            tool_calls: tool_calls
+                .iter()
+                .map(StoredToolCall::from_tool_call)
+                .collect(),
+            tool_call_id: None,
+        });
+    }
+
+    /// Append a tool-result message answering a specific tool call. Records both
+    /// the tool's function `name` (name-keyed providers like Gemini) and the
+    /// originating `tool_call_id` (id-keyed providers like OpenAI).
+    pub fn append_tool_result(
+        &mut self,
+        name: impl Into<String>,
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+        token_count: usize,
+    ) {
+        let content = content.into();
+        self.token_count += token_count;
+        self.messages.push(StoredMessage {
+            role: MessageRole::Tool,
+            content,
+            timestamp: now_timestamp(),
+            token_count,
+            name: Some(name.into()),
+            tool_calls: Vec::new(),
+            tool_call_id: Some(tool_call_id.into()),
+        });
+    }
+
+    /// Get messages as LLM-ready ChatMessage vec, faithfully reconstructing
+    /// assistant tool-call turns and tool-result correlation fields.
     pub fn as_chat_messages(&self) -> Vec<ChatMessage> {
         self.messages
             .iter()
             .map(|m| ChatMessage {
                 role: m.role.clone(),
                 content: MessageContent::Text(m.content.clone()),
-                name: None,
+                name: m.name.clone(),
+                tool_calls: m
+                    .tool_calls
+                    .iter()
+                    .map(StoredToolCall::to_tool_call)
+                    .collect(),
+                tool_call_id: m.tool_call_id.clone(),
             })
             .collect()
     }
@@ -167,6 +267,57 @@ mod tests {
         assert!(session.is_empty());
         assert_eq!(session.total_tokens(), 0);
         assert!(session.as_chat_messages().is_empty());
+    }
+
+    #[test]
+    fn tool_call_round_trip_reconstructs_assistant_and_tool_messages() {
+        let mut session = SessionMemory::new();
+        session.append(MessageRole::User, "weather in NYC?", 3);
+        let call = ToolCall {
+            id: "call_1".to_string(),
+            name: "get_weather".to_string(),
+            arguments: serde_json::json!({ "location": "NYC" }),
+        };
+        session.append_assistant_tool_calls("", std::slice::from_ref(&call), 0);
+        session.append_tool_result("get_weather", "call_1", "{\"temp\":72}", 4);
+
+        let msgs = session.as_chat_messages();
+        assert_eq!(msgs.len(), 3);
+
+        // Assistant turn carries the tool call verbatim.
+        assert_eq!(msgs[1].role, MessageRole::Assistant);
+        assert_eq!(msgs[1].tool_calls.len(), 1);
+        assert_eq!(msgs[1].tool_calls[0].id, "call_1");
+        assert_eq!(msgs[1].tool_calls[0].arguments["location"], "NYC");
+
+        // Tool result correlates by both name (Gemini) and id (OpenAI).
+        assert_eq!(msgs[2].role, MessageRole::Tool);
+        assert_eq!(msgs[2].name.as_deref(), Some("get_weather"));
+        assert_eq!(msgs[2].tool_call_id.as_deref(), Some("call_1"));
+    }
+
+    #[test]
+    fn tool_calls_survive_checkpoint_bincode_round_trip() {
+        let mut session = SessionMemory::new();
+        let call = ToolCall {
+            id: "call_9".to_string(),
+            name: "search".to_string(),
+            arguments: serde_json::json!({ "q": "rust" }),
+        };
+        session.append_assistant_tool_calls("looking it up", std::slice::from_ref(&call), 2);
+        session.append_tool_result("search", "call_9", "ok", 1);
+
+        let stored = session.messages().to_vec();
+        let bytes = bincode::encode_to_vec(&stored, bincode::config::standard()).unwrap();
+        let (back, _): (Vec<StoredMessage>, _) =
+            bincode::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
+
+        let mut restored = SessionMemory::new();
+        restored.restore(back);
+        let msgs = restored.as_chat_messages();
+        assert_eq!(msgs[0].tool_calls[0].name, "search");
+        assert_eq!(msgs[0].tool_calls[0].arguments["q"], "rust");
+        assert_eq!(msgs[1].tool_call_id.as_deref(), Some("call_9"));
     }
 
     #[test]
