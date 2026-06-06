@@ -960,6 +960,111 @@ pub async fn rewind_session(
         })
 }
 
+// ── Git pane routes — a session is (auto-)a git repo ────────────────────
+fn git_err(e: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: e.to_string(),
+        }),
+    )
+}
+
+/// GET /api/sessions/{id}/git/status
+pub async fn git_status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon.git_status(&id).await.map(Json).map_err(git_err)
+}
+
+#[derive(serde::Deserialize)]
+pub struct GitPathQuery {
+    pub path: String,
+}
+
+/// GET /api/sessions/{id}/git/diff?path=…
+pub async fn git_diff(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<GitPathQuery>,
+) -> Result<Json<axocoatl_daemon::git::GitDiff>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .git_diff(&id, &q.path)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
+/// GET /api/sessions/{id}/git/branches
+pub async fn git_branches(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_daemon::git::GitBranches>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon.git_branches(&id).await.map(Json).map_err(git_err)
+}
+
+#[derive(serde::Deserialize)]
+pub struct GitCommitBody {
+    pub message: Option<String>,
+}
+
+/// POST /api/sessions/{id}/git/commit
+pub async fn git_commit(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<GitCommitBody>,
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .git_commit(&id, body.message.as_deref().unwrap_or(""))
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
+#[derive(serde::Deserialize)]
+pub struct GitDiscardBody {
+    pub path: Option<String>,
+}
+
+/// POST /api/sessions/{id}/git/discard
+pub async fn git_discard(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<GitDiscardBody>,
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .git_discard(&id, body.path.as_deref())
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
+#[derive(serde::Deserialize)]
+pub struct GitCheckoutBody {
+    #[serde(rename = "ref")]
+    pub reference: String,
+}
+
+/// POST /api/sessions/{id}/git/checkout
+pub async fn git_checkout(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<GitCheckoutBody>,
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .git_checkout(&id, &body.reference)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
 pub async fn execute_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
