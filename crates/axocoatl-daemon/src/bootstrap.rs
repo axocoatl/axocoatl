@@ -1891,22 +1891,25 @@ impl AxocoatlDaemon {
             .ok_or_else(|| DaemonError::Session(format!("not a variant branch: {branch}")))?;
         let dir = self.session_dir(session_id).await?;
         let wt = format!("{dir}/.axo-variants/{idx}");
-        // Capture the variant's working-tree edits as a commit on its branch
-        // (the agent may have edited without committing).
+        // Capture the variant's working-tree edits as a commit on its branch —
+        // but only if it actually changed something, so we never make an empty
+        // adopt commit. (The agent may also have committed on its own; the
+        // merge below brings whatever is on the branch either way.)
         let _ = self.session_git_at(session_id, &wt, &["add", "-A"]).await;
-        let _ = self
-            .session_git_at(
-                session_id,
-                &wt,
-                &[
-                    "commit",
-                    "-q",
-                    "-m",
-                    &format!("axocoatl: adopt {branch}"),
-                    "--allow-empty",
-                ],
-            )
-            .await;
+        let dirty = self
+            .session_git_at(session_id, &wt, &["status", "--porcelain"])
+            .await
+            .map(|r| !r.stdout.trim().is_empty())
+            .unwrap_or(false);
+        if dirty {
+            let _ = self
+                .session_git_at(
+                    session_id,
+                    &wt,
+                    &["commit", "-q", "-m", &format!("axocoatl: adopt {branch}")],
+                )
+                .await;
+        }
         // Merge the variant branch into the primary checkout.
         let r = self
             .session_git(session_id, &["merge", "--no-edit", branch])

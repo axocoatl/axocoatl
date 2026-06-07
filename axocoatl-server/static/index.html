@@ -736,6 +736,29 @@
   .vlane-files-empty { color: var(--muted); font-size: 11px; }
   .vlane-file { display: flex; gap: 7px; align-items: center; font-size: 11.5px; padding: 1px 0; }
   .vlane-file .git-file-badge { width: 13px; }
+  /* Fan-out control + in-thread variants */
+  .fanout-btn { display: inline-flex; align-items: center; gap: 3px; align-self: flex-end;
+                background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
+                color: var(--muted); cursor: pointer; padding: 8px 10px; font-size: 12px; flex-shrink: 0; }
+  .fanout-btn:hover { color: var(--text); }
+  .fanout-btn.on { color: #fff; background: var(--accent); border-color: var(--accent); }
+  .fanout-glyph { font-size: 13px; opacity: .85; }
+  .fanout-n { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .vt-pills { display: flex; gap: 6px; margin-bottom: 9px; flex-wrap: wrap; }
+  .vt-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px;
+             border: 1px solid var(--border); background: var(--bg-2); color: var(--muted); cursor: pointer;
+             font-size: 12px; transition: color .15s, border-color .15s, background .15s; }
+  .vt-pill:hover { color: var(--text); }
+  .vt-pill.active { border-color: var(--accent); color: var(--text); background: rgba(255,255,255,.05); }
+  .vt-pill-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .vt-pill-dot.running { background: var(--axo-jade-glow, #4ade80); animation: vlane-pulse 1s ease-in-out infinite; }
+  .vt-pill-dot.done { background: var(--ok, #4ade80); }
+  .vt-pill-dot.error { background: var(--err, #ff6b6b); }
+  .vt-pill-stat { font-variant-numeric: tabular-nums; opacity: .8; font-size: 11px; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .vt-body { min-height: 22px; transition: opacity .12s; }
+  .vt-foot { display: flex; align-items: center; gap: 10px; margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--border); }
+  .vt-diffstat { font-size: 11.5px; color: var(--muted); font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .vt-keep { margin-left: auto; }
   .terminal-surface-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
   .terminal-surface-body > .terminals-body { flex: 1; min-height: 0; }
   /* Pin every grid child to its column so `display:none` leaves an empty
@@ -3225,6 +3248,9 @@
               </div>
               <div class="session-input-row">
                 <textarea class="input" id="session-text" placeholder="Tell the agents what to build — Enter to send, Shift+Enter for newline"></textarea>
+                <button class="fanout-btn" id="fanout-btn" title="Explore several ways at once, then keep the one you like">
+                  <span class="fanout-glyph">⑂</span><span class="fanout-n" id="fanout-n">1</span>
+                </button>
                 <button class="btn" id="session-send">Send</button>
               </div>
             </div>
@@ -8433,6 +8459,7 @@ function initCockpitChrome() {
   const vdisc = $('#variant-discard'); if (vdisc) vdisc.addEventListener('click', discardVariants);
   const vinput = $('#variant-input');
   if (vinput) vinput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runVariants(); } });
+  const fanout = $('#fanout-btn'); if (fanout) fanout.addEventListener('click', cycleFanout);
   // The "+ Add to chat" floating bubble now lives inside Monaco — see
   // onMonacoSelectionChange.  We still install a global mousedown
   // listener so a click outside the bubble hides it.
@@ -9521,6 +9548,10 @@ function openCockpit(s) {
   S.session.gitDiff = null;
   // Reset any prior session's Variants state.
   S.session.variants = [];
+  S.session.threadVariants = null;
+  S.session.fanout = 1;
+  if (typeof updateFanoutBtn === 'function') updateFanoutBtn();
+  if (typeof stopThreadVariantPoll === 'function') stopThreadVariantPoll();
   if (typeof stopVariantStatusPoll === 'function') stopVariantStatusPoll();
   const clanes = $('#compare-lanes');
   if (clanes) clanes.innerHTML = '<div class="empty small" style="padding:14px;">Run a prompt several ways at once. Each variant works on its own git branch — watch them live, then adopt the one you like.</div>';
@@ -11547,6 +11578,11 @@ function sendSessionMessage() {
   // the agent but isn't re-rendered in the transcript (keeps it clean).
   wrap.appendChild(el('div', 'smsg-body', text));
   appendSessionEl(wrap);
+
+  // Fan-out: explore the prompt several ways at once, in the thread.
+  const fanout = S.session.fanout || 1;
+  if (fanout > 1) { startThreadVariants(fullText, fanout); resetFanout(); return; }
+
   setThinking($('#session-msgs'), true);
   S.session.streamEl = null;
   S.session.reasoningEl = null;
@@ -11565,6 +11601,168 @@ function sendSessionMessage() {
   }
   $('#cockpit-status').textContent = 'running…';
   setCockpitLive('live', 'live');
+}
+
+// ── Variants in the thread ──────────────────────────────────────────────
+// Fan out one prompt into N attempts, shown as live pills at the head of an
+// assistant turn. Flip between them; keep the one you like; the rest dissolve.
+// The git worktrees/branches/merge underneath are never named.
+
+function cycleFanout() { S.session.fanout = ((S.session.fanout || 1) % 3) + 1; updateFanoutBtn(); }
+function resetFanout() { S.session.fanout = 1; updateFanoutBtn(); }
+function updateFanoutBtn() {
+  const n = S.session.fanout || 1;
+  const lbl = $('#fanout-n'); if (lbl) lbl.textContent = String(n);
+  const b = $('#fanout-btn'); if (b) b.classList.toggle('on', n > 1);
+}
+
+async function startThreadVariants(input, n) {
+  buildVariantTurn(n);                       // optimistic shell
+  $('#cockpit-status').textContent = 'exploring ' + n + ' ways…';
+  setCockpitLive('live', 'live');
+  try {
+    const variants = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/variants', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ input, n }),
+    }).then(r => r.json());
+    if (!Array.isArray(variants)) {
+      toast('Could not explore', (variants && variants.error) || 'error', 'err');
+      if (S.session.threadVariants) { S.session.threadVariants.wrap.remove(); S.session.threadVariants = null; }
+      return;
+    }
+    // Confirm branch names from the backend (should match the optimistic ones).
+    variants.forEach(v => { const t = S.session.threadVariants; if (t && t.variants[v.index]) t.variants[v.index].branch = v.branch; });
+    scheduleThreadVariantPoll();
+  } catch (e) { toast('Could not explore', String(e), 'err'); }
+}
+
+function buildVariantTurn(n) {
+  const wrap = el('div', 'smsg vturn');
+  wrap.appendChild(el('div', 'smsg-role', 'agent'));
+  const pills = el('div', 'vt-pills');
+  const body = el('div', 'vt-body prose');
+  const foot = el('div', 'vt-foot');
+  const diffstat = el('span', 'vt-diffstat', 'exploring…');
+  const keep = el('button', 'btn sm vt-keep', 'Keep this');
+  keep.disabled = true;
+  foot.append(diffstat, keep);
+  wrap.append(pills, body, foot);
+  appendSessionEl(wrap);
+  const variants = [];
+  for (let i = 0; i < n; i++) {
+    const pill = el('div', 'vt-pill' + (i === 0 ? ' active' : ''));
+    const dot = el('span', 'vt-pill-dot running');
+    const stat = el('span', 'vt-pill-stat', '');
+    pill.append(dot, el('span', '', String(i + 1)), stat);
+    pill.addEventListener('click', () => setActiveVariant(i));
+    pills.appendChild(pill);
+    variants.push({ index: i, branch: 'axo/variant-' + i, buf: '', status: 'running', pill, dot, stat, files: [] });
+  }
+  keep.addEventListener('click', keepActiveVariant);
+  S.session.threadVariants = { wrap, pillsEl: pills, bodyEl: body, footEl: foot, diffstatEl: diffstat, keepBtn: keep, active: 0, variants };
+  setActiveVariant(0);
+}
+
+function setActiveVariant(i) {
+  const tv = S.session.threadVariants; if (!tv || !tv.variants[i]) return;
+  tv.active = i;
+  tv.variants.forEach((v, idx) => v.pill.classList.toggle('active', idx === i));
+  const v = tv.variants[i];
+  tv.bodyEl.style.opacity = '0';
+  setTimeout(() => {
+    tv.bodyEl.innerHTML = v.buf ? mdRender(v.buf) : '<span class="muted small">working…</span>';
+    tv.bodyEl.style.opacity = '1';
+  }, 90);
+  renderVariantFoot();
+}
+
+function renderVariantFoot() {
+  const tv = S.session.threadVariants; if (!tv) return;
+  const v = tv.variants[tv.active];
+  const files = v.files || [];
+  const neu = files.filter(f => f.state === 'added' || f.state === 'untracked').length;
+  const mod = files.filter(f => f.state === 'modified' || f.state === 'renamed').length;
+  const del = files.filter(f => f.state === 'deleted').length;
+  if (!files.length) {
+    tv.diffstatEl.textContent = v.status === 'running' ? 'exploring…' : 'no changes';
+  } else {
+    const bits = [];
+    if (neu) bits.push(neu + ' new');
+    if (mod) bits.push(mod + ' edited');
+    if (del) bits.push(del + ' removed');
+    tv.diffstatEl.textContent = files.length + (files.length > 1 ? ' files' : ' file') + ' · ' + bits.join(', ');
+  }
+  tv.keepBtn.disabled = files.length === 0;
+}
+
+// Stream demux → the in-thread variant turn (calm view: text only).
+function threadVariantToken(i, delta) {
+  const tv = S.session.threadVariants; if (!tv || !tv.variants[i]) return;
+  tv.variants[i].buf += delta;
+  if (i === tv.active) {
+    tv.bodyEl.innerHTML = mdRender(tv.variants[i].buf);
+    const msgs = $('#session-msgs'); msgs.scrollTop = msgs.scrollHeight;
+  }
+}
+function threadVariantStatus(i, status) {
+  const tv = S.session.threadVariants; if (!tv || !tv.variants[i]) return;
+  tv.variants[i].status = status;
+  tv.variants[i].dot.className = 'vt-pill-dot ' + status;
+  if (i === tv.active) renderVariantFoot();
+  if (!tv.variants.some(v => v.status === 'running')) { refreshThreadVariantStatus(); stopThreadVariantPoll(); }
+}
+
+let _tvPoll = null;
+function scheduleThreadVariantPoll() { if (_tvPoll) clearInterval(_tvPoll); refreshThreadVariantStatus(); _tvPoll = setInterval(refreshThreadVariantStatus, 3000); }
+function stopThreadVariantPoll() { if (_tvPoll) { clearInterval(_tvPoll); _tvPoll = null; } }
+async function refreshThreadVariantStatus() {
+  const tv = S.session.threadVariants; if (!tv || !S.session.id) return;
+  try {
+    const list = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/variants/status').then(r => r.json());
+    if (!Array.isArray(list)) return;
+    list.forEach(vs => {
+      const v = tv.variants[vs.index]; if (!v) return;
+      v.files = (vs.status && vs.status.files) || [];
+      v.stat.textContent = v.files.length ? ('· ' + v.files.length) : '';
+    });
+    renderVariantFoot();
+  } catch {}
+}
+
+async function keepActiveVariant() {
+  const tv = S.session.threadVariants; if (!tv) return;
+  const i = tv.active, v = tv.variants[i];
+  const ok = await axoConfirm({
+    title: 'Keep this one?',
+    body: 'Use option ' + (i + 1) + ' and set the others aside.',
+    okLabel: 'Keep', okKind: 'primary',
+  });
+  if (!ok) return;
+  tv.keepBtn.disabled = true;
+  try {
+    const st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/variants/adopt', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ branch: v.branch }),
+    }).then(r => r.json());
+    if (st && st.error) { toast('Keep failed', String(st.error), 'err'); tv.keepBtn.disabled = false; return; }
+    collapseVariantTurn(i);
+    stopThreadVariantPoll();
+    refreshGitPane();
+    loadFileTree('', $('#file-tree'));
+    setCockpitLive('done', 'done');
+    $('#cockpit-status').textContent = 'kept option ' + (i + 1);
+  } catch (e) { toast('Keep failed', String(e), 'err'); tv.keepBtn.disabled = false; }
+}
+
+function collapseVariantTurn(i) {
+  const tv = S.session.threadVariants; if (!tv) return;
+  const v = tv.variants[i];
+  tv.pillsEl.remove();
+  tv.footEl.remove();
+  tv.bodyEl.innerHTML = mdRender(v.buf || '');
+  tv.wrap.appendChild(el('div', 'vt-trace small muted', 'kept option ' + (i + 1) + ' of ' + tv.variants.length));
+  if (window.hljs) tv.wrap.querySelectorAll('pre code').forEach(c => { try { window.hljs.highlightElement(c); } catch {} });
+  S.session.threadVariants = null;
 }
 
 // ── References: code selections + DOM picks → chat context ──
@@ -13194,7 +13392,11 @@ function handleWsFrame(d) {
     // in Studio, not a separate transcript.
     case 'token': {
       const ln = variantLaneFor(d.workflow);
-      if (ln !== null) { laneAppendText(ln, d.delta); break; }
+      if (ln !== null) {
+        if (S.session.threadVariants) threadVariantToken(ln, d.delta);
+        else laneAppendText(ln, d.delta);
+        break;
+      }
       if (S.session.id && d.workflow === S.session.id) sessionAppendText(d.delta);
       break;
     }
@@ -13231,7 +13433,7 @@ function handleWsFrame(d) {
       break;
     case 'session-done': {
       const ln = variantLaneFor(d.session);
-      if (ln !== null) { laneStatus(ln, 'done'); break; }
+      if (ln !== null) { if (S.session.threadVariants) threadVariantStatus(ln, 'done'); else laneStatus(ln, 'done'); break; }
       if (S.session.id === d.session) {
         S.session.streamEl = null;
         setThinking($('#session-msgs'), false);
@@ -13251,7 +13453,7 @@ function handleWsFrame(d) {
     }
     case 'session-error': {
       const lne = variantLaneFor(d.session);
-      if (lne !== null) { laneStatus(lne, 'error'); break; }
+      if (lne !== null) { if (S.session.threadVariants) threadVariantStatus(lne, 'error'); else laneStatus(lne, 'error'); break; }
       if (S.session.id === d.session) {
         S.session.streamEl = null;
         setThinking($('#session-msgs'), false);
