@@ -8,32 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Variants — run one prompt several ways in parallel.** A new **Variants**
-  cockpit preset runs N agents at once, each on its own `git worktree` +
-  branch (`axo/variant-{i}`) inside the session's container, isolated from each
-  other and from the primary checkout. Each variant streams to its own live
-  lane (text, tool calls, a changed-files summary, a status dot); you **Adopt**
-  the one you like — it merges that branch into your working tree and tears the
-  rest down — or **Discard** them all. The agent's `bash` tools now run rooted
-  at the variant's worktree, so a variant's shell edits stay in its own branch.
-  New routes under `/api/sessions/{id}/variants` (start, status, adopt,
-  discard); `SessionSandbox::attach` reuses one container across worktrees.
-- **A flexible cockpit layout with mode presets.** The session cockpit's
-  hardwired three-pane grid is now an N-surface layout engine: a registry of
-  surfaces (Files, Activity, Browser, Agent graph, Terminal) the engine tiles,
-  resizes, focuses, collapses, and reorders generically. A **preset switcher**
-  in the cockpit bar (and ⌘⌥-number) swaps the arrangement:
-  - **Classic** — Files | Activity | Browser (the previous default, unchanged).
-  - **Review** — Activity as a sidebar with the file/diff surface filling the
-    rest, opened on Source Control, so a Monaco diff renders full-width and
-    side-by-side instead of collapsing in the slim files pane.
-  - **Build** — Activity + a large embedded browser/live-preview, terminal
-    drawer opened.
-  - **Debug** — Activity + Terminal + the live **agent graph** (the Studio
-    lattice scoped to the session), tiled side by side — watch an agent's
-    reasoning graph and its shell at once. The terminal is promoted from the
-    overlay drawer into a real grid surface for this view (the live xterm is
-    moved, not recreated). The active preset, sizes, and order persist.
+- **Variants — run one prompt several ways, right in the conversation.** Fan a
+  turn out into N parallel attempts (the ⑂ control in the composer, configurable
+  from 1 up to 100) and keep the one you like. Each attempt is a real agent
+  working in isolation — its own `git worktree` + branch (`axo/variant-{i}`)
+  inside the session's container, separate from the others and from your working
+  tree. The attempts appear as live **option-pills** at the head of the
+  assistant's turn: flip between them as they stream, glance at each one's
+  changed-files summary, and **keep** one (reply to it, or a single Keep) — which
+  silently merges its branch into your working tree and dissolves the rest. A
+  heavy fan-out degrades gracefully: a failed attempt settles on its own, and a
+  failed worktree set rolls back cleanly rather than leaving debris. The agent's
+  `bash` tools run rooted at each attempt's worktree, so a variant's shell edits
+  stay on its own branch. New routes under `/api/sessions/{id}/variants` (start,
+  status, adopt, discard); `SessionSandbox::attach` reuses one container across
+  worktrees.
+- **A conversation-forward cockpit you configure, not a grid you're handed.**
+  The session cockpit's hardwired three-pane layout is now an N-surface engine
+  (Files, Activity, Browser, Terminal, Agent graph) that tiles, resizes,
+  collapses, and reorders generically — but the resting state is calm: a freshly
+  opened session is **just the conversation**. Surfaces show up when they're
+  useful. The agent's edits land as a **change card** ("Changed N files", tap a
+  file for an inline diff); a running dev server lands as a **preview card**
+  ("Open" brings the browser in). You add the file tree, terminal, or agent
+  graph yourself from a **Panes** menu when you want them, and the files pane's
+  editor collapses to nothing when no file is open so it never sits there empty.
+  The per-turn model/agent-target pickers and the Panes toggles are small
+  on-theme web components (`ax-select`, `ax-toggle`) rather than stock browser
+  controls. Layout, sizes, and order persist.
 - **Unified, polished conversation UI across the Chat tab and the Sessions
   Activity pane.** The two surfaces now share one rendering layer:
   - Messages render with **markdown-it** (tables, nested/task lists,
