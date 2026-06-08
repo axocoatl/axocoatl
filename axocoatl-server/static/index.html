@@ -1659,6 +1659,11 @@
   .files-editor { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
   .files-inner-resizer { width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; }
   .files-inner-resizer:hover, .files-inner-resizer.dragging { background: var(--accent); }
+  /* Editor collapsed (no file open): the tree fills the pane, no empty
+     editor column beside it. The editor opens when you open a file/diff. */
+  .files-pane-inner.editor-collapsed > .files-editor,
+  .files-pane-inner.editor-collapsed > .files-inner-resizer { display: none; }
+  .files-pane-inner.editor-collapsed > .files-explorer { width: auto; flex: 1; max-width: none; border-right: 0; }
   /* File pane search input — sits above the tree, filters as you type. */
   .file-search { padding: 6px 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
   .file-search-input { flex: 1; min-width: 0; background: var(--bg-3); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; color: var(--text); font-size: 12px; outline: none; font-family: inherit; }
@@ -7735,9 +7740,9 @@ S.cockpitLayout = {
   widths: { files: 220, browser: 360 },
   collapsed: {},
   focused: null,                // null | surface id
-  // Conversation-forward by default: the chat is the canvas, a slim file
-  // sidebar beside it. Browser/terminal/graph appear when you reach for them.
-  paneOrder: ['files', 'stream'],
+  // Conversation-only by default: a fresh session is just the Activity canvas.
+  // Files/browser/terminal/graph appear when you reach for them (Panes menu).
+  paneOrder: ['stream'],
   termOpen: false,        // false = thin rail, true = drawer expanded
   termOpenW: 460,         // drawer width when open (drag-resizable)
   termInnerListW: 140,    // inner list width (drag-resizable inside the drawer)
@@ -7749,7 +7754,7 @@ S.sidebarMode = 'full';         // 'full' | 'mini' | 'hidden'
 // dropped from Sessions.  v3: terminals became an overlay drawer.
 // v6: presets retired — the cockpit is one configurable workspace; surfaces
 // are toggled via the Panes menu. Bumped so old persisted presets reset.
-const LAYOUT_KEY = 'axo.cockpit.v7';
+const LAYOUT_KEY = 'axo.cockpit.v8';
 const SIDEBAR_KEY = 'axo.sidebar.v1';
 function persistLayout() {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(S.cockpitLayout)); } catch {}
@@ -7878,7 +7883,7 @@ function applyCockpitLayout() {
   // After the grid relayouts, tell embedded editors to remeasure.  Without
   // this Monaco renders at the old container size (visually broken file
   // pane) and xterm gets stuck on the old rows/cols.
-  requestAnimationFrame(() => { relayoutEmbeddedEditors(); relayoutTrace(); });
+  requestAnimationFrame(() => { relayoutEmbeddedEditors(); relayoutTrace(); updateFilesEditor(); });
 }
 
 // Re-fit the session's agent-graph (lattice) when the trace surface is
@@ -8082,7 +8087,7 @@ const DEFAULT_LAYOUT = {
   widths: { files: 220, browser: 360 },
   collapsed: {},
   focused: null,
-  paneOrder: ['files', 'stream'],
+  paneOrder: ['stream'],
   termOpen: false,
   termOpenW: 460,
   termInnerListW: 140,
@@ -8220,7 +8225,7 @@ function toggleSurface(id, show) {
 
 function resetWorkspace() {
   const L = S.cockpitLayout;
-  L.paneOrder = ['files', 'stream'];
+  L.paneOrder = ['stream'];
   L.flex = 'stream';
   L.widths = { files: 220, browser: 360 };
   L.collapsed = {};
@@ -9608,6 +9613,7 @@ function openCockpit(s) {
   setExplorerTab('files');   // default to the file tree; git refreshes lazily
   $('#file-tabs').innerHTML = '';
   $('#file-viewer').innerHTML = '<div class="empty small">Select a file to view</div>';
+  updateFilesEditor();       // editor collapsed until a file/diff is opened
   loadFileTree('', $('#file-tree'));
   sessionLatticeBuild(s);   // no-ops (lattice pane is gone) but still emits status frames
   renderSessionActive(s);
@@ -10710,6 +10716,7 @@ function loadMonacoOnce() {
 
 async function openFile(relPath) {
   if (!S.session.openFiles) S.session.openFiles = [];
+  document.querySelector('#cockpit-files .files-pane-inner')?.classList.remove('editor-collapsed');
   // Already open → just activate.
   const existing = S.session.openFiles.find(f => f.path === relPath);
   if (existing) {
@@ -10780,6 +10787,19 @@ function renderFileTabs() {
     });
     bar.appendChild(tab);
   });
+  updateFilesEditor();
+}
+
+// Collapse the file-editor column when nothing is open, so the Files pane is
+// just the tree (no empty cramped editor beside it). Opens when a file or a
+// diff is open.
+function updateFilesEditor() {
+  const inner = document.querySelector('#cockpit-files .files-pane-inner');
+  if (!inner) return;
+  const hasContent = ((S.session.openFiles || []).length > 0) || !!S.session.gitDiff;
+  const wasCollapsed = inner.classList.contains('editor-collapsed');
+  inner.classList.toggle('editor-collapsed', !hasContent);
+  if (hasContent && wasCollapsed) requestAnimationFrame(() => relayoutEmbeddedEditors());
 }
 
 const PREVIEWABLE_LANGS = new Set(['html', 'htm', 'svg', 'md', 'markdown']);
@@ -11289,6 +11309,9 @@ function renderGitFiles(st) {
 // Monaco's diff editor.
 async function openGitDiff(path) {
   const v = $('#file-viewer'); if (!v || !S.session.id) return;
+  // Open the editor column (it's collapsed when nothing's shown) so Monaco
+  // lays out at a real size.
+  document.querySelector('#cockpit-files .files-pane-inner')?.classList.remove('editor-collapsed');
   const modes = $('#viewer-modes'); if (modes) modes.style.display = 'none';
   v.innerHTML = '<div class="empty small">Loading diff…</div>';
   let d;
@@ -11337,6 +11360,7 @@ async function refreshOpenDiff() {
     gitDisposeDiff(monaco);
     const v = $('#file-viewer');
     if (v) v.innerHTML = '<div class="empty small">No changes — committed or reverted.</div>';
+    updateFilesEditor();   // collapse the editor if nothing else is open
     return;
   }
   let d;
