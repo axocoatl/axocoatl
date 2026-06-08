@@ -737,13 +737,41 @@
   .vlane-file { display: flex; gap: 7px; align-items: center; font-size: 11.5px; padding: 1px 0; }
   .vlane-file .git-file-badge { width: 13px; }
   /* Fan-out control + in-thread variants */
-  .fanout-btn { display: inline-flex; align-items: center; gap: 3px; align-self: flex-end;
+  /* No align-self: the button stretches with the row exactly like Send, so the
+     two are always the same height. */
+  .fanout-btn { display: inline-flex; align-items: center; gap: 4px;
                 background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
-                color: var(--muted); cursor: pointer; padding: 8px 10px; font-size: 12px; flex-shrink: 0; }
+                color: var(--muted); cursor: pointer; padding: 0 13px; font-size: 13px; flex-shrink: 0;
+                transition: filter .15s ease, box-shadow .15s ease; }
   .fanout-btn:hover { color: var(--text); }
   .fanout-btn.on { color: #fff; background: var(--accent); border-color: var(--accent); }
-  .fanout-glyph { font-size: 13px; opacity: .85; }
+  .fanout-glyph { font-size: 14px; opacity: .85; }
+  .fanout-btn.on .fanout-glyph { opacity: 1; }
   .fanout-n { font-weight: 600; font-variant-numeric: tabular-nums; }
+  /* Fan-out config popover — opens above the composer button. */
+  .fanout-pop { position: fixed; width: 264px; background: var(--panel); border: 1px solid var(--border-strong);
+                border-radius: 11px; padding: 13px; z-index: 60; box-shadow: 0 12px 34px rgba(0,0,0,.42); }
+  .fanout-pop.hide { display: none; }
+  .fp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .fp-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .fp-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1;
+          padding: 3px 5px; border-radius: 6px; }
+  .fp-x:hover { color: var(--text); background: var(--bg-3); }
+  .fp-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; }
+  .fp-label { font-size: 12px; color: var(--text); }
+  .fp-count { transition: opacity .15s ease; }
+  .fp-count.off { opacity: .38; pointer-events: none; }
+  .fp-stepper { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 7px;
+                overflow: hidden; background: var(--bg-3); }
+  .fp-step { background: none; border: none; color: var(--muted); cursor: pointer; width: 27px; height: 26px;
+             font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+  .fp-step:hover { color: var(--text); background: var(--bg-2); }
+  .fp-num { width: 42px; text-align: center; background: none; border: none;
+            border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+            color: var(--text); font-size: 12.5px; font-family: 'JetBrains Mono', ui-monospace, monospace;
+            padding: 4px 0; outline: none; -moz-appearance: textfield; }
+  .fp-num::-webkit-outer-spin-button, .fp-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .fp-hint { margin-top: 9px; font-size: 10.5px; line-height: 1.5; color: var(--muted-2); }
   .vt-pills { display: flex; gap: 6px; margin-bottom: 9px; flex-wrap: wrap; }
   .vt-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px;
              border: 1px solid var(--border); background: var(--bg-2); color: var(--muted); cursor: pointer;
@@ -3287,6 +3315,26 @@
                   <span class="fanout-glyph">⑂</span><span class="fanout-n" id="fanout-n">1</span>
                 </button>
                 <button class="btn" id="session-send">Send</button>
+              </div>
+              <div id="fanout-pop" class="fanout-pop hide">
+                <div class="fp-head">
+                  <span class="fp-title">Explore several ways</span>
+                  <button class="fp-x" id="fanout-pop-x" title="Close">✕</button>
+                </div>
+                <div class="fp-row">
+                  <span class="fp-label">Fan out this prompt</span>
+                  <ax-toggle id="fanout-pop-toggle"></ax-toggle>
+                </div>
+                <div class="fp-row fp-count" id="fanout-count-row">
+                  <span class="fp-label">How many</span>
+                  <div class="fp-stepper">
+                    <button class="fp-step" data-d="-1" title="Fewer">−</button>
+                    <input class="fp-num" id="fanout-count" type="number" min="2" max="100" value="3"
+                           inputmode="numeric" aria-label="Number of variants">
+                    <button class="fp-step" data-d="1" title="More">+</button>
+                  </div>
+                </div>
+                <div class="fp-hint" id="fanout-hint"></div>
               </div>
             </div>
           </div>
@@ -8540,7 +8588,8 @@ function initCockpitChrome() {
   const vdisc = $('#variant-discard'); if (vdisc) vdisc.addEventListener('click', discardVariants);
   const vinput = $('#variant-input');
   if (vinput) vinput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runVariants(); } });
-  const fanout = $('#fanout-btn'); if (fanout) fanout.addEventListener('click', cycleFanout);
+  const fanout = $('#fanout-btn'); if (fanout) fanout.addEventListener('click', toggleFanoutPop);
+  wireFanoutPop();
   // The "+ Add to chat" floating bubble now lives inside Monaco — see
   // onMonacoSelectionChange.  We still install a global mousedown
   // listener so a click outside the bubble hides it.
@@ -9631,7 +9680,10 @@ function openCockpit(s) {
   S.session.variants = [];
   S.session.threadVariants = null;
   S.session._previewCards = new Set();
-  S.session.fanout = 1;
+  // Fan-out is a persistent mode: an on/off plus a configured count. Leave a
+  // prior session's choice alone if set; default to off, 3 ways.
+  if (S.session.fanout == null) S.session.fanout = 3;
+  if (S.session.fanoutOn == null) S.session.fanoutOn = false;
   if (typeof updateFanoutBtn === 'function') updateFanoutBtn();
   if (typeof stopThreadVariantPoll === 'function') stopThreadVariantPoll();
   if (typeof stopVariantStatusPoll === 'function') stopVariantStatusPoll();
@@ -11681,9 +11733,10 @@ function sendSessionMessage() {
   wrap.appendChild(el('div', 'smsg-body', text));
   appendSessionEl(wrap);
 
-  // Fan-out: explore the prompt several ways at once, in the thread.
-  const fanout = S.session.fanout || 1;
-  if (fanout > 1) { startThreadVariants(fullText, fanout); resetFanout(); return; }
+  // Fan-out: explore the prompt several ways at once, in the thread. It's a
+  // persistent mode — stays on across turns until you switch it off.
+  const fanout = (S.session.fanoutOn && (S.session.fanout || 1) > 1) ? S.session.fanout : 1;
+  if (fanout > 1) { startThreadVariants(fullText, fanout); return; }
 
   setThinking($('#session-msgs'), true);
   S.session.streamEl = null;
@@ -11710,12 +11763,110 @@ function sendSessionMessage() {
 // assistant turn. Flip between them; keep the one you like; the rest dissolve.
 // The git worktrees/branches/merge underneath are never named.
 
-function cycleFanout() { S.session.fanout = ((S.session.fanout || 1) % 3) + 1; updateFanoutBtn(); }
-function resetFanout() { S.session.fanout = 1; updateFanoutBtn(); }
+// Fan-out is a persistent on/off mode with a user-set count. The backend caps
+// at FANOUT_MAX; we let the user dial all the way there and degrade gracefully.
+const FANOUT_MAX = 100;
+const FANOUT_RECOMMENDED = 4;
+
+function clampFanout(n) {
+  n = Math.round(Number(n) || 0);
+  if (!Number.isFinite(n)) n = 2;
+  return Math.max(2, Math.min(FANOUT_MAX, n));
+}
+
+// The composer button: ⑂ N when on (N = the count), ⑂ 1 when off.
 function updateFanoutBtn() {
-  const n = S.session.fanout || 1;
+  const on = !!S.session.fanoutOn;
+  const n = on ? clampFanout(S.session.fanout || FANOUT_RECOMMENDED) : 1;
   const lbl = $('#fanout-n'); if (lbl) lbl.textContent = String(n);
-  const b = $('#fanout-btn'); if (b) b.classList.toggle('on', n > 1);
+  const b = $('#fanout-btn');
+  if (b) {
+    b.classList.toggle('on', on);
+    b.title = on
+      ? ('Exploring ' + n + ' ways — click to configure')
+      : 'Explore several ways at once, then keep the one you like';
+  }
+}
+
+// ── Fan-out config popover ──────────────────────────────────────────────
+function wireFanoutPop() {
+  const x = $('#fanout-pop-x');
+  if (x) x.addEventListener('click', closeFanoutPop);
+  const tog = $('#fanout-pop-toggle');
+  if (tog) tog.addEventListener('change', () => {
+    S.session.fanoutOn = tog.checked;
+    if (S.session.fanoutOn && (S.session.fanout || 0) < 2) S.session.fanout = FANOUT_RECOMMENDED;
+    renderFanoutPop(); updateFanoutBtn();
+  });
+  const num = $('#fanout-count');
+  if (num) {
+    const commit = () => { S.session.fanout = clampFanout(num.value); renderFanoutPop(); updateFanoutBtn(); };
+    num.addEventListener('change', commit);
+    num.addEventListener('blur', commit);
+  }
+  document.querySelectorAll('#fanout-count-row .fp-step').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const d = parseInt(btn.getAttribute('data-d'), 10) || 0;
+      S.session.fanout = clampFanout((S.session.fanout || FANOUT_RECOMMENDED) + d);
+      renderFanoutPop(); updateFanoutBtn();
+    });
+  });
+}
+
+// Sync the popover controls to state.
+function renderFanoutPop() {
+  const on = !!S.session.fanoutOn;
+  const n = clampFanout(S.session.fanout || FANOUT_RECOMMENDED);
+  const tog = $('#fanout-pop-toggle'); if (tog) tog.checked = on;
+  const num = $('#fanout-count'); if (num) num.value = String(n);
+  const row = $('#fanout-count-row'); if (row) row.classList.toggle('off', !on);
+  const hint = $('#fanout-hint');
+  if (hint) {
+    hint.textContent = n > 16
+      ? (n + ' ways at once is a lot — each runs in its own branch, so it works, but expect it to be slow and heavy on local models. Up to ' + FANOUT_MAX + '.')
+      : ('A few ways (around ' + FANOUT_RECOMMENDED + ') runs comfortably in parallel. You can go up to ' + FANOUT_MAX + '; more than a handful gets slow on local models.');
+  }
+}
+
+function toggleFanoutPop() {
+  const pop = $('#fanout-pop');
+  if (!pop) return;
+  if (!pop.classList.contains('hide')) { closeFanoutPop(); return; }
+  renderFanoutPop();
+  pop.classList.remove('hide');
+  positionFanoutPop();
+  setTimeout(() => document.addEventListener('mousedown', closeFanoutPopOutside, { capture: true }), 0);
+}
+
+function closeFanoutPop() {
+  const pop = $('#fanout-pop'); if (pop) pop.classList.add('hide');
+  document.removeEventListener('mousedown', closeFanoutPopOutside, { capture: true });
+}
+
+function closeFanoutPopOutside(e) {
+  const pop = $('#fanout-pop'); const btn = $('#fanout-btn');
+  if (!pop) return;
+  if (pop.contains(e.target) || (btn && btn.contains(e.target))) return;
+  closeFanoutPop();
+}
+
+// Anchor above the ⑂ button, right-aligned to it, clamped to the viewport.
+function positionFanoutPop() {
+  const pop = $('#fanout-pop'); const btn = $('#fanout-btn');
+  if (!pop || !btn) return;
+  pop.style.visibility = 'hidden';
+  const r = btn.getBoundingClientRect();
+  const pw = pop.offsetWidth || 264;
+  const ph = pop.offsetHeight || 180;
+  const margin = 8;
+  let left = r.right - pw;
+  if (left < margin) left = margin;
+  if (left + pw > window.innerWidth - margin) left = window.innerWidth - pw - margin;
+  let top = r.top - ph - 6;                       // prefer above the composer
+  if (top < margin) top = r.bottom + 6;           // fall back to below
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+  pop.style.visibility = '';
 }
 
 async function startThreadVariants(input, n) {
