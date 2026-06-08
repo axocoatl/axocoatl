@@ -1629,15 +1629,25 @@ impl AxocoatlDaemon {
             let _ = self
                 .session_git(session_id, &["branch", "-D", &branch])
                 .await;
-            let r = self
+            let r = match self
                 .session_git(
                     session_id,
                     &["worktree", "add", "-q", "-b", &branch, &wt, "HEAD"],
                 )
-                .await?;
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    // Roll back the partial set so a failure leaves no debris.
+                    self.remove_variant_worktrees(session_id).await.ok();
+                    return Err(e);
+                }
+            };
             if !r.ok() {
+                self.remove_variant_worktrees(session_id).await.ok();
                 return Err(DaemonError::Session(format!(
-                    "worktree add failed for variant {i}: {}",
+                    "couldn't create variant {} of {n} ({}). Try fewer variants.",
+                    i + 1,
                     r.stderr.trim()
                 )));
             }
@@ -1774,10 +1784,15 @@ impl AxocoatlDaemon {
         n: usize,
         model_override: Option<String>,
     ) -> Result<Vec<crate::git::Variant>, DaemonError> {
-        if !(1..=8).contains(&n) {
-            return Err(DaemonError::Session(
-                "variant count must be between 1 and 8".into(),
-            ));
+        // A generous ceiling — the user configures the count. Beyond a handful
+        // it gets slow on local models, but we let them push it and degrade
+        // gracefully (a failed lane errors on its own; a failed worktree set
+        // rolls back) rather than capping low.
+        const MAX_VARIANTS: usize = 100;
+        if !(1..=MAX_VARIANTS).contains(&n) {
+            return Err(DaemonError::Session(format!(
+                "variant count must be between 1 and {MAX_VARIANTS}"
+            )));
         }
         let session = self
             .get_session(session_id)
