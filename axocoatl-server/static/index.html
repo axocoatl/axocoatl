@@ -3166,8 +3166,7 @@
           <span class="grow"></span>
           <span class="small muted" id="cockpit-status"></span>
           <span class="cockpit-live-pill idle" id="cockpit-live"><span class="cockpit-live-label">idle</span></span>
-          <span class="preset-switch" id="preset-switch"></span>
-          <button class="btn ghost sm" id="panes-menu-btn" title="Show/hide panes">Panes ▾</button>
+          <button class="btn ghost sm" id="panes-menu-btn" title="Show or hide workspace surfaces">Panes ▾</button>
         </div>
         <div id="panes-menu" class="panes-menu hide"></div>
         <div class="cockpit-shell" id="cockpit-shell">
@@ -7716,7 +7715,9 @@ S.sidebarMode = 'full';         // 'full' | 'mini' | 'hidden'
 // localStorage persistence — your custom workspace survives page reloads.
 // v5: N-surface layout engine (preset + widths map).  v4: lattice pane
 // dropped from Sessions.  v3: terminals became an overlay drawer.
-const LAYOUT_KEY = 'axo.cockpit.v5';
+// v6: presets retired — the cockpit is one configurable workspace; surfaces
+// are toggled via the Panes menu. Bumped so old persisted presets reset.
+const LAYOUT_KEY = 'axo.cockpit.v6';
 const SIDEBAR_KEY = 'axo.sidebar.v1';
 function persistLayout() {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(S.cockpitLayout)); } catch {}
@@ -8134,41 +8135,65 @@ function renderPresetSwitcher() {
   });
 }
 
+// The cockpit is one configurable workspace; this menu shows/hides each
+// surface. The conversation (Activity) is the canvas — always on.
+const TOGGLEABLE_SURFACES = ['stream', 'files', 'browser', 'terminal', 'trace'];
 function renderPanesMenu() {
   const menu = $('#panes-menu'); if (!menu) return;
   menu.innerHTML = '';
   const L = S.cockpitLayout;
-  const panes = (L.paneOrder || DEFAULT_PANE_ORDER)
-    .filter(id => SURFACES[id])
-    .map((id, i) => ({ key: id, label: SURFACES[id].title, sc: 'Ctrl+' + (i + 1), stream: isFlexSurface(id) }));
-  panes.forEach(p => {
+  const order = (L.paneOrder || DEFAULT_PANE_ORDER).filter(id => SURFACES[id]);
+  TOGGLEABLE_SURFACES.forEach(id => {
+    if (!SURFACES[id]) return;
+    const canvas = id === 'stream';                 // the conversation, always on
+    const present = order.includes(id);
     const row = el('div', 'pm-item');
     const cb = document.createElement('input');
     cb.type = 'checkbox';
-    cb.checked = p.stream ? true : !L.collapsed[p.key];
-    if (p.stream) cb.disabled = true;
+    cb.checked = canvas ? true : present;
+    if (canvas) cb.disabled = true;
     row.appendChild(cb);
-    row.appendChild(el('span', '', p.label));
-    if (p.sc) row.appendChild(el('span', 'pm-shortcut', p.sc));
+    row.appendChild(el('span', '', SURFACES[id].title));
     row.addEventListener('click', (e) => {
-      if (p.stream) return;
+      if (canvas) return;
       if (e.target !== cb) cb.checked = !cb.checked;
-      L.focused = null;
-      L.collapsed[p.key] = !cb.checked;
-      applyCockpitLayout();
+      toggleSurface(id, cb.checked);
       renderPanesMenu();
     });
     menu.appendChild(row);
   });
   menu.appendChild(el('div', 'pm-divider'));
   const reset = el('div', 'pm-item pm-action');
-  reset.appendChild(el('span', '', '↺ Reset layout'));
-  reset.addEventListener('click', () => {
-    S.cockpitLayout = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
-    applyCockpitLayout();
-    renderPanesMenu();
-  });
+  reset.appendChild(el('span', '', '↺ Reset workspace'));
+  reset.addEventListener('click', () => { resetWorkspace(); renderPanesMenu(); });
   menu.appendChild(reset);
+}
+
+// Show/hide a surface by adding/removing it from the layout. Files sit left of
+// the conversation; everything else to its right.
+function toggleSurface(id, show) {
+  const L = S.cockpitLayout;
+  let order = (L.paneOrder || DEFAULT_PANE_ORDER).filter(x => SURFACES[x]);
+  if (show && !order.includes(id)) {
+    if (id === 'files') order.unshift(id);
+    else order.push(id);
+  } else if (!show) {
+    order = order.filter(x => x !== id);
+  }
+  L.paneOrder = order;
+  L.focused = null;
+  if (L.collapsed) L.collapsed[id] = false;
+  applyCockpitLayout();
+}
+
+function resetWorkspace() {
+  const L = S.cockpitLayout;
+  L.paneOrder = ['files', 'stream', 'browser'];
+  L.flex = 'stream';
+  L.widths = { files: 260, browser: 240 };
+  L.collapsed = {};
+  L.focused = null;
+  applyCockpitLayout();
 }
 
 function openPanesMenu() {
@@ -8354,14 +8379,6 @@ function onCockpitKey(e) {
   const inField = tag === 'INPUT' || tag === 'TEXTAREA';
   if (e.key === 'Escape' && S.cockpitLayout.focused) {
     S.cockpitLayout.focused = null; applyCockpitLayout(); return;
-  }
-  // ⌘⌥<n> — switch layout preset.  Allowed even while typing (not a
-  // typeable combo), so it works from the composer.
-  if ((e.ctrlKey || e.metaKey) && e.altKey && /^[1-9]$/.test(e.key)) {
-    e.preventDefault();
-    const name = PRESET_ORDER[parseInt(e.key, 10) - 1];
-    if (name) applyPreset(name);
-    return;
   }
   if (inField) return;
   if ((e.ctrlKey || e.metaKey) && !e.altKey && ['1','2','3','4','5'].includes(e.key)) {
