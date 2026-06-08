@@ -441,10 +441,15 @@ impl BuiltinTool for BashTool {
     }
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let command = str_arg(&args, "command", "bash")?;
+        // Run at the sandbox root, not the container's default cwd — these
+        // differ for an attached (variant) sandbox, where the root is the
+        // worktree. A no-op for the primary session (root == default cwd).
+        let root = self.sandbox.root().to_string_lossy();
+        let scoped = format!("cd '{root}' && {command}");
         // The container is the boundary, so an arbitrary command is safe to run.
         let r = self
             .sandbox
-            .exec(&["sh", "-c", command], SHELL_TIMEOUT)
+            .exec(&["sh", "-c", &scoped], SHELL_TIMEOUT)
             .await
             .map_err(|e| exec_err("bash", e))?;
         Ok(serde_json::json!({
@@ -479,7 +484,11 @@ impl BuiltinTool for BashBackgroundTool {
     }
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let command = str_arg(&args, "command", "bash_background")?;
-        let task_id = self.sandbox.spawn_background(command);
+        // Root at the sandbox dir (the worktree, for a variant sandbox).
+        let root = self.sandbox.root().to_string_lossy();
+        let task_id = self
+            .sandbox
+            .spawn_background(&format!("cd '{root}' && {command}"));
         Ok(serde_json::json!({ "task_id": task_id, "started": true }))
     }
 }

@@ -702,13 +702,103 @@
   }
   .col-resizer { cursor: col-resize; background: transparent; transition: background .15s; user-select: none; touch-action: none; }
   .col-resizer:hover, .col-resizer.dragging { background: var(--accent); opacity: .55; }
+  /* Layout-preset switcher in the cockpit bar. */
+  .preset-switch { display: inline-flex; gap: 2px; background: var(--bg-2); border: 1px solid var(--border);
+                   border-radius: 7px; padding: 2px; margin-right: 6px; }
+  .preset-btn { background: transparent; border: none; color: var(--muted); font-size: 11.5px;
+                padding: 3px 10px; border-radius: 5px; cursor: pointer; line-height: 1.4; }
+  .preset-btn:hover { color: var(--text); }
+  .preset-btn.active { background: var(--accent); color: #fff; }
+  .trace-body { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; }
+  .trace-body ax-lattice { width: 100%; height: 100%; display: block; }
+  /* Fan-out control + in-thread variants */
+  /* No align-self: the button stretches with the row exactly like Send, so the
+     two are always the same height. */
+  .fanout-btn { display: inline-flex; align-items: center; gap: 4px;
+                background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
+                color: var(--muted); cursor: pointer; padding: 0 13px; font-size: 13px; flex-shrink: 0;
+                transition: filter .15s ease, box-shadow .15s ease; }
+  .fanout-btn:hover { color: var(--text); }
+  .fanout-btn.on { color: #fff; background: var(--accent); border-color: var(--accent); }
+  .fanout-glyph { font-size: 14px; opacity: .85; }
+  .fanout-btn.on .fanout-glyph { opacity: 1; }
+  .fanout-n { font-weight: 600; font-variant-numeric: tabular-nums; }
+  /* Fan-out config popover — opens above the composer button. */
+  .fanout-pop { position: fixed; width: 264px; background: var(--panel); border: 1px solid var(--border-strong);
+                border-radius: 11px; padding: 13px; z-index: 60; box-shadow: 0 12px 34px rgba(0,0,0,.42); }
+  .fanout-pop.hide { display: none; }
+  .fp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .fp-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .fp-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1;
+          padding: 3px 5px; border-radius: 6px; }
+  .fp-x:hover { color: var(--text); background: var(--bg-3); }
+  .fp-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; }
+  .fp-label { font-size: 12px; color: var(--text); }
+  .fp-count { transition: opacity .15s ease; }
+  .fp-count.off { opacity: .38; pointer-events: none; }
+  .fp-stepper { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 7px;
+                overflow: hidden; background: var(--bg-3); }
+  .fp-step { background: none; border: none; color: var(--muted); cursor: pointer; width: 27px; height: 26px;
+             font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+  .fp-step:hover { color: var(--text); background: var(--bg-2); }
+  .fp-num { width: 42px; text-align: center; background: none; border: none;
+            border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+            color: var(--text); font-size: 12.5px; font-family: 'JetBrains Mono', ui-monospace, monospace;
+            padding: 4px 0; outline: none; -moz-appearance: textfield; }
+  .fp-num::-webkit-outer-spin-button, .fp-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .fp-hint { margin-top: 9px; font-size: 10.5px; line-height: 1.5; color: var(--muted-2); }
+  .vt-pills { display: flex; gap: 6px; margin-bottom: 9px; flex-wrap: wrap; }
+  .vt-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px;
+             border: 1px solid var(--border); background: var(--bg-2); color: var(--muted); cursor: pointer;
+             font-size: 12px; transition: color .15s, border-color .15s, background .15s; }
+  .vt-pill:hover { color: var(--text); }
+  .vt-pill.active { border-color: var(--accent); color: var(--text); background: rgba(255,255,255,.05); }
+  .vt-pill-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .vt-pill-dot.running { background: var(--axo-jade-glow, #4ade80); animation: vlane-pulse 1s ease-in-out infinite; }
+  .vt-pill-dot.done { background: var(--ok, #4ade80); }
+  .vt-pill-dot.error { background: var(--err, #ff6b6b); }
+  .vt-pill-stat { font-variant-numeric: tabular-nums; opacity: .8; font-size: 11px; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .vt-body { min-height: 22px; transition: opacity .12s; }
+  .vt-foot { display: flex; align-items: center; gap: 10px; margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--border); }
+  .vt-diffstat { font-size: 11.5px; color: var(--muted); font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .vt-keep { margin-left: auto; }
+  /* Change card — agent edits, in the conversation flow */
+  .change-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2);
+                 padding: 11px 13px; }
+  .cc-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text); }
+  .cc-icon { color: var(--axo-bronze, #d6a55a); }
+  .cc-title { font-weight: 600; }
+  .cc-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+  .cc-file { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 7px;
+             border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer;
+             font-size: 11.5px; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .cc-file:hover { color: var(--text); }
+  .cc-file.open { border-color: var(--accent); color: var(--text); }
+  .cc-diff { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 9px; }
+  .inline-diff { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 1.55;
+                 max-height: 320px; overflow: auto; border-radius: 6px; }
+  .idiff-line { display: flex; white-space: pre; }
+  .idiff-gutter { width: 16px; flex-shrink: 0; text-align: center; opacity: .6; user-select: none; }
+  .idiff-text { white-space: pre-wrap; word-break: break-word; }
+  .idiff-add { background: rgba(74, 222, 128, .10); }
+  .idiff-add .idiff-gutter { color: var(--ok, #4ade80); }
+  .idiff-del { background: rgba(255, 107, 107, .10); }
+  .idiff-del .idiff-gutter { color: var(--err, #ff6b6b); }
+  .idiff-ctx { color: var(--muted); }
+  .idiff-more { padding: 4px 2px; }
+  /* Preview card — a running dev server */
+  .preview-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); padding: 11px 13px; }
+  .pc-icon { color: var(--axo-jade-glow, #4ade80); }
+  .pc-row { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+  .pc-url { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--accent-2, var(--axo-blue)); }
+  .pc-open { margin-left: auto; }
+  .terminal-surface-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .terminal-surface-body > .terminals-body { flex: 1; min-height: 0; }
   /* Pin every grid child to its column so `display:none` leaves an empty
      track instead of triggering CSS-grid auto-placement (which would shift
      Activity into a zero-width resizer slot). */
   .cockpit-grid > #cockpit-files     { grid-column: 1; }
-  .cockpit-grid > [data-which="1"]   { grid-column: 2; }
   .cockpit-grid > #cockpit-stream    { grid-column: 3; }
-  .cockpit-grid > [data-which="2"]   { grid-column: 4; }
   .cockpit-grid > #cockpit-browser   { grid-column: 5; }
   body.axo-resizing, body.axo-resizing * { user-select: none !important; cursor: col-resize !important; }
   body.axo-vresizing, body.axo-vresizing * { user-select: none !important; cursor: row-resize !important; }
@@ -1544,9 +1634,10 @@
   /* Panes menu */
   .cockpit-bar { position: relative; }
   .panes-menu { position: fixed; background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px; padding: 5px; min-width: 220px; z-index: 50; box-shadow: 0 6px 22px rgba(0,0,0,.35); }
-  .pm-item { display: flex; align-items: center; gap: 9px; padding: 7px 10px; cursor: pointer; border-radius: 5px; font-size: 12.5px; user-select: none; }
+  .pm-item { display: flex; align-items: center; gap: 9px; padding: 7px 10px; cursor: pointer; border-radius: 6px; font-size: 12.5px; user-select: none; }
   .pm-item:hover { background: var(--bg-3); }
-  .pm-item input[type="checkbox"] { margin: 0; cursor: pointer; }
+  .pm-item ax-toggle { margin-left: auto; }
+  .pm-label { color: var(--text); }
   .pm-item .pm-shortcut { margin-left: auto; font-size: 10.5px; color: var(--muted-2); }
   .pm-divider { border-top: 1px solid var(--border); margin: 4px 0; }
   .pm-action { color: var(--muted); }
@@ -1572,6 +1663,11 @@
   .files-editor { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
   .files-inner-resizer { width: 4px; cursor: col-resize; background: transparent; flex-shrink: 0; }
   .files-inner-resizer:hover, .files-inner-resizer.dragging { background: var(--accent); }
+  /* Editor collapsed (no file open): the tree fills the pane, no empty
+     editor column beside it. The editor opens when you open a file/diff. */
+  .files-pane-inner.editor-collapsed > .files-editor,
+  .files-pane-inner.editor-collapsed > .files-inner-resizer { display: none; }
+  .files-pane-inner.editor-collapsed > .files-explorer { width: auto; flex: 1; max-width: none; border-right: 0; }
   /* File pane search input — sits above the tree, filters as you type. */
   .file-search { padding: 6px 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
   .file-search-input { flex: 1; min-width: 0; background: var(--bg-3); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; color: var(--text); font-size: 12px; outline: none; font-family: inherit; }
@@ -1627,14 +1723,8 @@
   .session-input-bar { display: flex; align-items: center; gap: 8px; }
   .session-input-row { display: flex; gap: 8px; }
   .session-input textarea { flex: 1; min-height: 42px; max-height: 140px; }
-  .session-model-picker, .session-agent-target {
-    background: var(--bg-3); border: 1px solid var(--border); border-radius: 5px;
-    color: var(--fg-soft, var(--text)); font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 11px; padding: 3px 8px; outline: none; cursor: pointer;
-    max-width: 50%;
-  }
-  .session-model-picker:focus, .session-agent-target:focus { border-color: var(--accent); }
-  .session-model-picker.hide, .session-agent-target.hide { display: none; }
+  /* The per-turn model + agent-target pickers are <ax-select> web components
+     now — they style themselves in shadow DOM (see class AxSelect). */
   .smsg { font-size: 13px; line-height: 1.55; }
   .smsg-role { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 4px; font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .smsg.agent .smsg-role { color: var(--accent-lift); }
@@ -1676,9 +1766,13 @@
              border-radius: 5px; color: var(--text); font-size: 12px; padding: 4px 7px; }
   .git-branchline { display: flex; align-items: center; gap: 6px; padding: 0 8px 6px;
                     font-size: 11px; color: var(--muted); flex-shrink: 0; border-bottom: 1px solid var(--border); }
-  .git-branch { font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--accent-2, var(--axo-blue)); }
-  .git-branch::before { content: '⎇ '; opacity: .7; }
-  .git-mini { margin-left: auto; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; }
+  .git-branch-glyph { opacity: .7; color: var(--accent-2, var(--axo-blue)); }
+  .git-branch-select { flex: 1; min-width: 0; max-width: 100%; background: var(--bg-2); border: 1px solid var(--border);
+                       border-radius: 5px; color: var(--accent-2, var(--axo-blue)); cursor: pointer; padding: 2px 5px;
+                       font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; }
+  .git-branch-select:hover { border-color: var(--accent-2, var(--axo-blue)); }
+  .git-branch-select:disabled { opacity: .6; cursor: default; }
+  .git-mini { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 12px; flex-shrink: 0; }
   .git-mini:hover { color: var(--text); }
   .git-files { flex: 1; overflow: auto; padding: 4px; }
   .git-file { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border-radius: 5px;
@@ -3105,7 +3199,7 @@
           <span class="grow"></span>
           <span class="small muted" id="cockpit-status"></span>
           <span class="cockpit-live-pill idle" id="cockpit-live"><span class="cockpit-live-label">idle</span></span>
-          <button class="btn ghost sm" id="panes-menu-btn" title="Show/hide panes">Panes ▾</button>
+          <button class="btn ghost sm" id="panes-menu-btn" title="Show or hide workspace surfaces">Panes ▾</button>
         </div>
         <div id="panes-menu" class="panes-menu hide"></div>
         <div class="cockpit-shell" id="cockpit-shell">
@@ -3140,7 +3234,8 @@
                     <button class="btn sm" id="git-commit" title="Stage all + commit">Commit all</button>
                   </div>
                   <div class="git-branchline">
-                    <span class="git-branch" id="git-branch">—</span>
+                    <span class="git-branch-glyph" aria-hidden="true">⎇</span>
+                    <select class="git-branch-select" id="git-branch" title="Switch branch"></select>
                     <button class="git-mini" id="git-refresh" title="Refresh">⟳</button>
                   </div>
                   <div class="git-files" id="git-files"></div>
@@ -3162,7 +3257,6 @@
               </div>
             </div>
           </div>
-          <div class="col-resizer" data-which="1"></div>
           <div class="cockpit-pane" id="cockpit-stream">
             <div class="pane-head" data-pane="stream" draggable="true">
               <span class="pane-head-title">Activity</span>
@@ -3181,16 +3275,38 @@
                    sends; values are read at send-time and forwarded as
                    `model_override` / `target_agent` on the WS payload. -->
               <div class="session-input-bar" id="session-input-bar">
-                <select class="session-model-picker" id="session-model" title="Override the model for this turn"></select>
-                <select class="session-agent-target hide" id="session-target" title="Send this turn to a specific agent"></select>
+                <ax-select id="session-model" title="Override the model for this turn"></ax-select>
+                <ax-select id="session-target" class="hide" title="Send this turn to a specific agent"></ax-select>
               </div>
               <div class="session-input-row">
                 <textarea class="input" id="session-text" placeholder="Tell the agents what to build — Enter to send, Shift+Enter for newline"></textarea>
+                <button class="fanout-btn" id="fanout-btn" title="Explore several ways at once, then keep the one you like">
+                  <span class="fanout-glyph">⑂</span><span class="fanout-n" id="fanout-n">1</span>
+                </button>
                 <button class="btn" id="session-send">Send</button>
+              </div>
+              <div id="fanout-pop" class="fanout-pop hide">
+                <div class="fp-head">
+                  <span class="fp-title">Explore several ways</span>
+                  <button class="fp-x" id="fanout-pop-x" title="Close">✕</button>
+                </div>
+                <div class="fp-row">
+                  <span class="fp-label">Fan out this prompt</span>
+                  <ax-toggle id="fanout-pop-toggle"></ax-toggle>
+                </div>
+                <div class="fp-row fp-count" id="fanout-count-row">
+                  <span class="fp-label">How many</span>
+                  <div class="fp-stepper">
+                    <button class="fp-step" data-d="-1" title="Fewer">−</button>
+                    <input class="fp-num" id="fanout-count" type="number" min="2" max="100" value="3"
+                           inputmode="numeric" aria-label="Number of variants">
+                    <button class="fp-step" data-d="1" title="More">+</button>
+                  </div>
+                </div>
+                <div class="fp-hint" id="fanout-hint"></div>
               </div>
             </div>
           </div>
-          <div class="col-resizer" data-which="2"></div>
           <div class="cockpit-pane cockpit-browser-pane" id="cockpit-browser">
             <div class="pane-head" data-pane="browser" draggable="true">
               <span class="pane-head-title">Browser</span>
@@ -3225,6 +3341,30 @@
                 </div>
               </div>
             </div>
+          </div>
+          <!-- Agent graph (the Studio lattice, scoped to this session) — the
+               "glass box" trace surface, shown by the Debug preset. -->
+          <div class="cockpit-pane" id="cockpit-trace">
+            <div class="pane-head" data-pane="trace" draggable="true">
+              <span class="pane-head-title">Agent graph</span>
+              <span class="pane-head-meta" id="pane-meta-trace"></span>
+              <button class="pane-btn" data-pane="trace" data-act="focus" title="Focus">⛶</button>
+              <button class="pane-btn" data-pane="trace" data-act="collapse" title="Collapse">▶</button>
+            </div>
+            <div class="trace-body" id="session-lattice-host"></div>
+          </div>
+          <!-- Terminal as a first-class grid surface (Debug preset).  The live
+               terminal body (#terminals-body) is re-parented here from the
+               overlay drawer when a preset puts the terminal in the grid. -->
+          <div class="cockpit-pane" id="cockpit-terminal">
+            <div class="pane-head" data-pane="terminal" draggable="true">
+              <span class="pane-head-title">Terminal</span>
+              <span class="pane-head-meta" id="pane-meta-terminal-surface"></span>
+              <button class="pane-btn" id="term-surface-new-btn" title="New terminal">＋</button>
+              <button class="pane-btn" data-pane="terminal" data-act="focus" title="Focus">⛶</button>
+              <button class="pane-btn" data-pane="terminal" data-act="collapse" title="Collapse">▶</button>
+            </div>
+            <div class="terminal-surface-body" id="terminal-surface-body"></div>
           </div>
         </div>
         <!-- Terminals drawer: lives outside the column grid as an
@@ -7585,13 +7725,19 @@ window.addEventListener('DOMContentLoaded', () => {
 S.session = { id: null, dir: '', name: '', streamEl: null, streamBuf: '', toolCards: {}, openFiles: [], activeFile: null };
 S.fpPath = '';
 S.cockpitLayout = {
-  // 2 widths for files / browser  (Activity = 1fr).  Lattice is no
-  // longer in Sessions — its canonical surface is Studio.  Terminals
-  // is the right-side overlay drawer (separate from the grid).
-  colWidths: [260, 240],
-  collapsed: { files: false, browser: false },
-  focused: null,                // null | 'files' | 'stream' | 'browser'
-  paneOrder: ['files', 'stream', 'browser'],
+  // The cockpit is a row of N "surfaces" (panes) drawn from the SURFACES
+  // registry.  `preset` names the active arrangement; `paneOrder` is the
+  // visible surfaces left→right; `widths` is the px size of each fixed
+  // surface (flex surfaces — e.g. Activity — take 1fr and ignore it).
+  // Terminals is the right-side overlay drawer (separate from the grid).
+  preset: 'classic',
+  flex: 'stream',               // id of the surface that fills (1fr)
+  widths: { files: 220, browser: 360 },
+  collapsed: {},
+  focused: null,                // null | surface id
+  // Conversation-only by default: a fresh session is just the Activity canvas.
+  // Files/browser/terminal/graph appear when you reach for them (Panes menu).
+  paneOrder: ['stream'],
   termOpen: false,        // false = thin rail, true = drawer expanded
   termOpenW: 460,         // drawer width when open (drag-resizable)
   termInnerListW: 140,    // inner list width (drag-resizable inside the drawer)
@@ -7599,9 +7745,11 @@ S.cockpitLayout = {
 S.sidebarMode = 'full';         // 'full' | 'mini' | 'hidden'
 
 // localStorage persistence — your custom workspace survives page reloads.
-// v4: lattice pane dropped from Sessions (now Studio-only).  v3:
-// terminals became an overlay drawer.  v2: terminals as a column.
-const LAYOUT_KEY = 'axo.cockpit.v4';
+// v5: N-surface layout engine (preset + widths map).  v4: lattice pane
+// dropped from Sessions.  v3: terminals became an overlay drawer.
+// v6: presets retired — the cockpit is one configurable workspace; surfaces
+// are toggled via the Panes menu. Bumped so old persisted presets reset.
+const LAYOUT_KEY = 'axo.cockpit.v8';
 const SIDEBAR_KEY = 'axo.sidebar.v1';
 function persistLayout() {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(S.cockpitLayout)); } catch {}
@@ -7614,25 +7762,23 @@ function loadPersistedLayout() {
     const s = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null');
     if (s && typeof s === 'object') {
       // Merge carefully so new fields land with sensible defaults.
-      if (Array.isArray(s.colWidths) && s.colWidths.length >= 2) {
-        const NEW = [260, 240];
-        const MIN = [200, 200];
-        const padded = s.colWidths.slice(0, 2);
-        while (padded.length < 2) padded.push(NEW[padded.length]);
-        for (let i = 0; i < 2; i++) {
-          if (padded[i] < MIN[i] || padded[i] > 600) padded[i] = NEW[i];
-        }
-        S.cockpitLayout.colWidths = padded;
+      if (typeof s.preset === 'string') S.cockpitLayout.preset = s.preset;
+      if (typeof s.flex === 'string' && SURFACES[s.flex]) S.cockpitLayout.flex = s.flex;
+      if (s.widths && typeof s.widths === 'object') {
+        Object.keys(SURFACES).forEach(id => {
+          const w = s.widths[id];
+          const mn = SURFACES[id].min || 120, mx = SURFACES[id].max || 1400;
+          if (typeof w === 'number' && w >= mn && w <= mx) S.cockpitLayout.widths[id] = w;
+        });
       }
       if (s.collapsed && typeof s.collapsed === 'object') {
-        ['files','browser'].forEach(k => {
+        Object.keys(S.cockpitLayout.collapsed).forEach(k => {
           if (typeof s.collapsed[k] === 'boolean') S.cockpitLayout.collapsed[k] = s.collapsed[k];
         });
       }
-      if (Array.isArray(s.paneOrder)) {
-        const want = ['files','stream','browser'].sort().join(',');
-        const got  = [...s.paneOrder].sort().join(',');
-        if (want === got) S.cockpitLayout.paneOrder = s.paneOrder;
+      // Accept any persisted order whose ids are all registered surfaces.
+      if (Array.isArray(s.paneOrder) && s.paneOrder.length && s.paneOrder.every(id => SURFACES[id])) {
+        S.cockpitLayout.paneOrder = s.paneOrder.slice();
       }
       if (typeof s.termOpen     === 'boolean') S.cockpitLayout.termOpen     = s.termOpen;
       if (typeof s.termOpenW    === 'number' && s.termOpenW    > 200) S.cockpitLayout.termOpenW    = s.termOpenW;
@@ -7646,93 +7792,118 @@ function loadPersistedLayout() {
   } catch {}
 }
 
-// Map pane key → element id and (for sized panes) index into L.colWidths.
-// Terminals is NOT in the grid (it's the overlay drawer); lattice is
-// gone from Sessions — its canonical surface is Studio.
-const PANE_ELS = {
-  files:   '#cockpit-files',
-  stream:  '#cockpit-stream',
-  browser: '#cockpit-browser',
+// Surface registry — each surface is a persistent pane element the layout
+// engine places into the grid.  `flex` surfaces take 1fr; the rest are
+// sized in px via S.cockpitLayout.widths[id].  New surfaces (diff, trace…)
+// register here and presets just choose which are visible and in what order.
+// Terminals is NOT a grid surface (it's the overlay drawer).
+const SURFACES = {
+  files:   { el: '#cockpit-files',   title: 'Files',       defaultW: 260, min: 150, max: 1200, collapsible: true },
+  stream:  { el: '#cockpit-stream',  title: 'Activity',    defaultW: 420, min: 280, max: 1200, collapsible: false },
+  browser: { el: '#cockpit-browser', title: 'Browser',     defaultW: 240, min: 180, max: 1100, collapsible: true },
+  trace:   { el: '#cockpit-trace',   title: 'Agent graph', defaultW: 420, min: 240, max: 1200, collapsible: true },
+  terminal:{ el: '#cockpit-terminal',title: 'Terminal',    defaultW: 360, min: 220, max: 1100, collapsible: true },
 };
-const PANE_WIDTH_IDX = { files: 0, browser: 1 };
 const DEFAULT_PANE_ORDER = ['files', 'stream', 'browser'];
+// Which surface stretches to fill (1fr) is a property of the active layout,
+// not the surface — a preset can make the diff or the editor the big one.
+const isFlexSurface = (id) => id === (S.cockpitLayout.flex || 'stream');
+const surfaceWidth = (id) =>
+  S.cockpitLayout.widths[id] ?? (SURFACES[id] ? SURFACES[id].defaultW : 260);
+// Visible surfaces, in order: registered, and (unless one is focused) not
+// collapsed.  Focus mode shows only the focused surface.
+function visibleSurfaces() {
+  const L = S.cockpitLayout;
+  const order = (Array.isArray(L.paneOrder) ? L.paneOrder : DEFAULT_PANE_ORDER).filter(id => SURFACES[id]);
+  return order.filter(id => (L.focused ? id === L.focused : !L.collapsed[id]));
+}
 
 function applyCockpitLayout() {
   const grid = document.querySelector('.cockpit-grid');
   if (!grid) return;
   const L = S.cockpitLayout;
-  const order = (L.paneOrder && L.paneOrder.length === 3)
-    ? L.paneOrder.slice()
-    : DEFAULT_PANE_ORDER.slice();
   const px = n => n + 'px';
+  const visible = visibleSurfaces();
+  const solo = visible.length === 1;            // focus mode / single surface fills
 
-  // Compute per-pane track size (1fr for stream, fixed px for the rest).
-  const trackFor = (key) => {
-    if (L.focused) return L.focused === key ? '1fr' : '0';
-    if (L.collapsed[key]) return '0';
-    if (key === 'stream') return '1fr';
-    return px(L.colWidths[PANE_WIDTH_IDX[key]]);
-  };
+  // One resizer between each pair of visible surfaces.
+  const nResizers = Math.max(0, visible.length - 1);
+  ensureResizerPool(nResizers);
+  const resizers = [...grid.querySelectorAll('.col-resizer')];
 
-  // Build 5-track template: pane, resizer, pane, resizer, pane.
+  // Build the track template: surface, 6px, surface, 6px, …  A solo surface
+  // fills (1fr); otherwise flex surfaces take 1fr and the rest their px width.
   const tracks = [];
-  for (let i = 0; i < 3; i++) {
-    tracks.push(trackFor(order[i]));
-    if (i < 2) {
-      // The resizer between i and i+1 collapses to 0 if either neighbor is
-      // hidden (focused/collapsed) — otherwise show the 6px handle.
-      const leftHidden  = (L.focused && L.focused !== order[i])     || L.collapsed[order[i]];
-      const rightHidden = (L.focused && L.focused !== order[i + 1]) || L.collapsed[order[i + 1]];
-      tracks.push((leftHidden || rightHidden) ? '0' : '6px');
-    }
-  }
-  grid.style.gridTemplateColumns = tracks.join(' ');
-
-  // Place each pane at its slot's grid column (odd slots: 1, 3, 5, 7, 9).
-  // Toggle display + the visual-rightmost class (used by CSS to strip the
-  // right border on whichever pane ends up last after reorder).
-  let lastVisibleIdx = -1;
-  order.forEach((key, i) => {
-    const hidden = (L.focused && L.focused !== key) || L.collapsed[key];
-    if (!hidden) lastVisibleIdx = i;
+  visible.forEach((id, i) => {
+    tracks.push(solo ? '1fr' : (isFlexSurface(id) ? '1fr' : px(surfaceWidth(id))));
+    if (i < visible.length - 1) tracks.push('6px');
   });
-  order.forEach((key, i) => {
-    const el = $(PANE_ELS[key]); if (!el) return;
+  grid.style.gridTemplateColumns = tracks.length ? tracks.join(' ') : '1fr';
+
+  // Hide every registered surface, then place + show the visible ones in order.
+  Object.keys(SURFACES).forEach(id => { const el = $(SURFACES[id].el); if (el) el.style.display = 'none'; });
+  // Pin every child to row 1 + its column.  Without an explicit grid-row,
+  // CSS grid auto-placement wraps a pane to a new row whenever DOM order
+  // doesn't ascend by column (e.g. a preset that puts Activity left of Files
+  // while Files is DOM-first) — which stacks the panes instead of tiling them.
+  visible.forEach((id, i) => {
+    const el = $(SURFACES[id].el); if (!el) return;
+    el.style.gridRow = '1';
     el.style.gridColumn = String(i * 2 + 1);
-    const hidden = (L.focused && L.focused !== key) || L.collapsed[key];
-    el.style.display = hidden ? 'none' : 'flex';
-    el.classList.toggle('is-rightmost', i === lastVisibleIdx);
+    el.style.display = 'flex';
+    el.classList.toggle('is-rightmost', i === visible.length - 1);
   });
 
-  // Place each resizer (2, 4).  Hide collapsed-neighbour resizers and
-  // any stale data-which="3"/"4" handles from older layouts.
-  $$('.col-resizer').forEach(h => {
-    const w = parseInt(h.dataset.which, 10);
-    if (w > 2) { h.style.display = 'none'; return; }
-    h.style.gridColumn = String(w * 2);
-    const leftKey  = order[w - 1];
-    const rightKey = order[w];
-    const leftHidden  = (L.focused && L.focused !== leftKey)  || L.collapsed[leftKey];
-    const rightHidden = (L.focused && L.focused !== rightKey) || L.collapsed[rightKey];
-    h.style.display = (leftHidden || rightHidden) ? 'none' : '';
+  // Place resizers between consecutive visible panes; carry the boundary index.
+  resizers.forEach((h, b) => {
+    if (b < nResizers) {
+      h.style.display = '';
+      h.style.gridRow = '1';
+      h.style.gridColumn = String(b * 2 + 2);
+      h.dataset.boundary = String(b);
+    } else {
+      h.style.display = 'none';
+    }
   });
 
   // Terminals drawer — open/closed, width, inner list/output split.
   applyTerminalsDrawer();
   $$('.pane-btn[data-act="focus"]').forEach(b => b.classList.toggle('active', L.focused === b.dataset.pane));
-  $$('.pane-btn[data-act="collapse"]').forEach(b => {
-    const which = b.dataset.pane;
-    b.classList.toggle('active', !!L.collapsed[which]);
-  });
-  // Defensive: any layout change clears stuck drag state (cursor, purple highlight).
+  $$('.pane-btn[data-act="collapse"]').forEach(b => b.classList.toggle('active', !!L.collapsed[b.dataset.pane]));
+  // Defensive: any layout change clears stuck drag state (cursor, highlight).
   document.body.classList.remove('axo-resizing', 'axo-vresizing');
-  $$('.col-resizer.dragging')
-    .forEach(h => h.classList.remove('dragging'));
+  grid.querySelectorAll('.col-resizer.dragging').forEach(h => h.classList.remove('dragging'));
   persistLayout();
   // After the grid relayouts, tell embedded editors to remeasure.  Without
   // this Monaco renders at the old container size (visually broken file
   // pane) and xterm gets stuck on the old rows/cols.
-  requestAnimationFrame(() => relayoutEmbeddedEditors());
+  requestAnimationFrame(() => { relayoutEmbeddedEditors(); relayoutTrace(); updateFilesEditor(); });
+}
+
+// Re-fit the session's agent-graph (lattice) when the trace surface is
+// visible.  The lattice is built on cockpit open into a host that may be
+// hidden (size 0), so it needs an autoLayout once it actually has room.
+function relayoutTrace() {
+  const lat = S.session && S.session.lattice;
+  if (!lat) return;
+  const pane = document.querySelector('#cockpit-trace');
+  if (!pane || getComputedStyle(pane).display === 'none') return;
+  try { if (typeof lat.autoLayout === 'function') lat.autoLayout({ direction: 'LR' }); } catch {}
+}
+
+// Keep exactly `n` resizer handles in the grid (create + wire as needed).
+// Resizers are positioned by inline grid-column in applyCockpitLayout, so
+// DOM order among grid children doesn't matter.
+function ensureResizerPool(n) {
+  const grid = document.querySelector('.cockpit-grid');
+  if (!grid) return;
+  let pool = grid.querySelectorAll('.col-resizer');
+  for (let i = pool.length; i < n; i++) {
+    const h = document.createElement('div');
+    h.className = 'col-resizer';
+    attachColResizer(h);
+    grid.appendChild(h);
+  }
 }
 
 // ── Terminals overlay drawer ──────────────────────────────────────
@@ -7745,11 +7916,34 @@ const TERM_DRAWER_MIN  = 280;
 const TERM_DRAWER_MAX  = 900;
 const TERM_INNER_MIN   = 80;
 
+// Re-home the live terminal body: into the grid surface when a preset puts
+// `terminal` in the grid (Debug), otherwise back into the overlay drawer.
+// The xterm instances + WebSockets ride along with the moved subtree; a fit()
+// follows via relayoutEmbeddedEditors.
+function syncTerminalHome() {
+  const body = document.getElementById('terminals-body');
+  if (!body) return;
+  const inGrid = visibleSurfaces().includes('terminal');
+  const slot   = document.getElementById('terminal-surface-body');
+  const drawerBody = document.getElementById('term-drawer-body');
+  if (inGrid && slot && body.parentElement !== slot) slot.appendChild(body);
+  else if (!inGrid && drawerBody && body.parentElement !== drawerBody) drawerBody.appendChild(body);
+}
+
 function applyTerminalsDrawer() {
   const drawer = document.getElementById('cockpit-terminals');
   const shell  = document.getElementById('cockpit-shell');
   if (!drawer || !shell) return;
   const L = S.cockpitLayout;
+  syncTerminalHome();
+  // When the terminal is a grid surface, retire the overlay drawer entirely
+  // (no rail, no reserved margin).
+  if (visibleSurfaces().includes('terminal')) {
+    drawer.style.display = 'none';
+    shell.style.setProperty('--term-rail-w', '0px');
+    return;
+  }
+  drawer.style.display = '';
   // Reserve rail space on the grid's right margin.
   shell.style.setProperty('--term-rail-w', TERM_RAIL_W + 'px');
   shell.style.setProperty('--term-open-w', (L.termOpenW || 460) + 'px');
@@ -7882,52 +8076,327 @@ function relayoutEmbeddedEditors() {
 
 // Panes menu — the safety net for "I collapsed a pane and now it's gone."
 const DEFAULT_LAYOUT = {
-  colWidths: [260, 240],
-  collapsed: { files: false, browser: false },
+  preset: 'classic',
+  flex: 'stream',
+  widths: { files: 220, browser: 360 },
+  collapsed: {},
   focused: null,
-  paneOrder: ['files', 'stream', 'browser'],
+  paneOrder: ['stream'],
   termOpen: false,
   termOpenW: 460,
   termInnerListW: 140,
 };
 
+// ── Layout presets ────────────────────────────────────────────────────
+// Named arrangements the user cycles (buttons in the cockpit bar, or
+// ⌘⌥<n>).  Each lists the visible surfaces left→right and which one fills
+// (flex).  Switching a preset resets sizes to the preset's intent; the user
+// can then resize and those tweaks persist.  `after` runs once applied.
+const PRESETS = {
+  classic: {
+    label: 'Classic',
+    order: ['files', 'stream', 'browser'], flex: 'stream',
+    widths: { files: 260, browser: 240 },
+  },
+  review: {
+    // Conversation on the left, the file/diff surface filling the rest —
+    // so a Monaco diff finally gets room.  Opens on Source Control.
+    label: 'Review',
+    order: ['stream', 'files'], flex: 'files',
+    widths: { stream: 460 },
+    after: () => { try { setExplorerTab('git'); } catch {} },
+  },
+  build: {
+    // Conversation on the left, a big embedded browser/live-preview filling
+    // the rest, with the terminal drawer open to run a dev server.
+    label: 'Build',
+    order: ['stream', 'browser'], flex: 'browser',
+    widths: { stream: 460 },
+    after: () => { try { toggleTerminalsDrawer(true); } catch {} },
+  },
+  debug: {
+    // Conversation on the left, the live agent graph (Studio lattice) filling
+    // the rest, with the terminal in the grid.  The "glass box" view.
+    label: 'Debug',
+    order: ['stream', 'terminal', 'trace'], flex: 'trace',
+    widths: { stream: 380, terminal: 360 },
+  },
+};
+const PRESET_ORDER = ['classic', 'review', 'build', 'debug'];
+
+function applyPreset(name) {
+  const p = PRESETS[name] || PRESETS.classic;
+  const L = S.cockpitLayout;
+  L.preset = PRESETS[name] ? name : 'classic';
+  L.paneOrder = p.order.slice();
+  L.flex = p.flex || 'stream';
+  L.focused = null;
+  // Reset every surface to its default width, then apply the preset's overrides.
+  const w = {};
+  Object.keys(SURFACES).forEach(id => { w[id] = SURFACES[id].defaultW || 260; });
+  Object.assign(w, p.widths || {});
+  L.widths = w;
+  // Visibility is controlled by `order`; clear any stale collapse flags.
+  Object.keys(L.collapsed).forEach(k => { L.collapsed[k] = false; });
+  applyCockpitLayout();
+  renderPresetSwitcher();
+  if (p.after) try { p.after(); } catch {}
+}
+
+function cyclePreset(dir) {
+  const i = PRESET_ORDER.indexOf(S.cockpitLayout.preset);
+  const n = PRESET_ORDER.length;
+  applyPreset(PRESET_ORDER[(((i < 0 ? 0 : i) + dir) % n + n) % n]);
+}
+
+function renderPresetSwitcher() {
+  const host = $('#preset-switch'); if (!host) return;
+  host.innerHTML = '';
+  PRESET_ORDER.forEach((name, i) => {
+    const b = el('button', 'preset-btn' + (S.cockpitLayout.preset === name ? ' active' : ''), PRESETS[name].label);
+    b.title = PRESETS[name].label + ' layout (⌘⌥' + (i + 1) + ')';
+    b.addEventListener('click', () => applyPreset(name));
+    host.appendChild(b);
+  });
+}
+
+// The cockpit is one configurable workspace; this menu shows/hides each
+// surface. The conversation (Activity) is the canvas — always on.
+const TOGGLEABLE_SURFACES = ['stream', 'files', 'browser', 'terminal', 'trace'];
+// A small toggle switch in the cockpit's own dark/accent vibe — reusable
+// across the app. <ax-toggle checked disabled>; emits 'change' with {checked}.
+// Shadow-DOM styled, but reads the page's CSS custom properties (they pierce
+// the shadow boundary) so it stays on-theme automatically.
+class AxToggle extends HTMLElement {
+  constructor() {
+    super();
+    const r = this.attachShadow({ mode: 'open' });
+    r.innerHTML =
+      '<style>' +
+      ':host{display:inline-flex;cursor:pointer;-webkit-tap-highlight-color:transparent}' +
+      ':host([disabled]){cursor:default;opacity:.45}' +
+      '.t{width:34px;height:19px;border-radius:999px;background:var(--bg-2,#1c1c1c);' +
+      'border:1px solid var(--border,#333);position:relative;transition:background .18s,border-color .18s}' +
+      '.k{position:absolute;top:1px;left:1px;width:15px;height:15px;border-radius:50%;' +
+      'background:var(--muted,#888);transition:transform .18s,background .18s;box-shadow:0 1px 2px rgba(0,0,0,.3)}' +
+      ':host([checked]) .t{background:var(--accent,#4ade80);border-color:var(--accent,#4ade80)}' +
+      ':host([checked]) .k{transform:translateX(15px);background:#fff}' +
+      '</style><div class="t"><div class="k"></div></div>';
+    this.addEventListener('click', () => {
+      if (this.hasAttribute('disabled')) return;
+      this.checked = !this.checked;
+      this.dispatchEvent(new CustomEvent('change', { detail: { checked: this.checked }, bubbles: true }));
+    });
+  }
+  get checked() { return this.hasAttribute('checked'); }
+  set checked(v) { v ? this.setAttribute('checked', '') : this.removeAttribute('checked'); }
+}
+if (!customElements.get('ax-toggle')) customElements.define('ax-toggle', AxToggle);
+
+// A polished dropdown in the cockpit's vibe — a drop-in for a small <select>.
+// It reads its <option> light-DOM children (so existing populate code that
+// appends <option>s keeps working), exposes a select-like `.value`, and emits
+// 'change'. The menu is a fixed-position layer so it escapes the panes'
+// overflow clipping and opens upward above the composer. Shadow-DOM styled,
+// reading the page's CSS custom properties so it stays on-theme.
+class AxSelect extends HTMLElement {
+  constructor() {
+    super();
+    this._value = null;
+    this._open = false;
+    this._opts = [];
+    const r = this.attachShadow({ mode: 'open' });
+    r.innerHTML =
+      '<style>' +
+      ':host{display:inline-flex;max-width:100%;vertical-align:middle}' +
+      '.trig{display:inline-flex;align-items:center;gap:7px;max-width:100%;' +
+        'background:var(--bg-3,#1a1a1a);border:1px solid var(--border,#333);border-radius:6px;' +
+        'color:var(--fg-soft,#ddd);font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;' +
+        'padding:4px 9px;cursor:pointer;outline:none;user-select:none;transition:border-color .15s}' +
+      '.trig:hover{border-color:var(--border-strong,#444)}' +
+      ':host(.open) .trig,.trig:focus-visible{border-color:var(--accent,#4ade80)}' +
+      '.lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+      '.chev{flex-shrink:0;opacity:.55;font-size:9px;transition:transform .15s}' +
+      ':host(.open) .chev{transform:rotate(180deg)}' +
+      '.menu{position:fixed;z-index:70;min-width:160px;max-width:360px;max-height:280px;overflow:auto;' +
+        'background:var(--panel,#161616);border:1px solid var(--border-strong,#444);border-radius:9px;' +
+        'padding:5px;box-shadow:0 12px 34px rgba(0,0,0,.45);display:none}' +
+      '.menu.show{display:block}' +
+      '.opt{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:6px;cursor:pointer;' +
+        'font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;color:var(--fg-soft,#ddd);white-space:nowrap}' +
+      '.opt:hover{background:var(--bg-3,#222)}' +
+      '.opt[aria-selected="true"]{color:var(--accent-lift,var(--accent,#4ade80))}' +
+      '.opt .tick{margin-left:auto;opacity:0;font-size:11px}' +
+      '.opt[aria-selected="true"] .tick{opacity:1}' +
+      '</style>' +
+      '<div class="trig" part="trigger" tabindex="0"><span class="lbl"></span><span class="chev">▾</span></div>' +
+      '<div class="menu"></div>';
+    this._trig = r.querySelector('.trig');
+    this._lbl = r.querySelector('.lbl');
+    this._menu = r.querySelector('.menu');
+    this._trig.addEventListener('click', () => this.toggleOpen());
+    this._trig.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.toggleOpen(); }
+      else if (e.key === 'Escape') this.close();
+    });
+    this._onDocDown = (e) => {
+      if (!this._open) return;
+      const path = e.composedPath ? e.composedPath() : [];
+      if (path.includes(this) || path.includes(this._menu)) return;
+      this.close();
+    };
+    this._mo = new MutationObserver(() => this._scheduleSync());
+  }
+  connectedCallback() {
+    this._mo.observe(this, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['value', 'selected'] });
+    this._sync();
+  }
+  disconnectedCallback() {
+    this._mo.disconnect();
+    document.removeEventListener('mousedown', this._onDocDown, true);
+  }
+  _scheduleSync() {
+    if (this._syncQ) return;
+    this._syncQ = true;
+    Promise.resolve().then(() => { this._syncQ = false; this._sync(); });
+  }
+  // Read <option> children → rebuild the menu, keeping the value valid.
+  _sync() {
+    this._opts = Array.from(this.querySelectorAll('option')).map(o => ({
+      value: o.getAttribute('value') != null ? o.getAttribute('value') : (o.textContent || ''),
+      label: o.textContent || '',
+      selected: o.hasAttribute('selected'),
+    }));
+    let v = this._value;
+    if (!this._opts.some(o => o.value === v)) {
+      const sel = this._opts.find(o => o.selected);
+      v = sel ? sel.value : (this._opts[0] ? this._opts[0].value : null);
+    }
+    this._value = v;
+    this._renderMenu();
+    this._renderLabel();
+  }
+  _renderMenu() {
+    this._menu.innerHTML = '';
+    this._opts.forEach(o => {
+      const row = document.createElement('div');
+      row.className = 'opt';
+      if (o.value === this._value) row.setAttribute('aria-selected', 'true');
+      const t = document.createElement('span');
+      t.textContent = o.label;
+      row.appendChild(t);
+      const tick = document.createElement('span');
+      tick.className = 'tick';
+      tick.textContent = '✓';
+      row.appendChild(tick);
+      row.addEventListener('click', () => this._select(o.value));
+      this._menu.appendChild(row);
+    });
+  }
+  _renderLabel() {
+    const cur = this._opts.find(o => o.value === this._value);
+    this._lbl.textContent = cur ? cur.label : '';
+    this.title = cur ? cur.label : '';
+  }
+  _select(v) {
+    const changed = v !== this._value;
+    this._value = v;
+    this._renderMenu();
+    this._renderLabel();
+    this.close();
+    if (changed) this.dispatchEvent(new CustomEvent('change', { detail: { value: v }, bubbles: true }));
+  }
+  toggleOpen() { this._open ? this.close() : this.open(); }
+  open() {
+    if (this._open || !this._opts.length) return;
+    this._open = true;
+    this.classList.add('open');
+    this._menu.classList.add('show');
+    this._position();
+    setTimeout(() => document.addEventListener('mousedown', this._onDocDown, true), 0);
+  }
+  close() {
+    if (!this._open) return;
+    this._open = false;
+    this.classList.remove('open');
+    this._menu.classList.remove('show');
+    document.removeEventListener('mousedown', this._onDocDown, true);
+  }
+  // Anchor above the trigger (the composer sits low), left-aligned, clamped.
+  _position() {
+    const r = this._trig.getBoundingClientRect();
+    const m = this._menu;
+    m.style.visibility = 'hidden';
+    m.style.minWidth = Math.max(r.width, 160) + 'px';
+    const mw = m.offsetWidth || 200;
+    const mh = m.offsetHeight || 200;
+    const margin = 8;
+    let left = r.left;
+    if (left + mw > window.innerWidth - margin) left = window.innerWidth - mw - margin;
+    if (left < margin) left = margin;
+    let top = r.top - mh - 5;
+    if (top < margin) top = r.bottom + 5;
+    m.style.left = left + 'px';
+    m.style.top = top + 'px';
+    m.style.visibility = '';
+  }
+  get value() { return this._value; }
+  set value(v) { this._value = v; this._renderMenu(); this._renderLabel(); }
+}
+if (!customElements.get('ax-select')) customElements.define('ax-select', AxSelect);
+
 function renderPanesMenu() {
   const menu = $('#panes-menu'); if (!menu) return;
   menu.innerHTML = '';
   const L = S.cockpitLayout;
-  const panes = [
-    { key: 'files',   label: 'Files',            sc: 'Ctrl+1' },
-    { key: 'stream',  label: 'Activity',         sc: 'Ctrl+2', stream: true },
-    { key: 'browser', label: 'Browser',          sc: 'Ctrl+3' },
-  ];
-  panes.forEach(p => {
+  const order = (L.paneOrder || DEFAULT_PANE_ORDER).filter(id => SURFACES[id]);
+  TOGGLEABLE_SURFACES.forEach(id => {
+    if (!SURFACES[id]) return;
+    const canvas = id === 'stream';                 // the conversation, always on
+    const present = order.includes(id);
     const row = el('div', 'pm-item');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.checked = p.stream ? true : !L.collapsed[p.key];
-    if (p.stream) cb.disabled = true;
-    row.appendChild(cb);
-    row.appendChild(el('span', '', p.label));
-    if (p.sc) row.appendChild(el('span', 'pm-shortcut', p.sc));
-    row.addEventListener('click', (e) => {
-      if (p.stream) return;
-      if (e.target !== cb) cb.checked = !cb.checked;
-      L.focused = null;
-      L.collapsed[p.key] = !cb.checked;
-      applyCockpitLayout();
-      renderPanesMenu();
-    });
+    row.appendChild(el('span', 'pm-label', SURFACES[id].title));
+    const tog = document.createElement('ax-toggle');
+    if (canvas || present) tog.setAttribute('checked', '');
+    if (canvas) tog.setAttribute('disabled', '');
+    tog.addEventListener('change', () => { if (!canvas) toggleSurface(id, tog.checked); });
+    row.appendChild(tog);
+    // Clicking anywhere on the row flips the toggle (forwards to it).
+    row.addEventListener('click', (e) => { if (!canvas && e.target !== tog) tog.click(); });
     menu.appendChild(row);
   });
   menu.appendChild(el('div', 'pm-divider'));
   const reset = el('div', 'pm-item pm-action');
-  reset.appendChild(el('span', '', '↺ Reset layout'));
-  reset.addEventListener('click', () => {
-    S.cockpitLayout = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
-    applyCockpitLayout();
-    renderPanesMenu();
-  });
+  reset.appendChild(el('span', '', '↺ Reset workspace'));
+  reset.addEventListener('click', () => { resetWorkspace(); renderPanesMenu(); });
   menu.appendChild(reset);
+}
+
+// Show/hide a surface by adding/removing it from the layout. Files sit left of
+// the conversation; everything else to its right.
+function toggleSurface(id, show) {
+  const L = S.cockpitLayout;
+  let order = (L.paneOrder || DEFAULT_PANE_ORDER).filter(x => SURFACES[x]);
+  if (show && !order.includes(id)) {
+    if (id === 'files') order.unshift(id);
+    else order.push(id);
+  } else if (!show) {
+    order = order.filter(x => x !== id);
+  }
+  L.paneOrder = order;
+  L.focused = null;
+  if (L.collapsed) L.collapsed[id] = false;
+  applyCockpitLayout();
+}
+
+function resetWorkspace() {
+  const L = S.cockpitLayout;
+  L.paneOrder = ['stream'];
+  L.flex = 'stream';
+  L.widths = { files: 220, browser: 360 };
+  L.collapsed = {};
+  L.focused = null;
+  applyCockpitLayout();
 }
 
 function openPanesMenu() {
@@ -7988,37 +8457,38 @@ function cycleSidebar() {
 // Sign convention:
 //   - Pane LEFT  of flex, drag-right → pane grows  (sign +1)
 //   - Pane RIGHT of flex, drag-right → pane shrinks (sign -1)
-function resizerTargetPane(which) {
-  const order = S.cockpitLayout.paneOrder || DEFAULT_PANE_ORDER;
-  const flexIdx = order.indexOf('stream');
-  const leftPos  = which - 1;
-  const rightPos = which;
-  if (rightPos === flexIdx) return { key: order[leftPos],  sign: +1 };
-  if (leftPos  === flexIdx) return { key: order[rightPos], sign: -1 };
-  if (rightPos < flexIdx)  return { key: order[leftPos],  sign: +1 };
-  if (leftPos  > flexIdx)  return { key: order[rightPos], sign: -1 };
-  return { key: order[leftPos], sign: +1 };
+// Which fixed surface does dragging the resizer at boundary `b` resize, and
+// in which direction?  A boundary sits between visible[b] and visible[b+1];
+// we resize the fixed neighbour on the far side from the flex (1fr) surface
+// so the flex pane absorbs the slack.
+function resizerTargetForBoundary(b) {
+  const visible = visibleSurfaces();
+  const flexIdx = visible.findIndex(isFlexSurface);
+  const left = visible[b], right = visible[b + 1];
+  if (flexIdx === -1)   return { key: left,  sign: +1 }; // no flex: grow left pane
+  if (b + 1 === flexIdx) return { key: left,  sign: +1 };
+  if (b === flexIdx)     return { key: right, sign: -1 };
+  if (b + 1 < flexIdx)   return { key: left,  sign: +1 };
+  return { key: right, sign: -1 };                       // b > flexIdx
 }
-const PANE_MINMAX = {
-  files:   { min: 150, max: 700 },
-  browser: { min: 180, max: 800 },
-};
 
-function attachColResizer(handle, which) {
+function attachColResizer(handle) {
   handle.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     e.preventDefault();
+    const b = parseInt(handle.dataset.boundary || '0', 10);
+    const tgt = resizerTargetForBoundary(b);
+    if (!tgt || !tgt.key || isFlexSurface(tgt.key)) return; // can't px-resize a flex pane
+    const sf = SURFACES[tgt.key] || {};
+    const mm = { min: sf.min || 150, max: sf.max || 1000 };
     try { handle.setPointerCapture(e.pointerId); } catch {}
     handle.classList.add('dragging');
     document.body.classList.add('axo-resizing');
     const startX = e.clientX;
-    const startW = [...S.cockpitLayout.colWidths];
-    const tgt = resizerTargetPane(which);
-    const idx = PANE_WIDTH_IDX[tgt.key];
-    const mm  = PANE_MINMAX[tgt.key] || { min: 150, max: 800 };
+    const startW = surfaceWidth(tgt.key);
     const onMove = (ev) => {
       const dx = ev.clientX - startX;
-      S.cockpitLayout.colWidths[idx] = Math.max(mm.min, Math.min(mm.max, startW[idx] + tgt.sign * dx));
+      S.cockpitLayout.widths[tgt.key] = Math.max(mm.min, Math.min(mm.max, startW + tgt.sign * dx));
       applyCockpitLayout();
     };
     const onEnd = () => {
@@ -8114,12 +8584,15 @@ function onCockpitKey(e) {
     S.cockpitLayout.focused = null; applyCockpitLayout(); return;
   }
   if (inField) return;
-  if ((e.ctrlKey || e.metaKey) && ['1','2','3','4'].includes(e.key)) {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && ['1','2','3','4','5'].includes(e.key)) {
     e.preventDefault();
-    const map = { '1': 'files', '2': 'stream', '3': 'lattice', '4': 'browser' };
-    const which = map[e.key];
-    S.cockpitLayout.focused = S.cockpitLayout.focused === which ? null : which;
-    applyCockpitLayout();
+    // Focus the Nth surface in the current visible order.
+    const order = (S.cockpitLayout.paneOrder || DEFAULT_PANE_ORDER).filter(id => SURFACES[id]);
+    const which = order[parseInt(e.key, 10) - 1];
+    if (which) {
+      S.cockpitLayout.focused = S.cockpitLayout.focused === which ? null : which;
+      applyCockpitLayout();
+    }
   } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
     e.preventDefault();
     S.cockpitLayout.collapsed.files = !S.cockpitLayout.collapsed.files;
@@ -8178,7 +8651,8 @@ function setCockpitLive(state, label) {
 
 function initCockpitChrome() {
   if (_cockpitInited) return; _cockpitInited = true;
-  document.querySelectorAll('.col-resizer').forEach(h => attachColResizer(h, parseInt(h.dataset.which, 10)));
+  // Column resizers are created + wired on demand by ensureResizerPool()
+  // (called from applyCockpitLayout, at the end of this function).
   attachFilesInnerResizer();
   attachPaneDragReorder();
   attachTermDrawerOuterResizer();
@@ -8195,9 +8669,13 @@ function initCockpitChrome() {
     const b = e.target.closest('.etab'); if (b) setExplorerTab(b.dataset.etab);
   });
   const gcommit = $('#git-commit'); if (gcommit) gcommit.addEventListener('click', gitCommit);
-  const grefresh = $('#git-refresh'); if (grefresh) grefresh.addEventListener('click', refreshGitPane);
+  const grefresh = $('#git-refresh'); if (grefresh) grefresh.addEventListener('click', () => { refreshGitPane(); loadGitBranches(); });
   const gmsg = $('#git-msg');
   if (gmsg) gmsg.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); gitCommit(); } });
+  const gbranch = $('#git-branch');
+  if (gbranch) gbranch.addEventListener('change', (e) => { gitCheckout(e.target.value); });
+  const fanout = $('#fanout-btn'); if (fanout) fanout.addEventListener('click', toggleFanoutPop);
+  wireFanoutPop();
   // The "+ Add to chat" floating bubble now lives inside Monaco — see
   // onMonacoSelectionChange.  We still install a global mousedown
   // listener so a click outside the bubble hides it.
@@ -8225,12 +8703,15 @@ function initCockpitChrome() {
   if (pbtn) pbtn.addEventListener('click', (e) => { e.stopPropagation(); openPanesMenu(); });
   // Terminals panel buttons
   const newBtn = $('#term-new-btn');
-  if (newBtn) newBtn.addEventListener('click', (e) => {
+  const onNewTermClick = (e) => {
     e.stopPropagation();
     const pop = $('#term-new-pop');
     if (pop && !pop.classList.contains('hide')) closeTerminalPop();
     else openTerminalPop();
-  });
+  };
+  if (newBtn) newBtn.addEventListener('click', onNewTermClick);
+  const newBtnSurface = $('#term-surface-new-btn');
+  if (newBtnSurface) newBtnSurface.addEventListener('click', onNewTermClick);
   const cancelBtn = $('#term-new-cancel');
   if (cancelBtn) cancelBtn.addEventListener('click', closeTerminalPop);
   const startBtn = $('#term-new-start');
@@ -8255,6 +8736,7 @@ function initCockpitChrome() {
     if (e.key === 'Enter') { e.preventDefault(); browserGo(bUrl.value); }
   });
   updateBrowserNavButtons();
+  renderPresetSwitcher();
   applyCockpitLayout();
 }
 
@@ -9280,9 +9762,20 @@ function openCockpit(s) {
   $('#session-msgs').innerHTML = '';
   reloadSessionTranscript(); // rehydrate prior turns from the persisted checkpoint
   S.session.gitDiff = null;
+  // Reset any prior session's in-thread variants state.
+  S.session.threadVariants = null;
+  S.session._previewCards = new Set();
+  // Fan-out is an on/off plus a configured count. It persists across turns
+  // within a session (a send doesn't reset it); each freshly-opened session
+  // starts from the default — off, 3 ways.
+  S.session.fanout = 3;
+  S.session.fanoutOn = false;
+  if (typeof updateFanoutBtn === 'function') updateFanoutBtn();
+  if (typeof stopThreadVariantPoll === 'function') stopThreadVariantPoll();
   setExplorerTab('files');   // default to the file tree; git refreshes lazily
   $('#file-tabs').innerHTML = '';
   $('#file-viewer').innerHTML = '<div class="empty small">Select a file to view</div>';
+  updateFilesEditor();       // editor collapsed until a file/diff is opened
   loadFileTree('', $('#file-tree'));
   sessionLatticeBuild(s);   // no-ops (lattice pane is gone) but still emits status frames
   renderSessionActive(s);
@@ -9335,6 +9828,10 @@ async function maybeAutoStartTerminal() {
 }
 function closeCockpit() {
   if (S.session.taskTimer) { clearInterval(S.session.taskTimer); S.session.taskTimer = null; }
+  // Tear down anything that outlives the pane: the fan-out popover's
+  // capture-phase outside-click listener and the in-thread variant poll.
+  if (typeof closeFanoutPop === 'function') closeFanoutPop();
+  if (typeof stopThreadVariantPoll === 'function') stopThreadVariantPoll();
   teardownXterms();
   _lastMountedTerminal = { id: null, kind: null };
   S.session.id = null;
@@ -9362,6 +9859,7 @@ function detectUrlsFromTasks() {
         S.browser.seen.add(u);
         S.browser.suggestions.unshift(u);
         added = true;
+        appendPreviewCard(u);   // surface it as a card in the conversation
       }
     }
   }
@@ -9780,7 +10278,9 @@ function openTerminalPop() {
   pop.style.left = '-9999px';
   pop.classList.remove('hide');
   requestAnimationFrame(() => {
-    const btn = $('#term-new-btn');
+    // Anchor to whichever "new terminal" button is actually visible (the grid
+    // surface's button in Debug, the drawer's button otherwise).
+    const btn = [$('#term-surface-new-btn'), $('#term-new-btn')].find(b => b && b.offsetParent !== null) || $('#term-new-btn');
     if (!btn) return;
     const r = btn.getBoundingClientRect();
     const popRect = pop.getBoundingClientRect();
@@ -9805,7 +10305,8 @@ function closeTerminalPop() {
 function onTermPopOutside(e) {
   const pop = $('#term-new-pop');
   const btn = $('#term-new-btn');
-  if (!pop || pop.contains(e.target) || (btn && btn.contains(e.target))) return;
+  const btn2 = $('#term-surface-new-btn');
+  if (!pop || pop.contains(e.target) || (btn && btn.contains(e.target)) || (btn2 && btn2.contains(e.target))) return;
   closeTerminalPop();
 }
 
@@ -10381,6 +10882,7 @@ function loadMonacoOnce() {
 
 async function openFile(relPath) {
   if (!S.session.openFiles) S.session.openFiles = [];
+  document.querySelector('#cockpit-files .files-pane-inner')?.classList.remove('editor-collapsed');
   // Already open → just activate.
   const existing = S.session.openFiles.find(f => f.path === relPath);
   if (existing) {
@@ -10451,6 +10953,19 @@ function renderFileTabs() {
     });
     bar.appendChild(tab);
   });
+  updateFilesEditor();
+}
+
+// Collapse the file-editor column when nothing is open, so the Files pane is
+// just the tree (no empty cramped editor beside it). Opens when a file or a
+// diff is open.
+function updateFilesEditor() {
+  const inner = document.querySelector('#cockpit-files .files-pane-inner');
+  if (!inner) return;
+  const hasContent = ((S.session.openFiles || []).length > 0) || !!S.session.gitDiff;
+  const wasCollapsed = inner.classList.contains('editor-collapsed');
+  inner.classList.toggle('editor-collapsed', !hasContent);
+  if (hasContent && wasCollapsed) requestAnimationFrame(() => relayoutEmbeddedEditors());
 }
 
 const PREVIEWABLE_LANGS = new Set(['html', 'htm', 'svg', 'md', 'markdown']);
@@ -10912,7 +11427,7 @@ function setExplorerTab(tab) {
   $('#file-search')?.classList.toggle('hide', git);
   $('#file-tree')?.classList.toggle('hide', git);
   $('#git-view')?.classList.toggle('hide', !git);
-  if (git) refreshGitPane();
+  if (git) { refreshGitPane(); loadGitBranches(); }
 }
 
 async function refreshGitPane() {
@@ -10928,7 +11443,8 @@ async function refreshGitPane() {
         badge.textContent = String(n);
         badge.classList.toggle('hide', n === 0);
       }
-      const br = $('#git-branch'); if (br) br.textContent = st.branch || '—';
+      syncBranchSelect(st.branch);
+      refreshOpenDiff();
     }
   } catch {}
 }
@@ -10959,6 +11475,9 @@ function renderGitFiles(st) {
 // Monaco's diff editor.
 async function openGitDiff(path) {
   const v = $('#file-viewer'); if (!v || !S.session.id) return;
+  // Open the editor column (it's collapsed when nothing's shown) so Monaco
+  // lays out at a real size.
+  document.querySelector('#cockpit-files .files-pane-inner')?.classList.remove('editor-collapsed');
   const modes = $('#viewer-modes'); if (modes) modes.style.display = 'none';
   v.innerHTML = '<div class="empty small">Loading diff…</div>';
   let d;
@@ -10969,6 +11488,16 @@ async function openGitDiff(path) {
   const monaco = await loadMonacoOnce();
   // Tear down any prior diff editor + models.
   gitDisposeDiff(monaco);
+  S.session.activeFile = null; // keep renderActiveFile from clobbering the view
+  // Binary or oversized files have no inline diff — show a sentinel, but still
+  // remember the path so a live refresh can recover if it shrinks/changes.
+  if (d.binary || d.too_large) {
+    v.innerHTML = '<div class="empty small">' +
+      (d.binary ? 'Binary file — no inline diff.' : 'File too large to diff inline (over 512 KB).') +
+      '</div>';
+    S.session.gitDiff = { path, sentinel: true };
+    return;
+  }
   v.innerHTML = '';
   const host = el('div', 'monaco-host'); v.appendChild(host);
   const de = monaco.editor.createDiffEditor(host, {
@@ -10980,14 +11509,45 @@ async function openGitDiff(path) {
   const orig = monaco.editor.createModel(d.old || '', undefined, monaco.Uri.parse('axo://diff-old/' + stamp));
   const modd = monaco.editor.createModel(d.new || '', undefined, monaco.Uri.parse('axo://diff-new/' + stamp));
   de.setModel({ original: orig, modified: modd });
-  S.session.gitDiff = { editor: de, models: [orig, modd] };
-  S.session.activeFile = null; // keep renderActiveFile from clobbering the view
+  S.session.gitDiff = { editor: de, models: [orig, modd], path };
+}
+
+// Keep an already-open diff in sync as the agent keeps editing. Called from
+// refreshGitPane after the status list updates. Updates the Monaco models in
+// place (no scroll jump) when possible; clears the view once the file is no
+// longer changed; rebuilds across binary/oversize ↔ renderable transitions.
+async function refreshOpenDiff() {
+  const gd = S.session.gitDiff;
+  if (!gd || !gd.path || !S.session.id) return;
+  const path = gd.path;
+  const changed = (S.session.gitStatus?.files || []).some(f => f.path === path);
+  if (!changed) {
+    const monaco = await loadMonacoOnce();
+    gitDisposeDiff(monaco);
+    const v = $('#file-viewer');
+    if (v) v.innerHTML = '<div class="empty small">No changes — committed or reverted.</div>';
+    updateFilesEditor();   // collapse the editor if nothing else is open
+    return;
+  }
+  let d;
+  try {
+    d = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/diff?path=' + encodeURIComponent(path)).then(r => r.json());
+  } catch { return; }
+  if (!d || d.error) return;
+  // Renderable and the editor is live → update in place (preserves scroll).
+  if (!d.binary && !d.too_large && gd.editor && gd.models) {
+    if (gd.models[0].getValue() !== (d.old || '')) gd.models[0].setValue(d.old || '');
+    if (gd.models[1].getValue() !== (d.new || '')) gd.models[1].setValue(d.new || '');
+    return;
+  }
+  // Sentinel ↔ renderable transition (or first render of a sentinel) → rebuild.
+  await openGitDiff(path);
 }
 
 function gitDisposeDiff(monaco) {
   const gd = S.session.gitDiff;
   if (!gd) return;
-  try { gd.editor.dispose(); } catch {}
+  try { gd.editor && gd.editor.dispose(); } catch {}
   (gd.models || []).forEach(m => { try { m.dispose(); } catch {} });
   S.session.gitDiff = null;
 }
@@ -11028,6 +11588,82 @@ async function gitDiscard(path) {
   } catch (e) { toast('Discard failed', String(e), 'err'); }
 }
 
+// Populate the branch dropdown from /git/branches. Called on git-tab open and
+// after a commit/checkout (when the branch set can change). The lighter
+// per-edit refresh only re-syncs the *selected* branch via syncBranchSelect.
+async function loadGitBranches() {
+  const sel = $('#git-branch'); if (!sel || !S.session.id) return;
+  try {
+    const b = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/branches').then(r => r.json());
+    if (!b || b.error || !Array.isArray(b.branches)) return;
+    S.session.gitBranches = b.branches;
+    sel.innerHTML = '';
+    b.branches.forEach(name => {
+      const o = document.createElement('option');
+      o.value = name; o.textContent = name;
+      sel.appendChild(o);
+    });
+    syncBranchSelect(b.current);
+  } catch {}
+}
+
+// Reflect the current branch in the dropdown without a branches round-trip
+// (status already carries it). Inserts the branch as an option if the list is
+// stale — e.g. the agent created/switched a branch since the last full load.
+function syncBranchSelect(branch) {
+  const sel = $('#git-branch'); if (!sel || !branch) return;
+  if (![...sel.options].some(o => o.value === branch)) {
+    const o = document.createElement('option');
+    o.value = branch; o.textContent = branch;
+    sel.appendChild(o);
+  }
+  sel.value = branch;
+}
+
+async function gitCheckout(ref) {
+  if (!S.session.id || !ref) return;
+  const sel = $('#git-branch');
+  if (sel) sel.disabled = true;
+  try {
+    const st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/checkout', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ref }),
+    }).then(r => r.json());
+    if (st && st.error) {
+      // Most often: uncommitted changes would be overwritten. Surface git's
+      // message and snap the dropdown back to the branch we're actually on.
+      toast('Checkout blocked', String(st.error), 'err');
+      syncBranchSelect(S.session.gitStatus?.branch);
+      return;
+    }
+    S.session.gitStatus = st; renderGitFiles(st);
+    const badge = $('#git-badge'); if (badge) { const n = (st.files||[]).length; badge.textContent = String(n); badge.classList.toggle('hide', n === 0); }
+    syncBranchSelect(st.branch);
+    refreshOpenDiff();
+    loadFileTree('', $('#file-tree'));
+    toast('Switched branch', ref, 'ok');
+  } catch (e) {
+    toast('Checkout failed', String(e), 'err');
+    syncBranchSelect(S.session.gitStatus?.branch);
+  } finally {
+    if (sel) sel.disabled = false;
+  }
+}
+
+// ── Variants run-key parser ─────────────────────────────────────────────
+// Variants stream over the WS keyed `{session}#{i}`. This shared helper pulls
+// the lane index out of a run id; the in-thread variant turn (startThreadVariants
+// → pills) demuxes those frames. Backed by /api/sessions/{id}/variants*.
+
+// If `key` is a variant run id (`{session}#{n}`), return n; else null.
+function variantLaneFor(key) {
+  if (!key || !S.session.id) return null;
+  const pre = S.session.id + '#';
+  if (!key.startsWith(pre)) return null;
+  const n = parseInt(key.slice(pre.length), 10);
+  return Number.isInteger(n) ? n : null;
+}
+
 function sendSessionMessage() {
   if (!S.session.id) return;
   const text = ($('#session-text').value || '').trim(); if (!text) return;
@@ -11043,6 +11679,12 @@ function sendSessionMessage() {
   // the agent but isn't re-rendered in the transcript (keeps it clean).
   wrap.appendChild(el('div', 'smsg-body', text));
   appendSessionEl(wrap);
+
+  // Fan-out: explore the prompt several ways at once, in the thread. It's a
+  // persistent mode — stays on across turns until you switch it off.
+  const fanout = (S.session.fanoutOn && (S.session.fanout || 1) > 1) ? S.session.fanout : 1;
+  if (fanout > 1) { startThreadVariants(fullText, fanout); return; }
+
   setThinking($('#session-msgs'), true);
   S.session.streamEl = null;
   S.session.reasoningEl = null;
@@ -11061,6 +11703,375 @@ function sendSessionMessage() {
   }
   $('#cockpit-status').textContent = 'running…';
   setCockpitLive('live', 'live');
+}
+
+// ── Variants in the thread ──────────────────────────────────────────────
+// Fan out one prompt into N attempts, shown as live pills at the head of an
+// assistant turn. Flip between them; keep the one you like; the rest dissolve.
+// The git worktrees/branches/merge underneath are never named.
+
+// Fan-out is a persistent on/off mode with a user-set count. The backend caps
+// at FANOUT_MAX; we let the user dial all the way there and degrade gracefully.
+const FANOUT_MAX = 100;
+const FANOUT_RECOMMENDED = 3;
+
+function clampFanout(n) {
+  n = Math.round(Number(n) || 0);
+  if (!Number.isFinite(n)) n = 2;
+  return Math.max(2, Math.min(FANOUT_MAX, n));
+}
+
+// The composer button: ⑂ N when on (N = the count), ⑂ 1 when off.
+function updateFanoutBtn() {
+  const on = !!S.session.fanoutOn;
+  const n = on ? clampFanout(S.session.fanout || FANOUT_RECOMMENDED) : 1;
+  const lbl = $('#fanout-n'); if (lbl) lbl.textContent = String(n);
+  const b = $('#fanout-btn');
+  if (b) {
+    b.classList.toggle('on', on);
+    b.title = on
+      ? ('Exploring ' + n + ' ways — click to configure')
+      : 'Explore several ways at once, then keep the one you like';
+  }
+}
+
+// ── Fan-out config popover ──────────────────────────────────────────────
+function wireFanoutPop() {
+  const x = $('#fanout-pop-x');
+  if (x) x.addEventListener('click', closeFanoutPop);
+  const tog = $('#fanout-pop-toggle');
+  if (tog) tog.addEventListener('change', () => {
+    S.session.fanoutOn = tog.checked;
+    if (S.session.fanoutOn && (S.session.fanout || 0) < 2) S.session.fanout = FANOUT_RECOMMENDED;
+    renderFanoutPop(); updateFanoutBtn();
+  });
+  const num = $('#fanout-count');
+  if (num) {
+    const commit = () => { S.session.fanout = clampFanout(num.value); renderFanoutPop(); updateFanoutBtn(); };
+    num.addEventListener('change', commit);
+    num.addEventListener('blur', commit);
+  }
+  document.querySelectorAll('#fanout-count-row .fp-step').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const d = parseInt(btn.getAttribute('data-d'), 10) || 0;
+      S.session.fanout = clampFanout((S.session.fanout || FANOUT_RECOMMENDED) + d);
+      renderFanoutPop(); updateFanoutBtn();
+    });
+  });
+}
+
+// Sync the popover controls to state.
+function renderFanoutPop() {
+  const on = !!S.session.fanoutOn;
+  const n = clampFanout(S.session.fanout || FANOUT_RECOMMENDED);
+  const tog = $('#fanout-pop-toggle'); if (tog) tog.checked = on;
+  const num = $('#fanout-count'); if (num) num.value = String(n);
+  const row = $('#fanout-count-row'); if (row) row.classList.toggle('off', !on);
+  const hint = $('#fanout-hint');
+  if (hint) {
+    hint.textContent = n > 16
+      ? (n + ' ways at once is a lot — each runs in its own branch, so it works, but expect it to be slow and heavy on local models. Up to ' + FANOUT_MAX + '.')
+      : ('A few ways — 3 or 4 — run comfortably in parallel. You can go up to ' + FANOUT_MAX + '; more than a handful gets slow on local models.');
+  }
+}
+
+function toggleFanoutPop() {
+  const pop = $('#fanout-pop');
+  if (!pop) return;
+  if (!pop.classList.contains('hide')) { closeFanoutPop(); return; }
+  renderFanoutPop();
+  pop.classList.remove('hide');
+  positionFanoutPop();
+  setTimeout(() => document.addEventListener('mousedown', closeFanoutPopOutside, { capture: true }), 0);
+}
+
+function closeFanoutPop() {
+  const pop = $('#fanout-pop'); if (pop) pop.classList.add('hide');
+  document.removeEventListener('mousedown', closeFanoutPopOutside, { capture: true });
+}
+
+function closeFanoutPopOutside(e) {
+  const pop = $('#fanout-pop'); const btn = $('#fanout-btn');
+  if (!pop) return;
+  if (pop.contains(e.target) || (btn && btn.contains(e.target))) return;
+  closeFanoutPop();
+}
+
+// Anchor above the ⑂ button, right-aligned to it, clamped to the viewport.
+function positionFanoutPop() {
+  const pop = $('#fanout-pop'); const btn = $('#fanout-btn');
+  if (!pop || !btn) return;
+  pop.style.visibility = 'hidden';
+  const r = btn.getBoundingClientRect();
+  const pw = pop.offsetWidth || 264;
+  const ph = pop.offsetHeight || 180;
+  const margin = 8;
+  let left = r.right - pw;
+  if (left < margin) left = margin;
+  if (left + pw > window.innerWidth - margin) left = window.innerWidth - pw - margin;
+  let top = r.top - ph - 6;                       // prefer above the composer
+  if (top < margin) top = r.bottom + 6;           // fall back to below
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+  pop.style.visibility = '';
+}
+
+async function startThreadVariants(input, n) {
+  buildVariantTurn(n);                       // optimistic shell
+  $('#cockpit-status').textContent = 'exploring ' + n + ' ways…';
+  setCockpitLive('live', 'live');
+  try {
+    const variants = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/variants', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ input, n }),
+    }).then(r => r.json());
+    if (!Array.isArray(variants)) {
+      toast('Could not explore', (variants && variants.error) || 'error', 'err');
+      if (S.session.threadVariants) { S.session.threadVariants.wrap.remove(); S.session.threadVariants = null; }
+      return;
+    }
+    // Confirm branch names from the backend (should match the optimistic ones).
+    variants.forEach(v => { const t = S.session.threadVariants; if (t && t.variants[v.index]) t.variants[v.index].branch = v.branch; });
+    scheduleThreadVariantPoll();
+  } catch (e) { toast('Could not explore', String(e), 'err'); }
+}
+
+function buildVariantTurn(n) {
+  const wrap = el('div', 'smsg vturn');
+  wrap.appendChild(el('div', 'smsg-role', 'agent'));
+  const pills = el('div', 'vt-pills');
+  const body = el('div', 'vt-body prose');
+  const foot = el('div', 'vt-foot');
+  const diffstat = el('span', 'vt-diffstat', 'exploring…');
+  const keep = el('button', 'btn sm vt-keep', 'Keep this');
+  keep.disabled = true;
+  foot.append(diffstat, keep);
+  wrap.append(pills, body, foot);
+  appendSessionEl(wrap);
+  const variants = [];
+  for (let i = 0; i < n; i++) {
+    const pill = el('div', 'vt-pill' + (i === 0 ? ' active' : ''));
+    const dot = el('span', 'vt-pill-dot running');
+    const stat = el('span', 'vt-pill-stat', '');
+    pill.append(dot, el('span', '', String(i + 1)), stat);
+    pill.addEventListener('click', () => setActiveVariant(i));
+    pills.appendChild(pill);
+    variants.push({ index: i, branch: 'axo/variant-' + i, buf: '', status: 'running', pill, dot, stat, files: [] });
+  }
+  keep.addEventListener('click', keepActiveVariant);
+  S.session.threadVariants = { wrap, pillsEl: pills, bodyEl: body, footEl: foot, diffstatEl: diffstat, keepBtn: keep, active: 0, variants };
+  setActiveVariant(0);
+}
+
+function setActiveVariant(i) {
+  const tv = S.session.threadVariants; if (!tv || !tv.variants[i]) return;
+  tv.active = i;
+  tv.variants.forEach((v, idx) => v.pill.classList.toggle('active', idx === i));
+  const v = tv.variants[i];
+  tv.bodyEl.style.opacity = '0';
+  setTimeout(() => {
+    tv.bodyEl.innerHTML = v.buf ? mdRender(v.buf) : '<span class="muted small">working…</span>';
+    tv.bodyEl.style.opacity = '1';
+  }, 90);
+  renderVariantFoot();
+}
+
+function renderVariantFoot() {
+  const tv = S.session.threadVariants; if (!tv) return;
+  const v = tv.variants[tv.active];
+  const files = v.files || [];
+  const neu = files.filter(f => f.state === 'added' || f.state === 'untracked').length;
+  const mod = files.filter(f => f.state === 'modified' || f.state === 'renamed').length;
+  const del = files.filter(f => f.state === 'deleted').length;
+  if (!files.length) {
+    tv.diffstatEl.textContent = v.status === 'running' ? 'exploring…' : 'no changes';
+  } else {
+    const bits = [];
+    if (neu) bits.push(neu + ' new');
+    if (mod) bits.push(mod + ' edited');
+    if (del) bits.push(del + ' removed');
+    tv.diffstatEl.textContent = files.length + (files.length > 1 ? ' files' : ' file') + ' · ' + bits.join(', ');
+  }
+  tv.keepBtn.disabled = files.length === 0;
+}
+
+// Stream demux → the in-thread variant turn (calm view: text only).
+function threadVariantToken(i, delta) {
+  const tv = S.session.threadVariants; if (!tv || !tv.variants[i]) return;
+  tv.variants[i].buf += delta;
+  if (i === tv.active) {
+    tv.bodyEl.innerHTML = mdRender(tv.variants[i].buf);
+    const msgs = $('#session-msgs'); msgs.scrollTop = msgs.scrollHeight;
+  }
+}
+function threadVariantStatus(i, status) {
+  const tv = S.session.threadVariants; if (!tv || !tv.variants[i]) return;
+  tv.variants[i].status = status;
+  tv.variants[i].dot.className = 'vt-pill-dot ' + status;
+  if (i === tv.active) renderVariantFoot();
+  if (!tv.variants.some(v => v.status === 'running')) { refreshThreadVariantStatus(); stopThreadVariantPoll(); }
+}
+
+let _tvPoll = null;
+function scheduleThreadVariantPoll() { if (_tvPoll) clearInterval(_tvPoll); refreshThreadVariantStatus(); _tvPoll = setInterval(refreshThreadVariantStatus, 3000); }
+function stopThreadVariantPoll() { if (_tvPoll) { clearInterval(_tvPoll); _tvPoll = null; } }
+async function refreshThreadVariantStatus() {
+  const tv = S.session.threadVariants; if (!tv || !S.session.id) return;
+  try {
+    const list = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/variants/status').then(r => r.json());
+    if (!Array.isArray(list)) return;
+    list.forEach(vs => {
+      const v = tv.variants[vs.index]; if (!v) return;
+      v.files = (vs.status && vs.status.files) || [];
+      v.stat.textContent = v.files.length ? ('· ' + v.files.length) : '';
+    });
+    renderVariantFoot();
+  } catch {}
+}
+
+async function keepActiveVariant() {
+  const tv = S.session.threadVariants; if (!tv) return;
+  const i = tv.active, v = tv.variants[i];
+  const ok = await axoConfirm({
+    title: 'Keep this one?',
+    body: 'Use option ' + (i + 1) + ' and set the others aside.',
+    okLabel: 'Keep', okKind: 'primary',
+  });
+  if (!ok) return;
+  tv.keepBtn.disabled = true;
+  try {
+    const st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/variants/adopt', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ branch: v.branch }),
+    }).then(r => r.json());
+    if (st && st.error) { toast('Keep failed', String(st.error), 'err'); tv.keepBtn.disabled = false; return; }
+    collapseVariantTurn(i);
+    stopThreadVariantPoll();
+    refreshGitPane();
+    loadFileTree('', $('#file-tree'));
+    setCockpitLive('done', 'done');
+    $('#cockpit-status').textContent = 'kept option ' + (i + 1);
+  } catch (e) { toast('Keep failed', String(e), 'err'); tv.keepBtn.disabled = false; }
+}
+
+function collapseVariantTurn(i) {
+  const tv = S.session.threadVariants; if (!tv) return;
+  const v = tv.variants[i];
+  tv.pillsEl.remove();
+  tv.footEl.remove();
+  tv.bodyEl.innerHTML = mdRender(v.buf || '');
+  tv.wrap.appendChild(el('div', 'vt-trace small muted', 'kept option ' + (i + 1) + ' of ' + tv.variants.length));
+  if (window.hljs) tv.wrap.querySelectorAll('pre code').forEach(c => { try { window.hljs.highlightElement(c); } catch {} });
+  S.session.threadVariants = null;
+}
+
+// ── Change cards: the agent's edits, as a card in the conversation ───────
+// After a turn that touched files, a calm card lands in the thread. Tap a
+// file to open its diff inline — the diff lives in the flow, not in a pane.
+const CC_BADGE = { modified: 'M', added: 'A', untracked: 'A', deleted: 'D', renamed: 'R' };
+
+async function appendChangeCard() {
+  if (!S.session.id) return;
+  let st;
+  try { st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/status').then(r => r.json()); }
+  catch { return; }
+  const files = (st && st.files) || [];
+  if (!files.length) return;
+  const card = el('div', 'smsg change-card');
+  const head = el('div', 'cc-head');
+  head.append(
+    el('span', 'cc-icon', '◆'),
+    el('span', 'cc-title', 'Changed ' + files.length + (files.length > 1 ? ' files' : ' file')),
+  );
+  card.appendChild(head);
+  const row = el('div', 'cc-files');
+  files.forEach(f => {
+    const chip = el('button', 'cc-file');
+    chip.append(el('span', 'git-file-badge ' + f.state, CC_BADGE[f.state] || '•'), el('span', 'cc-file-name', f.path));
+    chip.addEventListener('click', () => toggleCardDiff(card, f.path, chip));
+    row.appendChild(chip);
+  });
+  card.appendChild(row);
+  card.appendChild(el('div', 'cc-diff hide'));
+  appendSessionEl(card);
+}
+
+async function toggleCardDiff(card, path, chip) {
+  const host = card.querySelector('.cc-diff');
+  // Toggle off if already showing this file.
+  if (chip.classList.contains('open')) {
+    chip.classList.remove('open');
+    host.classList.add('hide'); host.innerHTML = '';
+    return;
+  }
+  card.querySelectorAll('.cc-file.open').forEach(c => c.classList.remove('open'));
+  chip.classList.add('open');
+  host.classList.remove('hide');
+  host.innerHTML = '<div class="muted small" style="padding:6px 2px;">Loading diff…</div>';
+  let d;
+  try { d = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/diff?path=' + encodeURIComponent(path)).then(r => r.json()); }
+  catch { host.innerHTML = '<div class="muted small">Diff unavailable.</div>'; return; }
+  if (!d || d.error) { host.innerHTML = '<div class="muted small">Diff unavailable.</div>'; return; }
+  if (d.binary || d.too_large) {
+    host.innerHTML = '<div class="muted small" style="padding:6px 2px;">' + (d.binary ? 'Binary file.' : 'File too large to preview.') + '</div>';
+    return;
+  }
+  host.innerHTML = '';
+  host.appendChild(renderInlineDiff(d.old || '', d.new || ''));
+}
+
+// A calm prefix/suffix line diff — light, no Monaco. Good for the contiguous
+// edits agents usually make; collapses long unchanged runs.
+function renderInlineDiff(oldText, newText) {
+  const a = oldText.length ? oldText.split('\n') : [];
+  const b = newText.length ? newText.split('\n') : [];
+  let s = 0; while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let ea = a.length, eb = b.length;
+  while (ea > s && eb > s && a[ea - 1] === b[eb - 1]) { ea--; eb--; }
+  const rows = [];
+  const ctx = 2;
+  const pushCtx = (arr, from, to) => {
+    for (let i = from; i < to; i++) rows.push({ t: ' ', l: arr[i] });
+  };
+  // leading context (last `ctx` unchanged lines before the change)
+  pushCtx(a, Math.max(0, s - ctx), s);
+  for (let i = s; i < ea; i++) rows.push({ t: '-', l: a[i] });
+  for (let i = s; i < eb; i++) rows.push({ t: '+', l: b[i] });
+  // trailing context
+  pushCtx(a, ea, Math.min(a.length, ea + ctx));
+  const pre = el('div', 'inline-diff');
+  rows.slice(0, 80).forEach(r => {
+    const line = el('div', 'idiff-line idiff-' + (r.t === '+' ? 'add' : r.t === '-' ? 'del' : 'ctx'));
+    line.append(el('span', 'idiff-gutter', r.t === ' ' ? '' : r.t), el('span', 'idiff-text', r.l || ' '));
+    pre.appendChild(line);
+  });
+  if (rows.length > 80) pre.appendChild(el('div', 'idiff-more muted small', '… ' + (rows.length - 80) + ' more lines'));
+  return pre;
+}
+
+// ── Preview cards: a running dev server, as a card in the conversation ───
+function appendPreviewCard(url) {
+  if (!S.session.id || !$('#session-msgs')) return;
+  S.session._previewCards = S.session._previewCards || new Set();
+  if (S.session._previewCards.has(url)) return;
+  S.session._previewCards.add(url);
+  const card = el('div', 'smsg preview-card');
+  const head = el('div', 'cc-head');
+  head.append(el('span', 'cc-icon pc-icon', '◍'), el('span', 'cc-title', 'Preview ready'));
+  card.appendChild(head);
+  const rowEl = el('div', 'pc-row');
+  rowEl.appendChild(el('span', 'pc-url', url.replace(/^https?:\/\//, '')));
+  const open = el('button', 'btn sm pc-open', 'Open');
+  open.addEventListener('click', () => openPreview(url));
+  rowEl.appendChild(open);
+  card.appendChild(rowEl);
+  appendSessionEl(card);
+}
+
+function openPreview(url) {
+  // Bring the browser surface in (it's hidden by default) and point it there.
+  if (!(S.cockpitLayout.paneOrder || []).includes('browser')) toggleSurface('browser', true);
+  setTimeout(() => { try { browserGo(url); } catch {} }, 120);
 }
 
 // ── References: code selections + DOM picks → chat context ──
@@ -12688,20 +13699,31 @@ function handleWsFrame(d) {
     // the run id matches the open session. Workflows fire silently from the
     // Automations card or palette; their live stream is reflected by pulses
     // in Studio, not a separate transcript.
-    case 'token':
+    case 'token': {
+      const ln = variantLaneFor(d.workflow);
+      if (ln !== null) {
+        if (S.session.threadVariants) threadVariantToken(ln, d.delta);
+        break;
+      }
       if (S.session.id && d.workflow === S.session.id) sessionAppendText(d.delta);
       break;
+    }
     case 'reasoning':
       if (S.session.id && d.workflow === S.session.id) sessionAppendReasoning(d.delta);
       break;
 
     // A tool call from a running agent.
-    case 'tool-call':
+    case 'tool-call': {
+      const ln = variantLaneFor(d.workflow);
+      // In-thread variants stream text into their pill, not tool lines —
+      // a variant-keyed tool call has no surface, so swallow it.
+      if (ln !== null) break;
       if (S.session.id && d.workflow === S.session.id) {
         if (d.phase === 'start') sessionToolStart(d);
         else sessionToolResult(d);
       }
       break;
+    }
 
     // Workflow run finished.
     case 'workflow-done':
@@ -12719,7 +13741,9 @@ function handleWsFrame(d) {
         sessionLatticeStatus(S.session.agents[0], 'running');
       }
       break;
-    case 'session-done':
+    case 'session-done': {
+      const ln = variantLaneFor(d.session);
+      if (ln !== null) { if (S.session.threadVariants) threadVariantStatus(ln, 'done'); break; }
       if (S.session.id === d.session) {
         S.session.streamEl = null;
         setThinking($('#session-msgs'), false);
@@ -12729,6 +13753,7 @@ function handleWsFrame(d) {
         setCockpitLive('done', 'done');
         loadFileTree('', $('#file-tree'));
         refreshGitPane();
+        appendChangeCard();   // the agent's edits, as a card in the flow
         if (window.hljs) {
           $$('#session-msgs pre code').forEach(c => {
             try { if (!c.dataset.hl) { window.hljs.highlightElement(c); c.dataset.hl = '1'; } } catch {}
@@ -12736,7 +13761,10 @@ function handleWsFrame(d) {
         }
       }
       break;
-    case 'session-error':
+    }
+    case 'session-error': {
+      const lne = variantLaneFor(d.session);
+      if (lne !== null) { if (S.session.threadVariants) threadVariantStatus(lne, 'error'); break; }
       if (S.session.id === d.session) {
         S.session.streamEl = null;
         setThinking($('#session-msgs'), false);
@@ -12748,6 +13776,7 @@ function handleWsFrame(d) {
         setCockpitLive('error', 'error');
       }
       break;
+    }
 
     // ── Chat streaming (Phase 1B) ────────────────────────────────────
     // Each frame carries chat_id so multiple chats can be open; we only

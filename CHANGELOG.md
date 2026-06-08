@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Variants — run one prompt several ways, right in the conversation.** Fan a
+  turn out into N parallel attempts (the ⑂ control in the composer, configurable
+  from 1 up to 100) and keep the one you like. Each attempt is a real agent
+  working in isolation — its own `git worktree` + branch (`axo/variant-{i}`)
+  inside the session's container, separate from the others and from your working
+  tree. The attempts appear as live **option-pills** at the head of the
+  assistant's turn: flip between them as they stream, glance at each one's
+  changed-files summary, and **keep** one (reply to it, or a single Keep) — which
+  silently merges its branch into your working tree and dissolves the rest. A
+  heavy fan-out degrades gracefully: a failed attempt settles on its own, and a
+  failed worktree set rolls back cleanly rather than leaving debris. The agent's
+  `bash` tools run rooted at each attempt's worktree, so a variant's shell edits
+  stay on its own branch. New routes under `/api/sessions/{id}/variants` (start,
+  status, adopt, discard); `SessionSandbox::attach` reuses one container across
+  worktrees.
+- **A conversation-forward cockpit you configure, not a grid you're handed.**
+  The session cockpit's hardwired three-pane layout is now an N-surface engine
+  (Files, Activity, Browser, Terminal, Agent graph) that tiles, resizes,
+  collapses, and reorders generically — but the resting state is calm: a freshly
+  opened session is **just the conversation**. Surfaces show up when they're
+  useful. The agent's edits land as a **change card** ("Changed N files", tap a
+  file for an inline diff); a running dev server lands as a **preview card**
+  ("Open" brings the browser in). You add the file tree, terminal, or agent
+  graph yourself from a **Panes** menu when you want them, and the files pane's
+  editor collapses to nothing when no file is open so it never sits there empty.
+  The per-turn model/agent-target pickers and the Panes toggles are small
+  on-theme web components (`ax-select`, `ax-toggle`) rather than stock browser
+  controls. Layout, sizes, and order persist.
 - **Unified, polished conversation UI across the Chat tab and the Sessions
   Activity pane.** The two surfaces now share one rendering layer:
   - Messages render with **markdown-it** (tables, nested/task lists,
@@ -37,9 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Control** tab in the cockpit's files pane shows the agent's working-tree
   changes live (branch + changed files with A/M/D/U badges + a count badge),
   opens each change as a **Monaco diff** (HEAD vs working), and supports
-  **commit** and per-file **discard**. New routes under `/api/sessions/{id}/git`:
-  `status`, `diff`, `branches`, `commit`, `discard`, `checkout`. This is the
-  substrate for parallel branch "Variants" (next).
+  **commit**, per-file **discard**, and **branch switching** from a dropdown.
+  An open diff **stays live** — it re-fetches as the agent keeps editing and
+  clears itself once the file is committed or reverted — and binary or
+  oversized (>512 KB) files report a sentinel instead of dumping bytes into the
+  editor. New routes under `/api/sessions/{id}/git`: `status`, `diff`,
+  `branches`, `commit`, `discard`, `checkout`. This is the substrate for
+  parallel branch "Variants" (next).
 
 ### Fixed
 - **A lingering session sandbox container no longer breaks new sessions.** A

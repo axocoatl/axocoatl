@@ -1065,6 +1065,78 @@ pub async fn git_checkout(
         .map_err(git_err)
 }
 
+// ── Variants — parallel branch exploration ──────────────────────────────
+fn default_variant_count() -> usize {
+    3
+}
+
+#[derive(serde::Deserialize)]
+pub struct VariantsBody {
+    pub input: String,
+    #[serde(default = "default_variant_count")]
+    pub n: usize,
+}
+
+/// POST /api/sessions/{id}/variants — start N parallel variants of the
+/// session's agent. Returns the variant list; each lane streams over the WS
+/// keyed `{session}#{i}`.
+pub async fn session_variants(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<VariantsBody>,
+) -> Result<Json<Vec<axocoatl_daemon::git::Variant>>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .execute_session_variants(&id, &body.input, body.n, None)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
+/// GET /api/sessions/{id}/variants/status — per-lane changed-files for the
+/// Compare view.
+pub async fn session_variants_status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<axocoatl_daemon::git::VariantStatus>>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon.variants_status(&id).await.map(Json).map_err(git_err)
+}
+
+#[derive(serde::Deserialize)]
+pub struct AdoptBody {
+    pub branch: String,
+}
+
+/// POST /api/sessions/{id}/variants/adopt — merge a variant branch into the
+/// session's primary checkout and tear down the rest.
+pub async fn session_variant_adopt(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<AdoptBody>,
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .adopt_variant(&id, &body.branch)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
+/// POST /api/sessions/{id}/variants/discard — tear down all variants without
+/// adopting any.
+pub async fn session_variants_discard(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .remove_variant_worktrees(&id)
+        .await
+        .map(|_| Json(serde_json::json!({ "ok": true })))
+        .map_err(git_err)
+}
+
 pub async fn execute_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
