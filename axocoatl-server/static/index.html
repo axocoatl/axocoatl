@@ -9826,10 +9826,11 @@ function openCockpit(s) {
   S.session.variants = [];
   S.session.threadVariants = null;
   S.session._previewCards = new Set();
-  // Fan-out is a persistent mode: an on/off plus a configured count. Leave a
-  // prior session's choice alone if set; default to off, 3 ways.
-  if (S.session.fanout == null) S.session.fanout = 3;
-  if (S.session.fanoutOn == null) S.session.fanoutOn = false;
+  // Fan-out is an on/off plus a configured count. It persists across turns
+  // within a session (a send doesn't reset it); each freshly-opened session
+  // starts from the default — off, 3 ways.
+  S.session.fanout = 3;
+  S.session.fanoutOn = false;
   if (typeof updateFanoutBtn === 'function') updateFanoutBtn();
   if (typeof stopThreadVariantPoll === 'function') stopThreadVariantPoll();
   if (typeof stopVariantStatusPoll === 'function') stopVariantStatusPoll();
@@ -9891,6 +9892,11 @@ async function maybeAutoStartTerminal() {
 }
 function closeCockpit() {
   if (S.session.taskTimer) { clearInterval(S.session.taskTimer); S.session.taskTimer = null; }
+  // Tear down anything that outlives the pane: the fan-out popover's
+  // capture-phase outside-click listener and the variant status polls.
+  if (typeof closeFanoutPop === 'function') closeFanoutPop();
+  if (typeof stopThreadVariantPoll === 'function') stopThreadVariantPoll();
+  if (typeof stopVariantStatusPoll === 'function') stopVariantStatusPoll();
   teardownXterms();
   _lastMountedTerminal = { id: null, kind: null };
   S.session.id = null;
@@ -11912,7 +11918,7 @@ function sendSessionMessage() {
 // Fan-out is a persistent on/off mode with a user-set count. The backend caps
 // at FANOUT_MAX; we let the user dial all the way there and degrade gracefully.
 const FANOUT_MAX = 100;
-const FANOUT_RECOMMENDED = 4;
+const FANOUT_RECOMMENDED = 3;
 
 function clampFanout(n) {
   n = Math.round(Number(n) || 0);
@@ -11970,7 +11976,7 @@ function renderFanoutPop() {
   if (hint) {
     hint.textContent = n > 16
       ? (n + ' ways at once is a lot — each runs in its own branch, so it works, but expect it to be slow and heavy on local models. Up to ' + FANOUT_MAX + '.')
-      : ('A few ways (around ' + FANOUT_RECOMMENDED + ') runs comfortably in parallel. You can go up to ' + FANOUT_MAX + '; more than a handful gets slow on local models.');
+      : ('A few ways — 3 or 4 — run comfortably in parallel. You can go up to ' + FANOUT_MAX + '; more than a handful gets slow on local models.');
   }
 }
 
