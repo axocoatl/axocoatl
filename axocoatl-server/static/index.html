@@ -783,6 +783,12 @@
   .idiff-del .idiff-gutter { color: var(--err, #ff6b6b); }
   .idiff-ctx { color: var(--muted); }
   .idiff-more { padding: 4px 2px; }
+  /* Preview card — a running dev server */
+  .preview-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2); padding: 11px 13px; }
+  .pc-icon { color: var(--axo-jade-glow, #4ade80); }
+  .pc-row { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+  .pc-url { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--accent-2, var(--axo-blue)); }
+  .pc-open { margin-left: auto; }
   .terminal-surface-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
   .terminal-surface-body > .terminals-body { flex: 1; min-height: 0; }
   /* Pin every grid child to its column so `display:none` leaves an empty
@@ -9592,6 +9598,7 @@ function openCockpit(s) {
   // Reset any prior session's Variants state.
   S.session.variants = [];
   S.session.threadVariants = null;
+  S.session._previewCards = new Set();
   S.session.fanout = 1;
   if (typeof updateFanoutBtn === 'function') updateFanoutBtn();
   if (typeof stopThreadVariantPoll === 'function') stopThreadVariantPoll();
@@ -9680,6 +9687,7 @@ function detectUrlsFromTasks() {
         S.browser.seen.add(u);
         S.browser.suggestions.unshift(u);
         added = true;
+        appendPreviewCard(u);   // surface it as a card in the conversation
       }
     }
   }
@@ -11890,6 +11898,31 @@ function renderInlineDiff(oldText, newText) {
   });
   if (rows.length > 80) pre.appendChild(el('div', 'idiff-more muted small', '… ' + (rows.length - 80) + ' more lines'));
   return pre;
+}
+
+// ── Preview cards: a running dev server, as a card in the conversation ───
+function appendPreviewCard(url) {
+  if (!S.session.id || !$('#session-msgs')) return;
+  S.session._previewCards = S.session._previewCards || new Set();
+  if (S.session._previewCards.has(url)) return;
+  S.session._previewCards.add(url);
+  const card = el('div', 'smsg preview-card');
+  const head = el('div', 'cc-head');
+  head.append(el('span', 'cc-icon pc-icon', '◍'), el('span', 'cc-title', 'Preview ready'));
+  card.appendChild(head);
+  const rowEl = el('div', 'pc-row');
+  rowEl.appendChild(el('span', 'pc-url', url.replace(/^https?:\/\//, '')));
+  const open = el('button', 'btn sm pc-open', 'Open');
+  open.addEventListener('click', () => openPreview(url));
+  rowEl.appendChild(open);
+  card.appendChild(rowEl);
+  appendSessionEl(card);
+}
+
+function openPreview(url) {
+  // Bring the browser surface in (it's hidden by default) and point it there.
+  if (!(S.cockpitLayout.paneOrder || []).includes('browser')) toggleSurface('browser', true);
+  setTimeout(() => { try { browserGo(url); } catch {} }, 120);
 }
 
 // ── References: code selections + DOM picks → chat context ──
