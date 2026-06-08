@@ -759,6 +759,30 @@
   .vt-foot { display: flex; align-items: center; gap: 10px; margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--border); }
   .vt-diffstat { font-size: 11.5px; color: var(--muted); font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .vt-keep { margin-left: auto; }
+  /* Change card — agent edits, in the conversation flow */
+  .change-card { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-2);
+                 padding: 11px 13px; }
+  .cc-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text); }
+  .cc-icon { color: var(--axo-bronze, #d6a55a); }
+  .cc-title { font-weight: 600; }
+  .cc-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+  .cc-file { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 7px;
+             border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer;
+             font-size: 11.5px; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .cc-file:hover { color: var(--text); }
+  .cc-file.open { border-color: var(--accent); color: var(--text); }
+  .cc-diff { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 9px; }
+  .inline-diff { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 1.55;
+                 max-height: 320px; overflow: auto; border-radius: 6px; }
+  .idiff-line { display: flex; white-space: pre; }
+  .idiff-gutter { width: 16px; flex-shrink: 0; text-align: center; opacity: .6; user-select: none; }
+  .idiff-text { white-space: pre-wrap; word-break: break-word; }
+  .idiff-add { background: rgba(74, 222, 128, .10); }
+  .idiff-add .idiff-gutter { color: var(--ok, #4ade80); }
+  .idiff-del { background: rgba(255, 107, 107, .10); }
+  .idiff-del .idiff-gutter { color: var(--err, #ff6b6b); }
+  .idiff-ctx { color: var(--muted); }
+  .idiff-more { padding: 4px 2px; }
   .terminal-surface-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
   .terminal-surface-body > .terminals-body { flex: 1; min-height: 0; }
   /* Pin every grid child to its column so `display:none` leaves an empty
@@ -7702,10 +7726,12 @@ S.cockpitLayout = {
   // Terminals is the right-side overlay drawer (separate from the grid).
   preset: 'classic',
   flex: 'stream',               // id of the surface that fills (1fr)
-  widths: { files: 260, browser: 240 },
-  collapsed: { files: false, browser: false },
+  widths: { files: 220, browser: 360 },
+  collapsed: {},
   focused: null,                // null | surface id
-  paneOrder: ['files', 'stream', 'browser'],
+  // Conversation-forward by default: the chat is the canvas, a slim file
+  // sidebar beside it. Browser/terminal/graph appear when you reach for them.
+  paneOrder: ['files', 'stream'],
   termOpen: false,        // false = thin rail, true = drawer expanded
   termOpenW: 460,         // drawer width when open (drag-resizable)
   termInnerListW: 140,    // inner list width (drag-resizable inside the drawer)
@@ -7717,7 +7743,7 @@ S.sidebarMode = 'full';         // 'full' | 'mini' | 'hidden'
 // dropped from Sessions.  v3: terminals became an overlay drawer.
 // v6: presets retired — the cockpit is one configurable workspace; surfaces
 // are toggled via the Panes menu. Bumped so old persisted presets reset.
-const LAYOUT_KEY = 'axo.cockpit.v6';
+const LAYOUT_KEY = 'axo.cockpit.v7';
 const SIDEBAR_KEY = 'axo.sidebar.v1';
 function persistLayout() {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(S.cockpitLayout)); } catch {}
@@ -8047,10 +8073,10 @@ function relayoutEmbeddedEditors() {
 const DEFAULT_LAYOUT = {
   preset: 'classic',
   flex: 'stream',
-  widths: { files: 260, browser: 240 },
-  collapsed: { files: false, browser: false },
+  widths: { files: 220, browser: 360 },
+  collapsed: {},
   focused: null,
-  paneOrder: ['files', 'stream', 'browser'],
+  paneOrder: ['files', 'stream'],
   termOpen: false,
   termOpenW: 460,
   termInnerListW: 140,
@@ -8188,9 +8214,9 @@ function toggleSurface(id, show) {
 
 function resetWorkspace() {
   const L = S.cockpitLayout;
-  L.paneOrder = ['files', 'stream', 'browser'];
+  L.paneOrder = ['files', 'stream'];
   L.flex = 'stream';
-  L.widths = { files: 260, browser: 240 };
+  L.widths = { files: 220, browser: 360 };
   L.collapsed = {};
   L.focused = null;
   applyCockpitLayout();
@@ -11782,6 +11808,90 @@ function collapseVariantTurn(i) {
   S.session.threadVariants = null;
 }
 
+// ── Change cards: the agent's edits, as a card in the conversation ───────
+// After a turn that touched files, a calm card lands in the thread. Tap a
+// file to open its diff inline — the diff lives in the flow, not in a pane.
+const CC_BADGE = { modified: 'M', added: 'A', untracked: 'A', deleted: 'D', renamed: 'R' };
+
+async function appendChangeCard() {
+  if (!S.session.id) return;
+  let st;
+  try { st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/status').then(r => r.json()); }
+  catch { return; }
+  const files = (st && st.files) || [];
+  if (!files.length) return;
+  const card = el('div', 'smsg change-card');
+  const head = el('div', 'cc-head');
+  head.append(
+    el('span', 'cc-icon', '◆'),
+    el('span', 'cc-title', 'Changed ' + files.length + (files.length > 1 ? ' files' : ' file')),
+  );
+  card.appendChild(head);
+  const row = el('div', 'cc-files');
+  files.forEach(f => {
+    const chip = el('button', 'cc-file');
+    chip.append(el('span', 'git-file-badge ' + f.state, CC_BADGE[f.state] || '•'), el('span', 'cc-file-name', f.path));
+    chip.addEventListener('click', () => toggleCardDiff(card, f.path, chip));
+    row.appendChild(chip);
+  });
+  card.appendChild(row);
+  card.appendChild(el('div', 'cc-diff hide'));
+  appendSessionEl(card);
+}
+
+async function toggleCardDiff(card, path, chip) {
+  const host = card.querySelector('.cc-diff');
+  // Toggle off if already showing this file.
+  if (chip.classList.contains('open')) {
+    chip.classList.remove('open');
+    host.classList.add('hide'); host.innerHTML = '';
+    return;
+  }
+  card.querySelectorAll('.cc-file.open').forEach(c => c.classList.remove('open'));
+  chip.classList.add('open');
+  host.classList.remove('hide');
+  host.innerHTML = '<div class="muted small" style="padding:6px 2px;">Loading diff…</div>';
+  let d;
+  try { d = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/diff?path=' + encodeURIComponent(path)).then(r => r.json()); }
+  catch { host.innerHTML = '<div class="muted small">Diff unavailable.</div>'; return; }
+  if (!d || d.error) { host.innerHTML = '<div class="muted small">Diff unavailable.</div>'; return; }
+  if (d.binary || d.too_large) {
+    host.innerHTML = '<div class="muted small" style="padding:6px 2px;">' + (d.binary ? 'Binary file.' : 'File too large to preview.') + '</div>';
+    return;
+  }
+  host.innerHTML = '';
+  host.appendChild(renderInlineDiff(d.old || '', d.new || ''));
+}
+
+// A calm prefix/suffix line diff — light, no Monaco. Good for the contiguous
+// edits agents usually make; collapses long unchanged runs.
+function renderInlineDiff(oldText, newText) {
+  const a = oldText.length ? oldText.split('\n') : [];
+  const b = newText.length ? newText.split('\n') : [];
+  let s = 0; while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let ea = a.length, eb = b.length;
+  while (ea > s && eb > s && a[ea - 1] === b[eb - 1]) { ea--; eb--; }
+  const rows = [];
+  const ctx = 2;
+  const pushCtx = (arr, from, to) => {
+    for (let i = from; i < to; i++) rows.push({ t: ' ', l: arr[i] });
+  };
+  // leading context (last `ctx` unchanged lines before the change)
+  pushCtx(a, Math.max(0, s - ctx), s);
+  for (let i = s; i < ea; i++) rows.push({ t: '-', l: a[i] });
+  for (let i = s; i < eb; i++) rows.push({ t: '+', l: b[i] });
+  // trailing context
+  pushCtx(a, ea, Math.min(a.length, ea + ctx));
+  const pre = el('div', 'inline-diff');
+  rows.slice(0, 80).forEach(r => {
+    const line = el('div', 'idiff-line idiff-' + (r.t === '+' ? 'add' : r.t === '-' ? 'del' : 'ctx'));
+    line.append(el('span', 'idiff-gutter', r.t === ' ' ? '' : r.t), el('span', 'idiff-text', r.l || ' '));
+    pre.appendChild(line);
+  });
+  if (rows.length > 80) pre.appendChild(el('div', 'idiff-more muted small', '… ' + (rows.length - 80) + ' more lines'));
+  return pre;
+}
+
 // ── References: code selections + DOM picks → chat context ──
 function ensureRefs() {
   if (!S.session.refs) S.session.refs = [];
@@ -13460,6 +13570,7 @@ function handleWsFrame(d) {
         setCockpitLive('done', 'done');
         loadFileTree('', $('#file-tree'));
         refreshGitPane();
+        appendChangeCard();   // the agent's edits, as a card in the flow
         if (window.hljs) {
           $$('#session-msgs pre code').forEach(c => {
             try { if (!c.dataset.hl) { window.hljs.highlightElement(c); c.dataset.hl = '1'; } } catch {}
