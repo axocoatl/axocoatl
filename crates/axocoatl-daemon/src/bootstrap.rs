@@ -1803,11 +1803,23 @@ impl AxocoatlDaemon {
         let container = sandbox.container().to_string();
         let variants = self.create_variant_worktrees(session_id, n).await?;
 
+        // Build every variant's actor *before* spawning any lane. If one fails
+        // (e.g. a missing agent), nothing is running yet, so we can tear the
+        // whole worktree set down and surface the error cleanly — rather than
+        // returning with half the lanes streaming against orphaned worktrees.
+        let mut prepared = Vec::with_capacity(variants.len());
         for v in &variants {
-            let run_id = format!("{}#{}", session.id, v.index);
-            let actor = self
-                .variant_actor(&session, &agent_id, v, &container)
-                .await?;
+            match self.variant_actor(&session, &agent_id, v, &container).await {
+                Ok(actor) => prepared.push((v.index, actor)),
+                Err(e) => {
+                    self.remove_variant_worktrees(session_id).await.ok();
+                    return Err(e);
+                }
+            }
+        }
+
+        for (index, actor) in prepared {
+            let run_id = format!("{}#{}", session.id, index);
             let bus = self.stream_bus.clone();
             let rid = run_id.clone();
             let aid = agent_id.clone();
