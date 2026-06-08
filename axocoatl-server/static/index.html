@@ -1748,14 +1748,8 @@
   .session-input-bar { display: flex; align-items: center; gap: 8px; }
   .session-input-row { display: flex; gap: 8px; }
   .session-input textarea { flex: 1; min-height: 42px; max-height: 140px; }
-  .session-model-picker, .session-agent-target {
-    background: var(--bg-3); border: 1px solid var(--border); border-radius: 5px;
-    color: var(--fg-soft, var(--text)); font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 11px; padding: 3px 8px; outline: none; cursor: pointer;
-    max-width: 50%;
-  }
-  .session-model-picker:focus, .session-agent-target:focus { border-color: var(--accent); }
-  .session-model-picker.hide, .session-agent-target.hide { display: none; }
+  /* The per-turn model + agent-target pickers are <ax-select> web components
+     now — they style themselves in shadow DOM (see class AxSelect). */
   .smsg { font-size: 13px; line-height: 1.55; }
   .smsg-role { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 4px; font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .smsg.agent .smsg-role { color: var(--accent-lift); }
@@ -3306,8 +3300,8 @@
                    sends; values are read at send-time and forwarded as
                    `model_override` / `target_agent` on the WS payload. -->
               <div class="session-input-bar" id="session-input-bar">
-                <select class="session-model-picker" id="session-model" title="Override the model for this turn"></select>
-                <select class="session-agent-target hide" id="session-target" title="Send this turn to a specific agent"></select>
+                <ax-select id="session-model" title="Override the model for this turn"></ax-select>
+                <ax-select id="session-target" class="hide" title="Send this turn to a specific agent"></ax-select>
               </div>
               <div class="session-input-row">
                 <textarea class="input" id="session-text" placeholder="Tell the agents what to build — Enter to send, Shift+Enter for newline"></textarea>
@@ -8253,6 +8247,158 @@ class AxToggle extends HTMLElement {
   set checked(v) { v ? this.setAttribute('checked', '') : this.removeAttribute('checked'); }
 }
 if (!customElements.get('ax-toggle')) customElements.define('ax-toggle', AxToggle);
+
+// A polished dropdown in the cockpit's vibe — a drop-in for a small <select>.
+// It reads its <option> light-DOM children (so existing populate code that
+// appends <option>s keeps working), exposes a select-like `.value`, and emits
+// 'change'. The menu is a fixed-position layer so it escapes the panes'
+// overflow clipping and opens upward above the composer. Shadow-DOM styled,
+// reading the page's CSS custom properties so it stays on-theme.
+class AxSelect extends HTMLElement {
+  constructor() {
+    super();
+    this._value = null;
+    this._open = false;
+    this._opts = [];
+    const r = this.attachShadow({ mode: 'open' });
+    r.innerHTML =
+      '<style>' +
+      ':host{display:inline-flex;max-width:100%;vertical-align:middle}' +
+      '.trig{display:inline-flex;align-items:center;gap:7px;max-width:100%;' +
+        'background:var(--bg-3,#1a1a1a);border:1px solid var(--border,#333);border-radius:6px;' +
+        'color:var(--fg-soft,#ddd);font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;' +
+        'padding:4px 9px;cursor:pointer;outline:none;user-select:none;transition:border-color .15s}' +
+      '.trig:hover{border-color:var(--border-strong,#444)}' +
+      ':host(.open) .trig,.trig:focus-visible{border-color:var(--accent,#4ade80)}' +
+      '.lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+      '.chev{flex-shrink:0;opacity:.55;font-size:9px;transition:transform .15s}' +
+      ':host(.open) .chev{transform:rotate(180deg)}' +
+      '.menu{position:fixed;z-index:70;min-width:160px;max-width:360px;max-height:280px;overflow:auto;' +
+        'background:var(--panel,#161616);border:1px solid var(--border-strong,#444);border-radius:9px;' +
+        'padding:5px;box-shadow:0 12px 34px rgba(0,0,0,.45);display:none}' +
+      '.menu.show{display:block}' +
+      '.opt{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:6px;cursor:pointer;' +
+        'font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;color:var(--fg-soft,#ddd);white-space:nowrap}' +
+      '.opt:hover{background:var(--bg-3,#222)}' +
+      '.opt[aria-selected="true"]{color:var(--accent-lift,var(--accent,#4ade80))}' +
+      '.opt .tick{margin-left:auto;opacity:0;font-size:11px}' +
+      '.opt[aria-selected="true"] .tick{opacity:1}' +
+      '</style>' +
+      '<div class="trig" part="trigger" tabindex="0"><span class="lbl"></span><span class="chev">▾</span></div>' +
+      '<div class="menu"></div>';
+    this._trig = r.querySelector('.trig');
+    this._lbl = r.querySelector('.lbl');
+    this._menu = r.querySelector('.menu');
+    this._trig.addEventListener('click', () => this.toggleOpen());
+    this._trig.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.toggleOpen(); }
+      else if (e.key === 'Escape') this.close();
+    });
+    this._onDocDown = (e) => {
+      if (!this._open) return;
+      const path = e.composedPath ? e.composedPath() : [];
+      if (path.includes(this) || path.includes(this._menu)) return;
+      this.close();
+    };
+    this._mo = new MutationObserver(() => this._scheduleSync());
+  }
+  connectedCallback() {
+    this._mo.observe(this, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['value', 'selected'] });
+    this._sync();
+  }
+  disconnectedCallback() {
+    this._mo.disconnect();
+    document.removeEventListener('mousedown', this._onDocDown, true);
+  }
+  _scheduleSync() {
+    if (this._syncQ) return;
+    this._syncQ = true;
+    Promise.resolve().then(() => { this._syncQ = false; this._sync(); });
+  }
+  // Read <option> children → rebuild the menu, keeping the value valid.
+  _sync() {
+    this._opts = Array.from(this.querySelectorAll('option')).map(o => ({
+      value: o.getAttribute('value') != null ? o.getAttribute('value') : (o.textContent || ''),
+      label: o.textContent || '',
+      selected: o.hasAttribute('selected'),
+    }));
+    let v = this._value;
+    if (!this._opts.some(o => o.value === v)) {
+      const sel = this._opts.find(o => o.selected);
+      v = sel ? sel.value : (this._opts[0] ? this._opts[0].value : null);
+    }
+    this._value = v;
+    this._renderMenu();
+    this._renderLabel();
+  }
+  _renderMenu() {
+    this._menu.innerHTML = '';
+    this._opts.forEach(o => {
+      const row = document.createElement('div');
+      row.className = 'opt';
+      if (o.value === this._value) row.setAttribute('aria-selected', 'true');
+      const t = document.createElement('span');
+      t.textContent = o.label;
+      row.appendChild(t);
+      const tick = document.createElement('span');
+      tick.className = 'tick';
+      tick.textContent = '✓';
+      row.appendChild(tick);
+      row.addEventListener('click', () => this._select(o.value));
+      this._menu.appendChild(row);
+    });
+  }
+  _renderLabel() {
+    const cur = this._opts.find(o => o.value === this._value);
+    this._lbl.textContent = cur ? cur.label : '';
+    this.title = cur ? cur.label : '';
+  }
+  _select(v) {
+    const changed = v !== this._value;
+    this._value = v;
+    this._renderMenu();
+    this._renderLabel();
+    this.close();
+    if (changed) this.dispatchEvent(new CustomEvent('change', { detail: { value: v }, bubbles: true }));
+  }
+  toggleOpen() { this._open ? this.close() : this.open(); }
+  open() {
+    if (this._open || !this._opts.length) return;
+    this._open = true;
+    this.classList.add('open');
+    this._menu.classList.add('show');
+    this._position();
+    setTimeout(() => document.addEventListener('mousedown', this._onDocDown, true), 0);
+  }
+  close() {
+    if (!this._open) return;
+    this._open = false;
+    this.classList.remove('open');
+    this._menu.classList.remove('show');
+    document.removeEventListener('mousedown', this._onDocDown, true);
+  }
+  // Anchor above the trigger (the composer sits low), left-aligned, clamped.
+  _position() {
+    const r = this._trig.getBoundingClientRect();
+    const m = this._menu;
+    m.style.visibility = 'hidden';
+    m.style.minWidth = Math.max(r.width, 160) + 'px';
+    const mw = m.offsetWidth || 200;
+    const mh = m.offsetHeight || 200;
+    const margin = 8;
+    let left = r.left;
+    if (left + mw > window.innerWidth - margin) left = window.innerWidth - mw - margin;
+    if (left < margin) left = margin;
+    let top = r.top - mh - 5;
+    if (top < margin) top = r.bottom + 5;
+    m.style.left = left + 'px';
+    m.style.top = top + 'px';
+    m.style.visibility = '';
+  }
+  get value() { return this._value; }
+  set value(v) { this._value = v; this._renderMenu(); this._renderLabel(); }
+}
+if (!customElements.get('ax-select')) customElements.define('ax-select', AxSelect);
 
 function renderPanesMenu() {
   const menu = $('#panes-menu'); if (!menu) return;
