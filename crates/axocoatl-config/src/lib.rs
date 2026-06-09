@@ -96,6 +96,66 @@ fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
         }
     }
 
+    // Role invariants: coordinators and workers only make sense inside a
+    // workflow — a worker is spawned and driven by its workflow's coordinator,
+    // never standalone. Reject a role with no workflow to back it so a
+    // half-wired multi-agent setup fails loudly at load time instead of at run.
+    let workflow_members: std::collections::HashSet<&str> = config
+        .workflows
+        .iter()
+        .flat_map(|w| w.agents.iter().map(String::as_str))
+        .collect();
+    let workflow_entry_points: std::collections::HashSet<&str> = config
+        .workflows
+        .iter()
+        .filter_map(|w| w.entry_point.as_deref())
+        .collect();
+    for agent in &config.agents {
+        match agent.role {
+            AgentRoleYaml::Worker => {
+                if !agent.depends_on.is_empty() {
+                    return Err(ConfigError::InvalidField {
+                        field: format!("agents[{}].depends_on", agent.id),
+                        value: format!("{:?}", agent.depends_on),
+                        reason: "A worker is driven by its coordinator, not by the \
+                                 event lattice, so it must not declare depends_on"
+                            .to_string(),
+                        suggestion: "Remove depends_on from this worker agent.".to_string(),
+                    });
+                }
+                if !workflow_members.contains(agent.id.as_str()) {
+                    return Err(ConfigError::InvalidField {
+                        field: format!("agents[{}].role", agent.id),
+                        value: "worker".to_string(),
+                        reason: "A worker must belong to a workflow (be listed in some \
+                                 workflow's agents); its coordinator spawns it on demand"
+                            .to_string(),
+                        suggestion: format!(
+                            "Add '{}' to a workflow's agents list, or change its role.",
+                            agent.id
+                        ),
+                    });
+                }
+            }
+            AgentRoleYaml::Coordinator => {
+                if !workflow_entry_points.contains(agent.id.as_str()) {
+                    return Err(ConfigError::InvalidField {
+                        field: format!("agents[{}].role", agent.id),
+                        value: "coordinator".to_string(),
+                        reason: "A coordinator must be the entry_point of some workflow \
+                                 (the workflow whose workers it manages)"
+                            .to_string(),
+                        suggestion: format!(
+                            "Set a workflow's entry_point to '{}', or change its role.",
+                            agent.id
+                        ),
+                    });
+                }
+            }
+            AgentRoleYaml::Autonomous => {}
+        }
+    }
+
     // MCP servers: validate the transport so a malformed or tampered config is
     // rejected up front rather than silently spawning the wrong process or
     // reaching an unexpected endpoint at connect time. The config file is a
@@ -254,6 +314,84 @@ agents:
         // Absent → None, so the automatic 0.5 × N threshold still applies.
         assert_eq!(config.agents[1].activation_threshold, None);
         assert_eq!(config.agents[1].activation_decay, None);
+    }
+
+    #[test]
+    fn worker_with_depends_on_rejected() {
+        let yaml = r#"
+agents:
+  - id: w
+    name: "W"
+    provider: ollama
+    model: llama3
+    role: worker
+    depends_on: [x]
+workflows:
+  - id: wf
+    name: "WF"
+    agents: [w]
+    entry_point: lead
+"#;
+        let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidField { ref field, .. } if field.contains("depends_on"))
+        );
+    }
+
+    #[test]
+    fn worker_without_workflow_rejected() {
+        let yaml = r#"
+agents:
+  - id: w
+    name: "W"
+    provider: ollama
+    model: llama3
+    role: worker
+"#;
+        let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidField { ref reason, .. } if reason.contains("must belong to a workflow"))
+        );
+    }
+
+    #[test]
+    fn coordinator_without_workflow_rejected() {
+        let yaml = r#"
+agents:
+  - id: c
+    name: "C"
+    provider: ollama
+    model: llama3
+    role: coordinator
+"#;
+        let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidField { ref reason, .. } if reason.contains("entry_point of some workflow"))
+        );
+    }
+
+    #[test]
+    fn valid_coordinator_worker_config_accepted() {
+        let yaml = r#"
+agents:
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: llama3
+    role: coordinator
+  - id: w
+    name: "W"
+    provider: ollama
+    model: llama3
+    role: worker
+workflows:
+  - id: wf
+    name: "WF"
+    agents: [lead, w]
+    entry_point: lead
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        assert_eq!(config.agents.len(), 2);
     }
 
     #[test]
