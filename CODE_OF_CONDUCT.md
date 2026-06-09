@@ -25,7 +25,7 @@ discussions, and any official communication channel.
 
 ## Enforcement
 
-Report concerns to **erick@codeoperators.com**. Reports stay confidential.
+Report concerns to **conduct@axocoatl.ai**. Reports stay confidential.
 Maintainers will respond and decide on appropriate action, which can range
 from a private note to removal from the project.
 

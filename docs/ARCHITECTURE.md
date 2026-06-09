@@ -98,6 +98,44 @@ it's unavailable. No external service, no network at inference time.
 - **A2A** — agent-to-agent interop for cross-framework workflows, reachable over
   `GET /.well-known/agent.json` and `POST /a2a/tasks`.
 
+## Security model
+
+A session runs the agent's tools inside a **rootless, daemonless Podman
+container**, not on the host. The threat model is deliberately narrow, and
+stated plainly so you know what it does and doesn't cover.
+
+**What the sandbox contains — the blast radius of a mistaken or misbehaving
+agent:**
+
+- **Filesystem.** Only the session's working directory is bind-mounted into the
+  container (`{dir}:{dir}:rw`). Nothing else of the host is visible — not your
+  home directory, SSH keys, or sibling projects. A destructive command
+  (`rm -rf`, a bad `git reset`) can only reach that one directory.
+- **Privileges.** The container runs with `--security-opt=no-new-privileges` and
+  drops the escape/recon capabilities (`SYS_ADMIN`, `SYS_PTRACE`, `NET_ADMIN`,
+  `NET_RAW`, `DAC_READ_SEARCH`, …), so a setuid binary can't escalate and the
+  classic namespace/mount escape levers are gone.
+- **Network.** Untrusted runs start with `--network none` — no outbound
+  connections at all. Bridged networking is opt-in, per policy.
+- **Resources.** Memory, CPU, and PID caps (2 GB / 2 CPUs / 512 pids) bound a
+  runaway loop or fork bomb, where the host's cgroup delegation allows it.
+
+**What it does NOT solve — and we won't pretend otherwise:**
+
+- **Prompt injection.** If the agent reads malicious instructions from a file, a
+  web page, or tool output, the sandbox does not stop it from *acting* on them
+  inside its workspace and its allowed network. Isolation bounds the blast
+  radius; it is not a defense against an agent being talked into the wrong
+  thing. Keep secrets out of the workspace and prefer `--network none` for
+  untrusted inputs.
+- **Host kernel / Podman bugs.** Container isolation is only as strong as the
+  host kernel and Podman underneath it. A kernel-level container-escape CVE is
+  outside our control.
+- **What you explicitly grant.** Bridged networking, mounted credentials, or a
+  permissive tool policy widen the surface — by your choice.
+
+Report security issues per [SECURITY.md](../SECURITY.md).
+
 ## Crate map
 
 `axocoatl-core` (types) · `axocoatl-token` (budgets) · `axocoatl-llm*`
