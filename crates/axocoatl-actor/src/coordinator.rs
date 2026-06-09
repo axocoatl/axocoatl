@@ -1,9 +1,16 @@
 //! Coordinator behavior — an orchestrator agent that decomposes a goal into
 //! subtasks, assigns each to a worker agent, runs them in parallel, and
-//! synthesizes the results. Decomposition prefers the symbolic HTN planner
-//! (resolving any LLM frontiers task-by-task) and uses whole-goal LLM
-//! decomposition only when no planner is configured; workers are chosen by a
-//! capability/budget auction.
+//! synthesizes the results.
+//!
+//! - Decomposition prefers the symbolic HTN planner (resolving any LLM frontiers
+//!   task-by-task) and falls back to whole-goal LLM decomposition only when no
+//!   planner is configured.
+//! - Workers are chosen by a capability/budget auction and spawned with the full
+//!   agent stack (checkpointing, long-term + semantic memory, hooks, tools).
+//! - The run is checkpointed — the plan plus each worker's outcome — so after a
+//!   crash the next run for the same goal resumes, skipping work already done.
+//! - If every worker fails the coordinator returns an error rather than
+//!   synthesizing from nothing.
 
 use std::collections::HashMap;
 use std::sync::Arc;

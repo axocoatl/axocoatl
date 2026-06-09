@@ -564,10 +564,31 @@ impl AxocoatlDaemon {
         // on demand; every other role runs the standard solo agent behavior.
         let behavior: Box<dyn AgentBehavior> =
             if matches!(agent_config.role, AgentRole::Coordinator) {
+                let data_dir =
+                    std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+                // The coordinator gets the full dependency stack so it can give
+                // its workers checkpointing + memory + hooks, and checkpoint its
+                // own orchestration for resumable runs.
                 let mut coord = CoordinatorBehavior::new(provider, counter.clone())
-                    .with_tool_executor(tool_executor.clone());
+                    .with_tool_executor(tool_executor.clone())
+                    .with_checkpoint_store(checkpoint_store.clone())
+                    .with_long_term_memory(long_term_memory.clone())
+                    .with_hook_registry(hook_registry.clone())
+                    .with_data_dir(data_dir);
+
+                // Workers are scoped to THIS coordinator's workflow(s): the
+                // workflows whose entry_point is this coordinator (union across
+                // several). Config validation guarantees every worker belongs to
+                // a coordinator-led workflow, so none are orphaned.
+                let worker_ids: std::collections::HashSet<&str> = config
+                    .workflows
+                    .iter()
+                    .filter(|wf| wf.entry_point.as_deref() == Some(agent_yaml.id.as_str()))
+                    .flat_map(|wf| wf.agents.iter().map(String::as_str))
+                    .collect();
                 for w in &config.agents {
-                    if matches!(w.role, AgentRoleYaml::Worker) {
+                    if matches!(w.role, AgentRoleYaml::Worker) && worker_ids.contains(w.id.as_str())
+                    {
                         coord = coord.add_worker_config(WorkerConfig {
                             id: AgentId::new(&w.id),
                             name: w.name.clone(),
@@ -587,10 +608,7 @@ impl AxocoatlDaemon {
                 if let Some(path) = config
                     .workflows
                     .iter()
-                    .find(|wf| {
-                        wf.entry_point.as_deref() == Some(agent_yaml.id.as_str())
-                            || wf.agents.iter().any(|a| a == &agent_yaml.id)
-                    })
+                    .find(|wf| wf.entry_point.as_deref() == Some(agent_yaml.id.as_str()))
                     .and_then(|wf| wf.htn_methods_file.as_deref())
                 {
                     match std::fs::read_to_string(path)

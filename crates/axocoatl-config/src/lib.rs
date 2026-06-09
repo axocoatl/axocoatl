@@ -100,9 +100,22 @@ fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     // workflow — a worker is spawned and driven by its workflow's coordinator,
     // never standalone. Reject a role with no workflow to back it so a
     // half-wired multi-agent setup fails loudly at load time instead of at run.
-    let workflow_members: std::collections::HashSet<&str> = config
+    let coordinator_ids: std::collections::HashSet<&str> = config
+        .agents
+        .iter()
+        .filter(|a| matches!(a.role, AgentRoleYaml::Coordinator))
+        .map(|a| a.id.as_str())
+        .collect();
+    // Agents in a workflow whose entry_point is a coordinator — the only
+    // workflows whose workers actually get managed (and thus spawned).
+    let coordinator_led_members: std::collections::HashSet<&str> = config
         .workflows
         .iter()
+        .filter(|w| {
+            w.entry_point
+                .as_deref()
+                .is_some_and(|ep| coordinator_ids.contains(ep))
+        })
         .flat_map(|w| w.agents.iter().map(String::as_str))
         .collect();
     let workflow_entry_points: std::collections::HashSet<&str> = config
@@ -123,15 +136,15 @@ fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
                         suggestion: "Remove depends_on from this worker agent.".to_string(),
                     });
                 }
-                if !workflow_members.contains(agent.id.as_str()) {
+                if !coordinator_led_members.contains(agent.id.as_str()) {
                     return Err(ConfigError::InvalidField {
                         field: format!("agents[{}].role", agent.id),
                         value: "worker".to_string(),
-                        reason: "A worker must belong to a workflow (be listed in some \
-                                 workflow's agents); its coordinator spawns it on demand"
+                        reason: "A worker must belong to a workflow whose entry_point is a \
+                                 coordinator; that coordinator spawns it on demand"
                             .to_string(),
                         suggestion: format!(
-                            "Add '{}' to a workflow's agents list, or change its role.",
+                            "Add '{}' to a coordinator-led workflow's agents, or change its role.",
                             agent.id
                         ),
                     });
