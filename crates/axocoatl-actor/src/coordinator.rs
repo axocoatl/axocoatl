@@ -11,8 +11,9 @@ use std::sync::Arc;
 use axocoatl_coordination::{compute_bid, run_auction, AgentBid, HtnPlanner, HtnTask, HtnTaskType};
 use axocoatl_core::{AgentConfig, AgentId, AgentInput, AgentOutput, TokenUsageStats};
 use axocoatl_llm::{ChatRequest, LlmProvider};
+use axocoatl_memory::{CheckpointStore, LongTermMemory, SemanticMemory};
 use axocoatl_token::{TokenCounter, TokenTracker};
-use axocoatl_tools::ToolExecutor;
+use axocoatl_tools::{HookRegistry, ToolExecutor};
 
 use crate::actor_impl::{execute_agent, AgentActor, AgentMessage};
 use crate::behavior::AgentBehavior;
@@ -98,6 +99,16 @@ pub struct CoordinatorBehavior {
     /// Monotonic run counter — scopes worker actor names per run so repeated
     /// executions of the same coordinator never collide in ractor's registry.
     run_seq: u64,
+    /// Full-stack dependencies handed to every spawned worker so a worker is a
+    /// first-class agent (checkpointed, with long-term + semantic memory and the
+    /// global hook registry), not a bare provider+tools shell.
+    checkpoint_store: Option<Arc<CheckpointStore>>,
+    long_term_memory: Option<Arc<tokio::sync::RwLock<LongTermMemory>>>,
+    hook_registry: Option<Arc<HookRegistry>>,
+    /// Data directory for per-worker semantic memory. When set (by the daemon),
+    /// each worker gets a Tier-4 semantic store under it; when unset, workers
+    /// run without semantic memory (and create no on-disk store).
+    data_dir: Option<String>,
 }
 
 impl CoordinatorBehavior {
@@ -115,11 +126,39 @@ impl CoordinatorBehavior {
             worker_results: Vec::new(),
             htn_planner: None,
             run_seq: 0,
+            checkpoint_store: None,
+            long_term_memory: None,
+            hook_registry: None,
+            data_dir: None,
         }
     }
 
     pub fn with_tool_executor(mut self, executor: Arc<ToolExecutor>) -> Self {
         self.tool_executor = Some(executor);
+        self
+    }
+
+    pub fn with_checkpoint_store(mut self, store: Arc<CheckpointStore>) -> Self {
+        self.checkpoint_store = Some(store);
+        self
+    }
+
+    pub fn with_long_term_memory(
+        mut self,
+        memory: Arc<tokio::sync::RwLock<LongTermMemory>>,
+    ) -> Self {
+        self.long_term_memory = Some(memory);
+        self
+    }
+
+    pub fn with_hook_registry(mut self, registry: Arc<HookRegistry>) -> Self {
+        self.hook_registry = Some(registry);
+        self
+    }
+
+    /// Set the data directory used for per-worker semantic memory stores.
+    pub fn with_data_dir(mut self, data_dir: String) -> Self {
+        self.data_dir = Some(data_dir);
         self
     }
 
@@ -142,13 +181,40 @@ impl CoordinatorBehavior {
             id: config.id.clone(),
             name: config.name.clone(),
             system_prompt: Some(config.system_prompt.clone()),
+            tools: config.tools.clone(),
             ..AgentConfig::default()
         };
 
+        // Build the worker with the full agent stack so it is a first-class
+        // agent, not a bare provider+tools shell: checkpointing, long-term and
+        // semantic memory, the global hook registry, and tool execution.
         let mut behavior = DefaultAgentBehavior::new(self.provider.clone(), self.counter.clone());
-
         if let Some(executor) = &self.tool_executor {
             behavior = behavior.with_tool_executor(executor.clone());
+        }
+        if let Some(store) = &self.checkpoint_store {
+            behavior = behavior.with_checkpoint_store(store.clone());
+        }
+        if let Some(ltm) = &self.long_term_memory {
+            behavior = behavior.with_long_term_memory(ltm.clone());
+        }
+        if let Some(hooks) = &self.hook_registry {
+            behavior = behavior.with_hook_registry(hooks.clone());
+        }
+        // Tier-4 semantic memory, one store per worker (same scheme as a
+        // standalone agent), under the coordinator's data dir. Built only when a
+        // data dir is configured (the daemon sets it); omitted in lightweight or
+        // embedded use so no disk store is created. Non-fatal on failure.
+        if let Some(data_dir) = &self.data_dir {
+            match SemanticMemory::new(
+                &config.id.to_string(),
+                format!("{data_dir}/memory/semantic"),
+            ) {
+                Ok(sem) => behavior = behavior.with_semantic_memory(Arc::new(sem)),
+                Err(e) => {
+                    tracing::warn!(worker = %config.id, error = %e, "semantic memory unavailable")
+                }
+            }
         }
 
         // Run-scoped actor name so repeated runs of this coordinator never
@@ -342,8 +408,12 @@ impl CoordinatorBehavior {
         self.run_seq += 1;
         self.worker_results.clear();
 
+        // The original goal — passed to synthesis so the model answers the
+        // actual request, not just a pile of worker outputs.
+        let goal = input.content;
+
         // 1. Decompose the task
-        let subtasks = self.decompose_task(&input.content).await?;
+        let subtasks = self.decompose_task(&goal).await?;
 
         tracing::info!(
             coordinator = %self.agent_id,
@@ -428,14 +498,15 @@ impl CoordinatorBehavior {
             });
         }
 
-        let mut results = Vec::new();
+        let mut succeeded: Vec<(String, String)> = Vec::new();
+        let mut failed: Vec<(String, String)> = Vec::new();
         let mut total_usage = TokenUsageStats::default();
 
         while let Some(join_result) = join_set.join_next().await {
             match join_result {
                 Ok((worker_id, task_name, Ok(output))) => {
                     total_usage.merge(&output.token_usage);
-                    results.push(format!("## {task_name}\n{}", output.content));
+                    succeeded.push((task_name.clone(), output.content.clone()));
                     self.worker_results.push(WorkerResult {
                         worker_id,
                         task_name,
@@ -443,7 +514,8 @@ impl CoordinatorBehavior {
                     });
                 }
                 Ok((worker_id, task_name, Err(e))) => {
-                    results.push(format!("## {task_name}\n[ERROR: {e}]"));
+                    tracing::warn!(worker = %worker_id, task = %task_name, error = %e, "Worker task failed");
+                    failed.push((task_name.clone(), e.to_string()));
                     self.worker_results.push(WorkerResult {
                         worker_id,
                         task_name,
@@ -452,15 +524,35 @@ impl CoordinatorBehavior {
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Worker task panicked");
+                    failed.push(("<panicked task>".to_string(), e.to_string()));
                 }
             }
         }
 
-        // 4. Synthesize final response
-        let synthesis_prompt = format!(
-            "Synthesize the following worker results into a coherent response:\n\n{}",
-            results.join("\n\n")
-        );
+        // If every worker failed there is nothing to synthesize — surface the
+        // failure rather than asking the model to make something out of nothing.
+        if succeeded.is_empty() {
+            return Err(AgentError::Internal(format!(
+                "all {} worker task(s) failed; nothing to synthesize",
+                failed.len()
+            )));
+        }
+
+        // 4. Synthesize: give the model the original goal and a structured view
+        //    of what succeeded and what failed so it answers the goal and
+        //    accounts for any gaps.
+        let mut synthesis_prompt = format!("Original goal:\n{goal}\n\nWorker results:\n");
+        for (name, content) in &succeeded {
+            synthesis_prompt.push_str(&format!("\n## {name} (succeeded)\n{content}\n"));
+        }
+        if !failed.is_empty() {
+            synthesis_prompt.push_str("\nThese subtasks failed — account for the gaps:\n");
+            for (name, err) in &failed {
+                synthesis_prompt.push_str(&format!("- {name}: {err}\n"));
+            }
+        }
+        synthesis_prompt
+            .push_str("\nSynthesize these into a single coherent response to the original goal.");
 
         let request = ChatRequest::with_system(
             self.system_prompt
@@ -541,6 +633,42 @@ mod tests {
                 }),
             ];
             Ok(Box::pin(tokio_stream::iter(events)))
+        }
+    }
+
+    /// Provider whose every call fails — used to force worker failures.
+    struct FailingLlm;
+
+    #[async_trait]
+    impl LlmProvider for FailingLlm {
+        fn provider_id(&self) -> &str {
+            "failing"
+        }
+        fn model_id(&self) -> &str {
+            "fail"
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            Err(ProviderError::ApiError {
+                provider: "failing".to_string(),
+                status: 500,
+                message: "mock LLM failure".to_string(),
+            })
+        }
+        async fn chat_stream(
+            &self,
+            _: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            Err(ProviderError::ApiError {
+                provider: "failing".to_string(),
+                status: 500,
+                message: "mock LLM failure".to_string(),
+            })
         }
     }
 
@@ -784,5 +912,46 @@ mod tests {
         assert!(second.is_ok(), "second run failed: {second:?}");
         // worker_results reflects only the latest run (cleared each run).
         assert_eq!(coord.worker_results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn coordinator_errors_when_all_workers_fail() {
+        // HTN decomposes with no LLM call, but the workers run on a failing
+        // provider, so every subtask fails — the coordinator surfaces an error
+        // instead of synthesizing from nothing.
+        let methods = r#"
+- task_pattern: "build something"
+  preconditions: []
+  subtasks:
+    - name: "a"
+      parameters: {}
+      task_type: Primitive
+    - name: "b"
+      parameters: {}
+      task_type: Primitive
+"#;
+        let planner = HtnPlanner::from_methods_yaml(methods).unwrap();
+        let provider: Arc<dyn LlmProvider> = Arc::new(FailingLlm);
+        let counter: Arc<dyn TokenCounter> = Arc::new(SimpleCounter);
+        let mut coord = CoordinatorBehavior::new(provider, counter)
+            .with_htn_methods(planner)
+            .add_worker_config(WorkerConfig {
+                id: AgentId::new("f1"),
+                name: "F1".to_string(),
+                system_prompt: "worker".to_string(),
+                tools: vec![],
+                token_budget: DEFAULT_WORKER_BUDGET,
+            })
+            .add_worker_config(WorkerConfig {
+                id: AgentId::new("f2"),
+                name: "F2".to_string(),
+                system_prompt: "worker".to_string(),
+                tools: vec![],
+                token_budget: DEFAULT_WORKER_BUDGET,
+            });
+
+        coord.on_start(&coord_config()).await.unwrap();
+        let result = coord.execute(AgentInput::text("build something")).await;
+        assert!(result.is_err(), "expected an error when all workers fail");
     }
 }
