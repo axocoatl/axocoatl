@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-06-08
+
 ### Added
 - **Variants — run one prompt several ways, right in the conversation.** Fan a
   turn out into N parallel attempts (the ⑂ control in the composer, configurable
@@ -173,4 +175,5 @@ First public release. The framework is functional end-to-end with a real LLM
 - `LICENSE` copyright attribution corrected to "Axocoatl Contributors".
 - Zero compiler warnings across the workspace.
 
+[0.1.1]: https://github.com/axocoatl/axocoatl/releases/tag/v0.1.1
 [0.1.0]: https://github.com/axocoatl/axocoatl/releases/tag/v0.1.0
