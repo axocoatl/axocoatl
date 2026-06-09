@@ -702,13 +702,6 @@
   }
   .col-resizer { cursor: col-resize; background: transparent; transition: background .15s; user-select: none; touch-action: none; }
   .col-resizer:hover, .col-resizer.dragging { background: var(--accent); opacity: .55; }
-  /* Layout-preset switcher in the cockpit bar. */
-  .preset-switch { display: inline-flex; gap: 2px; background: var(--bg-2); border: 1px solid var(--border);
-                   border-radius: 7px; padding: 2px; margin-right: 6px; }
-  .preset-btn { background: transparent; border: none; color: var(--muted); font-size: 11.5px;
-                padding: 3px 10px; border-radius: 5px; cursor: pointer; line-height: 1.4; }
-  .preset-btn:hover { color: var(--text); }
-  .preset-btn.active { background: var(--accent); color: #fff; }
   .trace-body { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; }
   .trace-body ax-lattice { width: 100%; height: 100%; display: block; }
   /* Fan-out control + in-thread variants */
@@ -7726,11 +7719,10 @@ S.session = { id: null, dir: '', name: '', streamEl: null, streamBuf: '', toolCa
 S.fpPath = '';
 S.cockpitLayout = {
   // The cockpit is a row of N "surfaces" (panes) drawn from the SURFACES
-  // registry.  `preset` names the active arrangement; `paneOrder` is the
-  // visible surfaces left→right; `widths` is the px size of each fixed
-  // surface (flex surfaces — e.g. Activity — take 1fr and ignore it).
-  // Terminals is the right-side overlay drawer (separate from the grid).
-  preset: 'classic',
+  // registry.  `paneOrder` is the visible surfaces left→right; `widths` is the
+  // px size of each fixed surface (flex surfaces — e.g. Activity — take 1fr and
+  // ignore it).  Terminals is the right-side overlay drawer (separate from the
+  // grid).
   flex: 'stream',               // id of the surface that fills (1fr)
   widths: { files: 220, browser: 360 },
   collapsed: {},
@@ -7762,7 +7754,6 @@ function loadPersistedLayout() {
     const s = JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null');
     if (s && typeof s === 'object') {
       // Merge carefully so new fields land with sensible defaults.
-      if (typeof s.preset === 'string') S.cockpitLayout.preset = s.preset;
       if (typeof s.flex === 'string' && SURFACES[s.flex]) S.cockpitLayout.flex = s.flex;
       if (s.widths && typeof s.widths === 'object') {
         Object.keys(SURFACES).forEach(id => {
@@ -8076,7 +8067,6 @@ function relayoutEmbeddedEditors() {
 
 // Panes menu — the safety net for "I collapsed a pane and now it's gone."
 const DEFAULT_LAYOUT = {
-  preset: 'classic',
   flex: 'stream',
   widths: { files: 220, browser: 360 },
   collapsed: {},
@@ -8086,79 +8076,6 @@ const DEFAULT_LAYOUT = {
   termOpenW: 460,
   termInnerListW: 140,
 };
-
-// ── Layout presets ────────────────────────────────────────────────────
-// Named arrangements the user cycles (buttons in the cockpit bar, or
-// ⌘⌥<n>).  Each lists the visible surfaces left→right and which one fills
-// (flex).  Switching a preset resets sizes to the preset's intent; the user
-// can then resize and those tweaks persist.  `after` runs once applied.
-const PRESETS = {
-  classic: {
-    label: 'Classic',
-    order: ['files', 'stream', 'browser'], flex: 'stream',
-    widths: { files: 260, browser: 240 },
-  },
-  review: {
-    // Conversation on the left, the file/diff surface filling the rest —
-    // so a Monaco diff finally gets room.  Opens on Source Control.
-    label: 'Review',
-    order: ['stream', 'files'], flex: 'files',
-    widths: { stream: 460 },
-    after: () => { try { setExplorerTab('git'); } catch {} },
-  },
-  build: {
-    // Conversation on the left, a big embedded browser/live-preview filling
-    // the rest, with the terminal drawer open to run a dev server.
-    label: 'Build',
-    order: ['stream', 'browser'], flex: 'browser',
-    widths: { stream: 460 },
-    after: () => { try { toggleTerminalsDrawer(true); } catch {} },
-  },
-  debug: {
-    // Conversation on the left, the live agent graph (Studio lattice) filling
-    // the rest, with the terminal in the grid.  The "glass box" view.
-    label: 'Debug',
-    order: ['stream', 'terminal', 'trace'], flex: 'trace',
-    widths: { stream: 380, terminal: 360 },
-  },
-};
-const PRESET_ORDER = ['classic', 'review', 'build', 'debug'];
-
-function applyPreset(name) {
-  const p = PRESETS[name] || PRESETS.classic;
-  const L = S.cockpitLayout;
-  L.preset = PRESETS[name] ? name : 'classic';
-  L.paneOrder = p.order.slice();
-  L.flex = p.flex || 'stream';
-  L.focused = null;
-  // Reset every surface to its default width, then apply the preset's overrides.
-  const w = {};
-  Object.keys(SURFACES).forEach(id => { w[id] = SURFACES[id].defaultW || 260; });
-  Object.assign(w, p.widths || {});
-  L.widths = w;
-  // Visibility is controlled by `order`; clear any stale collapse flags.
-  Object.keys(L.collapsed).forEach(k => { L.collapsed[k] = false; });
-  applyCockpitLayout();
-  renderPresetSwitcher();
-  if (p.after) try { p.after(); } catch {}
-}
-
-function cyclePreset(dir) {
-  const i = PRESET_ORDER.indexOf(S.cockpitLayout.preset);
-  const n = PRESET_ORDER.length;
-  applyPreset(PRESET_ORDER[(((i < 0 ? 0 : i) + dir) % n + n) % n]);
-}
-
-function renderPresetSwitcher() {
-  const host = $('#preset-switch'); if (!host) return;
-  host.innerHTML = '';
-  PRESET_ORDER.forEach((name, i) => {
-    const b = el('button', 'preset-btn' + (S.cockpitLayout.preset === name ? ' active' : ''), PRESETS[name].label);
-    b.title = PRESETS[name].label + ' layout (⌘⌥' + (i + 1) + ')';
-    b.addEventListener('click', () => applyPreset(name));
-    host.appendChild(b);
-  });
-}
 
 // The cockpit is one configurable workspace; this menu shows/hides each
 // surface. The conversation (Activity) is the canvas — always on.
@@ -8736,7 +8653,6 @@ function initCockpitChrome() {
     if (e.key === 'Enter') { e.preventDefault(); browserGo(bUrl.value); }
   });
   updateBrowserNavButtons();
-  renderPresetSwitcher();
   applyCockpitLayout();
 }
 
