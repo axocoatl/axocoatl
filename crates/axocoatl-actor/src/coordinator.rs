@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axocoatl_coordination::{HtnPlanner, HtnTask, HtnTaskType};
+use axocoatl_coordination::{compute_bid, run_auction, AgentBid, HtnPlanner, HtnTask, HtnTaskType};
 use axocoatl_core::{AgentConfig, AgentId, AgentInput, AgentOutput, TokenUsageStats};
 use axocoatl_llm::{ChatRequest, LlmProvider};
 use axocoatl_token::{TokenCounter, TokenTracker};
@@ -16,6 +16,10 @@ use crate::actor_impl::{execute_agent, AgentActor, AgentMessage};
 use crate::behavior::AgentBehavior;
 use crate::default_behavior::DefaultAgentBehavior;
 use crate::error::AgentError;
+
+/// Token budget assumed per worker when scoring auction bids (workers don't
+/// carry per-worker remaining budgets in this path yet).
+const WORKER_TOKEN_BUDGET: usize = 10_000;
 
 /// Status of a worker agent managed by the coordinator.
 #[derive(Debug, Clone)]
@@ -262,19 +266,40 @@ impl AgentBehavior for CoordinatorBehavior {
             "Decomposed task"
         );
 
-        // 2. Spawn workers for each subtask (reuse existing configs or create ad-hoc ones)
+        // 2. Assign each subtask to a worker by auction (best fit by tool match
+        //    and budget), removing the winner from the pool so each subtask gets
+        //    a distinct worker. When the pool is empty/exhausted, fall back to an
+        //    ad-hoc worker so behavior never regresses.
         let mut assignments: Vec<(AgentId, String, String)> = Vec::new();
+        let mut available = self.worker_configs.clone();
 
         for (i, (name, description)) in subtasks.iter().enumerate() {
-            let worker_config = if i < self.worker_configs.len() {
-                self.worker_configs[i].clone()
-            } else {
+            // Subtasks carry no tool requirements yet, so the auction ranks by
+            // budget (load is 0 here since each worker is used at most once).
+            let required_tools: Vec<String> = Vec::new();
+            let worker_config = if available.is_empty() {
                 WorkerConfig {
                     id: AgentId::new(format!("{}-worker-{}", self.agent_id, i)),
                     name: format!("Worker {}", i),
                     system_prompt: format!("You are a worker agent. Your task: {description}"),
                     tools: Vec::new(),
                 }
+            } else {
+                let bids: Vec<AgentBid> = available
+                    .iter()
+                    .map(|wc| {
+                        let ac = AgentConfig {
+                            id: wc.id.clone(),
+                            tools: wc.tools.clone(),
+                            ..AgentConfig::default()
+                        };
+                        compute_bid(&ac, &required_tools, 0, WORKER_TOKEN_BUDGET)
+                    })
+                    .collect();
+                let idx = run_auction(bids)
+                    .and_then(|id| available.iter().position(|w| w.id == id))
+                    .unwrap_or(0);
+                available.remove(idx)
             };
 
             let worker_id = self.spawn_worker(&worker_config).await?;
@@ -530,5 +555,21 @@ mod tests {
 
         assert!(!out.content.is_empty());
         assert_eq!(coord.worker_results.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn coordinator_with_no_workers_uses_adhoc() {
+        // No worker pool: the auction has nothing to bid on, so each subtask
+        // gets an ad-hoc worker. Proves the empty-pool fallback / backward compat.
+        let provider: Arc<dyn LlmProvider> = Arc::new(MockLlm);
+        let counter: Arc<dyn TokenCounter> = Arc::new(SimpleCounter);
+        let mut coord = CoordinatorBehavior::new(provider, counter);
+
+        coord.on_start(&coord_config()).await.unwrap();
+        let out = coord.execute(AgentInput::text("do work")).await.unwrap();
+
+        assert!(!out.content.is_empty());
+        // MockLlm decomposed into two subtasks → two ad-hoc workers.
+        assert_eq!(coord.worker_results.len(), 2);
     }
 }
