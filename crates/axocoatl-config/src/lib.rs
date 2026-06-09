@@ -231,6 +231,32 @@ agents:
     }
 
     #[test]
+    fn parse_activation_overrides() {
+        let yaml = r#"
+agents:
+  - id: tuned
+    name: "Tuned"
+    provider: ollama
+    model: llama3
+    depends_on: [a, b]
+    activation_threshold: 0.75
+    activation_decay: 0.05
+  - id: defaulted
+    name: "Defaulted"
+    provider: ollama
+    model: llama3
+    depends_on: [a]
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        // Explicit per-agent overrides are read through.
+        assert_eq!(config.agents[0].activation_threshold, Some(0.75));
+        assert_eq!(config.agents[0].activation_decay, Some(0.05));
+        // Absent → None, so the automatic 0.5 × N threshold still applies.
+        assert_eq!(config.agents[1].activation_threshold, None);
+        assert_eq!(config.agents[1].activation_decay, None);
+    }
+
+    #[test]
     fn parse_empty_config() {
         let yaml = "";
         let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();

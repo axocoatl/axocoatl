@@ -116,6 +116,28 @@ impl std::fmt::Debug for AxocoatlDaemon {
     }
 }
 
+/// An agent's event-lattice activation params: `(threshold, decay_rate)`.
+///
+/// Uses the per-agent `activation_threshold` / `activation_decay` overrides when
+/// set; otherwise the default — entry agents (no `depends_on`) get `(1.0, 0.0)`
+/// so a single `UserInput` (signal 1.0) activates them, and downstream agents
+/// get `(0.5 × N, 0.01)` so they fire once their N dependencies' `TaskCompleted`
+/// signals (0.5 each) accumulate.
+fn lattice_params(agent_yaml: &axocoatl_config::AgentConfigYaml) -> (f32, f32) {
+    let (mut threshold, mut decay_rate) = if agent_yaml.depends_on.is_empty() {
+        (1.0_f32, 0.0_f32)
+    } else {
+        (agent_yaml.depends_on.len() as f32 * 0.5, 0.01)
+    };
+    if let Some(t) = agent_yaml.activation_threshold {
+        threshold = t;
+    }
+    if let Some(d) = agent_yaml.activation_decay {
+        decay_rate = d;
+    }
+    (threshold, decay_rate)
+}
+
 impl AxocoatlDaemon {
     /// Bootstrap a daemon from a parsed config.
     pub async fn bootstrap(config: AxocoatlConfig) -> Result<Self, DaemonError> {
@@ -261,16 +283,10 @@ impl AxocoatlDaemon {
 
         for agent_yaml in &config.agents {
             let agent_id = AgentId::new(&agent_yaml.id);
-            // Entry agents are activated directly by execute_workflow().
-            // Downstream agents activate on accumulated TaskCompleted signals (0.5 each).
-            // Threshold = N * 0.5 where N = number of dependencies; use 1.0 for
-            // unreachable-via-cascade agents (defensive default).
-            let (threshold, decay_rate) = if agent_yaml.depends_on.is_empty() {
-                (1.0_f32, 0.0_f32)
-            } else {
-                let n = agent_yaml.depends_on.len() as f32;
-                (n * 0.5, 0.01)
-            };
+            // Entry agents activate directly via execute_workflow(); downstream
+            // agents activate on accumulated TaskCompleted signals. Threshold and
+            // decay come from lattice_params (per-agent override, else the default).
+            let (threshold, decay_rate) = lattice_params(agent_yaml);
             event_lattice.register_agent(agent_id, threshold, decay_rate);
         }
 
@@ -603,11 +619,7 @@ impl AxocoatlDaemon {
         self.agent_handles.lock().unwrap().push(handle);
 
         // Re-register in the event lattice with the same threshold rules.
-        let (threshold, decay_rate) = if agent_yaml.depends_on.is_empty() {
-            (1.0_f32, 0.0_f32)
-        } else {
-            (agent_yaml.depends_on.len() as f32 * 0.5, 0.01)
-        };
+        let (threshold, decay_rate) = lattice_params(agent_yaml);
         self.event_lattice.register_agent(id, threshold, decay_rate);
 
         tracing::info!(agent = %agent_id, "Agent restarted");

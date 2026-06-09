@@ -97,6 +97,8 @@ mod tests {
             memory: MemoryConfigYaml::default(),
             depends_on: vec![],
             role: AgentRoleYaml::default(),
+            activation_threshold: None,
+            activation_decay: None,
         };
 
         let core = yaml.to_core();

@@ -143,6 +143,14 @@ pub struct AgentConfigYaml {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub role: AgentRoleYaml,
+    /// Override the lattice activation threshold for this agent. When unset, the
+    /// threshold is computed automatically (0.5 × the number of dependencies).
+    #[serde(default)]
+    pub activation_threshold: Option<f32>,
+    /// Override the lattice signal decay rate. When unset, the default applies
+    /// (0.0 for entry agents, 0.01 for downstream agents).
+    #[serde(default)]
+    pub activation_decay: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
