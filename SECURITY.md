@@ -9,8 +9,8 @@ Older versions do not.
 
 **Please do not open a public GitHub issue for security bugs.**
 
-Email **security@axocoatl.ai** (or, until that alias is live, the Code
-Operators team at **erick@codeoperators.com**) with:
+Email **security@axocoatl.ai**, or use GitHub's private vulnerability reporting
+(the **Report a vulnerability** button on the repository's Security tab), with:
 
 - A clear description of the issue and its impact.
 - Steps to reproduce, ideally with a minimal repro repo or snippet.

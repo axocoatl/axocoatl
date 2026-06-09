@@ -1,3 +1,7 @@
+# Never commit JS dependencies or build output, anywhere in the tree.
+**/node_modules/
+**/dist/
+
 # Rust build artifacts
 /target
 **/target
@@ -8,8 +12,14 @@
 /data
 **/data/checkpoints
 **/data/memory
+**/data/models
 .env
 *.sock
+
+# Dead/vendored trees kept out of the repo. The embedding model is fetched
+# from Hugging Face on first use (see axocoatl-memory/src/neural.rs), so it
+# never needs to be committed.
+/ui
 
 # OS / editor
 .DS_Store

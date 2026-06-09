@@ -388,7 +388,7 @@ mod tests {
                 serde_json::json!({}),
             )
             .unwrap();
-            mem.store("user's name is Erick", serde_json::json!({"k": "name"}))
+            mem.store("the user's name is Ada", serde_json::json!({"k": "name"}))
                 .unwrap();
             let hits = mem.search("where is the deploy script", 1).unwrap();
             assert_eq!(hits.len(), 1);
