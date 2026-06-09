@@ -791,15 +791,29 @@ impl AxocoatlDaemon {
         config: &AxocoatlConfig,
         registry: &mut ProviderRegistry,
     ) -> Result<(), DaemonError> {
-        // OpenAI
+        // OpenAI — or any OpenAI-compatible server (LM Studio, MLX/oMLX, vLLM, …)
+        // when `base_url` is set, in which case requests go there instead of
+        // api.openai.com.
         if let Some(openai) = &config.providers.openai {
             if !openai.api_key.is_empty() {
-                let provider = axocoatl_llm_openai::OpenAiProvider::new(
-                    openai.api_key.expose_secret(),
-                    "gpt-4o", // Default model — agents specify their own
-                );
+                let provider = match &openai.base_url {
+                    Some(base_url) => axocoatl_llm_openai::OpenAiProvider::with_base_url(
+                        openai.api_key.expose_secret(),
+                        "gpt-4o", // Default model — agents specify their own
+                        base_url,
+                    ),
+                    None => axocoatl_llm_openai::OpenAiProvider::new(
+                        openai.api_key.expose_secret(),
+                        "gpt-4o", // Default model — agents specify their own
+                    ),
+                };
                 registry.register(Arc::new(provider));
-                tracing::info!("Registered OpenAI provider");
+                match &openai.base_url {
+                    Some(base_url) => {
+                        tracing::info!(%base_url, "Registered OpenAI provider")
+                    }
+                    None => tracing::info!("Registered OpenAI provider"),
+                }
 
                 // Set up fallback chain if configured
                 if let Some(fallback) = &openai.fallback {

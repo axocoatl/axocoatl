@@ -352,6 +352,12 @@ pub struct ProvidersConfigYaml {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderCredentials {
     pub api_key: SecretString,
+    /// Optional base URL override for OpenAI-compatible servers (LM Studio,
+    /// MLX/oMLX, vLLM, etc.). When set on the `openai` provider, requests go
+    /// here instead of api.openai.com. Must include the API version suffix
+    /// the server expects (usually `/v1`).
+    #[serde(default)]
+    pub base_url: Option<String>,
     /// Fallback provider/model identifier for the registry's fallback chain —
     /// not a credential.
     pub fallback: Option<String>,

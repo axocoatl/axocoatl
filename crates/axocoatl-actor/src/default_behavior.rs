@@ -21,6 +21,13 @@ pub struct DefaultAgentBehavior {
     tracker: Option<TokenTracker>,
     counter: Arc<dyn TokenCounter>,
     system_prompt: Option<String>,
+    /// The agent's configured model (from the YAML `model` field). Sent as the
+    /// per-request model so a shared provider (OpenAI and OpenAI-compatible
+    /// servers like MLX/oMLX, vLLM, etc.) uses this agent's model instead of
+    /// the provider's hardcoded default. `None` falls back to that default.
+    /// Ollama bakes the model into its per-agent provider, so this is
+    /// redundant-but-harmless there.
+    configured_model: Option<String>,
     session: SessionMemory,
     checkpoint_store: Option<Arc<CheckpointStore>>,
     checkpoint_version: u64,
@@ -93,6 +100,7 @@ impl DefaultAgentBehavior {
             tracker: None,
             counter,
             system_prompt: None,
+            configured_model: None,
             session: SessionMemory::new(),
             checkpoint_store: None,
             checkpoint_version: 0,
@@ -579,7 +587,10 @@ impl DefaultAgentBehavior {
             temperature: None,
             stop_sequences: Vec::new(),
             provider_options: None,
-            model_override,
+            // Per-request override (e.g. Chat tab) wins; otherwise use the
+            // agent's configured model so shared providers don't fall back to
+            // their hardcoded default.
+            model_override: model_override.or_else(|| self.configured_model.clone()),
         }
     }
 
@@ -788,6 +799,11 @@ impl AgentBehavior for DefaultAgentBehavior {
 
     async fn on_start(&mut self, config: &AgentConfig) -> Result<(), AgentError> {
         self.system_prompt = config.system_prompt.clone();
+        self.configured_model = if config.model.is_empty() {
+            None
+        } else {
+            Some(config.model.clone())
+        };
         self.agent_id = config.id.to_string();
 
         // Initialize token tracker if budget is configured
