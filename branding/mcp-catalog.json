@@ -77,8 +77,8 @@
       "description": "Read and write a local SQLite database. Tools: schema introspection, parameterized queries, table-create. Great for agent-managed scratch databases.",
       "category": "Data",
       "transport": "stdio",
-      "command": "npx",
-      "args_template": ["-y", "@modelcontextprotocol/server-sqlite", "{{DB_PATH}}"],
+      "command": "uvx",
+      "args_template": ["mcp-server-sqlite", "--db-path", "{{DB_PATH}}"],
       "env_template": {},
       "requires": [
         { "key": "DB_PATH", "label": "Path to .sqlite file", "kind": "path", "placeholder": "/home/you/data/agent.sqlite" }
@@ -124,8 +124,8 @@
       "description": "Current time and timezone conversion. Sounds small; it's the difference between an agent guessing what 'tomorrow' means and being right.",
       "category": "Utilities",
       "transport": "stdio",
-      "command": "npx",
-      "args_template": ["-y", "@modelcontextprotocol/server-time"],
+      "command": "uvx",
+      "args_template": ["mcp-server-time"],
       "env_template": {},
       "requires": [],
       "recommended": true,
@@ -139,8 +139,8 @@
       "description": "HTTP GET (and turn HTML into clean markdown). The minimal web-browsing primitive — pairs well with a search server.",
       "category": "Web",
       "transport": "stdio",
-      "command": "npx",
-      "args_template": ["-y", "@modelcontextprotocol/server-fetch"],
+      "command": "uvx",
+      "args_template": ["mcp-server-fetch"],
       "env_template": {},
       "requires": [],
       "recommended": true,
@@ -222,8 +222,8 @@
       "description": "Local git operations on an allowlisted repo — log, diff, blame, status. Read-only by default; explicit args enable commit/push.",
       "category": "Development",
       "transport": "stdio",
-      "command": "npx",
-      "args_template": ["-y", "@modelcontextprotocol/server-git", "--repository", "{{REPO_PATH}}"],
+      "command": "uvx",
+      "args_template": ["mcp-server-git", "--repository", "{{REPO_PATH}}"],
       "env_template": {},
       "requires": [
         { "key": "REPO_PATH", "label": "Repository path", "kind": "path", "placeholder": "/home/you/repos/myrepo" }

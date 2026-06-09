@@ -212,6 +212,7 @@ impl AxocoatlDaemon {
                     McpTransportType::Stdio {
                         command,
                         args: mcp.args.clone(),
+                        env: mcp.env.clone(),
                     }
                 }
                 "streamable_http" | "http" => {

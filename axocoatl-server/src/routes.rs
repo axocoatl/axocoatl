@@ -785,7 +785,19 @@ pub async fn install_mcp(
                         .collect()
                 })
                 .unwrap_or_default();
-            axocoatl_mcp::McpTransportType::Stdio { command, args }
+            // Most stdio servers take their secret via an env var (e.g.
+            // BRAVE_API_KEY, GITHUB_PERSONAL_ACCESS_TOKEN). Without this the
+            // dashboard's entered values are dropped and the server exits
+            // before the initialize handshake.
+            let env: std::collections::HashMap<String, String> = entry["env_template"]
+                .as_object()
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), substitute(s))))
+                        .collect()
+                })
+                .unwrap_or_default();
+            axocoatl_mcp::McpTransportType::Stdio { command, args, env }
         }
         "streamable_http" | "http" => {
             let url = substitute(entry["url"].as_str().unwrap_or(""));

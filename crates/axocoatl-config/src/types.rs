@@ -325,6 +325,10 @@ pub struct McpServerConfigYaml {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Environment variables for stdio servers — typically the API key/token
+    /// the server reads on startup (e.g. `BRAVE_API_KEY`).
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
     pub url: Option<String>,
     #[serde(default)]
     pub headers: std::collections::HashMap<String, String>,
