@@ -1,3 +1,7 @@
+# Never commit JS dependencies or build output, anywhere in the tree.
+**/node_modules/
+**/dist/
+
 # Rust build artifacts
 /target
 **/target
