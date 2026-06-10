@@ -365,7 +365,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         token_budget: Some(TokenBudget {
             per_call: 2_048,
             per_execution: 8_000,
-            overflow_policy: OverflowPolicy::Summarize,
+            // Context compaction toward the model window is automatic; this policy
+            // is only the spend cap. Warn = log and keep going past the budget.
+            overflow_policy: OverflowPolicy::Warn,
         }),
         tools: vec![
             "order_lookup".to_string(),

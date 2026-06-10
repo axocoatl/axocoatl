@@ -23,6 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worker set surfaces an error rather than a hollow result. Per-agent activation
   thresholds are configurable, and coordinator/worker role invariants are
   validated at config load.
+- **Automatic context compaction with real LLM summarization.** As a session
+  grows toward the model's context window, old turns are now **summarized** (via
+  the agent's own provider) and the raw transcript is archived to the Tier-2
+  daily log — instead of being silently snipped away. Compaction is always on and
+  runs before each request, so long conversations keep their early context
+  instead of forgetting it. The 5-stage `CompressionPipeline`'s LLM stages
+  (microcompact, autocompact) are now wired to a concrete `LlmSummarizer`, whose
+  own summarization tokens count against the agent's budget.
+
+### Changed
+- **`overflow_policy` is now strictly a spend cap: `abort` (default) or `warn`.**
+  Context management is automatic and independent of the budget, so the old
+  `summarize` policy is no longer a distinct behavior — it is accepted as a
+  deprecated alias for `warn`. The default is now `abort` (a configured budget is
+  enforced) rather than the previous continue-on-overflow default.
+
+### Removed
+- Dead `ContextCompressor` (superseded by the wired `CompressionPipeline`).
 
 ## [0.1.1] — 2026-06-08
 

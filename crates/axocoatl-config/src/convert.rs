@@ -36,9 +36,11 @@ impl TokenBudgetYaml {
 impl OverflowPolicyYaml {
     pub fn to_core(&self) -> OverflowPolicy {
         match self {
-            OverflowPolicyYaml::Summarize => OverflowPolicy::Summarize,
             OverflowPolicyYaml::Abort => OverflowPolicy::Abort,
             OverflowPolicyYaml::Warn => OverflowPolicy::Warn,
+            // Deprecated alias: context compaction is automatic now, so the old
+            // "summarize" spend policy maps to "warn" (continue past the budget).
+            OverflowPolicyYaml::Summarize => OverflowPolicy::Warn,
         }
     }
 }
@@ -108,6 +110,32 @@ mod tests {
         let budget = core.token_budget.unwrap();
         assert_eq!(budget.per_execution, 20000);
         assert!(matches!(budget.overflow_policy, OverflowPolicy::Abort));
+    }
+
+    #[test]
+    fn overflow_policy_yaml_maps_to_core() {
+        // Default is Abort — a configured budget is enforced.
+        assert!(matches!(
+            OverflowPolicyYaml::default().to_core(),
+            OverflowPolicy::Abort
+        ));
+        assert!(matches!(
+            OverflowPolicyYaml::Warn.to_core(),
+            OverflowPolicy::Warn
+        ));
+        // Deprecated `summarize` alias maps to Warn (context compaction is now
+        // automatic, so it is no longer a distinct spend policy).
+        assert!(matches!(
+            OverflowPolicyYaml::Summarize.to_core(),
+            OverflowPolicy::Warn
+        ));
+    }
+
+    #[test]
+    fn summarize_alias_deserializes() {
+        // Old configs that set `overflow_policy: summarize` must still parse.
+        let parsed: OverflowPolicyYaml = serde_yaml::from_str("summarize").unwrap();
+        assert!(matches!(parsed, OverflowPolicyYaml::Summarize));
     }
 
     #[test]

@@ -18,7 +18,9 @@ use std::sync::Arc;
 use axocoatl_coordination::{compute_bid, run_auction, AgentBid, HtnPlanner, HtnTask, HtnTaskType};
 use axocoatl_core::{AgentConfig, AgentId, AgentInput, AgentOutput, TokenUsageStats};
 use axocoatl_llm::{ChatRequest, LlmProvider};
-use axocoatl_memory::{AgentCheckpoint, CheckpointStore, LongTermMemory, SemanticMemory};
+use axocoatl_memory::{
+    AgentCheckpoint, CheckpointStore, DailyLogMemory, LongTermMemory, SemanticMemory,
+};
 use axocoatl_token::{TokenCounter, TokenTracker};
 use axocoatl_tools::{HookRegistry, ToolExecutor};
 use serde::{Deserialize, Serialize};
@@ -247,6 +249,13 @@ impl CoordinatorBehavior {
         // data dir is configured (the daemon sets it); omitted in lightweight or
         // embedded use so no disk store is created. Non-fatal on failure.
         if let Some(data_dir) = &self.data_dir {
+            // Daily log — a worker archives raw conversation segments here before
+            // context compaction summarizes them, so no history is lost (same
+            // scheme as a standalone agent).
+            behavior = behavior.with_daily_log(Arc::new(DailyLogMemory::new(
+                config.id.to_string(),
+                format!("{data_dir}/memory/daily_log"),
+            )));
             match SemanticMemory::new(
                 &config.id.to_string(),
                 format!("{data_dir}/memory/semantic"),

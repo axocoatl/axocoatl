@@ -78,16 +78,57 @@ impl CompressionPipeline {
         current > threshold
     }
 
-    /// Run the full pipeline. Stages 1-2 always run; stages 3-5 only if summarizer is provided
-    /// and token pressure remains after stages 1-2.
+    /// Run the full pipeline against the model context window. Stages 1-2 always
+    /// run; stages 3-5 only if a summarizer is provided and token pressure remains.
     pub async fn compress(
         &self,
         messages: Vec<ChatMessage>,
         summarizer: Option<&dyn Summarizer>,
         housekeeping_budget: usize,
     ) -> CompressionResult {
-        let tokens_before = self.counter.count_messages(&messages);
         let threshold = (self.model_context_limit as f32 * COMPRESSION_TRIGGER_PCT) as usize;
+        self.compress_internal(
+            messages,
+            summarizer,
+            housekeeping_budget,
+            threshold,
+            MAX_INPUT_TOKENS,
+        )
+        .await
+    }
+
+    /// Run the full pipeline against an explicit `target_threshold` (e.g. a token
+    /// budget's remaining headroom) rather than the model window. Stage 5
+    /// (full-conversation summarization) fires relative to that target, so a
+    /// sub-model-window target actually summarizes instead of only snipping.
+    pub async fn compress_to(
+        &self,
+        messages: Vec<ChatMessage>,
+        summarizer: Option<&dyn Summarizer>,
+        housekeeping_budget: usize,
+        target_threshold: usize,
+    ) -> CompressionResult {
+        self.compress_internal(
+            messages,
+            summarizer,
+            housekeeping_budget,
+            target_threshold,
+            target_threshold,
+        )
+        .await
+    }
+
+    /// Shared pipeline core. `threshold` is the target to get under; `stage5_trigger`
+    /// is the token count above which full-conversation summarization (Stage 5) runs.
+    async fn compress_internal(
+        &self,
+        messages: Vec<ChatMessage>,
+        summarizer: Option<&dyn Summarizer>,
+        housekeeping_budget: usize,
+        threshold: usize,
+        stage5_trigger: usize,
+    ) -> CompressionResult {
+        let tokens_before = self.counter.count_messages(&messages);
 
         if tokens_before <= threshold {
             return CompressionResult {
@@ -174,8 +215,9 @@ impl CompressionPipeline {
                     };
                 }
 
-                // Stage 5: AutoCompact
-                if current > MAX_INPUT_TOKENS && remaining_budget > 0 {
+                // Stage 5: AutoCompact (full-conversation summary), once token
+                // pressure remains above the stage-5 trigger.
+                if current > stage5_trigger && remaining_budget > 0 {
                     let messages = self
                         .stage5_autocompact(messages, summarizer, remaining_budget)
                         .await;
@@ -531,5 +573,37 @@ mod tests {
         let result = pipeline.compress(messages, None, 0).await;
         assert!(!result.stages_applied.is_empty());
         assert!(result.tokens_after <= result.tokens_before);
+    }
+
+    struct MockSummarizer;
+    #[async_trait::async_trait]
+    impl Summarizer for MockSummarizer {
+        async fn summarize_tool_result(&self, _: &str, _: &str) -> Result<String, String> {
+            Ok("TOOL_SUMMARY".to_string())
+        }
+        async fn summarize_conversation(&self, _: &[ChatMessage]) -> Result<String, String> {
+            Ok("CONVO_SUMMARY".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn compress_to_runs_llm_summarization() {
+        let pipeline = CompressionPipeline::new(counter(), 100_000);
+        let mut messages = vec![ChatMessage::system("sys")];
+        for i in 0..20 {
+            messages.push(ChatMessage::user(format!("question {i} with filler words")));
+            messages.push(ChatMessage::assistant(format!("answer {i} with details")));
+        }
+        // Tiny target + housekeeping budget → the pipeline escalates to the LLM
+        // autocompact stage (stage 5), which calls the summarizer. (With the
+        // model-window `compress`, stage 5 wouldn't fire below 180k tokens.)
+        let result = pipeline
+            .compress_to(messages, Some(&MockSummarizer), 10_000, 5)
+            .await;
+        assert!(result.stages_applied.contains(&"autocompact".to_string()));
+        assert!(result.messages.iter().any(|m| m
+            .text_content()
+            .is_some_and(|t| t.contains("CONVO_SUMMARY"))));
+        assert!(result.tokens_after < result.tokens_before);
     }
 }

@@ -24,11 +24,14 @@ exposes the HTTP API.
 Each agent is a `ractor` actor running `DefaultAgentBehavior`. On every turn:
 
 1. Append input to **session memory** (Tier 1).
-2. Build the request, injecting **long-term memory** (Tier 3) facts.
-3. **Token budget** pre-flight check (`abort` / `warn` / `summarize`).
-4. Call the agent's **provider** (Ollama, OpenAI, Anthropic, …).
-5. Run any **tool calls** (built-in or MCP) with hooks, up to 10 iterations.
-6. **Checkpoint** the session to disk (Tier 2) for crash recovery.
+2. **Compact context** automatically when the session approaches the model's
+   window — old turns are summarized (raw archived to the Tier-2 daily log, so
+   nothing is lost) instead of being dropped.
+3. Build the request, injecting **long-term memory** (Tier 3) facts.
+4. **Token budget** pre-flight check (`abort` / `warn`) — the spend cap.
+5. Call the agent's **provider** (Ollama, OpenAI, Anthropic, …).
+6. Run any **tool calls** (built-in or MCP) with hooks, up to 10 iterations.
+7. **Checkpoint** the session to disk (Tier 2) for crash recovery.
 
 On shutdown, agents distill the session into long-term memory facts.
 
@@ -37,12 +40,13 @@ On shutdown, agents distill the session into long-term memory facts.
 Per-agent `token_budget` with `per_call`, `per_execution`, and an
 `overflow_policy`:
 
-- `abort` — refuse the call and terminate the agent (no wasted tokens)
-- `warn` — log and continue
-- `summarize` — (compaction hook)
+- `abort` — refuse the over-budget call and return a budget error (the default)
+- `warn` — log and continue past the budget
 
 Budgets are checked **before** the LLM call, so an over-budget request never
-costs tokens.
+costs tokens. The `overflow_policy` is purely the **spend cap** — context
+compaction toward the model window is automatic and independent of it.
+(`summarize` is accepted as a deprecated alias for `warn`.)
 
 ## Stigmergic coordination
 
