@@ -509,7 +509,8 @@ impl DefaultAgentBehavior {
             .unwrap_or(usize::MAX / 4);
 
         let messages = self.session.as_chat_messages();
-        let summarizer = crate::summarizer::LlmSummarizer::new(self.provider.clone());
+        let summarizer =
+            crate::summarizer::LlmSummarizer::new(self.provider.clone(), self.tracker.clone());
         let result = self
             .compression_pipeline
             .as_ref()
@@ -710,71 +711,32 @@ impl AgentBehavior for DefaultAgentBehavior {
             attach_to_last_user_message(&mut request, &input.attachments);
         }
 
-        // Pre-flight budget check. Compute the outcome while only borrowing
-        // `&self`, so the Summarize arm is free to take `&mut self` afterwards.
-        let overflow = if let Some(tracker) = &self.tracker {
+        // Pre-flight check of the spend budget (the cost cap). Context compaction
+        // toward the model window already happened above and is independent of
+        // this policy — summarization is NOT a budget mechanism (spent tokens are
+        // sunk; you can't summarize them back).
+        if let Some(tracker) = &self.tracker {
             let estimated = self.provider.count_tokens(&request);
-            match tracker.check_headroom(estimated) {
-                Err(BudgetError::WouldExceedBudget {
-                    current,
-                    requested,
-                    budget,
-                }) => Some((
-                    tracker.budget().overflow_policy.clone(),
-                    current,
-                    requested,
-                    budget,
-                )),
-                _ => None,
-            }
-        } else {
-            None
-        };
-
-        if let Some((policy, current, requested, budget)) = overflow {
-            match policy {
-                OverflowPolicy::Abort => {
-                    return Err(AgentError::TokenBudgetExceeded {
-                        used: current + requested,
-                        budget,
-                    });
-                }
-                OverflowPolicy::Warn => {
-                    tracing::warn!(
-                        current,
-                        requested,
-                        budget,
-                        "Token budget would be exceeded, continuing (warn policy)"
-                    );
-                }
-                OverflowPolicy::Summarize => {
-                    tracing::info!(
-                        current,
-                        requested,
-                        budget,
-                        "Token budget pressure — compacting context (summarize policy)"
-                    );
-                    // Compact toward the remaining headroom so the next request
-                    // fits; already-spent tokens are sunk, so this extends runway.
-                    let remaining = budget.saturating_sub(current);
-                    self.compact_session(remaining).await;
-                    // Rebuild the request from the compacted session.
-                    request = self.build_request_from_session(
-                        input.system_override.as_deref(),
-                        input.model_override.clone(),
-                    );
-                    if !input.attachments.is_empty() {
-                        attach_to_last_user_message(&mut request, &input.attachments);
+            if let Err(BudgetError::WouldExceedBudget {
+                current,
+                requested,
+                budget,
+            }) = tracker.check_headroom(estimated)
+            {
+                match tracker.budget().overflow_policy {
+                    OverflowPolicy::Abort => {
+                        return Err(AgentError::TokenBudgetExceeded {
+                            used: current + requested,
+                            budget,
+                        });
                     }
-                    // If still over after one compaction, continue (degrade to
-                    // warn) — never loop, since the spent tokens can't be recovered.
-                    if let Some(tracker) = &self.tracker {
-                        let re_estimated = self.provider.count_tokens(&request);
-                        if tracker.check_headroom(re_estimated).is_err() {
-                            tracing::warn!(
-                                "Still over budget after compaction; continuing (budget is a soft cap)"
-                            );
-                        }
+                    OverflowPolicy::Warn => {
+                        tracing::warn!(
+                            current,
+                            requested,
+                            budget,
+                            "Token budget would be exceeded, continuing (warn policy)"
+                        );
                     }
                 }
             }
@@ -1571,18 +1533,16 @@ mod tests {
     }
 
     #[test]
-    fn summarize_is_default_policy() {
-        assert!(matches!(
-            OverflowPolicy::default(),
-            OverflowPolicy::Summarize
-        ));
+    fn abort_is_default_policy() {
+        // A configured spend budget is enforced by default — overflow aborts.
+        assert_eq!(OverflowPolicy::default(), OverflowPolicy::Abort);
     }
 
     #[tokio::test]
-    async fn summarize_policy_continues_where_abort_fails() {
+    async fn warn_policy_continues_where_abort_fails() {
         // Each turn records 100 tokens; budget 120. By the 3rd turn the pre-flight
         // check trips (200 used + request > 120).
-        // Abort policy → the 3rd turn returns a budget error.
+        // Abort policy (the default) → the 3rd turn returns a budget error.
         let mut abort =
             DefaultAgentBehavior::new(Arc::new(CtxLlm { per_call: 100 }), simple_counter());
         abort.on_start(&test_config_with_budget(120)).await.unwrap();
@@ -1594,18 +1554,19 @@ mod tests {
             "abort should error, got {third_abort:?}"
         );
 
-        // Summarize policy → the same overflow compacts and continues, no error.
+        // Warn policy → the same overflow logs and continues past the budget
+        // (the spend cap is advisory; context compaction is independent of it).
         let mut cfg = test_config_with_budget(120);
-        cfg.token_budget.as_mut().unwrap().overflow_policy = OverflowPolicy::Summarize;
-        let mut summ =
+        cfg.token_budget.as_mut().unwrap().overflow_policy = OverflowPolicy::Warn;
+        let mut warn =
             DefaultAgentBehavior::new(Arc::new(CtxLlm { per_call: 100 }), simple_counter());
-        summ.on_start(&cfg).await.unwrap();
-        summ.execute(AgentInput::text("t1")).await.unwrap();
-        summ.execute(AgentInput::text("t2")).await.unwrap();
-        let third_summ = summ.execute(AgentInput::text("t3")).await;
+        warn.on_start(&cfg).await.unwrap();
+        warn.execute(AgentInput::text("t1")).await.unwrap();
+        warn.execute(AgentInput::text("t2")).await.unwrap();
+        let third_warn = warn.execute(AgentInput::text("t3")).await;
         assert!(
-            third_summ.is_ok(),
-            "summarize should continue, got {third_summ:?}"
+            third_warn.is_ok(),
+            "warn should continue, got {third_warn:?}"
         );
     }
 

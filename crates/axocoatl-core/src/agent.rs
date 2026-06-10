@@ -89,14 +89,16 @@ pub struct TokenBudget {
     pub overflow_policy: OverflowPolicy,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// What to do when a token *spend* budget (`per_execution`) would be exceeded.
+/// Context compaction toward the model's window is automatic and independent of
+/// this policy — this is purely the cost-cap behavior.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum OverflowPolicy {
-    /// Summarize context and continue.
+    /// Enforce the budget: return a budget error. The default — a configured
+    /// budget is meant to be enforced.
     #[default]
-    Summarize,
-    /// Abort execution and return error.
     Abort,
-    /// Log warning and continue (no enforcement).
+    /// Advisory: log a warning and continue past the budget.
     Warn,
 }
 
@@ -216,9 +218,9 @@ mod tests {
     }
 
     #[test]
-    fn overflow_policy_default_is_summarize() {
+    fn overflow_policy_default_is_abort() {
         let policy = OverflowPolicy::default();
-        assert!(matches!(policy, OverflowPolicy::Summarize));
+        assert!(matches!(policy, OverflowPolicy::Abort));
     }
 
     #[test]

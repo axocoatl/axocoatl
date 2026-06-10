@@ -11,16 +11,19 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axocoatl_core::ChatMessage;
 use axocoatl_llm::{ChatRequest, LlmProvider};
-use axocoatl_token::Summarizer;
+use axocoatl_token::{Summarizer, TokenTracker};
 
-/// Summarizes text and conversations by calling an LLM provider.
+/// Summarizes text and conversations by calling an LLM provider. When a token
+/// tracker is supplied, the summarization's own token usage is recorded against
+/// the agent's budget — summarization is real spend, not free housekeeping.
 pub struct LlmSummarizer {
     provider: Arc<dyn LlmProvider>,
+    tracker: Option<TokenTracker>,
 }
 
 impl LlmSummarizer {
-    pub fn new(provider: Arc<dyn LlmProvider>) -> Self {
-        Self { provider }
+    pub fn new(provider: Arc<dyn LlmProvider>, tracker: Option<TokenTracker>) -> Self {
+        Self { provider, tracker }
     }
 
     async fn summarize(&self, system: &str, user: String) -> Result<String, String> {
@@ -30,6 +33,11 @@ impl LlmSummarizer {
             .chat(request)
             .await
             .map_err(|e| format!("summarizer LLM call failed: {e}"))?;
+        // Count the summarization's tokens against the budget (best-effort: an
+        // over-budget result is surfaced by the next pre-flight check, not here).
+        if let Some(tracker) = &self.tracker {
+            let _ = tracker.record_usage(response.usage.input_tokens, response.usage.output_tokens);
+        }
         let summary = response.content.trim().to_string();
         if summary.is_empty() {
             return Err("summarizer returned an empty summary".to_string());
@@ -77,6 +85,7 @@ mod tests {
     struct StubLlm {
         content: String,
         ok: bool,
+        usage: TokenUsageStats,
     }
 
     #[async_trait]
@@ -102,7 +111,7 @@ mod tests {
                 content: self.content.clone(),
                 tool_calls: vec![],
                 finish_reason: FinishReason::Stop,
-                usage: TokenUsageStats::default(),
+                usage: self.usage.clone(),
                 model: "stub-model".to_string(),
                 provider: "stub".to_string(),
             })
@@ -119,10 +128,14 @@ mod tests {
     }
 
     fn summarizer(content: &str, ok: bool) -> LlmSummarizer {
-        LlmSummarizer::new(Arc::new(StubLlm {
-            content: content.to_string(),
-            ok,
-        }))
+        LlmSummarizer::new(
+            Arc::new(StubLlm {
+                content: content.to_string(),
+                ok,
+                usage: TokenUsageStats::default(),
+            }),
+            None,
+        )
     }
 
     #[tokio::test]
@@ -165,5 +178,43 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("summarizer LLM call failed"));
+    }
+
+    #[tokio::test]
+    async fn records_summarization_usage_against_tracker() {
+        use axocoatl_core::TokenBudget;
+        use axocoatl_token::{TokenCounter, TokenTracker};
+
+        struct ZeroCounter;
+        impl TokenCounter for ZeroCounter {
+            fn count_text(&self, _: &str) -> usize {
+                0
+            }
+            fn count_messages(&self, _: &[ChatMessage]) -> usize {
+                0
+            }
+            fn count_tool_definition(&self, _: &serde_json::Value) -> usize {
+                0
+            }
+        }
+
+        let tracker = TokenTracker::new(
+            TokenBudget {
+                per_call: 1000,
+                per_execution: 1000,
+                overflow_policy: Default::default(),
+            },
+            Arc::new(ZeroCounter),
+        );
+        let s = LlmSummarizer::new(
+            Arc::new(StubLlm {
+                content: "summary".to_string(),
+                ok: true,
+                usage: TokenUsageStats::new(30, 12),
+            }),
+            Some(tracker.clone()),
+        );
+        s.summarize_tool_result("grep", "lots").await.unwrap();
+        assert_eq!(tracker.total_used(), 42);
     }
 }

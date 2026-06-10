@@ -169,10 +169,15 @@ fn default_per_call() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum OverflowPolicyYaml {
+    /// Enforce the budget — abort on overflow. The default.
     #[default]
-    Summarize,
     Abort,
+    /// Continue past the budget, logging a warning.
     Warn,
+    /// Deprecated: context compaction is now automatic, so `summarize` is no
+    /// longer a distinct spend policy. Accepted for backward compatibility and
+    /// treated as `warn`.
+    Summarize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
