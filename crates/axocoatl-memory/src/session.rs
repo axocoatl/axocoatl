@@ -185,6 +185,50 @@ impl SessionMemory {
         self.messages = messages;
     }
 
+    /// Replace the transcript with a compacted set of chat messages — used by
+    /// context/budget compaction, which produces a `Vec<ChatMessage>`. Per-message
+    /// token counts (which the compaction layer doesn't carry) are recomputed via
+    /// `count`. Tool-call correlation (assistant `tool_calls` ↔ tool `tool_call_id`)
+    /// is preserved.
+    pub fn replace_with_chat_messages(
+        &mut self,
+        messages: &[ChatMessage],
+        count: impl Fn(&str) -> usize,
+    ) {
+        let stored: Vec<StoredMessage> = messages
+            .iter()
+            .map(|m| {
+                let content = match &m.content {
+                    MessageContent::Text(s) => s.clone(),
+                    MessageContent::Parts(parts) => parts
+                        .iter()
+                        .filter_map(|p| match p {
+                            axocoatl_core::ContentPart::Text(t) => Some(t.clone()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                };
+                let token_count = count(&content);
+                StoredMessage {
+                    role: m.role.clone(),
+                    content,
+                    timestamp: now_timestamp(),
+                    token_count,
+                    name: m.name.clone(),
+                    tool_calls: m
+                        .tool_calls
+                        .iter()
+                        .map(StoredToolCall::from_tool_call)
+                        .collect(),
+                    tool_call_id: m.tool_call_id.clone(),
+                }
+            })
+            .collect();
+        self.token_count = stored.iter().map(|m| m.token_count).sum();
+        self.messages = stored;
+    }
+
     /// Find a segment boundary: the index of the first message after
     /// the given fraction of the conversation. Used by compression Stage 4.
     pub fn segment_boundary(&self, fraction: f32) -> usize {
@@ -318,6 +362,60 @@ mod tests {
         assert_eq!(msgs[0].tool_calls[0].name, "search");
         assert_eq!(msgs[0].tool_calls[0].arguments["q"], "rust");
         assert_eq!(msgs[1].tool_call_id.as_deref(), Some("call_9"));
+    }
+
+    #[test]
+    fn replace_with_chat_messages_swaps_and_recounts() {
+        let mut session = SessionMemory::new();
+        for i in 0..3 {
+            session.append(MessageRole::User, format!("old {i}"), 99);
+        }
+        let replacement = vec![
+            ChatMessage::system("summary of earlier"),
+            ChatMessage::user("recent question"),
+        ];
+        session.replace_with_chat_messages(&replacement, |s| s.len() / 4 + 1);
+
+        assert_eq!(session.len(), 2);
+        let msgs = session.as_chat_messages();
+        assert_eq!(msgs[0].text_content(), Some("summary of earlier"));
+        assert_eq!(msgs[1].text_content(), Some("recent question"));
+        // Token count recomputed from the new content, not the old 3×99.
+        let expected: usize = ["summary of earlier", "recent question"]
+            .iter()
+            .map(|s| s.len() / 4 + 1)
+            .sum();
+        assert_eq!(session.total_tokens(), expected);
+    }
+
+    #[test]
+    fn replace_with_chat_messages_preserves_tool_correlation() {
+        let mut session = SessionMemory::new();
+        let assistant = ChatMessage {
+            role: MessageRole::Assistant,
+            content: MessageContent::Text("calling".to_string()),
+            name: None,
+            tool_calls: vec![ToolCall {
+                id: "c1".to_string(),
+                name: "search".to_string(),
+                arguments: serde_json::json!({ "q": "x" }),
+            }],
+            tool_call_id: None,
+        };
+        let tool = ChatMessage {
+            role: MessageRole::Tool,
+            content: MessageContent::Text("result".to_string()),
+            name: Some("search".to_string()),
+            tool_calls: vec![],
+            tool_call_id: Some("c1".to_string()),
+        };
+        session.replace_with_chat_messages(&[assistant, tool], |s| s.len() / 4 + 1);
+
+        let msgs = session.as_chat_messages();
+        assert_eq!(msgs[0].tool_calls[0].id, "c1");
+        assert_eq!(msgs[0].tool_calls[0].arguments["q"], "x");
+        assert_eq!(msgs[1].tool_call_id.as_deref(), Some("c1"));
+        assert_eq!(msgs[1].name.as_deref(), Some("search"));
     }
 
     #[test]
