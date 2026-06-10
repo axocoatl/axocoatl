@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Coordinator role — hierarchical task decomposition with worker agents.** An
+  agent with `role: coordinator` decomposes a goal into subtasks, assigns each to
+  the best-fit worker by **auction** (tool-capability match + remaining token
+  budget), runs the workers **in parallel**, and synthesizes their outputs into a
+  single answer. Decomposition is HTN-symbolic when methods are configured (an
+  `HtnPlanner` expands compound tasks; an `LlmFrontierResolver` fills only the
+  frontiers the methods don't cover) and LLM-driven otherwise. Workers are
+  first-class agents — their own tools, checkpoints, long-term + semantic memory,
+  and hooks — with run-scoped actor names, and they are torn down after every
+  pass (on success and on every error path) so nothing leaks. The pass is
+  **resumable**: the plan and each finished subtask are checkpointed, so a crash
+  mid-run resumes where it left off instead of re-decomposing; a fully failed
+  worker set surfaces an error rather than a hollow result. Per-agent activation
+  thresholds are configurable, and coordinator/worker role invariants are
+  validated at config load.
+
 ## [0.1.1] — 2026-06-08
 
 ### Added

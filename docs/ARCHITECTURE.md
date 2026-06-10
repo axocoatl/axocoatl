@@ -69,12 +69,36 @@ execute_workflow → activate entry agent
 A cycle guard (`max_activations = agents × 3`) and acyclic-DAG validation make
 runaway activation impossible.
 
-**On the roadmap** — additional coordination primitives are built and tested in
-`axocoatl-coordination` (sub-microsecond) but not yet wired into the runtime:
+## Coordinator role
 
-- **HTN planner** — symbolic task decomposition without LLM calls.
-- **Auction** — deterministic agent selection by tool capability, load, and
-  remaining token budget.
+Alongside emergent lattice coordination, an agent can take the **coordinator**
+role (`role: coordinator`) for explicit hierarchical decomposition. Each
+coordination pass (`CoordinatorBehavior`):
+
+1. **Decompose** the goal into subtasks. With HTN methods configured, planning
+   is symbolic — an `HtnPlanner` expands compound tasks via its methods and an
+   `LlmFrontierResolver` resolves only the frontiers the methods don't cover.
+   Without methods, the LLM decomposes the whole goal. Each subtask carries the
+   tools it needs.
+2. **Assign** each subtask to a worker by **auction** (`compute_bid` /
+   `run_auction`) — best fit by tool-capability match and remaining token
+   budget. If no pooled worker can cover a subtask's tools, an ad-hoc worker is
+   spawned with exactly those tools, so a subtask is never forced onto an unfit
+   worker.
+3. **Delegate** the pending subtasks to workers **in parallel**. Each worker is
+   a first-class agent — its own tools, checkpoints, long-term + semantic
+   memory, and hooks — with a run-scoped actor name so repeated runs never
+   collide.
+4. **Synthesize** the workers' outputs back into one answer to the original
+   goal, accounting for any subtasks that failed.
+
+The pass is **resumable**: the plan and each completed subtask are checkpointed
+(`OrchestrationState`), so a crash mid-run resumes where it left off instead of
+re-doing finished work. Workers are always torn down after a pass — on success
+and on every error path — so no actor or task leaks, and a fully failed worker
+set surfaces an error rather than a hollow result. The underlying primitives
+(`axocoatl-coordination`: lattice, HTN, auction) run in sub-microsecond time and
+are independently tested.
 
 ## Memory tiers
 

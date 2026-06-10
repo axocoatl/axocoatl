@@ -51,8 +51,8 @@ Prefer Cargo? `cargo install axocoatl-cli` (requires Rust 1.82+).
 |---|:--:|:--:|:--:|
 | Language / runtime | Rust / actors | Rust / actors | Python |
 | **Stigmergic coordination** (no orchestrator) | ✅ | ❌ | ❌ |
-| HTN symbolic planning | roadmap | ❌ | ❌ |
-| Auction-based agent selection | roadmap | ❌ | ❌ |
+| HTN symbolic planning | ✅ | ❌ | ❌ |
+| Auction-based agent selection | ✅ | ❌ | ❌ |
 | Per-agent token budgets | ✅ | ❌ | partial |
 | 4-tier persistent memory + checkpointing | ✅ | partial | partial |
 | MCP client + server | ✅ | partial | ✅ |
@@ -93,6 +93,10 @@ axocoatl workflow run research-and-summarize -i "What is photosynthesis?"
 - **Stigmergic coordination** — agents publish `TaskCompleted` events; an
   `EventLattice` accumulates pheromone signals and activates downstream agents
   when thresholds are crossed. No scheduler, no glue code.
+- **Coordinator role** — for explicit hierarchical work, an agent with
+  `role: coordinator` decomposes a goal into subtasks (HTN or LLM), auctions them
+  to worker agents, runs them in parallel, and synthesizes the results. The pass
+  is resumable via checkpointing.
 - **Workflows** — declarative multi-agent DAGs via `depends_on` / `entry_point`.
 - **Providers** — Ollama, OpenAI, Anthropic, Mistral, Gemini, OpenRouter. No lock-in.
 - **Protocols** — MCP (consume & expose tools) and A2A (agent interop).
@@ -107,12 +111,6 @@ quick reference.
 
 ## Roadmap
 
-Built and tested in the `axocoatl-coordination` crate, but not yet wired into
-the shipped runtime:
-
-- **HTN symbolic planning** — task decomposition without LLM calls.
-- **Auction-based agent selection** — pick agents by tool capability, load, and
-  remaining token budget.
 - **Stronger sandbox isolation tiers** — the shipped sandbox is a hardened
   rootless Podman container (capabilities dropped, no-new-privileges,
   network-isolatable); microVM-class isolation (Firecracker) is planned.
