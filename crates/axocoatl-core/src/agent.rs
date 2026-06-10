@@ -102,11 +102,37 @@ pub enum OverflowPolicy {
     Warn,
 }
 
+/// Tuning for memory recall — governs both the passive top-k injection and the
+/// agent-driven `recall_search` tool, so the two paths agree on the relevance bar.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RecallConfig {
+    /// Passively inject the top-k semantic hits into the prompt each turn.
+    /// When false, the agent relies solely on the `recall_search` tool.
+    pub passive_inject: bool,
+    /// Number of semantic hits to retrieve (passive injection + `recall_search` default).
+    pub top_k: usize,
+    /// Minimum cosine similarity for a hit to count as relevant.
+    pub min_score: f32,
+}
+
+impl Default for RecallConfig {
+    fn default() -> Self {
+        Self {
+            passive_inject: true,
+            top_k: 5,
+            min_score: 0.15,
+        }
+    }
+}
+
 /// Memory backend configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryConfig {
     pub backend: MemoryBackend,
     pub max_session_messages: usize,
+    /// Recall tuning (passive injection + agent-driven recall tools).
+    #[serde(default)]
+    pub recall: RecallConfig,
 }
 
 impl Default for MemoryConfig {
@@ -114,6 +140,7 @@ impl Default for MemoryConfig {
         Self {
             backend: MemoryBackend::default(),
             max_session_messages: 100,
+            recall: RecallConfig::default(),
         }
     }
 }
@@ -184,6 +211,7 @@ mod tests {
                     path: "./data/memory".to_string(),
                 },
                 max_session_messages: 50,
+                recall: RecallConfig::default(),
             },
             role: AgentRole::default(),
         };

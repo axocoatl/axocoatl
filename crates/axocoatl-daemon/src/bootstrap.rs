@@ -599,6 +599,7 @@ impl AxocoatlDaemon {
                                 .as_ref()
                                 .map(|b| b.per_execution)
                                 .unwrap_or(DEFAULT_WORKER_BUDGET),
+                            recall: w.memory.recall.to_core(),
                         });
                     }
                 }

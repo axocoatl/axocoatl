@@ -1,7 +1,8 @@
 //! Conversion from YAML config types to axocoatl-core types.
 
 use axocoatl_core::{
-    AgentConfig, AgentId, AgentRole, MemoryBackend, MemoryConfig, OverflowPolicy, TokenBudget,
+    AgentConfig, AgentId, AgentRole, MemoryBackend, MemoryConfig, OverflowPolicy, RecallConfig,
+    TokenBudget,
 };
 
 use crate::types::*;
@@ -74,6 +75,17 @@ impl MemoryConfigYaml {
                 },
             },
             max_session_messages: self.max_session_messages,
+            recall: self.recall.to_core(),
+        }
+    }
+}
+
+impl RecallConfigYaml {
+    pub fn to_core(&self) -> RecallConfig {
+        RecallConfig {
+            passive_inject: self.passive_inject,
+            top_k: self.top_k,
+            min_score: self.min_score,
         }
     }
 }
@@ -144,8 +156,31 @@ mod tests {
             backend: MemoryBackendYaml::Lancedb,
             max_session_messages: 50,
             path: Some("./custom/path".to_string()),
+            recall: RecallConfigYaml::default(),
         };
         let core = yaml.to_core();
         assert!(matches!(core.backend, MemoryBackend::LanceDb { path } if path == "./custom/path"));
+    }
+
+    #[test]
+    fn recall_config_defaults_when_absent() {
+        // Existing YAML with no `recall:` block keeps working — defaults applied.
+        let yaml: MemoryConfigYaml = serde_yaml::from_str("backend: in_memory").unwrap();
+        let core = yaml.to_core();
+        assert!(core.recall.passive_inject);
+        assert_eq!(core.recall.top_k, 5);
+        assert_eq!(core.recall.min_score, 0.15);
+    }
+
+    #[test]
+    fn recall_config_parsed_and_mapped() {
+        let yaml: MemoryConfigYaml = serde_yaml::from_str(
+            "backend: in_memory\nrecall:\n  passive_inject: false\n  top_k: 12\n  min_score: 0.3",
+        )
+        .unwrap();
+        let core = yaml.to_core();
+        assert!(!core.recall.passive_inject);
+        assert_eq!(core.recall.top_k, 12);
+        assert_eq!(core.recall.min_score, 0.3);
     }
 }

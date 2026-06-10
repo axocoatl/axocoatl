@@ -40,6 +40,21 @@ pub struct DefaultAgentBehavior {
     semantic_memory: Option<Arc<axocoatl_memory::SemanticMemory>>,
     /// Semantically-retrieved context for the current turn (set in `execute`).
     semantic_context: String,
+    /// Agent-scoped recall tools (`recall_search` / `recall_timeframe`), built
+    /// from this agent's own memory stores. Held here — not on the shared
+    /// `ToolExecutor` — because a recall tool must reach a *specific* agent's
+    /// per-agent memory, which a shared executor can't provide.
+    recall_tools: Vec<(String, Arc<dyn axocoatl_tools::BuiltinTool>)>,
+    /// Standing system-prompt line telling the agent the recall tools exist and
+    /// when to use them. Set when at least one recall tool is available.
+    recall_capability_hint: Option<String>,
+    /// Single (non-accumulating) "topics now searchable via recall" hint,
+    /// overwritten on each context compaction.
+    recall_toc_hint: Option<String>,
+    /// Recall tuning (from `MemoryConfig::recall`), read in `on_start`.
+    passive_inject: bool,
+    recall_top_k: usize,
+    recall_min_score: f32,
     /// Directory-session context — when the agent runs inside a session, this
     /// preamble tells it which working directory it operates in.
     session_context: Option<String>,
@@ -81,6 +96,12 @@ impl DefaultAgentBehavior {
             long_term_memory: None,
             semantic_memory: None,
             semantic_context: String::new(),
+            recall_tools: Vec::new(),
+            recall_capability_hint: None,
+            recall_toc_hint: None,
+            passive_inject: true,
+            recall_top_k: 5,
+            recall_min_score: 0.15,
             session_context: None,
             project_instructions: None,
             stream_sink: None,
@@ -304,6 +325,15 @@ impl DefaultAgentBehavior {
         if !self.semantic_context.is_empty() {
             parts.push(self.semantic_context.clone());
         }
+        // After semantic recall: what's now only in long-term memory (post-
+        // compaction topics), then the standing capability hint last so it
+        // frames "if what you need isn't above, search for it".
+        if let Some(toc) = &self.recall_toc_hint {
+            parts.push(toc.clone());
+        }
+        if let Some(hint) = &self.recall_capability_hint {
+            parts.push(hint.clone());
+        }
         parts.join("\n\n")
     }
 
@@ -317,14 +347,17 @@ impl DefaultAgentBehavior {
     /// Retrieve semantically-relevant past memories for `query`. Best-effort:
     /// a search failure logs and yields no context rather than failing the turn.
     fn retrieve_semantic_context(&self, query: &str) -> String {
+        if !self.passive_inject {
+            return String::new();
+        }
         let Some(mem) = &self.semantic_memory else {
             return String::new();
         };
-        match mem.search(query, 5) {
+        match mem.search(query, self.recall_top_k) {
             Ok(hits) => {
                 let relevant: Vec<String> = hits
                     .into_iter()
-                    .filter(|h| h.score > 0.15)
+                    .filter(|h| h.score > self.recall_min_score)
                     .map(|h| format!("- {}", h.text.replace('\n', " ")))
                     .collect();
                 if relevant.is_empty() {
@@ -363,10 +396,41 @@ impl DefaultAgentBehavior {
 
     /// Get tool definitions from the executor (if any) for sending to the LLM.
     fn tool_definitions(&self) -> Vec<axocoatl_llm::ToolDefinition> {
-        self.tool_executor
+        let mut defs = self
+            .tool_executor
             .as_ref()
             .map(|exec| exec.as_llm_tools())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Agent-scoped recall tools are advertised alongside the executor's.
+        // The set is deterministic per agent, so the tool list is stable turn to
+        // turn. They're read-only, hence `Safe`.
+        for (name, tool) in &self.recall_tools {
+            defs.push(axocoatl_llm::ToolDefinition {
+                name: name.clone(),
+                description: tool.description().to_string(),
+                parameters: tool.parameters_schema(),
+                concurrency: axocoatl_llm::ConcurrencyPolicy::Safe,
+            });
+        }
+        defs
+    }
+
+    /// True when the model emitted a call to one of this agent's recall tools.
+    fn is_recall_tool(&self, name: &str) -> bool {
+        self.recall_tools.iter().any(|(n, _)| n == name)
+    }
+
+    /// Execute an agent-scoped recall tool by name (the behavior owns these,
+    /// since they reach this agent's per-agent memory). Unknown name → `NotFound`.
+    async fn execute_recall_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, axocoatl_tools::ToolError> {
+        match self.recall_tools.iter().find(|(n, _)| n == name) {
+            Some((_, tool)) => tool.execute(arguments).await,
+            None => Err(axocoatl_tools::ToolError::NotFound(name.to_string())),
+        }
     }
 
     /// Build a ChatRequest from an AgentInput + optional system prompt.
@@ -521,6 +585,21 @@ impl DefaultAgentBehavior {
         let counter = self.counter.clone();
         self.session
             .replace_with_chat_messages(&result.messages, |s| counter.count_text(s));
+
+        // Single, overwritten-each-compaction hint pointing the agent at the
+        // summary it can now see and telling it the detail behind it is
+        // searchable. Only when recall is actually available.
+        self.recall_toc_hint = if self.semantic_memory.is_some() {
+            Some(
+                "## Earlier context\nOlder turns in this conversation were summarized above to \
+                 save space; their full detail lives in long-term memory. Use `recall_search` to \
+                 retrieve specifics that aren't in the summary."
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+
         tracing::info!(
             agent = %self.agent_id,
             tokens_before = result.tokens_before,
@@ -673,6 +752,45 @@ impl AgentBehavior for DefaultAgentBehavior {
             }
         }
 
+        // Recall tuning (governs passive injection and the recall tools' defaults).
+        let recall = &config.memory.recall;
+        self.passive_inject = recall.passive_inject;
+        self.recall_top_k = recall.top_k;
+        self.recall_min_score = recall.min_score;
+
+        // Assemble this agent's recall tools from whichever memory stores it has,
+        // and a standing capability hint that names only the available ones.
+        self.recall_tools.clear();
+        let mut available: Vec<&str> = Vec::new();
+        if let Some(sem) = &self.semantic_memory {
+            self.recall_tools.push((
+                crate::recall::RECALL_SEARCH.to_string(),
+                Arc::new(crate::recall::RecallSearchTool::new(
+                    sem.clone(),
+                    recall.top_k,
+                    recall.min_score,
+                )) as Arc<dyn axocoatl_tools::BuiltinTool>,
+            ));
+            available.push("`recall_search` to look up past sessions and earlier context");
+        }
+        if let Some(log) = &self.daily_log {
+            self.recall_tools.push((
+                crate::recall::RECALL_TIMEFRAME.to_string(),
+                Arc::new(crate::recall::RecallTimeframeTool::new(log.clone()))
+                    as Arc<dyn axocoatl_tools::BuiltinTool>,
+            ));
+            available.push("`recall_timeframe` to read a specific day's activity log");
+        }
+        self.recall_capability_hint = if available.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "## Recall\nYou have memory beyond this conversation. Before saying you don't \
+                 know or don't remember something the user refers to, use {}.",
+                available.join(", and "),
+            ))
+        };
+
         Ok(())
     }
 
@@ -810,7 +928,10 @@ impl AgentBehavior for DefaultAgentBehavior {
         while !response.tool_calls.is_empty() && loop_count < MAX_TOOL_LOOPS {
             loop_count += 1;
 
-            if let Some(executor) = &self.tool_executor {
+            // Handle tool calls when anything can service them: the shared
+            // executor and/or this agent's per-agent recall tools.
+            let executor = self.tool_executor.clone();
+            if executor.is_some() || !self.recall_tools.is_empty() {
                 // Record the assistant's tool-call turn in the session BEFORE its
                 // results. The conversation must read
                 // `[…, assistant(tool_calls), tool(result)…]`; without this turn
@@ -887,14 +1008,56 @@ impl AgentBehavior for DefaultAgentBehavior {
                     });
                 }
 
-                // Phase 2: Concurrent dispatch of approved calls with real policy lookup
-                let results =
-                    ConcurrentToolDispatcher::dispatch(executor, &approved_calls, |name| {
-                        executor
-                            .get_concurrency_policy(name)
+                // Phase 2: partition approved calls into agent-scoped recall
+                // tools (serviced by the behavior, which owns this agent's
+                // memory) and executor tools, preserving original order; dispatch
+                // both and merge so Phase 3 is unchanged.
+                let mut indexed: Vec<(usize, axocoatl_tools::ToolResult)> = Vec::new();
+                let mut exec_calls: Vec<(usize, axocoatl_llm::ToolCall)> = Vec::new();
+                for (i, call) in approved_calls.iter().enumerate() {
+                    if self.is_recall_tool(&call.name) {
+                        let result = self
+                            .execute_recall_tool(&call.name, call.arguments.clone())
+                            .await;
+                        indexed.push((
+                            i,
+                            axocoatl_tools::ToolResult {
+                                seq: i,
+                                tool_call: call.clone(),
+                                result,
+                            },
+                        ));
+                    } else {
+                        exec_calls.push((i, call.clone()));
+                    }
+                }
+                if let Some(exec) = &executor {
+                    let calls: Vec<axocoatl_llm::ToolCall> =
+                        exec_calls.iter().map(|(_, c)| c.clone()).collect();
+                    let exec_results = ConcurrentToolDispatcher::dispatch(exec, &calls, |name| {
+                        exec.get_concurrency_policy(name)
                             .unwrap_or(axocoatl_llm::ConcurrencyPolicy::Safe)
                     })
                     .await;
+                    for ((orig_i, _), r) in exec_calls.iter().zip(exec_results) {
+                        indexed.push((*orig_i, r));
+                    }
+                } else {
+                    // No executor: a non-recall call can't be serviced.
+                    for (i, call) in &exec_calls {
+                        indexed.push((
+                            *i,
+                            axocoatl_tools::ToolResult {
+                                seq: *i,
+                                tool_call: call.clone(),
+                                result: Err(axocoatl_tools::ToolError::NotFound(call.name.clone())),
+                            },
+                        ));
+                    }
+                }
+                indexed.sort_by_key(|(i, _)| *i);
+                let results: Vec<axocoatl_tools::ToolResult> =
+                    indexed.into_iter().map(|(_, r)| r).collect();
 
                 // Phase 3: Run post-hooks and record results
                 for tool_result in results {
@@ -1379,6 +1542,219 @@ mod tests {
             .expect("tool result must be present in the follow-up");
         assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call_1"));
         assert_eq!(tool_msg.name.as_deref(), Some("echo"));
+    }
+
+    /// Emits a configurable set of tool calls on the first response, then text.
+    struct ToolCallsThenTextLlm {
+        calls: std::sync::atomic::AtomicUsize,
+        captured: Arc<std::sync::Mutex<Vec<ChatRequest>>>,
+        /// (id, name, args_json) for the first response.
+        first: Vec<(String, String, String)>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for ToolCallsThenTextLlm {
+        fn provider_id(&self) -> &str {
+            "tct"
+        }
+        fn model_id(&self) -> &str {
+            "tct-model"
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                streaming: true,
+                tool_calling: true,
+                ..Default::default()
+            }
+        }
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            unimplemented!("uses chat_stream")
+        }
+        async fn chat_stream(
+            &self,
+            request: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            self.captured.lock().unwrap().push(request);
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let events = if n == 0 {
+                let mut ev: Vec<Result<StreamEvent, ProviderError>> = self
+                    .first
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (id, name, args))| {
+                        Ok(StreamEvent::ToolCallDelta {
+                            index: Some(i),
+                            id: id.clone(),
+                            name: Some(name.clone()),
+                            args_delta: args.clone(),
+                        })
+                    })
+                    .collect();
+                ev.push(Ok(StreamEvent::Done {
+                    finish_reason: FinishReason::ToolUse,
+                }));
+                ev
+            } else {
+                vec![
+                    Ok(StreamEvent::TextDelta {
+                        delta: "final answer".to_string(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    }),
+                ]
+            };
+            Ok(Box::pin(tokio_stream::iter(events)))
+        }
+    }
+
+    fn hashed_semantic(dir: &std::path::Path, text: &str) -> Arc<axocoatl_memory::SemanticMemory> {
+        let mem = axocoatl_memory::SemanticMemory::new_hashed("test", dir).unwrap();
+        mem.store(text, serde_json::json!({})).unwrap();
+        Arc::new(mem)
+    }
+
+    #[tokio::test]
+    async fn recall_tool_advertised_only_when_memory_present() {
+        let dir = tempfile::tempdir().unwrap();
+        // Semantic memory present, no daily log → only recall_search advertised.
+        let mut b = DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter())
+            .with_semantic_memory(hashed_semantic(dir.path(), "alpha"));
+        b.on_start(&AgentConfig::default()).await.unwrap();
+        let names: Vec<String> = b.tool_definitions().into_iter().map(|d| d.name).collect();
+        assert!(names.iter().any(|n| n == "recall_search"), "{names:?}");
+        assert!(!names.iter().any(|n| n == "recall_timeframe"), "{names:?}");
+
+        // No memory at all → no recall tools advertised.
+        let mut b2 = DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter());
+        b2.on_start(&AgentConfig::default()).await.unwrap();
+        assert!(b2.tool_definitions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn recall_search_round_trip_without_executor() {
+        let dir = tempfile::tempdir().unwrap();
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(ToolCallsThenTextLlm {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            captured: captured.clone(),
+            first: vec![(
+                "call_r".to_string(),
+                "recall_search".to_string(),
+                "{\"query\":\"the deploy key is stored in vault\"}".to_string(),
+            )],
+        });
+        let mut b = DefaultAgentBehavior::new(provider, simple_counter()).with_semantic_memory(
+            hashed_semantic(dir.path(), "the deploy key is stored in vault"),
+        );
+        b.on_start(&AgentConfig::default()).await.unwrap();
+
+        let out = b
+            .execute(AgentInput::text("where is the deploy key?"))
+            .await
+            .unwrap();
+        assert_eq!(out.content, "final answer");
+        assert!(out
+            .tool_calls
+            .iter()
+            .any(|t| t.tool_name == "recall_search"));
+
+        let reqs = captured.lock().unwrap();
+        assert_eq!(reqs.len(), 2, "initial + follow-up");
+        let tool_msg = reqs[1]
+            .messages
+            .iter()
+            .find(|m| m.role == MessageRole::Tool)
+            .expect("recall tool result replayed in follow-up");
+        assert_eq!(tool_msg.name.as_deref(), Some("recall_search"));
+        assert!(tool_msg.text_content().unwrap().contains("deploy key"));
+    }
+
+    #[tokio::test]
+    async fn mixed_executor_and_recall_calls_recorded_in_order() {
+        use axocoatl_tools::{EchoTool, ToolExecutor};
+        let dir = tempfile::tempdir().unwrap();
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(ToolCallsThenTextLlm {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            captured: captured.clone(),
+            first: vec![
+                ("call_e".into(), "echo".into(), "{\"text\":\"hi\"}".into()),
+                (
+                    "call_r".into(),
+                    "recall_search".into(),
+                    "{\"query\":\"alpha beta gamma\"}".into(),
+                ),
+            ],
+        });
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("echo", Arc::new(EchoTool));
+        let mut b = DefaultAgentBehavior::new(provider, simple_counter())
+            .with_tool_executor(Arc::new(executor))
+            .with_semantic_memory(hashed_semantic(dir.path(), "alpha beta gamma"));
+        b.on_start(&AgentConfig::default()).await.unwrap();
+
+        let out = b.execute(AgentInput::text("do both")).await.unwrap();
+        assert_eq!(out.content, "final answer");
+
+        let reqs = captured.lock().unwrap();
+        let tool_msgs: Vec<_> = reqs[1]
+            .messages
+            .iter()
+            .filter(|m| m.role == MessageRole::Tool)
+            .collect();
+        assert_eq!(tool_msgs.len(), 2, "both tool results recorded");
+        // Original call order preserved: echo (idx 0) before recall (idx 1).
+        assert_eq!(tool_msgs[0].name.as_deref(), Some("echo"));
+        assert_eq!(tool_msgs[1].name.as_deref(), Some("recall_search"));
+    }
+
+    #[tokio::test]
+    async fn passive_inject_can_be_disabled() {
+        use axocoatl_core::{MemoryConfig, RecallConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let mem = hashed_semantic(dir.path(), "the sky is blue");
+
+        // Default (passive on) → a matching query yields injected context.
+        let mut on = DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter())
+            .with_semantic_memory(mem.clone());
+        on.on_start(&AgentConfig::default()).await.unwrap();
+        assert!(!on.retrieve_semantic_context("the sky is blue").is_empty());
+
+        // passive_inject=false → nothing injected regardless of matches.
+        let cfg = AgentConfig {
+            memory: MemoryConfig {
+                recall: RecallConfig {
+                    passive_inject: false,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..AgentConfig::default()
+        };
+        let mut off =
+            DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter())
+                .with_semantic_memory(mem);
+        off.on_start(&cfg).await.unwrap();
+        assert!(off.retrieve_semantic_context("the sky is blue").is_empty());
+    }
+
+    #[tokio::test]
+    async fn capability_hint_present_only_with_recall() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut with =
+            DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter())
+                .with_semantic_memory(hashed_semantic(dir.path(), "x"));
+        with.on_start(&AgentConfig::default()).await.unwrap();
+        assert!(with.memory_context().contains("recall_search"));
+
+        let mut without =
+            DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter());
+        without.on_start(&AgentConfig::default()).await.unwrap();
+        assert!(!without.memory_context().contains("## Recall"));
     }
 
     #[tokio::test]
