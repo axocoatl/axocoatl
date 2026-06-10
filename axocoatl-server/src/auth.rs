@@ -62,12 +62,12 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 /// Whether the request carries a credential that this config accepts.
 fn is_authorized(config: &AuthConfig, headers: &HeaderMap) -> bool {
     if let Some(key) = extract_api_key(headers) {
-        if config.api_keys.iter().any(|k| *k == key) {
+        if config.api_keys.contains(&key) {
             return true;
         }
     }
     if let Some(token) = extract_bearer_token(headers) {
-        if config.bearer_tokens.iter().any(|t| *t == token) {
+        if config.bearer_tokens.contains(&token) {
             return true;
         }
     }

@@ -781,7 +781,7 @@ pub async fn install_mcp(
                 .map(|a| {
                     a.iter()
                         .filter_map(|v| v.as_str())
-                        .map(|s| substitute(s))
+                        .map(&substitute)
                         .collect()
                 })
                 .unwrap_or_default();
@@ -1408,7 +1408,7 @@ pub async fn delete_chat(
 
 /// Max sizes per type. The user can adjust by editing constants if needed.
 const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024; // 10 MB
-const MAX_TEXT_BYTES: usize = 1 * 1024 * 1024; // 1 MB
+const MAX_TEXT_BYTES: usize = 1024 * 1024; // 1 MB
 
 pub async fn upload_chat_attachment(
     State(state): State<AppState>,
@@ -2165,7 +2165,7 @@ pub async fn fs_list_dirs(
             });
         }
     }
-    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.sort_by_key(|a| a.name.to_lowercase());
     Ok(Json(FsListResponse {
         path: dir.to_string_lossy().to_string(),
         parent: dir.parent().map(|p| p.to_string_lossy().to_string()),
@@ -2361,12 +2361,12 @@ pub async fn session_task_spawn(
             .await
         {
             Ok(tid) => Ok(Json(serde_json::json!({ "id": tid, "kind": "terminal" }))),
-            Err(e) => Err(err(StatusCode::BAD_REQUEST, &e.to_string())),
+            Err(e) => Err(err(StatusCode::BAD_REQUEST, e.to_string())),
         }
     } else {
         match state.read().await.spawn_session_task(&id, cmd).await {
             Ok(task_id) => Ok(Json(serde_json::json!({ "id": task_id, "kind": "task" }))),
-            Err(e) => Err(err(StatusCode::BAD_REQUEST, &e.to_string())),
+            Err(e) => Err(err(StatusCode::BAD_REQUEST, e.to_string())),
         }
     }
 }
