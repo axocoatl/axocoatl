@@ -28,6 +28,10 @@ pub struct DefaultAgentBehavior {
     tool_executor: Option<Arc<ToolExecutor>>,
     hook_registry: Option<Arc<HookRegistry>>,
     compression_pipeline: Option<axocoatl_token::CompressionPipeline>,
+    /// Append-only daily log. Context compaction archives raw conversation
+    /// segments here *before* summarizing, so nothing is lost. When unset, the
+    /// archived segments are dropped (with a warning).
+    daily_log: Option<Arc<axocoatl_memory::DailyLogMemory>>,
     /// Cross-session long-term memory (Tier 3). Injected into system prompt
     /// so the LLM has access to facts, preferences, and decisions from prior sessions.
     long_term_memory: Option<Arc<tokio::sync::RwLock<axocoatl_memory::LongTermMemory>>>,
@@ -73,6 +77,7 @@ impl DefaultAgentBehavior {
             tool_executor: None,
             hook_registry: None,
             compression_pipeline: pipeline,
+            daily_log: None,
             long_term_memory: None,
             semantic_memory: None,
             semantic_context: String::new(),
@@ -197,6 +202,13 @@ impl DefaultAgentBehavior {
     /// Enable hook-based tool execution hooks.
     pub fn with_hook_registry(mut self, registry: Arc<HookRegistry>) -> Self {
         self.hook_registry = Some(registry);
+        self
+    }
+
+    /// Provide the append-only daily log used to archive raw conversation
+    /// segments before context compaction summarizes them.
+    pub fn with_daily_log(mut self, log: Arc<axocoatl_memory::DailyLogMemory>) -> Self {
+        self.daily_log = Some(log);
         self
     }
 
@@ -440,6 +452,82 @@ impl DefaultAgentBehavior {
             model_override,
         }
     }
+
+    /// Persistently compact the session toward `target_threshold` tokens: archive
+    /// the raw transcript to the daily log (so nothing is lost), run the
+    /// compression pipeline (summarizing old turns via the LLM), and replace the
+    /// session with the compacted messages. No-op when already under the target
+    /// or no pipeline is configured. Best-effort — never fails the turn.
+    async fn compact_session(&mut self, target_threshold: usize) {
+        if self.compression_pipeline.is_none() || self.session.total_tokens() <= target_threshold {
+            return;
+        }
+
+        // Archive the raw transcript BEFORE compacting, so no history is lost
+        // regardless of which pipeline stage drops or summarizes it.
+        if let Some(daily_log) = &self.daily_log {
+            let raw: Vec<_> = self
+                .session
+                .as_chat_messages()
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "role": format!("{:?}", m.role),
+                        "content": m.text_content().unwrap_or(""),
+                    })
+                })
+                .collect();
+            let entry = axocoatl_memory::LogEntry {
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                entry_type: axocoatl_memory::LogEntryType::Conversation,
+                content: serde_json::json!({
+                    "reason": "context_compaction",
+                    "target_threshold": target_threshold,
+                    "messages": raw,
+                }),
+            };
+            if let Err(e) = daily_log.append(entry).await {
+                tracing::warn!(agent = %self.agent_id, error = %e, "failed to archive transcript before compaction");
+            }
+        } else {
+            tracing::warn!(agent = %self.agent_id, "no daily log configured — compacted history will not be archived");
+        }
+
+        // Housekeeping budget for the LLM summarization stages: a slice of the
+        // remaining token budget, or generous when there is no budget (pure
+        // context-window compaction).
+        let housekeeping = self
+            .tracker
+            .as_ref()
+            .map(|t| {
+                let remaining = t.budget().per_execution.saturating_sub(t.total_used());
+                (remaining as f32 * axocoatl_token::HOUSEKEEPING_BUDGET_PCT) as usize
+            })
+            .unwrap_or(usize::MAX / 4);
+
+        let messages = self.session.as_chat_messages();
+        let summarizer = crate::summarizer::LlmSummarizer::new(self.provider.clone());
+        let result = self
+            .compression_pipeline
+            .as_ref()
+            .unwrap()
+            .compress_to(messages, Some(&summarizer), housekeeping, target_threshold)
+            .await;
+
+        let counter = self.counter.clone();
+        self.session
+            .replace_with_chat_messages(&result.messages, |s| counter.count_text(s));
+        tracing::info!(
+            agent = %self.agent_id,
+            tokens_before = result.tokens_before,
+            tokens_after = result.tokens_after,
+            stages = ?result.stages_applied,
+            "Compacted session context"
+        );
+    }
 }
 
 /// Convert a chat-turn's attachments into multimodal `Parts` and graft them
@@ -598,6 +686,14 @@ impl AgentBehavior for DefaultAgentBehavior {
         // Retrieve semantically-relevant memories for this turn (Tier 4).
         self.semantic_context = self.retrieve_semantic_context(&input.content);
 
+        // Persistently summarize old context once the session has grown toward
+        // the model's context window — old turns are LLM-summarized (and archived
+        // to the daily log), not silently dropped. No-op under the threshold or
+        // when no pipeline is configured.
+        let ctx_target = (self.provider.capabilities().max_context_tokens as f32
+            * axocoatl_token::COMPRESSION_TRIGGER_PCT) as usize;
+        self.compact_session(ctx_target).await;
+
         // Build from session (not from input.history) so the LLM sees full
         // conversation history accumulated across all calls to this actor.
         // `input.system_override` (when Some, e.g. from a Chat tab call) takes
@@ -614,37 +710,71 @@ impl AgentBehavior for DefaultAgentBehavior {
             attach_to_last_user_message(&mut request, &input.attachments);
         }
 
-        // Pre-flight budget check
-        if let Some(tracker) = &self.tracker {
+        // Pre-flight budget check. Compute the outcome while only borrowing
+        // `&self`, so the Summarize arm is free to take `&mut self` afterwards.
+        let overflow = if let Some(tracker) = &self.tracker {
             let estimated = self.provider.count_tokens(&request);
-            if let Err(BudgetError::WouldExceedBudget {
-                current,
-                requested,
-                budget,
-            }) = tracker.check_headroom(estimated)
-            {
-                // Check overflow policy
-                let policy = &tracker.budget().overflow_policy;
-                match policy {
-                    OverflowPolicy::Abort => {
-                        return Err(AgentError::TokenBudgetExceeded {
-                            used: current + requested,
-                            budget,
-                        });
+            match tracker.check_headroom(estimated) {
+                Err(BudgetError::WouldExceedBudget {
+                    current,
+                    requested,
+                    budget,
+                }) => Some((
+                    tracker.budget().overflow_policy.clone(),
+                    current,
+                    requested,
+                    budget,
+                )),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        if let Some((policy, current, requested, budget)) = overflow {
+            match policy {
+                OverflowPolicy::Abort => {
+                    return Err(AgentError::TokenBudgetExceeded {
+                        used: current + requested,
+                        budget,
+                    });
+                }
+                OverflowPolicy::Warn => {
+                    tracing::warn!(
+                        current,
+                        requested,
+                        budget,
+                        "Token budget would be exceeded, continuing (warn policy)"
+                    );
+                }
+                OverflowPolicy::Summarize => {
+                    tracing::info!(
+                        current,
+                        requested,
+                        budget,
+                        "Token budget pressure — compacting context (summarize policy)"
+                    );
+                    // Compact toward the remaining headroom so the next request
+                    // fits; already-spent tokens are sunk, so this extends runway.
+                    let remaining = budget.saturating_sub(current);
+                    self.compact_session(remaining).await;
+                    // Rebuild the request from the compacted session.
+                    request = self.build_request_from_session(
+                        input.system_override.as_deref(),
+                        input.model_override.clone(),
+                    );
+                    if !input.attachments.is_empty() {
+                        attach_to_last_user_message(&mut request, &input.attachments);
                     }
-                    OverflowPolicy::Warn => {
-                        tracing::warn!(
-                            current,
-                            requested,
-                            budget,
-                            "Token budget would be exceeded, continuing (warn policy)"
-                        );
-                    }
-                    OverflowPolicy::Summarize => {
-                        // TODO: implement context summarization
-                        tracing::warn!(
-                            "Token budget pressure — summarization not yet implemented, continuing"
-                        );
+                    // If still over after one compaction, continue (degrade to
+                    // warn) — never loop, since the spent tokens can't be recovered.
+                    if let Some(tracker) = &self.tracker {
+                        let re_estimated = self.provider.count_tokens(&request);
+                        if tracker.check_headroom(re_estimated).is_err() {
+                            tracing::warn!(
+                                "Still over budget after compaction; continuing (budget is a soft cap)"
+                            );
+                        }
                     }
                 }
             }
@@ -1388,6 +1518,94 @@ mod tests {
         assert!(
             tracker.total_used() > 160,
             "Should exceed budget after 2 calls"
+        );
+    }
+
+    /// Provider with a real context window (so the compression pipeline is built)
+    /// and a fixed per-call usage to drive the budget.
+    struct CtxLlm {
+        per_call: usize,
+    }
+    #[async_trait::async_trait]
+    impl LlmProvider for CtxLlm {
+        fn provider_id(&self) -> &str {
+            "ctx"
+        }
+        fn model_id(&self) -> &str {
+            "ctx-model"
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                max_context_tokens: 200,
+                ..ProviderCapabilities::default()
+            }
+        }
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            Ok(ChatResponse {
+                content: "summary".to_string(),
+                tool_calls: vec![],
+                finish_reason: FinishReason::Stop,
+                usage: TokenUsageStats::new(self.per_call, 0),
+                model: "ctx-model".to_string(),
+                provider: "ctx".to_string(),
+            })
+        }
+        async fn chat_stream(
+            &self,
+            _: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            let events = vec![
+                Ok(StreamEvent::TextDelta {
+                    delta: "resp".to_string(),
+                }),
+                Ok(StreamEvent::Usage(TokenUsageStats::new(self.per_call, 0))),
+                Ok(StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                }),
+            ];
+            Ok(Box::pin(tokio_stream::iter(events)))
+        }
+    }
+
+    #[test]
+    fn summarize_is_default_policy() {
+        assert!(matches!(
+            OverflowPolicy::default(),
+            OverflowPolicy::Summarize
+        ));
+    }
+
+    #[tokio::test]
+    async fn summarize_policy_continues_where_abort_fails() {
+        // Each turn records 100 tokens; budget 120. By the 3rd turn the pre-flight
+        // check trips (200 used + request > 120).
+        // Abort policy → the 3rd turn returns a budget error.
+        let mut abort =
+            DefaultAgentBehavior::new(Arc::new(CtxLlm { per_call: 100 }), simple_counter());
+        abort.on_start(&test_config_with_budget(120)).await.unwrap();
+        abort.execute(AgentInput::text("t1")).await.unwrap();
+        abort.execute(AgentInput::text("t2")).await.unwrap();
+        let third_abort = abort.execute(AgentInput::text("t3")).await;
+        assert!(
+            matches!(third_abort, Err(AgentError::TokenBudgetExceeded { .. })),
+            "abort should error, got {third_abort:?}"
+        );
+
+        // Summarize policy → the same overflow compacts and continues, no error.
+        let mut cfg = test_config_with_budget(120);
+        cfg.token_budget.as_mut().unwrap().overflow_policy = OverflowPolicy::Summarize;
+        let mut summ =
+            DefaultAgentBehavior::new(Arc::new(CtxLlm { per_call: 100 }), simple_counter());
+        summ.on_start(&cfg).await.unwrap();
+        summ.execute(AgentInput::text("t1")).await.unwrap();
+        summ.execute(AgentInput::text("t2")).await.unwrap();
+        let third_summ = summ.execute(AgentInput::text("t3")).await;
+        assert!(
+            third_summ.is_ok(),
+            "summarize should continue, got {third_summ:?}"
         );
     }
 

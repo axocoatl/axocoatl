@@ -637,6 +637,12 @@ impl AxocoatlDaemon {
                 // recall. A failure here is non-fatal: the agent runs without it.
                 let data_dir =
                     std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+                // Daily log — context compaction archives raw conversation
+                // segments here before summarizing, so no history is lost.
+                behavior = behavior.with_daily_log(Arc::new(axocoatl_memory::DailyLogMemory::new(
+                    agent_id.to_string(),
+                    format!("{data_dir}/memory/daily_log"),
+                )));
                 match axocoatl_memory::SemanticMemory::new(
                     &agent_id.to_string(),
                     format!("{data_dir}/memory/semantic"),
@@ -2478,6 +2484,10 @@ impl AxocoatlDaemon {
             .with_checkpoint_store(self.checkpoint_store.clone())
             .with_tool_executor(tool_executor)
             .with_long_term_memory(self.long_term_memory.clone())
+            .with_daily_log(Arc::new(axocoatl_memory::DailyLogMemory::new(
+                scoped_id.to_string(),
+                format!("{}/memory/daily_log", self.data_dir),
+            )))
             .with_session_context(session.working_dir.display())
             // Shared/versioned team knowledge layer — walks up from working_dir
             // collecting every AXOCOATL.md it finds.
