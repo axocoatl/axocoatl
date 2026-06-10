@@ -285,6 +285,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_string(),
             tools: vec!["read_file".to_string(), "list_directory".to_string()],
             token_budget: 50_000,
+            recall: axocoatl_core::RecallConfig::default(),
         })
         .add_worker_config(WorkerConfig {
             id: AgentId::new("analyzer-worker"),
@@ -294,6 +295,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_string(),
             tools: vec!["ast_parse".to_string(), "complexity_check".to_string()],
             token_budget: 50_000,
+            recall: axocoatl_core::RecallConfig::default(),
         })
         .add_worker_config(WorkerConfig {
             id: AgentId::new("reporter-worker"),
@@ -303,6 +305,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_string(),
             tools: vec!["lint_check".to_string()],
             token_budget: 50_000,
+            recall: axocoatl_core::RecallConfig::default(),
         });
 
     // -----------------------------------------------------------------------

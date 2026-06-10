@@ -61,6 +61,8 @@ pub struct WorkerConfig {
     pub tools: Vec<String>,
     /// The worker's token budget, used as the budget signal in the auction.
     pub token_budget: usize,
+    /// Recall tuning for this worker (passive injection + recall-tool defaults).
+    pub recall: axocoatl_core::RecallConfig,
 }
 
 /// A unit of work the coordinator assigns to a worker: a name, a description,
@@ -225,6 +227,12 @@ impl CoordinatorBehavior {
             name: config.name.clone(),
             system_prompt: Some(config.system_prompt.clone()),
             tools: config.tools.clone(),
+            // Carry the worker's recall tuning so its `on_start` configures the
+            // passive path and the recall-tool defaults from it.
+            memory: axocoatl_core::MemoryConfig {
+                recall: config.recall.clone(),
+                ..Default::default()
+            },
             ..AgentConfig::default()
         };
 
@@ -586,6 +594,7 @@ impl CoordinatorBehavior {
                 system_prompt: format!("You are a worker agent. Your task: {}", item.description),
                 tools: required_tools.clone(),
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             };
             let worker_config = if available.is_empty() {
                 make_adhoc()
@@ -875,6 +884,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             })
             .add_worker_config(WorkerConfig {
                 id: AgentId::new("w2"),
@@ -882,6 +892,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             });
 
         coord.on_start(&coord_config()).await.unwrap();
@@ -926,6 +937,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             })
             .add_worker_config(WorkerConfig {
                 id: AgentId::new("h2"),
@@ -933,6 +945,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             })
             .add_worker_config(WorkerConfig {
                 id: AgentId::new("h3"),
@@ -940,6 +953,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             });
 
         coord.on_start(&coord_config()).await.unwrap();
@@ -996,6 +1010,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             });
         }
 
@@ -1031,6 +1046,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             })
             .add_worker_config(WorkerConfig {
                 id: AgentId::new("specialist"),
@@ -1038,6 +1054,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec!["special".to_string()],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             });
 
         coord.on_start(&coord_config()).await.unwrap();
@@ -1061,6 +1078,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             })
             .add_worker_config(WorkerConfig {
                 id: AgentId::new("rep_b"),
@@ -1068,6 +1086,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             });
         coord.on_start(&coord_config()).await.unwrap();
 
@@ -1109,6 +1128,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             })
             .add_worker_config(WorkerConfig {
                 id: AgentId::new("f2"),
@@ -1116,6 +1136,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             });
 
         coord.on_start(&coord_config()).await.unwrap();
@@ -1172,6 +1193,7 @@ mod tests {
                 system_prompt: "worker".to_string(),
                 tools: vec![],
                 token_budget: DEFAULT_WORKER_BUDGET,
+                recall: axocoatl_core::RecallConfig::default(),
             });
 
         // on_start restores the incomplete run; execute resumes it.

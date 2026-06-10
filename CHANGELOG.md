@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Agent-driven memory recall (MemGPT/Letta-style).** Retrieval is now hybrid:
+  the top-k semantic hits are still injected passively each turn, and the agent
+  can also pull on demand with two new tools — `recall_search` (semantic search
+  over Tier-4 memory) and `recall_timeframe` (read the Tier-2 daily log for a date
+  or range). The recall tools are agent-scoped (owned by the behavior, since they
+  reach a *specific* agent's per-agent stores), advertised to the model, and
+  dispatched in the existing tool loop alongside executor tools. A standing
+  capability hint plus a post-compaction note tell the agent what's recallable so
+  the tools get used. Recall is tunable per agent via `memory.recall`
+  (`passive_inject`, `top_k`, `min_score`), inherited by coordinator workers.
 - **Coordinator role — hierarchical task decomposition with worker agents.** An
   agent with `role: coordinator` decomposes a goal into subtasks, assigns each to
   the best-fit worker by **auction** (tool-capability match + remaining token

@@ -27,7 +27,8 @@ Each agent is a `ractor` actor running `DefaultAgentBehavior`. On every turn:
 2. **Compact context** automatically when the session approaches the model's
    window — old turns are summarized (raw archived to the Tier-2 daily log, so
    nothing is lost) instead of being dropped.
-3. Build the request, injecting **long-term memory** (Tier 3) facts.
+3. Build the request, injecting **long-term memory** (Tier 3) facts and the
+   top-k **semantic recall** (Tier 4) for the turn.
 4. **Token budget** pre-flight check (`abort` / `warn`) — the spend cap.
 5. Call the agent's **provider** (Ollama, OpenAI, Anthropic, …).
 6. Run any **tool calls** (built-in or MCP) with hooks, up to 10 iterations.
@@ -116,6 +117,15 @@ are independently tested.
 Tier 4 runs a pure-Rust neural embedding model (`all-MiniLM-L6-v2`, 384-dim) on
 Candle — the ~90 MB model is downloaded once, with a feature-hash fallback when
 it's unavailable. No external service, no network at inference time.
+
+**Recall is hybrid.** Each turn the top-k Tier-4 hits are injected passively (the
+baseline), and the agent can also *pull* on demand with two tools: `recall_search`
+(semantic search over Tier 4) and `recall_timeframe` (read the Tier-2 daily log
+for a date or range). A standing capability hint — plus a post-compaction note
+pointing at the summary — tells the agent what's recallable, so the tools get
+used instead of sitting idle. Passive injection, `top_k`, and the relevance
+`min_score` are per-agent (`memory.recall` in config); passive can be turned off
+to go fully agent-driven.
 
 ## Protocols
 

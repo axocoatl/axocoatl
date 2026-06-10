@@ -90,6 +90,9 @@ axocoatl workflow run research-and-summarize -i "What is photosynthesis?"
 
 - **Agents** — persistent `ractor` actors with a provider, tools, 4-tier
   memory, and a token budget. Survive restarts via checkpointing.
+- **Hybrid memory recall** — relevant past exchanges are injected each turn, and
+  the agent can also pull on demand: `recall_search` (semantic search over past
+  sessions) and `recall_timeframe` (read a day's activity log). Tunable per agent.
 - **Stigmergic coordination** — agents publish `TaskCompleted` events; an
   `EventLattice` accumulates pheromone signals and activates downstream agents
   when thresholds are crossed. No scheduler, no glue code.

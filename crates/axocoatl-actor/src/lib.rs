@@ -4,6 +4,7 @@ pub mod coordinator;
 pub mod default_behavior;
 pub mod error;
 pub mod frontier_resolver;
+pub mod recall;
 pub mod registry;
 pub mod summarizer;
 
@@ -13,5 +14,6 @@ pub use coordinator::*;
 pub use default_behavior::*;
 pub use error::*;
 pub use frontier_resolver::*;
+pub use recall::*;
 pub use registry::*;
 pub use summarizer::*;

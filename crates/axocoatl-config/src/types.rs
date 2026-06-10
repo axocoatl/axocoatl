@@ -188,10 +188,43 @@ pub struct MemoryConfigYaml {
     pub max_session_messages: usize,
     /// Path for LanceDB storage (used when backend is lancedb).
     pub path: Option<String>,
+    /// Recall tuning (passive injection + agent-driven recall tools).
+    #[serde(default)]
+    pub recall: RecallConfigYaml,
 }
 
 fn default_max_session() -> usize {
     100
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallConfigYaml {
+    #[serde(default = "default_passive_inject")]
+    pub passive_inject: bool,
+    #[serde(default = "default_recall_top_k")]
+    pub top_k: usize,
+    #[serde(default = "default_recall_min_score")]
+    pub min_score: f32,
+}
+
+impl Default for RecallConfigYaml {
+    fn default() -> Self {
+        Self {
+            passive_inject: default_passive_inject(),
+            top_k: default_recall_top_k(),
+            min_score: default_recall_min_score(),
+        }
+    }
+}
+
+fn default_passive_inject() -> bool {
+    true
+}
+fn default_recall_top_k() -> usize {
+    5
+}
+fn default_recall_min_score() -> f32 {
+    0.15
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
