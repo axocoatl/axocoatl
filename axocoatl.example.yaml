@@ -25,13 +25,18 @@ agents:
     system_prompt: "You research a question and return 3 bullet-pointed facts."
     depends_on: []
     token_budget: { per_execution: 2000, per_call: 1000, overflow_policy: warn }
-    # Memory recall is on by default. Tune it per agent (all fields optional);
-    # the agent also gets recall_search / recall_timeframe tools automatically.
+    # Per-agent memory tuning (all optional). The agent also gets the
+    # recall_search / recall_timeframe + core_memory_* tools automatically.
     # memory:
-    #   recall:
+    #   recall:                 # passive Tier-4 injection + the recall tools
     #     passive_inject: true  # inject top-k semantic hits each turn (false = pull-only)
-    #     top_k: 5              # hits to retrieve
-    #     min_score: 0.15       # min cosine similarity to count as relevant
+    #     top_k: 5
+    #     min_score: 0.15
+    #   core:                   # Tier-3 editable blocks (default: persona/human/project)
+    #     blocks:
+    #       - { label: persona, limit: 2000 }
+    #       - { label: human, limit: 2000 }
+    #       - { label: team, limit: 1000, shared: true }  # cross-agent team memory
 
   - id: summarizer
     name: "Summarizer"

@@ -20,7 +20,7 @@ exclude = ["data/", "data/**"]
 
 [dependencies]
 axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "sync"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 bincode = { workspace = true }

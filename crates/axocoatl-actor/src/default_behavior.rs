@@ -32,9 +32,17 @@ pub struct DefaultAgentBehavior {
     /// segments here *before* summarizing, so nothing is lost. When unset, the
     /// archived segments are dropped (with a warning).
     daily_log: Option<Arc<axocoatl_memory::DailyLogMemory>>,
-    /// Cross-session long-term memory (Tier 3). Injected into system prompt
-    /// so the LLM has access to facts, preferences, and decisions from prior sessions.
-    long_term_memory: Option<Arc<tokio::sync::RwLock<axocoatl_memory::LongTermMemory>>>,
+    /// Core memory (Tier 3) — agent-editable, curated blocks rendered into the
+    /// system prompt and maintained via the core-memory tools. The curated top of
+    /// the hierarchy; the lossless raw lives in Tier 2 (daily log) + Tier 4.
+    core_memory: Option<Arc<tokio::sync::RwLock<axocoatl_memory::CoreMemoryStore>>>,
+    /// Shared core-memory blocks this agent may read/edit (label → cross-agent handle).
+    shared_blocks: std::collections::HashMap<String, axocoatl_memory::SharedBlock>,
+    /// Agent-scoped core-memory edit tools (append / replace / set), built in `on_start`.
+    core_memory_tools: Vec<(String, Arc<dyn axocoatl_tools::BuiltinTool>)>,
+    /// Standing system-prompt line telling the agent its core-memory blocks exist
+    /// and to keep them current. Set when a core-memory store is attached.
+    core_capability_hint: Option<String>,
     /// Semantic memory (Tier 4) — vector recall of past exchanges. Internally
     /// synchronized, so a plain `Arc` is enough.
     semantic_memory: Option<Arc<axocoatl_memory::SemanticMemory>>,
@@ -93,7 +101,10 @@ impl DefaultAgentBehavior {
             hook_registry: None,
             compression_pipeline: pipeline,
             daily_log: None,
-            long_term_memory: None,
+            core_memory: None,
+            shared_blocks: std::collections::HashMap::new(),
+            core_memory_tools: Vec::new(),
+            core_capability_hint: None,
             semantic_memory: None,
             semantic_context: String::new(),
             recall_tools: Vec::new(),
@@ -233,13 +244,16 @@ impl DefaultAgentBehavior {
         self
     }
 
-    /// Enable cross-session long-term memory (Tier 3).
-    /// Memory contents are injected as a system message addendum before each LLM call.
-    pub fn with_long_term_memory(
+    /// Attach this agent's core memory (Tier 3): its per-agent block store plus
+    /// any shared blocks it may edit. Rendered into the prompt and maintained via
+    /// the core-memory tools (built in `on_start`).
+    pub fn with_core_memory(
         mut self,
-        memory: Arc<tokio::sync::RwLock<axocoatl_memory::LongTermMemory>>,
+        store: Arc<tokio::sync::RwLock<axocoatl_memory::CoreMemoryStore>>,
+        shared: std::collections::HashMap<String, axocoatl_memory::SharedBlock>,
     ) -> Self {
-        self.long_term_memory = Some(memory);
+        self.core_memory = Some(store);
+        self.shared_blocks = shared;
         self
     }
 
@@ -318,20 +332,23 @@ impl DefaultAgentBehavior {
         if let Some(pi) = &self.project_instructions {
             parts.push(pi.clone());
         }
-        let ltm = self.long_term_memory_context();
-        if !ltm.is_empty() {
-            parts.push(ltm);
+        let core = self.core_memory_context();
+        if !core.is_empty() {
+            parts.push(core);
         }
         if !self.semantic_context.is_empty() {
             parts.push(self.semantic_context.clone());
         }
-        // After semantic recall: what's now only in long-term memory (post-
-        // compaction topics), then the standing capability hint last so it
-        // frames "if what you need isn't above, search for it".
+        // After semantic recall: post-compaction "what's recallable" topics, then
+        // the standing capability hints last so they frame "if what you need isn't
+        // above, search for it / curate it".
         if let Some(toc) = &self.recall_toc_hint {
             parts.push(toc.clone());
         }
         if let Some(hint) = &self.recall_capability_hint {
+            parts.push(hint.clone());
+        }
+        if let Some(hint) = &self.core_capability_hint {
             parts.push(hint.clone());
         }
         parts.join("\n\n")
@@ -381,17 +398,23 @@ impl DefaultAgentBehavior {
         &self.session
     }
 
-    /// Get formatted long-term memory context for injection into system prompt.
-    /// Uses try_read to avoid blocking — if the lock is held (e.g. during save),
-    /// we skip injection for this turn rather than blocking the LLM call.
-    fn long_term_memory_context(&self) -> String {
-        match &self.long_term_memory {
-            Some(ltm) => match ltm.try_read() {
-                Ok(mem) => mem.as_context_string(),
-                Err(_) => String::new(), // lock contention, skip this turn
-            },
-            None => String::new(),
+    /// Render core memory (Tier 3) for the system prompt — the agent's local
+    /// blocks plus any shared blocks, under one `## Core Memory` header. Uses
+    /// `try_read` so lock contention (e.g. a concurrent save) skips this turn
+    /// rather than blocking the LLM call.
+    fn core_memory_context(&self) -> String {
+        let mut blocks: Vec<axocoatl_memory::MemoryBlock> = Vec::new();
+        if let Some(store) = &self.core_memory {
+            if let Ok(s) = store.try_read() {
+                blocks.extend(s.blocks().iter().cloned());
+            }
         }
+        for shared in self.shared_blocks.values() {
+            if let Ok(b) = shared.block.try_read() {
+                blocks.push(b.clone());
+            }
+        }
+        axocoatl_memory::render_blocks(blocks.iter())
     }
 
     /// Get tool definitions from the executor (if any) for sending to the LLM.
@@ -412,6 +435,15 @@ impl DefaultAgentBehavior {
                 concurrency: axocoatl_llm::ConcurrencyPolicy::Safe,
             });
         }
+        // Core-memory edit tools — mutating, so advertised Exclusive.
+        for (name, tool) in &self.core_memory_tools {
+            defs.push(axocoatl_llm::ToolDefinition {
+                name: name.clone(),
+                description: tool.description().to_string(),
+                parameters: tool.parameters_schema(),
+                concurrency: axocoatl_llm::ConcurrencyPolicy::Exclusive,
+            });
+        }
         defs
     }
 
@@ -430,6 +462,40 @@ impl DefaultAgentBehavior {
         match self.recall_tools.iter().find(|(n, _)| n == name) {
             Some((_, tool)) => tool.execute(arguments).await,
             None => Err(axocoatl_tools::ToolError::NotFound(name.to_string())),
+        }
+    }
+
+    /// True when the model emitted a call to one of this agent's core-memory tools.
+    fn is_core_memory_tool(&self, name: &str) -> bool {
+        self.core_memory_tools.iter().any(|(n, _)| n == name)
+    }
+
+    async fn execute_core_memory_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, axocoatl_tools::ToolError> {
+        match self.core_memory_tools.iter().find(|(n, _)| n == name) {
+            Some((_, tool)) => tool.execute(arguments).await,
+            None => Err(axocoatl_tools::ToolError::NotFound(name.to_string())),
+        }
+    }
+
+    /// Any agent-scoped tool the behavior services itself (recall + core memory),
+    /// rather than the shared executor.
+    fn is_behavior_tool(&self, name: &str) -> bool {
+        self.is_recall_tool(name) || self.is_core_memory_tool(name)
+    }
+
+    async fn execute_behavior_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, axocoatl_tools::ToolError> {
+        if self.is_recall_tool(name) {
+            self.execute_recall_tool(name, arguments).await
+        } else {
+            self.execute_core_memory_tool(name, arguments).await
         }
     }
 
@@ -791,6 +857,53 @@ impl AgentBehavior for DefaultAgentBehavior {
             ))
         };
 
+        // Assemble this agent's core-memory edit tools + a standing hint, when a
+        // core-memory store is attached. The tools hold clones of the SAME store
+        // Arc the behavior renders from, so an edit shows on the next request.
+        self.core_memory_tools.clear();
+        if let Some(store) = &self.core_memory {
+            let handles = crate::core_memory_tools::CoreMemoryHandles {
+                store: store.clone(),
+                shared: self.shared_blocks.clone(),
+            };
+            self.core_memory_tools = vec![
+                (
+                    crate::core_memory_tools::CORE_MEMORY_APPEND.to_string(),
+                    Arc::new(crate::core_memory_tools::CoreMemoryAppendTool::new(
+                        handles.clone(),
+                    )) as Arc<dyn axocoatl_tools::BuiltinTool>,
+                ),
+                (
+                    crate::core_memory_tools::CORE_MEMORY_REPLACE.to_string(),
+                    Arc::new(crate::core_memory_tools::CoreMemoryReplaceTool::new(
+                        handles.clone(),
+                    )) as Arc<dyn axocoatl_tools::BuiltinTool>,
+                ),
+                (
+                    crate::core_memory_tools::CORE_MEMORY_SET.to_string(),
+                    Arc::new(crate::core_memory_tools::CoreMemorySetTool::new(handles))
+                        as Arc<dyn axocoatl_tools::BuiltinTool>,
+                ),
+            ];
+            let mut labels: Vec<String> = store
+                .read()
+                .await
+                .blocks()
+                .iter()
+                .map(|b| b.label.clone())
+                .collect();
+            labels.extend(self.shared_blocks.keys().cloned());
+            self.core_capability_hint = Some(format!(
+                "## Core memory\nYou maintain editable memory blocks ({}). When you learn a \
+                 durable fact about yourself, the user, or the project, update the relevant block \
+                 with `core_memory_append` / `core_memory_replace`. Keep them accurate and \
+                 concise; don't store ephemeral, task-scoped detail.",
+                labels.join(", "),
+            ));
+        } else {
+            self.core_capability_hint = None;
+        }
+
         Ok(())
     }
 
@@ -931,7 +1044,10 @@ impl AgentBehavior for DefaultAgentBehavior {
             // Handle tool calls when anything can service them: the shared
             // executor and/or this agent's per-agent recall tools.
             let executor = self.tool_executor.clone();
-            if executor.is_some() || !self.recall_tools.is_empty() {
+            if executor.is_some()
+                || !self.recall_tools.is_empty()
+                || !self.core_memory_tools.is_empty()
+            {
                 // Record the assistant's tool-call turn in the session BEFORE its
                 // results. The conversation must read
                 // `[…, assistant(tool_calls), tool(result)…]`; without this turn
@@ -1015,9 +1131,9 @@ impl AgentBehavior for DefaultAgentBehavior {
                 let mut indexed: Vec<(usize, axocoatl_tools::ToolResult)> = Vec::new();
                 let mut exec_calls: Vec<(usize, axocoatl_llm::ToolCall)> = Vec::new();
                 for (i, call) in approved_calls.iter().enumerate() {
-                    if self.is_recall_tool(&call.name) {
+                    if self.is_behavior_tool(&call.name) {
                         let result = self
-                            .execute_recall_tool(&call.name, call.arguments.clone())
+                            .execute_behavior_tool(&call.name, call.arguments.clone())
                             .await;
                         indexed.push((
                             i,
@@ -1173,59 +1289,9 @@ impl AgentBehavior for DefaultAgentBehavior {
             );
         }
 
-        // Fact extraction: promote session highlights → long-term memory
-        if let Some(ltm) = &self.long_term_memory {
-            if self.session.len() >= 4 {
-                // Only extract if there was meaningful conversation (2+ turns)
-                let messages: Vec<String> = self
-                    .session
-                    .messages()
-                    .iter()
-                    .map(|m| format!("{:?}: {}", m.role, m.content))
-                    .collect();
-
-                let (sys_prompt, user_prompt) =
-                    axocoatl_memory::long_term::extract_facts_prompt(&messages);
-
-                let request = ChatRequest {
-                    messages: vec![
-                        ChatMessage::system(&sys_prompt),
-                        ChatMessage::user(&user_prompt),
-                    ],
-                    tools: vec![],
-                    max_tokens: Some(500),
-                    temperature: Some(0.0),
-                    stop_sequences: Vec::new(),
-                    provider_options: None,
-                    model_override: None,
-                };
-
-                match self.provider.chat(request).await {
-                    Ok(response) => {
-                        let facts =
-                            axocoatl_memory::long_term::parse_extracted_facts(&response.content);
-                        if !facts.is_empty() {
-                            let mut mem = ltm.write().await;
-                            for (category, key, value) in &facts {
-                                mem.set(key, value, category.clone());
-                            }
-                            if let Err(e) = mem.save().await {
-                                tracing::warn!(error = %e, "Failed to save long-term memory");
-                            } else {
-                                tracing::info!(
-                                    facts = facts.len(),
-                                    "Extracted and saved facts to long-term memory"
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Fact extraction LLM call failed (non-fatal)");
-                    }
-                }
-            }
-        }
-
+        // Tier-3 is now agent-edited core memory; session-end fact extraction is
+        // retired. (Phase 2 adds a background consolidation pass that promotes
+        // durable Tier-4 facts into the blocks.)
         Ok(())
     }
 }
@@ -1755,6 +1821,113 @@ mod tests {
             DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter());
         without.on_start(&AgentConfig::default()).await.unwrap();
         assert!(!without.memory_context().contains("## Recall"));
+    }
+
+    fn behavior_with_core(
+        provider: Arc<dyn LlmProvider>,
+        dir: &std::path::Path,
+    ) -> DefaultAgentBehavior {
+        let mut store = axocoatl_memory::CoreMemoryStore::new("a", dir.join("a.json"));
+        store.ensure_block(axocoatl_memory::MemoryBlock::new("human", 0));
+        DefaultAgentBehavior::new(provider, simple_counter()).with_core_memory(
+            Arc::new(tokio::sync::RwLock::new(store)),
+            std::collections::HashMap::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn core_memory_tools_advertised_only_with_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut with = behavior_with_core(Arc::new(MockLlm::new("x", 1, 1)), dir.path());
+        with.on_start(&AgentConfig::default()).await.unwrap();
+        let names: Vec<String> = with
+            .tool_definitions()
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        for t in [
+            "core_memory_append",
+            "core_memory_replace",
+            "core_memory_set",
+        ] {
+            assert!(names.iter().any(|n| n == t), "missing {t} in {names:?}");
+        }
+
+        let mut without =
+            DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter());
+        without.on_start(&AgentConfig::default()).await.unwrap();
+        assert!(!without
+            .tool_definitions()
+            .iter()
+            .any(|d| d.name.starts_with("core_memory")));
+    }
+
+    #[tokio::test]
+    async fn core_memory_renders_and_hints() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = axocoatl_memory::CoreMemoryStore::new("a", dir.path().join("a.json"));
+        let mut human = axocoatl_memory::MemoryBlock::new("human", 0);
+        human.set("name: Alice").unwrap();
+        store.ensure_block(human);
+        let mut b = DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter())
+            .with_core_memory(
+                Arc::new(tokio::sync::RwLock::new(store)),
+                std::collections::HashMap::new(),
+            );
+        b.on_start(&AgentConfig::default()).await.unwrap();
+        let ctx = b.memory_context();
+        assert!(ctx.contains("## Core Memory"));
+        assert!(ctx.contains("name: Alice"));
+        assert!(
+            ctx.contains("core_memory_append"),
+            "capability hint present"
+        );
+    }
+
+    #[tokio::test]
+    async fn core_memory_edit_persists_and_renders_same_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(ToolCallsThenTextLlm {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            captured: captured.clone(),
+            first: vec![(
+                "c1".to_string(),
+                "core_memory_append".to_string(),
+                "{\"block\":\"human\",\"text\":\"name: Alice\"}".to_string(),
+            )],
+        });
+        let mut b = behavior_with_core(provider, dir.path());
+        b.on_start(&AgentConfig::default()).await.unwrap();
+
+        let out = b
+            .execute(AgentInput::text("my name is Alice"))
+            .await
+            .unwrap();
+        assert_eq!(out.content, "final answer");
+
+        // The store reflects the edit...
+        let stored = b
+            .core_memory
+            .as_ref()
+            .unwrap()
+            .read()
+            .await
+            .block("human")
+            .unwrap()
+            .value
+            .clone();
+        assert!(stored.contains("name: Alice"));
+
+        // ...and the follow-up request's system prompt re-rendered it same-turn.
+        let reqs = captured.lock().unwrap();
+        assert_eq!(reqs.len(), 2, "initial + follow-up");
+        let sys = reqs[1]
+            .messages
+            .iter()
+            .find(|m| m.role == MessageRole::System)
+            .expect("system message with core memory");
+        assert!(sys.text_content().unwrap().contains("name: Alice"));
     }
 
     #[tokio::test]

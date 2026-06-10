@@ -22,7 +22,7 @@ use axocoatl_mcp::permissions::McpPermissionStore;
 use axocoatl_mcp::{McpToolRegistry, McpTransportType};
 use axocoatl_memory::chat::ChatStore;
 use axocoatl_memory::files::FileStore;
-use axocoatl_memory::{CheckpointPolicy, CheckpointStore, LongTermMemory};
+use axocoatl_memory::{CheckpointPolicy, CheckpointStore};
 use axocoatl_session::{Session, SessionMode, SessionStore};
 use axocoatl_token::{ApproximateCounter, TokenCounter};
 use axocoatl_tools::ToolExecutor;
@@ -105,7 +105,7 @@ pub struct AxocoatlDaemon {
     pub active_chat_turns:
         Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
     pub tool_executor: Arc<ToolExecutor>,
-    long_term_memory: Arc<tokio::sync::RwLock<LongTermMemory>>,
+    shared_registry: Arc<axocoatl_memory::SharedBlockRegistry>,
     activation_tx: mpsc::UnboundedSender<ActivationRequest>,
     activation_handle: Option<tokio::task::JoinHandle<()>>,
     agent_handles: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
@@ -167,15 +167,21 @@ impl AxocoatlDaemon {
             CheckpointPolicy::EveryLlmCall,
         ));
 
-        // 3. Set up shared long-term memory (Tier 3)
-        let ltm_path = format!("{data_dir}/memory/long_term.bin");
-        let mut ltm = LongTermMemory::new(&ltm_path);
-        if let Err(e) = ltm.load().await {
-            tracing::warn!(error = %e, "Failed to load long-term memory, starting fresh");
-        } else if !ltm.is_empty() {
-            tracing::info!(entries = ltm.len(), "Loaded long-term memory");
+        // 3. Core memory (Tier 3): build the shared-block registry once, from the
+        //    union of all agents' `shared: true` blocks. Per-agent block stores are
+        //    built at spawn time.
+        let mut shared_registry = axocoatl_memory::SharedBlockRegistry::new(
+            axocoatl_memory::shared_blocks_dir(&data_dir),
+        );
+        for agent in &config.agents {
+            let core = agent.memory.core.to_core();
+            for block in core.blocks.iter().filter(|b| b.shared) {
+                shared_registry
+                    .ensure(axocoatl_memory::MemoryBlock::from(block))
+                    .await;
+            }
         }
-        let long_term_memory = Arc::new(tokio::sync::RwLock::new(ltm));
+        let shared_registry = Arc::new(shared_registry);
 
         // 5. Set up tool executor with built-in tools
         let mut tool_executor = ToolExecutor::new();
@@ -278,7 +284,7 @@ impl AxocoatlDaemon {
                 &counter,
                 &checkpoint_store,
                 &tool_executor,
-                &long_term_memory,
+                &shared_registry,
                 &agent_registry,
                 &hook_registry,
             )
@@ -503,7 +509,7 @@ impl AxocoatlDaemon {
             stream_bus,
             active_runs,
             tool_executor,
-            long_term_memory,
+            shared_registry,
             activation_tx,
             activation_handle: Some(activation_handle),
             agent_handles: std::sync::Mutex::new(agent_handles),
@@ -513,6 +519,41 @@ impl AxocoatlDaemon {
     /// Spawn a single agent: build its provider + behavior, start the actor,
     /// and register it. Shared by bootstrap and `restart_agent`.
     #[allow(clippy::too_many_arguments)]
+    /// Resolve an agent's shared blocks (its `shared: true` labels) against the
+    /// process-wide registry into a per-agent map.
+    fn resolve_shared(
+        core: &axocoatl_core::CoreMemoryConfig,
+        registry: &axocoatl_memory::SharedBlockRegistry,
+    ) -> std::collections::HashMap<String, axocoatl_memory::SharedBlock> {
+        let mut m = std::collections::HashMap::new();
+        for spec in core.blocks.iter().filter(|b| b.shared) {
+            if let Some(sb) = registry.get(&spec.label) {
+                m.insert(spec.label.clone(), sb);
+            }
+        }
+        m
+    }
+
+    /// Build (load + seed) an agent's per-agent core-memory store.
+    async fn build_core(
+        agent_id: &str,
+        data_dir: &str,
+        core: &axocoatl_core::CoreMemoryConfig,
+    ) -> Arc<tokio::sync::RwLock<axocoatl_memory::CoreMemoryStore>> {
+        let specs: Vec<axocoatl_memory::MemoryBlock> = core
+            .blocks
+            .iter()
+            .map(axocoatl_memory::MemoryBlock::from)
+            .collect();
+        let store = axocoatl_memory::build_store(
+            agent_id,
+            axocoatl_memory::core_store_path(data_dir, agent_id),
+            &specs,
+        )
+        .await;
+        Arc::new(tokio::sync::RwLock::new(store))
+    }
+
     async fn spawn_agent(
         agent_yaml: &axocoatl_config::AgentConfigYaml,
         config: &AxocoatlConfig,
@@ -520,7 +561,7 @@ impl AxocoatlDaemon {
         counter: &Arc<dyn TokenCounter>,
         checkpoint_store: &Arc<CheckpointStore>,
         tool_executor: &Arc<ToolExecutor>,
-        long_term_memory: &Arc<tokio::sync::RwLock<LongTermMemory>>,
+        shared_registry: &Arc<axocoatl_memory::SharedBlockRegistry>,
         agent_registry: &AgentRegistry,
         hook_registry: &Arc<axocoatl_tools::HookRegistry>,
     ) -> Result<tokio::task::JoinHandle<()>, DaemonError> {
@@ -572,7 +613,10 @@ impl AxocoatlDaemon {
                 let mut coord = CoordinatorBehavior::new(provider, counter.clone())
                     .with_tool_executor(tool_executor.clone())
                     .with_checkpoint_store(checkpoint_store.clone())
-                    .with_long_term_memory(long_term_memory.clone())
+                    .with_shared_blocks(Self::resolve_shared(
+                        &agent_config.memory.core,
+                        shared_registry,
+                    ))
                     .with_hook_registry(hook_registry.clone())
                     .with_data_dir(data_dir);
 
@@ -631,7 +675,6 @@ impl AxocoatlDaemon {
                 let mut behavior = DefaultAgentBehavior::new(provider, counter.clone())
                     .with_checkpoint_store(checkpoint_store.clone())
                     .with_tool_executor(tool_executor.clone())
-                    .with_long_term_memory(long_term_memory.clone())
                     .with_hook_registry(hook_registry.clone());
 
                 // Tier 4 semantic memory — one store per agent, for cross-session
@@ -653,6 +696,14 @@ impl AxocoatlDaemon {
                         tracing::warn!(agent = %agent_id, error = %e, "semantic memory unavailable")
                     }
                 }
+                // Core memory (Tier 3) — per-agent editable blocks + shared blocks.
+                let core_store =
+                    Self::build_core(&agent_id.to_string(), &data_dir, &agent_config.memory.core)
+                        .await;
+                behavior = behavior.with_core_memory(
+                    core_store,
+                    Self::resolve_shared(&agent_config.memory.core, shared_registry),
+                );
                 Box::new(behavior)
             };
 
@@ -701,7 +752,7 @@ impl AxocoatlDaemon {
             &self.counter,
             &self.checkpoint_store,
             &self.tool_executor,
-            &self.long_term_memory,
+            &self.shared_registry,
             &self.agent_registry,
             &self.hook_registry,
         )
@@ -2481,10 +2532,15 @@ impl AxocoatlDaemon {
         // session's conversation is isolated from the global agent's.
         agent_config.id = AgentId::new(scoped_id);
 
+        let core_store =
+            Self::build_core(scoped_id, &self.data_dir, &agent_config.memory.core).await;
         let behavior = DefaultAgentBehavior::new(provider, self.counter.clone())
             .with_checkpoint_store(self.checkpoint_store.clone())
             .with_tool_executor(tool_executor)
-            .with_long_term_memory(self.long_term_memory.clone())
+            .with_core_memory(
+                core_store,
+                Self::resolve_shared(&agent_config.memory.core, &self.shared_registry),
+            )
             .with_daily_log(Arc::new(axocoatl_memory::DailyLogMemory::new(
                 scoped_id.to_string(),
                 format!("{}/memory/daily_log", self.data_dir),

@@ -191,10 +191,38 @@ pub struct MemoryConfigYaml {
     /// Recall tuning (passive injection + agent-driven recall tools).
     #[serde(default)]
     pub recall: RecallConfigYaml,
+    /// Agent-editable core-memory blocks (Tier 3).
+    #[serde(default)]
+    pub core: CoreMemoryConfigYaml,
 }
 
 fn default_max_session() -> usize {
     100
+}
+
+/// Core-memory blocks. An empty `blocks` (or an omitted `core`) yields the
+/// default set (persona + human + project); a non-empty list replaces it.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CoreMemoryConfigYaml {
+    #[serde(default)]
+    pub blocks: Vec<CoreBlockConfigYaml>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoreBlockConfigYaml {
+    pub label: String,
+    #[serde(default)]
+    pub value: String,
+    #[serde(default = "default_block_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub shared: bool,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+fn default_block_limit() -> usize {
+    2000
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

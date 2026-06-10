@@ -1,8 +1,8 @@
 //! Conversion from YAML config types to axocoatl-core types.
 
 use axocoatl_core::{
-    AgentConfig, AgentId, AgentRole, MemoryBackend, MemoryConfig, OverflowPolicy, RecallConfig,
-    TokenBudget,
+    AgentConfig, AgentId, AgentRole, CoreBlockConfig, CoreMemoryConfig, MemoryBackend,
+    MemoryConfig, OverflowPolicy, RecallConfig, TokenBudget,
 };
 
 use crate::types::*;
@@ -76,6 +76,7 @@ impl MemoryConfigYaml {
             },
             max_session_messages: self.max_session_messages,
             recall: self.recall.to_core(),
+            core: self.core.to_core(),
         }
     }
 }
@@ -86,6 +87,31 @@ impl RecallConfigYaml {
             passive_inject: self.passive_inject,
             top_k: self.top_k,
             min_score: self.min_score,
+        }
+    }
+}
+
+impl CoreMemoryConfigYaml {
+    pub fn to_core(&self) -> CoreMemoryConfig {
+        // Empty/omitted → the default block set; a non-empty list replaces it.
+        if self.blocks.is_empty() {
+            CoreMemoryConfig::default()
+        } else {
+            CoreMemoryConfig {
+                blocks: self.blocks.iter().map(|b| b.to_core()).collect(),
+            }
+        }
+    }
+}
+
+impl CoreBlockConfigYaml {
+    pub fn to_core(&self) -> CoreBlockConfig {
+        CoreBlockConfig {
+            label: self.label.clone(),
+            value: self.value.clone(),
+            limit: self.limit,
+            shared: self.shared,
+            description: self.description.clone(),
         }
     }
 }
@@ -157,9 +183,30 @@ mod tests {
             max_session_messages: 50,
             path: Some("./custom/path".to_string()),
             recall: RecallConfigYaml::default(),
+            core: CoreMemoryConfigYaml::default(),
         };
         let core = yaml.to_core();
         assert!(matches!(core.backend, MemoryBackend::LanceDb { path } if path == "./custom/path"));
+    }
+
+    #[test]
+    fn core_memory_config_defaults_and_override() {
+        // Omitted `core` → default block set (persona + human + project).
+        let yaml: MemoryConfigYaml = serde_yaml::from_str("backend: in_memory").unwrap();
+        let core = yaml.to_core();
+        let labels: Vec<&str> = core.core.blocks.iter().map(|b| b.label.as_str()).collect();
+        assert_eq!(labels, ["persona", "human", "project"]);
+
+        // Explicit blocks replace the defaults.
+        let yaml: MemoryConfigYaml = serde_yaml::from_str(
+            "backend: in_memory\ncore:\n  blocks:\n    - label: notes\n      limit: 500\n      shared: true",
+        )
+        .unwrap();
+        let core = yaml.to_core();
+        assert_eq!(core.core.blocks.len(), 1);
+        assert_eq!(core.core.blocks[0].label, "notes");
+        assert_eq!(core.core.blocks[0].limit, 500);
+        assert!(core.core.blocks[0].shared);
     }
 
     #[test]

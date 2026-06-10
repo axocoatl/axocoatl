@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Agent-managed core memory (MemGPT/Letta-style blocks).** Tier 3 is now a set
+  of named, character-limited, agent-editable blocks (default: `persona`,
+  `human`, `project`) rendered into the system prompt every turn. The agent
+  curates them mid-conversation via three tools — `core_memory_append`,
+  `core_memory_replace`, `core_memory_set` — and an edit is visible on the very
+  next request (same turn). Blocks are per-agent by default; a block marked
+  `shared` is backed by a process-wide registry so multiple agents see each
+  other's edits (team memory). Configure per agent under `memory.core`. This is
+  the curated top of the hierarchy — the lossless raw stays in Tiers 2 and 4.
 - **Agent-driven memory recall (MemGPT/Letta-style).** Retrieval is now hybrid:
   the top-k semantic hits are still injected passively each turn, and the agent
   can also pull on demand with two new tools — `recall_search` (semantic search
@@ -43,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own summarization tokens count against the agent's budget.
 
 ### Changed
+- **Tier 3 is no longer a shared key-value fact store.** The old daemon-global
+  `LongTermMemory` (one `long_term.bin` for all agents, written by a session-end
+  LLM extraction in `on_stop`) is **retired**, replaced by per-agent core-memory
+  blocks. Any existing `{data_dir}/memory/long_term.bin` is obsolete and may be
+  deleted; no migration is performed.
 - **`overflow_policy` is now strictly a spend cap: `abort` (default) or `warn`.**
   Context management is automatic and independent of the budget, so the old
   `summarize` policy is no longer a distinct behavior — it is accepted as a

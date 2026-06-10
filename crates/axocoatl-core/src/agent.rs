@@ -125,6 +125,61 @@ impl Default for RecallConfig {
     }
 }
 
+/// One agent-editable core-memory block (Tier 3). Curated, always-in-context.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CoreBlockConfig {
+    pub label: String,
+    /// Seed content (e.g. a persona). The agent edits from here.
+    pub value: String,
+    /// Character budget; `0` = unlimited.
+    pub limit: usize,
+    /// When true, the block is shared across agents (opt-in).
+    pub shared: bool,
+    /// What the block is for — guides the agent and renders when empty.
+    pub description: Option<String>,
+}
+
+/// Core-memory configuration: the set of named blocks an agent maintains.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CoreMemoryConfig {
+    pub blocks: Vec<CoreBlockConfig>,
+}
+
+impl Default for CoreMemoryConfig {
+    fn default() -> Self {
+        Self {
+            blocks: default_core_blocks(),
+        }
+    }
+}
+
+/// The default per-agent block set: `persona` + `human` + `project`.
+pub fn default_core_blocks() -> Vec<CoreBlockConfig> {
+    vec![
+        CoreBlockConfig {
+            label: "persona".to_string(),
+            value: String::new(),
+            limit: 2000,
+            shared: false,
+            description: Some("Who you are and how you behave.".to_string()),
+        },
+        CoreBlockConfig {
+            label: "human".to_string(),
+            value: String::new(),
+            limit: 2000,
+            shared: false,
+            description: Some("What you know about the user you serve.".to_string()),
+        },
+        CoreBlockConfig {
+            label: "project".to_string(),
+            value: String::new(),
+            limit: 3000,
+            shared: false,
+            description: Some("Durable project context, decisions, and conventions.".to_string()),
+        },
+    ]
+}
+
 /// Memory backend configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryConfig {
@@ -133,6 +188,9 @@ pub struct MemoryConfig {
     /// Recall tuning (passive injection + agent-driven recall tools).
     #[serde(default)]
     pub recall: RecallConfig,
+    /// Agent-editable core-memory blocks (Tier 3).
+    #[serde(default)]
+    pub core: CoreMemoryConfig,
 }
 
 impl Default for MemoryConfig {
@@ -141,6 +199,7 @@ impl Default for MemoryConfig {
             backend: MemoryBackend::default(),
             max_session_messages: 100,
             recall: RecallConfig::default(),
+            core: CoreMemoryConfig::default(),
         }
     }
 }
@@ -212,6 +271,7 @@ mod tests {
                 },
                 max_session_messages: 50,
                 recall: RecallConfig::default(),
+                core: CoreMemoryConfig::default(),
             },
             role: AgentRole::default(),
         };

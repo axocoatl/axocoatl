@@ -18,9 +18,7 @@ use std::sync::Arc;
 use axocoatl_coordination::{compute_bid, run_auction, AgentBid, HtnPlanner, HtnTask, HtnTaskType};
 use axocoatl_core::{AgentConfig, AgentId, AgentInput, AgentOutput, TokenUsageStats};
 use axocoatl_llm::{ChatRequest, LlmProvider};
-use axocoatl_memory::{
-    AgentCheckpoint, CheckpointStore, DailyLogMemory, LongTermMemory, SemanticMemory,
-};
+use axocoatl_memory::{AgentCheckpoint, CheckpointStore, DailyLogMemory, SemanticMemory};
 use axocoatl_token::{TokenCounter, TokenTracker};
 use axocoatl_tools::{HookRegistry, ToolExecutor};
 use serde::{Deserialize, Serialize};
@@ -138,10 +136,11 @@ pub struct CoordinatorBehavior {
     /// executions of the same coordinator never collide in ractor's registry.
     run_seq: u64,
     /// Full-stack dependencies handed to every spawned worker so a worker is a
-    /// first-class agent (checkpointed, with long-term + semantic memory and the
+    /// first-class agent (checkpointed, with core + semantic memory and the
     /// global hook registry), not a bare provider+tools shell.
     checkpoint_store: Option<Arc<CheckpointStore>>,
-    long_term_memory: Option<Arc<tokio::sync::RwLock<LongTermMemory>>>,
+    /// Shared core-memory blocks handed to each worker (opt-in team memory).
+    shared_blocks: std::collections::HashMap<String, axocoatl_memory::SharedBlock>,
     hook_registry: Option<Arc<HookRegistry>>,
     /// Data directory for per-worker semantic memory. When set (by the daemon),
     /// each worker gets a Tier-4 semantic store under it; when unset, workers
@@ -170,7 +169,7 @@ impl CoordinatorBehavior {
             htn_planner: None,
             run_seq: 0,
             checkpoint_store: None,
-            long_term_memory: None,
+            shared_blocks: std::collections::HashMap::new(),
             hook_registry: None,
             data_dir: None,
             checkpoint_version: 0,
@@ -188,11 +187,11 @@ impl CoordinatorBehavior {
         self
     }
 
-    pub fn with_long_term_memory(
+    pub fn with_shared_blocks(
         mut self,
-        memory: Arc<tokio::sync::RwLock<LongTermMemory>>,
+        shared: std::collections::HashMap<String, axocoatl_memory::SharedBlock>,
     ) -> Self {
-        self.long_term_memory = Some(memory);
+        self.shared_blocks = shared;
         self
     }
 
@@ -246,20 +245,15 @@ impl CoordinatorBehavior {
         if let Some(store) = &self.checkpoint_store {
             behavior = behavior.with_checkpoint_store(store.clone());
         }
-        if let Some(ltm) = &self.long_term_memory {
-            behavior = behavior.with_long_term_memory(ltm.clone());
-        }
         if let Some(hooks) = &self.hook_registry {
             behavior = behavior.with_hook_registry(hooks.clone());
         }
-        // Tier-4 semantic memory, one store per worker (same scheme as a
-        // standalone agent), under the coordinator's data dir. Built only when a
-        // data dir is configured (the daemon sets it); omitted in lightweight or
-        // embedded use so no disk store is created. Non-fatal on failure.
+        // Per-worker Tier-2/3/4 stores under the coordinator's data dir (same
+        // scheme as a standalone agent). Built only when a data dir is configured
+        // (the daemon sets it); omitted in lightweight/embedded use. Non-fatal.
         if let Some(data_dir) = &self.data_dir {
             // Daily log — a worker archives raw conversation segments here before
-            // context compaction summarizes them, so no history is lost (same
-            // scheme as a standalone agent).
+            // context compaction summarizes them, so no history is lost.
             behavior = behavior.with_daily_log(Arc::new(DailyLogMemory::new(
                 config.id.to_string(),
                 format!("{data_dir}/memory/daily_log"),
@@ -273,6 +267,22 @@ impl CoordinatorBehavior {
                     tracing::warn!(worker = %config.id, error = %e, "semantic memory unavailable")
                 }
             }
+            // Core memory (Tier 3) — the default block set per worker, plus the
+            // coordinator's shared blocks (opt-in team memory).
+            let specs: Vec<axocoatl_memory::MemoryBlock> = axocoatl_core::default_core_blocks()
+                .iter()
+                .map(axocoatl_memory::MemoryBlock::from)
+                .collect();
+            let store = axocoatl_memory::build_store(
+                &config.id.to_string(),
+                axocoatl_memory::core_store_path(data_dir, &config.id.to_string()),
+                &specs,
+            )
+            .await;
+            behavior = behavior.with_core_memory(
+                Arc::new(tokio::sync::RwLock::new(store)),
+                self.shared_blocks.clone(),
+            );
         }
 
         // Run-scoped actor name so repeated runs of this coordinator never

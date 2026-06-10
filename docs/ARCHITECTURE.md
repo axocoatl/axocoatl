@@ -27,14 +27,15 @@ Each agent is a `ractor` actor running `DefaultAgentBehavior`. On every turn:
 2. **Compact context** automatically when the session approaches the model's
    window — old turns are summarized (raw archived to the Tier-2 daily log, so
    nothing is lost) instead of being dropped.
-3. Build the request, injecting **long-term memory** (Tier 3) facts and the
-   top-k **semantic recall** (Tier 4) for the turn.
+3. Build the request, injecting the agent's **core-memory blocks** (Tier 3) and
+   the top-k **semantic recall** (Tier 4) for the turn.
 4. **Token budget** pre-flight check (`abort` / `warn`) — the spend cap.
 5. Call the agent's **provider** (Ollama, OpenAI, Anthropic, …).
 6. Run any **tool calls** (built-in or MCP) with hooks, up to 10 iterations.
 7. **Checkpoint** the session to disk (Tier 2) for crash recovery.
 
-On shutdown, agents distill the session into long-term memory facts.
+The agent curates its core-memory blocks (Tier 3) during the conversation; the
+lossless raw is always preserved in Tiers 2 and 4.
 
 ## Token budgets
 
@@ -91,7 +92,7 @@ coordination pass (`CoordinatorBehavior`):
    spawned with exactly those tools, so a subtask is never forced onto an unfit
    worker.
 3. **Delegate** the pending subtasks to workers **in parallel**. Each worker is
-   a first-class agent — its own tools, checkpoints, long-term + semantic
+   a first-class agent — its own tools, checkpoints, core + semantic
    memory, and hooks — with a run-scoped actor name so repeated runs never
    collide.
 4. **Synthesize** the workers' outputs back into one answer to the original
@@ -111,7 +112,7 @@ are independently tested.
 |---|---|---|
 | 1 — Session | conversation transcript | in-memory |
 | 2 — Checkpoint | agent state snapshots | disk (pruned to 3) |
-| 3 — Long-term | distilled facts | disk (bincode) |
+| 3 — Core memory | agent-edited curated blocks | disk (JSON; per-agent + shared) |
 | 4 — Semantic | neural vector recall | disk (embeddings) |
 
 Tier 4 runs a pure-Rust neural embedding model (`all-MiniLM-L6-v2`, 384-dim) on
@@ -126,6 +127,16 @@ pointing at the summary — tells the agent what's recallable, so the tools get
 used instead of sitting idle. Passive injection, `top_k`, and the relevance
 `min_score` are per-agent (`memory.recall` in config); passive can be turned off
 to go fully agent-driven.
+
+**Core memory is agent-managed.** Tier 3 is a small set of named, editable blocks
+(`persona`, `human`, `project`, …) rendered into the system prompt every turn. The
+agent curates them itself via `core_memory_append` / `core_memory_replace` /
+`core_memory_set` as it learns durable facts (the MemGPT/Letta model — replacing
+the old session-end fact extraction). Blocks are per-agent by default; a block
+marked `shared` forms cross-agent team memory. This is the **curated top** of the
+hierarchy — small and lossy by design, safe to rewrite because the lossless raw
+stays in Tier 2 (daily log) and Tier 4 (semantic). Configure the block set per
+agent under `memory.core`.
 
 ## Protocols
 

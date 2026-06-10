@@ -29,4 +29,11 @@ pub enum MemoryError {
 
     #[error("Consolidation LLM call failed: {0}")]
     ConsolidationLlmFailed(String),
+
+    #[error("core-memory block '{label}' over limit ({attempted} > {limit} chars)")]
+    BlockOverLimit {
+        label: String,
+        limit: usize,
+        attempted: usize,
+    },
 }
