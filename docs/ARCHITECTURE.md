@@ -138,6 +138,17 @@ hierarchy — small and lossy by design, safe to rewrite because the lossless ra
 stays in Tier 2 (daily log) and Tier 4 (semantic). Configure the block set per
 agent under `memory.core`.
 
+**Sleep-time consolidation.** A background loop (`consolidation.rs`, mirroring
+supervision) periodically asks **idle** agents to consolidate. Each agent runs an
+LLM "memory manager" pass — `on_consolidate`, triggered by an
+`AgentMessage::Consolidate` and once more on graceful stop — that reviews recent
+Tier-4 activity and **promotes durable facts into the right core block**, merging
+duplicates and tightening wording within the char limits. It is **promotion-only**:
+it reads Tier 4 and never evicts it. The agent itself decides whether it has been
+idle long enough (the pass runs only past `idle_threshold_secs`), so a pass never
+fires between a user's two messages. Tune under `consolidation` (`enabled`,
+`idle_threshold_secs`, `interval_secs`).
+
 ## Protocols
 
 - **MCP** — the daemon connects to configured `mcp_servers` (stdio or

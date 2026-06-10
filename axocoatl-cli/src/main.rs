@@ -1078,6 +1078,11 @@ async fn cmd_dev(config_path: &std::path::Path) {
     // Supervise agents: restart any that crash, from their last checkpoint.
     axocoatl_daemon::supervision::start_supervision(state.clone());
 
+    // Background memory consolidation (sleep-time): idle agents promote durable
+    // facts from semantic memory into their curated core-memory blocks.
+    let consolidation = { state.read().await.config.consolidation.clone() };
+    axocoatl_daemon::consolidation::start_consolidation(state.clone(), consolidation);
+
     // Start IPC server for CLI clients
     let socket_path = axocoatl_daemon::ipc::default_socket_path();
     match axocoatl_daemon::ipc::start_ipc_server(state.clone(), &socket_path).await {
@@ -1150,6 +1155,11 @@ async fn cmd_serve(config_path: &std::path::Path) {
 
     // Supervise agents: restart any that crash, from their last checkpoint.
     axocoatl_daemon::supervision::start_supervision(state.clone());
+
+    // Background memory consolidation (sleep-time): idle agents promote durable
+    // facts from semantic memory into their curated core-memory blocks.
+    let consolidation = { state.read().await.config.consolidation.clone() };
+    axocoatl_daemon::consolidation::start_consolidation(state.clone(), consolidation);
 
     if let Err(e) = axocoatl_server::serve_shared(state, &host, port).await {
         eprintln!("Server error: {e}");

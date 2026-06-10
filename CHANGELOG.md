@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `shared` is backed by a process-wide registry so multiple agents see each
   other's edits (team memory). Configure per agent under `memory.core`. This is
   the curated top of the hierarchy — the lossless raw stays in Tiers 2 and 4.
+- **Background "sleep-time" memory consolidation.** A daemon loop periodically
+  asks **idle** agents to run an LLM memory-manager pass (`on_consolidate`, also
+  run once on graceful stop) that promotes durable facts from recent Tier-4
+  activity into the right core-memory block and tidies them — promotion-only,
+  never evicting Tier 4. The agent self-gates on idle time so a pass never fires
+  mid-conversation. Tunable under `consolidation` (`enabled`,
+  `idle_threshold_secs`, `interval_secs`).
 - **Agent-driven memory recall (MemGPT/Letta-style).** Retrieval is now hybrid:
   the top-k semantic hits are still injected passively each turn, and the agent
   can also pull on demand with two new tools — `recall_search` (semantic search

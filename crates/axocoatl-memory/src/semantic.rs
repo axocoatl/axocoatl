@@ -237,6 +237,20 @@ impl SemanticMemory {
             .collect())
     }
 
+    /// Up to `n` most-recently-stored memories (their text), oldest-first.
+    /// Used by background consolidation to see "what's new" — a read-only feed
+    /// (the semantic store is never evicted). Empty store → empty list.
+    pub fn recent(&self, n: usize) -> Result<Vec<String>, MemoryError> {
+        let records = self.lock_records()?;
+        if records.is_empty() || n == 0 {
+            return Ok(Vec::new());
+        }
+        let mut refs: Vec<&MemoryRecord> = records.iter().collect();
+        refs.sort_by_key(|r| r.ts);
+        let start = refs.len().saturating_sub(n);
+        Ok(refs[start..].iter().map(|r| r.text.clone()).collect())
+    }
+
     /// Embedding dimensionality of the active backend.
     pub fn dimensions(&self) -> usize {
         self.embedder.dim()

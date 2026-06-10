@@ -29,6 +29,42 @@ pub struct AxocoatlConfig {
     pub proactive: Vec<ProactiveConfigYaml>,
     #[serde(default)]
     pub web_search: Option<WebSearchConfigYaml>,
+    #[serde(default)]
+    pub consolidation: ConsolidationConfigYaml,
+}
+
+/// Background "sleep-time" memory consolidation: idle agents promote durable
+/// facts from semantic memory (Tier 4) into their curated core-memory blocks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsolidationConfigYaml {
+    #[serde(default = "default_consolidation_enabled")]
+    pub enabled: bool,
+    /// An agent must have been idle at least this long before a pass runs.
+    #[serde(default = "default_idle_threshold")]
+    pub idle_threshold_secs: u64,
+    /// Minimum time between consolidation passes for a single agent.
+    #[serde(default = "default_consolidation_interval")]
+    pub interval_secs: u64,
+}
+
+impl Default for ConsolidationConfigYaml {
+    fn default() -> Self {
+        Self {
+            enabled: default_consolidation_enabled(),
+            idle_threshold_secs: default_idle_threshold(),
+            interval_secs: default_consolidation_interval(),
+        }
+    }
+}
+
+fn default_consolidation_enabled() -> bool {
+    true
+}
+fn default_idle_threshold() -> u64 {
+    120
+}
+fn default_consolidation_interval() -> u64 {
+    1800
 }
 
 /// Web-search provider for session agents. When present, the `web_search`

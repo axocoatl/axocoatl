@@ -230,4 +230,22 @@ mod tests {
         assert_eq!(core.recall.top_k, 12);
         assert_eq!(core.recall.min_score, 0.3);
     }
+
+    #[test]
+    fn consolidation_config_defaults_and_override() {
+        // Omitted → enabled, with defaults.
+        let cfg: AxocoatlConfig = serde_yaml::from_str("agents: []").unwrap();
+        assert!(cfg.consolidation.enabled);
+        assert_eq!(cfg.consolidation.idle_threshold_secs, 120);
+        assert_eq!(cfg.consolidation.interval_secs, 1800);
+
+        // Explicit override.
+        let cfg: AxocoatlConfig = serde_yaml::from_str(
+            "consolidation:\n  enabled: false\n  idle_threshold_secs: 30\n  interval_secs: 600",
+        )
+        .unwrap();
+        assert!(!cfg.consolidation.enabled);
+        assert_eq!(cfg.consolidation.idle_threshold_secs, 30);
+        assert_eq!(cfg.consolidation.interval_secs, 600);
+    }
 }

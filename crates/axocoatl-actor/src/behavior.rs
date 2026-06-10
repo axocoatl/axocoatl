@@ -38,6 +38,31 @@ pub enum AgentStreamChunk {
 /// these before a streaming execution; non-streaming callers pass `None`.
 pub type StreamSink = tokio::sync::mpsc::UnboundedSender<AgentStreamChunk>;
 
+/// Outcome of a background "sleep-time" consolidation pass.
+#[derive(Debug, Clone, Default)]
+pub struct ConsolidationReport {
+    /// True when the pass did no work (agent not idle long enough, or no memory).
+    pub skipped: bool,
+    /// Durable facts promoted into core-memory blocks.
+    pub promoted: usize,
+    /// Blocks rewritten / tightened / deduped.
+    pub rewritten: usize,
+    /// Labels of the blocks that were touched.
+    pub blocks_touched: Vec<String>,
+    /// Tokens the consolidation LLM call spent.
+    pub tokens_used: usize,
+}
+
+impl ConsolidationReport {
+    /// A no-work report (the actor was active too recently, or there is no memory).
+    pub fn skipped() -> Self {
+        Self {
+            skipped: true,
+            ..Default::default()
+        }
+    }
+}
+
 /// Every Axocoatl agent implements this trait.
 /// The ractor Actor trait is the execution primitive;
 /// AgentBehavior is the domain-level interface.
@@ -65,6 +90,13 @@ pub trait AgentBehavior: Send + Sync + 'static {
         _error: AgentError,
     ) -> SupervisionDecision {
         SupervisionDecision::Restart
+    }
+
+    /// Background "sleep-time" consolidation — invoked when the agent has been
+    /// idle, by the daemon's consolidation loop (and once on graceful stop).
+    /// Promotes durable facts into curated memory and tidies it. Default: no-op.
+    async fn on_consolidate(&mut self) -> Result<ConsolidationReport, AgentError> {
+        Ok(ConsolidationReport::default())
     }
 
     /// Called on graceful shutdown.

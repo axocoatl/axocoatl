@@ -67,3 +67,11 @@ skills:
     reacts_to: []
     agents: [researcher]
     prompt: "Research this topic in 3 bullets."
+
+# ─── Sleep-time memory consolidation ────────────────────────────────
+# Idle agents periodically promote durable facts from their semantic memory
+# into their curated core-memory blocks. On by default; tune or disable here.
+# consolidation:
+#   enabled: true
+#   idle_threshold_secs: 120   # how long an agent must be idle before a pass runs
+#   interval_secs: 1800        # minimum time between passes for one agent

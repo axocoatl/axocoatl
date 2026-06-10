@@ -95,7 +95,8 @@ axocoatl workflow run research-and-summarize -i "What is photosynthesis?"
   sessions) and `recall_timeframe` (read a day's activity log). Tunable per agent.
 - **Agent-managed core memory** — editable blocks (`persona`, `human`, `project`,
   …) the agent curates via tools and that render into its prompt each turn (the
-  MemGPT/Letta model). Per-agent by default, shareable across agents.
+  MemGPT/Letta model). Per-agent by default, shareable across agents. A
+  background "sleep-time" pass consolidates idle agents' memory automatically.
 - **Stigmergic coordination** — agents publish `TaskCompleted` events; an
   `EventLattice` accumulates pheromone signals and activates downstream agents
   when thresholds are crossed. No scheduler, no glue code.

@@ -3,6 +3,7 @@ pub mod automation_executor;
 pub mod automation_runs;
 pub mod automation_store;
 pub mod bootstrap;
+pub mod consolidation;
 pub mod error;
 pub mod git;
 pub mod interrupt;

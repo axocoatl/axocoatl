@@ -1279,6 +1279,110 @@ impl AgentBehavior for DefaultAgentBehavior {
         })
     }
 
+    /// Background "sleep-time" consolidation: an LLM memory-manager pass that
+    /// promotes durable facts from recent Tier-4 activity into the curated core
+    /// blocks and tidies them. Promotion-only — it reads Tier 4, never evicts it.
+    async fn on_consolidate(&mut self) -> Result<crate::behavior::ConsolidationReport, AgentError> {
+        // Need a core store to write to and a semantic feed to promote from.
+        let (Some(store), Some(sem)) = (self.core_memory.clone(), self.semantic_memory.clone())
+        else {
+            return Ok(crate::behavior::ConsolidationReport::skipped());
+        };
+        let recent = sem.recent(20).unwrap_or_default();
+        let blocks_snapshot: Vec<(String, String, usize)> = {
+            let s = store.read().await;
+            s.blocks()
+                .iter()
+                .map(|b| (b.label.clone(), b.value.clone(), b.limit))
+                .collect()
+        };
+        if recent.is_empty() || blocks_snapshot.is_empty() {
+            return Ok(crate::behavior::ConsolidationReport::skipped());
+        }
+
+        let blocks_text = blocks_snapshot
+            .iter()
+            .map(|(l, v, lim)| {
+                format!(
+                    "### {l} (limit {lim} chars)\n{}",
+                    if v.trim().is_empty() { "(empty)" } else { v }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let activity = recent.join("\n---\n");
+        let system = "You are a memory manager for an AI agent. Given its core-memory blocks and \
+                      recent activity, promote DURABLE facts (about the user, the project, the \
+                      agent's persona) into the right block, merge duplicates, and tighten wording \
+                      — within each block's character limit. Do NOT store ephemeral or task-scoped \
+                      detail. Output ONLY a JSON array of edits ([] if nothing should change). Each \
+                      edit is one of: {\"op\":\"append\",\"block\":\"<label>\",\"text\":\"...\"}, \
+                      {\"op\":\"replace\",\"block\":\"<label>\",\"old\":\"...\",\"new\":\"...\"}, \
+                      {\"op\":\"set\",\"block\":\"<label>\",\"value\":\"...\"}.";
+        let user = format!(
+            "Core-memory blocks:\n{blocks_text}\n\nRecent activity:\n{activity}\n\nJSON edit array:"
+        );
+        let request = ChatRequest {
+            messages: vec![ChatMessage::system(system), ChatMessage::user(&user)],
+            tools: vec![],
+            max_tokens: Some(800),
+            temperature: Some(0.0),
+            stop_sequences: Vec::new(),
+            provider_options: None,
+            model_override: None,
+        };
+        let response = self
+            .provider
+            .chat(request)
+            .await
+            .map_err(|e| AgentError::Provider(e.to_string()))?;
+        let tokens_used = response.usage.input_tokens + response.usage.output_tokens;
+        if let Some(tracker) = &self.tracker {
+            let _ = tracker.record_usage(response.usage.input_tokens, response.usage.output_tokens);
+        }
+
+        let edits = parse_consolidation_edits(&response.content);
+        let mut report = crate::behavior::ConsolidationReport {
+            tokens_used,
+            ..Default::default()
+        };
+        {
+            let mut s = store.write().await;
+            for e in &edits {
+                match apply_consolidation_edit(&mut s, e) {
+                    Ok(label) => {
+                        if !report.blocks_touched.contains(&label) {
+                            report.blocks_touched.push(label);
+                        }
+                        if e.op == "replace" {
+                            report.rewritten += 1;
+                        } else {
+                            report.promoted += 1;
+                        }
+                    }
+                    Err(err) => {
+                        tracing::debug!(error = %err, block = %e.block, "consolidation edit skipped")
+                    }
+                }
+            }
+            if !report.blocks_touched.is_empty() {
+                if let Err(err) = s.save().await {
+                    tracing::warn!(error = %err, "failed to save core memory after consolidation");
+                }
+            }
+        }
+        // `skipped` stays false: the LLM pass ran (even with zero edits), so the
+        // daemon won't re-run it until the next interval.
+        tracing::info!(
+            agent = %self.agent_id,
+            promoted = report.promoted,
+            rewritten = report.rewritten,
+            tokens = report.tokens_used,
+            "Consolidated core memory"
+        );
+        Ok(report)
+    }
+
     async fn on_stop(&mut self) -> Result<(), AgentError> {
         if let Some(tracker) = &self.tracker {
             tracing::info!(
@@ -1289,11 +1393,67 @@ impl AgentBehavior for DefaultAgentBehavior {
             );
         }
 
-        // Tier-3 is now agent-edited core memory; session-end fact extraction is
-        // retired. (Phase 2 adds a background consolidation pass that promotes
-        // durable Tier-4 facts into the blocks.)
+        // A graceful stop runs one last consolidation pass (same as the idle
+        // background loop) so this session's durable facts are promoted into the
+        // curated blocks before shutdown.
+        let _ = self.on_consolidate().await;
         Ok(())
     }
+}
+
+/// One edit emitted by the consolidation memory-manager LLM pass.
+#[derive(Debug, serde::Deserialize)]
+struct ConsolidationEdit {
+    op: String,
+    block: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    old: Option<String>,
+    #[serde(default)]
+    new: Option<String>,
+    #[serde(default)]
+    value: Option<String>,
+}
+
+/// Parse the model's JSON edit array, tolerating prose/code-fence wrapping by
+/// falling back to the first `[ … ]` slice. Unparseable → no edits.
+fn parse_consolidation_edits(content: &str) -> Vec<ConsolidationEdit> {
+    let trimmed = content.trim();
+    if let Ok(v) = serde_json::from_str::<Vec<ConsolidationEdit>>(trimmed) {
+        return v;
+    }
+    if let (Some(start), Some(end)) = (trimmed.find('['), trimmed.rfind(']')) {
+        if start < end {
+            if let Ok(v) = serde_json::from_str::<Vec<ConsolidationEdit>>(&trimmed[start..=end]) {
+                return v;
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Apply one consolidation edit to the store (limit-enforced by the block
+/// methods). Returns the touched block label on success.
+fn apply_consolidation_edit(
+    store: &mut axocoatl_memory::CoreMemoryStore,
+    e: &ConsolidationEdit,
+) -> Result<String, axocoatl_memory::MemoryError> {
+    let block = store
+        .block_mut(&e.block)
+        .ok_or_else(|| axocoatl_memory::MemoryError::NotFound(format!("block '{}'", e.block)))?;
+    match e.op.as_str() {
+        "append" => block.append(e.text.as_deref().unwrap_or("")),
+        "replace" => block.replace(
+            e.old.as_deref().unwrap_or(""),
+            e.new.as_deref().unwrap_or(""),
+        ),
+        "set" => block.set(e.value.as_deref().unwrap_or("")),
+        other => Err(axocoatl_memory::MemoryError::Invalid(format!(
+            "unknown consolidation op '{other}'"
+        ))),
+    }?;
+    Ok(e.block.clone())
 }
 
 /// Extract every top-level JSON object from a free-form text body.
@@ -1928,6 +2088,47 @@ mod tests {
             .find(|m| m.role == MessageRole::System)
             .expect("system message with core memory");
         assert!(sys.text_content().unwrap().contains("name: Alice"));
+    }
+
+    #[tokio::test]
+    async fn on_consolidate_promotes_into_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let sem = hashed_semantic(dir.path(), "the user said their name is Alice");
+        let mut store = axocoatl_memory::CoreMemoryStore::new("a", dir.path().join("core.json"));
+        store.ensure_block(axocoatl_memory::MemoryBlock::new("human", 0));
+        let store = Arc::new(tokio::sync::RwLock::new(store));
+        // The memory-manager LLM returns a fixed edit list.
+        let provider = Arc::new(MockLlm::new(
+            "[{\"op\":\"append\",\"block\":\"human\",\"text\":\"name: Alice\"}]",
+            10,
+            10,
+        ));
+        let mut b = DefaultAgentBehavior::new(provider, simple_counter())
+            .with_semantic_memory(sem)
+            .with_core_memory(store.clone(), std::collections::HashMap::new());
+        b.on_start(&AgentConfig::default()).await.unwrap();
+
+        let report = b.on_consolidate().await.unwrap();
+        assert!(!report.skipped);
+        assert_eq!(report.promoted, 1);
+        assert_eq!(report.blocks_touched, vec!["human".to_string()]);
+        assert!(store
+            .read()
+            .await
+            .block("human")
+            .unwrap()
+            .value
+            .contains("Alice"));
+    }
+
+    #[tokio::test]
+    async fn on_consolidate_skips_without_memory() {
+        // No core/semantic memory → a cheap skip, no LLM-applied edits.
+        let mut b = DefaultAgentBehavior::new(Arc::new(MockLlm::new("[]", 1, 1)), simple_counter());
+        b.on_start(&AgentConfig::default()).await.unwrap();
+        let report = b.on_consolidate().await.unwrap();
+        assert!(report.skipped);
+        assert_eq!(report.promoted, 0);
     }
 
     #[tokio::test]

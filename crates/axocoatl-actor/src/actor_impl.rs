@@ -19,6 +19,13 @@ pub enum AgentMessage {
     GetStatus(oneshot::Sender<AgentStatus>),
     /// Get cumulative token usage.
     GetTokenUsage(oneshot::Sender<TokenUsageStats>),
+    /// Run a background consolidation pass — but only if the agent has been idle
+    /// for at least `idle_threshold_secs` (the actor decides, so the daemon never
+    /// triggers the LLM pass in the gap between a user's two messages).
+    Consolidate {
+        idle_threshold_secs: u64,
+        reply: oneshot::Sender<Result<crate::behavior::ConsolidationReport, String>>,
+    },
 }
 
 // ractor requires Message: Send + 'static
@@ -30,6 +37,7 @@ impl std::fmt::Debug for AgentMessage {
             AgentMessage::Execute { .. } => write!(f, "AgentMessage::Execute"),
             AgentMessage::GetStatus(_) => write!(f, "AgentMessage::GetStatus"),
             AgentMessage::GetTokenUsage(_) => write!(f, "AgentMessage::GetTokenUsage"),
+            AgentMessage::Consolidate { .. } => write!(f, "AgentMessage::Consolidate"),
         }
     }
 }
@@ -40,6 +48,8 @@ pub struct AgentActorState {
     pub status: AgentStatus,
     pub behavior: Box<dyn AgentBehavior>,
     pub token_usage: TokenUsageStats,
+    /// When this agent last processed a turn — drives the consolidation idle gate.
+    pub last_active: std::time::Instant,
 }
 
 /// The ractor Actor wrapper for Axocoatl agents.
@@ -67,6 +77,7 @@ impl Actor for AgentActor {
             status: AgentStatus::Idle,
             behavior,
             token_usage: TokenUsageStats::default(),
+            last_active: std::time::Instant::now(),
         })
     }
 
@@ -90,6 +101,7 @@ impl Actor for AgentActor {
                 if streaming {
                     state.behavior.set_stream_sink(None);
                 }
+                state.last_active = std::time::Instant::now();
 
                 match result {
                     Ok(output) => {
@@ -114,6 +126,25 @@ impl Actor for AgentActor {
             }
             AgentMessage::GetTokenUsage(reply) => {
                 let _ = reply.send(state.token_usage.clone());
+            }
+            AgentMessage::Consolidate {
+                idle_threshold_secs,
+                reply,
+            } => {
+                if state.last_active.elapsed() < std::time::Duration::from_secs(idle_threshold_secs)
+                {
+                    // Active too recently — skip cheaply (no LLM call).
+                    let _ = reply.send(Ok(crate::behavior::ConsolidationReport::skipped()));
+                } else {
+                    state.status = AgentStatus::Running;
+                    let result = state
+                        .behavior
+                        .on_consolidate()
+                        .await
+                        .map_err(|e| e.to_string());
+                    state.status = AgentStatus::Idle;
+                    let _ = reply.send(result);
+                }
             }
         }
         Ok(())
@@ -204,6 +235,23 @@ pub async fn get_agent_status(actor: &ActorRef<AgentMessage>) -> Result<AgentSta
         .map_err(|e| format!("Failed to send to agent: {e}"))?;
     rx.await
         .map_err(|_| "Agent dropped reply channel".to_string())
+}
+
+/// Helper: ask an agent to run a consolidation pass (it self-skips unless it has
+/// been idle for at least `idle_threshold_secs`).
+pub async fn consolidate_agent(
+    actor: &ActorRef<AgentMessage>,
+    idle_threshold_secs: u64,
+) -> Result<crate::behavior::ConsolidationReport, String> {
+    let (tx, rx) = oneshot::channel();
+    actor
+        .cast(AgentMessage::Consolidate {
+            idle_threshold_secs,
+            reply: tx,
+        })
+        .map_err(|e| format!("Failed to send to agent: {e}"))?;
+    rx.await
+        .map_err(|_| "Agent dropped reply channel".to_string())?
 }
 
 /// Helper: query cumulative token usage for an agent.
@@ -390,5 +438,60 @@ mod tests {
         ref2.stop(None);
         h1.await.unwrap();
         h2.await.unwrap();
+    }
+
+    /// Records whether `on_consolidate` actually ran.
+    struct ConsolidateTracker(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    #[async_trait::async_trait]
+    impl AgentBehavior for ConsolidateTracker {
+        async fn on_start(&mut self, _: &AgentConfig) -> Result<(), crate::AgentError> {
+            Ok(())
+        }
+        async fn execute(&mut self, input: AgentInput) -> Result<AgentOutput, crate::AgentError> {
+            Ok(AgentOutput {
+                content: input.content,
+                tool_calls: vec![],
+                token_usage: TokenUsageStats::new(1, 1),
+            })
+        }
+        async fn on_consolidate(
+            &mut self,
+        ) -> Result<crate::behavior::ConsolidationReport, crate::AgentError> {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::behavior::ConsolidationReport {
+                promoted: 1,
+                ..Default::default()
+            })
+        }
+        async fn on_stop(&mut self) -> Result<(), crate::AgentError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn consolidate_respects_idle_gate() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let ran = std::sync::Arc::new(AtomicBool::new(false));
+        let (actor, h) = AgentActor::spawn(
+            Some("consolidate-gate".to_string()),
+            AgentActor,
+            (test_config(), Box::new(ConsolidateTracker(ran.clone()))),
+        )
+        .await
+        .unwrap();
+
+        // Just spawned → not idle for an hour → skipped, on_consolidate not run.
+        let r = consolidate_agent(&actor, 3600).await.unwrap();
+        assert!(r.skipped);
+        assert!(!ran.load(Ordering::SeqCst));
+
+        // Threshold 0 → idle "long enough" → on_consolidate runs.
+        let r2 = consolidate_agent(&actor, 0).await.unwrap();
+        assert!(!r2.skipped);
+        assert!(ran.load(Ordering::SeqCst));
+
+        actor.stop(None);
+        let _ = h.await;
     }
 }
