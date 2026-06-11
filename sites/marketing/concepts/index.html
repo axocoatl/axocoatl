@@ -140,11 +140,6 @@
           You don't wire Skills to agents. You declare what each Skill
           listens for, and the lattice does the routing.
         </p>
-        <p class="muted">
-          <strong>On the roadmap:</strong> when two agents hold the same
-          Skill, an auction picks the best fit. The selector is built but
-          not yet wired into the lattice — planned, not shipped.
-        </p>
       </div>
     </section>
 
@@ -172,15 +167,19 @@
         <span class="eyebrow">5 · Memory has tiers</span>
         <h2>Hot to cold, local to neural.</h2>
         <p>
-          Four tiers: session (in-process), checkpoint (durable
-          snapshot), long-term (key/value), and a neural Tier 4 backed
-          by an embedded BERT model running through Candle — pure Rust,
-          no ONNX, no C++ runtime. Agents retrieve from whichever tier
-          matches the query's locality.
+          Four tiers, plus checkpointing. Session is the live window. A
+          daily log records every exchange, readable back by date. Core
+          memory is a set of small, agent-editable blocks the agent
+          curates as it learns and renders into its context every turn
+          (the MemGPT model). And semantic recall is a neural tier: an
+          embedded BERT model through Candle (pure Rust, no ONNX, no C++
+          runtime), so retrieval never hits an API.
         </p>
         <p>
-          All four tiers are local-first. None call out unless you tell
-          them to.
+          Checkpointing snapshots state for crash recovery, and while the
+          agent is idle a background pass consolidates durable facts up
+          into the core blocks. All of it local-first. Nothing calls out
+          unless you tell it to.
         </p>
       </div>
     </section>
