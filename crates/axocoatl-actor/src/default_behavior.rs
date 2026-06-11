@@ -21,6 +21,13 @@ pub struct DefaultAgentBehavior {
     tracker: Option<TokenTracker>,
     counter: Arc<dyn TokenCounter>,
     system_prompt: Option<String>,
+    /// The agent's configured model (from the YAML `model` field). Sent as the
+    /// per-request model so a shared provider (OpenAI and OpenAI-compatible
+    /// servers like MLX/oMLX, vLLM, etc.) uses this agent's model instead of
+    /// the provider's hardcoded default. `None` falls back to that default.
+    /// Ollama bakes the model into its per-agent provider, so this is
+    /// redundant-but-harmless there.
+    configured_model: Option<String>,
     session: SessionMemory,
     checkpoint_store: Option<Arc<CheckpointStore>>,
     checkpoint_version: u64,
@@ -93,6 +100,7 @@ impl DefaultAgentBehavior {
             tracker: None,
             counter,
             system_prompt: None,
+            configured_model: None,
             session: SessionMemory::new(),
             checkpoint_store: None,
             checkpoint_version: 0,
@@ -579,7 +587,10 @@ impl DefaultAgentBehavior {
             temperature: None,
             stop_sequences: Vec::new(),
             provider_options: None,
-            model_override,
+            // Per-request override (e.g. Chat tab) wins; otherwise use the
+            // agent's configured model so shared providers don't fall back to
+            // their hardcoded default.
+            model_override: model_override.or_else(|| self.configured_model.clone()),
         }
     }
 
@@ -639,8 +650,11 @@ impl DefaultAgentBehavior {
             .unwrap_or(usize::MAX / 4);
 
         let messages = self.session.as_chat_messages();
-        let summarizer =
-            crate::summarizer::LlmSummarizer::new(self.provider.clone(), self.tracker.clone());
+        let summarizer = crate::summarizer::LlmSummarizer::new(
+            self.provider.clone(),
+            self.tracker.clone(),
+            self.configured_model.clone(),
+        );
         let result = self
             .compression_pipeline
             .as_ref()
@@ -788,6 +802,11 @@ impl AgentBehavior for DefaultAgentBehavior {
 
     async fn on_start(&mut self, config: &AgentConfig) -> Result<(), AgentError> {
         self.system_prompt = config.system_prompt.clone();
+        self.configured_model = if config.model.is_empty() {
+            None
+        } else {
+            Some(config.model.clone())
+        };
         self.agent_id = config.id.to_string();
 
         // Initialize token tracker if budget is configured
@@ -1329,7 +1348,8 @@ impl AgentBehavior for DefaultAgentBehavior {
             temperature: Some(0.0),
             stop_sequences: Vec::new(),
             provider_options: None,
-            model_override: None,
+            // Honor the agent's configured model on OpenAI-compatible servers.
+            model_override: self.configured_model.clone(),
         };
         let response = self
             .provider
@@ -2361,6 +2381,31 @@ mod tests {
         assert!(sys_override.contains("Respond in haiku."));
         assert!(!sys_override.contains("Default prompt."));
         assert!(sys_default.contains("Default prompt."));
+    }
+
+    #[tokio::test]
+    async fn configured_model_flows_into_model_override() {
+        // The agent's configured model is sent as the per-request model so a
+        // shared OpenAI-compatible provider uses it (not the provider default);
+        // an explicit per-request override still wins.
+        let provider = Arc::new(MockLlm::new("ok", 1, 1));
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter());
+        behavior
+            .on_start(&AgentConfig {
+                model: "gemma-local".to_string(),
+                ..AgentConfig::default()
+            })
+            .await
+            .unwrap();
+        behavior.session.append(MessageRole::User, "hi", 1);
+
+        // No per-request override: falls back to the configured model.
+        let req = behavior.build_request_from_session(None, None);
+        assert_eq!(req.model_override.as_deref(), Some("gemma-local"));
+
+        // Per-request override wins.
+        let req = behavior.build_request_from_session(None, Some("override-model".to_string()));
+        assert_eq!(req.model_override.as_deref(), Some("override-model"));
     }
 
     #[tokio::test]

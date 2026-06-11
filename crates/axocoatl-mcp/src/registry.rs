@@ -8,7 +8,15 @@ use crate::error::McpError;
 #[derive(Debug, Clone)]
 pub enum McpTransportType {
     /// Local process via stdin/stdout (rmcp feature: transport-child-process).
-    Stdio { command: String, args: Vec<String> },
+    /// `env` is layered onto the child process's environment — most stdio
+    /// servers take their API key / token this way (e.g. `BRAVE_API_KEY`,
+    /// `GITHUB_PERSONAL_ACCESS_TOKEN`). Without it those servers exit before
+    /// the initialize handshake.
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    },
     /// Remote server via Streamable HTTP (rmcp feature: transport-streamable-http-client-reqwest).
     /// NOTE: SSE was removed in rmcp 0.11.0.
     StreamableHttp {
@@ -76,16 +84,18 @@ impl McpToolRegistry {
         let cached_transport = transport.clone();
 
         match &transport {
-            McpTransportType::Stdio { command, args } => {
+            McpTransportType::Stdio { command, args, env } => {
                 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
                 use rmcp::ServiceExt;
                 use tokio::process::Command;
 
                 let args = args.clone();
+                let env = env.clone();
                 let client = ()
                     .serve(
                         TokioChildProcess::new(Command::new(command).configure(|cmd| {
                             cmd.args(&args);
+                            cmd.envs(&env);
                         }))
                         .map_err(|e| McpError::ConnectionFailed(e.to_string()))?,
                     )
