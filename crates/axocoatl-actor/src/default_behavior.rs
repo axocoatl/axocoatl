@@ -76,7 +76,7 @@ pub struct DefaultAgentBehavior {
     /// Project-scoped instructions composed from `AXOCOATL.md` files found
     /// along the path from the filesystem root down to `working_dir`. Treated
     /// as authoritative team knowledge — shared/versioned in the repo, distinct
-    /// from the personal `long_term_memory` and `semantic_memory` which are
+    /// from the personal `core_memory` and `semantic_memory` which are
     /// per-user.
     project_instructions: Option<String>,
     /// Set by the actor before a streaming execution — receives output chunks
@@ -291,7 +291,7 @@ impl DefaultAgentBehavior {
     /// specific files appear later and can override broader org-wide ones).
     ///
     /// This is the shared/versioned "team knowledge" layer — distinct from
-    /// the per-user `long_term_memory` and `semantic_memory`. A file edit
+    /// the per-user `core_memory` and `semantic_memory`. A file edit
     /// takes effect on the next actor spawn (session reopen).
     pub fn with_project_instructions(mut self, working_dir: &std::path::Path) -> Self {
         let mut chunks: Vec<(std::path::PathBuf, String)> = Vec::new();
@@ -538,7 +538,7 @@ impl DefaultAgentBehavior {
     }
 
     /// Build a ChatRequest from the current session memory.
-    /// Includes system prompt + long-term memory context + full session history.
+    /// Includes system prompt + memory context (core blocks + recalled context) + full session history.
     /// `system_override` replaces the agent's configured system_prompt for
     /// this single call when `Some` — memory context still merges as usual.
     /// `model_override` swaps the model on the configured provider (same
@@ -672,8 +672,7 @@ impl DefaultAgentBehavior {
         self.recall_toc_hint = if self.semantic_memory.is_some() {
             Some(
                 "## Earlier context\nOlder turns in this conversation were summarized above to \
-                 save space; their full detail lives in long-term memory. Use `recall_search` to \
-                 retrieve specifics that aren't in the summary."
+                 save space. Use `recall_search` to retrieve specifics that aren't in the summary."
                     .to_string(),
             )
         } else {

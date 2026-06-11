@@ -1,6 +1,6 @@
 //! Restrictive permissions for at-rest data.
 //!
-//! Checkpoints, transcripts and long-term memory persist conversation content
+//! Checkpoints, daily logs, and the memory stores persist conversation content
 //! and tool I/O verbatim — anything a tool returned or a user pasted (including
 //! secrets) is durably on disk. These helpers keep that data readable only by
 //! the owner: directories `0700`, files `0600`. The umbrella is the `0700` data

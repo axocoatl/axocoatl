@@ -24,7 +24,8 @@ pub struct CompressionResult {
     pub stages_applied: Vec<String>,
     pub tokens_before: usize,
     pub tokens_after: usize,
-    /// Messages archived (moved to long-term memory) during Stage 4.
+    /// Messages evicted from the live context during Stage 4. Their full detail
+    /// stays in the daily log + semantic memory (written per turn), so nothing is lost.
     pub archived_messages: Vec<ChatMessage>,
 }
 
@@ -419,7 +420,7 @@ impl CompressionPipeline {
         // to avoid multi-system-message issues with some APIs)
         let mut result = system_msgs;
         result.push(ChatMessage::user(format!(
-            "[Context note: {} earlier messages have been archived to long-term memory]",
+            "[Context note: {} earlier messages were trimmed from the live context to save space]",
             archived.len()
         )));
         result.extend(non_system);
@@ -544,10 +545,10 @@ mod tests {
 
         let (remaining, archived) = pipeline.stage4_context_collapse(messages);
         assert!(!archived.is_empty());
-        // Remaining should have system + archive marker + recent messages
+        // Remaining should have system + the trim marker + recent messages
         assert!(remaining.iter().any(|m| {
             m.text_content()
-                .map(|t| t.contains("archived"))
+                .map(|t| t.contains("Context note") && t.contains("trimmed"))
                 .unwrap_or(false)
         }));
     }

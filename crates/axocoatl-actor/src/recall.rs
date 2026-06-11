@@ -47,7 +47,7 @@ impl RecallSearchTool {
 #[async_trait]
 impl BuiltinTool for RecallSearchTool {
     fn description(&self) -> &str {
-        "Search your long-term memory (past sessions and earlier in this conversation) for \
+        "Search your memory of past sessions and earlier in this conversation for \
          information related to a query. Use this when the user refers to something you don't \
          see in the current conversation, or before saying you don't know or don't remember."
     }
