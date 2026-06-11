@@ -248,4 +248,24 @@ mod tests {
         assert_eq!(cfg.consolidation.idle_threshold_secs, 30);
         assert_eq!(cfg.consolidation.interval_secs, 600);
     }
+
+    #[test]
+    fn provider_base_url_and_mcp_env_parse() {
+        // OpenAI-compatible servers: base_url on the provider, and stdio MCP
+        // servers carry their env (e.g. an API key) through config.
+        let cfg: AxocoatlConfig = serde_yaml::from_str(
+            "providers:\n  openai:\n    api_key: sk-x\n    base_url: http://127.0.0.1:8000/v1\n\
+             mcp_servers:\n  - name: brave\n    transport: stdio\n    command: npx\n    env:\n      BRAVE_API_KEY: abc123",
+        )
+        .unwrap();
+        let openai = cfg.providers.openai.expect("openai provider");
+        assert_eq!(openai.base_url.as_deref(), Some("http://127.0.0.1:8000/v1"));
+        assert_eq!(
+            cfg.mcp_servers[0]
+                .env
+                .get("BRAVE_API_KEY")
+                .map(String::as_str),
+            Some("abc123")
+        );
+    }
 }

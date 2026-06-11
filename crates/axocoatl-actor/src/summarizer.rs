@@ -19,15 +19,28 @@ use axocoatl_token::{Summarizer, TokenTracker};
 pub struct LlmSummarizer {
     provider: Arc<dyn LlmProvider>,
     tracker: Option<TokenTracker>,
+    /// The agent's configured model, sent as the per-request override so a shared
+    /// OpenAI-compatible provider summarizes with the agent's model instead of the
+    /// provider's hardcoded default. `None` falls back to that default.
+    model: Option<String>,
 }
 
 impl LlmSummarizer {
-    pub fn new(provider: Arc<dyn LlmProvider>, tracker: Option<TokenTracker>) -> Self {
-        Self { provider, tracker }
+    pub fn new(
+        provider: Arc<dyn LlmProvider>,
+        tracker: Option<TokenTracker>,
+        model: Option<String>,
+    ) -> Self {
+        Self {
+            provider,
+            tracker,
+            model,
+        }
     }
 
     async fn summarize(&self, system: &str, user: String) -> Result<String, String> {
-        let request = ChatRequest::with_system(system, user);
+        let mut request = ChatRequest::with_system(system, user);
+        request.model_override = self.model.clone();
         let response = self
             .provider
             .chat(request)
@@ -135,6 +148,7 @@ mod tests {
                 usage: TokenUsageStats::default(),
             }),
             None,
+            None,
         )
     }
 
@@ -213,6 +227,7 @@ mod tests {
                 usage: TokenUsageStats::new(30, 12),
             }),
             Some(tracker.clone()),
+            None,
         );
         s.summarize_tool_result("grep", "lots").await.unwrap();
         assert_eq!(tracker.total_used(), 42);
