@@ -119,6 +119,64 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v0.1.2</span>
+        <span class="release-date">2026-06-11</span>
+        <h2>Coordination and memory.</h2>
+
+        <h3>Added</h3>
+        <ul>
+          <li>Coordinator role: an agent with <code>role: coordinator</code>
+              decomposes a goal into subtasks, assigns each to a worker by a
+              capability and budget auction, runs them in parallel, and
+              synthesizes the result. Symbolic HTN planning when methods are
+              provided, otherwise LLM decomposition. Resumable from the last
+              checkpointed subtask.</li>
+          <li>Agent-editable core memory (the MemGPT model): small blocks the
+              agent curates as it works, rendered into its context every turn.
+              Agent-driven recall (<code>recall_search</code>,
+              <code>recall_timeframe</code>) and a background sleep-time pass
+              that promotes durable facts up into the core blocks.</li>
+          <li>Automatic context compaction: long conversations summarize toward
+              the model window instead of being snipped, so early context
+              survives.</li>
+          <li>OpenAI-compatible servers: point the <code>openai</code> provider
+              at LM Studio, MLX, or vLLM via <code>base_url</code>, with the
+              agent's model sent per request. Stdio MCP servers now receive
+              their env vars.</li>
+        </ul>
+
+        <h3>Changed</h3>
+        <ul>
+          <li>Tier 3 is now agent-editable core memory; the old shared
+              long-term fact store is retired.</li>
+          <li><code>overflow_policy</code> is strictly a spend cap
+              (<code>abort</code> default, or <code>warn</code>); context
+              compaction is automatic and independent of the budget.</li>
+        </ul>
+      </article>
+
+      <article class="release">
+        <span class="release-tag">v0.1.1</span>
+        <span class="release-date">2026-06-09</span>
+        <h2>The cockpit.</h2>
+
+        <h3>Added</h3>
+        <ul>
+          <li>Variants: fan one prompt into N parallel attempts, each a real
+              agent in its own git worktree, and keep the one you like.</li>
+          <li>A conversation-forward session cockpit: an N-surface layout
+              (files, activity, browser, terminal, agent graph) that starts as
+              just the conversation. Agent edits land as change cards; a running
+              dev server lands as a preview card.</li>
+          <li>Unified conversation UI across Chat and Sessions; persisted
+              session transcripts with Retry and Rewind.</li>
+          <li>Git-native sessions: a live Source Control pane (status, diff,
+              commit, discard, branch switch) inside the cockpit.</li>
+          <li>Multi-turn tool-calling verified across all six providers.</li>
+        </ul>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v0.1.0</span>
         <span class="release-date">2026-04-24 · first public release</span>
         <h2>The runtime that runs.</h2>
@@ -147,18 +205,6 @@
           <li>340+ tests passing across the workspace.</li>
         </ul>
 
-        <h3>Roadmap — built, not yet wired in</h3>
-        <ul>
-          <li>HTN symbolic planning — the planner exists in the
-              codebase but is not yet integrated into the runtime.
-              Planned, not shipped.</li>
-          <li>Auction-based agent selection — when several agents hold
-              the same Skill, an auction picks the best fit. Built,
-              not yet wired into the lattice. Planned, not shipped.</li>
-          <li>Lattice-mode directory sessions — single-agent mode is
-              fully wired; lattice mode returns a clear "not yet
-              available" message and is the next fast-follow.</li>
-        </ul>
       </article>
 
     </section>
