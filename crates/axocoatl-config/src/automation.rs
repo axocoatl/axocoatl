@@ -510,7 +510,6 @@ mod tests {
         WorkflowConfigYaml {
             id: id.into(),
             name: id.into(),
-            coordination: "stigmergic_lattice".into(),
             agents: agents.iter().map(|s| s.to_string()).collect(),
             entry_point: agents.first().map(|s| s.to_string()),
             htn_methods_file: None,

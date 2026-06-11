@@ -18,8 +18,6 @@ pub struct AxocoatlConfig {
     #[serde(default)]
     pub sandbox: SandboxConfigYaml,
     #[serde(default)]
-    pub daemon: DaemonConfigYaml,
-    #[serde(default)]
     pub hooks: Vec<HookConfigYaml>,
     #[serde(default)]
     pub skills: Vec<SkillConfigYaml>,
@@ -305,16 +303,10 @@ pub enum MemoryBackendYaml {
 pub struct WorkflowConfigYaml {
     pub id: String,
     pub name: String,
-    #[serde(default = "default_coordination")]
-    pub coordination: String,
     #[serde(default)]
     pub agents: Vec<String>,
     pub entry_point: Option<String>,
     pub htn_methods_file: Option<String>,
-}
-
-fn default_coordination() -> String {
-    "stigmergic_lattice".to_string()
 }
 
 /// MCP server connection config.
@@ -474,28 +466,6 @@ impl Default for SandboxConfigYaml {
 
 fn default_sandbox_network() -> String {
     "bridge".to_string()
-}
-
-/// Daemon configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DaemonConfigYaml {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_heartbeat")]
-    pub heartbeat_interval_secs: u64,
-}
-
-impl Default for DaemonConfigYaml {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            heartbeat_interval_secs: default_heartbeat(),
-        }
-    }
-}
-
-fn default_heartbeat() -> u64 {
-    1800
 }
 
 /// Hook configuration in YAML.

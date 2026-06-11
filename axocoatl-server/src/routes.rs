@@ -480,7 +480,6 @@ pub async fn agent_status(
 pub struct WorkflowInfo {
     pub id: String,
     pub name: String,
-    pub coordination: String,
     pub agents: Vec<String>,
     pub entry_point: Option<String>,
 }
@@ -494,7 +493,6 @@ pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowI
         .map(|w| WorkflowInfo {
             id: w.id.clone(),
             name: w.name.clone(),
-            coordination: w.coordination.clone(),
             agents: w.agents.clone(),
             entry_point: w.entry_point.clone(),
         })
