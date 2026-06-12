@@ -612,6 +612,7 @@ impl AxocoatlDaemon {
                 // its workers checkpointing + memory + hooks, and checkpoint its
                 // own orchestration for resumable runs.
                 let mut coord = CoordinatorBehavior::new(provider, counter.clone())
+                    .with_model(agent_config.model.clone())
                     .with_tool_executor(tool_executor.clone())
                     .with_checkpoint_store(checkpoint_store.clone())
                     .with_shared_blocks(Self::resolve_shared(
@@ -639,6 +640,8 @@ impl AxocoatlDaemon {
                             name: w.name.clone(),
                             system_prompt: w.system_prompt.clone().unwrap_or_default(),
                             tools: w.tools.clone(),
+                            // The declared worker's own configured model.
+                            model: w.model.clone(),
                             token_budget: w
                                 .token_budget
                                 .as_ref()
