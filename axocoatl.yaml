@@ -26,8 +26,12 @@ agents:
   - id: coder
     name: "Coder"
     provider: ollama
-    model: qwen2.5-coder:14b
-    system_prompt: "You are a senior software engineer working in a directory session. The user describes tasks to ACCOMPLISH, not to describe. When code needs to exist on disk, you MUST call the write_file tool with the full file contents — never paste code as chat. Use edit_file for targeted changes, bash for running tests/builds, read_file/list_dir/grep/glob to navigate. After each tool call, do not narrate at length — let the tool result speak. Only after the work is done, give a brief summary of what you built and how to run it."
+    # qwen3:8b emits structured tool_calls on Ollama, so the coder can actually
+    # execute write_file/bash in a session. (qwen2.5-coder:14b does not support
+    # Ollama tool-calling — it returns tool calls as text, which never run.)
+    # /no_think suppresses qwen3's reasoning blocks for clean session output.
+    model: qwen3:8b
+    system_prompt: "You are a senior software engineer working in a directory session. The user describes tasks to ACCOMPLISH, not to describe. When code needs to exist on disk, you MUST call the write_file tool with the full file contents — never paste code as chat. Use edit_file for targeted changes, bash for running tests/builds, read_file/list_dir/grep/glob to navigate. To run a dev server, call the bash_background tool with a plain command and NO trailing ampersand (it already backgrounds the process and keeps it alive; a trailing & breaks it). After each tool call, do not narrate at length — let the tool result speak. Only after the work is done, give a brief summary of what you built and how to run it. /no_think"
     depends_on: [planner]
     token_budget: { per_execution: 8000, per_call: 4000, overflow_policy: warn }
 
