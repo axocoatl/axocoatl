@@ -462,6 +462,22 @@ impl BuiltinTool for BashTool {
 
 // ── bash_background ─────────────────────────────────────────────────────
 
+/// `bash_background` already runs its command in the background (see
+/// `SessionSandbox::spawn_background`), so a trailing `&` double-backgrounds it:
+/// the wrapper shell forks the process, then exits and SIGHUPs it. For a dev
+/// server that means it dies on startup and leaves its port stuck (`Errno 98`
+/// on the next bind). Models reach for `&` by reflex, so strip a single trailing
+/// `&`. `&&` (logical-and) and a mid-command `&` are left untouched. Returns the
+/// cleaned command and whether anything was stripped.
+fn strip_trailing_ampersand(command: &str) -> (String, bool) {
+    let trimmed = command.trim_end();
+    if trimmed.ends_with('&') && !trimmed.ends_with("&&") {
+        (trimmed[..trimmed.len() - 1].trim_end().to_string(), true)
+    } else {
+        (trimmed.to_string(), false)
+    }
+}
+
 pub struct BashBackgroundTool {
     sandbox: Arc<SessionSandbox>,
 }
@@ -483,13 +499,22 @@ impl BuiltinTool for BashBackgroundTool {
         })
     }
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let command = str_arg(&args, "command", "bash_background")?;
+        let raw = str_arg(&args, "command", "bash_background")?;
+        let (command, stripped) = strip_trailing_ampersand(raw);
         // Root at the sandbox dir (the worktree, for a variant sandbox).
         let root = self.sandbox.root().to_string_lossy();
         let task_id = self
             .sandbox
             .spawn_background(&format!("cd '{root}' && {command}"));
-        Ok(serde_json::json!({ "task_id": task_id, "started": true }))
+        let mut out = serde_json::json!({ "task_id": task_id, "started": true });
+        if stripped {
+            out["note"] = serde_json::Value::String(
+                "Dropped a trailing '&' — bash_background already backgrounds the \
+                 command and keeps it alive."
+                    .to_string(),
+            );
+        }
+        Ok(out)
     }
 }
 
@@ -682,7 +707,7 @@ impl BuiltinTool for KillTerminalTool {
 
 #[cfg(test)]
 mod tests {
-    use super::{confine, lexical_normalize};
+    use super::{confine, lexical_normalize, strip_trailing_ampersand};
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -724,6 +749,35 @@ mod tests {
         assert_eq!(
             confine(root, "src/main.rs", "read_file").unwrap(),
             "src/main.rs"
+        );
+    }
+
+    #[test]
+    fn strip_trailing_ampersand_drops_redundant_background() {
+        // The reflexive `&` an agent adds — bash_background already backgrounds.
+        assert_eq!(
+            strip_trailing_ampersand("python3 -m http.server 8000 &"),
+            ("python3 -m http.server 8000".to_string(), true)
+        );
+        // Trailing whitespace after the `&`.
+        assert_eq!(
+            strip_trailing_ampersand("npm run dev &   "),
+            ("npm run dev".to_string(), true)
+        );
+        // No trailing `&` — left as-is.
+        assert_eq!(
+            strip_trailing_ampersand("npm run dev"),
+            ("npm run dev".to_string(), false)
+        );
+        // `&&` (logical-and) must not be touched.
+        assert_eq!(
+            strip_trailing_ampersand("make && ./serve"),
+            ("make && ./serve".to_string(), false)
+        );
+        // A mid-command `&` (job control) is left alone.
+        assert_eq!(
+            strip_trailing_ampersand("a & b"),
+            ("a & b".to_string(), false)
         );
     }
 }

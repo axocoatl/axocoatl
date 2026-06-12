@@ -284,6 +284,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             functions, types, imports, and module organization."
                 .to_string(),
             tools: vec!["read_file".to_string(), "list_directory".to_string()],
+            model: "mock-worker-v1".to_string(),
             token_budget: 50_000,
             recall: axocoatl_core::RecallConfig::default(),
         })
@@ -294,6 +295,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             complexity issues, and potential runtime errors."
                 .to_string(),
             tools: vec!["ast_parse".to_string(), "complexity_check".to_string()],
+            model: "mock-worker-v1".to_string(),
             token_budget: 50_000,
             recall: axocoatl_core::RecallConfig::default(),
         })
@@ -304,6 +306,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Format all findings into a clear review report."
                 .to_string(),
             tools: vec!["lint_check".to_string()],
+            model: "mock-worker-v1".to_string(),
             token_budget: 50_000,
             recall: axocoatl_core::RecallConfig::default(),
         });

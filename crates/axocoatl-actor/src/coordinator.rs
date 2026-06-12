@@ -57,6 +57,10 @@ pub struct WorkerConfig {
     pub name: String,
     pub system_prompt: String,
     pub tools: Vec<String>,
+    /// The model this worker runs on (e.g. `llama3.2`). Without it a worker would
+    /// inherit `AgentConfig::default()`'s `gpt-4o`, which 404s on a local-only
+    /// (Ollama) provider — and local-first is the coordinator's whole point.
+    pub model: String,
     /// The worker's token budget, used as the budget signal in the auction.
     pub token_budget: usize,
     /// Recall tuning for this worker (passive injection + recall-tool defaults).
@@ -120,6 +124,10 @@ pub struct CoordinatorBehavior {
     tool_executor: Option<Arc<ToolExecutor>>,
     system_prompt: Option<String>,
     agent_id: String,
+    /// The coordinator's own model, inherited by ad-hoc workers (those spawned
+    /// when no pooled worker bids) so they run on the same provider/model rather
+    /// than the `gpt-4o` default, which fails on a local Ollama setup.
+    model: String,
 
     /// Configurations for worker agents this coordinator can spawn.
     worker_configs: Vec<WorkerConfig>,
@@ -162,6 +170,7 @@ impl CoordinatorBehavior {
             tool_executor: None,
             system_prompt: None,
             agent_id: String::new(),
+            model: String::new(),
             worker_configs: Vec::new(),
             active_workers: HashMap::new(),
             worker_handles: Vec::new(),
@@ -206,6 +215,13 @@ impl CoordinatorBehavior {
         self
     }
 
+    /// Set the coordinator's own model. Ad-hoc workers inherit it so they run on
+    /// the coordinator's provider/model instead of the `gpt-4o` default.
+    pub fn with_model(mut self, model: String) -> Self {
+        self.model = model;
+        self
+    }
+
     /// Add a worker configuration. Workers with these configs can be spawned on demand.
     pub fn add_worker_config(mut self, config: WorkerConfig) -> Self {
         self.worker_configs.push(config);
@@ -224,6 +240,9 @@ impl CoordinatorBehavior {
         let agent_config = AgentConfig {
             id: config.id.clone(),
             name: config.name.clone(),
+            // The worker's own model — without this it would fall back to
+            // `AgentConfig::default()`'s `gpt-4o`, which 404s on a local provider.
+            model: config.model.clone(),
             system_prompt: Some(config.system_prompt.clone()),
             tools: config.tools.clone(),
             // Carry the worker's recall tuning so its `on_start` configures the
@@ -590,6 +609,7 @@ impl CoordinatorBehavior {
             .collect();
         let mut available = self.worker_configs.clone();
         let coord_id = self.agent_id.clone();
+        let coord_model = self.model.clone();
         let mut assignments: Vec<(usize, AgentId)> = Vec::new();
 
         for &idx in &pending {
@@ -603,6 +623,9 @@ impl CoordinatorBehavior {
                 name: format!("Worker {idx}"),
                 system_prompt: format!("You are a worker agent. Your task: {}", item.description),
                 tools: required_tools.clone(),
+                // Inherit the coordinator's model so an ad-hoc worker runs on the
+                // same (local) provider rather than the `gpt-4o` default.
+                model: coord_model.clone(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             };
@@ -893,6 +916,7 @@ mod tests {
                 name: "W1".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             })
@@ -901,6 +925,7 @@ mod tests {
                 name: "W2".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             });
@@ -946,6 +971,7 @@ mod tests {
                 name: "H1".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             })
@@ -954,6 +980,7 @@ mod tests {
                 name: "H2".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             })
@@ -962,6 +989,7 @@ mod tests {
                 name: "H3".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             });
@@ -1019,6 +1047,7 @@ mod tests {
                 name: id.to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             });
@@ -1055,6 +1084,7 @@ mod tests {
                 name: "Generalist".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             })
@@ -1063,6 +1093,7 @@ mod tests {
                 name: "Specialist".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec!["special".to_string()],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             });
@@ -1087,6 +1118,7 @@ mod tests {
                 name: "A".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             })
@@ -1095,6 +1127,7 @@ mod tests {
                 name: "B".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             });
@@ -1137,6 +1170,7 @@ mod tests {
                 name: "F1".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             })
@@ -1145,6 +1179,7 @@ mod tests {
                 name: "F2".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             });
@@ -1202,6 +1237,7 @@ mod tests {
                 name: "RW1".to_string(),
                 system_prompt: "worker".to_string(),
                 tools: vec![],
+                model: "test-model".to_string(),
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             });

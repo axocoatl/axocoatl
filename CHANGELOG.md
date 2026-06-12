@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Coordinator workers now run on a configured model instead of `gpt-4o`.**
+  Spawned workers inherited `AgentConfig::default()`'s `gpt-4o`, so on a
+  local-only (Ollama) provider every worker returned `404 model 'gpt-4o' not
+  found` and the coordinator could never synthesize. `WorkerConfig` now carries a
+  model: declared workers use their own configured model, and ad-hoc workers
+  (spawned when no pooled worker bids) inherit the coordinator's.
+- **`bash_background` no longer kills the dev server it's asked to start.** A
+  trailing `&` double-backgrounds the command (the tool already backgrounds it),
+  so the wrapper shell exits and SIGHUPs the process — a dev server dies on
+  startup and leaves its port stuck (`Errno 98` on the next bind). The tool now
+  strips a single trailing `&` (leaving `&&` and a mid-command `&` untouched).
+- **Demo config (`axocoatl.yaml`): the `coder` agent now uses `qwen3:8b`.**
+  `qwen2.5-coder:14b` does not support tool-calling through Ollama — it returns
+  tool calls as text content rather than structured calls, so a coder session
+  never executed them and could not write files or run commands. `qwen3:8b` emits
+  structured `tool_calls`; `/no_think` suppresses its reasoning blocks for clean
+  session output.
+
 ## [0.1.2] — 2026-06-11
 
 ### Added
