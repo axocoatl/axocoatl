@@ -119,6 +119,33 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v0.1.3</span>
+        <span class="release-date">2026-06-11</span>
+        <h2>Local-first fixes.</h2>
+
+        <h3>Fixed</h3>
+        <ul>
+          <li>Coordinator workers now run on a configured model instead of
+              <code>gpt-4o</code>. Spawned workers inherited the
+              <code>gpt-4o</code> default, so on a local-only Ollama provider
+              every worker returned a 404 and the coordinator could never
+              synthesize. Declared workers now use their own model; ad-hoc
+              workers inherit the coordinator's.</li>
+          <li><code>bash_background</code> no longer kills the dev server it is
+              asked to start. A trailing <code>&amp;</code> double-backgrounded
+              the command and SIGHUP'd it on shell exit, leaving the port stuck.
+              The tool now strips a single trailing <code>&amp;</code> (leaving
+              <code>&amp;&amp;</code> and a mid-command <code>&amp;</code>
+              untouched).</li>
+          <li>The demo config's <code>coder</code> agent moved to
+              <code>qwen3:8b</code>. <code>qwen2.5-coder:14b</code> returns tool
+              calls as text through Ollama rather than structured calls, so a
+              coder session could not execute them; <code>qwen3:8b</code> emits
+              structured <code>tool_calls</code>.</li>
+        </ul>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v0.1.2</span>
         <span class="release-date">2026-06-11</span>
         <h2>Coordination and memory.</h2>
@@ -183,10 +210,10 @@
 
         <h3>Added</h3>
         <ul>
-          <li>Stigmergic multi-agent coordination via EventLattice —
+          <li>Stigmergic multi-agent coordination via EventLattice:
               agents activate themselves off accumulated signals, with
               no central orchestrator.</li>
-          <li>Workflow execution — CLI, HTTP, and IPC paths. Entry
+          <li>Workflow execution: CLI, HTTP, and IPC paths. Entry
               agents activate directly; downstream agents cascade via
               <code>TaskCompleted</code> events.</li>
           <li>Per-agent token budgets, four-tier persistent memory

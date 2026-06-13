@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Axocoatl — open-source agentic runtime in Rust</title>
-  <meta name="description" content="Axocoatl is an open-source agentic runtime in Rust — persistent, supervised agents that survive crashes, stay on budget, and run on your own hardware.">
+  <meta name="description" content="An open-source Rust runtime for agents that self-coordinate, remember across runs, survive crashes, and run entirely on your own hardware.">
   <meta name="author" content="Axocoatl Contributors">
   <meta name="theme-color" content="#3E7C5C">
   <link rel="canonical" href="https://axocoatl.ai/">
@@ -14,7 +14,7 @@
   <meta property="og:locale" content="en_US">
   <meta property="og:url" content="https://axocoatl.ai/">
   <meta property="og:title" content="Axocoatl — open-source agentic runtime in Rust">
-  <meta property="og:description" content="Axocoatl is an open-source agentic runtime in Rust — persistent, supervised agents that survive crashes, stay on budget, and run on your own hardware.">
+  <meta property="og:description" content="An open-source Rust runtime for agents that self-coordinate, remember across runs, survive crashes, and run entirely on your own hardware.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -23,7 +23,7 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:site" content="@axocoatl">
   <meta name="twitter:title" content="Axocoatl — open-source agentic runtime in Rust">
-  <meta name="twitter:description" content="Axocoatl is an open-source agentic runtime in Rust — persistent, supervised agents that survive crashes, stay on budget, and run on your own hardware.">
+  <meta name="twitter:description" content="An open-source Rust runtime for agents that self-coordinate, remember across runs, survive crashes, and run entirely on your own hardware.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta name="twitter:image:alt" content="Axocoatl — open-source agentic runtime in Rust">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
@@ -74,7 +74,7 @@
         "@id": "https://axocoatl.ai/#website",
         "url": "https://axocoatl.ai/",
         "name": "Axocoatl",
-        "description": "Axocoatl is an open-source agentic runtime in Rust — persistent, supervised agents that survive crashes, stay on budget, and run on your own hardware.",
+        "description": "An open-source Rust runtime for agents that self-coordinate, remember across runs, survive crashes, and run entirely on your own hardware.",
         "publisher": { "@id": "https://axocoatl.ai/#organization" },
         "inLanguage": "en-US"
       },
@@ -84,7 +84,7 @@
         "name": "Axocoatl",
         "url": "https://axocoatl.ai/",
         "downloadUrl": "https://axocoatl.ai/install",
-        "softwareVersion": "0.1.2",
+        "softwareVersion": "0.1.3",
         "applicationCategory": "DeveloperApplication",
         "applicationSubCategory": "AI agent runtime",
         "operatingSystem": "Linux, macOS",
@@ -119,14 +119,13 @@
     <section class="container hero">
       <span class="hero-tagline">
         <span class="hero-tagline-dot"></span>
-        v0.1.2 · Rust · Apache-2.0
+        v0.1.3 · Rust · Apache-2.0
       </span>
       <h1>Real workflows.<br>No theater.</h1>
       <p class="lede">
-        Axocoatl is an open-source agentic runtime, written in Rust.
-        Agents that run, supervise themselves, persist their state, and
-        finish what you start. One 25 MB Rust binary. Your hardware.
-        Your LLM. Your data.
+        Agents that coordinate without an orchestrator, remember across
+        runs, and never leave your machine. An open-source Rust runtime:
+        one 25 MB binary, your hardware, your model, your data.
       </p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="/install">Install →</a>
@@ -136,11 +135,11 @@
       <div style="margin-top: var(--s-6);">
         <video src="/assets/lattice.mp4" autoplay loop muted playsinline preload="metadata"
           style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
-          aria-label="The Axocoatl lattice — agents coordinating as a live graph"></video>
+          aria-label="The Axocoatl lattice: agents coordinating as a live graph"></video>
       </div>
 
       <div class="trust-row" style="margin-top: var(--s-6);">
-        <span>340+ tests</span>
+        <span>430+ tests</span>
         <span>25 MB binary</span>
         <span>Zero telemetry</span>
         <span>Ollama · OpenAI · Anthropic · Mistral · Gemini</span>
@@ -155,31 +154,31 @@
         <h2>A runtime, not a framework.</h2>
         <p class="muted">
           Most agent tooling optimizes for the aesthetic of AI work. We
-          optimize for the unglamorous reality — the work that ships.
+          optimize for the unglamorous reality: the work that ships.
         </p>
       </div>
       <div class="pillars">
-        <ax-pillar glyph="◉">
-          <h3>Built for production</h3>
+        <ax-pillar glyph="⌬">
+          <h3>Coordinates itself</h3>
           <p>
-            Actor-supervised, checkpointed, sandboxed. Survives restarts.
-            Runs as a system service. Never asks you to keep your laptop
-            awake.
+            Agents self-activate on a stigmergic event lattice. A finished
+            agent's signal pushes the next one past its threshold. No central
+            orchestrator handing out tasks.
+          </p>
+        </ax-pillar>
+        <ax-pillar glyph="◈">
+          <h3>Actually remembers</h3>
+          <p>
+            Four memory tiers and agent-editable core memory, with on-device
+            recall. Checkpointed, so a crash resumes from the last step instead
+            of starting over.
           </p>
         </ax-pillar>
         <ax-pillar glyph="◇">
           <h3>Yours by default</h3>
           <p>
-            Your hardware, your LLM, your data. Air-gappable. The only
-            network call is the one you wired.
-          </p>
-        </ax-pillar>
-        <ax-pillar glyph="⌬">
-          <h3>Real workflows, not chat</h3>
-          <p>
-            A stigmergic event lattice cascades work between agents
-            automatically. Schedules, proactive triggers, multi-step
-            automations. Not "ask the chatbot and hope."
+            Your hardware, your model, your data. Zero telemetry, air-gappable,
+            one binary. The only network call is the one you wired.
           </p>
         </ax-pillar>
       </div>
@@ -281,7 +280,7 @@
         <h2>Build with your agents.</h2>
         <p class="muted">
           The Sessions cockpit is where the work happens. Pick a
-          directory, pick an agent — or a whole lattice — and watch
+          directory, pick an agent (or a whole lattice) and watch
           them operate inside a sandboxed copy of your folder. Reading,
           writing, running commands, with every action streaming into
           the dashboard. Real products get built here: SaaS,
@@ -292,7 +291,7 @@
 
       <video src="/assets/session.mp4" autoplay loop muted playsinline preload="metadata"
         style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
-        aria-label="The Axocoatl Sessions cockpit — an agent building in a sandboxed folder"></video>
+        aria-label="The Axocoatl Sessions cockpit: an agent building in a sandboxed folder"></video>
 
       <div class="pillars" style="margin-top: var(--s-7);">
         <ax-pillar glyph="▣">
@@ -300,7 +299,7 @@
           <p>
             Every session runs inside a podman container bind-mounted
             to your folder. The agent sees your code, you see every
-            file it touches. Close the laptop, open it tomorrow —
+            file it touches. Close the laptop, open it tomorrow. The
             session resumes from the last checkpoint.
           </p>
         </ax-pillar>
@@ -325,15 +324,73 @@
       </div>
     </section>
 
+    <!-- ─────────────── See it work · the four clips ─────────────── -->
+    <section class="container section">
+      <div class="section-head">
+        <span class="eyebrow">See it work</span>
+        <h2>Four capabilities, no slides.</h2>
+        <p class="muted">
+          Short clips from the running product: the coordinator building a
+          team to fit a goal, memory that survives a brand-new conversation,
+          a crash that resumes from its checkpoint, and the network trace
+          that shows nothing leaves your machine.
+        </p>
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap:var(--s-6); margin-top:var(--s-6);">
+
+        <figure style="margin:0;">
+          <video src="/assets/demos/coordinator.mp4" autoplay loop muted playsinline preload="metadata"
+            style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
+            aria-label="A coordinator decomposes a goal into subtasks, auctions each to the best-suited worker, runs them in parallel, and synthesizes the result"></video>
+          <figcaption class="muted small" style="margin-top:var(--s-3); line-height:1.6;">
+            <strong>Give it a goal.</strong> One agent plans it, builds a team
+            to fit, and runs them in parallel. No orchestration code.
+          </figcaption>
+        </figure>
+
+        <figure style="margin:0;">
+          <video src="/assets/demos/memory.mp4" autoplay loop muted playsinline preload="metadata"
+            style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
+            aria-label="An agent stores a preference to its core memory, then recalls it in a separate conversation"></video>
+          <figcaption class="muted small" style="margin-top:var(--s-3); line-height:1.6;">
+            <strong>Tell it once.</strong> Store a preference, open a new
+            conversation, and it still knows. Memory that persists across runs.
+          </figcaption>
+        </figure>
+
+        <figure style="margin:0;">
+          <video src="/assets/demos/crash-restart.mp4" autoplay loop muted playsinline preload="metadata"
+            style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
+            aria-label="The daemon is killed mid-run; on restart it resumes from its checkpoint and skips the subtask it had already finished"></video>
+          <figcaption class="muted small" style="margin-top:var(--s-3); line-height:1.6;">
+            <strong>Crash it mid-run.</strong> On restart it resumes from its
+            last checkpoint and never repeats finished work.
+          </figcaption>
+        </figure>
+
+        <figure style="margin:0;">
+          <video src="/assets/demos/no-phone-home.mp4" autoplay loop muted playsinline preload="metadata"
+            style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
+            aria-label="A live lsof of the running daemon shows every socket is 127.0.0.1, with zero external connections"></video>
+          <figcaption class="muted small" style="margin-top:var(--s-3); line-height:1.6;">
+            <strong>Nothing phones home.</strong> Every socket is 127.0.0.1;
+            the only outbound call is your local model. Zero telemetry.
+          </figcaption>
+        </figure>
+
+      </div>
+    </section>
+
     <!-- ─────────────── Install ─────────────── -->
     <section class="container section">
       <div class="section-head">
         <span class="eyebrow">Install</span>
         <h2>One binary. Sixty seconds.</h2>
         <p class="muted">
-          Prebuilt for Linux and macOS, x86_64 and aarch64. The script
-          verifies a SHA-256 checksum before installing anywhere on your
-          PATH.
+          Prebuilt binaries for macOS (Apple Silicon and Intel) and Linux
+          (x86_64). The script verifies a SHA-256 checksum before installing
+          anywhere on your PATH.
         </p>
       </div>
       <ax-cli-snippet>curl -fsSL https://axocoatl.ai/install.sh | sh</ax-cli-snippet>
@@ -352,7 +409,7 @@
         <p class="muted">
           These are real workflows running on the platform today,
           rendered as they look inside the dashboard's Automations
-          tab. The recurring work that adds up to a margin — not the
+          tab. The recurring work that adds up to a margin, not the
           work that makes a video.
         </p>
       </div>

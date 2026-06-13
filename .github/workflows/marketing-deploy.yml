@@ -26,6 +26,12 @@ jobs:
           chmod +x sites/marketing/scripts/sync-assets.sh
           sites/marketing/scripts/sync-assets.sh
 
+      # The homepage tells people to `curl https://axocoatl.ai/install.sh | sh`.
+      # Stage the canonical installer at the web root so that URL resolves
+      # (single source of truth — scripts/install.sh).
+      - name: Stage the installer at the web root
+        run: cp scripts/install.sh sites/marketing/install.sh
+
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:

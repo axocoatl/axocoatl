@@ -86,6 +86,27 @@ axocoatl workflow run research-and-summarize -i "What is photosynthesis?"
 
 ---
 
+## See it work
+
+**Give it a goal — it builds the team.** A coordinator agent decomposes the goal
+into subtasks, spawns a worker to fit each one, and runs them in parallel. No
+orchestration code, no glue.
+
+<p align="center"><img src="docs/img/coordinator.gif" alt="A coordinator agent decomposes a goal into five subtasks and spawns a worker for each, running in parallel" width="760"></p>
+
+**Tell it once — it remembers.** Store a preference, open a brand-new
+conversation, and it still knows. Agent-editable core memory that persists
+across runs.
+
+<p align="center"><img src="docs/img/memory.gif" alt="An agent stores a preference to core memory, then recalls it in a separate conversation" width="760"></p>
+
+**It never phones home.** Every socket the daemon opens is `127.0.0.1`; the only
+outbound call is your local model. Zero telemetry, zero external connections.
+
+<p align="center"><img src="docs/img/no-phone-home.gif" alt="A live lsof of the running daemon shows every socket is 127.0.0.1, with zero external connections" width="760"></p>
+
+---
+
 ## Core concepts
 
 - **Agents** — persistent `ractor` actors with a provider, tools, 4-tier
@@ -161,7 +182,7 @@ Runnable, mock-LLM (no keys needed) — see [`examples/`](examples/):
 git clone https://github.com/axocoatl/axocoatl
 cd axocoatl
 cargo build --release          # binary: target/release/axocoatl
-cargo test --workspace         # 340+ tests
+cargo test --workspace         # 420+ tests
 ```
 
 ## License
