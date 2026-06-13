@@ -245,6 +245,9 @@ pub struct AgentInfo {
     pub model: String,
     pub depends_on: Vec<String>,
     pub team: String,
+    /// "autonomous" | "coordinator" | "worker" — lets the UI mark coordinators
+    /// (which own a Layer-2 run view) distinctly.
+    pub role: String,
     pub system_prompt: Option<String>,
     pub per_call_budget: Option<usize>,
     pub per_execution_budget: Option<usize>,
@@ -276,6 +279,7 @@ pub async fn list_agents(State(state): State<AppState>) -> Json<Vec<AgentInfo>> 
             model: a.model.clone(),
             depends_on: a.depends_on.clone(),
             team: team_of(&a.id).to_string(),
+            role: format!("{:?}", a.role).to_lowercase(),
             system_prompt: a.system_prompt.clone(),
             per_call_budget: a.token_budget.as_ref().map(|b| b.per_call),
             per_execution_budget: a.token_budget.as_ref().map(|b| b.per_execution),

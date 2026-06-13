@@ -110,6 +110,38 @@ enum OrchestrationOutcome {
     Failed { error: String },
 }
 
+/// A subtask as reported to an observer: what it is, which worker won the
+/// capability+budget auction, and the runner-up bids. Plain data so the actor
+/// crate stays decoupled from the daemon's wire types.
+#[derive(Debug, Clone, Default)]
+pub struct ReportedSubtask {
+    pub name: String,
+    pub description: String,
+    pub winner: String,
+    pub score: f32,
+    pub adhoc: bool,
+    pub bids: Vec<ReportedBid>,
+}
+
+/// One worker's bid on a subtask.
+#[derive(Debug, Clone, Default)]
+pub struct ReportedBid {
+    pub worker: String,
+    pub score: f32,
+}
+
+/// Observer of a coordinator's run, so a UI can render Layer-2 progress. The
+/// daemon implements this and forwards to the dashboard stream. Every method
+/// takes the run id (`workflow`) — one coordinator can run many workflows.
+pub trait CoordinatorReporter: Send + Sync {
+    /// The decomposition + auction outcome, emitted once before the workers run.
+    fn plan(&self, workflow: &str, coordinator: &str, goal: &str, subtasks: &[ReportedSubtask]);
+    /// A worker began its subtask.
+    fn worker_started(&self, workflow: &str, worker: &str);
+    /// A worker finished — its output and token count.
+    fn worker_done(&self, workflow: &str, worker: &str, output: &str, tokens: u64);
+}
+
 /// Coordinator behavior — manages a pool of worker agents.
 ///
 /// The coordinator:
@@ -159,6 +191,9 @@ pub struct CoordinatorBehavior {
     /// Orchestration state restored from a checkpoint in `on_start`; consumed by
     /// the next run if its goal matches (resume), else discarded (fresh run).
     resumed_state: Option<OrchestrationState>,
+    /// Optional observer of run progress (decompose, auction, workers). The
+    /// daemon sets this to forward Layer-2 progress to the dashboard stream.
+    reporter: Option<Arc<dyn CoordinatorReporter>>,
 }
 
 impl CoordinatorBehavior {
@@ -183,11 +218,18 @@ impl CoordinatorBehavior {
             data_dir: None,
             checkpoint_version: 0,
             resumed_state: None,
+            reporter: None,
         }
     }
 
     pub fn with_tool_executor(mut self, executor: Arc<ToolExecutor>) -> Self {
         self.tool_executor = Some(executor);
+        self
+    }
+
+    /// Attach a run-progress observer (the daemon forwards it to the dashboard).
+    pub fn with_reporter(mut self, reporter: Arc<dyn CoordinatorReporter>) -> Self {
+        self.reporter = Some(reporter);
         self
     }
 
@@ -555,8 +597,16 @@ impl CoordinatorBehavior {
         self.run_seq += 1;
         self.worker_results.clear();
 
-        // The original goal — passed to synthesis so the model answers the
-        // actual request, not just a pile of worker outputs.
+        // The run id (from the activation context) scopes the progress events so
+        // the dashboard associates them with this workflow run; the original goal
+        // goes to synthesis.
+        let workflow_id = input
+            .context
+            .as_ref()
+            .and_then(|c| c.get("workflow_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| self.agent_id.clone());
         let goal = input.content;
 
         // 1. Build the work list: resume an incomplete checkpointed run for the
@@ -611,6 +661,9 @@ impl CoordinatorBehavior {
         let coord_id = self.agent_id.clone();
         let coord_model = self.model.clone();
         let mut assignments: Vec<(usize, AgentId)> = Vec::new();
+        // The auction outcome per subtask, reported to observers (the dashboard
+        // run view) once the whole plan is assigned.
+        let mut plan: Vec<ReportedSubtask> = Vec::new();
 
         for &idx in &pending {
             let item = &items[idx];
@@ -629,7 +682,10 @@ impl CoordinatorBehavior {
                 token_budget: DEFAULT_WORKER_BUDGET,
                 recall: axocoatl_core::RecallConfig::default(),
             };
+            let mut reported_bids: Vec<ReportedBid> = Vec::new();
+            let mut adhoc = false;
             let worker_config = if available.is_empty() {
+                adhoc = true;
                 make_adhoc()
             } else {
                 let bids: Vec<AgentBid> = available
@@ -643,6 +699,13 @@ impl CoordinatorBehavior {
                         compute_bid(&ac, required_tools, 0, wc.token_budget)
                     })
                     .collect();
+                reported_bids = bids
+                    .iter()
+                    .map(|b| ReportedBid {
+                        worker: b.agent_id.to_string(),
+                        score: b.score,
+                    })
+                    .collect();
                 match run_auction(bids).and_then(|id| available.iter().position(|w| w.id == id)) {
                     Some(pos) => available.remove(pos),
                     None => {
@@ -651,17 +714,41 @@ impl CoordinatorBehavior {
                             tools = ?required_tools,
                             "No worker bid for subtask; spawning an ad-hoc worker with the required tools"
                         );
+                        adhoc = true;
                         make_adhoc()
                     }
                 }
             };
             let worker_id = self.spawn_worker(&worker_config).await?;
+            let wid_str = worker_id.to_string();
+            let score = reported_bids
+                .iter()
+                .find(|b| b.worker == wid_str)
+                .map(|b| b.score)
+                .unwrap_or(0.0);
+            plan.push(ReportedSubtask {
+                name: item.name.clone(),
+                description: item.description.clone(),
+                winner: wid_str,
+                score,
+                adhoc,
+                bids: reported_bids,
+            });
             assignments.push((idx, worker_id));
+        }
+
+        // Report the decomposition + auction outcome before the workers run, so
+        // the dashboard can render the Layer-2 plan (goal → subtasks → winners).
+        if let Some(reporter) = &self.reporter {
+            reporter.plan(&workflow_id, &coord_id, &goal, &plan);
         }
 
         // 3. Delegate the pending subtasks to workers IN PARALLEL.
         let mut join_set = tokio::task::JoinSet::new();
         for (idx, worker_id) in assignments {
+            if let Some(reporter) = &self.reporter {
+                reporter.worker_started(&workflow_id, &worker_id.to_string());
+            }
             let actor = self.active_workers.get(&worker_id).cloned();
             let desc = items[idx].description.clone();
             let name = items[idx].name.clone();
@@ -685,6 +772,14 @@ impl CoordinatorBehavior {
             match join_result {
                 Ok((idx, name, worker_id, Ok(output))) => {
                     total_usage.merge(&output.token_usage);
+                    if let Some(reporter) = &self.reporter {
+                        reporter.worker_done(
+                            &workflow_id,
+                            &worker_id.to_string(),
+                            &output.content,
+                            output.token_usage.total() as u64,
+                        );
+                    }
                     items[idx].outcome = Some(OrchestrationOutcome::Succeeded {
                         content: output.content.clone(),
                     });
@@ -696,6 +791,9 @@ impl CoordinatorBehavior {
                 }
                 Ok((idx, name, worker_id, Err(e))) => {
                     tracing::warn!(worker = %worker_id, task = %name, error = %e, "Worker task failed");
+                    if let Some(reporter) = &self.reporter {
+                        reporter.worker_done(&workflow_id, &worker_id.to_string(), &e, 0);
+                    }
                     items[idx].outcome = Some(OrchestrationOutcome::Failed { error: e.clone() });
                     self.worker_results.push(WorkerResult {
                         worker_id,
