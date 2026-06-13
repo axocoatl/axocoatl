@@ -60,6 +60,15 @@ pub enum StreamFrame {
     },
     /// A workflow run failed.
     WorkflowError { workflow: String, error: String },
+    /// A coordinator's plan for a run (Layer 2): the subtasks it decomposed the
+    /// goal into and, for each, the capability+budget auction outcome. Emitted
+    /// once, right after decompose + auction, before the workers run.
+    CoordinatorPlan {
+        workflow: String,
+        coordinator: String,
+        goal: String,
+        subtasks: Vec<PlanSubtask>,
+    },
     /// A directory-session run started.
     SessionStart { session: String },
     /// A directory-session run finished.
@@ -94,6 +103,26 @@ pub enum StreamFrame {
     },
 }
 
+/// One planned subtask in a coordinator run: what it is, which worker won the
+/// capability+budget auction (with the runner-up bids), and whether it fell
+/// back to an ad-hoc worker because no declared worker bid.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct PlanSubtask {
+    pub name: String,
+    pub description: String,
+    pub winner: String,
+    pub score: f32,
+    pub adhoc: bool,
+    pub bids: Vec<PlanBid>,
+}
+
+/// One worker's bid on a subtask in the capability+budget auction.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct PlanBid {
+    pub worker: String,
+    pub score: f32,
+}
+
 /// Live state of one agent within an in-flight run.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct RunAgent {
@@ -115,6 +144,15 @@ pub struct RunState {
     #[serde(default)]
     pub kind: String,
     pub agents: Vec<RunAgent>,
+    /// Set when this run is a coordinator run — the coordinator agent id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinator: Option<String>,
+    /// The coordinator's goal (the run's input).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub goal: String,
+    /// The coordinator's decomposed subtasks + auction outcomes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtasks: Vec<PlanSubtask>,
 }
 
 impl RunState {
@@ -142,6 +180,7 @@ pub fn apply_frame(runs: &mut std::collections::HashMap<String, RunState>, frame
             workflow: wf.to_string(),
             kind: "workflow".to_string(),
             agents: Vec::new(),
+            ..Default::default()
         })
     }
     match frame {
@@ -150,6 +189,7 @@ pub fn apply_frame(runs: &mut std::collections::HashMap<String, RunState>, frame
             agent: Some(agent),
             workflow: Some(wf),
             tokens,
+            output,
             ..
         } => match event_type.as_str() {
             "AgentActivated" => {
@@ -160,6 +200,9 @@ pub fn apply_frame(runs: &mut std::collections::HashMap<String, RunState>, frame
                 a.status = "done".to_string();
                 if let Some(t) = tokens {
                     a.tokens = *t;
+                }
+                if let Some(o) = output {
+                    a.output = o.clone();
                 }
             }
             "AgentFailed" => {
@@ -196,10 +239,22 @@ pub fn apply_frame(runs: &mut std::collections::HashMap<String, RunState>, frame
                 workflow: session.clone(),
                 kind: "session".to_string(),
                 agents: Vec::new(),
+                ..Default::default()
             });
         }
         StreamFrame::SessionDone { session, .. } | StreamFrame::SessionError { session, .. } => {
             runs.remove(session);
+        }
+        StreamFrame::CoordinatorPlan {
+            workflow,
+            coordinator,
+            goal,
+            subtasks,
+        } => {
+            let run = run_for(runs, workflow);
+            run.coordinator = Some(coordinator.clone());
+            run.goal = goal.clone();
+            run.subtasks = subtasks.clone();
         }
         _ => {}
     }
@@ -244,5 +299,79 @@ pub fn event_frame(notif: &EventNotification) -> StreamFrame {
             .get("workflow_id")
             .and_then(|v| v.as_str())
             .map(String::from),
+    }
+}
+
+/// Bridges a coordinator's run-progress callbacks (Layer 2) onto the stream bus
+/// as frames the dashboard already understands: the decomposition + auction as a
+/// `CoordinatorPlan`, and each worker's start/finish as `AgentActivated` /
+/// `TaskCompleted` events scoped to the run. Built once per daemon, shared by
+/// every coordinator.
+pub struct CoordinatorStreamReporter {
+    bus: tokio::sync::broadcast::Sender<StreamFrame>,
+}
+
+impl CoordinatorStreamReporter {
+    pub fn new(bus: tokio::sync::broadcast::Sender<StreamFrame>) -> Self {
+        Self { bus }
+    }
+}
+
+impl axocoatl_actor::CoordinatorReporter for CoordinatorStreamReporter {
+    fn plan(
+        &self,
+        workflow: &str,
+        coordinator: &str,
+        goal: &str,
+        subtasks: &[axocoatl_actor::ReportedSubtask],
+    ) {
+        let subtasks = subtasks
+            .iter()
+            .map(|s| PlanSubtask {
+                name: s.name.clone(),
+                description: s.description.clone(),
+                winner: s.winner.clone(),
+                score: s.score,
+                adhoc: s.adhoc,
+                bids: s
+                    .bids
+                    .iter()
+                    .map(|b| PlanBid {
+                        worker: b.worker.clone(),
+                        score: b.score,
+                    })
+                    .collect(),
+            })
+            .collect();
+        let _ = self.bus.send(StreamFrame::CoordinatorPlan {
+            workflow: workflow.to_string(),
+            coordinator: coordinator.to_string(),
+            goal: goal.to_string(),
+            subtasks,
+        });
+    }
+
+    fn worker_started(&self, workflow: &str, worker: &str) {
+        let _ = self.bus.send(StreamFrame::Event {
+            event_type: "AgentActivated".to_string(),
+            agent: Some(worker.to_string()),
+            task: None,
+            name: None,
+            output: None,
+            tokens: None,
+            workflow: Some(workflow.to_string()),
+        });
+    }
+
+    fn worker_done(&self, workflow: &str, worker: &str, output: &str, tokens: u64) {
+        let _ = self.bus.send(StreamFrame::Event {
+            event_type: "TaskCompleted".to_string(),
+            agent: Some(worker.to_string()),
+            task: None,
+            name: None,
+            output: Some(output.to_string()),
+            tokens: Some(tokens),
+            workflow: Some(workflow.to_string()),
+        });
     }
 }

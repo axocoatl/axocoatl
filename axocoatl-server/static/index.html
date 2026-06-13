@@ -2431,6 +2431,91 @@
   .hljs { background: transparent !important; }
 
   /* ═══════════════════════════════════════════════════════════════════
+     COORDINATOR RUN VIEW — the Layer-2 live process tree. A vertical
+     spine (goal → decompose/auction → workers → synthesis); each phase a
+     node on the spine, lit while active, filled when done.
+     ═══════════════════════════════════════════════════════════════════ */
+  .modal.run-view { width: 760px; max-width: 94vw; }
+  .run-view-head { display: flex; align-items: center; gap: 10px; }
+  .run-view-title { font-weight: 600; font-size: 14px; }
+  .run-view-status {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+    padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--border-strong); color: var(--muted-2);
+  }
+  .run-view-status.running { color: var(--axo-jade-glow); border-color: var(--axo-jade-glow); }
+  .run-view-status.done    { color: var(--axo-jade-glow); border-color: var(--axo-jade-glow); }
+  .run-view-status.error   { color: var(--err); border-color: var(--err); }
+  .run-view-body {
+    padding: 18px 20px 20px; max-height: 74vh; overflow-y: auto;
+    display: flex; flex-direction: column;
+  }
+  /* spine phase */
+  .rv-phase {
+    position: relative; padding: 0 0 20px 22px;
+    border-left: 2px solid var(--border); margin-left: 7px;
+  }
+  .rv-phase:last-child { border-left-color: transparent; padding-bottom: 0; }
+  .rv-phase::before {
+    content: ''; position: absolute; left: -8px; top: 1px;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--bg-3); border: 2px solid var(--border-strong);
+  }
+  .rv-phase.active::before {
+    background: var(--axo-jade-glow); border-color: var(--axo-jade-glow);
+    box-shadow: 0 0 0 4px rgba(var(--axo-jade-glow-rgb), .18);
+  }
+  .rv-phase.done::before { background: var(--axo-jade-glow); border-color: var(--axo-jade-glow); }
+  .rv-phase-label {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted-2); margin-bottom: 7px;
+  }
+  .rv-goal { font-size: 14px; color: var(--text); line-height: 1.5; }
+  /* subtask card */
+  .rv-task {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 9px; padding: 10px 12px; margin-bottom: 8px;
+  }
+  .rv-task:last-child { margin-bottom: 0; }
+  .rv-task-head { display: flex; align-items: center; gap: 8px; }
+  .rv-task-name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .rv-task-desc { font-size: 12px; color: var(--muted-2); margin-top: 3px; line-height: 1.45; }
+  .rv-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); }
+  .rv-dot.running { background: var(--axo-jade-glow); animation: rv-pulse 1.1s ease-in-out infinite; }
+  .rv-dot.done    { background: var(--axo-jade-glow); }
+  .rv-dot.error   { background: var(--err); }
+  @keyframes rv-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .rv-winner { margin-left: auto; font-size: 11.5px; color: var(--muted-2); white-space: nowrap; }
+  .rv-winner .nm { color: var(--axo-jade-glow); font-family: ui-monospace, monospace; }
+  .rv-adhoc {
+    font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em;
+    color: #d6a338; border: 1px solid currentColor; border-radius: 4px;
+    padding: 0 4px; margin-left: 6px;
+  }
+  .rv-bids { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+  .rv-bid {
+    font-size: 11px; font-family: ui-monospace, monospace; color: var(--muted-2);
+    background: var(--bg-3); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 6px;
+  }
+  .rv-bid.win  { color: var(--axo-jade-glow); border-color: var(--axo-jade-glow); }
+  .rv-bid.zero { opacity: .5; }
+  .rv-out {
+    margin-top: 9px; font-size: 12px; font-family: ui-monospace, monospace;
+    color: var(--text); background: var(--bg-3); border: 1px solid var(--border);
+    border-radius: 7px; padding: 8px 10px; white-space: pre-wrap;
+    max-height: 170px; overflow-y: auto; line-height: 1.5;
+  }
+  .rv-out.empty { color: var(--muted-2); font-style: italic; font-family: inherit; }
+  .rv-meta { font-size: 11px; color: var(--muted-2); margin-top: 5px; }
+  .rv-synth {
+    font-size: 13px; color: var(--text); line-height: 1.6; white-space: pre-wrap;
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 9px; padding: 12px 14px;
+  }
+  .rv-synth.empty { color: var(--muted-2); font-style: italic; }
+
+  /* ═══════════════════════════════════════════════════════════════════
      COCKPIT — pixel-perfect parity with /sites/marketing/ax-sessions-mock
      Match the marketing site's Sessions mock byte-for-byte: flat panes
      (no border-radius), 40px title bar, Space Grotesk caps on pane heads,
@@ -3614,6 +3699,24 @@
 <!-- Toasts -->
 <div class="toasts" id="toasts"></div>
 
+<!-- Coordinator run view — the Layer-2 live process tree. A coordinator
+     decomposes a goal, auctions each subtask to its workers, runs them in
+     parallel, then synthesizes. This surface renders that whole run live
+     (goal → decompose → auction → workers → synthesis) from the stream bus.
+     Auto-opens when a coordinator plan lands; also re-openable from a
+     coordinator node. Top-level so it overlays from any tab. -->
+<div class="modal-backdrop hide" id="run-view-modal">
+  <div class="modal run-view">
+    <div class="modal-head run-view-head">
+      <span class="run-view-title" id="run-view-title">Coordinator run</span>
+      <span class="run-view-status" id="run-view-status"></span>
+      <span class="grow"></span>
+      <button class="btn ghost sm" id="run-view-close" title="Close (Esc)">×</button>
+    </div>
+    <div class="run-view-body" id="run-view-body"></div>
+  </div>
+</div>
+
 <!-- Command palette -->
 <div class="palette-mask" id="palette-mask">
   <div class="palette">
@@ -3674,6 +3777,9 @@ let S = {
   totalEvents: 0,
   studioPositions: {},
   tokensTotal: 0,
+  // The one coordinator run currently shown in the run view (Layer-2 tree).
+  // Held across completion so the coordinator node can re-open it.
+  runView: null,
 };
 
 // ───── Toasts ─────
@@ -13303,6 +13409,15 @@ function openStudioInspector(nodeId) {
     more.style.marginTop = '12px';
     more.addEventListener('click', () => showAgentDetail(a));
     body.appendChild(more);
+    // Coordinators own a Layer-2 run: a goal decomposed and auctioned to
+    // workers. Give the node a drill-in to that live (or last) run view.
+    if (a.role === 'coordinator') {
+      const rvBtn = el('button', 'btn ghost sm', '◈ View run →');
+      rvBtn.style.marginTop = '8px';
+      rvBtn.style.marginLeft = '6px';
+      rvBtn.addEventListener('click', () => openCoordinatorRunView(a.id));
+      body.appendChild(rvBtn);
+    }
   } else if (nodeId.startsWith('skill-')) {
     const g = S.skills.find(x => 'skill-' + x.id === nodeId);
     if (!g) { closeStudioInspector(); return; }
@@ -13367,12 +13482,14 @@ async function renderStudio() {
     const node = document.createElement('ax-node');
     node.id = 'agent-' + a.id;
     if (a.team) node.setAttribute('data-team', a.team);
+    if (a.role) node.setAttribute('data-role', a.role);
     const p = S.studioPositions[node.id] || { x: 0, y: 0 };
     node.setAttribute('data-x', p.x);
     node.setAttribute('data-y', p.y);
+    const isCoord = a.role === 'coordinator';
     node.append(
-      mkDiv('sn-title', a.id),
-      mkDiv('sn-sub', `${a.team || ''} · ${a.model || ''}`),
+      mkDiv('sn-title', (isCoord ? '◈ ' : '') + a.id),
+      mkDiv('sn-sub', `${isCoord ? 'coordinator' : (a.team || '')} · ${a.model || ''}`),
       mkHandle('target', 'in', 'left'),
       mkHandle('source', 'out', 'right'),
     );
@@ -13577,6 +13694,7 @@ function handleWsFrame(d) {
     // A lattice coordination event.
     case 'event': {
       S.totalEvents += 1;
+      rvWorkerEvent(d);   // feed the Layer-2 run view if this event belongs to it
       if (S.session.id && d.workflow === S.session.id) { sessionLatticeEvent(d); break; }
       const t = d.type || '';
 
@@ -13640,6 +13758,12 @@ function handleWsFrame(d) {
       }
       break;
     }
+
+    // A coordinator decomposed a goal and auctioned its subtasks — open the
+    // Layer-2 run view and follow it live (workers arrive as run-scoped events).
+    case 'coordinator-plan':
+      onCoordinatorPlan(d);
+      break;
 
     // Workflow run finished.
     case 'workflow-done':
@@ -13748,13 +13872,203 @@ function handleWsFrame(d) {
 function onWorkflowDone(d) {
   S.activeWorkflows.delete(d.workflow);
   toast('Workflow complete', `${(d.completed || []).length} agents · ${fmtNum(d.tokens || 0)} tokens`, 'ok');
+  rvWorkflowDone(d);
   try { refreshTopStats(); } catch {}
 }
 
 function onWorkflowError(d) {
   S.activeWorkflows.delete(d.workflow);
   toast('Workflow failed', d.error || 'unknown error', 'err');
+  if (S.runView && d.workflow === S.runView.workflow) {
+    S.runView.status = 'error';
+    S.runView.synthesis = d.error || 'run failed';
+    renderRunView();
+  }
 }
+
+// ╔══════════════════ Coordinator run view (Layer-2) ══════════════════╗
+// The live process tree for one coordinator run: goal → decompose →
+// auction → workers → synthesis. Built entirely from the stream bus:
+//   coordinator-plan  → the goal + subtasks + per-subtask auction outcome
+//   event (run-scoped)→ each winning worker's running / done / error + output
+//   workflow-done     → the coordinator's synthesis
+// One run is held at a time and kept after it finishes, so a coordinator
+// node can re-open its last run.
+
+function onCoordinatorPlan(d) {
+  S.runView = {
+    workflow: d.workflow,
+    coordinator: d.coordinator,
+    goal: d.goal || '',
+    subtasks: d.subtasks || [],
+    workers: {},          // workerId → { status, output, tokens }
+    synthesis: '',
+    status: 'running',
+  };
+  // Seed each winning worker as queued so the whole plan shows before any
+  // worker reports in.
+  (d.subtasks || []).forEach(s => {
+    if (s.winner) S.runView.workers[s.winner] = { status: 'queued', output: '', tokens: 0 };
+  });
+  openRunView();
+  renderRunView();
+}
+
+// Fold a worker lifecycle event into the open run if it belongs to it.
+// Returns true when consumed (so the caller knows it was run-scoped).
+function rvWorkerEvent(d) {
+  const rv = S.runView;
+  if (!rv || !rv.workflow || d.workflow !== rv.workflow || !d.agent) return false;
+  const t = d.type || '';
+  // The coordinator's own completion carries the synthesis — fold it into the
+  // synthesis phase, not the worker list. This always arrives (the activation
+  // layer publishes it), so the run view shows the result even if the separate
+  // workflow-done frame is missed.
+  if (d.agent === rv.coordinator) {
+    if (t === 'TaskCompleted') {
+      if (d.output != null) rv.synthesis = String(d.output);
+      if (d.tokens != null) rv.tokens = d.tokens;
+      rv.status = 'done';
+      renderRunView();
+      return true;
+    }
+    if (t === 'AgentFailed') { rv.status = 'error'; renderRunView(); return true; }
+    return false;  // the coordinator's own activation — the goal phase covers it
+  }
+  const w = rv.workers[d.agent] || (rv.workers[d.agent] = { status: 'queued', output: '', tokens: 0 });
+  if (t === 'AgentActivated') {
+    w.status = 'running';
+  } else if (t === 'TaskCompleted') {
+    w.status = 'done';
+    if (d.output != null) w.output = String(d.output);
+    if (d.tokens != null) w.tokens = d.tokens;
+  } else if (t === 'AgentFailed') {
+    w.status = 'error';
+  } else {
+    return false;
+  }
+  renderRunView();
+  return true;
+}
+
+function rvWorkflowDone(d) {
+  const rv = S.runView;
+  if (!rv || d.workflow !== rv.workflow) return;
+  rv.synthesis = d.output || '';
+  rv.status = 'done';
+  rv.tokens = d.tokens || 0;
+  renderRunView();
+}
+
+function openRunView() { $('#run-view-modal')?.classList.remove('hide'); }
+function closeRunView() { $('#run-view-modal')?.classList.add('hide'); }
+
+// Open (or re-open) the run view for a specific coordinator — used by the
+// "View run →" affordance on a coordinator node. Shows the last run if one is
+// held, otherwise an idle shell.
+function openCoordinatorRunView(coordinatorId) {
+  if (!S.runView || S.runView.coordinator !== coordinatorId) {
+    S.runView = {
+      workflow: null, coordinator: coordinatorId, goal: '',
+      subtasks: [], workers: {}, synthesis: '', status: 'idle',
+    };
+  }
+  openRunView();
+  renderRunView();
+}
+
+function renderRunView() {
+  const rv = S.runView;
+  const body = $('#run-view-body');
+  if (!rv || !body) return;
+
+  $('#run-view-title').textContent = (rv.coordinator || 'coordinator') + ' · run';
+  const st = $('#run-view-status');
+  st.className = 'run-view-status ' + (rv.status === 'idle' ? '' : rv.status);
+  st.textContent = rv.status === 'done'  ? 'done'
+                 : rv.status === 'error' ? 'failed'
+                 : rv.status === 'idle'  ? 'idle'
+                                         : 'running';
+
+  body.innerHTML = '';
+
+  // ── Goal
+  const gp = el('div', 'rv-phase done');
+  gp.appendChild(el('div', 'rv-phase-label', 'Goal'));
+  gp.appendChild(el('div', 'rv-goal', rv.goal || '—'));
+  body.appendChild(gp);
+
+  // ── Decompose · auction · workers
+  const tasksDone = rv.subtasks.length > 0 && rv.subtasks.every(s => {
+    const w = rv.workers[s.winner];
+    return w && (w.status === 'done' || w.status === 'error');
+  });
+  const pp = el('div', 'rv-phase ' + (rv.status === 'idle' ? '' : tasksDone ? 'done' : 'active'));
+  pp.appendChild(el('div', 'rv-phase-label',
+    rv.subtasks.length
+      ? `Decompose · auction · ${rv.subtasks.length} subtask${rv.subtasks.length === 1 ? '' : 's'}`
+      : 'Decompose · auction'));
+
+  if (!rv.subtasks.length) {
+    pp.appendChild(el('div', 'rv-out empty',
+      rv.status === 'idle' ? 'No run yet — fire a workflow to watch this coordinator work.' : 'Decomposing…'));
+  }
+
+  rv.subtasks.forEach(s => {
+    const w = rv.workers[s.winner] || { status: 'queued', output: '', tokens: 0 };
+    const card = el('div', 'rv-task');
+
+    const head = el('div', 'rv-task-head');
+    head.appendChild(el('span', 'rv-dot ' + (w.status === 'queued' ? '' : w.status)));
+    head.appendChild(el('span', 'rv-task-name', s.name || 'subtask'));
+    const win = el('span', 'rv-winner');
+    win.innerHTML = 'won by <span class="nm">' + escHtml(s.winner || '—') + '</span>'
+      + (s.score ? ' · ' + Number(s.score).toFixed(2) : '');
+    head.appendChild(win);
+    if (s.adhoc) head.appendChild(el('span', 'rv-adhoc', 'ad-hoc'));
+    card.appendChild(head);
+
+    if (s.description) card.appendChild(el('div', 'rv-task-desc', s.description));
+
+    if (s.bids && s.bids.length) {
+      const bids = el('div', 'rv-bids');
+      s.bids.forEach(b => {
+        const cls = 'rv-bid' + (b.worker === s.winner ? ' win' : '') + (Number(b.score) === 0 ? ' zero' : '');
+        bids.appendChild(el('span', cls, b.worker + ' ' + Number(b.score).toFixed(2)));
+      });
+      card.appendChild(bids);
+    }
+
+    const out = el('div', 'rv-out' + (w.output ? '' : ' empty'));
+    out.textContent = w.output
+      || (w.status === 'running' ? 'working…' : w.status === 'error' ? 'failed' : 'queued');
+    card.appendChild(out);
+    if (w.tokens) card.appendChild(el('div', 'rv-meta', fmtNum(w.tokens) + ' tokens'));
+
+    pp.appendChild(card);
+  });
+  body.appendChild(pp);
+
+  // ── Synthesis
+  const sp = el('div', 'rv-phase' + (rv.status === 'done' ? ' done' : ''));
+  sp.appendChild(el('div', 'rv-phase-label', 'Synthesis'));
+  const synth = el('div', 'rv-synth' + (rv.synthesis ? '' : ' empty'));
+  synth.textContent = rv.synthesis
+    || (rv.status === 'idle' ? '—' : 'Waiting for the coordinator to synthesize…');
+  sp.appendChild(synth);
+  body.appendChild(sp);
+}
+
+// Close button, backdrop click, Esc — wired once.
+(function wireRunView() {
+  $('#run-view-close')?.addEventListener('click', closeRunView);
+  $('#run-view-modal')?.addEventListener('click', (e) => {
+    if (e.target === $('#run-view-modal')) closeRunView();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('#run-view-modal')?.classList.contains('hide')) closeRunView();
+  });
+})();
 
 // ╔══════════════════════════════ Init ══════════════════════════════╗
 async function init() {

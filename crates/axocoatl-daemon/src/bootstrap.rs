@@ -288,6 +288,7 @@ impl AxocoatlDaemon {
                 &shared_registry,
                 &agent_registry,
                 &hook_registry,
+                &stream_bus,
             )
             .await?;
             agent_handles.push(handle);
@@ -555,6 +556,10 @@ impl AxocoatlDaemon {
         Arc::new(tokio::sync::RwLock::new(store))
     }
 
+    // The full dependency stack a behavior may need is threaded explicitly
+    // rather than bundled into a context struct — each is a distinct shared
+    // handle and the call sites are few (bootstrap + restart).
+    #[allow(clippy::too_many_arguments)]
     async fn spawn_agent(
         agent_yaml: &axocoatl_config::AgentConfigYaml,
         config: &AxocoatlConfig,
@@ -565,6 +570,7 @@ impl AxocoatlDaemon {
         shared_registry: &Arc<axocoatl_memory::SharedBlockRegistry>,
         agent_registry: &AgentRegistry,
         hook_registry: &Arc<axocoatl_tools::HookRegistry>,
+        stream_bus: &tokio::sync::broadcast::Sender<crate::stream::StreamFrame>,
     ) -> Result<tokio::task::JoinHandle<()>, DaemonError> {
         let agent_config = agent_yaml.to_core();
         let agent_id = agent_config.id.clone();
@@ -620,7 +626,12 @@ impl AxocoatlDaemon {
                         shared_registry,
                     ))
                     .with_hook_registry(hook_registry.clone())
-                    .with_data_dir(data_dir);
+                    .with_data_dir(data_dir)
+                    // Forward Layer-2 run progress (decompose → auction → workers)
+                    // onto the stream bus so the dashboard run view can render it.
+                    .with_reporter(Arc::new(crate::stream::CoordinatorStreamReporter::new(
+                        stream_bus.clone(),
+                    )));
 
                 // Workers are scoped to THIS coordinator's workflow(s): the
                 // workflows whose entry_point is this coordinator (union across
@@ -759,6 +770,7 @@ impl AxocoatlDaemon {
             &self.shared_registry,
             &self.agent_registry,
             &self.hook_registry,
+            &self.stream_bus,
         )
         .await?;
         self.agent_handles.lock().unwrap().push(handle);

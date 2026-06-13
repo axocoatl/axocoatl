@@ -129,7 +129,10 @@ pub async fn run_activation_loop(
                 }
             };
 
-            let agent_input = axocoatl_core::AgentInput::text(&input_text);
+            // Carry the run id in the structured context so a coordinator can
+            // scope its Layer-2 progress events to this workflow run.
+            let agent_input = axocoatl_core::AgentInput::text(&input_text)
+                .with_context(serde_json::json!({ "workflow_id": workflow_exec.workflow_id }));
 
             // Stream this agent's output onto the bus token-by-token. The
             // forwarder ends when execution finishes and the sink drops.
