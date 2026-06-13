@@ -21,14 +21,16 @@ jobs:
     needs: test-gate
     strategy:
       fail-fast: false
-      # v0.1.0 ships Linux x86_64 + macOS only.  Windows needs Unix-socket
-      # replacement work (axocoatl-daemon::ipc uses tokio::net::UnixListener
-      # which doesn't exist on Windows).  aarch64-linux needs cross-built
-      # openssl-sys, which fails without a vendored or rustls switch.
-      # Both are post-launch follow-ups.
+      # Linux (x86_64 + aarch64) and macOS (x86_64 + aarch64).  aarch64-linux
+      # cross-compiles now that the workspace uses rustls, not openssl (root
+      # Cargo.toml).  Windows still needs Unix-socket replacement work
+      # (axocoatl-daemon::ipc uses tokio::net::UnixListener) — a post-launch
+      # follow-up.
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
           - target: x86_64-apple-darwin
             os: macos-latest

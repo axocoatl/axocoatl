@@ -65,8 +65,9 @@ tiktoken-rs = "0.9"
 # Vector DB
 qdrant-client = "1.11"
 
-# HTTP
-reqwest = { version = "0.12", features = ["json", "stream"] }
+# HTTP — rustls (not native-tls/openssl) so the workspace cross-compiles to
+# aarch64-linux without a system OpenSSL; axocoatl-server already uses rustls.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "http2", "charset"] }
 reqwest-eventsource = "0.6"
 axum = { version = "0.8", features = ["json", "ws", "multipart"] }
 
