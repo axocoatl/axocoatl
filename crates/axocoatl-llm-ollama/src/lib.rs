@@ -110,6 +110,125 @@ fn tools_json(tools: &[axocoatl_llm::ToolDefinition]) -> serde_json::Value {
     )
 }
 
+/// Strip a single leading and trailing newline — the formatting wrapper the XML
+/// tool-call shapes put around multi-line values — while preserving inner
+/// indentation. The inner whitespace matters: `edit_file` matches `old` exactly.
+fn strip_wrapping_newlines(v: &str) -> String {
+    let v = v
+        .strip_prefix("\r\n")
+        .or_else(|| v.strip_prefix('\n'))
+        .unwrap_or(v);
+    let v = v
+        .strip_suffix("\r\n")
+        .or_else(|| v.strip_suffix('\n'))
+        .unwrap_or(v);
+    v.to_string()
+}
+
+/// Recover tool calls a model emitted as *text* in `content` rather than in the
+/// structured `tool_calls` field. Most models Ollama serves emit the structured
+/// form, but some local coder models (e.g. qwen3-coder) sometimes fall back to
+/// text. Two shapes are handled:
+///
+/// ```text
+/// <function=NAME><parameter=KEY>VALUE</parameter>…</function>   (Qwen-coder)
+/// <tool_call>{"name":"NAME","arguments":{…}}</tool_call>        (Hermes JSON)
+/// ```
+///
+/// Only calls whose name was actually offered in `tool_names` are returned, so
+/// ordinary prose that happens to contain the markers is never misread as a call.
+fn parse_text_tool_calls(content: &str, tool_names: &[String]) -> Vec<axocoatl_llm::ToolCall> {
+    let mut calls: Vec<axocoatl_llm::ToolCall> = Vec::new();
+    let known = |name: &str| tool_names.iter().any(|t| t == name);
+
+    // Shape 1: <function=NAME> … <parameter=KEY>VALUE</parameter> … </function>
+    let mut rest = content;
+    while let Some(start) = rest.find("<function=") {
+        let after = &rest[start + "<function=".len()..];
+        let Some(name_end) = after.find('>') else {
+            break;
+        };
+        let name = after[..name_end].trim().to_string();
+        let body_start = name_end + 1;
+        // Require the closing tag — a complete block, not prose that merely
+        // mentions `<function=…>`.
+        let Some(close) = after[body_start..].find("</function>") else {
+            break;
+        };
+        let body = &after[body_start..body_start + close];
+        let next = &after[body_start + close + "</function>".len()..];
+        if known(&name) {
+            let mut args = serde_json::Map::new();
+            let mut pbody = body;
+            while let Some(ps) = pbody.find("<parameter=") {
+                let pafter = &pbody[ps + "<parameter=".len()..];
+                let Some(key_end) = pafter.find('>') else {
+                    break;
+                };
+                let key = pafter[..key_end].trim().to_string();
+                let val_start = key_end + 1;
+                let (val, pnext) = match pafter[val_start..].find("</parameter>") {
+                    Some(e) => (
+                        &pafter[val_start..val_start + e],
+                        &pafter[val_start + e + "</parameter>".len()..],
+                    ),
+                    None => (&pafter[val_start..], ""),
+                };
+                args.insert(key, serde_json::Value::String(strip_wrapping_newlines(val)));
+                pbody = pnext;
+            }
+            calls.push(axocoatl_llm::ToolCall {
+                id: format!("call_{}", calls.len()),
+                name,
+                arguments: serde_json::Value::Object(args),
+            });
+        }
+        rest = next;
+    }
+
+    // Shape 2: <tool_call>{"name":…,"arguments":{…}}</tool_call>
+    let mut rest = content;
+    while let Some(start) = rest.find("<tool_call>") {
+        let after = &rest[start + "<tool_call>".len()..];
+        let Some(close) = after.find("</tool_call>") else {
+            break;
+        };
+        let inner = &after[..close];
+        let next = &after[close + "</tool_call>".len()..];
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(inner.trim()) {
+            if let Some(name) = v["name"].as_str() {
+                if known(name) {
+                    calls.push(axocoatl_llm::ToolCall {
+                        id: format!("call_{}", calls.len()),
+                        name: name.to_string(),
+                        arguments: v
+                            .get("arguments")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                    });
+                }
+            }
+        }
+        rest = next;
+    }
+
+    calls
+}
+
+/// Largest char-boundary offset of `s` that still leaves `holdback` bytes
+/// unflushed, so a tool-call marker split across stream deltas is never
+/// half-shown before we can recognise it.
+fn flush_boundary(s: &str, holdback: usize) -> usize {
+    if s.len() <= holdback {
+        return 0;
+    }
+    let mut end = s.len() - holdback;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
 /// Ollama / LM Studio provider using the OpenAI-compatible chat completions endpoint.
 /// Works with any server that exposes `/v1/chat/completions`.
 pub struct OllamaProvider {
@@ -215,7 +334,7 @@ impl LlmProvider for OllamaProvider {
             .to_string();
 
         // Extract tool calls from OpenAI-compatible response
-        let tool_calls = resp_body["choices"][0]["message"]["tool_calls"]
+        let mut tool_calls = resp_body["choices"][0]["message"]["tool_calls"]
             .as_array()
             .map(|calls| {
                 calls
@@ -240,11 +359,21 @@ impl LlmProvider for OllamaProvider {
             })
             .unwrap_or_default();
 
-        let finish_reason = match resp_body["choices"][0]["finish_reason"].as_str() {
-            Some("stop") => FinishReason::Stop,
-            Some("tool_calls") => FinishReason::ToolUse,
-            Some("length") => FinishReason::MaxTokens,
-            _ => FinishReason::Stop,
+        // Fallback: some local models emit tool calls as text in `content`
+        // (`<function=NAME>…`) instead of the structured `tool_calls` field.
+        // Recover them so the call still executes — guarded to offered tools.
+        if tool_calls.is_empty() {
+            let tool_names: Vec<String> = request.tools.iter().map(|t| t.name.clone()).collect();
+            tool_calls = parse_text_tool_calls(&content, &tool_names);
+        }
+
+        let finish_reason = if !tool_calls.is_empty() {
+            FinishReason::ToolUse
+        } else {
+            match resp_body["choices"][0]["finish_reason"].as_str() {
+                Some("length") => FinishReason::MaxTokens,
+                _ => FinishReason::Stop,
+            }
         };
 
         Ok(ChatResponse {
@@ -317,8 +446,18 @@ impl LlmProvider for OllamaProvider {
             chunk.map_err(|e| ProviderError::Stream(e.to_string()))
         });
 
+        // Captured for the text-tool-call fallback in the finish branch below.
+        let tool_names: Vec<String> = request.tools.iter().map(|t| t.name.clone()).collect();
+
         let stream = async_stream::try_stream! {
             let mut buffer = String::new();
+            // Accumulated assistant text plus how much we've already streamed out.
+            // Lets the finish branch recover a tool call a model emits as text while
+            // keeping its raw markup off-screen.
+            let mut content_acc = String::new();
+            let mut flushed = 0usize;
+            let mut in_text_tool_call = false;
+            let mut saw_struct_tool_call = false;
 
             while let Some(chunk) = lines_stream.next().await {
                 let bytes = chunk?;
@@ -354,18 +493,36 @@ impl LlmProvider for OllamaProvider {
 
                     if let Some(choices) = parsed["choices"].as_array() {
                         for choice in choices {
-                            // Text content deltas
+                            // Text content deltas. Accumulate everything so the finish
+                            // branch can recover a tool call emitted as text. Until a
+                            // `<function=`/`<tool_call>` marker appears we stream text
+                            // through, holding back a short tail so a marker split
+                            // across deltas is never half-shown.
                             if let Some(content) = choice["delta"]["content"].as_str() {
                                 if !content.is_empty() {
-                                    yield StreamEvent::TextDelta {
-                                        delta: content.to_string(),
-                                    };
+                                    content_acc.push_str(content);
+                                    if !in_text_tool_call {
+                                        if content_acc[flushed..].contains("<function=")
+                                            || content_acc[flushed..].contains("<tool_call>")
+                                        {
+                                            in_text_tool_call = true;
+                                        } else {
+                                            let end = flush_boundary(&content_acc, 16);
+                                            if end > flushed {
+                                                let delta = content_acc[flushed..end].to_string();
+                                                flushed = end;
+                                                yield StreamEvent::TextDelta { delta };
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
-                            // Tool call deltas. OpenAI-compatible streams send the
-                            // id once and key later argument fragments by `index`.
+                            // Structured tool call deltas (the usual path). OpenAI-
+                            // compatible streams send the id once and key later
+                            // argument fragments by `index`.
                             if let Some(tool_calls) = choice["delta"]["tool_calls"].as_array() {
+                                saw_struct_tool_call = true;
                                 for tc in tool_calls {
                                     let index = tc["index"].as_u64().map(|i| i as usize);
                                     let id = tc["id"].as_str().unwrap_or("").to_string();
@@ -380,12 +537,6 @@ impl LlmProvider for OllamaProvider {
 
                             // Finish reason
                             if let Some(reason) = choice["finish_reason"].as_str() {
-                                let finish = match reason {
-                                    "stop" => FinishReason::Stop,
-                                    "tool_calls" => FinishReason::ToolUse,
-                                    "length" => FinishReason::MaxTokens,
-                                    _ => FinishReason::Stop,
-                                };
                                 if let Some(usage) = parsed.get("usage") {
                                     yield StreamEvent::Usage(TokenUsageStats {
                                         input_tokens: usage["prompt_tokens"].as_u64().unwrap_or(0) as usize,
@@ -393,7 +544,41 @@ impl LlmProvider for OllamaProvider {
                                         reasoning_tokens: None,
                                     });
                                 }
-                                yield StreamEvent::Done { finish_reason: finish };
+
+                                // Recover a tool call emitted as text when the model
+                                // never sent a structured one.
+                                let recovered = if saw_struct_tool_call {
+                                    Vec::new()
+                                } else {
+                                    parse_text_tool_calls(&content_acc, &tool_names)
+                                };
+
+                                if !recovered.is_empty() {
+                                    for (i, call) in recovered.iter().enumerate() {
+                                        yield StreamEvent::ToolCallDelta {
+                                            index: Some(i),
+                                            id: call.id.clone(),
+                                            name: Some(call.name.clone()),
+                                            args_delta: serde_json::to_string(&call.arguments)
+                                                .unwrap_or_else(|_| "{}".to_string()),
+                                        };
+                                    }
+                                    yield StreamEvent::Done { finish_reason: FinishReason::ToolUse };
+                                } else {
+                                    // Not a tool call after all — flush any held text.
+                                    if flushed < content_acc.len() {
+                                        let delta = content_acc[flushed..].to_string();
+                                        flushed = content_acc.len();
+                                        yield StreamEvent::TextDelta { delta };
+                                    }
+                                    let finish = match reason {
+                                        "stop" => FinishReason::Stop,
+                                        "tool_calls" => FinishReason::ToolUse,
+                                        "length" => FinishReason::MaxTokens,
+                                        _ => FinishReason::Stop,
+                                    };
+                                    yield StreamEvent::Done { finish_reason: finish };
+                                }
                             }
                         }
                     }
@@ -481,5 +666,86 @@ mod tests {
         // Tool result correlates via tool_call_id.
         assert_eq!(out[2]["role"], "tool");
         assert_eq!(out[2]["tool_call_id"], "call_1");
+    }
+
+    #[test]
+    fn recovers_qwen_coder_function_tool_call_from_text() {
+        // The shape qwen3-coder emits as text when Ollama doesn't convert it.
+        // `concat!` keeps the literal 2-space indentation inside the values.
+        let content = concat!(
+            "I'll update the heading.\n",
+            "<function=edit_file>\n",
+            "<parameter=path>\nindex.html\n</parameter>\n",
+            "<parameter=old>\n  h1 { color: #fff; }\n</parameter>\n",
+            "<parameter=new>\n  h1 { color: #9c27b0; font-weight: bold; }\n</parameter>\n",
+            "</function>\n</tool_call>",
+        );
+        let names = vec!["edit_file".to_string(), "write_file".to_string()];
+        let calls = parse_text_tool_calls(content, &names);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "edit_file");
+        assert_eq!(calls[0].arguments["path"], "index.html");
+        // Inner indentation is preserved (exact-match `old`); only the wrapper
+        // newlines are stripped.
+        assert_eq!(calls[0].arguments["old"], "  h1 { color: #fff; }");
+        assert_eq!(
+            calls[0].arguments["new"],
+            "  h1 { color: #9c27b0; font-weight: bold; }"
+        );
+    }
+
+    #[test]
+    fn recovers_hermes_json_tool_call() {
+        let content = "<tool_call>\n\
+            {\"name\": \"write_file\", \"arguments\": {\"path\": \"a.txt\", \"content\": \"hi\"}}\n\
+            </tool_call>";
+        let names = vec!["write_file".to_string()];
+        let calls = parse_text_tool_calls(content, &names);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "write_file");
+        assert_eq!(calls[0].arguments["path"], "a.txt");
+        assert_eq!(calls[0].arguments["content"], "hi");
+    }
+
+    #[test]
+    fn ignores_function_names_not_offered() {
+        let content = "<function=rm_rf>\n<parameter=path>/</parameter>\n</function>";
+        let names = vec!["edit_file".to_string()];
+        assert!(parse_text_tool_calls(content, &names).is_empty());
+    }
+
+    #[test]
+    fn prose_mentioning_a_marker_is_not_a_call() {
+        // Offered tool name appears in prose, but with no complete block.
+        let content = "Use <function=edit_file> when you need to change a file.";
+        let names = vec!["edit_file".to_string()];
+        assert!(parse_text_tool_calls(content, &names).is_empty());
+    }
+
+    #[test]
+    fn no_markers_yields_no_calls() {
+        let content = "Just a normal assistant reply with no tool calls at all.";
+        let names = vec!["edit_file".to_string()];
+        assert!(parse_text_tool_calls(content, &names).is_empty());
+    }
+
+    #[test]
+    fn strip_wrapping_newlines_keeps_inner_indentation() {
+        assert_eq!(
+            strip_wrapping_newlines("\n  h1 {\n    color: red;\n  }\n"),
+            "  h1 {\n    color: red;\n  }"
+        );
+        assert_eq!(strip_wrapping_newlines("index.html"), "index.html");
+        assert_eq!(strip_wrapping_newlines("\r\nx\r\n"), "x");
+    }
+
+    #[test]
+    fn flush_boundary_respects_utf8() {
+        // 'é' is two bytes; the boundary must not split it.
+        let s = "abcdé";
+        let b = flush_boundary(s, 1);
+        assert!(s.is_char_boundary(b));
+        // Short strings hold everything back.
+        assert_eq!(flush_boundary("ab", 16), 0);
     }
 }
