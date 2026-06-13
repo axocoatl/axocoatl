@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-06-13
+
+### Added
+- **Coordinator run view in the dashboard.** A coordinator's Layer-2 work —
+  decomposing a goal, auctioning each subtask to a worker by capability and
+  budget, running them in parallel, then synthesizing — is now a live drill-in
+  view: goal → the auction (the winning worker and the runner-up bids per
+  subtask) → each worker's status and output → the final synthesis. Workers are
+  driven by the coordinator (they are not lattice nodes), so this is the surface
+  that shows the team. A `CoordinatorReporter` trait keeps the actor crate
+  decoupled from the daemon's stream types, and the run id is threaded through
+  `AgentInput.context`.
+- **Prebuilt `aarch64-unknown-linux-gnu` binaries.** The workspace now uses
+  rustls instead of native-tls/openssl, so it cross-compiles to ARM Linux; that
+  target is built and published alongside the other release binaries, with a CI
+  job guarding the cross-build.
+
+### Fixed
+- **Ollama tool calls emitted as text are now recovered.** Some local models
+  (e.g. qwen3-coder) return tool calls as `<function=…>` text in the message
+  content instead of structured `tool_calls`. Axocoatl now parses that fallback
+  form, so those models can drive tools — write files, run commands — instead of
+  silently doing nothing.
+
 ## [0.1.3] — 2026-06-11
 
 ### Fixed
