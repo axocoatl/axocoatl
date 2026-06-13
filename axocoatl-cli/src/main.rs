@@ -1615,10 +1615,7 @@ async fn cmd_session_list() {
                 println!("Create one:  axocoatl session new <directory>");
                 return;
             }
-            println!(
-                "{:<40} {:<18} {:<10} {}",
-                "ID", "NAME", "STATUS", "DIRECTORY"
-            );
+            println!("{:<40} {:<18} {:<10} DIRECTORY", "ID", "NAME", "STATUS");
             println!("{}", "-".repeat(96));
             for s in sessions {
                 println!(
