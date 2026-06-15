@@ -14,9 +14,18 @@ That fabric is the **event lattice**.
 ## How it works
 
 The lattice is a shared bulletin board for events. Agents publish events
-when they finish work (or fail, or get interrupted). Every other agent
-watches for events it cares about. When an agent's threshold is crossed
-— usually one event from each dependency — it wakes up and runs.
+when they finish work (or fail, or get interrupted). Each published event is
+**broadcast to every agent** — there's no edge-addressed routing. Every agent
+watches for events it cares about and accumulates signal from them. When an
+agent's threshold is crossed — usually one `TaskCompleted` from each
+dependency — it wakes up and runs.
+
+Concretely: an entry agent (no dependencies) has threshold `1.0`, so a single
+`UserInput` signal (strength `1.0`) activates it. A downstream agent with `N`
+dependencies has threshold `0.5 × N`, and each upstream `TaskCompleted`
+contributes `0.5` — so it fires exactly once all `N` of its dependencies have
+completed. (Both are tunable per agent via `activation_threshold` /
+`activation_decay`.)
 
 There's no orchestrator deciding the order. The order is whatever the
 dependency graph implies. The lattice is what makes the ordering happen.
@@ -62,8 +71,9 @@ The lattice also unlocks:
 
 - **Multi-agent for the same skill.** If two agents both hold a Skill
   that reacts to `BugReportFiled`, the lattice activates every holder —
-  you don't pre-assign. A *planned* auction layer (roadmap) will refine
-  this to pick a single best-fit holder when several contend.
+  it's a fan-out, you don't pre-assign. Narrowing that fan-out to a single
+  best-fit holder via an auction is a deliberate **non-goal** for the
+  lattice: arbitration lives in the coordinator (below), not here.
 - **Proactive agents.** An agent can declare it reacts to a system event
   (`EveryMorningAt8am`, `NewSupportEmail`). The lattice activates it
   without you doing anything.
@@ -73,6 +83,22 @@ The lattice also unlocks:
 - **Interrupts.** An agent can pause itself, publish an `Interrupted`
   event, and wait for human input. The lattice picks it back up on
   `Resumed`.
+
+## Where auctioning lives: the coordinator
+
+The lattice itself never picks a winner — it broadcasts and lets thresholds
+decide. When you *do* want a single agent chosen for a task, that's the job of
+the **coordinator role**, a separate mechanism that ships today.
+
+An agent with `role: coordinator` spawns a pool of `role: worker` agents at
+runtime, decomposes its task into subtasks, and assigns each subtask to a
+worker via a **capability + budget auction**: every worker bids, and the best
+fit by required tools and available budget wins. This is real, on the live
+execute path — not roadmap.
+
+So the two ideas live in different places by design: the lattice fans out to
+every holder; the coordinator arbitrates. There is no auction *inside* the
+lattice, and adding one is a non-goal.
 
 ## Watch it happen
 

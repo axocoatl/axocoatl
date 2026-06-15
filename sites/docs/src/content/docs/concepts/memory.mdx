@@ -1,63 +1,162 @@
 ---
 title: Memory
-description: Four-tier persistent memory with local neural embeddings.
+description: Four memory tiers — session, daily log, agent-editable core memory, and on-device semantic recall — plus checkpointing.
 ---
 
-Every agent in Axocoatl has access to a **four-tier memory system**, hot
-to cold:
+import { Aside } from '@astrojs/starlight/components';
 
-| Tier | Lives in | Latency | Used for |
-|------|----------|---------|----------|
-| 1 — Session | In-process state | µs | Current conversation, current turn |
-| 2 — Checkpoint | Disk (durable) | ms | Survives restarts; replay on crash |
-| 3 — Long-term | Disk (key/value) | ms | Cross-session facts the agent learned |
-| 4 — Semantic | Neural embeddings + cosine search | tens of ms | Retrieve by meaning, not by key |
+Every agent in Axocoatl has a **four-tier memory system**, modeled on the
+MemGPT/Letta split between a small curated context the agent edits itself and
+a larger lossless store it retrieves from. The tiers go from hot working
+state down to durable recall:
 
-All four tiers are **local-first**. None call out unless you configure
-them to (e.g. swapping in a remote vector DB for Tier 4).
+| Tier | Lives in | What it holds |
+|------|----------|---------------|
+| 1 — Session | In-process state | The live conversation, this turn |
+| 2 — Daily log | Append-only JSONL, one file per date | Everything that happened, by day |
+| 3 — Core memory | Named blocks, rendered into every prompt | Curated facts the agent keeps in context |
+| 4 — Semantic | On-device vector store | Lossless recall by meaning, not by key |
 
-## Tier 4: neural embeddings
+All four tiers are **local-first**. The semantic embedder runs on your own
+hardware (see below); nothing leaves the machine unless you point a provider
+at a remote LLM.
 
-Tier 4 is backed by `all-MiniLM-L6-v2` — a 384-dimension BERT model that
-runs via [Candle](https://github.com/huggingface/candle), pure-Rust, no
-ONNX, no C++ runtime. The model auto-downloads the first time an agent
-asks for a semantic retrieval, then caches under `{data_dir}/models/`.
+<Aside type="note">
+**Checkpointing is a separate mechanism, not a tier.** It snapshots the
+session transcript for crash recovery — covered at the end of this page.
+</Aside>
 
-When you store a memory:
+## Tier 1: session
 
-```rust
-agent.memory_4.store("Customer reported the API hangs on >50MB uploads.")
-              .await?;
+The session is the live conversation — the ordered list of messages for the
+current run, held in process. It's the working set every LLM call sees.
+Source: [`session.rs`](https://github.com/axocoatl/axocoatl/tree/main/crates/axocoatl-memory/src/session.rs).
+
+## Tier 2: daily log
+
+The daily log is an **append-only JSONL file per date**
+(`{base_dir}/{agent_id}/YYYY-MM-DD.jsonl`). Every conversation turn, tool
+call, decision, and note is appended as one line — nothing is ever
+overwritten or evicted, so it's the durable record of what the agent did.
+
+The agent can read its own history back by date range with the
+**`recall_timeframe`** tool — "what did I do on the 12th?" reads that day's
+log. Source: [`daily_log.rs`](https://github.com/axocoatl/axocoatl/tree/main/crates/axocoatl-memory/src/daily_log.rs).
+
+## Tier 3: core memory (agent-editable)
+
+Core memory is the **curated top of the hierarchy** — a small set of named
+blocks that are rendered into the system prompt on **every turn**, so they're
+always in context. By default an agent gets three blocks:
+
+- **`persona`** — who the agent is and how it behaves.
+- **`human`** — what it knows about the person it's working with.
+- **`project`** — durable facts about the work at hand.
+
+You can override the default set in YAML:
+
+```yaml
+memory:
+  core:
+    blocks:
+      - label: persona
+        value: "A terse senior Rust engineer."
+        limit: 2000
+      - label: project
+        description: "Facts about the repo under work."
+        shared: true
 ```
 
-The store embeds the text into a 384-dim vector and writes it to disk.
+The agent maintains these blocks **itself**, using three tools exposed in its
+tool loop:
 
-When you retrieve:
+- **`core_memory_append`** — add a line to a block.
+- **`core_memory_replace`** — find-and-replace within a block.
+- **`core_memory_set`** — overwrite a block's whole value.
 
-```rust
-let hits = agent.memory_4.search("uploads stalling", top_k=5).await?;
+Edits persist per-agent as atomic, owner-only (`0600`) JSON. Each block has a
+character `limit` (default 2000; `0` means unlimited) the tools enforce, so
+the curated context can't grow without bound.
+
+### Shared blocks (team memory)
+
+A block marked **`shared: true`** is backed by a process-wide registry
+instead of the per-agent store. Every agent that declares that label gets the
+*same* block, so one agent's edit is immediately visible to the others —
+team memory across a lattice of agents. Source:
+[`core_memory.rs`](https://github.com/axocoatl/axocoatl/tree/main/crates/axocoatl-memory/src/core_memory.rs).
+
+## Tier 4: semantic recall
+
+Tier 4 is a **lossless on-device vector store**. Every stored memory is
+embedded into a vector; recall finds the nearest vectors by cosine
+similarity. Real recall — semantically related text with no shared words
+still scores high.
+
+There are two ways the agent reaches it:
+
+- **Passive injection.** Each turn, the top-k most relevant memories above a
+  score floor are injected into the prompt automatically — the agent doesn't
+  have to ask.
+- **The `recall_search` tool.** The agent can also query the store directly
+  when it needs a specific fact that isn't in the passive set.
+
+Both paths share one relevance bar, tunable under `memory.recall`:
+
+```yaml
+memory:
+  recall:
+    passive_inject: true   # inject top-k each turn (default true)
+    top_k: 5               # how many hits (default 5)
+    min_score: 0.15        # cosine floor a hit must clear (default 0.15)
 ```
 
-The query is embedded, cosine-similarity is computed against every stored
-vector, top-k by score returns. Real recall — semantically related text
-with no shared words still scores high.
+### On-device embeddings
 
-## Embed-or-hash
+Embeddings come from **`all-MiniLM-L6-v2`** run with
+[Candle](https://github.com/huggingface/candle) — pure-Rust, no ONNX, no C++
+runtime, no external embedding API. The model weights are fetched once (~90 MB)
+the first time an agent needs them, then cached. The active embedder's id is
+recorded in each store file; if it changes, every memory is automatically
+re-embedded so all vectors share one space (the original text is always kept).
 
-If you build with `--no-default-features` (omitting `neural-embeddings`),
-Tier 4 falls back to a pure-Rust feature-hashing embedder. Recall is
-weaker but the binary stays tiny and there's no model download. The
-store records which embedder produced its vectors and automatically
-re-embeds on a model change.
+If you build with `--no-default-features` (dropping `neural-embeddings`),
+Tier 4 falls back to a pure-Rust lexical embedder (signed feature hashing).
+Recall is weaker — it reflects word overlap rather than meaning — but there's
+no model download and the binary stays small. Source:
+[`semantic.rs`](https://github.com/axocoatl/axocoatl/tree/main/crates/axocoatl-memory/src/semantic.rs).
 
-## Checkpoints
+## Sleep-time consolidation
 
-Tier 2 is the checkpoint — a periodic disk snapshot of the agent's
-message history, memory state, and pending mailbox. The supervisor uses
-it to restore an agent after a crash. You can also fork a session from a
-checkpoint via the dashboard's **time travel** UI: pick a point in
-history, fork it into a new session, see how a different choice plays
-out.
+Tiers 3 and 4 are linked by a background **"sleep-time" consolidation** pass.
+A daemon loop periodically asks **idle** agents to run an LLM memory-manager
+turn that reads recent Tier-4 activity and **promotes durable facts up into
+the core blocks** — so the things that matter graduate into always-in-context
+memory on their own.
+
+Two properties keep it safe:
+
+- **Promotion-only.** It reads Tier 4 and writes Tier 3. It **never evicts**
+  the semantic store — the lossless record stays intact.
+- **Idle-gated.** Each agent decides whether it's been idle long enough; the
+  pass never fires mid-turn. A graceful stop runs one final pass.
+
+Source: [`consolidation.rs`](https://github.com/axocoatl/axocoatl/tree/main/crates/axocoatl-daemon/src/consolidation.rs)
+(the loop) and `on_consolidate` in the actor behavior (the per-agent pass).
+
+## Checkpointing
+
+Checkpointing is **separate from the memory tiers**. It's a crash-recovery
+snapshot: the session transcript serialized to disk with `bincode`, written
+atomically with owner-only (`0600`) permissions, keeping the last three
+versions per agent.
+
+On restart the supervisor restores the agent from its latest checkpoint —
+**the conversation transcript only**. It does not restore token-usage
+accounting or tool/plan state; the agent resumes its conversation and rebuilds
+the rest. The checkpoint frequency follows the configured policy
+(`EveryLlmCall`, `EveryNMessages(n)`, `Manual`, or `None`). Source:
+[`checkpoint.rs`](https://github.com/axocoatl/axocoatl/tree/main/crates/axocoatl-memory/src/checkpoint.rs).
 
 ## Where the data lives
 
@@ -66,13 +165,16 @@ By default, under `./data/`:
 ```
 data/
   memory/
-    session-{uuid}/
-    checkpoints/
-    long-term/
-    semantic/
+    core/
+      agent_{id}.json      # Tier 3 — per-agent core blocks
+      shared/              # Tier 3 — shared (team) blocks
+    {agent_id}/
+      YYYY-MM-DD.jsonl     # Tier 2 — daily logs
+    agent_{id}_semantic.json   # Tier 4 — semantic store
+    checkpoints/           # crash-recovery snapshots
   models/
-    all-MiniLM-L6-v2/
+    all-MiniLM-L6-v2/      # cached embedder weights
 ```
 
-The `data/` directory is gitignored by default. Move it to your home,
-back it up, sync it with Syncthing — your call.
+The `data/` directory is gitignored by default. Move it to your home, back it
+up, sync it — your call.

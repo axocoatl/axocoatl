@@ -1,0 +1,84 @@
+---
+title: Token budgets
+description: "Per-agent token budgets: the per_execution and per_call caps, the abort/warn overflow policy, and how this differs from automatic context compaction."
+---
+
+# Token budgets
+
+A token budget is a per-agent spend cap. It is a **pre-flight check**: before
+each LLM call, the agent estimates the request's input tokens and refuses or
+warns if the call would push the agent over budget — so an over-budget call is
+never sent.
+
+## The YAML block
+
+```yaml
+agents:
+  - id: assistant
+    name: "Assistant"
+    provider: ollama
+    model: llama3.2
+    token_budget:
+      per_execution: 20000   # cumulative cap across all calls this run
+      per_call: 8192         # single-call cap
+      overflow_policy: abort  # abort (default) or warn
+```
+
+## The two caps
+
+Both caps are enforced in the same pre-flight check, before the LLM call:
+
+- **`per_call`** — a single call's estimated input must fit within this cap. A
+  call larger than `per_call` is refused **even when there is ample cumulative
+  headroom**.
+- **`per_execution`** — cumulative usage (input + output, across every call in
+  the run) plus this call's estimate must fit within this cap.
+
+If either cap would be exceeded, the configured `overflow_policy` decides what
+happens.
+
+> `per_call` must not exceed `per_execution`. `axocoatl validate` rejects a
+> config where it does.
+
+## `overflow_policy`
+
+- **`abort`** (the default) — enforce the budget: the agent returns a token-budget
+  error and stops the call. A configured budget is meant to be enforced, so this
+  is the default.
+- **`warn`** — advisory: log a warning and continue past the budget.
+- **`summarize`** — **deprecated alias**. Accepted for backward compatibility and
+  treated exactly as `warn`. Context compaction is now automatic (below), so
+  `summarize` is no longer a distinct spend policy.
+
+What you'll see under `abort`:
+
+```
+Token budget exceeded: used N, budget M
+```
+
+After an abort the agent terminates (the budget did its job). Restart it, raise
+`per_execution`, or switch to `warn` to continue.
+
+Note that the input estimate counts everything in the request — memory context
+and tool schemas included — not just your prompt text.
+
+## Budgets vs. context compaction
+
+These are two independent mechanisms; don't conflate them:
+
+- **Token budget** is a *cost cap*. It blocks or warns on spend. Spent tokens
+  are sunk — you can't summarize them back.
+- **Context compaction** is *automatic and independent of the budget*. When the
+  session grows toward the model's context window, older turns are
+  LLM-summarized (and archived to the daily-log memory tier) so the conversation
+  keeps fitting the window. It happens regardless of `overflow_policy` and is
+  not a spend mechanism.
+
+So `abort`/`warn` govern *spend*; compaction governs *fitting the window*. A
+deprecated `summarize` policy reads as if it spent-summarizes, which is why it
+now just maps to `warn`.
+
+## Related
+
+- Example: [`examples/multi-provider`](https://github.com/axocoatl/axocoatl/tree/main/examples/multi-provider) — per-agent provider tiers with a per-tier cost breakdown (`cargo run -p multi-provider`).
+- See also: [Providers](/guides/providers/) for routing cheap vs. frontier models per agent.

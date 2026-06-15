@@ -1,0 +1,81 @@
+---
+title: Examples gallery
+description: "An index of the runnable example crates and config recipes under examples/ — what each one demonstrates and how to run it."
+---
+
+# Examples gallery
+
+The repo ships **14 runnable example crates** under `examples/`, plus a
+**`configs/` gallery** of YAML recipes. Each crate has its own `main.rs` and
+runs with `cargo run -p <name>`. **Most run offline with a mock LLM — no API
+keys needed** — unless noted.
+
+These examples teach the library; they are not a runtime feature.
+
+## Coordination & planning
+
+| Example | Demonstrates | Run |
+|---|---|---|
+| `stigmergic-workflow` | The `EventLattice` + `depends_on` DAG — running order *emerges* from pheromone signals crossing thresholds; no orchestrator decides it. | `cargo run -p stigmergic-workflow` |
+| `skills-lattice` | Event-driven Skills: one event fans out to every agent that `reacts_to` it (`emits`/`reacts_to`), distinct from a fixed DAG. | `cargo run -p skills-lattice` |
+| `htn-planner` | Symbolic HTN decomposition — compound tasks expand via methods; only unresolved frontiers reach the LLM. | `cargo run -p htn-planner` |
+| `crash-recovery` | Kill a multi-step workflow mid-run and resume from the checkpoint; completed steps are not re-run. | `cargo run -p crash-recovery` |
+
+## Memory & providers
+
+| Example | Demonstrates | Run |
+|---|---|---|
+| `memory-recall` | Agent-managed core memory, semantic recall, and sleep-time consolidation (Tiers 3–4). Runs offline. | `cargo run -p memory-recall` |
+| `multi-provider` | Per-agent provider selection — a cheap local model for simple steps, a frontier model for the hard one, with a per-tier cost breakdown. | `cargo run -p multi-provider` |
+
+## Tools, protocols & integration
+
+| Example | Demonstrates | Run |
+|---|---|---|
+| `tool-hooks` | Pre/post tool hooks that deny a path-traversal write, audit every call as JSON, and let the agent recover. | `cargo run -p tool-hooks` |
+| `mcp-bridge` | Call an external MCP tool over stdio through the real `McpToolRegistry`; plus exposing agents as an MCP server. | `cargo run -p mcp-bridge` |
+| `a2a-server` | Expose an agent over the A2A protocol (agent card + task endpoint) and call it from a client, in-process. | `cargo run -p a2a-server` |
+| `sandbox-session` | The rootless Podman sandbox for tool execution — threat model, config knobs, and a live integration test (needs Podman). | `cargo run -p sandbox-session` |
+
+## Autonomy & config
+
+| Example | Demonstrates | Run |
+|---|---|---|
+| `proactive-agents` | Agents that fire on a schedule or on an event (here, reacting to `AgentFailed`), not on a user prompt. | `cargo run -p proactive-agents` |
+| `configs/` | A gallery of minimal YAML configs (below). No Rust — validate and run with the CLI. | see [Config gallery](#config-gallery) |
+
+## Foundations
+
+The three foundational examples cover agent coordination, token budgets, and
+session/checkpoint memory:
+
+| Example | Run |
+|---|---|
+| `research-assistant` | `cargo run -p research-assistant` |
+| `code-reviewer` | `cargo run -p code-reviewer` |
+| `customer-support` | `cargo run -p customer-support` |
+
+## Config gallery
+
+`examples/configs/` holds minimal, copy-pasteable `axocoatl.yaml` recipes — YAML
++ CLI only, no Rust. Each passes `axocoatl validate`, and each file's header
+comment lists its prerequisites, run command, and expected output.
+
+| File | Agents | Demonstrates |
+|---|---|---|
+| `research-pipeline.yaml` | 2 | `depends_on` workflow — summarizer waits on researcher |
+| `feature-dev.yaml` | 5 | Linear DAG (architect → planner → coder → reviewer → docs) |
+| `incident-response.yaml` | 3 | Skills (`emits` / `reacts_to`) + an ops agent |
+| `local-only.yaml` | 2 | Ollama, no API keys — data never leaves the box |
+| `mcp-tools.yaml` | 1 | A single MCP server (stdio transport) |
+
+Validate or run any of them:
+
+```sh
+axocoatl validate examples/configs/research-pipeline.yaml
+axocoatl dev -c examples/configs/research-pipeline.yaml
+```
+
+Most configs need a local Ollama (`ollama serve && ollama pull llama3.2`) — no
+cloud API key required. The `mcp-tools` recipe additionally needs `npx` on your
+PATH for the filesystem MCP server.

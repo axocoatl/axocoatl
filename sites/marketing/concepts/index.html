@@ -132,13 +132,15 @@
         <h2>Capabilities that route themselves.</h2>
         <p>
           A Skill declares the events it <strong>emits</strong> and the
-          events it <strong>reacts to</strong>. The lattice wires it
-          automatically: any agent that holds the right Skill can be
-          the one that fires when the matching event lands.
+          events it <strong>reacts to</strong>. The lattice broadcasts
+          each event to every agent: every agent that holds a Skill
+          reacting to it activates. The matching event fans out — there's
+          no central picker choosing one agent over another.
         </p>
         <p>
           You don't wire Skills to agents. You declare what each Skill
-          listens for, and the lattice does the routing.
+          listens for, and the lattice fans every event out to all the
+          holders that react.
         </p>
       </div>
     </section>

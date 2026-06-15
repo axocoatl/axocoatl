@@ -1,0 +1,88 @@
+---
+title: Protocols — MCP and A2A
+description: Axocoatl speaks MCP both ways — it calls external MCP tools and exposes its own agents as MCP tools — and accepts inbound A2A tasks.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Axocoatl agents don't live in a walled garden. The daemon speaks two
+interop protocols: **MCP** (Model Context Protocol) in both directions, and
+**A2A** (Agent-to-Agent) inbound.
+
+## MCP client — calling external tools
+
+The daemon connects to every server you list under `mcp_servers`, over two
+transports:
+
+- **stdio** — a local child process the daemon spawns and talks to over
+  stdin/stdout. Configured env vars (e.g. an API key) are layered onto the
+  child's environment.
+- **streamable HTTP** — a remote server addressed by URL.
+
+On connect, the daemon **discovers** each server's tools and registers them
+under qualified names (`mcp__<server>__<tool>`). From there an agent can
+**call** them: when the model invokes a discovered tool, the tool executor
+routes the call to the live client — the connection is kept alive after
+discovery — maps the qualified name back to the bare name the server
+registered, and round-trips the call. A server-reported tool error surfaces as
+a failed tool call rather than a silent success.
+
+<Aside type="tip" title="Discovered tools are real tools">
+There's no separate "MCP mode." A discovered MCP tool sits in the same
+registry as a built-in tool and is advertised to the model the same way. The
+agent calls it like any other tool.
+</Aside>
+
+## MCP server — exposing your agents
+
+The same protocol runs the other way. `axocoatl mcp serve` bootstraps your
+agents and then speaks MCP over stdio, exposing **each agent as an `agent_<id>`
+tool**. Point any MCP client — Claude Desktop, another agent runtime — at the
+command, and it can list your agents and call them. A call to `agent_<id>`
+bridges straight to that agent's execution and returns its output.
+
+## Human-in-the-loop approval
+
+MCP tool calls can be gated behind **human approval**. When the gate has no
+prior decision for a call, it pauses, surfaces the pending approval to the
+dashboard over the WebSocket stream, and waits for a verdict before the tool
+runs.
+
+## A2A — inbound tasks
+
+Axocoatl exposes the standard A2A surface on its HTTP server:
+
+- **`GET /.well-known/agent.json`** — a discovery card describing this
+  instance and listing its agents as capabilities.
+- **`POST /a2a/tasks`** — task intake. Address an agent with the task's
+  `receiver_id`; the daemon dispatches the task to that agent and returns the
+  result.
+
+<Aside type="note">
+A2A is **inbound only**. Other agent systems can discover and dispatch tasks
+*to* your agents. There is no outbound A2A client wired into the running
+daemon, so an agent can't delegate *out* to a remote A2A agent.
+</Aside>
+
+## A2A vs. MCP vs. the HTTP execute endpoint
+
+Three different doors lead to "run this agent." Which one you use depends on
+who's calling:
+
+| | Caller | Transport | Direction |
+|---|---|---|---|
+| **A2A** | Another agent system that speaks A2A | HTTP (`/a2a/tasks`) | Inbound |
+| **MCP server** | An MCP client (Claude Desktop, another runtime) | stdio (`agent_<id>` tool) | Inbound |
+| **`/api/agents/{id}/execute`** | Your own app or script | HTTP (the daemon's own API) | Inbound |
+
+All three end at the same place — the agent runs and returns its output. A2A
+and MCP are the standards-based front doors for *other* systems; the
+`/api/agents/{id}/execute` route is the daemon's native API for your own
+integrations.
+
+## Examples
+
+- [`examples/mcp-bridge`](https://github.com/axocoatl/axocoatl/tree/main/examples/mcp-bridge)
+  — connecting to an external MCP server and calling its tools.
+- [`examples/a2a-server`](https://github.com/axocoatl/axocoatl/tree/main/examples/a2a-server)
+  — the inbound A2A surface end to end.

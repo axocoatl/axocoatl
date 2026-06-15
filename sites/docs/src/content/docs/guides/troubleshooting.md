@@ -44,7 +44,7 @@ Set the key in `.env` (copied from `.env.example`) or directly in the config.
 **`Token budget exceeded: used N, budget M`**
 Working as designed — the budget is enforced before the LLM call. With
 `overflow_policy: abort` the agent stops; switch to `warn` to continue past
-the budget, or raise `per_execution`. Note: long-term memory + tool schemas
+the budget, or raise `per_execution`. Note: memory context + tool schemas
 count toward the input budget.
 
 **`actor is likely terminated` after a budget abort**

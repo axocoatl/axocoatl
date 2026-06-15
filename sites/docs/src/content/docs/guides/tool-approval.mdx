@@ -1,0 +1,67 @@
+---
+title: Tool approval
+description: "Human-in-the-loop approval for MCP tool calls: the approve/deny flow, persisted decisions, the 5-minute deny-on-timeout, and where it surfaces in the dashboard."
+---
+
+# Tool approval
+
+When an agent wants to call an external MCP tool that has no recorded decision,
+Axocoatl pauses the call and asks a human. This is the built-in MCP approval
+gate, and it is wired in globally at daemon startup — every MCP tool call passes
+through it unless a saved permission already says allow or deny.
+
+## The flow
+
+1. A tool dispatch checks the permission store for a recorded decision.
+2. If none exists, the approval gate parks the call, mints an `approval_id`, and
+   fires a notifier — in the running server that's an `mcp-approval-required`
+   WebSocket frame, so the dashboard pops a modal.
+3. The tool call **blocks**, waiting on the human.
+4. The human clicks Allow or Deny in the modal. That resolves the approval over
+   the WebSocket, and the tool dispatch resumes (running the tool, or returning a
+   denial).
+
+The approval prompt carries enough context to decide: the agent id, the server,
+the tool name, and a truncated preview of the call's arguments.
+
+## Approve, deny, and persistence
+
+When resolving, the human also picks how widely the decision applies:
+
+- **Once** — applies to this single call only; nothing is saved.
+- **This agent, this tool** — save the exact `{agent, server, tool}` decision.
+- **This agent, this server** — save it for any tool from this server, but only
+  when called by this agent.
+- **Any agent, this server** — the most permissive scope.
+
+A saved decision means future matching calls skip the prompt and apply the
+recorded allow/deny automatically.
+
+## The 5-minute timeout
+
+A parked approval waits up to **5 minutes**. Long enough for a human to step
+away and come back; short enough that a forgotten prompt doesn't pin daemon
+resources forever. **On timeout the decision defaults to deny** (a soft deny,
+not persisted), and the pending entry is cleaned up. A dropped/closed connection
+resolves the same way — deny.
+
+## Where it surfaces
+
+The prompt arrives as an `mcp-approval-required` frame on the dashboard's
+WebSocket connection, which renders the approval modal. The dashboard also
+exposes a count of pending approvals for a "waiting" badge. The human's
+allow/deny (with its persistence scope) is sent back over the same WebSocket to
+resolve the specific `approval_id`.
+
+## Scope: built-in gate only
+
+The MCP approval gate above is the **only** hook that runs today. A user-defined
+`hooks:` section in your config is **experimental and not yet active** — it is
+parsed, and a non-empty `hooks:` block logs a warning at daemon startup, but it
+does not execute. Don't rely on custom hooks to gate tools yet; the built-in
+approval gate is the live mechanism.
+
+## Related
+
+- Example: [`examples/mcp-bridge`](https://github.com/axocoatl/axocoatl/tree/main/examples/mcp-bridge) — calling an external MCP tool over stdio (`cargo run -p mcp-bridge`).
+- See also: [Examples gallery](/guides/examples-gallery/) for the `tool-hooks` example, which demonstrates pre/post tool hooks at the library level.

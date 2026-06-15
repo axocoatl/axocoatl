@@ -39,7 +39,7 @@ export default defineConfig({
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/axocoatl-ai/axocoatl',
+          href: 'https://github.com/axocoatl/axocoatl',
         },
       ],
       sidebar: [
@@ -55,9 +55,13 @@ export default defineConfig({
           items: [
             { label: 'The event lattice', slug: 'concepts/lattice' },
             { label: 'Agents', slug: 'concepts/agents' },
+            { label: 'Coordinator', slug: 'concepts/coordinator' },
             { label: 'Skills', slug: 'concepts/skills' },
             { label: 'Memory', slug: 'concepts/memory' },
+            { label: 'Checkpointing', slug: 'concepts/checkpointing' },
             { label: 'Sessions', slug: 'concepts/sessions' },
+            { label: 'Protocols (MCP & A2A)', slug: 'concepts/protocols' },
+            { label: 'Automations', slug: 'concepts/automations' },
           ],
         },
         {
@@ -65,7 +69,11 @@ export default defineConfig({
           items: [
             { label: 'Ollama quickstart', slug: 'guides/ollama-quickstart' },
             { label: 'Architecture', slug: 'guides/architecture' },
+            { label: 'Providers', slug: 'guides/providers' },
+            { label: 'Token budgets', slug: 'guides/token-budgets' },
+            { label: 'Tool approval', slug: 'guides/tool-approval' },
             { label: 'Troubleshooting', slug: 'guides/troubleshooting' },
+            { label: 'Examples gallery', slug: 'guides/examples-gallery' },
           ],
         },
         {
