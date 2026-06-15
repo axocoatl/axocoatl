@@ -439,11 +439,15 @@ Expect: All endpoints work identically to dev mode.
 ```bash
 cargo test -p axocoatl-coordination -- --nocapture
 ```
-Expect: All tests pass — event lattice publish/subscribe, pheromone decay, threshold activation. The crate also unit-tests the HTN decomposition and auction-scoring primitives; these are built and tested but **not yet integrated** into the running coordination (roadmap).
+Expect: All tests pass — event lattice publish/subscribe, pheromone decay, threshold activation. The crate also unit-tests the HTN decomposition and auction-scoring primitives. These are **shipped**: the `role: coordinator` agent uses the auction to assign subtasks to worker agents on the live execute path, and the HTN planner runs when a workflow provides an `htn_methods_file` (otherwise the coordinator decomposes with the LLM).
 
 ---
 
 ## Phase 13: Workflow Graph (Unit Tests)
+
+`axocoatl-graph` is an **experimental** graph-validation crate — it is **not
+wired into the runtime** (no daemon, actor, or CLI path imports it). It's kept
+as a standalone module; its tests still run on their own:
 
 ```bash
 cargo test -p axocoatl-graph -- --nocapture
@@ -459,13 +463,24 @@ cargo test -p axocoatl-mcp -- --nocapture
 ```
 Expect: MCP server frame and tool discovery tests pass.
 
+MCP tool **execution** ships: the daemon discovers external MCP tools, keeps
+the client alive, and routes an LLM's `mcp__server__tool` call through to the
+live server. For an end-to-end walkthrough, run the bridge example:
+
+```bash
+cargo run -p mcp-bridge
+```
+See `examples/mcp-bridge/` for the source.
+
 ---
 
 ## Phase 15: WASM Isolation (Unit Tests)
 
 The shipped directory-session sandbox is a **hardened rootless podman
-container**. The WASM isolation tier exercised below is a **roadmap** tier in
-`axocoatl-isolation` — built and unit-tested, but not the default sandbox.
+container**. The WASM isolation tier exercised below is **parked /
+experimental** — it's an opt-in `wasmtime-sandbox` Cargo feature, not part of
+the default build or the default tool path (where the podman session sandbox is
+the boundary). On the default path the WASM tool backend errors out by design.
 
 ```bash
 cargo test -p axocoatl-isolation -- --nocapture
@@ -527,7 +542,7 @@ Expect: Handled gracefully (error or empty response, no panic).
 ```bash
 cargo test --workspace
 ```
-Expect: 340+ tests, 0 failures.
+Expect: 400+ tests, 0 failures.
 
 ---
 

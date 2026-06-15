@@ -46,17 +46,20 @@ in `reacts_to` is a candidate. For `code-review-checklist`, the lattice
 finds two holders (`reviewer`, `coder`). Today the lattice activates the
 holders directly — fan-out, no central picker. You don't pre-assign.
 
-### Auction refinement (roadmap)
+### Why there's no skill auction
 
-A **planned** auction layer (built in `axocoatl-coordination`, not yet
-wired into the running system) will sit on top of this dispatch step. When
-several holders contend, it will score them to pick a single winner:
+A natural question: when several holders contend, shouldn't the system score
+them and pick a single winner? Axocoatl treats **skill-selection arbitration
+as a non-goal** — fan-out is the intended behavior for a Skill. Activating
+every holder is composable and predictable; you add a holder and it
+participates, no hidden scoring to reason about.
 
-- Which holder has the lower current token usage?
-- Which holder's status is `idle` vs. `running`?
-- Which holder's model has higher capability?
-
-Until that lands, holder selection is the lattice's plain fan-out.
+Auctioning *does* exist in Axocoatl, but in a different place: the
+**coordinator role** runs a capability + budget auction to assign subtasks to
+a pool of worker agents it spawns. That's where "pick the single best fit"
+belongs — a coordinator decomposing one task across workers, not the lattice
+choosing among Skill holders. See [The event lattice](/concepts/lattice/#where-auctioning-lives-the-coordinator)
+for how the coordinator's auction works.
 
 ## Manual fire
 

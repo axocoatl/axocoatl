@@ -1,0 +1,91 @@
+---
+title: Automations
+description: A DAG engine with seven node kinds, interval scheduling, proactive agents that fire on a schedule or a lattice event, and human-in-the-loop interrupts.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The [lattice](/concepts/lattice/) coordinates agents by emergent dependency.
+**Automations** are the other shape of multi-step work: an explicit **DAG** you
+draw, where each node does one thing and edges carry control flow. Build them
+in the dashboard's visual editor; run them by schedule, by a proactive trigger,
+or on demand.
+
+## Node kinds
+
+An automation is a graph of typed nodes. The executor dispatches on the node's
+kind:
+
+| Kind | What it does |
+|------|--------------|
+| **Agent** | Runs an agent with a configurable input. |
+| **Tool** | Calls a registry tool directly — no LLM in the loop. Deterministic, fast, cheap. |
+| **Conditional** | Evaluates an expression and activates only the matching labeled branch (with an optional default). |
+| **Map** | Fan-out: resolves its input to a list and runs a body node once per item; downstream runs once after all iterations finish. |
+| **Subgraph** | Calls another automation as a node. Depth-limited to prevent infinite recursion. |
+| **TextInput** | A first-class input slot. For manual runs the dashboard renders it as a form field; for scheduled/proactive runs its default value fires. |
+| **Interrupt** | Pauses the run and waits for a human. |
+
+## Scheduling is interval-only
+
+Scheduled automations fire on a fixed interval. The `every` field accepts
+`s` / `m` / `h` / `d` units — `30s`, `5m`, `2h`, `1d`.
+
+<Aside type="caution" title="No cron">
+There is **no cron syntax** and no `cron:` field. Scheduling is fixed-interval
+by design — if you need "every 5 minutes," write `every: 5m`. Cron expressions
+are an explicit non-goal, not a missing feature.
+</Aside>
+
+## Proactive agents
+
+A **proactive agent** acts on its own, with no user prompt, when its trigger
+fires. This is the autonomous half of "Always-On" — the service keeps the
+daemon alive; proactive agents make the agents act while it runs. There are two
+triggers:
+
+```yaml
+proactive:
+  # Fire on a fixed interval.
+  - id: morning-digest
+    name: Morning digest
+    agent: summarizer
+    trigger:
+      type: schedule
+      every: 1d
+    input: Summarize what happened overnight.
+
+  # Fire whenever a named lattice event occurs.
+  - id: on-failure
+    name: Failure responder
+    agent: triager
+    trigger:
+      type: on_event
+      event: AgentFailed
+    input: An agent failed. Investigate and report.
+```
+
+- **`schedule`** wakes the agent on its interval (`s`/`m`/`h`/`d`).
+- **`on_event`** subscribes to the lattice and fires when a matching event
+  arrives — a built-in event like `AgentFailed`, or a custom event a Skill
+  emits. A cooldown guards against an agent self-looping on an event it emits.
+
+## Human-in-the-loop
+
+An **Interrupt** node pauses a run and waits for a person. While paused, the
+dashboard lists the interrupt with its message and payload so an operator can
+decide what to do, then:
+
+- **Resume** — `POST /api/automations/{id}/runs/{run_id}/nodes/{node_id}/resume`.
+  The operator's value either replaces the node's output or appends to the
+  paused message, depending on the node's resume strategy.
+- **Cancel** — `POST /api/automations/{id}/runs/{run_id}/nodes/{node_id}/cancel`.
+  The run stops at the interrupt and records a distinct cancelled outcome.
+
+Runs are checkpointed per node, so a paused interrupt survives a restart and
+picks up where it stopped.
+
+## Example
+
+- [`examples/proactive-agents`](https://github.com/axocoatl/axocoatl/tree/main/examples/proactive-agents)
+  — schedule- and event-triggered proactive agents.

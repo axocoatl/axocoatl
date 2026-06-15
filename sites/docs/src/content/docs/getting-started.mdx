@@ -12,8 +12,10 @@ my box." If anything breaks, see [Troubleshooting](/guides/troubleshooting/).
 
 - macOS or Linux (x86_64 or aarch64).
 - [Ollama](https://ollama.com) for local LLM use (recommended for first
-  contact). Cloud providers — OpenAI, Anthropic, Mistral, Gemini — work
-  too; set the right key in `.env`.
+  contact). Five other providers work too — OpenAI, Anthropic, Mistral,
+  Gemini, and OpenRouter; set the right key in `.env`. (The `openai` provider
+  also takes a `base_url`, so it targets any OpenAI-compatible endpoint —
+  LM Studio, vLLM, MLX, and the like.)
 - (Optional) `podman` if you want sandboxed directory sessions.
 
 <Steps>

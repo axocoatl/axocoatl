@@ -1,0 +1,129 @@
+---
+title: The coordinator
+description: A hierarchical orchestrator nested inside one lattice node — decompose a goal, spawn workers at runtime, and assign each subtask by auction.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The [lattice](/concepts/lattice/) is **Layer 1**: top-level agents coordinate
+by events, with no orchestrator between them. Sometimes one agent's task is
+itself a goal that needs to be broken down and farmed out at runtime. That's
+**Layer 2** — the **coordinator**.
+
+An agent with `role: coordinator` runs the coordinator behavior. It is still a
+single lattice node; the hierarchy lives *inside* that node. So "no
+orchestrator" remains true of Layer 1 — the coordinator never sits between
+your top-level agents, it sits underneath one of them.
+
+## What a coordinator does
+
+When a coordinator agent fires, it runs one coordination pass:
+
+1. **Decompose** the goal into subtasks.
+2. **Auction** each subtask to the worker pool — the best fit by required
+   tools and available budget wins.
+3. **Spawn** the winning workers and run them **in parallel**.
+4. **Join** every worker, then **synthesize** their outputs into one answer.
+
+Workers are stopped and joined at the end of every run — on success and on
+every error path — so no worker is ever left running.
+
+## Decomposition: HTN, then LLM
+
+Decomposition has two paths, and which one runs is a configuration choice:
+
+- **Symbolic HTN.** When the coordinator's workflow sets `htn_methods_file`,
+  it decomposes with a Hierarchical Task Network planner — no LLM call for the
+  parts the methods already cover. Any task the methods leave open (an "LLM
+  frontier") is decomposed by the model, task-by-task, not the whole goal.
+- **LLM.** With no methods file, the coordinator asks the model to break the
+  goal into 2–5 independent subtasks.
+
+<Aside type="caution" title="HTN is opt-in">
+Auctioning and worker spawning are always on. **Symbolic HTN only runs when
+you provide an `htn_methods_file`** — otherwise decomposition is the LLM's job.
+Don't read "HTN" as the default.
+</Aside>
+
+## The auction
+
+Each subtask declares the tools it needs. Every worker in the pool computes a
+**bid** scored on two things: how well its tools cover the subtask's required
+tools, and how much token budget it has. The highest bidder wins and is
+removed from the pool for that pass.
+
+If the pool is empty, or no pooled worker can cover a subtask's tools, the
+coordinator spawns an **ad-hoc worker** granted exactly the required tools and
+running on the coordinator's own model — so a subtask is never forced onto an
+unfit worker, and a worker with no model never falls back to a cloud default.
+
+This is the same auction the lattice deliberately *doesn't* have: the lattice
+fans out to every holder of a skill; arbitration to a single winner lives here,
+in the coordinator.
+
+## Workers are first-class agents
+
+A worker isn't a bare provider-plus-tools shell. Every spawned worker gets the
+full agent stack: [checkpointing](/concepts/checkpointing/), the four
+[memory](/concepts/memory/) tiers (daily log, core memory, semantic recall),
+and the global hook registry. A worker is an agent that happens to be driven by
+its coordinator rather than by the lattice.
+
+## Resumable runs
+
+The coordinator checkpoints its own orchestration — the plan plus each worker's
+outcome — after decomposition and after every worker finishes. If the process
+crashes mid-run, the next run for the same goal **resumes**, skipping subtasks
+that already completed and re-running only what's left. If every worker fails,
+the coordinator returns an error rather than synthesizing from nothing.
+
+## A minimal config
+
+```yaml
+agents:
+  - id: lead
+    name: Lead
+    provider: ollama
+    model: llama3.2
+    role: coordinator
+    system_prompt: You coordinate a small research team.
+
+  - id: researcher
+    name: Researcher
+    provider: ollama
+    model: llama3.2
+    role: worker
+    tools: [web_search]
+
+  - id: writer
+    name: Writer
+    provider: ollama
+    model: llama3.2
+    role: worker
+
+workflows:
+  - id: research
+    entry_point: lead
+    agents: [researcher, writer]
+    # Optional: symbolic decomposition. Drop this line to decompose with the LLM.
+    htn_methods_file: ./methods.yaml
+```
+
+The `lead` agent is the lattice node you fire. `researcher` and `writer` are
+its pool — they're scoped to the workflows whose `entry_point` is `lead`, and
+the coordinator spawns them on demand. The auction decides which worker takes
+each subtask; the `web_search` tool on `researcher` is what its bid for a
+search-shaped subtask is scored on.
+
+## Lattice vs. coordinator
+
+| | Lattice (Layer 1) | Coordinator (Layer 2) |
+|---|---|---|
+| Structure | Static DAG you declare with `depends_on` | Dynamic decomposition at runtime |
+| Who decides order | The dependency graph — no orchestrator | The coordinator |
+| Fan-out | Every skill holder activates | One winner per subtask, by auction |
+| Membership | Top-level agents | A worker pool nested in one node |
+
+The two don't compete. Use the lattice for a pipeline you can draw ahead of
+time; reach for a coordinator when one step is a goal that only resolves into
+subtasks once it's running.

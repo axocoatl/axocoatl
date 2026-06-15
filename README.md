@@ -127,7 +127,8 @@ outbound call is your local model. Zero telemetry, zero external connections.
   is resumable via checkpointing.
 - **Workflows** — declarative multi-agent DAGs via `depends_on` / `entry_point`.
 - **Providers** — Ollama, OpenAI, Anthropic, Mistral, Gemini, OpenRouter. No lock-in.
-- **Protocols** — MCP (consume & expose tools) and A2A (agent interop).
+- **Protocols** — MCP (discover, call, and expose tools — agents invoke external
+  MCP tools through the daemon over a persistent connection) and A2A (agent interop).
 
 See the [docs site](https://docs.axocoatl.ai) for the full picture, the
 [marketing site](https://axocoatl.ai) for the positioning, or
@@ -205,7 +206,7 @@ noted. See [`examples/`](examples/).
 git clone https://github.com/axocoatl/axocoatl
 cd axocoatl
 cargo build --release          # binary: target/release/axocoatl
-cargo test --workspace         # 430+ tests
+cargo test --workspace         # 415 tests
 ```
 
 ## License

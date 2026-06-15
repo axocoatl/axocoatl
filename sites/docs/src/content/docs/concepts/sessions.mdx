@@ -47,9 +47,12 @@ output.
 ## State survives
 
 Close the laptop. Open it tomorrow. The session is still there. The
-container is gone (it'll respawn), but the agent's state — message
-history, memory, open files — is checkpointed. Hot-restart and the agent
-picks up where it left off.
+container is gone (it'll respawn), but the agent's **conversation transcript**
+is checkpointed to disk. Hot-restart and the agent picks up the conversation
+where it left off. (The checkpoint restores the transcript only — not
+token-usage accounting or in-flight tool state; the agent rebuilds the rest.
+Its longer-term knowledge lives in the [memory tiers](/concepts/memory/),
+which are persisted independently of the checkpoint.)
 
 ## The seeded demo
 

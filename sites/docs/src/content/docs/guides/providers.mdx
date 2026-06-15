@@ -1,0 +1,136 @@
+---
+title: Providers
+description: "The six LLM providers Axocoatl ships, per-agent provider+model selection, OpenAI-compatible local servers, and rate-limit fallback."
+---
+
+# Providers
+
+Axocoatl wires six LLM providers into the daemon. Each agent picks its own
+provider and model, so you can route cheap, high-volume steps to a local model
+and reserve a frontier model for the one step that needs it.
+
+## The six providers
+
+All six are constructed in `setup_providers` at daemon bootstrap. A provider is
+registered only when its config block is present **and** its key is non-empty.
+
+| `provider:` value | Backend |
+|---|---|
+| `ollama` | Local Ollama (or any Ollama endpoint) |
+| `openai` | OpenAI — or any OpenAI-compatible server (see below) |
+| `anthropic` | Anthropic Claude |
+| `gemini` | Google Gemini |
+| `mistral` | Mistral |
+| `openrouter` | OpenRouter (`openrouter.ai/api/v1`) |
+
+OpenRouter reuses the OpenAI client pointed at `openrouter.ai/api/v1` with the
+provider id `openrouter`, so you select it with `provider: openrouter`.
+
+## Configuring a provider
+
+Each provider block carries an `api_key`. Use `${ENV_VAR}` interpolation — the
+value is read from the environment (or your `.env`) at load time, and keys are
+held as secrets that never appear in debug output.
+
+```yaml
+agents:
+  - id: assistant
+    name: "Assistant"
+    provider: anthropic
+    model: claude-sonnet-4-6
+
+providers:
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+```
+
+Ollama is the exception — it takes a `base_url`, not a key:
+
+```yaml
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+```
+
+## Per-agent provider + model
+
+`provider:` and `model:` are set **on each agent**, not globally. A shared
+provider is registered once; each agent's configured `model` is sent as a
+per-request override, so two agents on the same provider can run different
+models.
+
+```yaml
+agents:
+  - id: triage
+    provider: ollama          # cheap, local — high-volume classification
+    model: llama3.2
+  - id: synthesizer
+    provider: anthropic       # frontier — the one hard step
+    model: claude-sonnet-4-6
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+```
+
+This cheap-local-plus-frontier pattern is the point of per-agent selection:
+the easy steps cost a fraction of the frontier step. See the
+[`multi-provider`](#) example below for a runnable, cost-broken-down version.
+
+## OpenAI-compatible servers (LM Studio, MLX, vLLM)
+
+The `openai` provider honors a configurable `base_url`. When set, requests go
+to that endpoint instead of `api.openai.com`, so you can target any
+OpenAI-compatible server — **LM Studio, MLX/oMLX, vLLM**, and similar — while
+still using `provider: openai`. The URL must include the API-version suffix the
+server expects (usually `/v1`).
+
+```yaml
+agents:
+  - id: local
+    provider: openai
+    model: "your-local-model-name"   # sent per-request to the server
+
+providers:
+  openai:
+    api_key: "${LOCAL_API_KEY}"      # many local servers accept any non-empty value
+    base_url: "http://localhost:1234/v1"   # e.g. LM Studio
+```
+
+Because the agent's `model` is sent per request, one OpenAI-compatible provider
+block can serve several agents each running a different local model.
+
+## Rate-limit fallback
+
+A provider can declare a `fallback` chain. When the primary provider returns a
+rate-limit error, the registry retries the request against the next provider in
+the chain, in order. Non-rate-limit errors are returned immediately (no
+fallback). Configure it with the provider's `fallback` field:
+
+```yaml
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    fallback: "anthropic"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+```
+
+## Local-only
+
+Point an agent at `ollama` with a local `base_url` and supply no provider keys
+at all — prompts and data never leave the machine. See the
+[`local-only`](#) config in the examples gallery.
+
+## Verified
+
+All six providers (Ollama, OpenAI, Anthropic, OpenRouter, Mistral, Gemini) work
+end-to-end, including the multi-turn tool-calling round-trip, in both chat and
+resumable sessions.
+
+## Related
+
+- Example: [`examples/multi-provider`](https://github.com/axocoatl/axocoatl/tree/main/examples/multi-provider) — `cargo run -p multi-provider` (mock providers, no API keys).
+- See also: [Token budgets](/guides/token-budgets/) for capping per-agent spend.

@@ -1,0 +1,76 @@
+---
+title: Checkpointing & crash recovery
+description: How an Axocoatl agent snapshots its conversation to disk and how the supervision loop restarts a crashed agent from its last checkpoint.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A long-running agent will eventually be interrupted — a crash, a deploy, a
+machine reboot. Checkpointing is how an agent comes back without losing the
+thread of its work. It pairs with the [memory](/concepts/memory/) tiers but is
+a separate mechanism: memory is what the agent knows; a checkpoint is a
+crash-recovery snapshot.
+
+## What a checkpoint holds
+
+The checkpoint store snapshots an agent's state to disk:
+
+- **Format** — bincode, written atomically (temp file, then rename).
+- **Retention** — keep-last-3; older checkpoints are pruned on each save.
+- **Permissions** — `0600`, owner-only. Checkpoints hold full message and tool
+  I/O verbatim, so the file is never even briefly world-readable.
+
+<Aside type="caution" title="Restore brings back the transcript only">
+On restart, an agent restores its **conversation transcript** from the latest
+checkpoint — the messages, in order. It does **not** restore cumulative token
+usage, and it does **not** restore in-flight tool or plan state. A restored
+agent continues the conversation; it doesn't resume a half-finished tool call.
+</Aside>
+
+## When checkpoints are written
+
+Cadence follows the **checkpoint policy**:
+
+| Policy | When it checkpoints |
+|--------|---------------------|
+| `EveryLlmCall` *(default)* | After every LLM response — the safest, smallest-loss-window option. |
+| `EveryNMessages(n)` | Every `n` messages. |
+| `Manual` | Only on an explicit save. |
+| `None` | Never. |
+
+If a checkpoint file fails to decode — corruption, or a schema change across an
+Axocoatl upgrade — the agent logs it, discards the file, and starts fresh. A
+checkpoint is a regenerable cache of session state, never a source of truth, so
+a bad one never bricks the agent.
+
+## The supervision loop
+
+Top-level agents are spawned **parentless** — there's no `ractor` supervisor
+tree above them. Instead the daemon runs a **supervision loop**: a background
+runner that polls agent liveness every **5 seconds** and restarts any agent
+that has stopped unexpectedly.
+
+When the loop restarts a crashed agent, the new actor's startup restores its
+transcript from the latest checkpoint — so the agent resumes the conversation
+it was having, not a blank one. A per-agent restart cap stops a crash-looping
+agent from restarting forever; once it stays healthy across a poll, its counter
+resets.
+
+<Aside type="note">
+"Supervision" here means this liveness-poll loop, not `ractor`'s actor
+supervision tree. Detection is the 5-second poll; recovery is a restart from
+the last checkpoint.
+</Aside>
+
+## Coordinator runs are checkpointed too
+
+A [coordinator](/concepts/coordinator/) checkpoints its own orchestration —
+the plan plus each worker's outcome — so a crash mid-run resumes the goal and
+skips the subtasks that already finished. That's a separate checkpoint from the
+per-agent conversation snapshot described above, written through the same
+store.
+
+## Example
+
+- [`examples/crash-recovery`](https://github.com/axocoatl/axocoatl/tree/main/examples/crash-recovery)
+  — checkpointing an agent and restoring it after a simulated crash.

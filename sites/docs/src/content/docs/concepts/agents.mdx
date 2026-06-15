@@ -5,8 +5,9 @@ description: Actors, supervision, token budgets, and per-agent provider configur
 
 An Axocoatl agent is a [`ractor`](https://github.com/slawlor/ractor) actor:
 an isolated unit of computation with its own mailbox, lifecycle, memory,
-and token budget. Each agent runs in its own task. Crashes get supervised
-restarts. State survives the process through periodic checkpoints.
+and token budget. Each agent runs in its own task. Crashes are caught by a
+supervision loop that restarts the agent from its last checkpoint. State
+survives the process through periodic checkpoints.
 
 ## Anatomy of an agent
 
@@ -35,46 +36,61 @@ Every agent has six knobs you control in YAML:
 - **`system_prompt`** — the agent's role and operating instructions.
 - **`depends_on`** — which agents must complete before this one
   activates. Drives the DAG.
-- **`token_budget`** — enforced *before* every LLM call. The agent can't
-  spend more than `per_call` in any single call or more than
-  `per_execution` across one full activation. `overflow_policy: warn` logs
-  + emits an event; `block` refuses the call.
+- **`token_budget`** — a pre-flight check, enforced *before* every LLM
+  call. The agent can't spend more than `per_call` in any single call or
+  more than `per_execution` across one full activation. `overflow_policy`
+  is `abort` (the default — return a budget error and stop) or `warn` (log
+  a warning and continue past the budget). The old `summarize` value is a
+  **deprecated alias that now maps to `warn`** — context compaction toward
+  the model window is automatic (see [Memory](/concepts/memory/)) and no
+  longer a spend policy.
 
 ## Lifecycle
 
 1. **Spawn** — on daemon boot, every agent in the config gets a
-   `ractor::Actor` spawned under the daemon's supervisor.
+   `ractor::Actor` spawned. Agents are spawned *parentless* (no ractor
+   supervisor tree); liveness is handled by the supervision loop below.
 2. **Idle** — the actor sits in its mailbox loop, waiting for messages.
 3. **Activate** — the lattice routes work to it via an `Execute` message
    when its dependencies fire.
-4. **Stream** — the LLM call streams tokens (when supported by the
-   provider). The dashboard's Studio rail reflects them live.
-5. **Checkpoint** — periodically the actor writes its message history and
-   memory state to disk so a crash + restart can resume from where it
-   left off.
+4. **Stream** — the LLM call streams tokens internally (always). The
+   dashboard's Studio rail reflects them live.
+5. **Checkpoint** — periodically the actor writes its session transcript
+   to disk so a crash + restart can resume the conversation.
 6. **Complete** — publishes `TaskCompleted` to the lattice with the
    output. Other agents activate.
 
 ## Supervision
 
-If an agent panics or its LLM provider returns an unrecoverable error,
-the supervisor restarts it from its last checkpoint. The agent's mailbox
-is preserved across the restart — pending work continues. The dashboard
-shows the restart in the agent's status line and emits a `RestartedAgent`
-event so other parts of the system can react.
+Agents are spawned parentless, so supervision is a **liveness loop**, not a
+ractor supervisor tree. A background runner polls every agent's status on a
+**5-second interval**; if an agent has stopped unexpectedly, it respawns a
+fresh actor whose `on_start` restores state from the latest checkpoint. A
+per-agent restart cap (5 consecutive attempts) stops a crash-looping agent
+from restarting forever.
+
+The restart restores the **conversation transcript only** — the messages from
+the last checkpoint. It does *not* restore token-usage accounting or
+tool/plan state; the agent resumes the conversation and rebuilds the rest.
+The dashboard shows the restart in the agent's status line.
 
 ## Providers
 
-Provider trait lets every agent pick its backend independently:
+A provider trait lets every agent pick its backend independently. Six
+provider ids are wired:
 
 - `ollama` — local Ollama daemon (default).
-- `openai` — OpenAI chat completions.
+- `openai` — OpenAI chat completions. Honors a configurable `base_url`, so
+  it also targets any OpenAI-compatible endpoint (LM Studio, MLX, vLLM, …).
+- `openrouter` — the OpenAI client re-pointed at openrouter.ai, with the
+  Axocoatl attribution headers attached.
 - `anthropic` — Anthropic messages API.
-- `mistral` — Mistral chat.
 - `gemini` — Google Gemini.
+- `mistral` — Mistral chat.
 
-Keys live in `.env`. The dashboard's onboarding wizard fills the right
-keys for you.
+Each agent's configured `model` is sent as a per-request override, so a
+shared provider still serves every agent its own model. Keys live in `.env`.
+The dashboard's onboarding wizard fills the right keys for you.
 
 ## Restart, manually
 
