@@ -28,3 +28,6 @@ uuid = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 tempfile = "3.27"
+# A trivial in-process rmcp server (the `#[tool]` macros need schemars for the
+# input schema) used to exercise the persistent client + call_tool path.
+schemars = "1"

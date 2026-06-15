@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 use axocoatl_llm::ToolDefinition;
+use rmcp::service::RunningService;
+use rmcp::RoleClient;
 
 use crate::error::McpError;
 
@@ -57,6 +59,12 @@ pub struct McpToolRegistry {
     /// Original transport per server. Cached so `reconnect_server` can
     /// re-dial without the user re-entering credentials.
     transports: HashMap<String, McpTransportType>,
+    /// Live client per server, kept alive after discovery so an agent's tool
+    /// call can be dispatched over the same connection instead of re-dialing.
+    /// The `RunningService` owns the background I/O task plus a drop-guard, so
+    /// removing it from this map (via `remove_server` / `reconnect_server`)
+    /// closes the connection and, for stdio, lets the child process exit.
+    clients: HashMap<String, RunningService<RoleClient, ()>>,
 }
 
 impl McpToolRegistry {
@@ -66,6 +74,7 @@ impl McpToolRegistry {
             tool_index: HashMap::new(),
             original_names: HashMap::new(),
             transports: HashMap::new(),
+            clients: HashMap::new(),
         }
     }
 
@@ -137,14 +146,13 @@ impl McpToolRegistry {
                         tool_count: tools.len(),
                     },
                 );
-                self.transports.insert(name, cached_transport);
+                self.transports.insert(name.clone(), cached_transport);
 
-                // Gracefully shut down the discovery client
-                // (in production, we'd keep persistent connections)
-                client
-                    .cancel()
-                    .await
-                    .map_err(|e| McpError::ConnectionFailed(e.to_string()))?;
+                // Keep the connection alive: discovery and execution share one
+                // client, so an agent's tool call dispatches over this same
+                // handshake (see `call_tool`). The connection is closed when the
+                // server is removed or reconnected.
+                self.clients.insert(name, client);
             }
             McpTransportType::StreamableHttp { url, headers: _ } => {
                 use rmcp::ServiceExt;
@@ -190,12 +198,10 @@ impl McpToolRegistry {
                         tool_count: tools.len(),
                     },
                 );
-                self.transports.insert(name, cached_transport);
+                self.transports.insert(name.clone(), cached_transport);
 
-                client
-                    .cancel()
-                    .await
-                    .map_err(|e| McpError::ConnectionFailed(e.to_string()))?;
+                // Keep the connection alive (same rationale as the stdio arm).
+                self.clients.insert(name, client);
             }
         }
 
@@ -219,6 +225,9 @@ impl McpToolRegistry {
             self.original_names.remove(&k);
         }
         self.transports.remove(name);
+        // Dropping the client closes the connection via its drop-guard (the
+        // background task is cancelled and, for stdio, the child exits).
+        self.clients.remove(name);
         had
     }
 
@@ -231,6 +240,11 @@ impl McpToolRegistry {
             self.transports.get(name).cloned().ok_or_else(|| {
                 McpError::ConnectionFailed(format!("no cached transport for {name}"))
             })?;
+        // Close the existing connection cleanly before re-dialing so we don't
+        // leak the old background task / child process.
+        if let Some(old) = self.clients.remove(name) {
+            let _ = old.cancel().await;
+        }
         // Drop current tools first so the connect_server below builds the
         // index from a clean state.
         let drop: Vec<String> = self
@@ -246,6 +260,52 @@ impl McpToolRegistry {
         self.servers.remove(name);
         // Reconnect — connect_server takes a name + transport.
         self.connect_server(name.to_string(), transport).await
+    }
+
+    /// Call a tool on a connected server over its persistent client and return
+    /// the result as JSON (`{"text": ...}` from the joined text content blocks).
+    ///
+    /// `tool` is the BARE name the server registered — map a qualified
+    /// `mcp__server__tool` key back with [`original_name`](Self::original_name)
+    /// first. A server-reported tool error (`isError`) is surfaced as
+    /// [`McpError::CallFailed`]; an unknown server as [`McpError::ServerNotFound`].
+    pub async fn call_tool(
+        &self,
+        server: &str,
+        tool: impl Into<String>,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, McpError> {
+        let tool = tool.into();
+        // Clone the cheap channel-handle peer rather than borrowing the map
+        // across the round trip; the `RunningService` stays parked in `clients`.
+        let peer = self
+            .clients
+            .get(server)
+            .map(|svc| svc.peer().clone())
+            .ok_or_else(|| McpError::ServerNotFound(server.to_string()))?;
+
+        let params = rmcp::model::CallToolRequestParams::new(tool.clone())
+            .with_arguments(arguments.as_object().cloned().unwrap_or_default());
+        let result = peer
+            .call_tool(params)
+            .await
+            .map_err(|e| McpError::CallFailed(e.to_string()))?;
+
+        // MCP tool results are a list of content blocks; join the text ones.
+        let text = result
+            .content
+            .iter()
+            .filter_map(|c| c.raw.as_text().map(|t| t.text.clone()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if result.is_error.unwrap_or(false) {
+            return Err(McpError::CallFailed(format!(
+                "tool '{tool}' on server '{server}' reported an error: {text}"
+            )));
+        }
+
+        Ok(serde_json::json!({ "text": text }))
     }
 
     /// The unqualified tool name (e.g. `read`) for a qualified key
@@ -329,6 +389,105 @@ mod tests {
         assert!(reg.as_llm_tools().is_empty());
     }
 
-    // Integration tests with real MCP servers are gated — they require npx or a server binary.
-    // The connect_server path is tested through the vertical integration test.
+    // ── Persistent-connection call path ────────────────────────────────────
+    // A trivial in-process MCP server over an in-memory duplex stream stands in
+    // for a real stdio child: fully hermetic (no process, no npx, no network)
+    // while exercising the exact `().serve(...)` client + `call_tool` round trip
+    // the registry now keeps alive after discovery.
+
+    use rmcp::handler::server::router::tool::ToolRouter;
+    use rmcp::handler::server::wrapper::Parameters;
+    use rmcp::{tool, tool_handler, tool_router, ServerHandler, ServiceExt};
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+    struct EchoArgs {
+        msg: String,
+    }
+
+    #[derive(Clone)]
+    struct EchoServer {
+        tool_router: ToolRouter<Self>,
+    }
+
+    impl EchoServer {
+        fn new() -> Self {
+            Self {
+                tool_router: Self::tool_router(),
+            }
+        }
+    }
+
+    #[tool_router(router = tool_router)]
+    impl EchoServer {
+        #[tool(description = "Echo the message back, prefixed.")]
+        async fn echo(&self, args: Parameters<EchoArgs>) -> String {
+            let Parameters(EchoArgs { msg }) = args;
+            format!("echo: {msg}")
+        }
+    }
+
+    #[tool_handler(router = self.tool_router)]
+    impl ServerHandler for EchoServer {}
+
+    #[tokio::test]
+    async fn persistent_client_call_tool_returns_real_result() {
+        let (server_io, client_io) = tokio::io::duplex(8192);
+        let (sr, sw) = tokio::io::split(server_io);
+        let (cr, cw) = tokio::io::split(client_io);
+
+        let server = tokio::spawn(async move {
+            if let Ok(svc) = EchoServer::new().serve((sr, sw)).await {
+                let _ = svc.waiting().await;
+            }
+        });
+
+        // The same client the registry holds, kept alive past discovery.
+        let client = ().serve((cr, cw)).await.expect("client connects");
+
+        // Hand-assemble a registry holding the live client + one indexed tool,
+        // mirroring what `connect_server` now does internally.
+        let mut reg = McpToolRegistry::new();
+        let qualified = qualified_tool_name("mem", "echo");
+        reg.tool_index.insert(
+            qualified.clone(),
+            (
+                "mem".to_string(),
+                ToolDefinition {
+                    name: qualified.clone(),
+                    description: "Echo the message back, prefixed.".to_string(),
+                    parameters: serde_json::json!({}),
+                    concurrency: axocoatl_llm::ConcurrencyPolicy::Safe,
+                },
+            ),
+        );
+        reg.original_names
+            .insert(qualified.clone(), "echo".to_string());
+        reg.servers.insert(
+            "mem".to_string(),
+            McpServerInfo {
+                name: "mem".to_string(),
+                transport_type: "memory".to_string(),
+                tool_count: 1,
+            },
+        );
+        reg.clients.insert("mem".to_string(), client);
+
+        // The real call, dispatched over the live connection.
+        let bare = reg.original_name(&qualified).unwrap().to_string();
+        let out = reg
+            .call_tool("mem", bare, serde_json::json!({ "msg": "hi" }))
+            .await
+            .expect("call_tool succeeds");
+        assert_eq!(out["text"], "echo: hi");
+
+        // An unknown server is a clear, typed error — not a panic.
+        let err = reg.call_tool("ghost", "echo", serde_json::json!({})).await;
+        assert!(matches!(err, Err(McpError::ServerNotFound(_))));
+
+        // Removing the server tears the connection down.
+        assert!(reg.remove_server("mem"));
+        server.abort();
+    }
 }

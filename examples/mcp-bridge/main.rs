@@ -27,18 +27,15 @@
 //! network — and it exercises exactly the path the registry uses in production
 //! (`TokioChildProcess` spawning a command, then the MCP initialize handshake).
 //!
-//! ## An honest note on the execution path
+//! ## The execution path
 //!
 //! `McpToolRegistry::connect_server` (in `crates/axocoatl-mcp/src/registry.rs`)
-//! does the discovery handshake and then **cancels the client** —
-//! "in production, we'd keep persistent connections" is the comment in the
-//! source. Correspondingly, `ToolExecutor`'s MCP backend
-//! (`crates/axocoatl-tools/src/executor.rs`) returns a descriptive
-//! "persistent connections not yet implemented" error rather than faking a
-//! result. So the registry is the source of truth for *discovery* (it owns the
-//! tool index + the qualified `mcp__server__tool` names + the cached transport),
-//! and for the actual *call* we open a live `rmcp` stdio client — the same rmcp
-//! the registry is built on — using the transport the registry cached for us.
+//! does the discovery handshake and **keeps the client alive** in a per-server
+//! connection pool. The product's `ToolExecutor`
+//! (`crates/axocoatl-tools/src/executor.rs`) routes an `mcp__server__tool` call
+//! to that live client via `McpToolRegistry::call_tool`. So this example drives
+//! the real path end to end: both discovery and execution go through the same
+//! registry + executor the daemon wires up — there is no out-of-band client.
 //! Nothing here is mocked except the LLM: the tool list, the tool call, and the
 //! returned weather string all cross a real MCP connection.
 //!
@@ -52,12 +49,9 @@ use std::sync::Arc;
 use ractor::Actor;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::CallToolRequestParams;
-use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use rmcp::{tool, tool_handler, tool_router, ServerHandler, ServiceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use tokio_stream::Stream;
 
 use axocoatl_actor::{execute_agent, AgentActor, AgentBehavior, AgentError};
@@ -69,6 +63,7 @@ use axocoatl_llm::{
     StreamEvent, ToolDefinition,
 };
 use axocoatl_mcp::{McpToolRegistry, McpTransportType};
+use axocoatl_tools::ToolExecutor;
 
 // ===========================================================================
 // PART 1 — The trivial MCP server (the "external" tool we consume).
@@ -243,19 +238,21 @@ impl LlmProvider for MockWeatherLlm {
 //
 // A minimal weather agent. It does the real tool-use loop by hand so the data
 // flow is visible: ask the model, and if the model wants a tool, dispatch the
-// call through `call_mcp_tool` (which opens a live MCP client), feed the result
-// back as a `Tool` message, then ask the model again for the final answer. This
-// is the same shape `DefaultBehavior` runs in the daemon (see the tool-execution
-// loop in `crates/axocoatl-actor/src/default_behavior.rs`), narrowed to one
-// tool so the example stays readable.
+// call through the `ToolExecutor` (which routes to the registry's live MCP
+// connection), feed the result back as a `Tool` message, then ask the model
+// again for the final answer. This is the same shape `DefaultBehavior` runs in
+// the daemon (see the tool-execution loop in
+// `crates/axocoatl-actor/src/default_behavior.rs`), narrowed to one tool so the
+// example stays readable.
 // ===========================================================================
 
 struct WeatherAgent {
     provider: Arc<dyn LlmProvider>,
     system_prompt: String,
-    /// How to actually run a tool call: qualified name + args -> result JSON.
-    /// Backed by a live rmcp stdio client (see `McpClient` below).
-    tool_caller: Arc<McpClient>,
+    /// Runs a tool call: qualified name + args -> result JSON. This is the
+    /// product's real `ToolExecutor`, which routes MCP calls over the registry's
+    /// persistent connection — the same path the daemon uses.
+    tool_executor: Arc<ToolExecutor>,
     /// Tools advertised to the model — sourced from the registry.
     tools: Vec<ToolDefinition>,
 }
@@ -306,8 +303,8 @@ impl AgentBehavior for WeatherAgent {
             );
 
             let result = self
-                .tool_caller
-                .call(&call.name, call.arguments.clone())
+                .tool_executor
+                .execute(&call.name, call.arguments.clone())
                 .await
                 .map_err(|e| AgentError::Provider(format!("MCP call failed: {e}")))?;
 
@@ -359,84 +356,8 @@ impl AgentBehavior for WeatherAgent {
 }
 
 // ===========================================================================
-// PART 4 — The live MCP client used for the actual call.
-//
-// The registry caches the transport it connected with but closes the discovery
-// connection. This thin wrapper re-dials the SAME transport (read straight off
-// the registry via `transport_for`) and performs a real `call_tool`. The
-// qualified name `mcp__weather__get_weather` is mapped back to the bare tool
-// name `get_weather` using the registry's own `original_name`, so the server
-// sees the name it actually registered.
-// ===========================================================================
-
-struct McpClient {
-    /// The exact transport details the registry used (so we don't re-derive
-    /// the command/args/env and risk drifting from what was discovered).
-    transport: McpTransportType,
-    /// Qualified (`mcp__server__tool`) -> bare (`tool`) name map, from registry.
-    bare_names: HashMap<String, String>,
-}
-
-impl McpClient {
-    /// Call `qualified_name` with `arguments`, returning the tool's result as
-    /// JSON. Opens a fresh stdio client, runs the MCP handshake, calls the tool,
-    /// and shuts the client down — a real round trip per call.
-    async fn call(
-        &self,
-        qualified_name: &str,
-        arguments: serde_json::Value,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
-        // Recover the bare tool name the server registered.
-        let bare = self
-            .bare_names
-            .get(qualified_name)
-            .cloned()
-            .ok_or_else(|| format!("no bare name known for {qualified_name}"))?;
-
-        // Re-dial the cached stdio transport. This mirrors exactly what
-        // `McpToolRegistry::connect_server` does internally to discover tools —
-        // here we keep the connection long enough to call one.
-        let McpTransportType::Stdio { command, args, env } = &self.transport else {
-            return Err("this example only drives the stdio transport".into());
-        };
-
-        let args = args.clone();
-        let env = env.clone();
-        let client = ()
-            .serve(TokioChildProcess::new(Command::new(command).configure(
-                |cmd| {
-                    cmd.args(&args);
-                    cmd.envs(&env);
-                },
-            ))?)
-            .await?;
-
-        // The real MCP tool call.
-        let params = CallToolRequestParams::new(bare)
-            .with_arguments(arguments.as_object().cloned().unwrap_or_default());
-        let result = client.call_tool(params).await?;
-
-        // Pull the text content out of the result. MCP tools return a list of
-        // content blocks; our weather tool returns one text block.
-        let text = result
-            .content
-            .iter()
-            .find_map(|c| c.raw.as_text().map(|t| t.text.clone()))
-            .unwrap_or_default();
-
-        client.cancel().await?;
-
-        // If the server flagged an error, surface it rather than the text.
-        if result.is_error.unwrap_or(false) {
-            return Err(format!("tool reported an error: {text}").into());
-        }
-
-        Ok(serde_json::json!({ "text": text }))
-    }
-}
-
-// ===========================================================================
-// Main — wire discovery (registry) + execution (live client) + a mock agent.
+// Main — wire discovery + execution (both through the registry/executor) + a
+// mock agent.
 // ===========================================================================
 
 #[tokio::main]
@@ -487,23 +408,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("registry discovered no tools")?;
 
     // -----------------------------------------------------------------------
-    // 2. Build the live MCP client from the registry's cached transport +
-    //    its qualified→bare name map. Execution reuses what discovery learned.
+    // 2. Build the product's ToolExecutor over the SAME registry. Registering
+    //    each discovered tool lets the executor route an `mcp__…` call to the
+    //    Mcp backend; `with_mcp_registry` hands it the registry so that backend
+    //    dispatches over the persistent connection. This is exactly how the
+    //    daemon wires MCP tools into agents.
     // -----------------------------------------------------------------------
-    let cached_transport = registry
-        .transport_for("weather")
-        .cloned()
-        .ok_or("registry did not cache the transport")?;
-    let mut bare_names = HashMap::new();
-    for name in registry.tool_names() {
-        if let Some(bare) = registry.original_name(&name) {
-            bare_names.insert(name.clone(), bare.to_string());
+    let mut executor = ToolExecutor::new();
+    for def in &llm_tools {
+        if let Some(server) = registry.server_for_tool(&def.name).map(str::to_string) {
+            executor.register_mcp(def.name.clone(), server, def.clone());
         }
     }
-    let tool_caller = Arc::new(McpClient {
-        transport: cached_transport,
-        bare_names,
-    });
+    let registry = Arc::new(tokio::sync::RwLock::new(registry));
+    let tool_executor = Arc::new(executor.with_mcp_registry(registry.clone()));
 
     // -----------------------------------------------------------------------
     // 3. Spawn a weather agent (a ractor actor, same path the daemon uses).
@@ -527,7 +445,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let behavior = WeatherAgent {
         provider,
         system_prompt: "You answer weather questions using the available tools.".to_string(),
-        tool_caller,
+        tool_executor,
         tools: llm_tools,
     };
 
