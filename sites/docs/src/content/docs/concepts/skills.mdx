@@ -8,6 +8,12 @@ frameworks tie a "skill" or "tool" to one agent that calls it directly,
 Axocoatl Skills are routed *by the lattice* — they declare what events
 they emit and react to, and the system wires them automatically.
 
+:::tip[Runnable example]
+[`examples/skills-lattice`](https://github.com/axocoatl/axocoatl/tree/main/examples/skills-lattice)
+shows one `CodeReady` event fanning out to every agent that holds a reacting
+skill, then chaining `ReviewComplete` → a deploy gate — `cargo run`, no API keys.
+:::
+
 ## Anatomy
 
 ```yaml

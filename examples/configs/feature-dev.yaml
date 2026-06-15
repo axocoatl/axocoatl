@@ -1,0 +1,54 @@
+# feature-dev — five agents in a linear DAG (architect → … → docs)
+#
+# Prerequisites: ollama serve && ollama pull llama3.2  (no API key needed)
+# Run:           axocoatl validate examples/configs/feature-dev.yaml
+#                axocoatl dev -c examples/configs/feature-dev.yaml
+# Expected:      each depends_on edge gates the next agent — architect fires
+#                first, then planner, coder, reviewer, and docs cascade in order
+#                as each upstream agent emits TaskCompleted on the lattice.
+
+agents:
+  - id: architect
+    name: "Architect"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Break the task into a clear, concise technical specification."
+    depends_on: []
+
+  - id: planner
+    name: "Planner"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Turn the spec into an ordered, actionable task list."
+    depends_on: [architect]
+
+  - id: coder
+    name: "Coder"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Implement the planned tasks. Describe the changes you would make."
+    depends_on: [planner]
+
+  - id: reviewer
+    name: "Code Reviewer"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Review the implementation for bugs, edge cases, and style. Be specific."
+    depends_on: [coder]
+
+  - id: docs
+    name: "Doc Writer"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Write clear, friendly documentation for the reviewed feature."
+    depends_on: [reviewer]
+
+workflows:
+  - id: feature-dev
+    name: "Feature Development"
+    agents: [architect, planner, coder, reviewer, docs]
+    entry_point: architect
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"

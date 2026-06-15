@@ -1,0 +1,91 @@
+# Axocoatl — Multi-provider routing (LIVE mode)
+#
+# This is the live-mode companion to the `multi-provider` example. The Rust
+# binary (`cargo run -p multi-provider`) runs the same shape with mock
+# providers and zero API keys. This file runs it against a REAL local Ollama
+# model and a REAL frontier model, so you can see the cost contrast on your own
+# bill instead of illustrative mock prices.
+#
+# ┌──────────────────────────────────────────────────────────────────────┐
+# │  COST WARNING                                                          │
+# │  The `synthesizer` agent calls a HOSTED frontier model (Anthropic      │
+# │  Claude Sonnet) on every run. That step costs real money — roughly     │
+# │  $3 / 1M input tokens + $15 / 1M output tokens at current list price.  │
+# │  The `triage` and `drafter` agents run locally via Ollama and are free │
+# │  to run. Set a `token_budget` (below) on the frontier agent so a       │
+# │  runaway loop can't ring up a surprise bill.                           │
+# └──────────────────────────────────────────────────────────────────────┘
+#
+# Preflight (see the README for the full walkthrough):
+#   ollama serve &
+#   ollama pull llama3.2:3b
+#   export ANTHROPIC_API_KEY=sk-ant-...        # never commit this
+#   axocoatl doctor --config axocoatl.multi-provider.yaml   # verifies both
+#   axocoatl dev    --config axocoatl.multi-provider.yaml
+#
+# `axocoatl doctor` checks that Ollama is reachable, that each Ollama agent's
+# model is pulled, and that the frontier provider has a non-empty API key.
+
+# ─── Agents ─────────────────────────────────────────────────────────
+# Each agent names its own `provider:` — that is the per-agent routing. The
+# provider name must match a key under `providers:` at the bottom of the file.
+agents:
+  # triage + drafter: cheap, high-volume steps → local model. Free to run.
+  - id: triage
+    name: "Triage"
+    provider: ollama
+    model: llama3.2:3b
+    system_prompt: "You are a triage agent. Classify the request and name the sub-questions a researcher should answer. Be terse."
+    depends_on: []
+    token_budget: { per_execution: 2000, per_call: 1000, overflow_policy: warn }
+
+  - id: drafter
+    name: "Drafter"
+    provider: ollama
+    model: llama3.2:3b
+    system_prompt: "You are a drafter. Using the triage notes, write a quick, rough first-pass answer. Don't polish it — the synthesizer will."
+    depends_on: [triage]
+    token_budget: { per_execution: 3000, per_call: 1500, overflow_policy: warn }
+
+  # synthesizer: the one expensive step → hosted frontier model. `overflow_policy:
+  # abort` is deliberate here — a cost cap on the paid tier should be ENFORCED,
+  # not merely logged, so a loop can't run up the bill.
+  - id: synthesizer
+    name: "Synthesizer"
+    provider: anthropic
+    model: claude-sonnet-4-6
+    system_prompt: "You are a senior synthesizer. Read the triage classification AND the rough draft, then write the final, polished answer with a crisp contrast paragraph."
+    depends_on: [triage, drafter]
+    token_budget: { per_execution: 6000, per_call: 4000, overflow_policy: abort }
+
+# ─── Workflow ───────────────────────────────────────────────────────
+# triage activates first; drafter activates when triage emits TaskCompleted;
+# synthesizer activates only once BOTH triage and drafter have completed
+# (threshold 1.0 = 0.5 × 2 dependencies). No orchestrator picks the order —
+# the event lattice does, exactly as in the mock binary.
+workflows:
+  - id: route-and-synthesize
+    name: "Route and synthesize"
+    description: "Cheap local triage + draft, then one frontier synthesis pass."
+    agents: [triage, drafter, synthesizer]
+    entry_point: triage
+
+# ─── Providers ──────────────────────────────────────────────────────
+# `ollama` runs locally — no key, just a reachable base_url. `anthropic` reads
+# its key from the environment via ${ENV_VAR} interpolation, so the secret is
+# NEVER committed to this file. An unset variable interpolates to an empty
+# string, which `axocoatl doctor` flags before you spend anything.
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+    # To use OpenAI instead, swap the synthesizer's `provider:` to `openai`,
+    # its `model:` to e.g. `gpt-4o`, and uncomment:
+    # openai:
+    #   api_key: "${OPENAI_API_KEY}"
+
+# ─── Server ─────────────────────────────────────────────────────────
+server:
+  port: 8080
+  host: "127.0.0.1"

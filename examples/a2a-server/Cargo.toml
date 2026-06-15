@@ -1,0 +1,27 @@
+[package]
+name = "a2a-server"
+version = "0.1.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+axocoatl-core = { path = "../../crates/axocoatl-core" }
+axocoatl-actor = { path = "../../crates/axocoatl-actor" }
+axocoatl-llm = { path = "../../crates/axocoatl-llm" }
+axocoatl-a2a = { path = "../../crates/axocoatl-a2a" }
+
+tokio = { version = "1.48", features = ["full"] }
+tokio-stream = "0.1"
+async-trait = "0.1"
+serde_json = "1.0"
+ractor = { version = "0.15", features = ["monitors"] }
+# `build_a2a_router` returns an `axum::Router`; we need `axum::serve` to run it
+# on our own TcpListener. Match the workspace axum version.
+axum = { version = "0.8", features = ["json"] }
+# Same TLS feature set the workspace pins for reqwest (rustls, no native-tls),
+# so the example links the identical HTTP/TLS stack as axocoatl-a2a's client.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+
+[[bin]]
+name = "a2a-server"
+path = "main.rs"

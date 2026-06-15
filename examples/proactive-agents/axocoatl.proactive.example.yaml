@@ -1,0 +1,81 @@
+# Proactive agents — schedule + on_event triggers.
+#
+# This config is loaded two ways, and both must work:
+#   1. `cargo run -p proactive-agents` parses it with axocoatl_config::parse_config
+#      (the real parser) and drives the on_event path with a mock LLM.
+#   2. `axocoatl dev -c examples/proactive-agents/axocoatl.proactive.example.yaml`
+#      runs it in a real daemon (needs Ollama, or swap providers for a hosted key).
+#
+# It deliberately contains BOTH a `schedules:` block and a `proactive:` block so
+# you can see the difference (see the bottom of this file).
+
+# ─────────────────────────── AGENTS ───────────────────────────
+# Two agents — the ones the proactive entries name. Provider is ollama so the
+# daemon path needs no API key (point it at a local model). The cargo demo
+# ignores the provider and substitutes a mock LLM.
+
+agents:
+  - id: ops
+    name: "Ops Agent"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are an operations agent. When an agent fails, diagnose the likely cause from the error and the failing agent's context, then suggest one concrete, actionable fix. Be specific and brief."
+
+  - id: secretary
+    name: "Secretary"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a concise operations secretary. Produce short, factual status briefings. No fluff."
+
+# ─────────────────────────── WORKFLOW + SCHEDULE ──────────────
+# A `schedules:` entry re-runs a whole WORKFLOW on a clock. Shown here to
+# contrast with `proactive:` below. (The cargo demo only counts these; it
+# exercises the proactive on_event path.)
+
+workflows:
+  - id: daily-briefing
+    name: "Daily Briefing"
+    agents: [secretary]
+    entry_point: secretary
+
+schedules:
+  - id: briefing-run
+    name: "Briefing Run"
+    workflow: daily-briefing          # fires the whole workflow above
+    every: "30s"                       # 30s so local testing doesn't wait
+    input: "Produce a 3-bullet briefing on recent activity."
+    enabled: true
+
+# ─────────────────────────── PROACTIVE AGENTS ─────────────────
+# A `proactive:` entry fires a SINGLE agent — on a clock OR on a lattice event.
+# This is the autonomous half of "Always-On": the Always-On Service
+# (`axocoatl service install`) keeps the daemon process alive; these make the
+# agents act on their own while it runs.
+
+proactive:
+  # (a) schedule trigger — fires one agent on a fixed interval.
+  - id: hourly-briefing
+    name: "Hourly Briefing"
+    agent: secretary
+    trigger:
+      type: schedule
+      every: 30s                       # 30s for local testing (would be 1h in prod)
+    input: "Give a concise one-paragraph briefing on recent activity and anything that needs attention."
+    enabled: true
+
+  # (b) on_event trigger — fires one agent whenever a named lattice event fires.
+  #     This is the entry the cargo demo drives: a simulated AgentFailed event
+  #     activates the ops agent with its diagnostic prompt.
+  - id: failure-watch
+    name: "Failure Watcher"
+    agent: ops
+    trigger:
+      type: on_event
+      event: AgentFailed               # any AgentFailed event on the lattice
+    input: "An agent just failed. Diagnose the likely cause and suggest a concrete fix."
+    enabled: true
+
+# ─────────────────────────── PROVIDERS ────────────────────────
+providers:
+  ollama:
+    base_url: "http://localhost:11434"

@@ -1,0 +1,26 @@
+# mcp-tools — one agent backed by a single MCP server (stdio transport)
+#
+# Prerequisites: ollama serve && ollama pull llama3.2 ; npx available on PATH
+# Run:           axocoatl validate examples/configs/mcp-tools.yaml
+#                axocoatl dev -c examples/configs/mcp-tools.yaml
+# Expected:      the daemon launches the filesystem MCP server over stdio and
+#                exposes its tools to the agent alongside the built-in file tools.
+
+agents:
+  - id: assistant
+    name: "Tool-using Assistant"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You can read and search files. Use the available tools to answer."
+    tools: [read_file, list_dir, grep]
+    depends_on: []
+
+mcp_servers:
+  - name: filesystem
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"

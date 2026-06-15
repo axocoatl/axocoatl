@@ -3,6 +3,23 @@
 version = 3
 
 [[package]]
+name = "a2a-server"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axocoatl-a2a",
+ "axocoatl-actor",
+ "axocoatl-core",
+ "axocoatl-llm",
+ "axum",
+ "ractor",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1464,6 +1481,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "948865622f87f30907bb46fbb081b235ae63c1896a99a83c26a003305c1fa82d"
 
 [[package]]
+name = "crash-recovery"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axocoatl-actor",
+ "axocoatl-core",
+ "axocoatl-llm",
+ "axocoatl-memory",
+ "ractor",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2598,6 +2631,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "htn-planner"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axocoatl-coordination",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "http"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3269,6 +3312,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
 
 [[package]]
+name = "mcp-bridge"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axocoatl-actor",
+ "axocoatl-config",
+ "axocoatl-core",
+ "axocoatl-llm",
+ "axocoatl-mcp",
+ "ractor",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "md-5"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3319,6 +3383,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "memory-recall"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axocoatl-actor",
+ "axocoatl-core",
+ "axocoatl-llm",
+ "axocoatl-memory",
+ "axocoatl-token",
+ "ractor",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3427,6 +3509,21 @@ dependencies = [
  "mime",
  "spin",
  "version_check",
+]
+
+[[package]]
+name = "multi-provider"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axocoatl-actor",
+ "axocoatl-coordination",
+ "axocoatl-core",
+ "axocoatl-llm",
+ "ractor",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -3970,6 +4067,22 @@ checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
  "syn",
+]
+
+[[package]]
+name = "proactive-agents"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axocoatl-actor",
+ "axocoatl-config",
+ "axocoatl-coordination",
+ "axocoatl-core",
+ "axocoatl-llm",
+ "ractor",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -4899,6 +5012,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandbox-session"
+version = "0.1.1"
+dependencies = [
+ "axocoatl-config",
+ "axocoatl-isolation",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5218,6 +5341,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "skills-lattice"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axocoatl-actor",
+ "axocoatl-coordination",
+ "axocoatl-core",
+ "axocoatl-llm",
+ "ractor",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5294,6 +5432,21 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "stigmergic-workflow"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axocoatl-actor",
+ "axocoatl-coordination",
+ "axocoatl-core",
+ "axocoatl-llm",
+ "ractor",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
 
 [[package]]
 name = "strsim"
@@ -5787,6 +5940,22 @@ name = "toml_writer"
 version = "1.1.1+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
+
+[[package]]
+name = "tool-hooks"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "axocoatl-actor",
+ "axocoatl-core",
+ "axocoatl-llm",
+ "axocoatl-token",
+ "axocoatl-tools",
+ "ractor",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+]
 
 [[package]]
 name = "tower"

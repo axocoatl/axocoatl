@@ -1,0 +1,51 @@
+# incident-response — three agents coordinating through Skills (lattice events)
+#
+# Prerequisites: ollama serve && ollama pull llama3.2  (no API key needed)
+# Run:           axocoatl validate examples/configs/incident-response.yaml
+#                axocoatl dev -c examples/configs/incident-response.yaml
+# Expected:      the triage Skill reacts to IncidentReported and emits
+#                IncidentResolved; the postmortem Skill reacts to that and drafts
+#                a writeup — Skills compose through the lattice, no manual wiring.
+
+agents:
+  - id: ops
+    name: "Ops Engineer"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a site reliability engineer. Diagnose incidents and produce mitigation steps."
+    depends_on: []
+
+  - id: analyst
+    name: "Data Analyst"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Extract the signal from logs and metrics. State the likely root cause."
+    depends_on: []
+
+  - id: scribe
+    name: "Scribe"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Write a clear, blameless incident postmortem from the resolved incident."
+    depends_on: []
+
+skills:
+  - id: incident-triage
+    name: "Incident Triage"
+    description: "Diagnose an incident and propose a concrete mitigation."
+    emits: ["IncidentResolved"]
+    reacts_to: ["IncidentReported"]
+    agents: [ops, analyst]
+    prompt: "Diagnose this incident: likely cause, blast radius, immediate mitigation."
+
+  - id: incident-postmortem
+    name: "Incident Postmortem"
+    description: "Draft a blameless postmortem once the incident is resolved."
+    emits: ["PostmortemDraft"]
+    reacts_to: ["IncidentResolved"]
+    agents: [scribe]
+    prompt: "Draft a blameless postmortem: timeline, root cause, impact, mitigation, action items."
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"

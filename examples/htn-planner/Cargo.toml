@@ -1,0 +1,16 @@
+[package]
+name = "htn-planner"
+version = "0.1.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+axocoatl-coordination = { path = "../../crates/axocoatl-coordination" }
+
+tokio = { version = "1.48", features = ["full"] }
+async-trait = "0.1"
+serde_json = "1.0"
+
+[[bin]]
+name = "htn-planner"
+path = "main.rs"

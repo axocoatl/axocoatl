@@ -173,8 +173,31 @@ GET  /ws   (WebSocket streaming)
 
 ## Examples
 
-Runnable, mock-LLM (no keys needed) — see [`examples/`](examples/):
-`research-assistant`, `code-reviewer`, `customer-support`.
+Every example is runnable with a mock LLM — **no API keys needed** — unless
+noted. See [`examples/`](examples/).
+
+**Coordination & planning**
+- [`stigmergic-workflow`](examples/stigmergic-workflow) — the `EventLattice` + `depends_on` DAG. The running order *emerges* from pheromone signals crossing thresholds; no orchestrator decides it.
+- [`skills-lattice`](examples/skills-lattice) — event-driven Skills: one event fans out to every agent that `reacts_to` it (`emits`/`reacts_to`), distinct from a fixed DAG.
+- [`htn-planner`](examples/htn-planner) — symbolic HTN decomposition; compound tasks expand via methods and only unresolved frontiers reach the LLM.
+- [`crash-recovery`](examples/crash-recovery) — kill a multi-step workflow mid-run and resume from the checkpoint; completed steps are not re-run.
+
+**Memory & providers**
+- [`memory-recall`](examples/memory-recall) — agent-managed core memory, semantic recall, and sleep-time consolidation (Tiers 3–4); runs offline.
+- [`multi-provider`](examples/multi-provider) — per-agent provider selection: a cheap local model for simple steps, a frontier model for the hard one, with a per-tier cost breakdown.
+
+**Tools, protocols & integration**
+- [`tool-hooks`](examples/tool-hooks) — pre/post tool hooks that deny a path-traversal write, audit every call as JSON, and let the agent recover.
+- [`mcp-bridge`](examples/mcp-bridge) — call an external MCP tool over stdio through the real `McpToolRegistry`; plus how to expose agents as an MCP server.
+- [`a2a-server`](examples/a2a-server) — expose an agent over the A2A protocol (agent card + task endpoint) and call it from a client, in-process.
+- [`sandbox-session`](examples/sandbox-session) — the rootless Podman sandbox for agent tool execution: threat model, config knobs, and a live integration test (needs Podman).
+
+**Autonomy & config**
+- [`proactive-agents`](examples/proactive-agents) — agents that fire on a schedule or on an event (here, reacting to `AgentFailed`), not on a user prompt.
+- [`configs/`](examples/configs) — a gallery of minimal YAML configs for common recipes (research pipeline, feature dev, incident response, local-only, MCP). No Rust.
+
+**Foundations**
+- [`research-assistant`](examples/research-assistant), [`code-reviewer`](examples/code-reviewer), [`customer-support`](examples/customer-support) — agent coordination, token budgets, and session/checkpoint memory.
 
 ## Build from source
 
@@ -182,7 +205,7 @@ Runnable, mock-LLM (no keys needed) — see [`examples/`](examples/):
 git clone https://github.com/axocoatl/axocoatl
 cd axocoatl
 cargo build --release          # binary: target/release/axocoatl
-cargo test --workspace         # 420+ tests
+cargo test --workspace         # 430+ tests
 ```
 
 ## License

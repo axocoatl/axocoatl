@@ -1,0 +1,26 @@
+# local-only — fully local inference via Ollama, zero API keys
+#
+# Prerequisites: ollama serve && ollama pull llama3.2  (no cloud credentials)
+# Run:           axocoatl validate examples/configs/local-only.yaml
+#                axocoatl dev -c examples/configs/local-only.yaml
+# Expected:      both agents run against the local Ollama endpoint — no provider
+#                api_key anywhere, so your prompts and data never leave the box.
+
+agents:
+  - id: assistant
+    name: "Local Assistant"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a helpful assistant running entirely on local hardware."
+    depends_on: []
+
+  - id: critic
+    name: "Local Critic"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Critique the assistant's answer and point out anything missing or wrong."
+    depends_on: [assistant]
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"

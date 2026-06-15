@@ -1,0 +1,45 @@
+[package]
+name = "mcp-bridge"
+version = "0.1.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+axocoatl-core = { path = "../../crates/axocoatl-core" }
+axocoatl-llm = { path = "../../crates/axocoatl-llm" }
+axocoatl-mcp = { path = "../../crates/axocoatl-mcp" }
+axocoatl-actor = { path = "../../crates/axocoatl-actor" }
+
+# rmcp is the same MCP library axocoatl-mcp is built on. We use it directly for
+# two things the registry intentionally doesn't do itself:
+#   1. expose a trivial `get_weather` tool over stdio (the `server`/`macros`
+#      features + ToolRouter) when this binary re-execs in --mcp-server mode;
+#   2. open a live stdio client to actually CALL the tool — the registry closes
+#      its discovery connection (see the registry walkthrough in main.rs).
+rmcp = { version = "1.2", features = [
+    "server",
+    "client",
+    "transport-child-process",
+    "macros",
+] }
+
+tokio = { version = "1.48", features = ["full"] }
+tokio-stream = "0.1"
+async-trait = "0.1"
+# Same actor runtime the daemon uses to host agents; AgentActor::spawn lives on
+# ractor's `Actor` trait.
+ractor = { version = "0.15", features = ["monitors"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+schemars = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# Used by the test that loads axocoatl.example.mcp.yaml through the real config
+# loader, so the companion config can't silently drift from the schema.
+axocoatl-config = { path = "../../crates/axocoatl-config" }
+
+[[bin]]
+name = "mcp-bridge"
+path = "main.rs"

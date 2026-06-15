@@ -158,6 +158,10 @@ fires between a user's two messages. Tune under `consolidation` (`enabled`,
 - **A2A** — agent-to-agent interop for cross-framework workflows, reachable over
   `GET /.well-known/agent.json` and `POST /a2a/tasks`.
 
+Runnable examples: [`mcp-bridge`](../examples/mcp-bridge) (consume an MCP tool
+over stdio, expose agents as an MCP server) and [`a2a-server`](../examples/a2a-server)
+(publish an agent card and call it from a client, in-process).
+
 ## Security model
 
 A session runs the agent's tools inside a **rootless, daemonless Podman

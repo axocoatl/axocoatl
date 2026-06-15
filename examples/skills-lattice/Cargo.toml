@@ -1,0 +1,21 @@
+[package]
+name = "skills-lattice"
+version = "0.1.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+axocoatl-core = { path = "../../crates/axocoatl-core" }
+axocoatl-actor = { path = "../../crates/axocoatl-actor" }
+axocoatl-coordination = { path = "../../crates/axocoatl-coordination" }
+axocoatl-llm = { path = "../../crates/axocoatl-llm" }
+
+tokio = { version = "1.48", features = ["full"] }
+tokio-stream = "0.1"
+async-trait = "0.1"
+serde_json = "1.0"
+ractor = { version = "0.15", features = ["monitors"] }
+
+[[bin]]
+name = "skills-lattice"
+path = "main.rs"

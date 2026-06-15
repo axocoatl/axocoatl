@@ -14,6 +14,17 @@ members = [
     "examples/research-assistant",
     "examples/code-reviewer",
     "examples/customer-support",
+    "examples/stigmergic-workflow",
+    "examples/skills-lattice",
+    "examples/memory-recall",
+    "examples/multi-provider",
+    "examples/crash-recovery",
+    "examples/htn-planner",
+    "examples/tool-hooks",
+    "examples/mcp-bridge",
+    "examples/a2a-server",
+    "examples/proactive-agents",
+    "examples/sandbox-session",
 ]
 
 [workspace.package]

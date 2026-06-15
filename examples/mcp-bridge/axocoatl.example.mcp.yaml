@@ -1,0 +1,66 @@
+# Axocoatl — MCP example config
+#
+# Two independent things live here, matching the two halves of the README:
+#
+#   • `mcp_servers:` — external MCP servers Axocoatl connects to AS A CLIENT.
+#     The daemon dials each one at startup, runs the MCP handshake, and folds
+#     their tools into the agent tool set under qualified `mcp__<server>__<tool>`
+#     names (the same discovery this example's Part 1 does in-process).
+#
+#   • `agents:` — your own agents. `axocoatl mcp serve -c this-file.yaml`
+#     exposes each one to OTHER MCP clients as an `agent_<id>` tool. That's the
+#     SERVER path (README "Path B").
+#
+# Copy to `axocoatl.yaml` (or pass with `-c`) to use it.
+
+# ─── MCP servers Axocoatl consumes (client path) ────────────────────────────
+mcp_servers:
+  # stdio transport: Axocoatl spawns the command as a child process and speaks
+  # JSON-RPC over its stdin/stdout. This is how most local MCP servers ship
+  # (filesystem, git, sqlite, the official reference servers via `npx`). `env`
+  # is layered onto the child's environment — most servers read their API key
+  # or token from there and exit before the handshake if it's missing.
+  - name: filesystem
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    env: {}
+
+  # The example in this folder uses exactly this stdio shape, except `command`
+  # is the example binary itself launched with `--mcp-server`. To point a real
+  # daemon at it instead, you'd write:
+  #
+  #   - name: weather
+  #     transport: stdio
+  #     command: /absolute/path/to/mcp-bridge
+  #     args: ["--mcp-server"]
+
+  # streamable_http transport: a remote MCP server reached over HTTP. Use this
+  # for hosted servers. `headers` is where bearer tokens / API keys go. (SSE was
+  # removed upstream in rmcp 0.11; streamable HTTP is the remote transport now.)
+  - name: remote-tools
+    transport: streamable_http
+    url: https://mcp.example.com/mcp
+    headers:
+      Authorization: "Bearer ${REMOTE_MCP_TOKEN}"
+
+# ─── Your agents (exposed when you run `axocoatl mcp serve`) ─────────────────
+# `axocoatl mcp serve` exposes each of these as an `agent_<id>` MCP tool. A host
+# (Claude Desktop, another Axocoatl, any MCP client) lists `agent_weather` and
+# calls it with `{ "input": "What's the weather in Tokyo?" }`.
+agents:
+  - id: weather
+    name: "Weather Agent"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You answer weather questions. Use the available tools to look up conditions, then reply in one sentence."
+    depends_on: []
+    # `tools` declares the capabilities this agent advertises — used for
+    # capability-based task routing (the auction matcher checks an agent has the
+    # required tools before assigning work). Names use the qualified
+    # `mcp__<server>__<tool>` form. Per-call authorization of MCP tools is a
+    # separate, runtime concern handled by the human-in-the-loop approval gate
+    # and the persisted permission store (see crates/axocoatl-mcp).
+    tools:
+      - mcp__filesystem__read_file
+    token_budget: { per_execution: 2000, per_call: 1000, overflow_policy: warn }

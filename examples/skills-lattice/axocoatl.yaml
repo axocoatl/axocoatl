@@ -1,0 +1,60 @@
+# Skills — event-driven lattice activation.
+#
+# This is the declarative form of what `main.rs` builds in code: the same two
+# skills, three holder agents, and the CodeReady → ReviewComplete → DeployApproved
+# routing. In a running daemon you would drop this in and fire the skill with:
+#
+#   curl -X POST http://localhost:8080/api/skills/code-review-checklist/fire
+#
+# The lattice activates every agent that holds a skill reacting to the event —
+# no graph, no scheduler. `main.rs` reproduces that mechanism standalone with a
+# mock LLM so it runs with no daemon and no API keys.
+
+agents:
+  - id: reviewer
+    name: "Reviewer"
+    provider: ollama
+    model: llama3.2
+    # The agent's STANDING role. Constant across every skill it holds. This is
+    # distinct from a skill's `prompt` (the per-fire task) — see below.
+    system_prompt: "You are a senior reviewer. You care about correctness and tests."
+
+  - id: coder
+    name: "Coder"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are the implementing engineer. You review for runtime safety."
+
+  - id: deployer
+    name: "Deployer"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are the release gate. You only ship green reviews."
+
+skills:
+  # Held by TWO agents. When `CodeReady` lands, both reviewer AND coder
+  # activate — one event, fan-out to every holder.
+  - id: code-review-checklist
+    name: "Code Review Checklist"
+    description: "Structured 12-point review."
+    reacts_to: ["CodeReady"]
+    emits: ["ReviewComplete"]
+    agents: [reviewer, coder]
+    # The skill's task prompt — handed to whichever holder activates. NOT the
+    # agent's system prompt. The agent says WHO is acting; the skill says WHAT.
+    prompt: |
+      Run the 12-point review checklist on the diff: correctness, edge cases,
+      error handling, performance, security, naming, tests. Return JSON with
+      `issues` and `severity`.
+
+  # Reacts to an event EMITTED by the skill above — so the routing chains
+  # through the lattice with nothing wiring the two skills together.
+  - id: deploy-gate
+    name: "Deploy Gate"
+    description: "Decide whether a reviewed change may ship."
+    reacts_to: ["ReviewComplete"]
+    emits: ["DeployApproved"]
+    agents: [deployer]
+    prompt: |
+      A review just completed. Decide whether the change may ship. Return JSON
+      with `decision` and `reason`.

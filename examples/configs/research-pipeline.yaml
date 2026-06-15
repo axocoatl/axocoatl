@@ -1,0 +1,32 @@
+# research-pipeline — two agents wired by depends_on
+#
+# Prerequisites: ollama serve && ollama pull llama3.2  (no API key needed)
+# Run:           axocoatl validate examples/configs/research-pipeline.yaml
+#                axocoatl dev -c examples/configs/research-pipeline.yaml
+# Expected:      summarizer activates automatically once researcher emits
+#                TaskCompleted on the lattice — no orchestrator, no manual wiring.
+
+agents:
+  - id: researcher
+    name: "Researcher"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Research the question and return 3 bullet-pointed facts."
+    depends_on: []
+
+  - id: summarizer
+    name: "Summarizer"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Take the research bullets and write one 2-sentence summary."
+    depends_on: [researcher]
+
+workflows:
+  - id: research-pipeline
+    name: "Research Pipeline"
+    agents: [researcher, summarizer]
+    entry_point: researcher
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"

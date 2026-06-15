@@ -1,0 +1,18 @@
+[package]
+name = "sandbox-session"
+version = "0.1.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+axocoatl-config = { path = "../../crates/axocoatl-config" }
+axocoatl-isolation = { path = "../../crates/axocoatl-isolation" }
+
+tokio = { version = "1.48", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "3.27"
+
+[[bin]]
+name = "sandbox-session"
+path = "main.rs"
