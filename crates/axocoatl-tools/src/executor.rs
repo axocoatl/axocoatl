@@ -11,8 +11,12 @@ use crate::error::ToolError;
 pub enum ToolBackend {
     /// Built-in Rust tool (runs in-process).
     Builtin(Arc<dyn BuiltinTool>),
-    /// MCP tool on a named server.
-    Mcp { server_name: String },
+    /// MCP tool on a named server. Carries the discovered definition so the
+    /// executor can advertise it to the LLM without re-querying the registry.
+    Mcp {
+        server_name: String,
+        definition: axocoatl_llm::ToolDefinition,
+    },
     /// WASM tool in sandbox.
     Wasm { module_name: String },
 }
@@ -45,12 +49,20 @@ impl ToolExecutor {
         self.tools.insert(name.into(), ToolBackend::Builtin(tool));
     }
 
-    /// Register an MCP tool (from a connected server).
-    pub fn register_mcp(&mut self, name: impl Into<String>, server_name: impl Into<String>) {
+    /// Register an MCP tool (from a connected server). `name` is the qualified
+    /// `mcp__server__tool` name the LLM sees; `definition` is what gets
+    /// advertised to it.
+    pub fn register_mcp(
+        &mut self,
+        name: impl Into<String>,
+        server_name: impl Into<String>,
+        definition: axocoatl_llm::ToolDefinition,
+    ) {
         self.tools.insert(
             name.into(),
             ToolBackend::Mcp {
                 server_name: server_name.into(),
+                definition,
             },
         );
     }
@@ -78,18 +90,27 @@ impl ToolExecutor {
 
         match backend {
             ToolBackend::Builtin(tool) => tool.execute(arguments).await,
-            ToolBackend::Mcp { server_name } => {
-                // MCP tool execution requires a persistent connection (not yet implemented).
-                // The registry currently disconnects after discovery.
-                // For now, return a descriptive error.
-                Err(ToolError::ExecutionFailed {
-                    tool: tool_name.to_string(),
-                    reason: format!(
-                        "MCP tool '{}' on server '{}': persistent connections not yet implemented. \
-                         Tools are discovered but execution requires keeping the MCP client alive.",
-                        tool_name, server_name
-                    ),
-                })
+            ToolBackend::Mcp { server_name, .. } => {
+                // Route to the live client the registry keeps alive after
+                // discovery. The LLM calls the qualified `mcp__server__tool`
+                // name; the server expects the bare name it registered.
+                let Some(registry) = &self.mcp_registry else {
+                    return Err(ToolError::ExecutionFailed {
+                        tool: tool_name.to_string(),
+                        reason: "MCP registry not configured on this executor".to_string(),
+                    });
+                };
+                let reg = registry.read().await;
+                let bare = reg
+                    .original_name(tool_name)
+                    .unwrap_or(tool_name)
+                    .to_string();
+                reg.call_tool(server_name, bare, arguments)
+                    .await
+                    .map_err(|e| ToolError::ExecutionFailed {
+                        tool: tool_name.to_string(),
+                        reason: e.to_string(),
+                    })
             }
             ToolBackend::Wasm { module_name } => {
                 // TODO: Route to WasmtimeSandbox for execution
@@ -130,7 +151,8 @@ impl ToolExecutor {
                     parameters: tool.parameters_schema(),
                     concurrency: axocoatl_llm::ConcurrencyPolicy::Safe,
                 }),
-                _ => None, // MCP/WASM tools get their schemas from their registries
+                ToolBackend::Mcp { definition, .. } => Some(definition.clone()),
+                ToolBackend::Wasm { .. } => None, // WASM execution not wired (tracked separately)
             })
             .collect()
     }
@@ -187,5 +209,45 @@ mod tests {
 
         let tools = executor.as_llm_tools();
         assert_eq!(tools.len(), 2);
+    }
+
+    fn mcp_def(name: &str) -> axocoatl_llm::ToolDefinition {
+        axocoatl_llm::ToolDefinition {
+            name: name.to_string(),
+            description: "does a thing".to_string(),
+            parameters: serde_json::json!({}),
+            concurrency: axocoatl_llm::ConcurrencyPolicy::Safe,
+        }
+    }
+
+    #[test]
+    fn as_llm_tools_advertises_mcp_tools() {
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("echo", Arc::new(EchoTool));
+        executor.register_mcp("mcp__srv__do", "srv", mcp_def("mcp__srv__do"));
+
+        let tools = executor.as_llm_tools();
+        assert_eq!(tools.len(), 2);
+        assert!(tools.iter().any(|t| t.name == "mcp__srv__do"));
+    }
+
+    #[tokio::test]
+    async fn mcp_without_registry_reports_unconfigured() {
+        // With no registry wired, the Mcp arm must surface a clear configuration
+        // error — not the old "not yet implemented", and not NotFound (the tool
+        // IS registered, so dispatch reaches the Mcp arm).
+        let mut executor = ToolExecutor::new();
+        executor.register_mcp("mcp__srv__do", "srv", mcp_def("mcp__srv__do"));
+
+        let err = executor
+            .execute("mcp__srv__do", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        match err {
+            ToolError::ExecutionFailed { reason, .. } => {
+                assert!(reason.contains("registry not configured"), "got: {reason}");
+            }
+            other => panic!("expected ExecutionFailed, got {other:?}"),
+        }
     }
 }

@@ -33,6 +33,18 @@ use crate::error::DaemonError;
 use crate::scheduler::ScheduleTable;
 use crate::workflow::{WorkflowExecution, WorkflowOutput};
 
+/// Register every discovered MCP tool into `executor` under its qualified
+/// `mcp__server__tool` name, so a model call reaches the `Mcp` backend and the
+/// tool is advertised to the LLM. The executor must also be given the registry
+/// (`with_mcp_registry`) for that backend to dispatch over the live connection.
+fn register_discovered_mcp_tools(executor: &mut ToolExecutor, reg: &McpToolRegistry) {
+    for def in reg.as_llm_tools() {
+        if let Some(server) = reg.server_for_tool(&def.name).map(str::to_string) {
+            executor.register_mcp(def.name.clone(), server, def);
+        }
+    }
+}
+
 /// Running state of the Axocoatl daemon.
 pub struct AxocoatlDaemon {
     pub config: AxocoatlConfig,
@@ -183,12 +195,13 @@ impl AxocoatlDaemon {
         }
         let shared_registry = Arc::new(shared_registry);
 
-        // 5. Set up tool executor with built-in tools
+        // 5. Set up tool executor with built-in tools. Kept mutable: discovered
+        // MCP tools are registered into it below, once the MCP registry is up,
+        // before it's shared.
         let mut tool_executor = ToolExecutor::new();
         tool_executor.register_builtin("echo", Arc::new(axocoatl_tools::EchoTool));
         tool_executor.register_builtin("json_keys", Arc::new(axocoatl_tools::JsonKeysTool));
         tool_executor.register_builtin("text_split", Arc::new(axocoatl_tools::TextSplitTool));
-        let tool_executor = Arc::new(tool_executor);
 
         // 6. Set up agent registry
         let agent_registry = AgentRegistry::new();
@@ -246,6 +259,17 @@ impl AxocoatlDaemon {
             );
         }
         let mcp_registry = Arc::new(tokio::sync::RwLock::new(mcp_registry));
+
+        // Advertise + route discovered MCP tools through the shared executor:
+        // register each tool so a model call reaches the Mcp backend (and is
+        // advertised to the LLM), and hand the executor the registry so that
+        // backend dispatches over the persistent client. Done before the
+        // executor is shared so every agent sees the MCP tools.
+        {
+            let reg = mcp_registry.read().await;
+            register_discovered_mcp_tools(&mut tool_executor, &reg);
+        }
+        let tool_executor = Arc::new(tool_executor.with_mcp_registry(mcp_registry.clone()));
 
         // MCP permission decisions live in a single JSON file alongside
         // chats and files. Missing file = empty store, which means every
@@ -1955,7 +1979,7 @@ impl AxocoatlDaemon {
             container,
             std::path::Path::new(&variant.worktree),
         ));
-        let executor = self.build_session_executor(session, sandbox);
+        let executor = self.build_session_executor(session, sandbox).await;
         // Point context + project instructions at the worktree.
         let mut vsession = session.clone();
         vsession.working_dir = std::path::PathBuf::from(&variant.worktree);
@@ -2485,7 +2509,7 @@ impl AxocoatlDaemon {
             })?
             .clone();
         let sandbox = self.ensure_sandbox(session).await?;
-        let executor = self.build_session_executor(session, sandbox);
+        let executor = self.build_session_executor(session, sandbox).await;
         self.spawn_session_agent(session, &agent_yaml, &scoped, Arc::new(executor))
             .await
     }
@@ -2494,7 +2518,7 @@ impl AxocoatlDaemon {
     /// at `sandbox`, the session's allowlisted skills (callable as tools), and
     /// web search when configured. Shared by the primary session actor and
     /// per-variant actors (which pass a worktree-rooted attached sandbox).
-    fn build_session_executor(
+    async fn build_session_executor(
         &self,
         session: &Session,
         sandbox: Arc<SessionSandbox>,
@@ -2518,7 +2542,13 @@ impl AxocoatlDaemon {
             );
             executor.register_builtin("web_search", Arc::new(tool));
         }
-        executor
+        // Global MCP tools (discovered at bootstrap) are available to session
+        // agents too, dispatched over the daemon's persistent connections.
+        {
+            let reg = self.mcp_registry.read().await;
+            register_discovered_mcp_tools(&mut executor, &reg);
+        }
+        executor.with_mcp_registry(self.mcp_registry.clone())
     }
 
     /// Spawn a session-scoped agent actor named `{session}:{agent}`, bound to

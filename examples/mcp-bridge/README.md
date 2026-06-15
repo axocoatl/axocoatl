@@ -34,9 +34,11 @@ What the run does, in order:
    `mcp__weather__get_weather`.
 3. **A mock LLM emits a tool call** for that discovered name (it isn't hard-coded
    — the name comes from the registry).
-4. **The call goes over a real MCP connection.** The agent opens a live `rmcp`
-   stdio client using the transport the registry cached and invokes `call_tool`.
-   The weather string the agent prints came back across that connection.
+4. **The call goes over a real MCP connection.** The agent dispatches it through
+   the product's `ToolExecutor`, which routes the `mcp__weather__get_weather`
+   call to the live client the registry keeps in its connection pool and invokes
+   `call_tool`. The weather string the agent prints came back across that
+   connection.
 5. **The model writes the final answer** from the tool result.
 
 Expected output (abridged):
@@ -59,23 +61,21 @@ The result depends on the `city` argument (London vs Tokyo vs SF return
 different strings), which only works because the argument really crossed the
 wire to the server.
 
-### An honest note on the call path
+### How the call path works
 
 `McpToolRegistry::connect_server`
 ([`crates/axocoatl-mcp/src/registry.rs`](../../crates/axocoatl-mcp/src/registry.rs))
-does the discovery handshake and then **cancels the client** —
-*"in production, we'd keep persistent connections"* is the comment in the
-source. Matching that, the `ToolExecutor` MCP backend
+does the discovery handshake and **keeps the client alive** in a per-server
+connection pool. The `ToolExecutor` MCP backend
 ([`crates/axocoatl-tools/src/executor.rs`](../../crates/axocoatl-tools/src/executor.rs))
-returns a descriptive *"persistent connections not yet implemented"* error
-rather than fabricating a result.
+routes an `mcp__server__tool` call to that live client via
+`McpToolRegistry::call_tool`.
 
-So this example uses the registry as the source of truth for **discovery** (the
-tool index, the qualified `mcp__server__tool` names, the cached transport) and,
-for the actual **call**, opens a live `rmcp` stdio client — the same library the
-registry is built on — re-dialing the transport the registry cached. Nothing is
-mocked except the LLM: the tool list, the call, and the returned string all
-cross a real MCP stdio connection.
+So this example drives the real runtime path end to end: discovery **and**
+execution both go through the same registry + executor the daemon wires into its
+agents — there is no out-of-band client. Nothing is mocked except the LLM: the
+tool list, the call, and the returned string all cross a real MCP stdio
+connection.
 
 ---
 

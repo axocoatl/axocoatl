@@ -9,13 +9,14 @@ axocoatl-core = { path = "../../crates/axocoatl-core" }
 axocoatl-llm = { path = "../../crates/axocoatl-llm" }
 axocoatl-mcp = { path = "../../crates/axocoatl-mcp" }
 axocoatl-actor = { path = "../../crates/axocoatl-actor" }
+# The product's tool executor — the example calls MCP tools through it (over the
+# registry's persistent connection), the same path the daemon uses.
+axocoatl-tools = { path = "../../crates/axocoatl-tools" }
 
-# rmcp is the same MCP library axocoatl-mcp is built on. We use it directly for
-# two things the registry intentionally doesn't do itself:
-#   1. expose a trivial `get_weather` tool over stdio (the `server`/`macros`
-#      features + ToolRouter) when this binary re-execs in --mcp-server mode;
-#   2. open a live stdio client to actually CALL the tool — the registry closes
-#      its discovery connection (see the registry walkthrough in main.rs).
+# rmcp is the same MCP library axocoatl-mcp is built on. We use it directly only
+# to expose a trivial `get_weather` tool over stdio (the `server`/`macros`
+# features + ToolRouter) when this binary re-execs in --mcp-server mode. The
+# tool CALL goes through axocoatl's own registry + executor, not rmcp directly.
 rmcp = { version = "1.2", features = [
     "server",
     "client",
