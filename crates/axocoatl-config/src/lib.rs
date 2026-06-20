@@ -212,6 +212,26 @@ fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
         }
     }
 
+    for webhook in &config.webhooks {
+        if webhook.name.trim().is_empty() {
+            return Err(ConfigError::InvalidField {
+                field: "webhooks[].name".to_string(),
+                value: "\"\"".to_string(),
+                reason: "Webhook name cannot be empty".to_string(),
+                suggestion: "Give each webhook a name, e.g. name: slack-alerts".to_string(),
+            });
+        }
+        if !(webhook.url.starts_with("http://") || webhook.url.starts_with("https://")) {
+            return Err(ConfigError::InvalidField {
+                field: format!("webhooks[{}].url", webhook.name),
+                value: webhook.url.clone(),
+                reason: "Webhook URL must be an http(s) URL".to_string(),
+                suggestion: "Use a full URL, e.g. url: https://hooks.example.com/axocoatl"
+                    .to_string(),
+            });
+        }
+    }
+
     Ok(())
 }
 

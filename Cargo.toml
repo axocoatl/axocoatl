@@ -61,6 +61,8 @@ base64 = "0.22"
 #   pdf-extract — text extraction from PDFs (no external binary)
 #   calamine    — xlsx/xls/ods/csv → cells
 sha2 = "0.10"
+hmac = "0.12"          # HMAC-SHA256 signing for outbound event webhooks
+hex = "0.4"            # hex-encode webhook signatures
 pdf-extract = "0.7"
 calamine = "0.26"
 

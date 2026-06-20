@@ -694,6 +694,25 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
         ),
     }
 
+    // Outbound egress transparency — always surface what leaves the box.
+    if let Some(cfg) = &config {
+        if cfg.webhooks.is_empty() {
+            pass("Outbound webhooks: none (no event egress)");
+        } else {
+            let names: Vec<&str> = cfg
+                .webhooks
+                .iter()
+                .filter(|w| w.enabled)
+                .map(|w| w.name.as_str())
+                .collect();
+            println!(
+                "  [EGRESS] {} webhook(s) active — lattice events leave the box to: {}",
+                names.len(),
+                names.join(", ")
+            );
+        }
+    }
+
     println!();
     if hard_ok {
         println!("All required checks passed.");

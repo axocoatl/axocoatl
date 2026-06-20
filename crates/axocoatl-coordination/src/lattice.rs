@@ -42,6 +42,34 @@ pub enum EventType {
     Custom(String),
 }
 
+impl EventType {
+    /// Canonical, stable name for this event type — the string users filter on
+    /// (e.g. in `webhooks[].events`) and the value placed in egress payloads.
+    /// For `Custom`, the name is the custom event string itself, so a
+    /// Skill-emitted event is filterable by its own name. Derived from a match,
+    /// not `Debug`, so the contract never shifts with formatting.
+    pub fn name(&self) -> &str {
+        match self {
+            EventType::TaskAvailable { .. } => "TaskAvailable",
+            EventType::TaskCompleted { .. } => "TaskCompleted",
+            EventType::AgentActivated { .. } => "AgentActivated",
+            EventType::AgentFailed { .. } => "AgentFailed",
+            EventType::ToolResult { .. } => "ToolResult",
+            EventType::UserInput => "UserInput",
+            EventType::WorkflowCompleted => "WorkflowCompleted",
+            EventType::Custom(name) => name.as_str(),
+        }
+    }
+
+    /// Whether this event is pure observability telemetry (broadcast via
+    /// `notify_observers`) rather than a coordination signal. Egress sinks
+    /// exclude these from the default "all events" set so a webhook is not
+    /// spammed on every agent activation.
+    pub fn is_telemetry(&self) -> bool {
+        matches!(self, EventType::AgentActivated { .. })
+    }
+}
+
 /// Notification sent when an event is published.
 #[derive(Debug, Clone)]
 pub struct EventNotification {
@@ -50,6 +78,10 @@ pub struct EventNotification {
     /// The published event's payload — carried so observers (e.g. the
     /// dashboard's SSE stream) can surface details like an agent's output.
     pub payload: serde_json::Value,
+    /// The agent or source that produced the event (`LatticeEvent::produced_by`).
+    pub produced_by: String,
+    /// Unix-seconds timestamp when the event was produced.
+    pub timestamp: u64,
 }
 
 /// The typed event lattice — the shared coordination space.
@@ -82,6 +114,8 @@ impl EventLattice {
         let event_id = event.id.clone();
         let event_type = event.event_type.clone();
         let payload = event.payload.clone();
+        let produced_by = event.produced_by.clone();
+        let timestamp = event.timestamp;
 
         // Store the event
         self.events.insert(event_id.clone(), event);
@@ -91,6 +125,8 @@ impl EventLattice {
             event_id,
             event_type: event_type.clone(),
             payload,
+            produced_by,
+            timestamp,
         });
 
         // Calculate signal strength based on event type
@@ -136,6 +172,8 @@ impl EventLattice {
             event_id: event.id.clone(),
             event_type: event.event_type.clone(),
             payload: event.payload.clone(),
+            produced_by: event.produced_by.clone(),
+            timestamp: event.timestamp,
         });
     }
 
@@ -186,6 +224,30 @@ mod tests {
             retrieved.event_type,
             EventType::TaskAvailable { .. }
         ));
+    }
+
+    #[test]
+    fn event_type_name_is_canonical() {
+        assert_eq!(
+            EventType::TaskCompleted {
+                task_id: "t".into()
+            }
+            .name(),
+            "TaskCompleted"
+        );
+        assert_eq!(EventType::WorkflowCompleted.name(), "WorkflowCompleted");
+        // Custom events are named by their own string, so a Skill-emitted event
+        // filters on its own name (the old Debug-parsing approach broke this).
+        assert_eq!(EventType::Custom("CodeReady".into()).name(), "CodeReady");
+        // AgentActivated is the only pure-telemetry event.
+        assert!(EventType::AgentActivated {
+            agent_id: "a".into()
+        }
+        .is_telemetry());
+        assert!(!EventType::TaskCompleted {
+            task_id: "t".into()
+        }
+        .is_telemetry());
     }
 
     #[test]

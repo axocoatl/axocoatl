@@ -132,14 +132,28 @@ fn default_enabled() -> bool {
     true
 }
 
-/// Webhook configuration for the event lattice egress sink.
+/// An outbound webhook — **lattice event egress**. When the lattice publishes an
+/// event whose name matches `events` (or `events` is empty, i.e. all coordination
+/// events), Axocoatl sends a signed JSON `POST` to `url`. This is the outbound
+/// counterpart to inbound A2A: signals leave, opt-in, to systems you own.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookConfigYaml {
     pub name: String,
     pub url: String,
-    /// List of event types to dispatch. If empty, all events are dispatched.
+    /// Event names to dispatch — e.g. `["TaskCompleted", "AgentFailed"]`, or a
+    /// Skill's custom event name. Empty means all coordination events; pure
+    /// telemetry (`AgentActivated`) is excluded from "all" unless named explicitly.
     #[serde(default)]
     pub events: Vec<String>,
+    /// Optional shared secret. When set, each delivery is HMAC-SHA256 signed over
+    /// the request body and the hex digest is sent in `X-Axocoatl-Signature:
+    /// sha256=…`, so the receiver can verify authenticity. Redacted in logs.
+    #[serde(default)]
+    pub secret: Option<SecretString>,
+    /// Static headers added to every request (e.g. an `Authorization` bearer for
+    /// an internal endpoint). Values are redacted in logs.
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, SecretString>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
