@@ -33,6 +33,34 @@ use crate::frontier_resolver::LlmFrontierResolver;
 /// treated as ample so an unbounded worker isn't penalized in the auction.
 pub const DEFAULT_WORKER_BUDGET: usize = 100_000;
 
+/// Extract the JSON array from an LLM decomposition response.
+///
+/// Reasoning models (Qwen3, DeepSeek-R1, …) emit a `<think>…</think>` block
+/// and/or prose around their answer, and many models wrap it in a ```json
+/// fence. A bare `serde_json::from_str` on the whole response then fails even
+/// though a valid array is present. This drops a leading think block and any
+/// code fence, then falls back to the outermost `[ … ]` slice.
+fn extract_json_array(content: &str) -> Option<String> {
+    let mut s = content.trim();
+    if let Some(end) = s.find("</think>") {
+        s = s[end + "</think>".len()..].trim();
+    }
+    if let Some(start) = s.find("```") {
+        let after = &s[start + 3..];
+        let after = after.strip_prefix("json").unwrap_or(after);
+        s = match after.find("```") {
+            Some(end) => after[..end].trim(),
+            None => after.trim(),
+        };
+    }
+    if serde_json::from_str::<serde_json::Value>(s).is_ok() {
+        return Some(s.to_string());
+    }
+    let start = s.find('[')?;
+    let end = s.rfind(']')?;
+    (end > start).then(|| s[start..=end].to_string())
+}
+
 /// Status of a worker agent managed by the coordinator.
 #[derive(Debug, Clone)]
 pub struct WorkerStatus {
@@ -491,10 +519,18 @@ impl CoordinatorBehavior {
             .await
             .map_err(|e| AgentError::Provider(e.to_string()))?;
 
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(response.content.trim())
-            .map_err(|e| {
-                AgentError::Internal(format!("task decomposition returned invalid JSON: {e}"))
-            })?;
+        // Reasoning models wrap the array in <think> blocks, prose, or a ```json
+        // fence; pull the JSON array out before parsing so decomposition is
+        // robust to that, not just to a clean bare array.
+        let json = extract_json_array(&response.content).ok_or_else(|| {
+            AgentError::Internal(format!(
+                "task decomposition returned no JSON array (first 200 chars: {})",
+                response.content.chars().take(200).collect::<String>()
+            ))
+        })?;
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).map_err(|e| {
+            AgentError::Internal(format!("task decomposition returned invalid JSON: {e}"))
+        })?;
         let subtasks: Vec<Subtask> = parsed
             .into_iter()
             .map(|s| {
@@ -896,6 +932,37 @@ mod tests {
     use axocoatl_token::TokenCounter;
     use std::pin::Pin;
     use tokio_stream::Stream;
+
+    #[test]
+    fn extract_json_array_reads_reasoning_wrapped_output() {
+        // Qwen3/DeepSeek-style: a think block, then a fenced array.
+        let raw = "<think>Break the task into independent subtasks.</think>\n\n\
+                   ```json\n[{\"name\":\"a\",\"description\":\"x\",\"tools\":[]}]\n```";
+        let json = extract_json_array(raw).expect("array extracted");
+        let v: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn extract_json_array_reads_prose_wrapped_output() {
+        let raw =
+            "Sure! Here is the decomposition:\n[{\"name\":\"a\"}]\nLet me know if that helps.";
+        let json = extract_json_array(raw).expect("array extracted");
+        assert!(json.starts_with('[') && json.ends_with(']'));
+    }
+
+    #[test]
+    fn extract_json_array_passes_through_bare_array() {
+        assert_eq!(
+            extract_json_array(" [1, 2, 3] ").as_deref(),
+            Some("[1, 2, 3]")
+        );
+    }
+
+    #[test]
+    fn extract_json_array_rejects_no_array() {
+        assert!(extract_json_array("I cannot do that.").is_none());
+    }
 
     /// Every chat returns a fixed two-subtask decomposition. The coordinator's
     /// decompose call parses it into two subtasks; worker + synthesis calls just
