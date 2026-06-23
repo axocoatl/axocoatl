@@ -26,8 +26,9 @@ uuid = { workspace = true }
 portable-pty = "0.8"
 bytes = "1"
 # Firecracker — behind feature flag (requires Linux + KVM)
-firepilot = { version = "1.2", optional = true }
 # OCI container runtime (youki) — behind feature flag (requires Linux)
+[target.'cfg(target_os = "linux")'.dependencies]
+firepilot = { version = "1.2", optional = true }
 libcontainer = { version = "0.6", optional = true, default-features = false, features = ["v1", "v2"] }
 
 [dev-dependencies]
