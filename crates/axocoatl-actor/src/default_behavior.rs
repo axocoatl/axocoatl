@@ -608,6 +608,93 @@ impl DefaultAgentBehavior {
         }
     }
 
+    /// Build a request from this input ALONE — the system override (or the
+    /// configured prompt) + the input's history + its content, with the agent's
+    /// sampling controls. No session, no memory context: a stateless call is a
+    /// pure function of its input.
+    fn build_stateless_request(&self, input: &AgentInput) -> ChatRequest {
+        let mut messages = Vec::new();
+        let effective_system = input
+            .system_override
+            .as_deref()
+            .or(self.system_prompt.as_deref());
+        if let Some(sys) = effective_system {
+            messages.push(ChatMessage::system(sys));
+        }
+        for msg in &input.history {
+            messages.push(msg.clone());
+        }
+        messages.push(ChatMessage::user(&input.content));
+
+        ChatRequest {
+            messages,
+            tools: self.tool_definitions(),
+            max_tokens: self.sampling.max_tokens,
+            temperature: self.sampling.temperature,
+            top_p: self.sampling.top_p,
+            response_format: self.sampling.response_format,
+            stop_sequences: Vec::new(),
+            provider_options: None,
+            model_override: input
+                .model_override
+                .clone()
+                .or_else(|| self.configured_model.clone()),
+        }
+    }
+
+    /// Stateless execution: a single inference from this input alone, with no
+    /// reads or writes to the persistent session or checkpoint. A pure function
+    /// of `(system, history, content)` — the right mode for per-request
+    /// prompt/model variants and for scoring an agent over independent inputs.
+    /// Single-shot by design: it does not run the (stateful) tool loop.
+    async fn execute_stateless(&mut self, input: AgentInput) -> Result<AgentOutput, AgentError> {
+        let mut request = self.build_stateless_request(&input);
+        if !input.attachments.is_empty() {
+            attach_to_last_user_message(&mut request, &input.attachments);
+        }
+
+        // Same spend pre-flight as the stateful path.
+        if let Some(tracker) = &self.tracker {
+            let estimated = self.provider.count_tokens(&request);
+            if let Err(BudgetError::WouldExceedBudget {
+                current,
+                requested,
+                budget,
+            }) = tracker.check_headroom(estimated)
+            {
+                match tracker.budget().overflow_policy {
+                    OverflowPolicy::Abort => {
+                        return Err(AgentError::TokenBudgetExceeded {
+                            used: current + requested,
+                            budget,
+                        });
+                    }
+                    OverflowPolicy::Warn => {
+                        tracing::warn!(
+                            current,
+                            requested,
+                            budget,
+                            "Token budget would be exceeded, continuing (warn policy)"
+                        );
+                    }
+                }
+            }
+        }
+
+        let est_input = self.provider.count_tokens(&request);
+        let mut response = self.stream_chat(request).await?;
+        if response.usage.total() == 0 {
+            response.usage =
+                TokenUsageStats::new(est_input, self.counter.count_text(&response.content));
+        }
+
+        Ok(AgentOutput {
+            content: response.content,
+            tool_calls: Vec::new(),
+            token_usage: response.usage,
+        })
+    }
+
     /// Persistently compact the session toward `target_threshold` tokens: archive
     /// the raw transcript to the daily log (so nothing is lost), run the
     /// compression pipeline (summarizing old turns via the LLM), and replace the
@@ -940,6 +1027,12 @@ impl AgentBehavior for DefaultAgentBehavior {
     }
 
     async fn execute(&mut self, input: AgentInput) -> Result<AgentOutput, AgentError> {
+        // A stateless call is a pure function of its input — no session, no
+        // checkpoint, no memory. The right mode for per-request variants + eval.
+        if input.stateless {
+            return self.execute_stateless(input).await;
+        }
+
         // Append user input to session memory FIRST — the session is the
         // canonical conversation history. This enables multi-turn: the LLM
         // sees all prior user/assistant exchanges from this actor's lifetime.
@@ -2398,6 +2491,130 @@ mod tests {
         assert!(sys_override.contains("Respond in haiku."));
         assert!(!sys_override.contains("Default prompt."));
         assert!(sys_default.contains("Default prompt."));
+    }
+
+    /// Records every request it receives; returns a one-token text answer.
+    struct CapturingLlm {
+        captured: Arc<std::sync::Mutex<Vec<ChatRequest>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for CapturingLlm {
+        fn provider_id(&self) -> &str {
+            "capture"
+        }
+        fn model_id(&self) -> &str {
+            "capture-model"
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                streaming: true,
+                ..Default::default()
+            }
+        }
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            unimplemented!("uses chat_stream")
+        }
+        async fn chat_stream(
+            &self,
+            request: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            self.captured.lock().unwrap().push(request);
+            let events = vec![
+                Ok(StreamEvent::TextDelta {
+                    delta: "ok".to_string(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                }),
+            ];
+            Ok(Box::pin(tokio_stream::iter(events)))
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_applies_input_system_override() {
+        // Reproduces axocoatl#64: the per-request `system_override` on the
+        // agent-execute path must replace the configured prompt for that call.
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(CapturingLlm {
+            captured: captured.clone(),
+        });
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter());
+        behavior
+            .on_start(&AgentConfig {
+                system_prompt: Some("CONFIGURED TAXONOMY".to_string()),
+                ..AgentConfig::default()
+            })
+            .await
+            .unwrap();
+
+        behavior
+            .execute(
+                AgentInput::text("hi").with_system_override(Some("LABEL SPAM OR HAM".to_string())),
+            )
+            .await
+            .unwrap();
+
+        let reqs = captured.lock().unwrap();
+        let sys = reqs[0].messages[0].text_content().unwrap();
+        assert!(sys.contains("LABEL SPAM OR HAM"), "system sent was: {sys}");
+        assert!(
+            !sys.contains("CONFIGURED TAXONOMY"),
+            "configured prompt leaked through: {sys}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stateless_execute_isolates_from_session() {
+        // axocoatl#64: a stateless call builds from the input alone — override
+        // wins, prior session turns don't leak in, and the call doesn't persist.
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(CapturingLlm {
+            captured: captured.clone(),
+        });
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter());
+        behavior
+            .on_start(&AgentConfig {
+                system_prompt: Some("CONFIGURED".to_string()),
+                ..AgentConfig::default()
+            })
+            .await
+            .unwrap();
+
+        // Pollute the session with a prior turn.
+        behavior
+            .session
+            .append(MessageRole::User, "earlier question", 2);
+        let len_before = behavior.session().len();
+
+        behavior
+            .execute(
+                AgentInput::text("classify this")
+                    .with_system_override(Some("OVERRIDE".to_string()))
+                    .with_stateless(true),
+            )
+            .await
+            .unwrap();
+
+        let reqs = captured.lock().unwrap();
+        let msgs = &reqs[0].messages;
+        // Exactly [system(override), user(content)] — no configured prompt, no
+        // prior session turn.
+        assert_eq!(msgs.len(), 2, "expected only system + user, got {msgs:?}");
+        assert!(msgs[0].text_content().unwrap().contains("OVERRIDE"));
+        assert!(!msgs[0].text_content().unwrap().contains("CONFIGURED"));
+        assert_eq!(msgs[1].text_content(), Some("classify this"));
+        assert!(!msgs
+            .iter()
+            .any(|m| m.text_content() == Some("earlier question")));
+        drop(reqs);
+
+        // The stateless call did not write to the session.
+        assert_eq!(behavior.session().len(), len_before);
     }
 
     #[tokio::test]
