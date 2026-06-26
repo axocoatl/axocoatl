@@ -421,6 +421,12 @@ pub struct ExecuteRequest {
     /// execution — used to A/B-test a model variant of an agent.
     #[serde(default)]
     pub model_override: Option<String>,
+    /// Run this call statelessly — no read/write of the agent's persistent
+    /// session or checkpoint, so the override fully controls the call and
+    /// independent inputs don't anchor on each other. Implied when an override
+    /// is set; set explicitly to isolate even without one (scoring/eval).
+    #[serde(default)]
+    pub stateless: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -439,9 +445,15 @@ pub async fn execute_agent(
     Json(body): Json<ExecuteRequest>,
 ) -> Result<Json<ExecuteResponse>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
+    // An override is meaningless without isolation, so it implies stateless; an
+    // explicit `stateless: true` isolates even without one (scoring over inputs).
+    let stateless = body.stateless.unwrap_or(false)
+        || body.system_override.is_some()
+        || body.model_override.is_some();
     let input = axocoatl_core::AgentInput::text(body.input)
         .with_system_override(body.system_override)
-        .with_model_override(body.model_override);
+        .with_model_override(body.model_override)
+        .with_stateless(stateless);
     match daemon.execute_agent_input(&agent_id, input).await {
         Ok(output) => Ok(Json(ExecuteResponse {
             output: output.content,

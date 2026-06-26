@@ -334,6 +334,55 @@ mod tests {
         handle.await.unwrap();
     }
 
+    /// Records the `system_override` it actually receives.
+    struct RecordingBehavior {
+        seen: std::sync::Arc<std::sync::Mutex<Option<Option<String>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentBehavior for RecordingBehavior {
+        async fn on_start(&mut self, _: &AgentConfig) -> Result<(), crate::AgentError> {
+            Ok(())
+        }
+        async fn execute(&mut self, input: AgentInput) -> Result<AgentOutput, crate::AgentError> {
+            *self.seen.lock().unwrap() = Some(input.system_override.clone());
+            Ok(AgentOutput::text("ok"))
+        }
+        async fn on_stop(&mut self) -> Result<(), crate::AgentError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_agent_round_trip_preserves_system_override() {
+        // axocoatl#64: the per-request system_override must survive the full
+        // actor message round-trip (execute_agent → cast → handler → execute).
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let behavior = RecordingBehavior { seen: seen.clone() };
+        let (actor_ref, handle) = AgentActor::spawn(
+            Some("test-override".to_string()),
+            AgentActor,
+            (test_config(), Box::new(behavior)),
+        )
+        .await
+        .unwrap();
+
+        let _ = execute_agent(
+            &actor_ref,
+            AgentInput::text("hi").with_system_override(Some("OVERRIDE".to_string())),
+        )
+        .await;
+
+        assert_eq!(
+            seen.lock().unwrap().clone(),
+            Some(Some("OVERRIDE".to_string())),
+            "system_override was dropped in the actor round-trip"
+        );
+
+        actor_ref.stop(None);
+        handle.await.unwrap();
+    }
+
     #[tokio::test]
     async fn get_status_idle() {
         let (actor_ref, handle) = AgentActor::spawn(

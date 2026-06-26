@@ -46,6 +46,13 @@ pub struct AgentInput {
     /// for the provider in use.
     #[serde(default)]
     pub attachments: Vec<AgentAttachment>,
+    /// Run this call statelessly — build the request from this input alone
+    /// (system override or configured prompt + history + content), without
+    /// reading or writing the agent's persistent session or checkpoint. A pure
+    /// function of the input; the right mode for per-request prompt/model
+    /// variants and for scoring an agent over independent inputs.
+    #[serde(default)]
+    pub stateless: bool,
 }
 
 impl AgentInput {
@@ -57,6 +64,7 @@ impl AgentInput {
             system_override: None,
             model_override: None,
             attachments: Vec::new(),
+            stateless: false,
         }
     }
 
@@ -82,6 +90,11 @@ impl AgentInput {
 
     pub fn with_model_override(mut self, model: Option<String>) -> Self {
         self.model_override = model;
+        self
+    }
+
+    pub fn with_stateless(mut self, stateless: bool) -> Self {
+        self.stateless = stateless;
         self
     }
 }
