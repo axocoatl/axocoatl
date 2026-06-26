@@ -249,6 +249,15 @@ impl GeminiProvider {
         if let Some(temp) = request.temperature {
             gen_config.insert("temperature".to_string(), serde_json::json!(temp));
         }
+        if let Some(top_p) = request.top_p {
+            gen_config.insert("topP".to_string(), serde_json::json!(top_p));
+        }
+        if request.response_format == Some(axocoatl_core::ResponseFormat::Json) {
+            gen_config.insert(
+                "responseMimeType".to_string(),
+                serde_json::json!("application/json"),
+            );
+        }
         if !gen_config.is_empty() {
             body["generationConfig"] = serde_json::Value::Object(gen_config);
         }

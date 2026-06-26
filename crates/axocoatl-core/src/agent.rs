@@ -42,6 +42,32 @@ pub enum AgentRole {
     Worker,
 }
 
+/// Output format requested from the model. `Json` maps to each provider's
+/// native JSON mode where one exists (Ollama `format`, OpenAI/Mistral
+/// `response_format`, Gemini `responseMimeType`); for a provider without a
+/// native mode it is enforced via a system-prompt instruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+/// Per-agent sampling controls, threaded into every LLM request the agent
+/// makes. All optional — an unset field leaves the provider's default in place.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SamplingConfig {
+    /// Sampling temperature. `0` makes a model effectively deterministic.
+    pub temperature: Option<f32>,
+    /// Nucleus sampling cutoff.
+    pub top_p: Option<f32>,
+    /// Max completion tokens per call (distinct from the spend `token_budget`).
+    pub max_tokens: Option<usize>,
+    /// Requested output format (e.g. force JSON).
+    pub response_format: Option<ResponseFormat>,
+}
+
 /// Configuration for a single agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -60,6 +86,10 @@ pub struct AgentConfig {
     pub memory: MemoryConfig,
     /// Role in multi-agent orchestration.
     pub role: AgentRole,
+    /// Sampling controls (temperature, top_p, max_tokens, response format)
+    /// applied to every LLM call this agent makes.
+    #[serde(default)]
+    pub sampling: SamplingConfig,
 }
 
 impl Default for AgentConfig {
@@ -74,6 +104,7 @@ impl Default for AgentConfig {
             tools: Vec::new(),
             memory: MemoryConfig::default(),
             role: AgentRole::default(),
+            sampling: SamplingConfig::default(),
         }
     }
 }
@@ -258,6 +289,7 @@ mod tests {
                 core: CoreMemoryConfig::default(),
             },
             role: AgentRole::default(),
+            sampling: SamplingConfig::default(),
         };
 
         let json = serde_json::to_string_pretty(&config).unwrap();

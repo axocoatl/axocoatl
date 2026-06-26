@@ -105,6 +105,8 @@ fn chat_request_from_agent_config() {
         tools: Vec::new(),
         max_tokens: agent.token_budget.as_ref().map(|b| b.per_call),
         temperature: None,
+        top_p: None,
+        response_format: None,
         stop_sequences: Vec::new(),
         provider_options: None,
         model_override: None,

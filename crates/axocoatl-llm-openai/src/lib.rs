@@ -91,6 +91,12 @@ impl OpenAiProvider {
         if let Some(temp) = request.temperature {
             req_builder.temperature(temp);
         }
+        if let Some(top_p) = request.top_p {
+            req_builder.top_p(top_p);
+        }
+        if request.response_format == Some(axocoatl_core::ResponseFormat::Json) {
+            req_builder.response_format(async_openai::types::chat::ResponseFormat::JsonObject);
+        }
         if !request.tools.is_empty() {
             req_builder.tools(convert::to_openai_tools(&request.tools));
         }

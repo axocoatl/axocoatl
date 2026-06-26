@@ -82,6 +82,9 @@ pub struct DefaultAgentBehavior {
     /// Set by the actor before a streaming execution — receives output chunks
     /// as the LLM generates them.
     stream_sink: Option<crate::behavior::StreamSink>,
+    /// Per-agent sampling controls (temperature, top_p, max_tokens, response
+    /// format), applied to every ChatRequest this agent builds.
+    sampling: axocoatl_core::SamplingConfig,
 }
 
 impl DefaultAgentBehavior {
@@ -124,7 +127,14 @@ impl DefaultAgentBehavior {
             session_context: None,
             project_instructions: None,
             stream_sink: None,
+            sampling: axocoatl_core::SamplingConfig::default(),
         }
+    }
+
+    /// Set the per-agent sampling controls applied to every LLM call.
+    pub fn with_sampling(mut self, sampling: axocoatl_core::SamplingConfig) -> Self {
+        self.sampling = sampling;
+        self
     }
 
     /// Consume the provider's token stream — forwarding each text/reasoning
@@ -529,8 +539,10 @@ impl DefaultAgentBehavior {
         ChatRequest {
             messages,
             tools: self.tool_definitions(),
-            max_tokens: None,
-            temperature: None,
+            max_tokens: self.sampling.max_tokens,
+            temperature: self.sampling.temperature,
+            top_p: self.sampling.top_p,
+            response_format: self.sampling.response_format,
             stop_sequences: Vec::new(),
             provider_options: None,
             model_override: input.model_override.clone(),
@@ -583,8 +595,10 @@ impl DefaultAgentBehavior {
         ChatRequest {
             messages,
             tools: self.tool_definitions(),
-            max_tokens: None,
-            temperature: None,
+            max_tokens: self.sampling.max_tokens,
+            temperature: self.sampling.temperature,
+            top_p: self.sampling.top_p,
+            response_format: self.sampling.response_format,
             stop_sequences: Vec::new(),
             provider_options: None,
             // Per-request override (e.g. Chat tab) wins; otherwise use the
@@ -1347,6 +1361,8 @@ impl AgentBehavior for DefaultAgentBehavior {
             tools: vec![],
             max_tokens: Some(800),
             temperature: Some(0.0),
+            top_p: None,
+            response_format: None,
             stop_sequences: Vec::new(),
             provider_options: None,
             // Honor the agent's configured model on OpenAI-compatible servers.

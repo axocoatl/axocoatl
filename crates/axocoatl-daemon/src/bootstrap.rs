@@ -734,7 +734,8 @@ impl AxocoatlDaemon {
                 let mut behavior = DefaultAgentBehavior::new(provider, counter.clone())
                     .with_checkpoint_store(checkpoint_store.clone())
                     .with_tool_executor(tool_executor.clone())
-                    .with_hook_registry(hook_registry.clone());
+                    .with_hook_registry(hook_registry.clone())
+                    .with_sampling(agent_config.sampling.clone());
 
                 // Tier 4 semantic memory — one store per agent, for cross-session
                 // recall. A failure here is non-fatal: the agent runs without it.
@@ -2617,6 +2618,7 @@ impl AxocoatlDaemon {
         let behavior = DefaultAgentBehavior::new(provider, self.counter.clone())
             .with_checkpoint_store(self.checkpoint_store.clone())
             .with_tool_executor(tool_executor)
+            .with_sampling(agent_config.sampling.clone())
             .with_core_memory(
                 core_store,
                 Self::resolve_shared(&agent_config.memory.core, &self.shared_registry),

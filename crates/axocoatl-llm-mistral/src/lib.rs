@@ -225,6 +225,12 @@ impl MistralProvider {
         if let Some(temp) = request.temperature {
             body["temperature"] = serde_json::json!(temp);
         }
+        if let Some(top_p) = request.top_p {
+            body["top_p"] = serde_json::json!(top_p);
+        }
+        if request.response_format == Some(axocoatl_core::ResponseFormat::Json) {
+            body["response_format"] = serde_json::json!({ "type": "json_object" });
+        }
         // Without attaching tools the model never receives them and can't emit
         // a tool call.
         if !request.tools.is_empty() {

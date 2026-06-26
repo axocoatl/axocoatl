@@ -2,7 +2,7 @@
 
 use axocoatl_core::{
     AgentConfig, AgentId, AgentRole, CoreBlockConfig, CoreMemoryConfig, MemoryConfig,
-    OverflowPolicy, RecallConfig, TokenBudget,
+    OverflowPolicy, RecallConfig, ResponseFormat, SamplingConfig, TokenBudget,
 };
 
 use crate::types::*;
@@ -20,6 +20,7 @@ impl AgentConfigYaml {
             tools: self.tools.clone(),
             memory: self.memory.to_core(),
             role: self.role.to_core(),
+            sampling: self.sampling.to_core(),
         }
     }
 }
@@ -42,6 +43,20 @@ impl OverflowPolicyYaml {
             // Deprecated alias: context compaction is automatic now, so the old
             // "summarize" spend policy maps to "warn" (continue past the budget).
             OverflowPolicyYaml::Summarize => OverflowPolicy::Warn,
+        }
+    }
+}
+
+impl SamplingConfigYaml {
+    pub fn to_core(&self) -> SamplingConfig {
+        SamplingConfig {
+            temperature: self.temperature,
+            top_p: self.top_p,
+            max_tokens: self.max_tokens,
+            response_format: self.response_format.as_deref().map(|s| match s {
+                "json" => ResponseFormat::Json,
+                _ => ResponseFormat::Text,
+            }),
         }
     }
 }
@@ -124,6 +139,7 @@ mod tests {
             role: AgentRoleYaml::default(),
             activation_threshold: None,
             activation_decay: None,
+            sampling: SamplingConfigYaml::default(),
         };
 
         let core = yaml.to_core();
@@ -133,6 +149,30 @@ mod tests {
         let budget = core.token_budget.unwrap();
         assert_eq!(budget.per_execution, 20000);
         assert!(matches!(budget.overflow_policy, OverflowPolicy::Abort));
+    }
+
+    #[test]
+    fn sampling_config_threads_to_core() {
+        let yaml = SamplingConfigYaml {
+            temperature: Some(0.0),
+            top_p: Some(0.9),
+            max_tokens: Some(512),
+            response_format: Some("json".to_string()),
+        };
+        let core = yaml.to_core();
+        assert_eq!(core.temperature, Some(0.0));
+        assert_eq!(core.top_p, Some(0.9));
+        assert_eq!(core.max_tokens, Some(512));
+        assert_eq!(core.response_format, Some(ResponseFormat::Json));
+    }
+
+    #[test]
+    fn sampling_response_format_unknown_falls_back_to_text() {
+        let yaml = SamplingConfigYaml {
+            response_format: Some("nonsense".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(yaml.to_core().response_format, Some(ResponseFormat::Text));
     }
 
     #[test]

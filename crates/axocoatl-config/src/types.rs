@@ -218,6 +218,19 @@ pub struct AgentConfigYaml {
     /// (0.0 for entry agents, 0.01 for downstream agents).
     #[serde(default)]
     pub activation_decay: Option<f32>,
+    /// Sampling controls threaded into each LLM request this agent makes.
+    #[serde(default)]
+    pub sampling: SamplingConfigYaml,
+}
+
+/// Per-agent sampling controls. All optional; an unset field leaves the
+/// provider default in place. `response_format` is `"text"` or `"json"`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SamplingConfigYaml {
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub max_tokens: Option<usize>,
+    pub response_format: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

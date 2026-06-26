@@ -163,6 +163,20 @@ impl AnthropicProvider {
         if let Some(temp) = request.temperature {
             body["temperature"] = serde_json::json!(temp);
         }
+        if let Some(top_p) = request.top_p {
+            body["top_p"] = serde_json::json!(top_p);
+        }
+        // Anthropic's Messages API has no native JSON mode, so enforce it by
+        // instruction — appended to the system prompt (or set as one).
+        if request.response_format == Some(axocoatl_core::ResponseFormat::Json) {
+            const JSON_INSTRUCTION: &str =
+                "Respond with only valid JSON. Do not include any other text.";
+            let system = match body.get("system").and_then(|s| s.as_str()) {
+                Some(existing) => format!("{existing}\n\n{JSON_INSTRUCTION}"),
+                None => JSON_INSTRUCTION.to_string(),
+            };
+            body["system"] = serde_json::json!(system);
+        }
         if !request.tools.is_empty() {
             // Anthropic Messages API tool format: {name, description, input_schema}.
             // Without this the model never receives the tools and can't call them.
@@ -467,6 +481,27 @@ mod tests {
         assert_eq!(body["messages"][0]["role"], "user");
         assert_eq!(body["messages"][0]["content"], "Hello");
         assert_eq!(body["model"], "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn build_request_body_json_mode_appends_instruction() {
+        let provider = AnthropicProvider::new("test-key", "claude-sonnet-4-6");
+        let mut request = ChatRequest::with_system("You are helpful.", "Hello");
+        request.response_format = Some(axocoatl_core::ResponseFormat::Json);
+        let body = provider.build_request_body(&request);
+        // Anthropic has no native JSON mode → the instruction folds into system.
+        let system = body["system"].as_str().unwrap();
+        assert!(system.starts_with("You are helpful."));
+        assert!(system.contains("valid JSON"));
+    }
+
+    #[test]
+    fn build_request_body_forwards_top_p() {
+        let provider = AnthropicProvider::new("test-key", "claude-sonnet-4-6");
+        let mut request = ChatRequest::simple("Hi");
+        request.top_p = Some(0.5);
+        let body = provider.build_request_body(&request);
+        assert_eq!(body["top_p"], 0.5);
     }
 
     #[test]

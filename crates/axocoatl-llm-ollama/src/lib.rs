@@ -298,6 +298,12 @@ impl LlmProvider for OllamaProvider {
         if let Some(temp) = request.temperature {
             body["temperature"] = serde_json::json!(temp);
         }
+        if let Some(top_p) = request.top_p {
+            body["top_p"] = serde_json::json!(top_p);
+        }
+        if request.response_format == Some(axocoatl_core::ResponseFormat::Json) {
+            body["format"] = serde_json::json!("json");
+        }
         if !request.tools.is_empty() {
             body["tools"] = tools_json(&request.tools);
         }
@@ -416,6 +422,12 @@ impl LlmProvider for OllamaProvider {
         }
         if let Some(temp) = request.temperature {
             body["temperature"] = serde_json::json!(temp);
+        }
+        if let Some(top_p) = request.top_p {
+            body["top_p"] = serde_json::json!(top_p);
+        }
+        if request.response_format == Some(axocoatl_core::ResponseFormat::Json) {
+            body["format"] = serde_json::json!("json");
         }
         if !request.tools.is_empty() {
             body["tools"] = tools_json(&request.tools);

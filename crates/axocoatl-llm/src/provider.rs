@@ -73,6 +73,11 @@ pub struct ChatRequest {
     pub tools: Vec<ToolDefinition>,
     pub max_tokens: Option<usize>,
     pub temperature: Option<f32>,
+    /// Nucleus sampling cutoff. `None` → provider default.
+    pub top_p: Option<f32>,
+    /// Requested output format. `Some(Json)` selects the provider's native JSON
+    /// mode (or a prompt-enforced fallback where there is none).
+    pub response_format: Option<axocoatl_core::ResponseFormat>,
     pub stop_sequences: Vec<String>,
     /// Provider-specific parameters (escape hatch — zero overhead when unused).
     pub provider_options: Option<serde_json::Value>,
@@ -91,6 +96,8 @@ impl ChatRequest {
             tools: Vec::new(),
             max_tokens: None,
             temperature: None,
+            top_p: None,
+            response_format: None,
             stop_sequences: Vec::new(),
             provider_options: None,
             model_override: None,
@@ -104,6 +111,8 @@ impl ChatRequest {
             tools: Vec::new(),
             max_tokens: None,
             temperature: None,
+            top_p: None,
+            response_format: None,
             stop_sequences: Vec::new(),
             provider_options: None,
             model_override: None,

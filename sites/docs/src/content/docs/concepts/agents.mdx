@@ -11,7 +11,7 @@ survives the process through periodic checkpoints.
 
 ## Anatomy of an agent
 
-Every agent has six knobs you control in YAML:
+Every agent has seven knobs you control in YAML:
 
 ```yaml
 - id: coder
@@ -26,6 +26,9 @@ Every agent has six knobs you control in YAML:
     per_execution: 8000
     per_call:      4000
     overflow_policy: warn
+  sampling:
+    temperature: 0          # deterministic — same input, same output
+    response_format: json   # ask the model for JSON (native mode per provider)
 ```
 
 - **`id`** — the agent's name in the lattice. Other agents `depends_on`
@@ -44,6 +47,12 @@ Every agent has six knobs you control in YAML:
   **deprecated alias that now maps to `warn`** — context compaction toward
   the model window is automatic (see [Memory](/concepts/memory/)) and no
   longer a spend policy.
+- **`sampling`** — per-agent generation controls, all optional:
+  `temperature`, `top_p`, `max_tokens`, and `response_format` (`text` or
+  `json`). Set `temperature: 0` for reproducible structured tasks like a
+  classifier or a JSON extractor; `response_format: json` maps to each
+  provider's native JSON mode (and a prompt-enforced fallback where a
+  provider has none). Omit any field to keep the provider's default.
 
 ## Lifecycle
 
