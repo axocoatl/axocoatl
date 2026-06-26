@@ -412,6 +412,15 @@ pub async fn patch_agent(
 #[derive(Deserialize)]
 pub struct ExecuteRequest {
     pub input: String,
+    /// Per-request system-prompt override for this single execution — replaces
+    /// the agent's configured prompt without changing config. Mirrors the
+    /// session/chat override; used to A/B-test a prompt variant of an agent.
+    #[serde(default)]
+    pub system_override: Option<String>,
+    /// Per-request model override (same provider + credentials) for this single
+    /// execution — used to A/B-test a model variant of an agent.
+    #[serde(default)]
+    pub model_override: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -430,7 +439,10 @@ pub async fn execute_agent(
     Json(body): Json<ExecuteRequest>,
 ) -> Result<Json<ExecuteResponse>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
-    match daemon.execute_agent(&agent_id, &body.input).await {
+    let input = axocoatl_core::AgentInput::text(body.input)
+        .with_system_override(body.system_override)
+        .with_model_override(body.model_override);
+    match daemon.execute_agent_input(&agent_id, input).await {
         Ok(output) => Ok(Json(ExecuteResponse {
             output: output.content,
         })),
@@ -4008,5 +4020,29 @@ pub async fn a2a_receive_task(
             output: None,
             error: Some(e.to_string()),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execute_request_parses_per_request_overrides() {
+        let body: ExecuteRequest = serde_json::from_str(
+            r#"{"input":"hi","system_override":"be terse","model_override":"qwen3:32b"}"#,
+        )
+        .unwrap();
+        assert_eq!(body.input, "hi");
+        assert_eq!(body.system_override.as_deref(), Some("be terse"));
+        assert_eq!(body.model_override.as_deref(), Some("qwen3:32b"));
+    }
+
+    #[test]
+    fn execute_request_overrides_default_to_none() {
+        // Callers that send only `input` keep working — overrides are optional.
+        let body: ExecuteRequest = serde_json::from_str(r#"{"input":"hi"}"#).unwrap();
+        assert!(body.system_override.is_none());
+        assert!(body.model_override.is_none());
     }
 }

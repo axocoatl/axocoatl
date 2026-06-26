@@ -29,7 +29,7 @@ it from `axocoatl-server/src/routes.rs` so it never drifts.
 |--------|------|---------|
 | GET | `/api/agents` | List every agent in the config with provider/model/status. |
 | GET | `/api/agents/{id}/status` | Just the status string. |
-| POST | `/api/agents/{id}/execute` | Send the agent a single input; await the full output. |
+| POST | `/api/agents/{id}/execute` | Send the agent a single input; await the full output. Body `{ input, system_override?, model_override? }` — the optional overrides run a prompt or model variant for that one call without changing config. |
 | POST | `/api/agents/{id}/restart` | Restart the actor under the supervisor; memory survives. |
 | PATCH | `/api/agents/{id}` | Update model / system prompt at runtime. |
 

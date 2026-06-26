@@ -954,13 +954,27 @@ impl AxocoatlDaemon {
         agent_id: &str,
         input: &str,
     ) -> Result<axocoatl_core::AgentOutput, DaemonError> {
+        self.execute_agent_input(agent_id, axocoatl_core::AgentInput::text(input))
+            .await
+    }
+
+    /// Execute an agent with a fully-built input, carrying any per-request
+    /// `system_override` / `model_override`. Lets a caller run a prompt or model
+    /// variant of the agent for a single execution without reconfiguring the
+    /// daemon; the override fields are honored by the agent behavior (the same
+    /// path the Chat tab uses).
+    pub async fn execute_agent_input(
+        &self,
+        agent_id: &str,
+        input: axocoatl_core::AgentInput,
+    ) -> Result<axocoatl_core::AgentOutput, DaemonError> {
         let id = AgentId::new(agent_id);
         let actor =
             self.agent_registry.get(&id).await.ok_or_else(|| {
                 DaemonError::AgentSpawn(format!("Agent '{}' not found", agent_id))
             })?;
 
-        let output = axocoatl_actor::execute_agent(&actor, axocoatl_core::AgentInput::text(input))
+        let output = axocoatl_actor::execute_agent(&actor, input)
             .await
             .map_err(DaemonError::AgentSpawn)?;
 
