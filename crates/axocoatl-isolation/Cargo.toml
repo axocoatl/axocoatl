@@ -18,6 +18,7 @@ axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 tokio = { workspace = true }
+async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -764,6 +764,103 @@ impl SessionSandbox {
     }
 }
 
+/// The per-session runtime surface the session tools are written against.
+///
+/// `read_file`, `bash`, the terminals, and the rest call this trait — not a
+/// concrete runtime — so a session can be backed by the rootless Podman
+/// container ([`SessionSandbox`]) today, or an E2B-compatible remote microVM
+/// later, without the tools changing. Construction is backend-specific (see
+/// [`SessionSandbox::start`]); this is only the running-session API.
+#[async_trait::async_trait]
+pub trait Sandbox: Send + Sync {
+    /// The session working directory — the confinement root for file tools.
+    fn root(&self) -> &Path;
+
+    /// Run a command in the sandbox and capture its output.
+    async fn exec(&self, argv: &[&str], timeout: Duration) -> Result<ExecResult, IsolationError>;
+
+    /// Run a command with `stdin` piped in (used to write file contents).
+    async fn exec_stdin(
+        &self,
+        argv: &[&str],
+        stdin: &str,
+        timeout: Duration,
+    ) -> Result<ExecResult, IsolationError>;
+
+    /// Start a long-running command in the background; returns a task id.
+    fn spawn_background(&self, command: &str) -> String;
+
+    /// Spawn an interactive PTY-backed terminal in the session.
+    fn spawn_pty(
+        &self,
+        command: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<std::sync::Arc<crate::pty::PtyTerminal>, String>;
+
+    /// Find a live terminal by id.
+    fn get_terminal(&self, id: &str) -> Option<std::sync::Arc<crate::pty::PtyTerminal>>;
+
+    /// Drop a PTY terminal; returns `true` if one with this id was present.
+    fn kill_terminal(&self, id: &str) -> bool;
+
+    /// Snapshot of every PTY terminal — id, command, alive flag.
+    fn list_terminals(&self) -> Vec<(String, String, bool)>;
+
+    /// Snapshot of this session's background tasks.
+    fn list_tasks(&self) -> Vec<BgTask>;
+
+    /// Stop the sandbox and release its resources. Best-effort.
+    async fn stop(&self);
+}
+
+// Bodies delegate to the inherent methods — dot-syntax resolves to those, not
+// back into this trait impl (inherent methods take priority), so there is no
+// recursion and Podman behavior is byte-for-byte unchanged.
+#[async_trait::async_trait]
+impl Sandbox for SessionSandbox {
+    fn root(&self) -> &Path {
+        self.root()
+    }
+    async fn exec(&self, argv: &[&str], timeout: Duration) -> Result<ExecResult, IsolationError> {
+        self.exec(argv, timeout).await
+    }
+    async fn exec_stdin(
+        &self,
+        argv: &[&str],
+        stdin: &str,
+        timeout: Duration,
+    ) -> Result<ExecResult, IsolationError> {
+        self.exec_stdin(argv, stdin, timeout).await
+    }
+    fn spawn_background(&self, command: &str) -> String {
+        self.spawn_background(command)
+    }
+    fn spawn_pty(
+        &self,
+        command: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<std::sync::Arc<crate::pty::PtyTerminal>, String> {
+        self.spawn_pty(command, rows, cols)
+    }
+    fn get_terminal(&self, id: &str) -> Option<std::sync::Arc<crate::pty::PtyTerminal>> {
+        self.get_terminal(id)
+    }
+    fn kill_terminal(&self, id: &str) -> bool {
+        self.kill_terminal(id)
+    }
+    fn list_terminals(&self) -> Vec<(String, String, bool)> {
+        self.list_terminals()
+    }
+    fn list_tasks(&self) -> Vec<BgTask> {
+        self.list_tasks()
+    }
+    async fn stop(&self) {
+        self.stop().await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
