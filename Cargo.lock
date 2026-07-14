@@ -415,16 +415,20 @@ dependencies = [
 name = "axocoatl-isolation"
 version = "0.1.4"
 dependencies = [
+ "async-trait",
  "axocoatl-core",
+ "base64 0.22.1",
  "bytes",
  "firepilot",
  "libcontainer",
  "portable-pty",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tracing",
  "uuid",
  "wasmtime",

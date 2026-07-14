@@ -810,6 +810,13 @@ pub trait Sandbox: Send + Sync {
     /// Snapshot of this session's background tasks.
     fn list_tasks(&self) -> Vec<BgTask>;
 
+    /// A handle to the **same** isolation instance, re-rooted at `root` (a
+    /// subtree of the session mount — e.g. a `git worktree`). Does not start or
+    /// stop the instance; the owning handle controls that. Used for variant
+    /// lanes: each lane is a worktree inside the one shared session sandbox, so
+    /// this works identically for a local container or a remote microVM.
+    fn with_root(&self, root: &Path) -> std::sync::Arc<dyn Sandbox>;
+
     /// Stop the sandbox and release its resources. Best-effort.
     async fn stop(&self);
 }
@@ -855,6 +862,9 @@ impl Sandbox for SessionSandbox {
     }
     fn list_tasks(&self) -> Vec<BgTask> {
         self.list_tasks()
+    }
+    fn with_root(&self, root: &Path) -> std::sync::Arc<dyn Sandbox> {
+        std::sync::Arc::new(SessionSandbox::attach(self.container(), root))
     }
     async fn stop(&self) {
         self.stop().await

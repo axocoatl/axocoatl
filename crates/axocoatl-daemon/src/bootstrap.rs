@@ -15,7 +15,7 @@ use axocoatl_actor::{
 use axocoatl_config::{AgentRoleYaml, AxocoatlConfig};
 use axocoatl_coordination::{EventId, EventLattice, EventType, LatticeEvent};
 use axocoatl_core::{AgentId, AgentRole};
-use axocoatl_isolation::session_sandbox::{ExecResult, SessionSandbox};
+use axocoatl_isolation::session_sandbox::{ExecResult, Sandbox, SessionSandbox};
 use axocoatl_llm::ProviderRegistry;
 use axocoatl_mcp::approval::{McpApprovalGate, SharedApprovalGate};
 use axocoatl_mcp::permissions::McpPermissionStore;
@@ -99,8 +99,9 @@ pub struct AxocoatlDaemon {
     /// Per-automation run history + checkpoints — the time-travel store.
     /// Writes happen from inside the executor after every node completion.
     pub run_store: Arc<crate::automation_runs::AutomationRunStore>,
-    /// Live OCI sandbox containers, keyed by session id.
-    session_sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<SessionSandbox>>>>,
+    /// Live session isolation instances (local Podman container or remote
+    /// microVM), keyed by session id. Trait-typed so the backend is pluggable.
+    session_sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
     /// Ring buffer of the most recent lattice events (capped at 200).
     pub event_log: Arc<StdMutex<VecDeque<LatticeEvent>>>,
     /// The observability stream bus — flattened events + live agent tokens.
@@ -1445,35 +1446,94 @@ impl AxocoatlDaemon {
             .unwrap_or_default()
     }
 
-    /// Ensure the session's OCI sandbox container is running, returning it.
-    async fn ensure_sandbox(&self, session: &Session) -> Result<Arc<SessionSandbox>, DaemonError> {
+    /// Ensure the session's isolation instance is running, returning it. The
+    /// backend (local Podman container or remote E2B-compatible microVM) is
+    /// chosen by `sandbox.backend` in config — a per-project/session choice.
+    async fn ensure_sandbox(&self, session: &Session) -> Result<Arc<dyn Sandbox>, DaemonError> {
         let mut boxes = self.session_sandboxes.lock().await;
         if let Some(sb) = boxes.get(&session.id) {
             return Ok(sb.clone());
         }
         let sc = &self.config.sandbox;
-        let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
-            allow_post_create: sc.allow_post_create_command,
-            allow_untrusted_image: sc.allow_untrusted_images,
-            network: match sc.network.as_str() {
-                "none" => axocoatl_isolation::session_sandbox::SandboxNetwork::None,
-                _ => axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge,
-            },
-            require_resource_limits: sc.require_resource_limits,
+        let sandbox: Arc<dyn Sandbox> = match sc.backend.as_str() {
+            "e2b" => self.start_e2b_sandbox(session).await?,
+            "podman" | "" => {
+                let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
+                    allow_post_create: sc.allow_post_create_command,
+                    allow_untrusted_image: sc.allow_untrusted_images,
+                    network: match sc.network.as_str() {
+                        "none" => axocoatl_isolation::session_sandbox::SandboxNetwork::None,
+                        _ => axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge,
+                    },
+                    require_resource_limits: sc.require_resource_limits,
+                };
+                let sandbox = SessionSandbox::start(
+                    &session.id,
+                    &session.working_dir,
+                    session.image.as_deref(),
+                    &session.exposed_ports,
+                    &session.post_create_commands,
+                    &policy,
+                )
+                .await
+                .map_err(|e| DaemonError::Session(format!("starting session sandbox: {e}")))?;
+                Arc::new(sandbox)
+            }
+            other => {
+                return Err(DaemonError::Session(format!(
+                    "unknown isolation backend '{other}' (expected 'podman' or 'e2b')"
+                )));
+            }
         };
-        let sandbox = SessionSandbox::start(
-            &session.id,
-            &session.working_dir,
-            session.image.as_deref(),
-            &session.exposed_ports,
-            &session.post_create_commands,
-            &policy,
-        )
-        .await
-        .map_err(|e| DaemonError::Session(format!("starting session sandbox: {e}")))?;
-        let sandbox = Arc::new(sandbox);
         boxes.insert(session.id.clone(), sandbox.clone());
         Ok(sandbox)
+    }
+
+    /// Start a remote E2B-compatible microVM as a session's isolation instance
+    /// (E2B cloud or a self-hosted CubeSandbox, per the `sandbox.e2b` config).
+    ///
+    /// Scratch / code-execution sessions today: the agent's tools run inside the
+    /// microVM against a fresh remote workspace. Cloning a git repo *into* the VM
+    /// (git-native remote sessions + remote variant lanes) is the next step and
+    /// needs a credential policy — until it lands, a repo-backed session is
+    /// refused here rather than handed an empty workspace.
+    async fn start_e2b_sandbox(&self, session: &Session) -> Result<Arc<dyn Sandbox>, DaemonError> {
+        use axocoatl_isolation::e2b::{E2bConfig, E2bSandbox};
+        let e = self.config.sandbox.e2b.as_ref().ok_or_else(|| {
+            DaemonError::Session(
+                "sandbox.backend is 'e2b' but no `sandbox.e2b` block is configured".to_string(),
+            )
+        })?;
+        if e.api_key.is_empty() {
+            return Err(DaemonError::Session(
+                "the e2b backend needs an api_key (set `sandbox.e2b.api_key`, e.g. `${E2B_API_KEY}`)"
+                    .to_string(),
+            ));
+        }
+        if session.working_dir.join(".git").exists() {
+            return Err(DaemonError::Session(
+                "the e2b backend does not yet clone git repositories into the remote VM; \
+                 use the podman backend for this repo (git-native remote sessions are in progress)"
+                    .to_string(),
+            ));
+        }
+        let cfg = E2bConfig {
+            api_url: e.api_url.clone(),
+            api_key: e.api_key.expose_secret().to_string(),
+            template: e.template.clone(),
+            domain: e.domain.clone(),
+        };
+        // A fresh remote workspace; the file tools confine here. 1-hour lifetime
+        // by default — keep-alive/refresh for long remote sessions is a later
+        // robustness pass, not a correctness gap in tool execution.
+        let root = "/home/user";
+        let sandbox = E2bSandbox::start(cfg, 3600, root)
+            .await
+            .map_err(|err| DaemonError::Session(format!("starting E2B sandbox: {err}")))?;
+        let _ = sandbox
+            .exec(&["mkdir", "-p", root], Duration::from_secs(15))
+            .await;
+        Ok(Arc::new(sandbox))
     }
 
     /// Execute an instruction inside a session.
@@ -1993,7 +2053,7 @@ impl AxocoatlDaemon {
         session: &Session,
         agent_id: &str,
         variant: &crate::git::Variant,
-        container: &str,
+        base: &Arc<dyn Sandbox>,
     ) -> Result<ractor::ActorRef<axocoatl_actor::AgentMessage>, DaemonError> {
         let scoped = format!("{}#{}:{}", session.id, variant.index, agent_id);
         let sid = AgentId::new(&scoped);
@@ -2009,11 +2069,9 @@ impl AxocoatlDaemon {
                 DaemonError::Session(format!("agent '{agent_id}' is not in the config"))
             })?
             .clone();
-        // Reuse the session's container but root the tools at the worktree.
-        let sandbox = Arc::new(SessionSandbox::attach(
-            container,
-            std::path::Path::new(&variant.worktree),
-        ));
+        // Reuse the session's isolation instance but root the tools at the
+        // worktree — works identically for a local container or a remote microVM.
+        let sandbox = base.with_root(std::path::Path::new(&variant.worktree));
         let executor = self.build_session_executor(session, sandbox).await;
         // Point context + project instructions at the worktree.
         let mut vsession = session.clone();
@@ -2049,7 +2107,6 @@ impl AxocoatlDaemon {
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         let agent_id = self.primary_session_agent(&session)?;
         let sandbox = self.ensure_sandbox(&session).await?;
-        let container = sandbox.container().to_string();
         let variants = self.create_variant_worktrees(session_id, n).await?;
 
         // Build every variant's actor *before* spawning any lane. If one fails
@@ -2058,7 +2115,7 @@ impl AxocoatlDaemon {
         // returning with half the lanes streaming against orphaned worktrees.
         let mut prepared = Vec::with_capacity(variants.len());
         for v in &variants {
-            match self.variant_actor(&session, &agent_id, v, &container).await {
+            match self.variant_actor(&session, &agent_id, v, &sandbox).await {
                 Ok(actor) => prepared.push((v.index, actor)),
                 Err(e) => {
                     self.remove_variant_worktrees(session_id).await.ok();
@@ -2556,7 +2613,7 @@ impl AxocoatlDaemon {
     async fn build_session_executor(
         &self,
         session: &Session,
-        sandbox: Arc<SessionSandbox>,
+        sandbox: Arc<dyn Sandbox>,
     ) -> ToolExecutor {
         let mut executor = ToolExecutor::new();
         axocoatl_tools::register_session_tools(&mut executor, sandbox);
