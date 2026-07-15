@@ -13,6 +13,7 @@
 //!
 //! One client hits both E2B cloud and a self-hosted CubeSandbox (same API).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -64,13 +65,24 @@ impl E2bClient {
         }
     }
 
-    /// Create a sandbox with a maximum lifetime (seconds).
-    pub async fn create(&self, timeout_secs: u64) -> Result<E2bSession, IsolationError> {
+    /// Create a sandbox with a maximum lifetime (seconds) and a set of
+    /// environment variables. The vars are set at create time and persist into
+    /// **every** later `envd` process (verified live) — that's how a git token is
+    /// made available to the agent's own later `git push`, not just the clone.
+    pub async fn create(
+        &self,
+        timeout_secs: u64,
+        env: &BTreeMap<String, String>,
+    ) -> Result<E2bSession, IsolationError> {
+        let mut body = json!({ "templateID": self.cfg.template, "timeout": timeout_secs });
+        if !env.is_empty() {
+            body["envVars"] = json!(env);
+        }
         let resp = self
             .http
             .post(format!("{}/sandboxes", self.cfg.api_url))
             .header("X-API-KEY", &self.cfg.api_key)
-            .json(&json!({ "templateID": self.cfg.template, "timeout": timeout_secs }))
+            .json(&body)
             .send()
             .await
             .map_err(|e| IsolationError::E2b(format!("create request: {e}")))?;
@@ -106,6 +118,34 @@ impl E2bClient {
             .header("X-API-KEY", &self.cfg.api_key)
             .send()
             .await;
+        Ok(())
+    }
+
+    /// (Re)set a sandbox's remaining lifetime to `timeout_secs` from now. Called
+    /// periodically by the keep-alive loop so a live session's VM doesn't
+    /// self-terminate at its original TTL.
+    pub async fn set_timeout(
+        &self,
+        sandbox_id: &str,
+        timeout_secs: u64,
+    ) -> Result<(), IsolationError> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/sandboxes/{sandbox_id}/timeout",
+                self.cfg.api_url
+            ))
+            .header("X-API-KEY", &self.cfg.api_key)
+            .json(&json!({ "timeout": timeout_secs }))
+            .send()
+            .await
+            .map_err(|e| IsolationError::E2b(format!("set_timeout request: {e}")))?;
+        if !resp.status().is_success() {
+            return Err(IsolationError::E2b(format!(
+                "set_timeout failed: HTTP {}",
+                resp.status()
+            )));
+        }
         Ok(())
     }
 
@@ -370,6 +410,10 @@ pub struct E2bSandbox {
     /// The working directory inside the sandbox (the confinement root for file tools).
     root: PathBuf,
     tasks: Mutex<Vec<E2bBgHandle>>,
+    /// Keep-alive loop that periodically extends the VM's TTL so a live session
+    /// doesn't self-terminate. Only the owning handle (from `start`) has one;
+    /// `with_root` views share the VM and carry `None`. Aborted on stop/drop.
+    keepalive: Option<tokio::task::AbortHandle>,
 }
 
 struct E2bBgHandle {
@@ -381,25 +425,55 @@ struct E2bBgHandle {
 
 impl E2bSandbox {
     /// Create a fresh remote sandbox for a session, rooted at `root` (a path
-    /// inside the sandbox, e.g. a cloned repo or `/home/user`).
+    /// inside the sandbox, e.g. a cloned repo or `/home/user`). `env` is set on
+    /// the VM at create time and visible to every later command (e.g. a git
+    /// token read by an in-VM credential helper).
     pub async fn start(
         cfg: E2bConfig,
         timeout_secs: u64,
         root: impl Into<PathBuf>,
+        env: &BTreeMap<String, String>,
     ) -> Result<Self, IsolationError> {
         let client = E2bClient::new(cfg);
-        let session = client.create(timeout_secs).await?;
+        let session = client.create(timeout_secs, env).await?;
+
+        // Keep the VM alive while this handle lives: re-extend the TTL to
+        // `timeout_secs` every half-life (min 30s) so it never lapses under an
+        // active session. Best-effort; a failed extension just retries next tick.
+        let ka_client = client.clone();
+        let ka_id = session.sandbox_id.clone();
+        let period = Duration::from_secs((timeout_secs / 2).max(30));
+        let keepalive = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(period).await;
+                let _ = ka_client.set_timeout(&ka_id, timeout_secs).await;
+            }
+        })
+        .abort_handle();
+
         Ok(Self {
             client,
             session,
             root: root.into(),
             tasks: Mutex::new(Vec::new()),
+            keepalive: Some(keepalive),
         })
     }
 
     /// The underlying sandbox id.
     pub fn sandbox_id(&self) -> &str {
         &self.session.sandbox_id
+    }
+}
+
+impl Drop for E2bSandbox {
+    fn drop(&mut self) {
+        // Never let the keep-alive loop outlive its handle (it would keep a VM
+        // alive with no owner). The VM itself still lapses at its TTL if `stop`
+        // was never called.
+        if let Some(ka) = &self.keepalive {
+            ka.abort();
+        }
     }
 }
 
@@ -496,17 +570,22 @@ impl Sandbox for E2bSandbox {
 
     fn with_root(&self, root: &Path) -> Arc<dyn Sandbox> {
         // Same remote microVM (shared client + session), re-rooted at a worktree.
-        // Fresh task list; does not own the VM lifecycle (only the primary handle
-        // calls `stop`), so dropping a variant handle leaves the VM running.
+        // Fresh task list; does not own the VM lifecycle (no keep-alive, and only
+        // the primary handle calls `stop`), so dropping a variant handle leaves
+        // the VM running and its keep-alive untouched.
         Arc::new(E2bSandbox {
             client: self.client.clone(),
             session: self.session.clone(),
             root: root.to_path_buf(),
             tasks: Mutex::new(Vec::new()),
+            keepalive: None,
         })
     }
 
     async fn stop(&self) {
+        if let Some(ka) = &self.keepalive {
+            ka.abort();
+        }
         self.client.kill(&self.session.sandbox_id).await.ok();
     }
 }
@@ -707,7 +786,10 @@ mod tests {
             template: "base".into(),
             domain: "e2b.app".into(),
         });
-        let session = client.create(120).await.expect("create sandbox");
+        let session = client
+            .create(120, &BTreeMap::new())
+            .await
+            .expect("create sandbox");
 
         let run = async {
             // exec: non-zero exit, stdout + stderr split.
@@ -774,7 +856,7 @@ mod tests {
             template: "base".into(),
             domain: "e2b.app".into(),
         };
-        let sandbox = E2bSandbox::start(cfg, 120, "/tmp")
+        let sandbox = E2bSandbox::start(cfg, 120, "/tmp", &BTreeMap::new())
             .await
             .expect("start sandbox");
         let sb: &dyn Sandbox = &sandbox;
@@ -816,5 +898,110 @@ mod tests {
 
         sb.stop().await;
         run.expect("live E2bSandbox trait flow");
+    }
+
+    /// End-to-end git-native flow against real E2B, running the same commands the
+    /// daemon's `start_e2b_sandbox` uses: inject a token as a sandbox env var,
+    /// configure the in-VM credential helper, prove it yields Basic creds from the
+    /// env (the private clone/push auth path — without needing a real token),
+    /// clone a public repo, re-root at it, and `git worktree add` inside (the
+    /// variant-lane mechanism).
+    #[tokio::test]
+    #[ignore = "hits live E2B — requires E2B_API_KEY"]
+    async fn live_git_native_flow_against_e2b() {
+        let api_key = std::env::var("E2B_API_KEY").expect("E2B_API_KEY must be set");
+        let cfg = E2bConfig {
+            api_url: "https://api.e2b.dev".into(),
+            api_key,
+            template: "base".into(),
+            domain: "e2b.app".into(),
+        };
+        // Exactly the daemon's create-time env: no prompts + a (fake) git token.
+        let mut env = BTreeMap::new();
+        env.insert("GIT_TERMINAL_PROMPT".to_string(), "0".to_string());
+        env.insert("AXO_GIT_TOKEN".to_string(), "fake-token-xyz789".to_string());
+        let base = E2bSandbox::start(cfg, 180, "/home/user", &env)
+            .await
+            .expect("start sandbox");
+
+        let run = async {
+            // (1) Configure git — the daemon's exact setup command.
+            let setup = "git config --global 'credential.https://github.com.helper' \
+                 '!f() { echo username=x-access-token; echo password=$AXO_GIT_TOKEN; }; f' && \
+                 git config --global 'credential.https://github.com.useHttpPath' false && \
+                 git config --global user.email 'agent@axocoatl.local' && \
+                 git config --global user.name 'Axocoatl Agent'";
+            let r = base
+                .exec(&["sh", "-c", setup], Duration::from_secs(30))
+                .await?;
+            assert_eq!(r.exit_code, 0, "git config failed: {}", r.stderr);
+
+            // (2) The helper reads the injected token and produces Basic creds.
+            let fill = base
+                .exec(
+                    &[
+                        "sh",
+                        "-c",
+                        "printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill",
+                    ],
+                    Duration::from_secs(30),
+                )
+                .await?;
+            assert!(
+                fill.stdout.contains("username=x-access-token"),
+                "credential fill username: {}",
+                fill.stdout
+            );
+            assert!(
+                fill.stdout.contains("password=fake-token-xyz789"),
+                "credential fill password (token from env): {}",
+                fill.stdout
+            );
+
+            // (3) Public clone end-to-end, then re-root and run git inside it.
+            let clone = "git clone --branch master --single-branch \
+                 https://github.com/octocat/Hello-World.git /home/user/hello";
+            let r = base
+                .exec(&["sh", "-c", clone], Duration::from_secs(120))
+                .await?;
+            assert_eq!(r.exit_code, 0, "clone failed: {}", r.stderr);
+            let rooted = base.with_root(Path::new("/home/user/hello"));
+            let head = rooted
+                .exec(&["git", "rev-parse", "HEAD"], Duration::from_secs(30))
+                .await?;
+            assert_eq!(
+                head.stdout.trim().len(),
+                40,
+                "unexpected HEAD: {}",
+                head.stdout
+            );
+
+            // (4) `git worktree add` inside the clone — the variant-lane mechanism.
+            let wt = rooted
+                .exec(
+                    &[
+                        "git",
+                        "-c",
+                        "safe.directory=*",
+                        "-C",
+                        "/home/user/hello",
+                        "worktree",
+                        "add",
+                        "-q",
+                        "-b",
+                        "axo/variant-0",
+                        "/home/user/hello/.axo-variants/0",
+                        "HEAD",
+                    ],
+                    Duration::from_secs(30),
+                )
+                .await?;
+            assert_eq!(wt.exit_code, 0, "worktree add failed: {}", wt.stderr);
+            Ok::<_, IsolationError>(())
+        }
+        .await;
+
+        base.stop().await;
+        run.expect("live git-native flow");
     }
 }

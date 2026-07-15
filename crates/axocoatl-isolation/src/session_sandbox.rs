@@ -1,14 +1,24 @@
-//! Per-session OCI container sandbox.
+//! Per-session isolation instance.
 //!
-//! Each directory session runs inside its own long-lived **podman** container
-//! with the session's working directory bind-mounted at the same path. Every
-//! session tool (file ops and shell) runs as a command *inside* this container
-//! via `exec`, so the container is the security boundary: tools cannot reach
-//! the host filesystem outside the mounted directory, and run under memory/CPU
-//! caps.
+//! Each directory session runs inside its own long-lived **isolation instance**,
+//! and every session tool (file ops and shell) runs as a command *inside* it via
+//! `exec` — so the instance is the security boundary: tools reach only the
+//! session's working tree, not the surrounding environment. The backend is
+//! pluggable behind the [`Sandbox`] trait:
 //!
-//! Podman is rootless, daemonless, and cross-platform (native on Linux/WSL, a
-//! managed VM on macOS/Windows) — see [`crate::podman`]. Docker is not used.
+//! - **Local (default) — a rootless podman container** ([`SessionSandbox`], this
+//!   module): the working directory is bind-mounted at the same path and tools
+//!   run under memory/CPU caps. Nothing leaves the machine. Podman is rootless,
+//!   daemonless, and cross-platform (native on Linux/WSL, a managed VM on
+//!   macOS/Windows) — see [`crate::podman`]. Docker is not used.
+//! - **Remote (opt-in) — an E2B-compatible microVM** ([`crate::e2b`]): the repo
+//!   is reproduced git-natively inside a sandbox the *user* chose (E2B cloud or a
+//!   self-hosted CubeSandbox). Local-first by default; the remote backend is a
+//!   per-session choice, never the default — see `sandbox.backend` in config.
+//!
+//! The two differ only in *where* the instance lives (local bind-mount vs. remote
+//! git clone); the boundary statement — "the sandbox is the boundary" — holds for
+//! both, which is why the tools take `Arc<dyn Sandbox>` and never see the backend.
 
 use std::path::Path;
 use std::process::Stdio;

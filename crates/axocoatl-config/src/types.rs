@@ -573,6 +573,13 @@ pub struct E2bBackendYaml {
     /// `https://49983-{sandbox_id}.{domain}`. E2B cloud = `e2b.app`.
     #[serde(default = "default_e2b_domain")]
     pub domain: String,
+    /// Token for cloning/pushing the session's git repo **inside** the remote
+    /// VM (git-native remote sessions). Write `${GITHUB_TOKEN}` to source it from
+    /// the environment rather than committing it. Only needed for private repos;
+    /// public repos clone without it. Injected as a sandbox secret and read by an
+    /// in-VM credential helper — never written into the repo's git config.
+    #[serde(default)]
+    pub git_token: SecretString,
 }
 
 fn default_e2b_api_url() -> String {

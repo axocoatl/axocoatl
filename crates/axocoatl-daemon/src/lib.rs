@@ -6,6 +6,7 @@ pub mod bootstrap;
 pub mod consolidation;
 pub mod error;
 pub mod git;
+pub mod git_host;
 pub mod interrupt;
 pub mod ipc;
 pub mod mcp_approval_hook;
