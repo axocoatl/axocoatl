@@ -1,17 +1,20 @@
 //! E2B / CubeSandbox backend — run session tools inside a remote E2B-compatible
 //! microVM instead of a local Podman container.
 //!
-//! Two protocols, verified live against E2B (`envd` 0.6.6):
-//! - **Control plane** — REST at `api_url`: `POST /sandboxes` (`{templateID, timeout}`
-//!   → `{sandboxID, …}`), `DELETE /sandboxes/{id}`; `X-API-KEY` auth.
+//! Two protocols, every shape verified live against E2B:
+//! - **Control plane** — REST at `api_url`: `POST /sandboxes` (`{templateID, timeout, envVars}`
+//!   → `{sandboxID, …}`), `POST /sandboxes/{id}/timeout` (keep-alive), `DELETE /sandboxes/{id}`;
+//!   `X-API-KEY` auth.
 //! - **Data plane** — the sandbox's `envd` at `https://49983-{id}.{domain}`, ConnectRPC:
 //!   - `process.Process/Start` — server-streaming. POST `application/connect+json` with a
-//!     5-byte-framed JSON `{process:{cmd,args,cwd,envs}, tag, stdin}`. The response is framed
-//!     `ProcessEvent`s — `start{pid}` → `data{stdout|stderr}` (base64) → `end{exitCode?}` —
+//!     5-byte-framed JSON `{process:{cmd,args,cwd,envs}, tag, stdin, pty?}`. The response is framed
+//!     `ProcessEvent`s — `start{pid}` → `data{stdout|stderr|pty}` (base64) → `end{exitCode?}` —
 //!     terminated by a `0x02` end-of-stream frame. (`exitCode` is omitted when it is 0.)
-//!   - `SendInput` / `CloseStdin` — unary (`application/json`), target the process by `tag`.
+//!   - Unary (`application/json`, by `tag`): `SendInput` (`stdin` or `pty`), `CloseStdin`,
+//!     `Update` (PTY resize via `pty:{size}`), `SendSignal` (`SIGNAL_SIGKILL`).
 //!
-//! One client hits both E2B cloud and a self-hosted CubeSandbox (same API).
+//! One client hits both E2B cloud and a self-hosted CubeSandbox (same API). Command execution,
+//! background tasks, git-native clone, **and interactive PTY terminals** all run over this.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -20,6 +23,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use serde_json::json;
+use tokio::sync::broadcast;
 use tokio_stream::StreamExt;
 
 use crate::error::IsolationError;
@@ -147,6 +151,92 @@ impl E2bClient {
             )));
         }
         Ok(())
+    }
+
+    // ── Interactive PTY terminals ────────────────────────────────────────
+    // Protocol verified live against envd: Start carries `pty:{size:{cols,rows}}`
+    // and streams output as `event.data.pty` (base64 vt100); SendInput takes
+    // `input:{pty}`; Update resizes via `pty:{size}`; SendSignal SIGNAL_SIGKILL
+    // ends it. The process is addressed by `tag` (we use the terminal id).
+
+    /// Open a PTY-backed `sh -c <command>` and return the streaming response to
+    /// pump. `TERM` is set so vt100 features are on.
+    async fn pty_start(
+        &self,
+        session: &E2bSession,
+        tag: &str,
+        command: &str,
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<reqwest::Response, IsolationError> {
+        let payload = serde_json::to_vec(&json!({
+            "process": {
+                "cmd": "/bin/sh",
+                "args": ["-c", command],
+                "cwd": cwd,
+                "envs": { "TERM": "xterm-256color" },
+            },
+            "pty": { "size": { "cols": cols, "rows": rows } },
+            "tag": tag,
+        }))?;
+        let resp = self
+            .envd(session, "Start")
+            .header("Content-Type", "application/connect+json")
+            .body(connect_frame(&payload))
+            .send()
+            .await
+            .map_err(|e| IsolationError::E2b(format!("PTY Start request: {e}")))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(IsolationError::E2b(format!(
+                "PTY Start failed ({status}): {body}"
+            )));
+        }
+        Ok(resp)
+    }
+
+    /// Send keystrokes to a PTY process (by tag).
+    async fn pty_input(
+        &self,
+        session: &E2bSession,
+        tag: &str,
+        data: &[u8],
+    ) -> Result<(), IsolationError> {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+        self.envd_unary(
+            session,
+            "SendInput",
+            &json!({ "process": { "tag": tag }, "input": { "pty": encoded } }),
+        )
+        .await
+    }
+
+    /// Resize a PTY (by tag) so the inner program reflows.
+    async fn pty_resize(
+        &self,
+        session: &E2bSession,
+        tag: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), IsolationError> {
+        self.envd_unary(
+            session,
+            "Update",
+            &json!({ "process": { "tag": tag }, "pty": { "size": { "cols": cols, "rows": rows } } }),
+        )
+        .await
+    }
+
+    /// Kill a PTY process (by tag) with SIGKILL. Best-effort.
+    async fn pty_kill(&self, session: &E2bSession, tag: &str) -> Result<(), IsolationError> {
+        self.envd_unary(
+            session,
+            "SendSignal",
+            &json!({ "process": { "tag": tag }, "signal": "SIGNAL_SIGKILL" }),
+        )
+        .await
     }
 
     /// Run a command in the sandbox and collect `{stdout, stderr, exit}`.
@@ -397,6 +487,50 @@ fn append_tail(cell: &Arc<Mutex<String>>, text: &str) {
     }
 }
 
+/// Pump a PTY `Start` stream: decode each `event.data.pty` (base64 vt100) into
+/// the scrollback (tail-trimmed to 64 KiB) and the live output broadcast, and
+/// flip `alive` to false when the stream ends. Runs until the process exits or
+/// the stream drops.
+async fn pump_pty_output(
+    resp: reqwest::Response,
+    scrollback: Arc<Mutex<Vec<u8>>>,
+    output_tx: broadcast::Sender<Vec<u8>>,
+    alive: Arc<Mutex<bool>>,
+) {
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let mut stream = resp.bytes_stream();
+    let mut decoder = FrameDecoder::new();
+    'pump: while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else { break };
+        decoder.push(&chunk);
+        while let Ok(Some(frame)) = decoder.next_frame() {
+            let Frame::Event(v) = frame else { continue };
+            let event = &v["event"];
+            if let Some(s) = event
+                .get("data")
+                .and_then(|d| d.get("pty"))
+                .and_then(|x| x.as_str())
+            {
+                if let Ok(bytes) = b64.decode(s) {
+                    if let Ok(mut sb) = scrollback.lock() {
+                        sb.extend_from_slice(&bytes);
+                        if sb.len() > 64 * 1024 {
+                            let cut = sb.len() - 64 * 1024;
+                            sb.drain(..cut);
+                        }
+                    }
+                    let _ = output_tx.send(bytes);
+                }
+            } else if event.get("end").is_some() {
+                break 'pump;
+            }
+        }
+    }
+    if let Ok(mut a) = alive.lock() {
+        *a = false;
+    }
+}
+
 /// A [`Sandbox`] backed by a remote E2B-compatible microVM. Session tools run
 /// against it exactly as they do against the local Podman `SessionSandbox`.
 ///
@@ -410,6 +544,8 @@ pub struct E2bSandbox {
     /// The working directory inside the sandbox (the confinement root for file tools).
     root: PathBuf,
     tasks: Mutex<Vec<E2bBgHandle>>,
+    /// Live interactive PTY terminals opened on this handle.
+    terminals: Mutex<Vec<Arc<crate::pty::PtyTerminal>>>,
     /// Keep-alive loop that periodically extends the VM's TTL so a live session
     /// doesn't self-terminate. Only the owning handle (from `start`) has one;
     /// `with_root` views share the VM and carry `None`. Aborted on stop/drop.
@@ -456,6 +592,7 @@ impl E2bSandbox {
             session,
             root: root.into(),
             tasks: Mutex::new(Vec::new()),
+            terminals: Mutex::new(Vec::new()),
             keepalive: Some(keepalive),
         })
     }
@@ -532,23 +669,132 @@ impl Sandbox for E2bSandbox {
 
     fn spawn_pty(
         &self,
-        _command: &str,
-        _rows: u16,
-        _cols: u16,
+        command: &str,
+        rows: u16,
+        cols: u16,
     ) -> Result<std::sync::Arc<crate::pty::PtyTerminal>, String> {
-        Err("interactive terminals are not yet supported on the E2B backend".to_string())
+        use crate::pty::PtyTerminal;
+        // The terminal id doubles as the envd process `tag` for input/resize/kill.
+        let id = format!("term-{}", uuid::Uuid::new_v4());
+        let scrollback = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let (output_tx, _) = broadcast::channel::<Vec<u8>>(256);
+        let (input_tx, input_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let alive = Arc::new(Mutex::new(true));
+        let cwd = self.root.to_string_lossy().to_string();
+
+        // Output pump: open the PTY stream and feed scrollback + broadcast.
+        {
+            let client = self.client.clone();
+            let session = self.session.clone();
+            let (tag, command) = (id.clone(), command.to_string());
+            let (sb, otx, al) = (scrollback.clone(), output_tx.clone(), alive.clone());
+            tokio::spawn(async move {
+                match client
+                    .pty_start(&session, &tag, &command, &cwd, cols, rows)
+                    .await
+                {
+                    Ok(resp) => pump_pty_output(resp, sb, otx, al).await,
+                    Err(_) => {
+                        if let Ok(mut a) = al.lock() {
+                            *a = false;
+                        }
+                    }
+                }
+            });
+        }
+
+        // Input drain: the WS bridge writes to a std mpsc; bridge it to async and
+        // forward each chunk to SendInput.
+        {
+            let client = self.client.clone();
+            let session = self.session.clone();
+            let tag = id.clone();
+            let (async_tx, mut async_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+            std::thread::spawn(move || {
+                while let Ok(bytes) = input_rx.recv() {
+                    if async_tx.send(bytes).is_err() {
+                        break;
+                    }
+                }
+            });
+            tokio::spawn(async move {
+                while let Some(bytes) = async_rx.recv().await {
+                    let _ = client.pty_input(&session, &tag, &bytes).await;
+                }
+            });
+        }
+
+        // Resize hook: fire an async Update (xterm.js sends rows, cols).
+        let resize_hook: Box<dyn Fn(u16, u16) + Send + Sync> = {
+            let client = self.client.clone();
+            let session = self.session.clone();
+            let tag = id.clone();
+            Box::new(move |rows, cols| {
+                let (client, session, tag) = (client.clone(), session.clone(), tag.clone());
+                tokio::spawn(async move {
+                    let _ = client.pty_resize(&session, &tag, cols, rows).await;
+                });
+            })
+        };
+
+        let term = Arc::new(PtyTerminal::from_parts(
+            id,
+            command.to_string(),
+            scrollback,
+            output_tx,
+            input_tx,
+            alive,
+            resize_hook,
+        ));
+        if let Ok(mut t) = self.terminals.lock() {
+            t.push(term.clone());
+        }
+        Ok(term)
     }
 
-    fn get_terminal(&self, _id: &str) -> Option<std::sync::Arc<crate::pty::PtyTerminal>> {
-        None
+    fn get_terminal(&self, id: &str) -> Option<std::sync::Arc<crate::pty::PtyTerminal>> {
+        self.terminals
+            .lock()
+            .ok()?
+            .iter()
+            .find(|t| t.id == id)
+            .cloned()
     }
 
-    fn kill_terminal(&self, _id: &str) -> bool {
-        false
+    fn kill_terminal(&self, id: &str) -> bool {
+        let mut terms = match self.terminals.lock() {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        let Some(pos) = terms.iter().position(|t| t.id == id) else {
+            return false;
+        };
+        let term = terms.remove(pos);
+        drop(terms);
+        if let Ok(mut a) = term.alive.lock() {
+            *a = false;
+        }
+        // Best-effort remote kill (tag == id). Dropping the terminal also drops
+        // the output/input tasks' senders, closing them.
+        let client = self.client.clone();
+        let session = self.session.clone();
+        let tag = id.to_string();
+        tokio::spawn(async move {
+            let _ = client.pty_kill(&session, &tag).await;
+        });
+        true
     }
 
     fn list_terminals(&self) -> Vec<(String, String, bool)> {
-        Vec::new()
+        self.terminals
+            .lock()
+            .map(|terms| {
+                terms
+                    .iter()
+                    .map(|t| (t.id.clone(), t.command.clone(), t.is_alive()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn list_tasks(&self) -> Vec<BgTask> {
@@ -578,6 +824,7 @@ impl Sandbox for E2bSandbox {
             session: self.session.clone(),
             root: root.to_path_buf(),
             tasks: Mutex::new(Vec::new()),
+            terminals: Mutex::new(Vec::new()),
             keepalive: None,
         })
     }
@@ -890,8 +1137,11 @@ mod tests {
                 tasks[0].log
             );
 
-            // terminals are deferred on this backend.
-            assert!(sb.spawn_pty("bash", 24, 80).is_err());
+            // interactive terminals now work on this backend (see the dedicated
+            // live_pty_terminal_against_e2b test for the full input/output flow).
+            let term = sb.spawn_pty("sh", 24, 80).expect("spawn_pty");
+            assert_eq!(sb.list_terminals().len(), 1);
+            assert!(sb.kill_terminal(&term.id));
             Ok::<_, IsolationError>(())
         }
         .await;
@@ -1003,5 +1253,54 @@ mod tests {
 
         base.stop().await;
         run.expect("live git-native flow");
+    }
+
+    /// Interactive PTY terminal end-to-end against real E2B: open a shell, send a
+    /// keystroke command, see it execute, resize, list, and kill.
+    #[tokio::test]
+    #[ignore = "hits live E2B — requires E2B_API_KEY"]
+    async fn live_pty_terminal_against_e2b() {
+        let api_key = std::env::var("E2B_API_KEY").expect("E2B_API_KEY must be set");
+        let cfg = E2bConfig {
+            api_url: "https://api.e2b.dev".into(),
+            api_key,
+            template: "base".into(),
+            domain: "e2b.app".into(),
+        };
+        let sandbox = E2bSandbox::start(cfg, 120, "/home/user", &BTreeMap::new())
+            .await
+            .expect("start sandbox");
+
+        let run = async {
+            let term = Sandbox::spawn_pty(&sandbox, "sh", 24, 80).map_err(IsolationError::E2b)?;
+            // Let the shell come up, then type a command + Enter.
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            term.input_tx
+                .send(b"echo PTY_LIVE_OK\n".to_vec())
+                .expect("send keystrokes");
+            tokio::time::sleep(Duration::from_millis(2500)).await;
+
+            let out = term.snapshot();
+            let text = String::from_utf8_lossy(&out);
+            assert!(
+                text.contains("PTY_LIVE_OK"),
+                "shell should echo+run the command; got: {text:?}"
+            );
+            assert!(term.is_alive(), "shell should still be running");
+
+            // Resize is best-effort (fire-and-forget Update) — must not panic.
+            term.resize(40, 100);
+
+            // Tracked in the terminal list, then killed.
+            assert_eq!(Sandbox::list_terminals(&sandbox).len(), 1);
+            let id = term.id.clone();
+            assert!(Sandbox::kill_terminal(&sandbox, &id));
+            assert_eq!(Sandbox::list_terminals(&sandbox).len(), 0);
+            Ok::<_, IsolationError>(())
+        }
+        .await;
+
+        sandbox.stop().await;
+        run.expect("live PTY terminal flow");
     }
 }

@@ -702,7 +702,7 @@ impl SessionSandbox {
                 .map(|d| d.as_millis())
                 .unwrap_or(0)
         );
-        let term = crate::pty::PtyTerminal::spawn(id, &self.container, command, rows, cols)?;
+        let term = crate::pty::PtyTerminal::spawn_podman(id, &self.container, command, rows, cols)?;
         let arc = std::sync::Arc::new(term);
         if let Ok(mut t) = self.terminals.lock() {
             t.push(arc.clone());
