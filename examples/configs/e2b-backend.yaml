@@ -1,0 +1,48 @@
+# e2b-backend — run tool execution in a remote E2B microVM (opt-in isolation)
+#
+# The agent's file / shell / git tools run inside a remote E2B-compatible microVM
+# instead of a local Podman container. Point `sandbox.e2b.api_url` at E2B cloud
+# or a self-hosted CubeSandbox — same config either way. The LLM still runs
+# wherever the daemon does (here, local Ollama); only tool execution goes remote.
+#
+# Prerequisites:
+#   - E2B_API_KEY in your environment (or a CubeSandbox placeholder key)
+#   - For a private git-repo session: GITHUB_TOKEN with clone/push rights
+#   - ollama serve && ollama pull llama3.2   (or swap in any provider)
+# Run:
+#   export E2B_API_KEY=e2b_...   GITHUB_TOKEN=ghp_...
+#   axocoatl validate examples/configs/e2b-backend.yaml
+#   axocoatl dev -c examples/configs/e2b-backend.yaml
+# Expected:
+#   the session's tools (read/write/bash/git) execute inside the microVM; a
+#   git-repo session clones the repo into the VM and the agent can commit + push.
+#   Local-first stays the default — remove this `sandbox:` block (or set
+#   `backend: podman`) to run everything on-box again.
+
+# ─── Isolation backend ──────────────────────────────────────────────
+sandbox:
+  # podman (local container, default) | e2b (remote microVM: E2B or CubeSandbox)
+  backend: e2b
+  e2b:
+    # E2B cloud. For a self-hosted CubeSandbox, use its endpoint instead, e.g.
+    #   api_url: "http://127.0.0.1:3000"
+    #   domain:  "your-cube-domain"      # envd host: https://49983-{id}.{domain}
+    api_url: "https://api.e2b.dev"
+    api_key: "${E2B_API_KEY}"       # sourced from the environment, never committed
+    template: "base"                # E2B template / CubeSandbox template id
+    # Only for a private git-repo session; public repos clone without it. Read by
+    # an in-VM credential helper at fill-time — never written into the repo config.
+    git_token: "${GITHUB_TOKEN}"
+
+# ─── Agents ─────────────────────────────────────────────────────────
+agents:
+  - id: assistant
+    name: "Remote Assistant"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a coding assistant. Your file and shell tools run inside a remote microVM — use them normally."
+    depends_on: []
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"

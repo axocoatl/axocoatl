@@ -198,6 +198,31 @@ agent:**
 - **What you explicitly grant.** Bridged networking, mounted credentials, or a
   permissive tool policy widen the surface — by your choice.
 
+### Isolation backends (local-first by default; you choose the sandbox)
+
+The sandbox is pluggable behind one trait, chosen per session with
+`sandbox.backend`. The tools never know which backend they run on.
+
+- **`podman` (default).** The local, rootless container described above. Nothing
+  leaves your machine.
+- **`e2b`.** A remote, E2B-compatible microVM — E2B cloud **or a self-hosted
+  CubeSandbox on your own cluster**. Use it when you want tool execution to run
+  off-box (throwaway compute, a clean remote environment, many parallel lanes).
+  It's opt-in and per-session; the default stays local.
+
+  A **git-repo** session is reproduced *git-natively*: the microVM `git clone`s
+  the repo from a clean, committed branch over https. The git token
+  (`sandbox.e2b.git_token`, e.g. `${GITHUB_TOKEN}`) is injected as a sandbox
+  secret and read by an in-VM credential helper at fill-time — it is never
+  written into the repo's git config, the remote URL, or a command line. The
+  agent commits and pushes a branch; you review it through the normal git/PR
+  flow. A scratch session (no repo) just gets a fresh remote workspace.
+
+  Honest trade: with the remote backend, the repo (a committed ref) and a scoped
+  token intentionally travel to the remote sandbox *you* chose. That is the cost
+  of remote execution; it is opt-in, and the default (`podman`) keeps everything
+  local. See [`examples/configs/e2b-backend.yaml`](../examples/configs/e2b-backend.yaml).
+
 Report security issues per [SECURITY.md](../SECURITY.md).
 
 ## Crate map
