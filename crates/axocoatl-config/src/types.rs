@@ -524,6 +524,15 @@ pub struct SandboxConfigYaml {
     /// (rootless podman on WSL2) can't delegate cgroups.
     #[serde(default)]
     pub require_resource_limits: bool,
+    /// Isolation backend: `"podman"` (default — a local rootless container) or
+    /// `"e2b"` (a remote E2B-compatible microVM — E2B cloud or self-hosted
+    /// CubeSandbox). Per-project/session choice: point some projects local, some
+    /// remote. `"e2b"` requires the `e2b:` block below.
+    #[serde(default = "default_sandbox_backend")]
+    pub backend: String,
+    /// Settings for the `e2b` backend. Ignored unless `backend: e2b`.
+    #[serde(default)]
+    pub e2b: Option<E2bBackendYaml>,
 }
 
 impl Default for SandboxConfigYaml {
@@ -533,12 +542,59 @@ impl Default for SandboxConfigYaml {
             allow_untrusted_images: false,
             network: default_sandbox_network(),
             require_resource_limits: false,
+            backend: default_sandbox_backend(),
+            e2b: None,
         }
     }
 }
 
 fn default_sandbox_network() -> String {
     "bridge".to_string()
+}
+
+fn default_sandbox_backend() -> String {
+    "podman".to_string()
+}
+
+/// Connection settings for an E2B-compatible sandbox backend (E2B cloud or a
+/// self-hosted CubeSandbox). The same shape hits both — CubeSandbox reimplements
+/// the E2B API, so you only change `api_url` (and the key/template).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct E2bBackendYaml {
+    /// Control-plane API URL. E2B cloud = `https://api.e2b.dev`; a self-hosted
+    /// CubeSandbox = its endpoint (e.g. `http://127.0.0.1:3000`).
+    #[serde(default = "default_e2b_api_url")]
+    pub api_url: String,
+    /// Control-plane API key. Write `${E2B_API_KEY}` to source it from the
+    /// environment rather than committing it to the config file.
+    #[serde(default)]
+    pub api_key: SecretString,
+    /// Sandbox template / image id (E2B `"base"`, or a CubeSandbox template id).
+    #[serde(default = "default_e2b_template")]
+    pub template: String,
+    /// Data-plane host domain — the `envd` control host is
+    /// `https://49983-{sandbox_id}.{domain}`. E2B cloud = `e2b.app`.
+    #[serde(default = "default_e2b_domain")]
+    pub domain: String,
+    /// Token for cloning/pushing the session's git repo **inside** the remote
+    /// VM (git-native remote sessions). Write `${GITHUB_TOKEN}` to source it from
+    /// the environment rather than committing it. Only needed for private repos;
+    /// public repos clone without it. Injected as a sandbox secret and read by an
+    /// in-VM credential helper — never written into the repo's git config.
+    #[serde(default)]
+    pub git_token: SecretString,
+}
+
+fn default_e2b_api_url() -> String {
+    "https://api.e2b.dev".to_string()
+}
+
+fn default_e2b_template() -> String {
+    "base".to_string()
+}
+
+fn default_e2b_domain() -> String {
+    "e2b.app".to_string()
 }
 
 /// Hook configuration in YAML.

@@ -1,3 +1,4 @@
+pub mod e2b;
 pub mod error;
 pub mod podman;
 pub mod pty;

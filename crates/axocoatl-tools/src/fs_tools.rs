@@ -16,7 +16,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axocoatl_isolation::session_sandbox::{ExecResult, SessionSandbox};
+use axocoatl_isolation::session_sandbox::{ExecResult, Sandbox};
 
 use crate::builtin::BuiltinTool;
 use crate::error::ToolError;
@@ -110,7 +110,7 @@ fn confine<'a>(root: &Path, path: &'a str, tool: &str) -> Result<&'a str, ToolEr
 
 /// Register the full session toolset (file ops + shell) into `executor`,
 /// each tool bound to `sandbox`.
-pub fn register_session_tools(executor: &mut ToolExecutor, sandbox: Arc<SessionSandbox>) {
+pub fn register_session_tools(executor: &mut ToolExecutor, sandbox: Arc<dyn Sandbox>) {
     executor.register_builtin(
         "read_file",
         Arc::new(ReadFileTool {
@@ -186,7 +186,7 @@ pub fn register_session_tools(executor: &mut ToolExecutor, sandbox: Arc<SessionS
 // ── read_file ───────────────────────────────────────────────────────────
 
 pub struct ReadFileTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]
@@ -219,7 +219,7 @@ impl BuiltinTool for ReadFileTool {
 // ── write_file ──────────────────────────────────────────────────────────
 
 pub struct WriteFileTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]
@@ -259,7 +259,7 @@ impl BuiltinTool for WriteFileTool {
 // ── edit_file ───────────────────────────────────────────────────────────
 
 pub struct EditFileTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]
@@ -315,7 +315,7 @@ impl BuiltinTool for EditFileTool {
 // ── list_dir ────────────────────────────────────────────────────────────
 
 pub struct ListDirTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]
@@ -347,7 +347,7 @@ impl BuiltinTool for ListDirTool {
 // ── grep ────────────────────────────────────────────────────────────────
 
 pub struct GrepTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]
@@ -385,7 +385,7 @@ impl BuiltinTool for GrepTool {
 // ── glob ────────────────────────────────────────────────────────────────
 
 pub struct GlobTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]
@@ -422,7 +422,7 @@ impl BuiltinTool for GlobTool {
 // ── bash ────────────────────────────────────────────────────────────────
 
 pub struct BashTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]
@@ -479,7 +479,7 @@ fn strip_trailing_ampersand(command: &str) -> (String, bool) {
 }
 
 pub struct BashBackgroundTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]
@@ -527,7 +527,7 @@ impl BuiltinTool for BashBackgroundTool {
 // dev servers, demos, watch loops.
 
 pub struct SpawnTerminalTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]
@@ -585,7 +585,7 @@ impl BuiltinTool for SpawnTerminalTool {
 // acting.
 
 pub struct ListTerminalsTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]
@@ -629,7 +629,7 @@ impl BuiltinTool for ListTerminalsTool {
 // what its spawned terminals have done since it last looked.
 
 pub struct ReadTerminalTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]
@@ -679,7 +679,7 @@ impl BuiltinTool for ReadTerminalTool {
 // ── kill_terminal ───────────────────────────────────────────────────────
 
 pub struct KillTerminalTool {
-    sandbox: Arc<SessionSandbox>,
+    sandbox: Arc<dyn Sandbox>,
 }
 
 #[async_trait::async_trait]

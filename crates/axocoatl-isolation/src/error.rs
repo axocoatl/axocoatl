@@ -44,4 +44,7 @@ pub enum IsolationError {
 
     #[error("Wasmtime error: {0}")]
     Wasmtime(String),
+
+    #[error("E2B sandbox error: {0}")]
+    E2b(String),
 }

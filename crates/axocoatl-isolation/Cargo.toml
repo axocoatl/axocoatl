@@ -18,6 +18,7 @@ axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 tokio = { workspace = true }
+async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -25,6 +26,9 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 portable-pty = "0.8"
 bytes = "1"
+reqwest = { workspace = true }
+base64 = { workspace = true }
+tokio-stream = { workspace = true }
 # Firecracker — behind feature flag (requires Linux + KVM)
 # OCI container runtime (youki) — behind feature flag (requires Linux)
 [target.'cfg(target_os = "linux")'.dependencies]

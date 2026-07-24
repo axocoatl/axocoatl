@@ -1,14 +1,24 @@
-//! Per-session OCI container sandbox.
+//! Per-session isolation instance.
 //!
-//! Each directory session runs inside its own long-lived **podman** container
-//! with the session's working directory bind-mounted at the same path. Every
-//! session tool (file ops and shell) runs as a command *inside* this container
-//! via `exec`, so the container is the security boundary: tools cannot reach
-//! the host filesystem outside the mounted directory, and run under memory/CPU
-//! caps.
+//! Each directory session runs inside its own long-lived **isolation instance**,
+//! and every session tool (file ops and shell) runs as a command *inside* it via
+//! `exec` — so the instance is the security boundary: tools reach only the
+//! session's working tree, not the surrounding environment. The backend is
+//! pluggable behind the [`Sandbox`] trait:
 //!
-//! Podman is rootless, daemonless, and cross-platform (native on Linux/WSL, a
-//! managed VM on macOS/Windows) — see [`crate::podman`]. Docker is not used.
+//! - **Local (default) — a rootless podman container** ([`SessionSandbox`], this
+//!   module): the working directory is bind-mounted at the same path and tools
+//!   run under memory/CPU caps. Nothing leaves the machine. Podman is rootless,
+//!   daemonless, and cross-platform (native on Linux/WSL, a managed VM on
+//!   macOS/Windows) — see [`crate::podman`]. Docker is not used.
+//! - **Remote (opt-in) — an E2B-compatible microVM** ([`crate::e2b`]): the repo
+//!   is reproduced git-natively inside a sandbox the *user* chose (E2B cloud or a
+//!   self-hosted CubeSandbox). Local-first by default; the remote backend is a
+//!   per-session choice, never the default — see `sandbox.backend` in config.
+//!
+//! The two differ only in *where* the instance lives (local bind-mount vs. remote
+//! git clone); the boundary statement — "the sandbox is the boundary" — holds for
+//! both, which is why the tools take `Arc<dyn Sandbox>` and never see the backend.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -692,7 +702,7 @@ impl SessionSandbox {
                 .map(|d| d.as_millis())
                 .unwrap_or(0)
         );
-        let term = crate::pty::PtyTerminal::spawn(id, &self.container, command, rows, cols)?;
+        let term = crate::pty::PtyTerminal::spawn_podman(id, &self.container, command, rows, cols)?;
         let arc = std::sync::Arc::new(term);
         if let Ok(mut t) = self.terminals.lock() {
             t.push(arc.clone());
@@ -761,6 +771,113 @@ impl SessionSandbox {
             .args(["rm", "-f", &self.container])
             .output()
             .await;
+    }
+}
+
+/// The per-session runtime surface the session tools are written against.
+///
+/// `read_file`, `bash`, the terminals, and the rest call this trait — not a
+/// concrete runtime — so a session can be backed by the rootless Podman
+/// container ([`SessionSandbox`]) today, or an E2B-compatible remote microVM
+/// later, without the tools changing. Construction is backend-specific (see
+/// [`SessionSandbox::start`]); this is only the running-session API.
+#[async_trait::async_trait]
+pub trait Sandbox: Send + Sync {
+    /// The session working directory — the confinement root for file tools.
+    fn root(&self) -> &Path;
+
+    /// Run a command in the sandbox and capture its output.
+    async fn exec(&self, argv: &[&str], timeout: Duration) -> Result<ExecResult, IsolationError>;
+
+    /// Run a command with `stdin` piped in (used to write file contents).
+    async fn exec_stdin(
+        &self,
+        argv: &[&str],
+        stdin: &str,
+        timeout: Duration,
+    ) -> Result<ExecResult, IsolationError>;
+
+    /// Start a long-running command in the background; returns a task id.
+    fn spawn_background(&self, command: &str) -> String;
+
+    /// Spawn an interactive PTY-backed terminal in the session.
+    fn spawn_pty(
+        &self,
+        command: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<std::sync::Arc<crate::pty::PtyTerminal>, String>;
+
+    /// Find a live terminal by id.
+    fn get_terminal(&self, id: &str) -> Option<std::sync::Arc<crate::pty::PtyTerminal>>;
+
+    /// Drop a PTY terminal; returns `true` if one with this id was present.
+    fn kill_terminal(&self, id: &str) -> bool;
+
+    /// Snapshot of every PTY terminal — id, command, alive flag.
+    fn list_terminals(&self) -> Vec<(String, String, bool)>;
+
+    /// Snapshot of this session's background tasks.
+    fn list_tasks(&self) -> Vec<BgTask>;
+
+    /// A handle to the **same** isolation instance, re-rooted at `root` (a
+    /// subtree of the session mount — e.g. a `git worktree`). Does not start or
+    /// stop the instance; the owning handle controls that. Used for variant
+    /// lanes: each lane is a worktree inside the one shared session sandbox, so
+    /// this works identically for a local container or a remote microVM.
+    fn with_root(&self, root: &Path) -> std::sync::Arc<dyn Sandbox>;
+
+    /// Stop the sandbox and release its resources. Best-effort.
+    async fn stop(&self);
+}
+
+// Bodies delegate to the inherent methods — dot-syntax resolves to those, not
+// back into this trait impl (inherent methods take priority), so there is no
+// recursion and Podman behavior is byte-for-byte unchanged.
+#[async_trait::async_trait]
+impl Sandbox for SessionSandbox {
+    fn root(&self) -> &Path {
+        self.root()
+    }
+    async fn exec(&self, argv: &[&str], timeout: Duration) -> Result<ExecResult, IsolationError> {
+        self.exec(argv, timeout).await
+    }
+    async fn exec_stdin(
+        &self,
+        argv: &[&str],
+        stdin: &str,
+        timeout: Duration,
+    ) -> Result<ExecResult, IsolationError> {
+        self.exec_stdin(argv, stdin, timeout).await
+    }
+    fn spawn_background(&self, command: &str) -> String {
+        self.spawn_background(command)
+    }
+    fn spawn_pty(
+        &self,
+        command: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<std::sync::Arc<crate::pty::PtyTerminal>, String> {
+        self.spawn_pty(command, rows, cols)
+    }
+    fn get_terminal(&self, id: &str) -> Option<std::sync::Arc<crate::pty::PtyTerminal>> {
+        self.get_terminal(id)
+    }
+    fn kill_terminal(&self, id: &str) -> bool {
+        self.kill_terminal(id)
+    }
+    fn list_terminals(&self) -> Vec<(String, String, bool)> {
+        self.list_terminals()
+    }
+    fn list_tasks(&self) -> Vec<BgTask> {
+        self.list_tasks()
+    }
+    fn with_root(&self, root: &Path) -> std::sync::Arc<dyn Sandbox> {
+        std::sync::Arc::new(SessionSandbox::attach(self.container(), root))
+    }
+    async fn stop(&self) {
+        self.stop().await
     }
 }
 

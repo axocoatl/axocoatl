@@ -1,19 +1,26 @@
-//! Interactive PTY-backed terminals running inside a session sandbox.
+//! Interactive PTY-backed terminals for a session sandbox.
 //!
-//! `podman exec -i -t` only sets up a TTY for the inner command when the local
-//! podman process's own stdio is a TTY. We give it one by allocating a host
-//! pseudoterminal with [`portable_pty`] and spawning podman on the slave end.
-//! The result is a bidirectional byte pipe: our reader sees vt100 output, the
-//! writer accepts keystrokes — exactly what `xterm.js` expects on the other
-//! side of the WebSocket.
+//! A terminal is backend-neutral: a bidirectional byte pipe (vt100 output out,
+//! keystrokes in) plus resize and a liveness flag — exactly what `xterm.js`
+//! expects on the other side of the WebSocket. How that pipe is produced is
+//! backend-specific and lives in the constructors:
+//!
+//! - [`PtyTerminal::spawn_podman`] allocates a host pseudoterminal with
+//!   [`portable_pty`] and runs `podman exec -i -t` on the slave end (the local
+//!   podman process needs a TTY on its own stdio for the inner command to get
+//!   one).
+//! - a remote backend (E2B) feeds the same channels from its own PTY stream.
+//!
+//! Everything after construction — scrollback, the output broadcast, the input
+//! channel, `resize`, `is_alive` — is identical regardless of backend.
 
 use std::sync::{Arc, Mutex};
 
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tokio::sync::broadcast;
 
 /// Live terminal we can drive over a WebSocket: reads stream out, keystrokes
-/// stream in. Dropping it kills the child PTY.
+/// stream in. Dropping it tears the backing child/stream down.
 pub struct PtyTerminal {
     pub id: String,
     pub command: String,
@@ -23,21 +30,22 @@ pub struct PtyTerminal {
     pub scrollback: Arc<Mutex<Vec<u8>>>,
     /// Live output broadcast — every new chunk goes to all subscribers.
     pub output_tx: broadcast::Sender<Vec<u8>>,
-    /// Keystrokes from any subscriber funnel into here and reach the PTY's
-    /// stdin via the writer thread.
+    /// Keystrokes from any subscriber funnel into here and reach the terminal's
+    /// stdin via the writer/pump.
     pub input_tx: std::sync::mpsc::Sender<Vec<u8>>,
     /// Status flag flipped to `false` once the child exits.
     pub alive: Arc<Mutex<bool>>,
-    /// Hang onto the master so resize requests are possible. Wrapped in a
-    /// `Mutex` because `MasterPty: ?Send` operations need exclusive access.
-    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    /// Backend-specific resize hook. Podman captures the pty master; a remote
+    /// backend captures its resize RPC. Owning the backend handle here also
+    /// means dropping the terminal tears that handle (and the child) down.
+    resize_hook: Box<dyn Fn(u16, u16) + Send + Sync>,
 }
 
 impl PtyTerminal {
-    /// Open a PTY and spawn `podman exec -i -t <container> sh -c <command>`
-    /// on the slave end. Returns immediately; output streams to the
-    /// broadcast and the scrollback buffer.
-    pub fn spawn(
+    /// Open a host PTY and spawn `podman exec -i -t <container> sh -c <command>`
+    /// on the slave end. Returns immediately; output streams to the broadcast
+    /// and the scrollback buffer.
+    pub fn spawn_podman(
         id: String,
         container: &str,
         command: &str,
@@ -136,6 +144,21 @@ impl PtyTerminal {
             });
         }
 
+        // The resize hook owns the pty master. Wrapped in a `Mutex` because
+        // `MasterPty: ?Send` operations need exclusive access; owning it here
+        // means the master (and thus the child PTY) drops with the terminal.
+        let master = Arc::new(Mutex::new(pair.master));
+        let resize_hook: Box<dyn Fn(u16, u16) + Send + Sync> = Box::new(move |rows, cols| {
+            if let Ok(m) = master.lock() {
+                let _ = m.resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+            }
+        });
+
         Ok(Self {
             id,
             command: command.to_string(),
@@ -143,21 +166,38 @@ impl PtyTerminal {
             output_tx,
             input_tx,
             alive,
-            master: Arc::new(Mutex::new(pair.master)),
+            resize_hook,
         })
     }
 
-    /// Resize the PTY — call this when the xterm.js container in the browser
+    /// Build a terminal from already-wired channels and a backend resize hook.
+    /// Used by remote backends whose output/input pumps are set up by the caller
+    /// (the Podman path uses [`PtyTerminal::spawn_podman`] instead).
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts(
+        id: String,
+        command: String,
+        scrollback: Arc<Mutex<Vec<u8>>>,
+        output_tx: broadcast::Sender<Vec<u8>>,
+        input_tx: std::sync::mpsc::Sender<Vec<u8>>,
+        alive: Arc<Mutex<bool>>,
+        resize_hook: Box<dyn Fn(u16, u16) + Send + Sync>,
+    ) -> Self {
+        Self {
+            id,
+            command,
+            scrollback,
+            output_tx,
+            input_tx,
+            alive,
+            resize_hook,
+        }
+    }
+
+    /// Resize the terminal — call this when the xterm.js container in the browser
     /// resizes so the inner program reflows.
     pub fn resize(&self, rows: u16, cols: u16) {
-        if let Ok(m) = self.master.lock() {
-            let _ = m.resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
-        }
+        (self.resize_hook)(rows, cols);
     }
 
     pub fn is_alive(&self) -> bool {
