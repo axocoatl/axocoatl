@@ -105,6 +105,10 @@ pub fn build_router(
             post(routes::session_variants_verify),
         )
         .route(
+            "/api/sessions/{id}/variants/diff",
+            get(routes::session_variant_diff),
+        )
+        .route(
             "/api/sessions/{id}/variants/adopt",
             post(routes::session_variant_adopt),
         )

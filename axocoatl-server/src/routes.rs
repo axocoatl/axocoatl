@@ -1036,6 +1036,30 @@ pub async fn git_diff(
         .map_err(git_err)
 }
 
+#[derive(serde::Deserialize)]
+pub struct VariantDiffQuery {
+    /// 0-based lane index.
+    pub index: usize,
+    pub path: String,
+}
+
+/// GET /api/sessions/{id}/variants/diff?index=…&path=…
+///
+/// One file's before/after **within a single lane's worktree**. The comparison
+/// view calls this per candidate: same path, different lane, different answer.
+pub async fn session_variant_diff(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<VariantDiffQuery>,
+) -> Result<Json<axocoatl_daemon::git::GitDiff>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .variant_diff(&id, q.index, &q.path)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
 /// GET /api/sessions/{id}/git/branches
 pub async fn git_branches(
     State(state): State<AppState>,

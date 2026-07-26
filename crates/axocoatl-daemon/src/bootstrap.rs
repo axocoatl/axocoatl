@@ -1909,6 +1909,46 @@ impl AxocoatlDaemon {
         session_id: &str,
         path: &str,
     ) -> Result<crate::git::GitDiff, DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        // In-sandbox path: == working_dir for Podman, the in-VM clone for E2B.
+        let dir = self
+            .ensure_sandbox(&session)
+            .await?
+            .root()
+            .to_string_lossy()
+            .to_string();
+        self.git_diff_at(session_id, &dir, path).await
+    }
+
+    /// Before/after for one file **inside a variant lane's worktree**.
+    ///
+    /// Each lane is its own checkout, so the same path legitimately differs from
+    /// lane to lane — that difference *is* the thing being compared when you pick
+    /// a winner.
+    pub async fn variant_diff(
+        &self,
+        session_id: &str,
+        index: usize,
+        path: &str,
+    ) -> Result<crate::git::GitDiff, DaemonError> {
+        let dir = format!(
+            "{}/.axo-variants/{index}",
+            self.session_dir(session_id).await?
+        );
+        self.git_diff_at(session_id, &dir, path).await
+    }
+
+    /// The diff machinery, rooted at any checkout inside the sandbox — the
+    /// session's primary tree or one variant lane's worktree.
+    async fn git_diff_at(
+        &self,
+        session_id: &str,
+        dir: &str,
+        path: &str,
+    ) -> Result<crate::git::GitDiff, DaemonError> {
         if path.contains("..") {
             return Err(DaemonError::Session("invalid path".to_string()));
         }
@@ -1918,8 +1958,6 @@ impl AxocoatlDaemon {
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         let sandbox = self.ensure_sandbox(&session).await?;
-        // In-sandbox path: == working_dir for Podman, the in-VM clone for E2B.
-        let dir = sandbox.root().to_string_lossy().to_string();
         let head_ref = format!("HEAD:{path}");
         let old = sandbox
             .exec(
@@ -1928,7 +1966,7 @@ impl AxocoatlDaemon {
                     "-c",
                     "safe.directory=*",
                     "-C",
-                    dir.as_str(),
+                    dir,
                     "show",
                     head_ref.as_str(),
                 ],
