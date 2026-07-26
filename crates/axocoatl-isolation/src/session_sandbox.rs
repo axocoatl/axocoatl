@@ -564,7 +564,16 @@ impl SessionSandbox {
         timeout: Duration,
     ) -> Result<ExecResult, IsolationError> {
         let mut cmd = Command::new(PODMAN);
-        cmd.arg("exec").arg(&self.container).args(argv);
+        // `-w` per exec, not just at container creation: a handle produced by
+        // `attach`/`with_root` (a variant lane) shares the container but works in
+        // its own worktree. Without this every lane would run in the container's
+        // default directory — the session root — and a relative path would land
+        // in the shared checkout instead of that lane's tree.
+        cmd.arg("exec")
+            .arg("-w")
+            .arg(&self.working_dir)
+            .arg(&self.container)
+            .args(argv);
         let out = tokio::time::timeout(timeout, cmd.output())
             .await
             .map_err(|_| IsolationError::Timeout(timeout))?
@@ -587,6 +596,10 @@ impl SessionSandbox {
         let mut child = Command::new(PODMAN)
             .arg("exec")
             .arg("-i")
+            // See `exec`: the cwd must follow this handle's working dir so a
+            // variant lane writes into its own worktree.
+            .arg("-w")
+            .arg(&self.working_dir)
             .arg(&self.container)
             .args(argv)
             .stdin(Stdio::piped())
@@ -702,7 +715,14 @@ impl SessionSandbox {
                 .map(|d| d.as_millis())
                 .unwrap_or(0)
         );
-        let term = crate::pty::PtyTerminal::spawn_podman(id, &self.container, command, rows, cols)?;
+        let term = crate::pty::PtyTerminal::spawn_podman(
+            id,
+            &self.container,
+            &self.working_dir,
+            command,
+            rows,
+            cols,
+        )?;
         let arc = std::sync::Arc::new(term);
         if let Ok(mut t) = self.terminals.lock() {
             t.push(arc.clone());

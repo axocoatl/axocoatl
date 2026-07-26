@@ -48,6 +48,7 @@ impl PtyTerminal {
     pub fn spawn_podman(
         id: String,
         container: &str,
+        workdir: &std::path::Path,
         command: &str,
         rows: u16,
         cols: u16,
@@ -67,7 +68,11 @@ impl PtyTerminal {
             })?;
 
         let mut cmd = CommandBuilder::new("podman");
-        cmd.args(["exec", "-i", "-t", container, "sh", "-c", command]);
+        // `-w` so a terminal opened in a variant lane starts in that lane's
+        // worktree rather than the container's default (the session root).
+        cmd.args(["exec", "-i", "-t", "-w"]);
+        cmd.arg(workdir);
+        cmd.args([container, "sh", "-c", command]);
         // No TERM in the parent could otherwise leave vt100 features off.
         cmd.env("TERM", "xterm-256color");
 

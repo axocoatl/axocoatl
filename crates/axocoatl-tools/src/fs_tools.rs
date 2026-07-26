@@ -265,15 +265,17 @@ pub struct EditFileTool {
 #[async_trait::async_trait]
 impl BuiltinTool for EditFileTool {
     fn description(&self) -> &str {
-        "Replace an exact substring in a file with new text"
+        "Replace an exact substring in a file with new text. The old text must match \
+         exactly once unless 'all' is set"
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
                 "path": { "type": "string", "description": "File path to edit" },
-                "old": { "type": "string", "description": "Exact text to replace" },
-                "new": { "type": "string", "description": "Replacement text" }
+                "old": { "type": "string", "description": "Exact text to replace. Must appear exactly once — include surrounding lines to make it unique." },
+                "new": { "type": "string", "description": "Replacement text" },
+                "all": { "type": "boolean", "description": "Replace every occurrence instead of requiring a unique match. Default false." }
             },
             "required": ["path", "old", "new"]
         })
@@ -297,7 +299,30 @@ impl BuiltinTool for EditFileTool {
             });
         }
         let count = read.stdout.matches(old).count();
-        let updated = read.stdout.replace(old, new);
+        // Replace exactly one occurrence unless the caller explicitly asked for
+        // all of them. A silent replace-all is how a model that passes a common
+        // fragment (`}`) rewrites every match in the file and corrupts it — the
+        // failure is invisible until something downstream refuses to parse.
+        // Making ambiguity an error forces the caller to supply unique context.
+        let replace_all = args
+            .get("all")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if count > 1 && !replace_all {
+            return Err(ToolError::InvalidArgs {
+                tool: "edit_file".to_string(),
+                reason: format!(
+                    "the 'old' text appears {count} times in '{path}'; it must match \
+                     exactly once. Include surrounding lines to make it unique, or \
+                     pass \"all\": true to replace every occurrence."
+                ),
+            });
+        }
+        let updated = if replace_all {
+            read.stdout.replace(old, new)
+        } else {
+            read.stdout.replacen(old, new, 1)
+        };
         let r = self
             .sandbox
             .exec_stdin(
