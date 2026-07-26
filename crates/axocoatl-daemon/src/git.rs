@@ -6,7 +6,7 @@
 //! renders. Kept here (separate from the daemon impl) so the parsers are unit-
 //! testable without a container.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// One changed path in the working tree.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -57,6 +57,17 @@ pub struct GitBranches {
     pub branches: Vec<String>,
 }
 
+/// How one lane of a variants run executes. Lanes are heterogeneous: a plan
+/// produced by an expensive model can be executed by several cheaper ones in
+/// parallel, and running the *same* task against *different* models is itself a
+/// quality strategy (diverse approaches to choose between).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct LaneConfig {
+    /// Model this lane runs. `None` uses the agent's configured model.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
 /// One parallel exploration: a `git worktree` on its own branch where a
 /// variant agent runs, isolated from the other variants and from the
 /// session's primary checkout.
@@ -68,6 +79,45 @@ pub struct Variant {
     pub branch: String,
     /// Absolute worktree path — `{working_dir}/.axo-variants/{index}`.
     pub worktree: String,
+    /// Model this lane ran, when the lane overrode the agent's default. Carried
+    /// on the response so a comparison view can label each candidate with the
+    /// model that produced it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// How one lane fared against the project's own check command.
+///
+/// This is the *fan-in* half of a variants run: N candidates are generated in
+/// parallel, then each is judged by the repository's real checks (tests, build,
+/// typecheck) so the failures are eliminated before a human reads a single diff.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LaneVerdict {
+    /// 0-based lane index, matching [`Variant::index`].
+    pub index: usize,
+    /// True when the check command exited 0 — the lane survives.
+    pub passed: bool,
+    pub exit_code: i32,
+    /// Tail of the check's combined output (capped by [`VERDICT_OUTPUT_MAX`]),
+    /// so a failing lane can explain itself without shipping a whole test log.
+    pub output: String,
+}
+
+/// Most check output carried back per lane. Failures are what matter and the
+/// interesting part is at the end, so this keeps the tail.
+pub const VERDICT_OUTPUT_MAX: usize = 8 * 1024;
+
+/// Keep the last [`VERDICT_OUTPUT_MAX`] bytes of check output, on a char
+/// boundary so the result is always valid UTF-8.
+pub fn verdict_tail(s: &str) -> String {
+    if s.len() <= VERDICT_OUTPUT_MAX {
+        return s.to_string();
+    }
+    let mut cut = s.len() - VERDICT_OUTPUT_MAX;
+    while cut < s.len() && !s.is_char_boundary(cut) {
+        cut += 1;
+    }
+    s[cut..].to_string()
 }
 
 /// A variant plus the working-tree status of its worktree — what the Compare
@@ -210,5 +260,63 @@ mod tests {
         let b = parse_branches("main\n", "main\naxo/variant-0\naxo/variant-1\n");
         assert_eq!(b.current, "main");
         assert_eq!(b.branches, vec!["main", "axo/variant-0", "axo/variant-1"]);
+    }
+
+    #[test]
+    fn lane_config_parses_heterogeneous_models() {
+        // The shape the API accepts: one plan, executed by several different
+        // (typically cheaper) models concurrently — plus a lane that inherits
+        // the agent's own model.
+        let lanes: Vec<LaneConfig> =
+            serde_json::from_str(r#"[{"model":"qwen3-coder"},{"model":"deepseek-v3"},{}]"#)
+                .expect("lane configs parse");
+        assert_eq!(lanes.len(), 3);
+        assert_eq!(lanes[0].model.as_deref(), Some("qwen3-coder"));
+        assert_eq!(lanes[1].model.as_deref(), Some("deepseek-v3"));
+        assert_eq!(
+            lanes[2].model, None,
+            "an empty lane inherits the agent's model"
+        );
+    }
+
+    #[test]
+    fn verdict_tail_keeps_the_end_and_stays_utf8() {
+        // Short output passes through untouched.
+        assert_eq!(verdict_tail("all tests passed"), "all tests passed");
+
+        // Long output keeps the TAIL — a failing suite's useful part is the end.
+        let long = format!("{}FAILED: 3 tests", "x".repeat(VERDICT_OUTPUT_MAX));
+        let tail = verdict_tail(&long);
+        assert!(tail.len() <= VERDICT_OUTPUT_MAX);
+        assert!(tail.ends_with("FAILED: 3 tests"));
+
+        // Truncating mid-multibyte-char must not panic or produce invalid UTF-8.
+        let multi = "é".repeat(VERDICT_OUTPUT_MAX);
+        let tail = verdict_tail(&multi);
+        assert!(tail.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn variant_omits_model_when_not_overridden() {
+        // Uniform runs stay wire-compatible: no `model` key at all.
+        let v = Variant {
+            index: 0,
+            branch: "axo/variant-0".into(),
+            worktree: "/w/.axo-variants/0".into(),
+            model: None,
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        assert!(
+            !json.contains("model"),
+            "unset model must not serialize: {json}"
+        );
+
+        let labelled = Variant {
+            model: Some("qwen3-coder".into()),
+            ..v
+        };
+        assert!(serde_json::to_string(&labelled)
+            .unwrap()
+            .contains("qwen3-coder"));
     }
 }

@@ -1111,8 +1111,15 @@ fn default_variant_count() -> usize {
 #[derive(serde::Deserialize)]
 pub struct VariantsBody {
     pub input: String,
+    /// Number of lanes, all on the agent's configured model. Ignored when
+    /// `lanes` is given.
     #[serde(default = "default_variant_count")]
     pub n: usize,
+    /// Per-lane configuration. When present this defines the run exactly — one
+    /// lane per entry, each with its own model — so a plan can be executed
+    /// concurrently by several different (e.g. cheaper, local) models.
+    #[serde(default)]
+    pub lanes: Option<Vec<axocoatl_daemon::git::LaneConfig>>,
 }
 
 /// POST /api/sessions/{id}/variants — start N parallel variants of the
@@ -1124,8 +1131,12 @@ pub async fn session_variants(
     Json(body): Json<VariantsBody>,
 ) -> Result<Json<Vec<axocoatl_daemon::git::Variant>>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
+    // Explicit lanes define the run; otherwise `n` uniform lanes on the agent's model.
+    let lanes = body
+        .lanes
+        .unwrap_or_else(|| vec![axocoatl_daemon::git::LaneConfig::default(); body.n]);
     daemon
-        .execute_session_variants(&id, &body.input, body.n, None)
+        .execute_session_variants(&id, &body.input, &lanes)
         .await
         .map(Json)
         .map_err(git_err)
@@ -1139,6 +1150,29 @@ pub async fn session_variants_status(
 ) -> Result<Json<Vec<axocoatl_daemon::git::VariantStatus>>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
     daemon.variants_status(&id).await.map(Json).map_err(git_err)
+}
+
+#[derive(serde::Deserialize)]
+pub struct VerifyBody {
+    /// The project's own check command — tests, build, typecheck. Run through
+    /// `sh` inside each lane's worktree.
+    pub check: String,
+}
+
+/// POST /api/sessions/{id}/variants/verify — run the project's check command in
+/// every lane and report which survive. Generating candidates is cheap; this is
+/// what keeps a human from having to read the failures.
+pub async fn session_variants_verify(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<VerifyBody>,
+) -> Result<Json<Vec<axocoatl_daemon::git::LaneVerdict>>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .verify_variants(&id, &body.check)
+        .await
+        .map(Json)
+        .map_err(git_err)
 }
 
 #[derive(serde::Deserialize)]

@@ -101,6 +101,10 @@ pub fn build_router(
             get(routes::session_variants_status),
         )
         .route(
+            "/api/sessions/{id}/variants/verify",
+            post(routes::session_variants_verify),
+        )
+        .route(
             "/api/sessions/{id}/variants/adopt",
             post(routes::session_variant_adopt),
         )

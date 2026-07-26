@@ -2148,6 +2148,8 @@ impl AxocoatlDaemon {
                 index: i,
                 branch,
                 worktree: wt,
+                // Stamped by the caller once lanes are assigned.
+                model: None,
             });
         }
         Ok(variants)
@@ -2264,22 +2266,27 @@ impl AxocoatlDaemon {
             .await
     }
 
-    /// Run `n` variants of a session's agent in parallel — one per git
-    /// worktree, each streamed to the bus under its own run key
-    /// `{session}#{i}` so the cockpit can show N live lanes. Returns the
-    /// variant list immediately; the runs stream asynchronously.
+    /// Run one variant per entry in `lanes`, in parallel — each on its own git
+    /// worktree, each streamed to the bus under its own run key `{session}#{i}`
+    /// so the cockpit can show N live lanes. Returns the variant list
+    /// immediately; the runs stream asynchronously.
+    ///
+    /// Lanes are **heterogeneous**: each carries its own model override, so an
+    /// expensive model can plan once and several cheaper ones execute that plan
+    /// concurrently — and running the same task against different models is
+    /// itself a quality strategy. A lane with no model uses the agent's own.
     pub async fn execute_session_variants(
         &self,
         session_id: &str,
         input: &str,
-        n: usize,
-        model_override: Option<String>,
+        lanes: &[crate::git::LaneConfig],
     ) -> Result<Vec<crate::git::Variant>, DaemonError> {
         // A generous ceiling — the user configures the count. Beyond a handful
         // it gets slow on local models, but we let them push it and degrade
         // gracefully (a failed lane errors on its own; a failed worktree set
         // rolls back) rather than capping low.
         const MAX_VARIANTS: usize = 100;
+        let n = lanes.len();
         if !(1..=MAX_VARIANTS).contains(&n) {
             return Err(DaemonError::Session(format!(
                 "variant count must be between 1 and {MAX_VARIANTS}"
@@ -2291,7 +2298,12 @@ impl AxocoatlDaemon {
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         let agent_id = self.primary_session_agent(&session)?;
         let sandbox = self.ensure_sandbox(&session).await?;
-        let variants = self.create_variant_worktrees(session_id, n).await?;
+        let mut variants = self.create_variant_worktrees(session_id, n).await?;
+        // Label each lane with the model it will run, so the comparison view can
+        // attribute every candidate diff to the model that produced it.
+        for (v, lane) in variants.iter_mut().zip(lanes) {
+            v.model.clone_from(&lane.model);
+        }
 
         // Build every variant's actor *before* spawning any lane. If one fails
         // (e.g. a missing agent), nothing is running yet, so we can tear the
@@ -2314,7 +2326,8 @@ impl AxocoatlDaemon {
             let rid = run_id.clone();
             let aid = agent_id.clone();
             let inp = input.to_string();
-            let mo = model_override.clone();
+            // This lane's own model — the heterogeneous part.
+            let mo = lanes.get(index).and_then(|l| l.model.clone());
             tokio::spawn(async move {
                 let _ = bus.send(crate::stream::StreamFrame::SessionStart {
                     session: rid.clone(),
@@ -2342,6 +2355,96 @@ impl AxocoatlDaemon {
 
     /// The working-tree status of every live variant worktree — what each
     /// Compare lane shows as its changes.
+    /// Run `check` inside every variant lane's worktree and report which lanes
+    /// survive — the fan-in half of a variants run.
+    ///
+    /// Generating N candidates is easy; the cost is that a human then has N
+    /// diffs to read. Running the repository's own checks (tests, build,
+    /// typecheck) in each lane eliminates the failures first, so only survivors
+    /// reach review. `check` is the project's command, run through `sh` in the
+    /// lane's worktree.
+    ///
+    /// Lanes are checked **sequentially**: unlike the agent runs (which are
+    /// IO-bound on the model and genuinely parallel), check commands are
+    /// CPU-bound, and N test suites at once contend for the same cores.
+    pub async fn verify_variants(
+        &self,
+        session_id: &str,
+        check: &str,
+    ) -> Result<Vec<crate::git::LaneVerdict>, DaemonError> {
+        /// Test suites are slow; give a lane's check real room before killing it.
+        const CHECK_TIMEOUT: Duration = Duration::from_secs(900);
+
+        if check.trim().is_empty() {
+            return Err(DaemonError::Session(
+                "a check command is required to verify variants".to_string(),
+            ));
+        }
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+
+        let mut verdicts = Vec::new();
+        for index in self.variant_indexes(session_id).await? {
+            let wt = format!(
+                "{}/.axo-variants/{index}",
+                self.session_dir(session_id).await?
+            );
+            // `cd` into the lane's worktree so the check sees that candidate's
+            // tree, not the session's primary checkout.
+            let script = format!("cd {wt} && {check}");
+            let r = sandbox
+                .exec(&["sh", "-c", &script], CHECK_TIMEOUT)
+                .await
+                .map_err(|e| DaemonError::Session(format!("running check in lane {index}: {e}")))?;
+            let combined = if r.stderr.trim().is_empty() {
+                r.stdout
+            } else {
+                format!("{}{}", r.stdout, r.stderr)
+            };
+            verdicts.push(crate::git::LaneVerdict {
+                index,
+                passed: r.exit_code == 0,
+                exit_code: r.exit_code,
+                output: crate::git::verdict_tail(&combined),
+            });
+        }
+        Ok(verdicts)
+    }
+
+    /// The lane indexes present under `.axo-variants`, ascending.
+    async fn variant_indexes(&self, session_id: &str) -> Result<Vec<usize>, DaemonError> {
+        let dir = self.session_dir(session_id).await?;
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let ls = sandbox
+            .exec(
+                &[
+                    "sh",
+                    "-c",
+                    &format!("ls -1 '{dir}/.axo-variants' 2>/dev/null"),
+                ],
+                Duration::from_secs(10),
+            )
+            .await
+            .ok();
+        let mut out: Vec<usize> = ls
+            .map(|r| {
+                r.stdout
+                    .lines()
+                    .filter_map(|l| l.trim().parse::<usize>().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort_unstable();
+        Ok(out)
+    }
+
     pub async fn variants_status(
         &self,
         session_id: &str,
