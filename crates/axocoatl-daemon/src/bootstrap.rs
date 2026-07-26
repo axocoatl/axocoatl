@@ -2452,6 +2452,120 @@ impl AxocoatlDaemon {
         Ok(verdicts)
     }
 
+    /// The unified patch for one lane — what that candidate actually changed.
+    ///
+    /// `git add -A -N` first so files the agent *created* appear in the diff;
+    /// without it a brand-new file is invisible to `git diff` and the judge would
+    /// rank a candidate on a fraction of its work.
+    pub async fn variant_patch(
+        &self,
+        session_id: &str,
+        index: usize,
+    ) -> Result<String, DaemonError> {
+        let dir = format!(
+            "{}/.axo-variants/{index}",
+            self.session_dir(session_id).await?
+        );
+        let _ = self
+            .session_git_at(session_id, &dir, &["add", "-A", "-N"])
+            .await;
+        let r = self
+            .session_git_at(session_id, &dir, &["diff", "HEAD"])
+            .await?;
+        Ok(r.stdout)
+    }
+
+    /// Rank the candidates of a variants run and say **why**.
+    ///
+    /// This is the second half of fan-in. Verification removes what is wrong;
+    /// judging orders what is left, so a reviewer reads one diff with a reason
+    /// attached instead of N diffs with none. `only` narrows to the lanes that
+    /// survived `verify_variants`; omit it to judge every lane.
+    ///
+    /// The judge is expected to be a *stronger* model than the ones that
+    /// executed — comparing solutions is a different, harder job than producing
+    /// one, and it is the step worth spending on.
+    pub async fn judge_variants(
+        &self,
+        session_id: &str,
+        task: &str,
+        provider_id: &str,
+        model: Option<String>,
+        only: Option<Vec<usize>>,
+    ) -> Result<crate::git::Judgment, DaemonError> {
+        let lanes = match only {
+            Some(v) if !v.is_empty() => v,
+            _ => self.variant_indexes(session_id).await?,
+        };
+        if lanes.is_empty() {
+            return Err(DaemonError::Session(
+                "no variant lanes to judge".to_string(),
+            ));
+        }
+
+        let mut sections = String::new();
+        for index in &lanes {
+            let patch = self.variant_patch(session_id, *index).await?;
+            let patch = if patch.trim().is_empty() {
+                "(this candidate changed nothing)".to_string()
+            } else if patch.len() > crate::git::JUDGE_PATCH_MAX {
+                format!(
+                    "{}\n… (patch truncated at {} bytes)",
+                    &patch[..crate::git::JUDGE_PATCH_MAX],
+                    crate::git::JUDGE_PATCH_MAX
+                )
+            } else {
+                patch
+            };
+            sections.push_str(&format!("\n## Candidate {index}\n```diff\n{patch}\n```\n"));
+        }
+
+        let prompt = format!(
+            "You are reviewing {n} independent attempts at the same software task. \
+             Every attempt below already passes the project's automated checks, so \
+             correctness is not the question — judge them on engineering quality: \
+             clarity, how well the approach fits the existing code, edge cases \
+             handled, and what each one would cost to live with.\n\n\
+             # Task\n{task}\n\n\
+             # Candidates\n{sections}\n\n\
+             Rank every candidate (rank 1 = best) and name the real trade-off for \
+             each — what you gain and what you give up by taking it. Do not \
+             summarise the diff; say why one would be chosen over another.\n\n\
+             Reply with JSON only, no prose outside it:\n\
+             {{\"winner\": <candidate index>, \"reasoning\": \"<what separates them>\", \
+             \"candidates\": [{{\"index\": <n>, \"rank\": <n>, \"approach\": \"<one sentence>\", \
+             \"tradeoffs\": \"<gain vs give up>\"}}]}}",
+            n = lanes.len(),
+        );
+
+        let provider = self
+            .provider_registry
+            .get(provider_id)
+            .ok_or_else(|| {
+                DaemonError::Provider(format!("provider '{provider_id}' is not configured"))
+            })?
+            .clone();
+
+        let mut request = axocoatl_llm::ChatRequest::simple(prompt);
+        request.response_format = Some(axocoatl_core::ResponseFormat::Json);
+        request.model_override = model;
+        let response = provider
+            .chat(request)
+            .await
+            .map_err(|e| DaemonError::Provider(format!("judging variants: {e}")))?;
+
+        let body = crate::git::unfence_json(&response.content);
+        let mut judgment: crate::git::Judgment = serde_json::from_str(body).map_err(|e| {
+            DaemonError::Session(format!(
+                "the judge did not return usable JSON ({e}); got: {}",
+                crate::git::verdict_tail(&response.content)
+            ))
+        })?;
+        // Order best-first regardless of how the model emitted them.
+        judgment.candidates.sort_by_key(|c| c.rank);
+        Ok(judgment)
+    }
+
     /// The lane indexes present under `.axo-variants`, ascending.
     async fn variant_indexes(&self, session_id: &str) -> Result<Vec<usize>, DaemonError> {
         let dir = self.session_dir(session_id).await?;

@@ -1200,6 +1200,37 @@ pub async fn session_variants_verify(
 }
 
 #[derive(serde::Deserialize)]
+pub struct JudgeBody {
+    /// The task the candidates were attempting — the judge needs to know what
+    /// "good" meant.
+    pub task: String,
+    /// Provider to judge with. Use a stronger model than the lanes ran:
+    /// comparing solutions is harder than producing one.
+    pub provider: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Lanes to rank — typically the survivors of `/variants/verify`. Omit to
+    /// judge every lane.
+    #[serde(default)]
+    pub only: Option<Vec<usize>>,
+}
+
+/// POST /api/sessions/{id}/variants/judge — rank the surviving candidates and
+/// say why, so a reviewer reads one diff with a reason instead of N without.
+pub async fn session_variants_judge(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<JudgeBody>,
+) -> Result<Json<axocoatl_daemon::git::Judgment>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .judge_variants(&id, &body.task, &body.provider, body.model, body.only)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
+#[derive(serde::Deserialize)]
 pub struct AdoptBody {
     pub branch: String,
 }

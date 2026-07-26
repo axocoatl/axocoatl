@@ -120,6 +120,52 @@ pub fn verdict_tail(s: &str) -> String {
     s[cut..].to_string()
 }
 
+/// One candidate's assessment in a [`Judgment`].
+///
+/// The useful output of judging N attempts is not a score — it is *why you would
+/// pick this one*. A rank with no reasoning just moves the reading problem
+/// around; the trade-off is the thing a reviewer actually needs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CandidateRationale {
+    /// Lane index this assesses.
+    pub index: usize,
+    /// 1 = best.
+    pub rank: usize,
+    /// What this candidate did, in a sentence.
+    pub approach: String,
+    /// Why you would choose it — or wouldn't.
+    pub tradeoffs: String,
+}
+
+/// A ranking over the candidates that survived verification.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Judgment {
+    /// Lane index of the recommended candidate.
+    pub winner: usize,
+    /// Every candidate assessed, best first.
+    pub candidates: Vec<CandidateRationale>,
+    /// The comparison in prose — what actually separates them.
+    pub reasoning: String,
+}
+
+/// Largest patch carried into the judge prompt, per lane. Enough for a real
+/// change; short of pasting a refactor of the whole tree into the context.
+pub const JUDGE_PATCH_MAX: usize = 24 * 1024;
+
+/// Strip a ``` fence if a model wrapped its JSON in one, so the payload parses.
+pub fn unfence_json(s: &str) -> &str {
+    let t = s.trim();
+    let Some(rest) = t.strip_prefix("```") else {
+        return t;
+    };
+    // Drop an optional language tag on the opening fence.
+    let rest = rest.strip_prefix("json").unwrap_or(rest);
+    rest.trim_start()
+        .strip_suffix("```")
+        .map(str::trim)
+        .unwrap_or_else(|| rest.trim())
+}
+
 /// A variant plus the working-tree status of its worktree — what the Compare
 /// lanes show as each variant's changes.
 #[derive(Debug, Clone, Serialize)]
@@ -294,6 +340,34 @@ mod tests {
         let multi = "é".repeat(VERDICT_OUTPUT_MAX);
         let tail = verdict_tail(&multi);
         assert!(tail.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn unfence_json_handles_how_models_actually_reply() {
+        let want = r#"{"winner":1}"#;
+        assert_eq!(unfence_json(want), want, "bare JSON passes through");
+        assert_eq!(unfence_json("```json\n{\"winner\":1}\n```"), want);
+        assert_eq!(unfence_json("```\n{\"winner\":1}\n```"), want);
+        assert_eq!(unfence_json("  \n{\"winner\":1}\n  "), want);
+        // An unterminated fence still yields parseable content rather than
+        // failing the whole judgment.
+        assert_eq!(unfence_json("```json\n{\"winner\":1}"), want);
+    }
+
+    #[test]
+    fn judgment_round_trips() {
+        let j = Judgment {
+            winner: 2,
+            candidates: vec![CandidateRationale {
+                index: 2,
+                rank: 1,
+                approach: "Extracted a helper and reused it".into(),
+                tradeoffs: "Clearer, but adds an indirection".into(),
+            }],
+            reasoning: "Candidate 2 fits the existing style".into(),
+        };
+        let parsed: Judgment = serde_json::from_str(&serde_json::to_string(&j).unwrap()).unwrap();
+        assert_eq!(parsed, j);
     }
 
     #[test]
