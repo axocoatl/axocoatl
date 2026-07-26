@@ -1851,7 +1851,23 @@ impl AxocoatlDaemon {
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         let sandbox = self.ensure_sandbox(&session).await?;
-        let mut argv: Vec<&str> = vec!["git", "-c", "safe.directory=*", "-C", cwd];
+        let mut argv: Vec<&str> = vec![
+            "git",
+            "-c",
+            "safe.directory=*",
+            // The sandbox has no git identity and does not inherit the host's,
+            // so any commit would fail with "Author identity unknown" — which
+            // silently broke adopting a variant. Passing it per command rather
+            // than writing it into the user's repo config keeps this
+            // side-effect-free, and a repo that has its own identity is
+            // unaffected because committed metadata still comes from the repo.
+            "-c",
+            "user.email=agent@axocoatl.local",
+            "-c",
+            "user.name=Axocoatl",
+            "-C",
+            cwd,
+        ];
         argv.extend_from_slice(args);
         sandbox
             .exec(&argv, Duration::from_secs(60))
@@ -2452,6 +2468,38 @@ impl AxocoatlDaemon {
         Ok(verdicts)
     }
 
+    /// Resolve a provider by id, for callers that need one outside an agent.
+    ///
+    /// Ollama is deliberately **not** in the registry: its model is chosen per
+    /// caller, so it is constructed on use. Everything else lives in the
+    /// registry. Keeping that fork in one place matters — it existing in two
+    /// places is exactly why judging could not reach Ollama, the provider this
+    /// product cares most about.
+    pub fn resolve_provider(
+        &self,
+        provider_id: &str,
+        model: Option<&str>,
+    ) -> Result<Arc<dyn axocoatl_llm::LlmProvider>, DaemonError> {
+        if provider_id == "ollama" {
+            let ollama = self.config.providers.ollama.as_ref().ok_or_else(|| {
+                DaemonError::Provider("Ollama provider not configured".to_string())
+            })?;
+            let model = model
+                .filter(|m| !m.is_empty())
+                .or(ollama.model.as_deref())
+                .unwrap_or("llama3.2");
+            return Ok(Arc::new(
+                axocoatl_llm_ollama::OllamaProvider::with_base_url(&ollama.base_url, model),
+            ));
+        }
+        self.provider_registry
+            .get(provider_id)
+            .cloned()
+            .ok_or_else(|| {
+                DaemonError::Provider(format!("Provider '{provider_id}' not configured"))
+            })
+    }
+
     /// The unified patch for one lane — what that candidate actually changed.
     ///
     /// `git add -A -N` first so files the agent *created* appear in the diff;
@@ -2538,16 +2586,14 @@ impl AxocoatlDaemon {
             n = lanes.len(),
         );
 
-        let provider = self
-            .provider_registry
-            .get(provider_id)
-            .ok_or_else(|| {
-                DaemonError::Provider(format!("provider '{provider_id}' is not configured"))
-            })?
-            .clone();
+        // Resolve through the shared path so a local Ollama judge works — the
+        // registry alone never contains it.
+        let provider = self.resolve_provider(provider_id, model.as_deref())?;
 
         let mut request = axocoatl_llm::ChatRequest::simple(prompt);
         request.response_format = Some(axocoatl_core::ResponseFormat::Json);
+        // Ollama already carries the model from `resolve_provider`; for registry
+        // providers this selects it per request.
         request.model_override = model;
         let response = provider
             .chat(request)
@@ -2674,13 +2720,25 @@ impl AxocoatlDaemon {
             .map(|r| !r.stdout.trim().is_empty())
             .unwrap_or(false);
         if dirty {
-            let _ = self
+            // Do NOT ignore this result. If the commit fails, the branch still
+            // points at the base, the merge below reports "Already up to date"
+            // and exits 0, and the cleanup at the end then deletes the worktree
+            // — silently destroying the very work being adopted. Fail loudly
+            // instead, while the lane is still on disk and recoverable.
+            let commit = self
                 .session_git_at(
                     session_id,
                     &wt,
                     &["commit", "-q", "-m", &format!("axocoatl: adopt {branch}")],
                 )
-                .await;
+                .await?;
+            if !commit.ok() {
+                return Err(DaemonError::Session(format!(
+                    "adopt could not commit {branch}'s changes, so nothing would be \
+                     merged: {}",
+                    commit.stderr.trim()
+                )));
+            }
         }
         // Merge the variant branch into the primary checkout.
         let r = self
@@ -3105,30 +3163,8 @@ impl AxocoatlDaemon {
         let mut agent_config = agent_yaml.to_core();
 
         // Resolve the provider (per-agent Ollama, else the shared registry).
-        let provider: Arc<dyn axocoatl_llm::LlmProvider> = if agent_config.provider == "ollama" {
-            let ollama = self.config.providers.ollama.as_ref().ok_or_else(|| {
-                DaemonError::Provider("Ollama provider not configured".to_string())
-            })?;
-            let model = if agent_yaml.model.is_empty() {
-                ollama.model.as_deref().unwrap_or("llama3.2")
-            } else {
-                &agent_yaml.model
-            };
-            Arc::new(axocoatl_llm_ollama::OllamaProvider::with_base_url(
-                &ollama.base_url,
-                model,
-            ))
-        } else {
-            self.provider_registry
-                .get(&agent_config.provider)
-                .cloned()
-                .ok_or_else(|| {
-                    DaemonError::Provider(format!(
-                        "Provider '{}' not configured",
-                        agent_config.provider
-                    ))
-                })?
-        };
+        let provider: Arc<dyn axocoatl_llm::LlmProvider> =
+            self.resolve_provider(&agent_config.provider, Some(&agent_yaml.model))?;
 
         // The scoped id drives the actor name and the checkpoint key, so a
         // session's conversation is isolated from the global agent's.
