@@ -35,6 +35,21 @@ pub struct AxocoatlConfig {
     pub consolidation: ConsolidationConfigYaml,
     #[serde(default)]
     pub webhooks: Vec<WebhookConfigYaml>,
+    /// Model prices, in dollars per million tokens, used to report what a
+    /// variants run cost against what it would have cost on one expensive model.
+    /// Models absent from this map price at zero — which is the right default
+    /// for anything running locally.
+    #[serde(default)]
+    pub pricing: std::collections::HashMap<String, ModelPriceYaml>,
+}
+
+/// Price of one model, in dollars per million tokens.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct ModelPriceYaml {
+    #[serde(default)]
+    pub input_per_mtok: f64,
+    #[serde(default)]
+    pub output_per_mtok: f64,
 }
 
 /// Background "sleep-time" memory consolidation: idle agents promote durable

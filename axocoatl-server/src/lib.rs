@@ -113,6 +113,10 @@ pub fn build_router(
             post(routes::session_variants_judge),
         )
         .route(
+            "/api/sessions/{id}/variants/cost",
+            get(routes::session_variants_cost),
+        )
+        .route(
             "/api/sessions/{id}/variants/adopt",
             post(routes::session_variant_adopt),
         )

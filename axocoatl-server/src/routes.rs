@@ -1231,6 +1231,27 @@ pub async fn session_variants_judge(
 }
 
 #[derive(serde::Deserialize)]
+pub struct CostQuery {
+    /// Model to price the counterfactual against — the one expensive model you
+    /// would otherwise have run the whole task on.
+    pub baseline: String,
+}
+
+/// GET /api/sessions/{id}/variants/cost?baseline=… — what the run cost, and
+/// what the same tokens would have cost on one expensive model.
+pub async fn session_variants_cost(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<CostQuery>,
+) -> Result<Json<axocoatl_daemon::git::RunCost>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .variants_cost(&id, &q.baseline)
+        .map(Json)
+        .map_err(git_err)
+}
+
+#[derive(serde::Deserialize)]
 pub struct AdoptBody {
     pub branch: String,
 }

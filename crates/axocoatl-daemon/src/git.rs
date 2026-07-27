@@ -120,6 +120,55 @@ pub fn verdict_tail(s: &str) -> String {
     s[cut..].to_string()
 }
 
+/// What one lane spent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LaneUsage {
+    pub index: usize,
+    /// Model this lane ran; `None` means the agent's configured default.
+    pub model: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// What those tokens cost at this model's price. Local models are 0.
+    pub cost_usd: f64,
+}
+
+/// The economics of a variants run: what it cost, against what the same work
+/// would have cost run entirely on one expensive model.
+///
+/// This is the argument the product rests on, so it is computed from real token
+/// counts rather than estimated. The counterfactual is deliberately generous to
+/// the alternative — it prices *the same* token volume at the baseline model's
+/// rate, without assuming the frontier model would have needed several attempts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RunCost {
+    pub lanes: Vec<LaneUsage>,
+    /// Sum of what the lanes actually cost.
+    pub total_usd: f64,
+    /// The model the comparison is drawn against.
+    pub baseline_model: String,
+    /// What the same tokens would have cost on `baseline_model`.
+    pub baseline_usd: f64,
+    /// `baseline_usd - total_usd`, floored at 0.
+    pub saved_usd: f64,
+    /// True when every lane priced at 0 — i.e. the run was entirely local.
+    pub all_local: bool,
+}
+
+/// Price of a model, in dollars per million tokens.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+pub struct ModelPrice {
+    pub input_per_mtok: f64,
+    pub output_per_mtok: f64,
+}
+
+impl ModelPrice {
+    /// Cost of a token count at this price.
+    pub fn cost(&self, input_tokens: u64, output_tokens: u64) -> f64 {
+        (input_tokens as f64 / 1_000_000.0) * self.input_per_mtok
+            + (output_tokens as f64 / 1_000_000.0) * self.output_per_mtok
+    }
+}
+
 /// One candidate's assessment in a [`Judgment`].
 ///
 /// The useful output of judging N attempts is not a score — it is *why you would
@@ -340,6 +389,20 @@ mod tests {
         let multi = "é".repeat(VERDICT_OUTPUT_MAX);
         let tail = verdict_tail(&multi);
         assert!(tail.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn model_price_computes_per_million_tokens() {
+        let p = ModelPrice {
+            input_per_mtok: 3.0,
+            output_per_mtok: 15.0,
+        };
+        // 1M in + 1M out = 3 + 15.
+        assert!((p.cost(1_000_000, 1_000_000) - 18.0).abs() < 1e-9);
+        // Sub-million scales linearly.
+        assert!((p.cost(500_000, 0) - 1.5).abs() < 1e-9);
+        // An unpriced model — the default — is free, which is what local means.
+        assert_eq!(ModelPrice::default().cost(9_999_999, 9_999_999), 0.0);
     }
 
     #[test]

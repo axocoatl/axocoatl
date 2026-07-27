@@ -106,6 +106,10 @@ pub struct AxocoatlDaemon {
     /// Live session isolation instances (local Podman container or remote
     /// microVM), keyed by session id. Trait-typed so the backend is pluggable.
     session_sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
+    /// Token spend per variant lane, keyed `session id -> lane index`. Recorded
+    /// as each lane finishes so a run's cost survives the stream that reported
+    /// it — a reader who reloads still sees what the run cost.
+    variant_usage: Arc<StdMutex<HashMap<String, HashMap<usize, crate::git::LaneUsage>>>>,
     /// Ring buffer of the most recent lattice events (capped at 200).
     pub event_log: Arc<StdMutex<VecDeque<LatticeEvent>>>,
     /// The observability stream bus — flattened events + live agent tokens.
@@ -556,6 +560,7 @@ impl AxocoatlDaemon {
             pending_interrupts: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             run_store,
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            variant_usage: Arc::new(StdMutex::new(HashMap::new())),
             event_log,
             stream_bus,
             active_runs,
@@ -2382,12 +2387,30 @@ impl AxocoatlDaemon {
             let inp = input.to_string();
             // This lane's own model — the heterogeneous part.
             let mo = lanes.get(index).and_then(|l| l.model.clone());
+            let usage_store = self.variant_usage.clone();
+            let usage_key = session.id.clone();
+            let lane_model = mo.clone();
             tokio::spawn(async move {
                 let _ = bus.send(crate::stream::StreamFrame::SessionStart {
                     session: rid.clone(),
                 });
                 match Self::stream_agent_run(bus.clone(), actor, rid.clone(), aid, inp, mo).await {
                     Ok(out) => {
+                        // Record what this lane spent, so the run's economics
+                        // outlive the stream that reported them.
+                        if let Ok(mut store) = usage_store.lock() {
+                            store.entry(usage_key).or_default().insert(
+                                index,
+                                crate::git::LaneUsage {
+                                    index,
+                                    model: lane_model,
+                                    input_tokens: out.token_usage.input_tokens as u64,
+                                    output_tokens: out.token_usage.output_tokens as u64,
+                                    // Priced on read, where the config is available.
+                                    cost_usd: 0.0,
+                                },
+                            );
+                        }
                         let _ = bus.send(crate::stream::StreamFrame::SessionDone {
                             session: rid,
                             input_tokens: out.token_usage.input_tokens as u64,
@@ -2466,6 +2489,57 @@ impl AxocoatlDaemon {
             });
         }
         Ok(verdicts)
+    }
+
+    /// What a variants run cost, and what it would have cost on one model.
+    ///
+    /// The comparison is the point: fanning out to several cheap models is only
+    /// worth doing if the arithmetic favours it, so this reports real token
+    /// counts priced from config rather than an estimate. A model with no
+    /// configured price costs 0 — the right answer for anything local.
+    pub fn variants_cost(
+        &self,
+        session_id: &str,
+        baseline_model: &str,
+    ) -> Result<crate::git::RunCost, DaemonError> {
+        let price = |model: &str| -> crate::git::ModelPrice {
+            self.config
+                .pricing
+                .get(model)
+                .map(|p| crate::git::ModelPrice {
+                    input_per_mtok: p.input_per_mtok,
+                    output_per_mtok: p.output_per_mtok,
+                })
+                .unwrap_or_default()
+        };
+        let baseline = price(baseline_model);
+
+        let store = self
+            .variant_usage
+            .lock()
+            .map_err(|_| DaemonError::Session("usage store poisoned".to_string()))?;
+        let mut lanes: Vec<crate::git::LaneUsage> = store
+            .get(session_id)
+            .map(|m| m.values().cloned().collect())
+            .unwrap_or_default();
+        lanes.sort_by_key(|l| l.index);
+
+        let mut total = 0.0;
+        let mut baseline_total = 0.0;
+        for lane in &mut lanes {
+            let model = lane.model.clone().unwrap_or_default();
+            lane.cost_usd = price(&model).cost(lane.input_tokens, lane.output_tokens);
+            total += lane.cost_usd;
+            baseline_total += baseline.cost(lane.input_tokens, lane.output_tokens);
+        }
+        Ok(crate::git::RunCost {
+            all_local: !lanes.is_empty() && total == 0.0,
+            total_usd: total,
+            baseline_model: baseline_model.to_string(),
+            baseline_usd: baseline_total,
+            saved_usd: (baseline_total - total).max(0.0),
+            lanes,
+        })
     }
 
     /// Resolve a provider by id, for callers that need one outside an agent.
