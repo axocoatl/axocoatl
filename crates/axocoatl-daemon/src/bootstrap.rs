@@ -2516,6 +2516,68 @@ impl AxocoatlDaemon {
         Ok(verdicts)
     }
 
+    /// Check that a model can drive a lane before a run is spent on it.
+    ///
+    /// Offers one trivial tool and asks for it. A model that answers in prose —
+    /// even prose containing a correct-looking call — cannot edit files here, and
+    /// a lane using it will burn minutes to produce an empty diff that then
+    /// passes every check. One call, seconds, versus discovering it afterwards.
+    pub async fn probe_lane_model(
+        &self,
+        provider_id: &str,
+        model: &str,
+    ) -> Result<crate::git::ModelProbe, DaemonError> {
+        let provider = self.resolve_provider(provider_id, Some(model))?;
+        let mut req = axocoatl_llm::ChatRequest::simple(
+            "Read the file README.md. Call the tool — do not describe the call.",
+        );
+        req.tools = vec![axocoatl_llm::ToolDefinition {
+            name: "read_file".to_string(),
+            description: "Read a file from the project".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": { "path": { "type": "string" } },
+                "required": ["path"],
+            }),
+            concurrency: Default::default(),
+        }];
+        req.model_override = Some(model.to_string());
+
+        match provider.chat(req).await {
+            Ok(r) if !r.tool_calls.is_empty() => Ok(crate::git::ModelProbe {
+                model: model.to_string(),
+                usable: true,
+                detail: "Returns structured tool calls.".to_string(),
+            }),
+            Ok(r) => {
+                // Distinguish "tried and was not parsed" from "did not try": the
+                // first is a template/runtime mismatch the user can route around
+                // by choosing another model, and it is by far the more confusing.
+                let looked_like_a_call = r.content.contains("\"name\"")
+                    && (r.content.contains("read_file") || r.content.contains("arguments"));
+                Ok(crate::git::ModelProbe {
+                    model: model.to_string(),
+                    usable: false,
+                    detail: if looked_like_a_call {
+                        "Emits tool calls as plain text rather than structured calls, so the \
+                         runtime never sees them. A lane using this model will edit nothing. \
+                         Choose a model with agentic tool-calling support."
+                            .to_string()
+                    } else {
+                        "Did not call the tool when asked. A lane using this model will \
+                         probably edit nothing."
+                            .to_string()
+                    },
+                })
+            }
+            Err(e) => Ok(crate::git::ModelProbe {
+                model: model.to_string(),
+                usable: false,
+                detail: format!("The model could not be reached: {e}"),
+            }),
+        }
+    }
+
     /// Turn a task into a spec precise enough for cheap models to execute.
     ///
     /// Two bounded calls rather than one: the planner is first shown the

@@ -98,7 +98,8 @@
     <div class="row" style="margin-top:12px">
       <div style="flex:2 1 280px">
         <label for="models">Lane models &mdash; one per lane, comma separated</label>
-        <input id="models" value="qwen3-coder:30b, qwen2.5-coder:14b, qwen3:8b" />
+        <input id="models" value="qwen3-coder:30b, qwen3:8b" />
+        <div id="modelcheck" class="note"></div>
       </div>
       <div style="flex:1 1 190px">
         <label for="check">Check command</label>
@@ -223,22 +224,55 @@ async function showDiff(index) {
     let out = '';
     for (const f of files.slice(0, 4)) {
       const d = await api(`/api/sessions/${state.session}/variants/diff?index=${index}&path=${encodeURIComponent(f.path)}`);
-      out += `--- ${f.path}\n` + (d.too_large || d.binary ? '(not shown inline)\n' : simpleDiff(d.old, d.new));
+      out += `--- ${f.path}\n` + (d.too_large || d.binary ? '(not shown inline)\n' : lineDiff(d.old, d.new));
     }
     host.innerHTML = `<pre>${colorize(out)}</pre>`;
   } catch (e) { host.innerHTML = `<pre>${esc(e.message)}</pre>`; }
 }
 
-// A minimal line diff — enough to see what a candidate did without shipping a
-// diff library into the page.
-function simpleDiff(oldText, newText) {
-  const a = String(oldText || '').split('\n'), b = String(newText || '').split('\n');
-  const set = new Set(a);
-  const bset = new Set(b);
+// A real line diff. The previous version compared line *sets*, which reported
+// moved code as a change and collapsed duplicate lines — unacceptable for a
+// product whose central act is reading a diff. This is Myers-style via an LCS
+// table, emitted as unified hunks with context.
+function lineDiff(oldText, newText, context = 3) {
+  const a = String(oldText || '').split('\n');
+  const b = String(newText || '').split('\n');
+
+  // LCS lengths. Bounded so a huge file degrades to a summary instead of hanging.
+  if (a.length * b.length > 4_000_000) {
+    return `(files too large to diff inline: ${a.length} vs ${b.length} lines)\n`;
+  }
+  const lcs = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  // Walk it into a tagged edit script.
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { ops.push([' ', a[i]]); i++; j++; }
+    else if (lcs[i + 1][j] >= lcs[i][j + 1]) { ops.push(['-', a[i]]); i++; }
+    else { ops.push(['+', b[j]]); j++; }
+  }
+  while (i < a.length) ops.push(['-', a[i++]]);
+  while (j < b.length) ops.push(['+', b[j++]]);
+  if (!ops.some(([t]) => t !== ' ')) return '(no changes)\n';
+
+  // Keep only changed regions plus `context` lines either side.
+  const keep = new Array(ops.length).fill(false);
+  ops.forEach(([t], k) => {
+    if (t === ' ') return;
+    for (let x = Math.max(0, k - context); x <= Math.min(ops.length - 1, k + context); x++) keep[x] = true;
+  });
   const out = [];
-  for (const l of a) if (!bset.has(l)) out.push('-' + l);
-  for (const l of b) if (!set.has(l)) out.push('+' + l);
-  return (out.length ? out.join('\n') : '(no line changes)') + '\n';
+  let gap = false;
+  ops.forEach(([t, line], k) => {
+    if (keep[k]) { out.push(t + line); gap = false; }
+    else if (!gap) { out.push('@@'); gap = true; }
+  });
+  return out.join('\n') + '\n';
 }
 
 async function run() {
@@ -249,6 +283,11 @@ async function run() {
   state.session = session;
   const models = $('models').value.split(',').map(s => s.trim()).filter(Boolean);
   if (!models.length) return fail('at least one lane model is required');
+
+  // Catch an unusable lane model now rather than after it has burned minutes
+  // producing an empty diff.
+  const bad = await checkModels();
+  if (bad.length) return fail(`these models cannot drive a lane: ${bad.join(', ')}`);
 
   $('run').disabled = true;
   step('s-fan', 'on'); step('s-ver'); step('s-jud'); step('s-ado');
@@ -322,6 +361,21 @@ async function adopt(branch) {
 // Planning is its own step, and its output lands back in the task box as
 // editable text. A plan is one expensive call; correcting it before fanning out
 // costs nothing, and correcting it after costs N executions.
+async function checkModels() {
+  const models = $('models').value.split(',').map(m => m.trim()).filter(Boolean);
+  if (!models.length) { $('modelcheck').textContent = ''; return []; }
+  $('modelcheck').textContent = 'checking models…';
+  try {
+    const r = await api(`/api/variants/probe?provider=ollama&models=${encodeURIComponent(models.join(','))}`);
+    const bad = r.filter(m => !m.usable);
+    $('modelcheck').innerHTML = bad.length
+      ? bad.map(m => `<span style="color:var(--fail)">${esc(m.model)}: ${esc(m.detail)}</span>`).join('<br>')
+      : `<span style="color:var(--pass)">${r.length} model${r.length > 1 ? 's' : ''} can drive a lane.</span>`;
+    return bad.map(m => m.model);
+  } catch (e) { $('modelcheck').textContent = ''; return []; }
+}
+$('models').addEventListener('change', checkModels);
+
 $('plan').onclick = async () => {
   const session = $('session').value.trim();
   if (!session) return fail('a session id is required');

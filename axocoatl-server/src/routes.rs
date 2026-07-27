@@ -1242,6 +1242,33 @@ pub async fn session_variants_judge(
 }
 
 #[derive(serde::Deserialize)]
+pub struct ProbeQuery {
+    pub provider: String,
+    /// Comma-separated model ids — the lane list, checked in one call.
+    pub models: String,
+}
+
+/// GET /api/variants/probe?provider=…&models=a,b,c — can these models drive a
+/// lane? Answered in seconds, so a model that cannot is caught before a run is
+/// spent finding out.
+pub async fn variants_probe(
+    State(state): State<AppState>,
+    Query(q): Query<ProbeQuery>,
+) -> Result<Json<Vec<axocoatl_daemon::git::ModelProbe>>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    let mut out = Vec::new();
+    for model in q.models.split(',').map(str::trim).filter(|m| !m.is_empty()) {
+        out.push(
+            daemon
+                .probe_lane_model(&q.provider, model)
+                .await
+                .map_err(git_err)?,
+        );
+    }
+    Ok(Json(out))
+}
+
+#[derive(serde::Deserialize)]
 pub struct PlanBody {
     pub task: String,
     /// Provider to plan with — deliberately a stronger model than the lanes run.

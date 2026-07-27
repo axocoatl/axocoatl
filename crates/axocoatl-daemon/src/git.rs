@@ -156,6 +156,23 @@ pub fn verdict_tail(s: &str) -> String {
     s[cut..].to_string()
 }
 
+/// Whether a model can actually drive a lane.
+///
+/// A lane model must return **structured** tool calls. Some models emit a
+/// perfectly correct call as ordinary text instead, which the runtime never
+/// sees — so the agent reads the prompt, answers in a few tokens, edits nothing,
+/// and the run reports success because there was nothing to check. Establishing
+/// this in one cheap call beats discovering it after a lane has burned minutes
+/// producing an empty diff.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelProbe {
+    pub model: String,
+    /// True when the model returned a tool call in the structured field.
+    pub usable: bool,
+    /// What happened, in a sentence a user can act on.
+    pub detail: String,
+}
+
 /// One file the plan expects to change, and what to do in it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlanStep {
