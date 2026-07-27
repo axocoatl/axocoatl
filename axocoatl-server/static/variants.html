@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Variants — Axocoatl</title>
+<style>
+  :root {
+    --bg: #0d0f12; --bg-2: #14171c; --bg-3: #1a1e25;
+    --fg: #e6e9ef; --muted: #8b93a1; --dim: #5c6472;
+    --line: #242a33; --accent: #5eead4; --accent-dim: #2dd4bf;
+    --pass: #4ade80; --fail: #f87171; --warn: #fbbf24;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Inter, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    padding: 18px 22px; border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .01em; }
+  .sub { color: var(--muted); font-size: 12.5px; }
+  main { padding: 22px; max-width: 1400px; margin: 0 auto; }
+
+  .panel { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 5px; letter-spacing: .02em; }
+  textarea, input, select {
+    background: var(--bg-3); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 7px; padding: 9px 11px; font: 13px var(--sans); width: 100%;
+  }
+  textarea { resize: vertical; min-height: 68px; font-family: var(--mono); font-size: 12.5px; }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent-dim); }
+  button {
+    background: var(--accent); color: #06231f; border: 0; border-radius: 7px;
+    padding: 9px 15px; font: 600 13px var(--sans); cursor: pointer; white-space: nowrap;
+  }
+  button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button:not(:disabled):hover { filter: brightness(1.08); }
+
+  /* The pipeline: the loop, always visible, so you know where you are. */
+  .flow { display: flex; gap: 8px; align-items: center; margin: 20px 0 14px; flex-wrap: wrap; }
+  .step {
+    font: 600 11px var(--mono); letter-spacing: .06em; text-transform: uppercase;
+    color: var(--dim); padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px;
+  }
+  .step.on { color: var(--accent); border-color: var(--accent-dim); }
+  .step.done { color: var(--fg); border-color: var(--line); }
+  .flow .arr { color: var(--dim); font-size: 11px; }
+
+  .lanes { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); margin-top: 4px; }
+  .lane { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .lane.eliminated { opacity: .45; }
+  .lane.winner { border-color: var(--accent-dim); box-shadow: 0 0 0 1px var(--accent-dim) inset; }
+  .lane h3 { margin: 0 0 2px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  .model { font: 11.5px var(--mono); color: var(--muted); }
+  .badge {
+    font: 600 10px var(--mono); letter-spacing: .06em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 999px; border: 1px solid currentColor;
+  }
+  .badge.pass { color: var(--pass); } .badge.fail { color: var(--fail); }
+  .badge.rank { color: var(--accent); } .badge.run { color: var(--warn); }
+  .why { margin-top: 10px; font-size: 12.5px; }
+  .why b { color: var(--muted); font-weight: 500; display: block; font-size: 11px; margin-top: 7px; }
+  pre {
+    background: var(--bg-3); border: 1px solid var(--line); border-radius: 7px;
+    padding: 10px; overflow: auto; max-height: 260px; font: 11.5px/1.45 var(--mono); margin: 8px 0 0;
+  }
+  pre .add { color: var(--pass); } pre .del { color: var(--fail); } pre .hd { color: var(--muted); }
+
+  /* Cost — the argument, made visible. */
+  .cost { display: flex; gap: 22px; flex-wrap: wrap; align-items: baseline; margin-top: 14px; }
+  .cost .n { font: 600 19px var(--mono); }
+  .cost .n.save { color: var(--accent); }
+  .cost .k { font-size: 11px; color: var(--muted); display: block; letter-spacing: .03em; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .err { color: var(--fail); font: 12px var(--mono); margin-top: 10px; white-space: pre-wrap; }
+  .hidden { display: none; }
+  h2 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin: 26px 0 10px; font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Variants</h1>
+  <span class="sub">N attempts &middot; your checks eliminate the failures &middot; a stronger model ranks what survives</span>
+</header>
+
+<main>
+  <div class="panel">
+    <label for="task">Task</label>
+    <textarea id="task" placeholder="What should the agents attempt?"></textarea>
+    <div class="row" style="margin-top:12px">
+      <div style="flex:2 1 280px">
+        <label for="models">Lane models &mdash; one per lane, comma separated</label>
+        <input id="models" value="qwen3-coder:30b, qwen2.5-coder:14b, qwen3:8b" />
+      </div>
+      <div style="flex:1 1 190px">
+        <label for="check">Check command</label>
+        <input id="check" value="npm run check" />
+      </div>
+      <div style="flex:1 1 170px">
+        <label for="judge">Judge model</label>
+        <input id="judge" value="qwen3:32b" />
+      </div>
+      <button id="run">Run</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div style="flex:1 1 260px">
+        <label for="session">Session id</label>
+        <input id="session" placeholder="ses-…" />
+      </div>
+      <div style="flex:1 1 190px">
+        <label for="baseline">Price against</label>
+        <input id="baseline" value="claude-sonnet-4" />
+      </div>
+    </div>
+    <div id="err" class="err"></div>
+  </div>
+
+  <div class="flow">
+    <span class="step" id="s-fan">Fan out</span><span class="arr">&rarr;</span>
+    <span class="step" id="s-ver">Verify</span><span class="arr">&rarr;</span>
+    <span class="step" id="s-jud">Judge</span><span class="arr">&rarr;</span>
+    <span class="step" id="s-ado">Adopt</span>
+  </div>
+
+  <div id="verdict" class="panel hidden">
+    <div id="reasoning" class="sub"></div>
+    <div class="cost" id="cost"></div>
+    <div class="note" id="costnote"></div>
+  </div>
+
+  <h2 id="laneshead" class="hidden">Candidates</h2>
+  <div class="lanes" id="lanes"></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { session: null, lanes: [], verdicts: {}, ranks: {}, winner: null, diffs: {} };
+
+const api = async (path, opts) => {
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let body; try { body = JSON.parse(text); } catch { body = text; }
+  if (!r.ok) throw new Error(typeof body === 'string' ? body : (body.error || JSON.stringify(body)));
+  return body;
+};
+const fail = (e) => { $('err').textContent = String(e && e.message || e); };
+const step = (id, cls) => { const el = $(id); el.className = 'step ' + (cls || ''); };
+const money = (n) => '$' + (n < 0.01 && n > 0 ? n.toFixed(4) : n.toFixed(2));
+
+function renderLanes() {
+  const host = $('lanes');
+  $('laneshead').classList.toggle('hidden', state.lanes.length === 0);
+  host.innerHTML = '';
+  for (const lane of state.lanes) {
+    const v = state.verdicts[lane.index];
+    const rank = state.ranks[lane.index];
+    const el = document.createElement('div');
+    el.className = 'lane'
+      + (v && !v.passed ? ' eliminated' : '')
+      + (state.winner === lane.index ? ' winner' : '');
+
+    const badge = v
+      ? `<span class="badge ${v.passed ? 'pass' : 'fail'}">${v.passed ? 'passed' : 'eliminated'}</span>`
+      : `<span class="badge run">running</span>`;
+    const rankBadge = rank ? `<span class="badge rank">#${rank.rank}</span>` : '';
+
+    el.innerHTML = `
+      <h3>Lane ${lane.index} ${badge} ${rankBadge}</h3>
+      <div class="model">${lane.model || 'agent default'}</div>
+      ${rank ? `<div class="why"><b>Approach</b>${esc(rank.approach)}<b>Trade-off</b>${esc(rank.tradeoffs)}</div>` : ''}
+      ${v && !v.passed ? `<pre>${esc(tail(v.output))}</pre>` : ''}
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button class="ghost" data-diff="${lane.index}">Diff</button>
+        ${v && v.passed ? `<button data-adopt="${lane.branch}">Adopt</button>` : ''}
+      </div>
+      <div id="d-${lane.index}"></div>`;
+    host.appendChild(el);
+  }
+  host.querySelectorAll('[data-diff]').forEach(b =>
+    b.onclick = () => showDiff(Number(b.dataset.diff)));
+  host.querySelectorAll('[data-adopt]').forEach(b =>
+    b.onclick = () => adopt(b.dataset.adopt));
+}
+
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const tail = (s) => { const l = String(s || '').trim().split('\n'); return l.slice(-12).join('\n'); };
+
+function colorize(patch) {
+  return esc(patch).split('\n').map(l =>
+    l.startsWith('+') && !l.startsWith('+++') ? `<span class="add">${l}</span>` :
+    l.startsWith('-') && !l.startsWith('---') ? `<span class="del">${l}</span>` :
+    (l.startsWith('@@') || l.startsWith('diff ')) ? `<span class="hd">${l}</span>` : l
+  ).join('\n');
+}
+
+async function showDiff(index) {
+  const host = $('d-' + index);
+  if (host.innerHTML) { host.innerHTML = ''; return; }
+  try {
+    const st = await api(`/api/sessions/${state.session}/variants/status`);
+    const lane = st.find(s => s.index === index);
+    const files = (lane && lane.status && lane.status.files) || [];
+    if (!files.length) { host.innerHTML = `<pre>this lane changed nothing</pre>`; return; }
+    let out = '';
+    for (const f of files.slice(0, 4)) {
+      const d = await api(`/api/sessions/${state.session}/variants/diff?index=${index}&path=${encodeURIComponent(f.path)}`);
+      out += `--- ${f.path}\n` + (d.too_large || d.binary ? '(not shown inline)\n' : simpleDiff(d.old, d.new));
+    }
+    host.innerHTML = `<pre>${colorize(out)}</pre>`;
+  } catch (e) { host.innerHTML = `<pre>${esc(e.message)}</pre>`; }
+}
+
+// A minimal line diff — enough to see what a candidate did without shipping a
+// diff library into the page.
+function simpleDiff(oldText, newText) {
+  const a = String(oldText || '').split('\n'), b = String(newText || '').split('\n');
+  const set = new Set(a);
+  const bset = new Set(b);
+  const out = [];
+  for (const l of a) if (!bset.has(l)) out.push('-' + l);
+  for (const l of b) if (!set.has(l)) out.push('+' + l);
+  return (out.length ? out.join('\n') : '(no line changes)') + '\n';
+}
+
+async function run() {
+  $('err').textContent = '';
+  state.verdicts = {}; state.ranks = {}; state.winner = null;
+  const session = $('session').value.trim();
+  if (!session) return fail('a session id is required');
+  state.session = session;
+  const models = $('models').value.split(',').map(s => s.trim()).filter(Boolean);
+  if (!models.length) return fail('at least one lane model is required');
+
+  $('run').disabled = true;
+  step('s-fan', 'on'); step('s-ver'); step('s-jud'); step('s-ado');
+  try {
+    state.lanes = await api(`/api/sessions/${session}/variants`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: $('task').value, lanes: models.map(m => ({ model: m })) }),
+    });
+    renderLanes();
+    step('s-fan', 'done');
+    $('run').disabled = false;
+  } catch (e) { fail(e); step('s-fan'); $('run').disabled = false; }
+}
+
+async function verify() {
+  step('s-ver', 'on');
+  const v = await api(`/api/sessions/${state.session}/variants/verify`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ check: $('check').value }),
+  });
+  for (const r of v) state.verdicts[r.index] = r;
+  renderLanes(); step('s-ver', 'done');
+  return v.filter(r => r.passed).map(r => r.index);
+}
+
+async function judge(survivors) {
+  if (!survivors.length) { fail('every lane was eliminated — nothing to judge'); return; }
+  step('s-jud', 'on');
+  const j = await api(`/api/sessions/${state.session}/variants/judge`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task: $('task').value, provider: 'ollama', model: $('judge').value, only: survivors }),
+  });
+  state.winner = j.winner;
+  for (const c of j.candidates) state.ranks[c.index] = c;
+  $('verdict').classList.remove('hidden');
+  $('reasoning').textContent = j.reasoning;
+  renderLanes(); step('s-jud', 'done');
+}
+
+async function cost() {
+  const c = await api(`/api/sessions/${state.session}/variants/cost?baseline=${encodeURIComponent($('baseline').value)}`);
+  $('verdict').classList.remove('hidden');
+  $('cost').innerHTML = `
+    <div><span class="k">this run</span><span class="n">${money(c.total_usd)}</span></div>
+    <div><span class="k">all on ${esc(c.baseline_model)}</span><span class="n">${money(c.baseline_usd)}</span></div>
+    <div><span class="k">saved</span><span class="n save">${money(c.saved_usd)}</span></div>`;
+  $('costnote').textContent = c.all_local
+    ? 'Every lane ran locally, so this run cost nothing but electricity.'
+    : 'Priced from real token counts. The comparison assumes one attempt on the baseline model, not several.';
+}
+
+async function adopt(branch) {
+  try {
+    step('s-ado', 'on');
+    await api(`/api/sessions/${state.session}/variants/adopt`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branch }),
+    });
+    step('s-ado', 'done');
+    state.lanes = []; renderLanes();
+    $('reasoning').textContent = `Adopted ${branch}. It is merged into the session's branch.`;
+  } catch (e) { fail(e); step('s-ado'); }
+}
+
+// "Run" fans out; verification and judging are separate so you can fan out,
+// walk away while local models work, and come back to grade them.
+$('run').onclick = run;
+document.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter' || !e.metaKey || !state.session) return;
+  try { $('err').textContent = ''; await cost(); await judge(await verify()); await cost(); }
+  catch (err) { fail(err); }
+});
+
+// A visible affordance for the fan-in half, rather than a hidden shortcut.
+const bar = document.createElement('div');
+bar.className = 'row';
+bar.style.marginTop = '14px';
+bar.innerHTML = `<button class="ghost" id="grade">Verify &amp; judge</button>`;
+document.querySelector('.flow').after(bar);
+$('grade').onclick = async () => {
+  if (!state.session) return fail('run a fan-out first');
+  $('grade').disabled = true; $('err').textContent = '';
+  try { await judge(await verify()); await cost(); }
+  catch (e) { fail(e); }
+  finally { $('grade').disabled = false; }
+};
+</script>
+</body>
+</html>

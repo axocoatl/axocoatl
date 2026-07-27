@@ -12,11 +12,22 @@ use crate::AppState;
 // --- Dashboard (embedded SPA) ---
 
 const DASHBOARD_HTML: &str = include_str!("../static/index.html");
+/// The verified-variants surface: fan out, verify, judge, adopt — one screen.
+const VARIANTS_HTML: &str = include_str!("../static/variants.html");
 
 pub async fn dashboard() -> Response {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         DASHBOARD_HTML,
+    )
+        .into_response()
+}
+
+/// GET /variants — the verified-variants surface.
+pub async fn variants_page() -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        VARIANTS_HTML,
     )
         .into_response()
 }
