@@ -2481,11 +2481,30 @@ impl AxocoatlDaemon {
             } else {
                 format!("{}{}", r.stdout, r.stderr)
             };
+            // A green check is only evidence if the tests judging this lane were
+            // not written by it. Report any it changed, so "passed" can be read
+            // with that in view rather than taken at face value.
+            let _ = self
+                .session_git_at(session_id, &wt, &["add", "-A", "-N"])
+                .await;
+            let touched_tests = self
+                .session_git_at(session_id, &wt, &["diff", "--name-only", "HEAD"])
+                .await
+                .map(|r| {
+                    r.stdout
+                        .lines()
+                        .map(str::trim)
+                        .filter(|p| !p.is_empty() && crate::git::looks_like_test(p))
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             verdicts.push(crate::git::LaneVerdict {
                 index,
                 passed: r.exit_code == 0,
                 exit_code: r.exit_code,
                 output: crate::git::verdict_tail(&combined),
+                touched_tests,
             });
         }
         Ok(verdicts)
@@ -2595,8 +2614,13 @@ impl AxocoatlDaemon {
              # Task\n{task}\n\n\
              # Relevant files{}\n\n\
              Name exact files and exact changes — signatures, names, where code goes. \
-             State what must NOT be touched (other functions, tests). State how one \
-             would know the work is done.\n\n\
+             State how one would know the work is done.\n\n\
+             CRITICAL: the project's existing tests are the independent arbiter that \
+             decides whether an attempt succeeded. Never plan to add, modify or delete \
+             a test file, and never make acceptance depend on new tests — several \
+             models will execute this plan separately and be graded by those tests, so \
+             a plan that has them write their own lets each one grade its own work. \
+             Plan implementation only, and list touching tests under constraints.\n\n\
              Reply with JSON only:\n\
              {{\"summary\": \"<one sentence>\", \"steps\": [{{\"path\": \"<file>\", \
              \"change\": \"<specific change>\"}}], \"constraints\": [\"<do not …>\"], \

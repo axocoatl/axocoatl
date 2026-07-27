@@ -101,6 +101,33 @@ pub struct LaneVerdict {
     /// Tail of the check's combined output (capped by [`VERDICT_OUTPUT_MAX`]),
     /// so a failing lane can explain itself without shipping a whole test log.
     pub output: String,
+    /// Test files this lane changed.
+    ///
+    /// A passing check only means something if the tests were an *independent*
+    /// arbiter. A lane that rewrote them graded its own work, and "passed" would
+    /// be actively misleading — so this is reported rather than folded into
+    /// `passed`, and the decision is left to a human who can see it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub touched_tests: Vec<String>,
+}
+
+/// Whether a repo path looks like a test the check command would run.
+///
+/// A heuristic, deliberately broad: false positives merely prompt a human to
+/// look, while a false negative would let a lane quietly mark its own homework.
+pub fn looks_like_test(path: &str) -> bool {
+    let p = path.to_lowercase();
+    let file = p.rsplit('/').next().unwrap_or(&p);
+    p.split('/').any(|seg| {
+        matches!(
+            seg,
+            "test" | "tests" | "__tests__" | "spec" | "specs" | "e2e"
+        )
+    }) || file.contains(".test.")
+        || file.contains("_test.")
+        || file.contains(".spec.")
+        || file.contains("_spec.")
+        || file.starts_with("test_")
 }
 
 /// Most check output carried back per lane. Failures are what matter and the
@@ -448,6 +475,29 @@ mod tests {
         let multi = "é".repeat(VERDICT_OUTPUT_MAX);
         let tail = verdict_tail(&multi);
         assert!(tail.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn recognises_the_test_files_a_lane_must_not_grade_itself_with() {
+        for p in [
+            "lib/orders.test.ts",
+            "src/foo_test.go",
+            "tests/integration.rs",
+            "__tests__/App.tsx",
+            "spec/models/order_spec.rb",
+            "e2e/checkout.ts",
+            "test_math.py",
+        ] {
+            assert!(looks_like_test(p), "{p} should be recognised as a test");
+        }
+        for p in [
+            "lib/orders.ts",
+            "src/latest.rs", // contains "test" but is not one
+            "src/protest/main.rs",
+            "README.md",
+        ] {
+            assert!(!looks_like_test(p), "{p} should NOT be flagged");
+        }
     }
 
     #[test]

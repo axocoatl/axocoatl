@@ -65,6 +65,7 @@
   }
   .badge.pass { color: var(--pass); } .badge.fail { color: var(--fail); }
   .badge.rank { color: var(--accent); } .badge.run { color: var(--warn); }
+  .badge.warn { color: var(--warn); }
   .why { margin-top: 10px; font-size: 12.5px; }
   .why b { color: var(--muted); font-weight: 500; display: block; font-size: 11px; margin-top: 7px; }
   pre {
@@ -171,10 +172,14 @@ function renderLanes() {
     const badge = v
       ? `<span class="badge ${v.passed ? 'pass' : 'fail'}">${v.passed ? 'passed' : 'eliminated'}</span>`
       : `<span class="badge run">running</span>`;
+    // A pass earned against tests the lane itself rewrote is not evidence.
+    const tainted = v && v.touched_tests && v.touched_tests.length
+      ? `<span class="badge warn" title="${esc(v.touched_tests.join(', '))}">graded its own tests</span>`
+      : '';
     const rankBadge = rank ? `<span class="badge rank">#${rank.rank}</span>` : '';
 
     el.innerHTML = `
-      <h3>Lane ${lane.index} ${badge} ${rankBadge}</h3>
+      <h3>Lane ${lane.index} ${badge} ${tainted} ${rankBadge}</h3>
       <div class="model">${lane.model || 'agent default'}</div>
       ${rank ? `<div class="why"><b>Approach</b>${esc(rank.approach)}<b>Trade-off</b>${esc(rank.tradeoffs)}</div>` : ''}
       ${v && !v.passed ? `<pre>${esc(tail(v.output))}</pre>` : ''}
