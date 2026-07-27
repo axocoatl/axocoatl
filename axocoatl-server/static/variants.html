@@ -283,9 +283,15 @@ async function cost() {
     <div><span class="k">this run</span><span class="n">${money(c.total_usd)}</span></div>
     <div><span class="k">all on ${esc(c.baseline_model)}</span><span class="n">${money(c.baseline_usd)}</span></div>
     <div><span class="k">saved</span><span class="n save">${money(c.saved_usd)}</span></div>`;
-  $('costnote').textContent = c.all_local
-    ? 'Every lane ran locally, so this run cost nothing but electricity.'
-    : 'Priced from real token counts. The comparison assumes one attempt on the baseline model, not several.';
+  // A confident "saved $0.00" when no prices are configured would be a lie by
+  // omission — the number is zero because nothing has a price, not because
+  // nothing was saved. Say which.
+  $('costnote').textContent = c.baseline_usd === 0
+    ? `No price configured for ${c.baseline_model}, so there is nothing to compare against. `
+      + 'Add it under `pricing:` in your config (dollars per million tokens) to see the difference.'
+    : c.all_local
+      ? 'Every lane ran locally, so this run cost nothing but electricity — the figure above is what the same tokens would have cost on the baseline model.'
+      : 'Priced from real token counts. The comparison assumes one attempt on the baseline model, not several.';
 }
 
 async function adopt(branch) {
