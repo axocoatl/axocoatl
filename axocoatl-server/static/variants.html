@@ -172,6 +172,11 @@ function renderLanes() {
     const badge = v
       ? `<span class="badge ${v.passed ? 'pass' : 'fail'}">${v.passed ? 'passed' : 'eliminated'}</span>`
       : `<span class="badge run">running</span>`;
+    // A lane that changed nothing passes every check trivially — that is not a
+    // success, and it is what a model whose tool calls cannot be parsed looks
+    // like from the outside.
+    const empty = v && v.changed_files === 0
+      ? `<span class="badge fail" title="the check passed because there was nothing to check">changed nothing</span>` : '';
     // A pass earned against tests the lane itself rewrote is not evidence.
     const tainted = v && v.touched_tests && v.touched_tests.length
       ? `<span class="badge warn" title="${esc(v.touched_tests.join(', '))}">graded its own tests</span>`
@@ -179,13 +184,13 @@ function renderLanes() {
     const rankBadge = rank ? `<span class="badge rank">#${rank.rank}</span>` : '';
 
     el.innerHTML = `
-      <h3>Lane ${lane.index} ${badge} ${tainted} ${rankBadge}</h3>
+      <h3>Lane ${lane.index} ${badge} ${empty} ${tainted} ${rankBadge}</h3>
       <div class="model">${lane.model || 'agent default'}</div>
       ${rank ? `<div class="why"><b>Approach</b>${esc(rank.approach)}<b>Trade-off</b>${esc(rank.tradeoffs)}</div>` : ''}
       ${v && !v.passed ? `<pre>${esc(tail(v.output))}</pre>` : ''}
       <div style="margin-top:10px;display:flex;gap:8px">
         <button class="ghost" data-diff="${lane.index}">Diff</button>
-        ${v && v.passed ? `<button data-adopt="${lane.branch}">Adopt</button>` : ''}
+        ${v && v.passed && v.changed_files > 0 ? `<button data-adopt="${lane.branch}">Adopt</button>` : ''}
       </div>
       <div id="d-${lane.index}"></div>`;
     host.appendChild(el);

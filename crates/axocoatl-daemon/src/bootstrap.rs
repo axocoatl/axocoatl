@@ -2487,23 +2487,29 @@ impl AxocoatlDaemon {
             let _ = self
                 .session_git_at(session_id, &wt, &["add", "-A", "-N"])
                 .await;
-            let touched_tests = self
+            let changed: Vec<String> = self
                 .session_git_at(session_id, &wt, &["diff", "--name-only", "HEAD"])
                 .await
                 .map(|r| {
                     r.stdout
                         .lines()
                         .map(str::trim)
-                        .filter(|p| !p.is_empty() && crate::git::looks_like_test(p))
+                        .filter(|p| !p.is_empty())
                         .map(str::to_string)
-                        .collect::<Vec<_>>()
+                        .collect()
                 })
                 .unwrap_or_default();
+            let touched_tests: Vec<String> = changed
+                .iter()
+                .filter(|p| crate::git::looks_like_test(p))
+                .cloned()
+                .collect();
             verdicts.push(crate::git::LaneVerdict {
                 index,
                 passed: r.exit_code == 0,
                 exit_code: r.exit_code,
                 output: crate::git::verdict_tail(&combined),
+                changed_files: changed.len(),
                 touched_tests,
             });
         }

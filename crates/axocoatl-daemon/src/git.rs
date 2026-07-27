@@ -101,6 +101,15 @@ pub struct LaneVerdict {
     /// Tail of the check's combined output (capped by [`VERDICT_OUTPUT_MAX`]),
     /// so a failing lane can explain itself without shipping a whole test log.
     pub output: String,
+    /// How many files this lane changed.
+    ///
+    /// Zero is the important case: a lane that changed nothing passes every
+    /// check trivially, so `passed` alone would present it as a success. It
+    /// happens for real — a model whose tool calls the runtime cannot parse
+    /// completes a turn, burns tokens, and edits nothing, with no error
+    /// anywhere. Carrying the count lets that be shown for what it is.
+    #[serde(default)]
+    pub changed_files: usize,
     /// Test files this lane changed.
     ///
     /// A passing check only means something if the tests were an *independent*
