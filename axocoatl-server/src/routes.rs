@@ -1242,6 +1242,41 @@ pub async fn session_variants_judge(
 }
 
 #[derive(serde::Deserialize)]
+pub struct PlanBody {
+    pub task: String,
+    /// Provider to plan with — deliberately a stronger model than the lanes run.
+    pub provider: String,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// A plan plus the instruction it renders to — so the client fans out with
+/// exactly the text the lanes will receive, rather than reassembling it.
+#[derive(serde::Serialize)]
+pub struct PlanResponse {
+    #[serde(flatten)]
+    pub plan: axocoatl_daemon::git::Plan,
+    pub instruction: String,
+}
+
+/// POST /api/sessions/{id}/variants/plan — turn a task into a spec precise
+/// enough for cheap models to execute. Returned for review before fanning out:
+/// one plan corrected beats N executions of a bad one.
+pub async fn session_variants_plan(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<PlanBody>,
+) -> Result<Json<PlanResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    let plan = daemon
+        .plan_task(&id, &body.task, &body.provider, body.model)
+        .await
+        .map_err(git_err)?;
+    let instruction = plan.render(&body.task);
+    Ok(Json(PlanResponse { plan, instruction }))
+}
+
+#[derive(serde::Deserialize)]
 pub struct CostQuery {
     /// Model to price the counterfactual against — the one expensive model you
     /// would otherwise have run the whole task on.

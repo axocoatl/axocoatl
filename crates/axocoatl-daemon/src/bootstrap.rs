@@ -2491,6 +2491,137 @@ impl AxocoatlDaemon {
         Ok(verdicts)
     }
 
+    /// Turn a task into a spec precise enough for cheap models to execute.
+    ///
+    /// Two bounded calls rather than one: the planner is first shown the
+    /// repository's tracked files and asked which it needs, those are read, and
+    /// only then does it write the plan. That keeps the context proportional to
+    /// the task instead of the repository, so this works on a large codebase,
+    /// and it reads through the sandbox so it works on a remote backend where
+    /// the tree only exists inside the VM.
+    ///
+    /// This is the expensive half of "expensive brains, cheap hands", and the
+    /// cheapest place for a human to intervene: one plan reviewed beats N
+    /// executions of a bad one.
+    pub async fn plan_task(
+        &self,
+        session_id: &str,
+        task: &str,
+        provider_id: &str,
+        model: Option<String>,
+    ) -> Result<crate::git::Plan, DaemonError> {
+        /// Files listed to the planner when choosing what to read.
+        const MAX_LISTED: usize = 400;
+        /// Files it may ask for, and how much of each is shown.
+        const MAX_READ: usize = 8;
+        const MAX_FILE_BYTES: usize = 16 * 1024;
+
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let provider = self.resolve_provider(provider_id, model.as_deref())?;
+
+        // Tracked files only — respects .gitignore, so no node_modules or build
+        // output drowns the list.
+        let listing = self
+            .session_git(session_id, &["ls-files"])
+            .await
+            .map(|r| r.stdout)
+            .unwrap_or_default();
+        let files: Vec<&str> = listing
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .take(MAX_LISTED)
+            .collect();
+        if files.is_empty() {
+            return Err(DaemonError::Session(
+                "the session has no tracked files to plan against".to_string(),
+            ));
+        }
+
+        // Call 1 — which files matter for this task?
+        let scope_prompt = format!(
+            "You are planning a change to a codebase. Here are its tracked files:\n\n{}\n\n\
+             The task is:\n{task}\n\n\
+             Name the files you must read to write a precise plan — at most {MAX_READ}, \
+             fewest that suffice. Reply with JSON only: {{\"files\": [\"path\", …]}}",
+            files.join("\n"),
+        );
+        let mut req = axocoatl_llm::ChatRequest::simple(scope_prompt);
+        req.response_format = Some(axocoatl_core::ResponseFormat::Json);
+        req.model_override = model.clone();
+        let scope = provider
+            .chat(req)
+            .await
+            .map_err(|e| DaemonError::Provider(format!("planning (scope): {e}")))?;
+        #[derive(serde::Deserialize, Default)]
+        struct Scope {
+            #[serde(default)]
+            files: Vec<String>,
+        }
+        let wanted: Scope =
+            serde_json::from_str(crate::git::unfence_json(&scope.content)).unwrap_or_default();
+
+        // Read them through the sandbox — the tree may only exist inside the VM.
+        let mut context = String::new();
+        for path in wanted
+            .files
+            .iter()
+            .filter(|p| files.contains(&p.as_str()))
+            .take(MAX_READ)
+        {
+            if let Ok(r) = sandbox
+                .exec(&["cat", path.as_str()], Duration::from_secs(20))
+                .await
+            {
+                if r.ok() {
+                    let body = if r.stdout.len() > MAX_FILE_BYTES {
+                        &r.stdout[..MAX_FILE_BYTES]
+                    } else {
+                        &r.stdout
+                    };
+                    context.push_str(&format!("\n--- {path} ---\n{body}\n"));
+                }
+            }
+        }
+
+        // Call 2 — the plan itself.
+        let plan_prompt = format!(
+            "Write an implementation plan for this task, precise enough that a small \
+             model can execute it without inferring anything.\n\n\
+             # Task\n{task}\n\n\
+             # Relevant files{}\n\n\
+             Name exact files and exact changes — signatures, names, where code goes. \
+             State what must NOT be touched (other functions, tests). State how one \
+             would know the work is done.\n\n\
+             Reply with JSON only:\n\
+             {{\"summary\": \"<one sentence>\", \"steps\": [{{\"path\": \"<file>\", \
+             \"change\": \"<specific change>\"}}], \"constraints\": [\"<do not …>\"], \
+             \"acceptance\": [\"<done when …>\"]}}",
+            if context.is_empty() {
+                "\n(none could be read)".to_string()
+            } else {
+                format!("\n{context}")
+            },
+        );
+        let mut req = axocoatl_llm::ChatRequest::simple(plan_prompt);
+        req.response_format = Some(axocoatl_core::ResponseFormat::Json);
+        req.model_override = model;
+        let out = provider
+            .chat(req)
+            .await
+            .map_err(|e| DaemonError::Provider(format!("planning: {e}")))?;
+        serde_json::from_str(crate::git::unfence_json(&out.content)).map_err(|e| {
+            DaemonError::Session(format!(
+                "the planner did not return a usable plan ({e}); got: {}",
+                crate::git::verdict_tail(&out.content)
+            ))
+        })
+    }
+
     /// What a variants run cost, and what it would have cost on one model.
     ///
     /// The comparison is the point: fanning out to several cheap models is only

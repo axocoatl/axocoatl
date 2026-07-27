@@ -107,6 +107,7 @@
         <label for="judge">Judge model</label>
         <input id="judge" value="qwen3:32b" />
       </div>
+      <button class="ghost" id="plan">Plan</button>
       <button id="run">Run</button>
     </div>
     <div class="row" style="margin-top:10px">
@@ -123,6 +124,7 @@
   </div>
 
   <div class="flow">
+    <span class="step" id="s-plan">Plan</span><span class="arr">&rarr;</span>
     <span class="step" id="s-fan">Fan out</span><span class="arr">&rarr;</span>
     <span class="step" id="s-ver">Verify</span><span class="arr">&rarr;</span>
     <span class="step" id="s-jud">Judge</span><span class="arr">&rarr;</span>
@@ -306,6 +308,29 @@ async function adopt(branch) {
     $('reasoning').textContent = `Adopted ${branch}. It is merged into the session's branch.`;
   } catch (e) { fail(e); step('s-ado'); }
 }
+
+// Planning is its own step, and its output lands back in the task box as
+// editable text. A plan is one expensive call; correcting it before fanning out
+// costs nothing, and correcting it after costs N executions.
+$('plan').onclick = async () => {
+  const session = $('session').value.trim();
+  if (!session) return fail('a session id is required');
+  state.session = session;
+  $('plan').disabled = true; $('err').textContent = '';
+  step('s-plan', 'on');
+  try {
+    const p = await api(`/api/sessions/${session}/variants/plan`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task: $('task').value, provider: 'ollama', model: $('judge').value }),
+    });
+    $('task').value = p.instruction;
+    step('s-plan', 'done');
+    $('verdict').classList.remove('hidden');
+    $('reasoning').textContent =
+      'Plan ready and loaded into the task box — read it, edit anything wrong, then Run.';
+  } catch (e) { fail(e); step('s-plan'); }
+  finally { $('plan').disabled = false; }
+};
 
 // "Run" fans out; verification and judging are separate so you can fan out,
 // walk away while local models work, and come back to grade them.

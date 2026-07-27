@@ -120,6 +120,65 @@ pub fn verdict_tail(s: &str) -> String {
     s[cut..].to_string()
 }
 
+/// One file the plan expects to change, and what to do in it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PlanStep {
+    pub path: String,
+    /// The change, specific enough to act on without re-deriving intent.
+    pub change: String,
+}
+
+/// A task turned into a spec precise enough for a weak model to execute.
+///
+/// The observed failure mode is not incapacity — it is ambiguity. Given a bare
+/// task, a small model produced nothing at all, or syntactically broken code,
+/// where a larger one inferred the missing detail and succeeded. The plan is
+/// that inference, written down once by an expensive model so several cheap ones
+/// can execute it: which files, what change, what not to touch, and how you know
+/// it is done.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Plan {
+    /// The intent in a sentence.
+    pub summary: String,
+    pub steps: Vec<PlanStep>,
+    /// What must NOT change — the guardrails a weak model otherwise wanders past.
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    /// Observable conditions that mean the work is finished.
+    #[serde(default)]
+    pub acceptance: Vec<String>,
+}
+
+impl Plan {
+    /// Render the plan as the instruction each lane receives.
+    ///
+    /// Deliberately plain imperative prose rather than JSON: this is read by the
+    /// executing model, and the prompts that actually worked in testing looked
+    /// like this — name the file, name the change, name what not to touch.
+    pub fn render(&self, task: &str) -> String {
+        let mut s = format!("{task}\n\nPlan:\n{}\n", self.summary);
+        if !self.steps.is_empty() {
+            s.push_str("\nMake these changes:\n");
+            for step in &self.steps {
+                s.push_str(&format!("- In {}: {}\n", step.path, step.change));
+            }
+        }
+        if !self.constraints.is_empty() {
+            s.push_str("\nDo not:\n");
+            for c in &self.constraints {
+                s.push_str(&format!("- {c}\n"));
+            }
+        }
+        if !self.acceptance.is_empty() {
+            s.push_str("\nDone when:\n");
+            for a in &self.acceptance {
+                s.push_str(&format!("- {a}\n"));
+            }
+        }
+        s
+    }
+}
+
 /// What one lane spent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LaneUsage {
@@ -389,6 +448,40 @@ mod tests {
         let multi = "é".repeat(VERDICT_OUTPUT_MAX);
         let tail = verdict_tail(&multi);
         assert!(tail.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn plan_renders_the_instruction_a_weak_model_needs() {
+        let plan = Plan {
+            summary: "Replace the switch with a lookup table.".into(),
+            steps: vec![PlanStep {
+                path: "lib/orders.ts".into(),
+                change: "rewrite compareBy using a Record<SortKey, …> map".into(),
+            }],
+            constraints: vec!["modify any test file".into()],
+            acceptance: vec!["npm run check passes".into()],
+        };
+        let out = plan.render("Refactor compareBy.");
+        // The task leads; the plan supplies what a small model would otherwise
+        // have to infer — the file, the change, the guardrail, the finish line.
+        assert!(out.starts_with("Refactor compareBy."));
+        assert!(out.contains("In lib/orders.ts: rewrite compareBy"));
+        assert!(out.contains("Do not:\n- modify any test file"));
+        assert!(out.contains("Done when:\n- npm run check passes"));
+    }
+
+    #[test]
+    fn plan_render_omits_empty_sections() {
+        let bare = Plan {
+            summary: "Do the thing.".into(),
+            steps: vec![],
+            constraints: vec![],
+            acceptance: vec![],
+        };
+        let out = bare.render("Task.");
+        assert!(!out.contains("Do not:"));
+        assert!(!out.contains("Done when:"));
+        assert!(!out.contains("Make these changes:"));
     }
 
     #[test]
