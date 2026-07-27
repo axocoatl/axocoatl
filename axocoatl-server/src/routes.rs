@@ -3354,6 +3354,15 @@ async fn dispatch_ws_command(
                     })
                     .to_string(),
                 );
+                // …and on the shared bus, keyed by chat id. Chat used to stream
+                // only down the socket that asked for it, which meant a reload
+                // lost the reply, a second tab saw nothing, and a chat could
+                // never appear beside other runs. Publishing here makes a chat a
+                // run like any other, which is what a unified surface needs.
+                let chat_bus = { state.read().await.stream_bus.clone() };
+                let _ = chat_bus.send(axocoatl_daemon::StreamFrame::SessionStart {
+                    session: chat_id.clone(),
+                });
 
                 // Register a cancellation slot. If a prior turn for this chat
                 // is still in-flight, pre-empt it (UX: replying again cancels
@@ -3370,6 +3379,11 @@ async fn dispatch_ws_command(
 
                 // Token sink → chat-* frames. Also accumulates the text so we
                 // can persist the partial assistant message on cancel.
+                // Mirrors of the bus handle + agent id for the sink task, which
+                // republishes each delta so the chat is visible to any client,
+                // not just the socket that started it.
+                let bus_for_chat = chat_bus.clone();
+                let agent_for_chat = chat.agent_id.clone();
                 let accumulated = Arc::new(tokio::sync::Mutex::new(String::new()));
                 let (sink_tx, mut sink_rx) =
                     tokio::sync::mpsc::unbounded_channel::<axocoatl_actor::AgentStreamChunk>();
@@ -3382,11 +3396,24 @@ async fn dispatch_ws_command(
                             let f = match chunk {
                                 axocoatl_actor::AgentStreamChunk::Text(d) => {
                                     accumulated.lock().await.push_str(&d);
+                                    let _ =
+                                        bus_for_chat.send(axocoatl_daemon::StreamFrame::Token {
+                                            workflow: chat_id.clone(),
+                                            agent: agent_for_chat.clone(),
+                                            delta: d.clone(),
+                                        });
                                     serde_json::json!({
                                         "kind": "chat-token", "chat_id": chat_id, "delta": d,
                                     })
                                 }
                                 axocoatl_actor::AgentStreamChunk::Reasoning(d) => {
+                                    let _ = bus_for_chat.send(
+                                        axocoatl_daemon::StreamFrame::Reasoning {
+                                            workflow: chat_id.clone(),
+                                            agent: agent_for_chat.clone(),
+                                            delta: d.clone(),
+                                        },
+                                    );
                                     serde_json::json!({
                                         "kind": "chat-reasoning", "chat_id": chat_id, "delta": d,
                                     })
@@ -3510,6 +3537,11 @@ async fn dispatch_ws_command(
                             })
                             .to_string(),
                         );
+                        let _ = chat_bus.send(axocoatl_daemon::StreamFrame::SessionDone {
+                            session: chat_id.clone(),
+                            input_tokens: o.token_usage.input_tokens as u64,
+                            output_tokens: o.token_usage.output_tokens as u64,
+                        });
                     }
                     Some(Err(e)) => {
                         let _ = out.send(
