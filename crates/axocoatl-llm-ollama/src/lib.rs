@@ -133,7 +133,12 @@ fn strip_wrapping_newlines(v: &str) -> String {
 /// ```text
 /// <function=NAME><parameter=KEY>VALUE</parameter>…</function>   (Qwen-coder)
 /// <tool_call>{"name":"NAME","arguments":{…}}</tool_call>        (Hermes JSON)
+/// {"name":"NAME","arguments":{…}}                               (bare JSON)
 /// ```
+///
+/// The bare shape matters more than it looks: a model whose calls are never
+/// lifted into `tool_calls` is not merely degraded, it is silently useless —
+/// it edits nothing and the run still reports success.
 ///
 /// Only calls whose name was actually offered in `tool_names` are returned, so
 /// ordinary prose that happens to contain the markers is never misread as a call.
@@ -212,7 +217,80 @@ fn parse_text_tool_calls(content: &str, tool_names: &[String]) -> Vec<axocoatl_l
         rest = next;
     }
 
+    // Shape 3: a bare JSON object, no wrapper at all —
+    //   {"name":"NAME","arguments":{…}}
+    // qwen2.5-coder emits exactly this. Ollama's template for it does not lift
+    // the call into `tool_calls`, so without this the model appears to do
+    // nothing: it answers in a few tokens, edits no files, and every check then
+    // passes because there is nothing to check. The name gate below is what
+    // keeps this safe — prose is only ever read as a call when it names a tool
+    // that was actually offered.
+    if calls.is_empty() {
+        for candidate in bare_json_objects(content) {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(candidate) else {
+                continue;
+            };
+            // Accept `arguments` (OpenAI/Hermes) or `parameters` (some Qwen builds).
+            let Some(name) = v["name"].as_str() else {
+                continue;
+            };
+            if !known(name) {
+                continue;
+            }
+            let args = v
+                .get("arguments")
+                .or_else(|| v.get("parameters"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            calls.push(axocoatl_llm::ToolCall {
+                id: format!("call_{}", calls.len()),
+                name: name.to_string(),
+                arguments: args,
+            });
+        }
+    }
+
     calls
+}
+
+/// Every balanced top-level `{…}` span in `s`, so a JSON object embedded in
+/// prose (or several of them) can each be tried. Brace counting ignores braces
+/// inside string literals, which is what makes nested argument objects work.
+fn bare_json_objects(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    let (mut in_str, mut escaped) = (false, false);
+    for (i, &b) in bytes.iter().enumerate() {
+        if in_str {
+            match b {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => in_str = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => {
+                if depth == 0 {
+                    start = i;
+                }
+                depth += 1;
+            }
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 && i >= start {
+                    if let Some(slice) = s.get(start..=i) {
+                        out.push(slice);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Largest char-boundary offset of `s` that still leaves `holdback` bytes
@@ -599,6 +677,84 @@ impl LlmProvider for OllamaProvider {
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+#[cfg(test)]
+mod bare_json_tool_call_tests {
+    use super::*;
+
+    fn names() -> Vec<String> {
+        vec!["read_file".to_string(), "write_file".to_string()]
+    }
+
+    #[test]
+    fn recovers_a_bare_json_call() {
+        // Exactly what qwen2.5-coder emits, and what was being discarded.
+        let calls = parse_text_tool_calls(
+            r#"{"name": "read_file", "arguments": {"path": "lib/orders.ts"}}"#,
+            &names(),
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments["path"], "lib/orders.ts");
+    }
+
+    #[test]
+    fn recovers_a_call_embedded_in_prose() {
+        let calls = parse_text_tool_calls(
+            "Sure, I'll read it.\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.ts\"}}\nDone.",
+            &names(),
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["path"], "a.ts");
+    }
+
+    #[test]
+    fn accepts_parameters_as_an_alias_for_arguments() {
+        let calls = parse_text_tool_calls(
+            r#"{"name":"read_file","parameters":{"path":"b.ts"}}"#,
+            &names(),
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["path"], "b.ts");
+    }
+
+    #[test]
+    fn nested_objects_and_braces_in_strings_survive() {
+        let calls = parse_text_tool_calls(
+            r#"{"name":"write_file","arguments":{"path":"x.rs","content":"fn main() { let s = \"}\"; }"}}"#,
+            &names(),
+        );
+        assert_eq!(
+            calls.len(),
+            1,
+            "a brace inside a string must not end the object"
+        );
+        assert_eq!(calls[0].arguments["path"], "x.rs");
+    }
+
+    #[test]
+    fn prose_is_never_mistaken_for_a_call() {
+        // The name gate is what makes this safe.
+        assert!(parse_text_tool_calls(
+            r#"You could use {"name": "some_other_tool", "arguments": {}} here."#,
+            &names(),
+        )
+        .is_empty());
+        assert!(parse_text_tool_calls("{ just an object }", &names()).is_empty());
+        assert!(parse_text_tool_calls("no json at all", &names()).is_empty());
+    }
+
+    #[test]
+    fn structured_shapes_still_win_and_bare_does_not_double_count() {
+        // A wrapped call is parsed by shape 2; the bare pass must not add a
+        // duplicate for the same JSON.
+        let calls = parse_text_tool_calls(
+            r#"<tool_call>{"name":"read_file","arguments":{"path":"c.ts"}}</tool_call>"#,
+            &names(),
+        );
+        assert_eq!(calls.len(), 1);
     }
 }
 
