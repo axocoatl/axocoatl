@@ -207,6 +207,7 @@ const state = {
   ranks: {}, winner: null,
   awaiting: {},          // run key -> what it is blocked on
   peek: null,            // lane index whose peek panel is open
+  away: null,            // {at, snapshot} captured when the window loses focus
   streaming: null,      // element currently receiving assistant tokens
 };
 
@@ -301,6 +302,64 @@ window.answer = (approvalId, decision) => {
   ws.send(JSON.stringify({ cmd: 'mcp-approve', approval_id: approvalId, decision }));
   state.peek = null;
 };
+
+/** What changed while you were not looking.
+ *
+ *  Deliberately computed, not summarised by a model: lane transitions are facts
+ *  we already hold exactly, so a deterministic recap is instant, free and cannot
+ *  be wrong about them. The trigger is the borrowed part — capture on blur, and
+ *  only bother if enough time passed that you actually lost the thread.
+ */
+const AWAY_SECONDS = 25;
+
+function laneSnapshot() {
+  return state.lanes.map(l => {
+    const v = state.verdicts[l.index];
+    const wait = state.awaiting[`${state.session}#${l.index}`];
+    return {
+      index: l.index,
+      model: l.model,
+      status: wait ? 'needs-input'
+        : v ? (v.changed_files === 0 ? 'empty' : (v.passed ? 'passed' : 'eliminated'))
+        : (state.activity[l.index] ? 'working' : 'queued'),
+    };
+  });
+}
+
+function recapSince(before) {
+  const now = laneSnapshot();
+  const byIndex = Object.fromEntries(before.map(l => [l.index, l.status]));
+  const lines = [];
+  for (const l of now) {
+    const was = byIndex[l.index];
+    if (was === undefined || was === l.status) continue;
+    const name = l.model || `lane ${l.index}`;
+    lines.push({
+      'passed': `${name} finished and passed its checks`,
+      'eliminated': `${name} was eliminated by the checks`,
+      'empty': `${name} finished without changing anything`,
+      'needs-input': `${name} is waiting on you`,
+      'working': `${name} started working`,
+    }[l.status] || `${name} → ${l.status}`);
+  }
+  return lines;
+}
+
+window.addEventListener('blur', () => {
+  if (!state.lanes.length) return;
+  state.away = { at: Date.now(), snapshot: laneSnapshot() };
+});
+
+window.addEventListener('focus', () => {
+  const away = state.away; state.away = null;
+  if (!away) return;
+  const seconds = Math.round((Date.now() - away.at) / 1000);
+  if (seconds < AWAY_SECONDS) return;
+  const lines = recapSince(away.snapshot);
+  if (!lines.length) return;
+  addEvent('while you were away', `${seconds}s — ${lines.length} change${lines.length > 1 ? 's' : ''}`,
+    lines.map(l => `<div style="font-size:12.5px">· ${esc(l)}</div>`).join(''));
+});
 
 function renderBlocked() {
   const n = Object.keys(state.awaiting).length;
