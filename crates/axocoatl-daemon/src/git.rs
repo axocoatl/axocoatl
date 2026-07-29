@@ -66,12 +66,23 @@ pub struct LaneConfig {
     /// Model this lane runs. `None` uses the agent's configured model.
     #[serde(default)]
     pub model: Option<String>,
+    /// Agent this lane runs — its prompt, tools and memory, not just its model.
+    /// `None` uses the session's agent.
+    ///
+    /// This is what turns a variants run from "the same agent with different
+    /// models" into "different agents on the same task". Designing an agent by
+    /// reasoning about it is guesswork; running three and letting the project's
+    /// own checks decide is evidence.
+    #[serde(default)]
+    pub agent: Option<String>,
 }
 
 /// One parallel exploration: a `git worktree` on its own branch where a
 /// variant agent runs, isolated from the other variants and from the
 /// session's primary checkout.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+// Deserialize as well as Serialize: the roster is written to disk beside the
+// worktrees and read back, so a reload can still say what each lane is.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Variant {
     /// 0-based lane index.
     pub index: usize,
@@ -84,6 +95,10 @@ pub struct Variant {
     /// model that produced it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Agent this lane ran. Present whenever lanes differ by agent, so a
+    /// scoreboard can name the thing being compared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 /// How one lane fared against the project's own check command.
@@ -91,7 +106,7 @@ pub struct Variant {
 /// This is the *fan-in* half of a variants run: N candidates are generated in
 /// parallel, then each is judged by the repository's real checks (tests, build,
 /// typecheck) so the failures are eliminated before a human reads a single diff.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LaneVerdict {
     /// 0-based lane index, matching [`Variant::index`].
     pub index: usize,
@@ -242,6 +257,13 @@ pub struct LaneUsage {
     pub output_tokens: u64,
     /// What those tokens cost at this model's price. Local models are 0.
     pub cost_usd: f64,
+    /// Wall-clock the lane's agent ran for, measured in the daemon.
+    ///
+    /// Timed here rather than in the viewer so a reload mid-run does not lose
+    /// it, and so the number is the lane's actual work rather than the gap
+    /// between two frames arriving over a socket.
+    #[serde(default)]
+    pub duration_ms: u64,
 }
 
 /// The economics of a variants run: what it cost, against what the same work
@@ -309,6 +331,26 @@ pub struct Judgment {
     pub reasoning: String,
 }
 
+/// Everything a scoreboard needs about one comparison, in a single read.
+///
+/// A variants run outlives the page that started it: worktrees persist, checks
+/// take minutes, and reloading a tab mid-run is ordinary. Without this the
+/// comparison would come back as an empty table even though every result still
+/// exists — so the daemon holds the answers and hands them back on request,
+/// rather than the browser being the only place they were ever assembled.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RunResults {
+    /// The lanes, with the model or agent each one ran.
+    pub lanes: Vec<Variant>,
+    /// Verdicts from the last `verify`, empty if it has not been run.
+    pub verdicts: Vec<LaneVerdict>,
+    /// Token spend and wall-clock per lane, for lanes that have finished.
+    pub usage: Vec<LaneUsage>,
+    /// The last ranking, if a judge has been run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judgment: Option<Judgment>,
+}
+
 /// Largest patch carried into the judge prompt, per lane. Enough for a real
 /// change; short of pasting a refactor of the whole tree into the context.
 pub const JUDGE_PATCH_MAX: usize = 24 * 1024;
@@ -335,6 +377,17 @@ pub struct VariantStatus {
     pub branch: String,
     pub worktree: String,
     pub status: GitStatus,
+    /// Model this lane ran, recovered from the persisted roster.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Agent this lane ran, recovered from the persisted roster.
+    ///
+    /// Carried here because a lane's *identity* has to outlive the response
+    /// that created it. The worktrees survive a reload and a daemon restart; if
+    /// the labels did not, a comparison would come back as "lane 0 vs lane 1"
+    /// and stop being a comparison of anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 /// Parse `git status --porcelain=v1 -b --untracked-files=all`.
@@ -467,6 +520,122 @@ mod tests {
         let b = parse_branches("main\n", "main\naxo/variant-0\naxo/variant-1\n");
         assert_eq!(b.current, "main");
         assert_eq!(b.branches, vec!["main", "axo/variant-0", "axo/variant-1"]);
+    }
+
+    #[test]
+    fn lane_config_parses_agents_as_well_as_models() {
+        // The three comparison modes the API has to express: same agent with
+        // different models, different agents entirely, and a mix.
+        let lanes: Vec<LaneConfig> = serde_json::from_str(
+            r#"[{"model":"qwen3-coder:30b"},{"agent":"careful"},{"agent":"fast","model":"qwen3:8b"},{}]"#,
+        )
+        .expect("lane configs parse");
+        assert_eq!(lanes[0].model.as_deref(), Some("qwen3-coder:30b"));
+        assert_eq!(lanes[0].agent, None);
+        assert_eq!(lanes[1].agent.as_deref(), Some("careful"));
+        assert_eq!(lanes[1].model, None, "an agent lane keeps its own model");
+        assert_eq!(lanes[2].agent.as_deref(), Some("fast"));
+        assert_eq!(lanes[2].model.as_deref(), Some("qwen3:8b"));
+        assert!(lanes[3].agent.is_none() && lanes[3].model.is_none());
+    }
+
+    #[test]
+    fn variant_labels_the_agent_that_produced_it() {
+        let v = Variant {
+            index: 0,
+            branch: "axo/variant-0".into(),
+            worktree: "/w/.axo-variants/0".into(),
+            model: None,
+            agent: Some("careful".into()),
+        };
+        let j = serde_json::to_string(&v).unwrap();
+        assert!(
+            j.contains("careful"),
+            "a scoreboard must be able to name it"
+        );
+        assert!(
+            !j.contains("model"),
+            "an unset model still stays off the wire"
+        );
+    }
+
+    #[test]
+    fn variant_roster_round_trips_through_disk() {
+        // The roster is written beside the worktrees and read back by a later
+        // process, so what a lane *is* has to survive the trip. Losing it turns
+        // a comparison of two agents into "lane 0 vs lane 1".
+        let roster = vec![
+            Variant {
+                index: 0,
+                branch: "axo/variant-0".into(),
+                worktree: "/w/.axo-variants/0".into(),
+                model: None,
+                agent: Some("careful".into()),
+            },
+            Variant {
+                index: 1,
+                branch: "axo/variant-1".into(),
+                worktree: "/w/.axo-variants/1".into(),
+                model: Some("qwen3:8b".into()),
+                agent: None,
+            },
+        ];
+        let back: Vec<Variant> =
+            serde_json::from_str(&serde_json::to_string(&roster).unwrap()).unwrap();
+        assert_eq!(back, roster);
+    }
+
+    #[test]
+    fn run_results_round_trip_keeps_every_axis_the_board_compares() {
+        // One read has to carry identity, outcome, spend and ranking: the
+        // scoreboard renders all four, and a reload rebuilds it from this alone.
+        let results = RunResults {
+            lanes: vec![Variant {
+                index: 0,
+                branch: "axo/variant-0".into(),
+                worktree: "/w/.axo-variants/0".into(),
+                model: None,
+                agent: Some("careful".into()),
+            }],
+            verdicts: vec![LaneVerdict {
+                index: 0,
+                passed: true,
+                exit_code: 0,
+                output: "ok".into(),
+                changed_files: 2,
+                touched_tests: vec![],
+            }],
+            usage: vec![LaneUsage {
+                index: 0,
+                model: None,
+                input_tokens: 100,
+                output_tokens: 20,
+                cost_usd: 0.0,
+                duration_ms: 4_200,
+            }],
+            judgment: Some(Judgment {
+                winner: 0,
+                candidates: vec![],
+                reasoning: "only survivor".into(),
+            }),
+        };
+        let json = serde_json::to_string(&results).unwrap();
+        let back: RunResults = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.lanes[0].agent.as_deref(), Some("careful"));
+        assert!(back.verdicts[0].passed);
+        assert_eq!(back.usage[0].duration_ms, 4_200);
+        assert_eq!(back.judgment.unwrap().winner, 0);
+    }
+
+    #[test]
+    fn lane_usage_tolerates_a_record_written_before_durations_existed() {
+        // Usage files persist across upgrades; an older one must still price,
+        // reporting an unknown duration rather than failing the whole read.
+        let old: LaneUsage = serde_json::from_str(
+            r#"{"index":0,"model":null,"input_tokens":10,"output_tokens":2,"cost_usd":0.0}"#,
+        )
+        .expect("a record without duration_ms still parses");
+        assert_eq!(old.duration_ms, 0);
     }
 
     #[test]
@@ -610,6 +779,7 @@ mod tests {
             branch: "axo/variant-0".into(),
             worktree: "/w/.axo-variants/0".into(),
             model: None,
+            agent: None,
         };
         let json = serde_json::to_string(&v).unwrap();
         assert!(

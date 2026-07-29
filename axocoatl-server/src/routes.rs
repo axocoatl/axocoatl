@@ -1199,6 +1199,17 @@ pub async fn session_variants_status(
     daemon.variants_status(&id).await.map(Json).map_err(git_err)
 }
 
+/// GET /api/sessions/{id}/variants/results — the whole comparison in one read:
+/// which lanes exist and what each is, their verdicts, their spend, the
+/// ranking. What a scoreboard re-attaches to after a reload.
+pub async fn session_variants_results(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_daemon::git::RunResults>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon.run_results(&id).await.map(Json).map_err(git_err)
+}
+
 #[derive(serde::Deserialize)]
 pub struct VerifyBody {
     /// The project's own check command — tests, build, typecheck. Run through
@@ -1332,6 +1343,7 @@ pub async fn session_variants_cost(
     let daemon = state.read().await;
     daemon
         .variants_cost(&id, &q.baseline)
+        .await
         .map(Json)
         .map_err(git_err)
 }

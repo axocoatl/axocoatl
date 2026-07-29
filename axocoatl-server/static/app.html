@@ -58,7 +58,23 @@
   .split { display: grid; grid-template-columns: 1fr 340px; min-height: 0; }
   @media (max-width: 1000px) { .split { grid-template-columns: 1fr; } aside { display: none; } }
 
-  main { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
+  main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
+
+  /* A module opens *around* the chat, not instead of it: a pinned band above
+     the transcript, in the main column where there is width to lay several
+     candidates side by side. The 340px rail is for run state you glance at;
+     a comparison is something you read. */
+  .module { border-bottom: 1px solid var(--line); background: var(--bg-2); }
+  .module.shut { display: none; }
+  .module > summary {
+    cursor: pointer; list-style: none; padding: 9px 22px;
+    display: flex; align-items: center; gap: 9px;
+    font: 600 10.5px var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--dim);
+  }
+  .module > summary::-webkit-details-marker { display: none; }
+  .module > summary::before { content: "▾"; font-size: 11px; }
+  .module:not([open]) > summary::before { content: "▸"; }
+  .module .inner { padding: 0 22px 14px; overflow-x: auto; }
   #transcript { overflow-y: auto; padding: 20px 22px; }
   aside {
     border-left: 1px solid var(--line); background: var(--bg-2);
@@ -146,6 +162,21 @@
     border-radius: 6px; padding: 6px 9px; font: 12px var(--sans);
   }
   .cnote { font: 11.5px var(--sans); color: var(--accent); padding: 2px 0 2px 14px; }
+  /* Tier 1 — metrics as rows, candidates as columns. Transposed because with
+     several candidates the eye compares down a row, not across a card. */
+  .board { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .board th, .board td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .board th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+  .board td { font: 12px var(--mono); }
+  .board .base { color: var(--dim); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; }
+  .board td.win { color: var(--accent); }
+  .board td.bad { color: var(--fail); }
+  .board td.good { color: var(--pass); }
+  .board tr.same { opacity: .38; }
+  .board .rebase { background: none; border: 0; padding: 0; color: var(--fg); font: inherit; cursor: pointer; }
+  .board .rebase:hover { color: var(--accent); text-decoration: underline; }
+  .boardopt { display: flex; gap: 6px; align-items: center; margin-top: 9px; font-size: 11.5px; color: var(--muted); }
+  .boardopt input { width: auto; }
   .err { color: var(--fail); font: 12px var(--mono); margin-top: 8px; white-space: pre-wrap; }
   .badge {
     font: 600 9.5px var(--mono); letter-spacing: .06em; text-transform: uppercase;
@@ -170,6 +201,10 @@
 
 <div class="split">
   <main>
+    <details class="module shut" id="boardmod" open>
+      <summary>Scoreboard</summary>
+      <div class="inner"><div id="board"></div></div>
+    </details>
     <div id="transcript"></div>
     <div class="composer">
       <textarea id="input" placeholder="Describe the change. Send to work with one agent; fan out to compare several."></textarea>
@@ -205,6 +240,11 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 const money = (n) => '$' + (n < 0.01 && n > 0 ? n.toFixed(4) : n.toFixed(2));
+const secs = (ms) => ms < 1000 ? `${ms}ms` : (ms < 60000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
+// What a lane is *called* is the thing being compared: an agent when lanes
+// differ by agent, otherwise the model. Named once so the roster and the
+// scoreboard can never disagree about it.
+const laneLabel = (l) => l.agent || l.model || `lane ${l.index}`;
 
 const state = {
   session: null,
@@ -215,6 +255,7 @@ const state = {
   verdicts: {},         // lane index -> verdict
   ranks: {}, winner: null,
   awaiting: {},          // run key -> what it is blocked on
+  usage: {},             // lane index -> {input_tokens, output_tokens, cost_usd, duration_ms}
   peek: null,            // lane index whose peek panel is open
   away: null,            // {at, snapshot} captured when the window loses focus
   comments: [],          // line-anchored review notes, compiled into one follow-up
@@ -278,7 +319,7 @@ function renderRoster() {
     const rank = state.ranks[l.index];
     return `<div class="lane-row" data-lane="${l.index}">
       <span class="dot ${cls}"></span>
-      <span class="lane-name">${esc(l.model || 'default')}</span>
+      <span class="lane-name">${esc(laneLabel(l))}</span>
       ${rank ? `<span class="badge">#${rank.rank}</span>` : ''}
       ${v && v.touched_tests?.length ? '<span class="badge warn">own tests</span>' : ''}
       <span class="lane-act">${esc(right)}</span>
@@ -291,6 +332,7 @@ function renderRoster() {
     else showLane(i);
   });
   renderBlocked();
+  renderScoreboard();
 }
 
 /** Peek: answer the question where you are, rather than attaching to the lane.
@@ -370,6 +412,89 @@ window.addEventListener('focus', () => {
   addEvent('while you were away', `${seconds}s — ${lines.length} change${lines.length > 1 ? 's' : ''}`,
     lines.map(l => `<div style="font-size:12.5px">· ${esc(l)}</div>`).join(''));
 });
+
+/** Tier 1: the scoreboard.
+ *
+ *  Rows are metrics, columns are candidates. The transpose matters — comparing
+ *  four candidates on six measures reads down a row, where four stacked cards
+ *  make you hold values in your head. Leftmost is the baseline everything else
+ *  is read against, which is the convention every serious comparison tool
+ *  converged on, so deviating would cost familiarity for nothing.
+ *
+ *  "Only differences" collapses rows where every candidate agrees: when they
+ *  mostly match, the few rows that differ ARE the comparison. */
+let boardDiffOnly = false;
+let boardBase = 0;              // lane index held in the leftmost column
+
+const METRICS = [
+  ['outcome', 'Outcome'], ['rank', 'Rank'], ['files', 'Files changed'],
+  ['tests', 'Tests'], ['duration', 'Duration'], ['cost', 'Cost'], ['tokens', 'Tokens'],
+];
+
+/** What each candidate is worth on every measured axis.
+ *
+ *  Everything here comes from something observed — a check's exit code, a file
+ *  count, a token count, a clock in the daemon. Nothing is a score we invented,
+ *  because the whole claim of the product is that the project's own checks
+ *  decide, not us. */
+function scoreboardCell(l) {
+  const v = state.verdicts[l.index];
+  const r = state.ranks[l.index];
+  const wait = state.awaiting[`${state.session}#${l.index}`];
+  const u = state.usage[l.index];
+  return {
+    outcome: wait ? 'needs input'
+      : v ? (v.changed_files === 0 ? 'changed nothing' : (v.passed ? 'passed' : 'eliminated'))
+      : (state.activity[l.index] ? 'working' : 'queued'),
+    rank: r ? `#${r.rank}` : '—',
+    files: v ? String(v.changed_files) : '—',
+    tests: v?.touched_tests?.length ? 'rewrote tests' : 'untouched',
+    duration: u?.duration_ms ? secs(u.duration_ms) : '—',
+    cost: u ? money(u.cost_usd) : '—',
+    tokens: u ? String(u.input_tokens + u.output_tokens) : '—',
+  };
+}
+
+function renderScoreboard() {
+  const host = $('board');
+  const mod = $('boardmod');
+  if (!host || !mod) return;
+  // Nothing to compare is not an empty state worth any screen — the band stays
+  // out of the way entirely until a second candidate exists.
+  mod.classList.toggle('shut', state.lanes.length < 2);
+  if (state.lanes.length < 2) return;
+  // Re-based rather than re-sorted. Which candidate you read the others against
+  // is a judgement only the user can make — usually "the one I'd have shipped
+  // anyway" — so it is a click, not a ranking we impose.
+  const order = [...state.lanes].sort((a, b) =>
+    (a.index === boardBase ? -1 : 0) - (b.index === boardBase ? -1 : 0));
+  const cells = order.map(scoreboardCell);
+  const head = `<tr><th></th>${order.map((l, i) =>
+    `<th><button class="rebase" data-lane="${l.index}">${esc(laneLabel(l))}</button>` +
+    `${i === 0 ? '<div class="base">baseline</div>' : ''}</th>`).join('')}</tr>`;
+  const body = METRICS.map(([k, name]) => {
+    const vals = cells.map(c => c[k]);
+    const same = vals.every(v => v === vals[0]);
+    if (boardDiffOnly && same) return '';
+    return `<tr class="${same ? 'same' : ''}"><th>${name}</th>` + vals.map((v) => {
+      let cls = '';
+      if (k === 'outcome') cls = v === 'passed' ? 'good' : (v === 'eliminated' || v === 'changed nothing' ? 'bad' : '');
+      if (k === 'rank' && v === '#1') cls = 'win';
+      if (k === 'tests' && v === 'rewrote tests') cls = 'bad';
+      return `<td class="${cls}">${esc(v)}</td>`;
+    }).join('') + '</tr>';
+  }).join('');
+  const hidden = boardDiffOnly
+    ? METRICS.filter(([k]) => { const vs = cells.map(c => c[k]); return vs.every(v => v === vs[0]); }).length
+    : 0;
+  host.innerHTML = `<table class="board">${head}${body}</table>
+    <label class="boardopt"><input type="checkbox" id="diffonly" ${boardDiffOnly ? 'checked' : ''}>
+      only differences${hidden ? ` — ${hidden} identical row${hidden === 1 ? '' : 's'} hidden` : ''}</label>`;
+  $('diffonly').onchange = (e) => { boardDiffOnly = e.target.checked; renderScoreboard(); };
+  host.querySelectorAll('.rebase').forEach(b => {
+    b.onclick = () => { boardBase = Number(b.dataset.lane); renderScoreboard(); };
+  });
+}
 
 function renderBlocked() {
   const n = Object.keys(state.awaiting).length;
@@ -526,7 +651,7 @@ window.adopt = async (branch) => {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch }),
     });
     addEvent('adopted', branch + ' merged into the session branch', '');
-    state.lanes = []; state.verdicts = {}; state.activity = {}; state.ranks = {};
+    state.lanes = []; state.verdicts = {}; state.activity = {}; state.ranks = {}; state.usage = {};
     renderRoster();
   } catch (e) { fail(e); }
 };
@@ -610,10 +735,52 @@ async function loadSessions() {
   } catch (e) { fail(e); }
 }
 
+/** Re-attach to a comparison that is already under way.
+ *
+ *  A variants run outlives the tab that started it — worktrees persist, checks
+ *  take minutes, and reloading mid-run is ordinary. The daemon holds every
+ *  answer already; without this the page would show an empty scoreboard over a
+ *  run that has long since been verified and ranked. */
+/** The run's economics, priced server-side from the lanes' real token counts.
+ *
+ *  One writer for both the rail and the scoreboard's cost row, so grading a run
+ *  and re-attaching to one can never show different money. */
+async function loadCost() {
+  if (!state.session) return;
+  const cost = await api(`/api/sessions/${state.session}/variants/cost?baseline=claude-sonnet-4`);
+  state.usage = Object.fromEntries((cost.lanes || []).map(l => [l.index, l]));
+  renderScoreboard();
+  $('costbody').innerHTML = !cost.lanes?.length
+    ? '<div class="empty">—</div>'
+    : `<div class="kv"><span>this run</span><span class="v">${money(cost.total_usd)}</span></div>
+       <div class="kv"><span>all on ${esc(cost.baseline_model)}</span><span class="v">${money(cost.baseline_usd)}</span></div>
+       <div class="kv"><span>saved</span><span class="v save">${money(cost.saved_usd)}</span></div>` +
+      (cost.baseline_usd === 0 ? `<div class="empty" style="margin-top:6px">No price set for ${esc(cost.baseline_model)} — nothing to compare against.</div>` : '');
+}
+
+async function restoreRun() {
+  if (!state.session) return;
+  try {
+    const r = await api(`/api/sessions/${state.session}/variants/results`);
+    if (!r.lanes?.length) return;
+    state.lanes = r.lanes;
+    for (const v of r.lanes) state.runToLane[`${state.session}#${v.index}`] = v.index;
+    for (const v of r.verdicts || []) state.verdicts[v.index] = v;
+    for (const u of r.usage || []) state.usage[u.index] = u;
+    for (const c of r.judgment?.candidates || []) state.ranks[c.index] = c;
+    state.winner = r.judgment ? r.judgment.winner : null;
+    renderRoster();
+    // Prices the restored usage rather than trusting the raw counts — the
+    // baseline comparison is computed from config, which lives server-side.
+    await loadCost();
+  } catch { /* no variants dir yet — the normal case */ }
+}
+
 $('session').onchange = (e) => {
   state.session = e.target.value || null;
-  state.lanes = []; state.verdicts = {}; state.activity = {}; state.ranks = {}; state.runToLane = {};
+  state.lanes = []; state.verdicts = {}; state.activity = {}; state.ranks = {}; state.runToLane = {}; state.usage = {};
   $('transcript').innerHTML = ''; renderRoster();
+  restoreRun();
 };
 
 $('verbosity').onclick = (e) => {
@@ -676,9 +843,12 @@ $('fan').onclick = async () => {
     addTurn('you', task, 'user');
     state.lanes = await api(`/api/sessions/${state.session}/variants`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: task, lanes: models.map(m => ({ model: m })) }),
+      // "agent:name" compares agents; a bare name compares models. Same
+      // mechanism, and which one you reach for is the question you are asking.
+      body: JSON.stringify({ input: task, lanes: models.map(m =>
+        m.startsWith('agent:') ? { agent: m.slice(6).trim() } : { model: m }) }),
     });
-    state.verdicts = {}; state.activity = {}; state.ranks = {};
+    state.verdicts = {}; state.activity = {}; state.ranks = {}; state.usage = {};
     addEvent('fan out', `${state.lanes.length} lanes — ${models.join(', ')}`,
       `<div style="font-size:12.5px;color:var(--muted)">Each lane works in its own isolated worktree. Watch the roster; grade them when they settle.</div>`);
     renderRoster();
@@ -716,12 +886,7 @@ grade.onclick = async () => {
       `<div style="font-size:12.5px">${esc(j.reasoning)}</div>` +
       j.candidates.map(c => `<div style="margin-top:8px;font-size:12.5px"><b>#${c.rank} lane ${c.index}</b> — ${esc(c.tradeoffs)}</div>`).join(''));
 
-    const cost = await api(`/api/sessions/${state.session}/variants/cost?baseline=claude-sonnet-4`);
-    $('costbody').innerHTML =
-      `<div class="kv"><span>this run</span><span class="v">${money(cost.total_usd)}</span></div>
-       <div class="kv"><span>all on ${esc(cost.baseline_model)}</span><span class="v">${money(cost.baseline_usd)}</span></div>
-       <div class="kv"><span>saved</span><span class="v save">${money(cost.saved_usd)}</span></div>` +
-      (cost.baseline_usd === 0 ? `<div class="empty" style="margin-top:6px">No price set for ${esc(cost.baseline_model)} — nothing to compare against.</div>` : '');
+    await loadCost();
   } catch (e) { fail(e); } finally { grade.disabled = false; }
 };
 document.querySelector('.acts').insertBefore(grade, $('models'));

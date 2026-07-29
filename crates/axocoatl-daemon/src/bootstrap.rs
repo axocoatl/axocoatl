@@ -106,10 +106,6 @@ pub struct AxocoatlDaemon {
     /// Live session isolation instances (local Podman container or remote
     /// microVM), keyed by session id. Trait-typed so the backend is pluggable.
     session_sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
-    /// Token spend per variant lane, keyed `session id -> lane index`. Recorded
-    /// as each lane finishes so a run's cost survives the stream that reported
-    /// it — a reader who reloads still sees what the run cost.
-    variant_usage: Arc<StdMutex<HashMap<String, HashMap<usize, crate::git::LaneUsage>>>>,
     /// Ring buffer of the most recent lattice events (capped at 200).
     pub event_log: Arc<StdMutex<VecDeque<LatticeEvent>>>,
     /// The observability stream bus — flattened events + live agent tokens.
@@ -560,7 +556,6 @@ impl AxocoatlDaemon {
             pending_interrupts: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             run_store,
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            variant_usage: Arc::new(StdMutex::new(HashMap::new())),
             event_log,
             stream_bus,
             active_runs,
@@ -2209,6 +2204,7 @@ impl AxocoatlDaemon {
                 worktree: wt,
                 // Stamped by the caller once lanes are assigned.
                 model: None,
+                agent: None,
             });
         }
         Ok(variants)
@@ -2355,13 +2351,41 @@ impl AxocoatlDaemon {
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
-        let agent_id = self.primary_session_agent(&session)?;
+        let default_agent = self.primary_session_agent(&session)?;
+        // A lane may run a different agent entirely — a different prompt, tools
+        // and memory, not just a different model. Validate every named agent
+        // before creating any worktrees, so a typo fails immediately instead of
+        // after the set is half built.
+        for lane in lanes {
+            if let Some(a) = &lane.agent {
+                if !self.config.agents.iter().any(|c| &c.id == a) {
+                    return Err(DaemonError::Session(format!(
+                        "lane agent '{a}' is not in the config"
+                    )));
+                }
+            }
+        }
         let sandbox = self.ensure_sandbox(&session).await?;
         let mut variants = self.create_variant_worktrees(session_id, n).await?;
         // Label each lane with the model it will run, so the comparison view can
         // attribute every candidate diff to the model that produced it.
         for (v, lane) in variants.iter_mut().zip(lanes) {
             v.model.clone_from(&lane.model);
+            v.agent.clone_from(&lane.agent);
+        }
+        // Persist the roster beside the worktrees. `.axo-variants/` is already
+        // git-excluded and `lanes.json` is skipped by the numeric filter in
+        // `variants_status`, so it rides along with the thing it describes and
+        // dies with it.
+        if let Ok(json) = serde_json::to_string(&variants) {
+            let path = format!("{}/.axo-variants/lanes.json", sandbox.root().display());
+            let _ = sandbox
+                .exec_stdin(
+                    &["sh", "-c", &format!("cat > '{path}'")],
+                    &json,
+                    Duration::from_secs(10),
+                )
+                .await;
         }
 
         // Build every variant's actor *before* spawning any lane. If one fails
@@ -2370,7 +2394,11 @@ impl AxocoatlDaemon {
         // returning with half the lanes streaming against orphaned worktrees.
         let mut prepared = Vec::with_capacity(variants.len());
         for v in &variants {
-            match self.variant_actor(&session, &agent_id, v, &sandbox).await {
+            let lane_agent = lanes
+                .get(v.index)
+                .and_then(|l| l.agent.clone())
+                .unwrap_or_else(|| default_agent.clone());
+            match self.variant_actor(&session, &lane_agent, v, &sandbox).await {
                 Ok(actor) => prepared.push((v.index, actor)),
                 Err(e) => {
                     self.remove_variant_worktrees(session_id).await.ok();
@@ -2383,14 +2411,18 @@ impl AxocoatlDaemon {
             let run_id = format!("{}#{}", session.id, index);
             let bus = self.stream_bus.clone();
             let rid = run_id.clone();
-            let aid = agent_id.clone();
+            let aid = lanes
+                .get(index)
+                .and_then(|l| l.agent.clone())
+                .unwrap_or_else(|| default_agent.clone());
             let inp = input.to_string();
             // This lane's own model — the heterogeneous part.
             let mo = lanes.get(index).and_then(|l| l.model.clone());
-            let usage_store = self.variant_usage.clone();
+            let usage_sandbox = sandbox.clone();
             let usage_key = session.id.clone();
             let lane_model = mo.clone();
             tokio::spawn(async move {
+                let started = std::time::Instant::now();
                 // Announce the lane's identity once, so a viewer can attribute
                 // every later frame to the right lane and model without parsing
                 // the run key.
@@ -2404,23 +2436,26 @@ impl AxocoatlDaemon {
                 let _ = bus.send(crate::stream::StreamFrame::SessionStart {
                     session: rid.clone(),
                 });
-                match Self::stream_agent_run(bus.clone(), actor, rid.clone(), aid, inp, mo).await {
+                let outcome =
+                    Self::stream_agent_run(bus.clone(), actor, rid.clone(), aid, inp, mo).await;
+                let duration_ms = started.elapsed().as_millis() as u64;
+                match outcome {
                     Ok(out) => {
                         // Record what this lane spent, so the run's economics
                         // outlive the stream that reported them.
-                        if let Ok(mut store) = usage_store.lock() {
-                            store.entry(usage_key).or_default().insert(
+                        Self::record_lane_usage(
+                            &usage_sandbox,
+                            crate::git::LaneUsage {
                                 index,
-                                crate::git::LaneUsage {
-                                    index,
-                                    model: lane_model,
-                                    input_tokens: out.token_usage.input_tokens as u64,
-                                    output_tokens: out.token_usage.output_tokens as u64,
-                                    // Priced on read, where the config is available.
-                                    cost_usd: 0.0,
-                                },
-                            );
-                        }
+                                model: lane_model,
+                                input_tokens: out.token_usage.input_tokens as u64,
+                                output_tokens: out.token_usage.output_tokens as u64,
+                                // Priced on read, where the config is available.
+                                cost_usd: 0.0,
+                                duration_ms,
+                            },
+                        )
+                        .await;
                         let _ = bus.send(crate::stream::StreamFrame::SessionDone {
                             session: rid,
                             input_tokens: out.token_usage.input_tokens as u64,
@@ -2428,6 +2463,22 @@ impl AxocoatlDaemon {
                         });
                     }
                     Err(e) => {
+                        // A lane that failed still ran for a while and is still
+                        // one of the things being compared. Record it with zero
+                        // tokens — unknown, not free — so the scoreboard can say
+                        // how long it burned instead of showing a blank column.
+                        Self::record_lane_usage(
+                            &usage_sandbox,
+                            crate::git::LaneUsage {
+                                index,
+                                model: lane_model,
+                                input_tokens: 0,
+                                output_tokens: 0,
+                                cost_usd: 0.0,
+                                duration_ms,
+                            },
+                        )
+                        .await;
                         let _ = bus.send(crate::stream::StreamFrame::SessionError {
                             session: rid,
                             error: e.to_string(),
@@ -2438,6 +2489,133 @@ impl AxocoatlDaemon {
         }
         let _ = self.session_store.lock().await.touch(session_id);
         Ok(variants)
+    }
+
+    /// Record what one lane spent, in that lane's own file.
+    ///
+    /// Static because it is called from the lane's spawned task, which outlives
+    /// any borrow of the daemon.
+    async fn record_lane_usage(sandbox: &Arc<dyn Sandbox>, usage: crate::git::LaneUsage) {
+        let Ok(json) = serde_json::to_string(&usage) else {
+            return;
+        };
+        let path = format!(
+            "{}/.axo-variants/usage-{}.json",
+            sandbox.root().display(),
+            usage.index
+        );
+        let _ = sandbox
+            .exec_stdin(
+                &["sh", "-c", &format!("cat > '{path}'")],
+                &json,
+                Duration::from_secs(10),
+            )
+            .await;
+    }
+
+    /// Write one of the comparison's result files beside the worktrees.
+    ///
+    /// `.axo-variants/` is git-excluded and already holds the lane roster, so
+    /// the answers live with the thing they describe: they survive a reload, a
+    /// rebuild and a daemon restart, and they are deleted by the same teardown
+    /// that removes the lanes. Best-effort — a failed write must never fail the
+    /// verify or judge that produced the result.
+    async fn write_variant_meta(&self, session_id: &str, name: &str, json: &str) {
+        let Ok(session) = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(String::new()))
+        else {
+            return;
+        };
+        let Ok(sandbox) = self.ensure_sandbox(&session).await else {
+            return;
+        };
+        let path = format!("{}/.axo-variants/{name}", sandbox.root().display());
+        let _ = sandbox
+            .exec_stdin(
+                &["sh", "-c", &format!("cat > '{path}'")],
+                json,
+                Duration::from_secs(10),
+            )
+            .await;
+    }
+
+    /// Read back what `write_variant_meta` stored. `None` for anything absent —
+    /// a comparison that has not been verified or judged yet is normal.
+    async fn read_variant_meta<T: serde::de::DeserializeOwned>(
+        &self,
+        sandbox: &Arc<dyn Sandbox>,
+        name: &str,
+    ) -> Option<T> {
+        let path = format!("{}/.axo-variants/{name}", sandbox.root().display());
+        let r = sandbox
+            .exec(&["cat", &path], Duration::from_secs(10))
+            .await
+            .ok()?;
+        serde_json::from_str(&r.stdout).ok()
+    }
+
+    /// Per-lane spend, collected in one exec rather than one per lane.
+    ///
+    /// Each lane owns its own file: lanes finish concurrently, and a single
+    /// shared file would have them racing to overwrite each other's numbers.
+    async fn read_lane_usage(&self, sandbox: &Arc<dyn Sandbox>) -> Vec<crate::git::LaneUsage> {
+        let dir = format!("{}/.axo-variants", sandbox.root().display());
+        let script =
+            format!("for f in '{dir}'/usage-*.json; do [ -f \"$f\" ] && cat \"$f\" && echo; done");
+        let Ok(r) = sandbox
+            .exec(&["sh", "-c", &script], Duration::from_secs(10))
+            .await
+        else {
+            return Vec::new();
+        };
+        let mut out: Vec<crate::git::LaneUsage> = r
+            .stdout
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        out.sort_by_key(|u: &crate::git::LaneUsage| u.index);
+        out
+    }
+
+    /// Everything known about the session's current comparison, in one read.
+    ///
+    /// Lane identity comes off disk (it outlives the daemon); verdicts, spend
+    /// and ranking come from memory (they belong to this daemon's run). A
+    /// session with no variants returns an empty set rather than an error —
+    /// "nothing to compare" is a normal state, not a failure.
+    pub async fn run_results(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::git::RunResults, DaemonError> {
+        let lanes: Vec<crate::git::Variant> = self
+            .variants_status(session_id)
+            .await?
+            .into_iter()
+            .map(|v| crate::git::Variant {
+                index: v.index,
+                branch: v.branch,
+                worktree: v.worktree,
+                model: v.model,
+                agent: v.agent,
+            })
+            .collect();
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        Ok(crate::git::RunResults {
+            lanes,
+            verdicts: self
+                .read_variant_meta(&sandbox, "verdicts.json")
+                .await
+                .unwrap_or_default(),
+            usage: self.read_lane_usage(&sandbox).await,
+            judgment: self.read_variant_meta(&sandbox, "judgment.json").await,
+        })
     }
 
     /// The working-tree status of every live variant worktree — what each
@@ -2534,6 +2712,14 @@ impl AxocoatlDaemon {
                 touched_tests,
             });
         }
+        if let Ok(json) = serde_json::to_string(&verdicts) {
+            self.write_variant_meta(session_id, "verdicts.json", &json)
+                .await;
+        }
+        // A fresh check invalidates the old ranking: it was drawn over a
+        // different set of survivors.
+        self.write_variant_meta(session_id, "judgment.json", "null")
+            .await;
         Ok(verdicts)
     }
 
@@ -2741,7 +2927,7 @@ impl AxocoatlDaemon {
     /// worth doing if the arithmetic favours it, so this reports real token
     /// counts priced from config rather than an estimate. A model with no
     /// configured price costs 0 — the right answer for anything local.
-    pub fn variants_cost(
+    pub async fn variants_cost(
         &self,
         session_id: &str,
         baseline_model: &str,
@@ -2758,15 +2944,12 @@ impl AxocoatlDaemon {
         };
         let baseline = price(baseline_model);
 
-        let store = self
-            .variant_usage
-            .lock()
-            .map_err(|_| DaemonError::Session("usage store poisoned".to_string()))?;
-        let mut lanes: Vec<crate::git::LaneUsage> = store
-            .get(session_id)
-            .map(|m| m.values().cloned().collect())
-            .unwrap_or_default();
-        lanes.sort_by_key(|l| l.index);
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let mut lanes = self.read_lane_usage(&sandbox).await;
 
         let mut total = 0.0;
         let mut baseline_total = 0.0;
@@ -2927,18 +3110,29 @@ impl AxocoatlDaemon {
         })?;
         // Order best-first regardless of how the model emitted them.
         judgment.candidates.sort_by_key(|c| c.rank);
+        if let Ok(json) = serde_json::to_string(&judgment) {
+            self.write_variant_meta(session_id, "judgment.json", &json)
+                .await;
+        }
         Ok(judgment)
     }
 
     /// The lane indexes present under `.axo-variants`, ascending.
-    async fn variant_indexes(&self, session_id: &str) -> Result<Vec<usize>, DaemonError> {
-        let dir = self.session_dir(session_id).await?;
-        let session = self
-            .get_session(session_id)
-            .await
-            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
-        let sandbox = self.ensure_sandbox(&session).await?;
-        let ls = sandbox
+    ///
+    /// An unreachable sandbox is an **error**, not an empty list. The two are
+    /// indistinguishable downstream — both render as "no lanes" — but they mean
+    /// opposite things: one is a session that never fanned out, the other is a
+    /// live comparison the caller cannot currently see. Reporting the second as
+    /// the first is the silent-wrong-answer failure this surface exists to
+    /// prevent, so it fails loudly instead of showing an empty scoreboard over
+    /// a run that is still going.
+    async fn list_variant_indexes(
+        sandbox: &Arc<dyn Sandbox>,
+        dir: &str,
+    ) -> Result<Vec<usize>, DaemonError> {
+        // `2>/dev/null` means a missing directory is a clean empty listing, so
+        // anything left over is a real failure to run the command at all.
+        let r = sandbox
             .exec(
                 &[
                     "sh",
@@ -2948,17 +3142,28 @@ impl AxocoatlDaemon {
                 Duration::from_secs(10),
             )
             .await
-            .ok();
-        let mut out: Vec<usize> = ls
-            .map(|r| {
-                r.stdout
-                    .lines()
-                    .filter_map(|l| l.trim().parse::<usize>().ok())
-                    .collect()
-            })
-            .unwrap_or_default();
+            .map_err(|e| {
+                DaemonError::Session(format!(
+                    "cannot reach this session's sandbox to read its variants ({e})"
+                ))
+            })?;
+        let mut out: Vec<usize> = r
+            .stdout
+            .lines()
+            .filter_map(|l| l.trim().parse::<usize>().ok())
+            .collect();
         out.sort_unstable();
         Ok(out)
+    }
+
+    async fn variant_indexes(&self, session_id: &str) -> Result<Vec<usize>, DaemonError> {
+        let dir = self.session_dir(session_id).await?;
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        Self::list_variant_indexes(&sandbox, &dir).await
     }
 
     pub async fn variants_status(
@@ -2971,43 +3176,43 @@ impl AxocoatlDaemon {
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         let sandbox = self.ensure_sandbox(&session).await?;
-        let ls = sandbox
+        let indexes = Self::list_variant_indexes(&sandbox, &dir).await?;
+        // Lane labels, if this variant set was created by a fan-out that
+        // recorded them. Absent for worktrees made some other way — the status
+        // is still correct, it just has no name to hang on the column.
+        let roster: Vec<crate::git::Variant> = sandbox
             .exec(
-                &[
-                    "sh",
-                    "-c",
-                    &format!("ls -1 '{dir}/.axo-variants' 2>/dev/null"),
-                ],
+                &["cat", &format!("{dir}/.axo-variants/lanes.json")],
                 Duration::from_secs(10),
             )
             .await
-            .ok();
+            .ok()
+            .and_then(|r| serde_json::from_str(&r.stdout).ok())
+            .unwrap_or_default();
         let mut out = Vec::new();
-        if let Some(r) = ls {
-            for name in r.stdout.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
-                let Ok(index) = name.parse::<usize>() else {
-                    continue;
-                };
-                let wt = format!("{dir}/.axo-variants/{index}");
-                let status = self
-                    .session_git_at(
-                        session_id,
-                        &wt,
-                        &["status", "--porcelain=v1", "-b", "--untracked-files=all"],
-                    )
-                    .await
-                    .ok()
-                    .map(|r| crate::git::parse_status(&r.stdout))
-                    .unwrap_or_else(|| crate::git::parse_status(""));
-                out.push(crate::git::VariantStatus {
-                    index,
-                    branch: format!("axo/variant-{index}"),
-                    worktree: wt,
-                    status,
-                });
-            }
+        for index in indexes {
+            let wt = format!("{dir}/.axo-variants/{index}");
+            let status = self
+                .session_git_at(
+                    session_id,
+                    &wt,
+                    &["status", "--porcelain=v1", "-b", "--untracked-files=all"],
+                )
+                .await
+                .ok()
+                .map(|r| crate::git::parse_status(&r.stdout))
+                .unwrap_or_else(|| crate::git::parse_status(""));
+            let labels = roster.iter().find(|v| v.index == index);
+            out.push(crate::git::VariantStatus {
+                index,
+                branch: format!("axo/variant-{index}"),
+                worktree: wt,
+                status,
+                model: labels.and_then(|v| v.model.clone()),
+                agent: labels.and_then(|v| v.agent.clone()),
+            });
         }
-        out.sort_by_key(|v| v.index);
+        // `list_variant_indexes` already returns them ascending.
         Ok(out)
     }
 
