@@ -137,6 +137,15 @@
     padding: 9px; overflow: auto; max-height: 300px; font: 11.5px/1.45 var(--mono); margin: 8px 0 0;
   }
   pre .add { color: var(--pass); } pre .del { color: var(--fail); } pre .hd { color: var(--muted); }
+  .dl { display: block; cursor: text; }
+  .dl:hover { background: #1f2630; }
+  .dl.marked { background: #1c2b2b; box-shadow: inset 2px 0 0 var(--accent); }
+  .cbox { margin: 6px 0 10px; display: flex; gap: 6px; }
+  .cbox input {
+    flex: 1; background: var(--bg-3); color: var(--fg); border: 1px solid var(--accent-dim);
+    border-radius: 6px; padding: 6px 9px; font: 12px var(--sans);
+  }
+  .cnote { font: 11.5px var(--sans); color: var(--accent); padding: 2px 0 2px 14px; }
   .err { color: var(--fail); font: 12px var(--mono); margin-top: 8px; white-space: pre-wrap; }
   .badge {
     font: 600 9.5px var(--mono); letter-spacing: .06em; text-transform: uppercase;
@@ -208,6 +217,7 @@ const state = {
   awaiting: {},          // run key -> what it is blocked on
   peek: null,            // lane index whose peek panel is open
   away: null,            // {at, snapshot} captured when the window loses focus
+  comments: [],          // line-anchored review notes, compiled into one follow-up
   streaming: null,      // element currently receiving assistant tokens
 };
 
@@ -412,10 +422,18 @@ function lineDiff(oldText, newText, context = 3) {
   ops.forEach(([t, l], k) => { if (keep[k]) { out.push(t + l); gap = false; } else if (!gap) { out.push('@@'); gap = true; } });
   return out.join('\n') + '\n';
 }
-const colorize = (p) => esc(p).split('\n').map(l =>
-  l.startsWith('+') ? `<span class="add">${l}</span>` :
-  l.startsWith('-') ? `<span class="del">${l}</span>` :
-  l.startsWith('@@') ? `<span class="hd">${l}</span>` : l).join('\n');
+/** Render a patch with every line addressable.
+ *
+ *  Review is not accept-or-reject: the useful act is pointing at a line and
+ *  saying what is wrong with it. Anchoring a note to a line and compiling the
+ *  set into one follow-up turns review into steering, over the channel that
+ *  already exists, instead of a binary verdict plus a retyped explanation. */
+function renderPatch(patch, file) {
+  return esc(patch).split('\n').map((l, i) => {
+    const cls = l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : l.startsWith('@@') ? 'hd' : '';
+    return `<span class="dl ${cls}" data-file="${esc(file)}" data-line="${i}">${l || ' '}</span>`;
+  }).join('\n');
+}
 
 window.laneDiff = async (index, btn) => {
   const host = $('ld-' + index);
@@ -425,14 +443,81 @@ window.laneDiff = async (index, btn) => {
     const st = await api(`/api/sessions/${state.session}/variants/status`);
     const files = st.find(s => s.index === index)?.status?.files || [];
     if (!files.length) { host.innerHTML = '<pre>this lane changed nothing</pre>'; return; }
+    // Render per file so each line carries the file it belongs to — a comment
+    // is only actionable if it says *where*.
     let out = '';
     for (const f of files.slice(0, 4)) {
       const d = await api(`/api/sessions/${state.session}/variants/diff?index=${index}&path=${encodeURIComponent(f.path)}`);
-      out += `--- ${f.path}\n` + (d.too_large || d.binary ? '(not shown inline)\n' : lineDiff(d.old, d.new));
+      const patch = d.too_large || d.binary ? '(not shown inline)' : lineDiff(d.old, d.new);
+      out += `<span class="dl hd">--- ${esc(f.path)}</span>\n` + renderPatch(patch, f.path) + '\n';
     }
-    host.innerHTML = `<pre>${colorize(out)}</pre>`;
+    host.innerHTML = `<pre>${out}</pre><div class="cbar"></div>`;
+    attachCommenting(host);
   } catch (e) { host.innerHTML = `<pre>${esc(e.message)}</pre>`; }
   finally { btn.disabled = false; }
+};
+
+/** Click a line, say what is wrong with it. */
+function attachCommenting(host) {
+  host.querySelectorAll('.dl').forEach(line => {
+    line.onclick = () => {
+      if (line.nextElementSibling?.classList?.contains('cbox')) return;
+      const box = document.createElement('div');
+      box.className = 'cbox';
+      box.innerHTML = `<input placeholder="what's wrong with this line?" />
+                       <button class="go">Add</button>`;
+      line.after(box);
+      const input = box.querySelector('input');
+      input.focus();
+      const commit = () => {
+        const text = input.value.trim();
+        box.remove();
+        if (!text) return;
+        line.classList.add('marked');
+        const note = document.createElement('div');
+        note.className = 'cnote';
+        note.textContent = '↳ ' + text;
+        line.after(note);
+        state.comments.push({ file: line.dataset.file, code: line.textContent.trim(), text });
+        renderCommentBar();
+      };
+      box.querySelector('button').onclick = commit;
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') commit();
+        if (e.key === 'Escape') box.remove();
+      });
+    };
+  });
+}
+
+/** Comments accumulate, then go as ONE follow-up — several notes are one
+ *  instruction, not several conversations. */
+function renderCommentBar() {
+  document.querySelectorAll('.cbar').forEach(bar => {
+    const n = state.comments.length;
+    bar.innerHTML = n
+      ? `<button class="go" onclick="sendComments()">Send ${n} comment${n > 1 ? 's' : ''} as follow-up</button>
+         <button class="ghost" onclick="clearComments()">Discard</button>`
+      : '';
+    bar.style.cssText = n ? 'display:flex;gap:8px;margin-top:10px' : '';
+  });
+}
+window.clearComments = () => {
+  state.comments = [];
+  document.querySelectorAll('.marked').forEach(e => e.classList.remove('marked'));
+  document.querySelectorAll('.cnote').forEach(e => e.remove());
+  renderCommentBar();
+};
+window.sendComments = () => {
+  if (!state.comments.length) return;
+  const body = state.comments
+    .map(c => `In ${c.file}, on this line:\n    ${c.code}\n${c.text}`)
+    .join('\n\n');
+  const msg = `Review feedback on the change:\n\n${body}`;
+  addTurn('you', msg, 'user');
+  state.streaming = null;
+  ws.send(JSON.stringify({ cmd: 'session', id: state.session, input: msg }));
+  clearComments();
 };
 
 window.adopt = async (branch) => {
