@@ -148,6 +148,11 @@
   .kv { display: flex; justify-content: space-between; font-size: 12.5px; padding: 3px 0; }
   .kv .v { font: 12.5px var(--mono); }
   .kv .v.save { color: var(--accent); }
+  aside input {
+    width: 100%; background: var(--bg-3); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 8px; font: 11.5px var(--mono); margin-top: 6px;
+  }
+  aside input:focus { outline: none; border-color: var(--accent-dim); }
   pre {
     background: var(--bg-3); border: 1px solid var(--line); border-radius: 7px;
     padding: 9px; overflow: auto; max-height: 300px; font: 11.5px/1.45 var(--mono); margin: 8px 0 0;
@@ -272,8 +277,13 @@
       <div id="planbody" class="empty"></div>
     </section>
     <section>
+      <h2>Check</h2>
+      <input id="check" value="npm run check" title="The project's own command — tests, build, typecheck. This is the arbiter that eliminates lanes, so it has to be the project's, not a guess." />
+    </section>
+    <section>
       <h2>Cost</h2>
       <div id="costbody"><div class="empty">—</div></div>
+      <input id="baseline" value="claude-sonnet-4" title="The model the counterfactual is priced against — what this run would have cost on one expensive model." />
     </section>
   </aside>
 </div>
@@ -559,11 +569,12 @@ function renderScoreboard() {
 let trajectory = null;      // the alignment as served
 let trajOpen = new Set();   // indexes of folds the user has expanded
 
-// `same` marks a cell that did what the baseline did. Past three columns the
-// row-level verdict stops being enough — you need to see which lanes went their
-// own way without reading every cell.
-function stepCell(a, same) {
-  const cls = [same ? 'same' : 'off', a?.failed ? 'bad-step' : ''].filter(Boolean).join(' ');
+// `rel` is how this cell stands to the baseline: 'same', 'off', or '' for the
+// baseline itself, which stands to nothing. Past three columns the row-level
+// verdict stops being enough — you need to see which lanes went their own way
+// without reading every cell.
+function stepCell(a, rel) {
+  const cls = [rel, a?.failed ? 'bad-step' : ''].filter(Boolean).join(' ');
   if (!a) return `<td class="none ${cls}">—</td>`;
   const kind = esc(a.kind);
   return `<td class="${cls}">`
@@ -623,7 +634,12 @@ function renderTrajectories() {
     }
     const rows = g.rows.map(([i, r]) =>
       `<tr class="${r.agree ? '' : 'diverged'}"><td class="n">${i + 1}</td>`
-      + r.cells.map((c, n) => stepCell(c, r.agree || r.matches_baseline?.[n])).join('') + '</tr>').join('');
+      // The baseline gets neither mark. It cannot recede — it is the column
+      // everything else is read against, and dimming it hides the very content
+      // you reach for when a row diverges. Nor can it "differ from itself".
+      + r.cells.map((c, n) =>
+          stepCell(c, n === 0 ? '' : ((r.agree || r.matches_baseline?.[n]) ? 'same' : 'off'))).join('')
+      + '</tr>').join('');
     if (g.agree && g.rows.length > 1) {
       return `<tr class="fold"><td class="n"></td><td colspan="${lanes.length}">`
         + `<button data-fold="${gi}">▾ ${g.rows.length} identical steps</button></td></tr>` + rows;
@@ -892,7 +908,8 @@ async function loadSessions() {
  *  and re-attaching to one can never show different money. */
 async function loadCost() {
   if (!state.session) return;
-  const cost = await api(`/api/sessions/${state.session}/variants/cost?baseline=claude-sonnet-4`);
+  const base = $('baseline').value.trim() || 'claude-sonnet-4';
+  const cost = await api(`/api/sessions/${state.session}/variants/cost?baseline=${encodeURIComponent(base)}`);
   state.usage = Object.fromEntries((cost.lanes || []).map(l => [l.index, l]));
   renderScoreboard();
   $('costbody').innerHTML = !cost.lanes?.length
@@ -929,6 +946,8 @@ $('session').onchange = (e) => {
   $('transcript').innerHTML = ''; renderRoster();
   restoreRun();
 };
+
+$('baseline').onchange = () => { if (state.session) loadCost().catch(fail); };
 
 $('verbosity').onclick = (e) => {
   const b = e.target.closest('button'); if (!b) return;
@@ -1013,7 +1032,10 @@ grade.onclick = async () => {
   try {
     const v = await api(`/api/sessions/${state.session}/variants/verify`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ check: 'npm run check' }),
+      // The project's own command. Hardcoding one would quietly make this a
+      // JavaScript tool and, worse, would grade every lane against a check the
+      // project does not actually use.
+      body: JSON.stringify({ check: $('check').value.trim() || 'npm run check' }),
     });
     for (const r of v) state.verdicts[r.index] = r;
     renderRoster();
