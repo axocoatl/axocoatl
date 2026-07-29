@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Axocoatl</title>
+<style>
+  :root {
+    --bg: #0d0f12; --bg-2: #14171c; --bg-3: #1a1e25;
+    --fg: #e6e9ef; --muted: #8b93a1; --dim: #5c6472;
+    --line: #242a33; --accent: #5eead4; --accent-dim: #2dd4bf;
+    --pass: #4ade80; --fail: #f87171; --warn: #fbbf24;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Inter, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.55 var(--sans); -webkit-font-smoothing: antialiased;
+    display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden;
+  }
+
+  /* ── header ── */
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg-2);
+  }
+  .brand { font-weight: 600; font-size: 14px; letter-spacing: .01em; }
+  .brand span { color: var(--dim); font-weight: 400; }
+  header select, header input {
+    background: var(--bg-3); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 9px; font: 12.5px var(--sans);
+  }
+  .spacer { flex: 1; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button {
+    background: transparent; color: var(--muted); border: 0; padding: 5px 10px;
+    font: 500 11.5px var(--sans); cursor: pointer;
+  }
+  .seg button.on { background: var(--bg-3); color: var(--fg); }
+
+  /* ── the split: transcript scrolls, run state does not ── */
+  .split { display: grid; grid-template-columns: 1fr 340px; min-height: 0; }
+  @media (max-width: 1000px) { .split { grid-template-columns: 1fr; } aside { display: none; } }
+
+  main { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
+  #transcript { overflow-y: auto; padding: 20px 22px; }
+  aside {
+    border-left: 1px solid var(--line); background: var(--bg-2);
+    overflow-y: auto; padding: 16px;
+  }
+
+  /* ── transcript ── */
+  .turn { margin-bottom: 18px; max-width: 900px; }
+  .who { font: 600 11px var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--dim); margin-bottom: 5px; }
+  .turn.user .who { color: var(--accent-dim); }
+  .body { white-space: pre-wrap; }
+  .body.thinking { color: var(--muted); font-style: italic; }
+
+  /* An event is a first-class thing in the conversation, not a side panel. */
+  .event {
+    border: 1px solid var(--line); border-radius: 9px; background: var(--bg-2);
+    margin-bottom: 14px; max-width: 900px; overflow: hidden;
+  }
+  .event > summary {
+    cursor: pointer; padding: 10px 13px; list-style: none;
+    display: flex; align-items: center; gap: 9px; font-size: 13px;
+  }
+  .event > summary::-webkit-details-marker { display: none; }
+  .event > summary::before { content: "▸"; color: var(--dim); font-size: 11px; }
+  .event[open] > summary::before { content: "▾"; }
+  .event .kind {
+    font: 600 10px var(--mono); letter-spacing: .07em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 1px 7px;
+  }
+  .event .gist { color: var(--muted); }
+  .event .inner { padding: 0 13px 13px; border-top: 1px solid var(--line); padding-top: 12px; }
+
+  /* ── composer ── */
+  .composer { border-top: 1px solid var(--line); padding: 12px 22px 16px; background: var(--bg-2); }
+  .composer textarea {
+    width: 100%; background: var(--bg-3); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 12px; font: 13px var(--sans); resize: vertical; min-height: 56px;
+  }
+  .composer textarea:focus { outline: none; border-color: var(--accent-dim); }
+  .acts { display: flex; gap: 8px; margin-top: 9px; align-items: center; flex-wrap: wrap; }
+  button.go {
+    background: var(--accent); color: #06231f; border: 0; border-radius: 7px;
+    padding: 8px 14px; font: 600 12.5px var(--sans); cursor: pointer;
+  }
+  button.ghost {
+    background: transparent; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 7px; padding: 8px 12px; font: 500 12.5px var(--sans); cursor: pointer;
+  }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .hint { color: var(--dim); font-size: 11.5px; }
+
+  /* ── run state ── */
+  aside h2 {
+    font: 600 10.5px var(--mono); letter-spacing: .09em; text-transform: uppercase;
+    color: var(--dim); margin: 0 0 9px;
+  }
+  aside section { margin-bottom: 20px; }
+  .lane-row {
+    display: flex; align-items: baseline; gap: 8px; padding: 7px 0;
+    border-bottom: 1px solid var(--line); font-size: 12.5px; cursor: pointer;
+  }
+  .lane-row:last-child { border-bottom: 0; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--dim); }
+  .dot.working { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+  .dot.pass { background: var(--pass); } .dot.fail { background: var(--fail); }
+  .dot.need { background: var(--accent); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .3 } }
+  .lane-name { font: 11.5px var(--mono); }
+  .lane-act { color: var(--muted); font-size: 11.5px; margin-left: auto; text-align: right; }
+  .empty { color: var(--dim); font-size: 12px; }
+  .kv { display: flex; justify-content: space-between; font-size: 12.5px; padding: 3px 0; }
+  .kv .v { font: 12.5px var(--mono); }
+  .kv .v.save { color: var(--accent); }
+  pre {
+    background: var(--bg-3); border: 1px solid var(--line); border-radius: 7px;
+    padding: 9px; overflow: auto; max-height: 300px; font: 11.5px/1.45 var(--mono); margin: 8px 0 0;
+  }
+  pre .add { color: var(--pass); } pre .del { color: var(--fail); } pre .hd { color: var(--muted); }
+  .err { color: var(--fail); font: 12px var(--mono); margin-top: 8px; white-space: pre-wrap; }
+  .badge {
+    font: 600 9.5px var(--mono); letter-spacing: .06em; text-transform: uppercase;
+    padding: 1px 6px; border-radius: 999px; border: 1px solid currentColor;
+  }
+  .badge.pass { color: var(--pass); } .badge.fail { color: var(--fail); } .badge.warn { color: var(--warn); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">Axocoatl <span>/ workspace</span></div>
+  <select id="session"><option value="">— choose a workspace —</option></select>
+  <div class="spacer"></div>
+  <div class="seg" id="verbosity" title="With several lanes running, verbosity is a parallelism control, not a preference">
+    <button data-v="summary">Summary</button>
+    <button data-v="normal" class="on">Normal</button>
+    <button data-v="verbose">Verbose</button>
+  </div>
+</header>
+
+<div class="split">
+  <main>
+    <div id="transcript"></div>
+    <div class="composer">
+      <textarea id="input" placeholder="Describe the change. Send to work with one agent; fan out to compare several."></textarea>
+      <div class="acts">
+        <button class="go" id="send">Send</button>
+        <button class="ghost" id="planBtn">Plan first</button>
+        <button class="ghost" id="fan">Fan out</button>
+        <input id="models" value="qwen3-coder:30b, qwen3:8b"
+               style="flex:1 1 240px;background:var(--bg-3);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:8px 10px;font:12px var(--mono)" />
+        <span class="hint" id="modelhint"></span>
+      </div>
+      <div class="err" id="err"></div>
+    </div>
+  </main>
+
+  <aside>
+    <section>
+      <h2>Lanes</h2>
+      <div id="roster"><div class="empty">No lanes yet. Fan out to compare several attempts.</div></div>
+    </section>
+    <section id="planbox" style="display:none">
+      <h2>Plan</h2>
+      <div id="planbody" class="empty"></div>
+    </section>
+    <section>
+      <h2>Cost</h2>
+      <div id="costbody"><div class="empty">—</div></div>
+    </section>
+  </aside>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const money = (n) => '$' + (n < 0.01 && n > 0 ? n.toFixed(4) : n.toFixed(2));
+
+const state = {
+  session: null,
+  verbosity: 'normal',
+  lanes: [],            // [{index, model, branch}]
+  runToLane: {},        // run key -> lane index
+  activity: {},         // lane index -> what it is doing now
+  verdicts: {},         // lane index -> verdict
+  ranks: {}, winner: null,
+  streaming: null,      // element currently receiving assistant tokens
+};
+
+const api = async (path, opts) => {
+  const r = await fetch(path, opts);
+  const t = await r.text();
+  let b; try { b = JSON.parse(t); } catch { b = t; }
+  if (!r.ok) throw new Error(typeof b === 'string' ? b : (b.error || JSON.stringify(b)));
+  return b;
+};
+const fail = (e) => { $('err').textContent = String(e?.message || e); };
+
+// ── transcript ───────────────────────────────────────────────────────
+const scroll = () => { const t = $('transcript'); t.scrollTop = t.scrollHeight; };
+
+function addTurn(who, text, cls = '') {
+  const el = document.createElement('div');
+  el.className = `turn ${cls}`;
+  el.innerHTML = `<div class="who">${esc(who)}</div><div class="body">${esc(text)}</div>`;
+  $('transcript').appendChild(el);
+  scroll();
+  return el.querySelector('.body');
+}
+
+/** An event block in the conversation — the fan-out, the plan, the verdicts.
+ *  These are part of the narrative, not a separate destination: you scroll back
+ *  through a run's history the same way you scroll back through what was said. */
+function addEvent(kind, gist, innerHTML, open = true) {
+  const el = document.createElement('details');
+  el.className = 'event';
+  if (open) el.open = true;
+  el.innerHTML = `<summary><span class="kind">${esc(kind)}</span><span class="gist">${esc(gist)}</span></summary>
+                  <div class="inner">${innerHTML}</div>`;
+  $('transcript').appendChild(el);
+  scroll();
+  return el;
+}
+
+// ── run state panel ──────────────────────────────────────────────────
+function renderRoster() {
+  const host = $('roster');
+  if (!state.lanes.length) {
+    host.innerHTML = '<div class="empty">No lanes yet. Fan out to compare several attempts.</div>';
+    return;
+  }
+  host.innerHTML = state.lanes.map(l => {
+    const v = state.verdicts[l.index];
+    const act = state.activity[l.index];
+    // A lane that changed nothing is not a pass, however green the check was.
+    const empty = v && v.changed_files === 0;
+    const cls = v ? (v.passed && !empty ? 'pass' : 'fail') : (act ? 'working' : '');
+    const right = v
+      ? (empty ? 'changed nothing' : (v.passed ? 'passed' : 'eliminated'))
+      : (act || 'queued');
+    const rank = state.ranks[l.index];
+    return `<div class="lane-row" data-lane="${l.index}">
+      <span class="dot ${cls}"></span>
+      <span class="lane-name">${esc(l.model || 'default')}</span>
+      ${rank ? `<span class="badge">#${rank.rank}</span>` : ''}
+      ${v && v.touched_tests?.length ? '<span class="badge warn">own tests</span>' : ''}
+      <span class="lane-act">${esc(right)}</span>
+    </div>`;
+  }).join('');
+  host.querySelectorAll('[data-lane]').forEach(r => r.onclick = () => showLane(Number(r.dataset.lane)));
+}
+
+async function showLane(index) {
+  const lane = state.lanes.find(l => l.index === index);
+  const v = state.verdicts[index];
+  const rank = state.ranks[index];
+  let inner = `<div style="font:12px var(--mono);color:var(--muted)">${esc(lane?.model || 'agent default')}</div>`;
+  if (rank) inner += `<div style="margin-top:8px"><b style="color:var(--muted);font-weight:500">Approach</b><br>${esc(rank.approach)}
+                      <br><b style="color:var(--muted);font-weight:500">Trade-off</b><br>${esc(rank.tradeoffs)}</div>`;
+  if (v && !v.passed) inner += `<pre>${esc((v.output || '').split('\n').slice(-12).join('\n'))}</pre>`;
+  inner += `<div style="margin-top:10px;display:flex;gap:8px">
+      <button class="ghost" onclick="laneDiff(${index}, this)">Diff</button>
+      ${v && v.passed && v.changed_files > 0 ? `<button class="go" onclick="adopt('${lane.branch}')">Adopt</button>` : ''}
+    </div><div id="ld-${index}"></div>`;
+  addEvent('lane ' + index, lane?.model || '', inner);
+}
+
+// ── diff ─────────────────────────────────────────────────────────────
+function lineDiff(oldText, newText, context = 3) {
+  const a = String(oldText || '').split('\n'), b = String(newText || '').split('\n');
+  if (a.length * b.length > 4_000_000) return `(too large to diff inline)\n`;
+  const lcs = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i--)
+    for (let j = b.length - 1; j >= 0; j--)
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  const ops = []; let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) ops.push([' ', a[i++]]), j++;
+    else if (lcs[i + 1][j] >= lcs[i][j + 1]) ops.push(['-', a[i++]]);
+    else ops.push(['+', b[j++]]);
+  }
+  while (i < a.length) ops.push(['-', a[i++]]);
+  while (j < b.length) ops.push(['+', b[j++]]);
+  if (!ops.some(([t]) => t !== ' ')) return '(no changes)\n';
+  const keep = new Array(ops.length).fill(false);
+  ops.forEach(([t], k) => { if (t !== ' ') for (let x = Math.max(0, k - context); x <= Math.min(ops.length - 1, k + context); x++) keep[x] = true; });
+  const out = []; let gap = false;
+  ops.forEach(([t, l], k) => { if (keep[k]) { out.push(t + l); gap = false; } else if (!gap) { out.push('@@'); gap = true; } });
+  return out.join('\n') + '\n';
+}
+const colorize = (p) => esc(p).split('\n').map(l =>
+  l.startsWith('+') ? `<span class="add">${l}</span>` :
+  l.startsWith('-') ? `<span class="del">${l}</span>` :
+  l.startsWith('@@') ? `<span class="hd">${l}</span>` : l).join('\n');
+
+window.laneDiff = async (index, btn) => {
+  const host = $('ld-' + index);
+  if (host.innerHTML) { host.innerHTML = ''; return; }
+  btn.disabled = true;
+  try {
+    const st = await api(`/api/sessions/${state.session}/variants/status`);
+    const files = st.find(s => s.index === index)?.status?.files || [];
+    if (!files.length) { host.innerHTML = '<pre>this lane changed nothing</pre>'; return; }
+    let out = '';
+    for (const f of files.slice(0, 4)) {
+      const d = await api(`/api/sessions/${state.session}/variants/diff?index=${index}&path=${encodeURIComponent(f.path)}`);
+      out += `--- ${f.path}\n` + (d.too_large || d.binary ? '(not shown inline)\n' : lineDiff(d.old, d.new));
+    }
+    host.innerHTML = `<pre>${colorize(out)}</pre>`;
+  } catch (e) { host.innerHTML = `<pre>${esc(e.message)}</pre>`; }
+  finally { btn.disabled = false; }
+};
+
+window.adopt = async (branch) => {
+  try {
+    await api(`/api/sessions/${state.session}/variants/adopt`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch }),
+    });
+    addEvent('adopted', branch + ' merged into the session branch', '');
+    state.lanes = []; state.verdicts = {}; state.activity = {}; state.ranks = {};
+    renderRoster();
+  } catch (e) { fail(e); }
+};
+
+// ── the stream ───────────────────────────────────────────────────────
+let ws;
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.onmessage = (ev) => {
+    let f; try { f = JSON.parse(ev.data); } catch { return; }
+    const lane = state.runToLane[f.workflow ?? f.session];
+    switch (f.kind) {
+      case 'lane-started':
+        state.runToLane[f.run] = f.index;
+        state.activity[f.index] = 'starting';
+        renderRoster();
+        break;
+      case 'token':
+        if (lane !== undefined) { if (!state.activity[lane]) { state.activity[lane] = 'thinking'; renderRoster(); } break; }
+        // Main conversation tokens land in the transcript.
+        if (f.workflow === state.session) {
+          if (!state.streaming) state.streaming = addTurn('agent', '');
+          state.streaming.textContent += f.delta; scroll();
+        }
+        break;
+      case 'reasoning':
+        if (lane === undefined && f.workflow === state.session && state.verbosity === 'verbose') {
+          if (!state.streaming) state.streaming = addTurn('agent', '');
+          state.streaming.classList.add('thinking');
+          state.streaming.textContent += f.delta; scroll();
+        }
+        break;
+      case 'tool-call': {
+        if (lane !== undefined) {
+          const arg = f.arguments && (f.arguments.path || f.arguments.command || '');
+          state.activity[lane] = `${f.name}${arg ? ' ' + String(arg).split('/').pop() : ''}`
+            + (f.phase === 'result' ? (f.is_error ? ' — failed' : ' ✓') : '…');
+          renderRoster();
+        } else if (f.workflow === state.session && state.verbosity !== 'summary' && f.phase === 'start') {
+          const arg = f.arguments && (f.arguments.path || f.arguments.command || '');
+          addEvent('tool', `${f.name} ${String(arg).split('/').pop() || ''}`, '', false);
+          state.streaming = null;
+        }
+        break;
+      }
+      case 'session-done':
+        if (lane !== undefined) { state.activity[lane] = 'finished — awaiting verification'; renderRoster(); }
+        else if (f.session === state.session) state.streaming = null;
+        break;
+      case 'lane-verified':
+        state.verdicts[f.index] = { index: f.index, passed: f.passed, changed_files: f.changed_files, touched_tests: f.touched_tests || [] };
+        delete state.activity[f.index];
+        renderRoster();
+        break;
+    }
+  };
+  ws.onclose = () => setTimeout(connect, 1500);
+}
+
+// ── actions ──────────────────────────────────────────────────────────
+async function loadSessions() {
+  try {
+    const list = await api('/api/sessions');
+    $('session').innerHTML = '<option value="">— choose a workspace —</option>' +
+      list.map(s => `<option value="${esc(s.id)}">${esc(s.name)} — ${esc(s.working_dir)}</option>`).join('');
+  } catch (e) { fail(e); }
+}
+
+$('session').onchange = (e) => {
+  state.session = e.target.value || null;
+  state.lanes = []; state.verdicts = {}; state.activity = {}; state.ranks = {}; state.runToLane = {};
+  $('transcript').innerHTML = ''; renderRoster();
+};
+
+$('verbosity').onclick = (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  state.verbosity = b.dataset.v;
+  [...$('verbosity').children].forEach(x => x.classList.toggle('on', x === b));
+};
+
+async function checkModels() {
+  const models = $('models').value.split(',').map(m => m.trim()).filter(Boolean);
+  if (!models.length) return [];
+  try {
+    const r = await api(`/api/variants/probe?provider=ollama&models=${encodeURIComponent(models.join(','))}`);
+    const bad = r.filter(m => !m.usable);
+    $('modelhint').innerHTML = bad.length
+      ? `<span style="color:var(--fail)">${esc(bad.map(m => m.model).join(', '))} cannot drive a lane</span>`
+      : `<span style="color:var(--pass)">${r.length} ready</span>`;
+    return bad.map(m => m.model);
+  } catch { return []; }
+}
+$('models').addEventListener('change', checkModels);
+
+$('send').onclick = () => {
+  if (!state.session) return fail('choose a workspace first');
+  const text = $('input').value.trim(); if (!text) return;
+  $('err').textContent = '';
+  addTurn('you', text, 'user');
+  state.streaming = null;
+  ws.send(JSON.stringify({ cmd: 'session', id: state.session, input: text }));
+  $('input').value = '';
+};
+
+$('planBtn').onclick = async () => {
+  if (!state.session) return fail('choose a workspace first');
+  const task = $('input').value.trim(); if (!task) return fail('describe the change first');
+  $('planBtn').disabled = true; $('err').textContent = '';
+  try {
+    const p = await api(`/api/sessions/${state.session}/variants/plan`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task, provider: 'ollama', model: 'qwen3:32b' }),
+    });
+    // The plan lands back in the composer as editable text: one plan corrected
+    // beforehand costs nothing, where correcting it afterwards costs N runs.
+    $('input').value = p.instruction;
+    addEvent('plan', p.summary, `<div style="white-space:pre-wrap;font-size:12.5px">${esc(p.instruction)}</div>`);
+    $('planbox').style.display = ''; $('planbody').textContent = p.summary; $('planbody').className = '';
+  } catch (e) { fail(e); } finally { $('planBtn').disabled = false; }
+};
+
+$('fan').onclick = async () => {
+  if (!state.session) return fail('choose a workspace first');
+  const task = $('input').value.trim(); if (!task) return fail('describe the change first');
+  const models = $('models').value.split(',').map(m => m.trim()).filter(Boolean);
+  if (!models.length) return fail('name at least one lane model');
+  const bad = await checkModels();
+  if (bad.length) return fail(`these cannot drive a lane: ${bad.join(', ')}`);
+
+  $('fan').disabled = true; $('err').textContent = '';
+  try {
+    addTurn('you', task, 'user');
+    state.lanes = await api(`/api/sessions/${state.session}/variants`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: task, lanes: models.map(m => ({ model: m })) }),
+    });
+    state.verdicts = {}; state.activity = {}; state.ranks = {};
+    addEvent('fan out', `${state.lanes.length} lanes — ${models.join(', ')}`,
+      `<div style="font-size:12.5px;color:var(--muted)">Each lane works in its own isolated worktree. Watch the roster; grade them when they settle.</div>`);
+    renderRoster();
+    $('input').value = '';
+  } catch (e) { fail(e); } finally { $('fan').disabled = false; }
+};
+
+// Grading is a separate act from fanning out: local models take minutes, so you
+// fan out, walk away, and come back to judge.
+const grade = document.createElement('button');
+grade.className = 'ghost'; grade.textContent = 'Verify & judge';
+grade.onclick = async () => {
+  if (!state.lanes.length) return fail('fan out first');
+  grade.disabled = true; $('err').textContent = '';
+  try {
+    const v = await api(`/api/sessions/${state.session}/variants/verify`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ check: 'npm run check' }),
+    });
+    for (const r of v) state.verdicts[r.index] = r;
+    renderRoster();
+    const survivors = v.filter(r => r.passed && r.changed_files > 0).map(r => r.index);
+    addEvent('verified', `${survivors.length} of ${v.length} survived`,
+      v.map(r => `<div style="font-size:12.5px">lane ${r.index}: ${r.passed ? (r.changed_files ? 'passed' : 'passed but changed nothing') : 'eliminated'}</div>`).join(''));
+    if (!survivors.length) return;
+
+    const j = await api(`/api/sessions/${state.session}/variants/judge`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task: 'the change under review', provider: 'ollama', model: 'qwen3:32b', only: survivors }),
+    });
+    state.winner = j.winner;
+    for (const c of j.candidates) state.ranks[c.index] = c;
+    renderRoster();
+    addEvent('judged', `lane ${j.winner} wins`,
+      `<div style="font-size:12.5px">${esc(j.reasoning)}</div>` +
+      j.candidates.map(c => `<div style="margin-top:8px;font-size:12.5px"><b>#${c.rank} lane ${c.index}</b> — ${esc(c.tradeoffs)}</div>`).join(''));
+
+    const cost = await api(`/api/sessions/${state.session}/variants/cost?baseline=claude-sonnet-4`);
+    $('costbody').innerHTML =
+      `<div class="kv"><span>this run</span><span class="v">${money(cost.total_usd)}</span></div>
+       <div class="kv"><span>all on ${esc(cost.baseline_model)}</span><span class="v">${money(cost.baseline_usd)}</span></div>
+       <div class="kv"><span>saved</span><span class="v save">${money(cost.saved_usd)}</span></div>` +
+      (cost.baseline_usd === 0 ? `<div class="empty" style="margin-top:6px">No price set for ${esc(cost.baseline_model)} — nothing to compare against.</div>` : '');
+  } catch (e) { fail(e); } finally { grade.disabled = false; }
+};
+document.querySelector('.acts').insertBefore(grade, $('models'));
+
+$('input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $('send').click(); }
+});
+
+loadSessions();
+connect();
+renderRoster();
+</script>
+</body>
+</html>

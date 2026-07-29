@@ -14,11 +14,23 @@ use crate::AppState;
 const DASHBOARD_HTML: &str = include_str!("../static/index.html");
 /// The verified-variants surface: fan out, verify, judge, adopt — one screen.
 const VARIANTS_HTML: &str = include_str!("../static/variants.html");
+/// The fused shell: one transcript, a stable run-state panel, and fan-out as an
+/// event in the conversation rather than a separate destination.
+const APP_HTML: &str = include_str!("../static/app.html");
 
 pub async fn dashboard() -> Response {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         DASHBOARD_HTML,
+    )
+        .into_response()
+}
+
+/// GET /app — the fused shell.
+pub async fn app_page() -> Response {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        APP_HTML,
     )
         .into_response()
 }

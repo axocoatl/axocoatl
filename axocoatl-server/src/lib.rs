@@ -29,6 +29,7 @@ pub fn build_router(
     Router::new()
         .route("/", get(routes::dashboard))
         .route("/variants", get(routes::variants_page))
+        .route("/app", get(routes::app_page))
         .route("/lattice/{file}", get(routes::lattice_asset))
         .route("/vendor/{*file}", get(routes::vendor_asset))
         .route("/health", get(routes::health))
