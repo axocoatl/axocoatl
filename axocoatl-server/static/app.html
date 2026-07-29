@@ -64,7 +64,10 @@
      the transcript, in the main column where there is width to lay several
      candidates side by side. The 340px rail is for run state you glance at;
      a comparison is something you read. */
-  .module { border-bottom: 1px solid var(--line); background: var(--bg-2); }
+  /* One container for every module band: `main` keeps a fixed three-row template
+     however many bands exist. */
+  .modules { display: flex; flex-direction: column; min-height: 0; max-height: 60vh; overflow-y: auto; }
+  .module { border-bottom: 1px solid var(--line); background: var(--bg-2); flex: 0 0 auto; }
   .module.shut { display: none; }
   .module > summary {
     cursor: pointer; list-style: none; padding: 9px 22px;
@@ -244,6 +247,7 @@
 
 <div class="split">
   <main>
+    <div class="modules">
     <details class="module shut" id="boardmod" open>
       <summary>Scoreboard</summary>
       <div class="inner"><div id="board"></div></div>
@@ -252,6 +256,7 @@
       <summary>Trajectories <span id="trajgist" style="text-transform:none;letter-spacing:0;font-weight:400"></span></summary>
       <div class="inner"><div id="traj"></div></div>
     </details>
+    </div>
     <div id="transcript"></div>
     <div class="composer">
       <textarea id="input" placeholder="Describe the change. Send to work with one agent; fan out to compare several."></textarea>
