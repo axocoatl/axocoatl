@@ -8,6 +8,26 @@ use serde::Serialize;
 
 use axocoatl_coordination::{EventNotification, EventType};
 
+/// Why a run is blocked on a human, and what it needs to proceed.
+#[derive(Debug, Clone, Serialize)]
+pub struct AwaitingInput {
+    /// Identifier to answer with.
+    pub approval_id: String,
+    /// A short human-readable statement of the question.
+    pub question: String,
+    /// Unix seconds — so a viewer can show how long it has been stuck.
+    pub since: u64,
+}
+
+/// Split a scoped agent id into the run it belongs to.
+///
+/// Session agents are `{session}:{agent}` and variant lanes
+/// `{session}#{index}:{agent}`, so the run key is everything before the final
+/// colon in both cases.
+pub fn run_of_scoped_agent(agent_id: &str) -> Option<String> {
+    agent_id.rfind(':').map(|i| agent_id[..i].to_string())
+}
+
 /// A frame on the stream bus — serialized straight to the WebSocket as JSON.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -119,6 +139,13 @@ pub enum StreamFrame {
     /// arguments. Resolution comes back via `WsCommand::McpApprove`.
     McpApprovalRequired {
         approval_id: String,
+        /// The run that is blocked, when the agent id identifies one — a lane
+        /// (`{session}#{index}`) or a session. Derived here rather than leaving
+        /// every client to parse the scoped-agent convention, and the reason a
+        /// roster can say *which* lane is waiting rather than only that
+        /// something is.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run: Option<String>,
         agent_id: String,
         server: String,
         tool: String,
@@ -169,6 +196,15 @@ pub struct RunAgent {
 /// stream frames.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct RunState {
+    /// What this run is blocked on, if anything.
+    ///
+    /// Blocked-on-human is a state of the run, not a notification that happened
+    /// once: a client that connects late, or reloads, must still be able to see
+    /// that a lane is waiting. Carrying it in the snapshot is what makes that
+    /// true — the failure mode of parallel agents is not being unable to see
+    /// them, it is not noticing one has stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting: Option<AwaitingInput>,
     /// The run id — a workflow id or a session id.
     pub workflow: String,
     /// `"workflow"` or `"session"` — lets the dashboard re-attach the right view.
@@ -215,6 +251,34 @@ pub fn apply_frame(runs: &mut std::collections::HashMap<String, RunState>, frame
         })
     }
     match frame {
+        // Blocked-on-human is folded into run state, not merely announced, so a
+        // client that connects after the prompt fired still sees the lane is
+        // waiting rather than watching a row that appears idle forever.
+        StreamFrame::McpApprovalRequired {
+            approval_id,
+            run: Some(key),
+            tool_display,
+            server,
+            requested_at,
+            ..
+        } => {
+            run_for(runs, key).awaiting = Some(AwaitingInput {
+                approval_id: approval_id.clone(),
+                question: format!("approve {tool_display} on {server}?"),
+                since: *requested_at,
+            });
+        }
+        StreamFrame::McpApprovalResolved { approval_id, .. } => {
+            // Clear whichever run was parked on this approval.
+            for r in runs.values_mut() {
+                if r.awaiting
+                    .as_ref()
+                    .is_some_and(|a| &a.approval_id == approval_id)
+                {
+                    r.awaiting = None;
+                }
+            }
+        }
         StreamFrame::Event {
             event_type,
             agent: Some(agent),
@@ -404,5 +468,89 @@ impl axocoatl_actor::CoordinatorReporter for CoordinatorStreamReporter {
             tokens: Some(tokens),
             workflow: Some(workflow.to_string()),
         });
+    }
+}
+
+#[cfg(test)]
+mod supervision_tests {
+    use super::*;
+
+    #[test]
+    fn derives_the_run_from_a_scoped_agent_id() {
+        // A variant lane: the run is the lane, not the session.
+        assert_eq!(
+            run_of_scoped_agent("ses-abc#2:coder").as_deref(),
+            Some("ses-abc#2")
+        );
+        // A plain session agent.
+        assert_eq!(
+            run_of_scoped_agent("ses-abc:coder").as_deref(),
+            Some("ses-abc")
+        );
+        // An unscoped agent belongs to no run.
+        assert_eq!(run_of_scoped_agent("coder"), None);
+    }
+
+    #[test]
+    fn a_blocked_run_stays_blocked_until_resolved() {
+        let mut runs = std::collections::HashMap::new();
+        apply_frame(
+            &mut runs,
+            &StreamFrame::McpApprovalRequired {
+                approval_id: "ap-1".into(),
+                run: Some("ses-x#1".into()),
+                agent_id: "ses-x#1:coder".into(),
+                server: "fs".into(),
+                tool: "fs__write".into(),
+                tool_display: "write".into(),
+                arguments_preview: "{}".into(),
+                requested_at: 42,
+            },
+        );
+        // The state lives on the run, so a late client still learns of it.
+        let a = runs["ses-x#1"].awaiting.as_ref().expect("run is blocked");
+        assert_eq!(a.approval_id, "ap-1");
+        assert_eq!(a.since, 42);
+
+        apply_frame(
+            &mut runs,
+            &StreamFrame::McpApprovalResolved {
+                approval_id: "ap-1".into(),
+                decision: "allow".into(),
+            },
+        );
+        assert!(runs["ses-x#1"].awaiting.is_none(), "resolving unblocks it");
+    }
+
+    #[test]
+    fn resolving_one_approval_leaves_other_blocked_lanes_alone() {
+        let mut runs = std::collections::HashMap::new();
+        for (id, run) in [("ap-1", "ses-x#0"), ("ap-2", "ses-x#1")] {
+            apply_frame(
+                &mut runs,
+                &StreamFrame::McpApprovalRequired {
+                    approval_id: id.into(),
+                    run: Some(run.into()),
+                    agent_id: format!("{run}:coder"),
+                    server: "fs".into(),
+                    tool: "t".into(),
+                    tool_display: "t".into(),
+                    arguments_preview: "{}".into(),
+                    requested_at: 1,
+                },
+            );
+        }
+        apply_frame(
+            &mut runs,
+            &StreamFrame::McpApprovalResolved {
+                approval_id: "ap-1".into(),
+                decision: "allow".into(),
+            },
+        );
+        assert!(runs["ses-x#0"].awaiting.is_none());
+        assert!(
+            runs["ses-x#1"].awaiting.is_some(),
+            "the other lane is still waiting"
+        );
     }
 }

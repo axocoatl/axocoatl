@@ -118,6 +118,8 @@ impl ToolHook for McpApprovalHook {
             .request(approval_ctx.clone(), |c| {
                 let _ = bus.send(StreamFrame::McpApprovalRequired {
                     approval_id: c.approval_id.clone(),
+                    // Which run is blocked — derived once, here.
+                    run: crate::stream::run_of_scoped_agent(&c.agent_id),
                     agent_id: c.agent_id.clone(),
                     server: c.server.clone(),
                     tool: c.tool.clone(),

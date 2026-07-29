@@ -33,6 +33,20 @@
     border-radius: 6px; padding: 5px 9px; font: 12.5px var(--sans);
   }
   .spacer { flex: 1; }
+  /* The count of lanes waiting on you. The failure mode of parallel agents is
+     not being unable to see them — it is not noticing one has stopped. */
+  #blocked {
+    font: 600 11.5px var(--sans); color: #06231f; background: var(--accent);
+    border-radius: 999px; padding: 4px 11px; cursor: pointer;
+  }
+  #blocked.hidden { display: none; }
+  .peek {
+    margin-top: 8px; padding: 9px; border: 1px solid var(--accent-dim);
+    border-radius: 7px; background: var(--bg-3);
+  }
+  .peek .q { font-size: 12.5px; margin-bottom: 8px; }
+  .peek .btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .peek button { padding: 5px 10px; font-size: 11.5px; }
   .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
   .seg button {
     background: transparent; color: var(--muted); border: 0; padding: 5px 10px;
@@ -137,6 +151,7 @@
   <div class="brand">Axocoatl <span>/ workspace</span></div>
   <select id="session"><option value="">— choose a workspace —</option></select>
   <div class="spacer"></div>
+  <div id="blocked" class="hidden"></div>
   <div class="seg" id="verbosity" title="With several lanes running, verbosity is a parallelism control, not a preference">
     <button data-v="summary">Summary</button>
     <button data-v="normal" class="on">Normal</button>
@@ -190,6 +205,8 @@ const state = {
   activity: {},         // lane index -> what it is doing now
   verdicts: {},         // lane index -> verdict
   ranks: {}, winner: null,
+  awaiting: {},          // run key -> what it is blocked on
+  peek: null,            // lane index whose peek panel is open
   streaming: null,      // element currently receiving assistant tokens
 };
 
@@ -240,10 +257,13 @@ function renderRoster() {
     const act = state.activity[l.index];
     // A lane that changed nothing is not a pass, however green the check was.
     const empty = v && v.changed_files === 0;
-    const cls = v ? (v.passed && !empty ? 'pass' : 'fail') : (act ? 'working' : '');
-    const right = v
-      ? (empty ? 'changed nothing' : (v.passed ? 'passed' : 'eliminated'))
-      : (act || 'queued');
+    // Blocked-on-human outranks every other state: a lane that is waiting is
+    // not "working", and showing it as working is how it gets missed.
+    const wait = state.awaiting[`${state.session}#${l.index}`];
+    const cls = wait ? 'need' : (v ? (v.passed && !empty ? 'pass' : 'fail') : (act ? 'working' : ''));
+    const right = wait
+      ? 'needs input'
+      : (v ? (empty ? 'changed nothing' : (v.passed ? 'passed' : 'eliminated')) : (act || 'queued'));
     const rank = state.ranks[l.index];
     return `<div class="lane-row" data-lane="${l.index}">
       <span class="dot ${cls}"></span>
@@ -251,9 +271,48 @@ function renderRoster() {
       ${rank ? `<span class="badge">#${rank.rank}</span>` : ''}
       ${v && v.touched_tests?.length ? '<span class="badge warn">own tests</span>' : ''}
       <span class="lane-act">${esc(right)}</span>
-    </div>`;
+    </div>` + (wait && state.peek === l.index ? peekPanel(l.index, wait) : '');
   }).join('');
-  host.querySelectorAll('[data-lane]').forEach(r => r.onclick = () => showLane(Number(r.dataset.lane)));
+  host.querySelectorAll('[data-lane]').forEach(r => r.onclick = () => {
+    const i = Number(r.dataset.lane);
+    // A waiting lane wants answering, not inspecting.
+    if (state.awaiting[`${state.session}#${i}`]) { state.peek = state.peek === i ? null : i; renderRoster(); }
+    else showLane(i);
+  });
+  renderBlocked();
+}
+
+/** Peek: answer the question where you are, rather than attaching to the lane.
+ *  Attaching costs several seconds of re-orientation, and with five lanes that
+ *  is the whole budget — so the common case (a yes or no) is one click. */
+function peekPanel(index, wait) {
+  const age = Math.max(0, Math.floor(Date.now() / 1000) - (wait.since || 0));
+  return `<div class="peek">
+    <div class="q">${esc(wait.question)} <span style="color:var(--dim)">— waiting ${age}s</span></div>
+    <div class="btns">
+      <button class="go" onclick="answer('${esc(wait.approval_id)}','allow')">Allow</button>
+      <button class="ghost" onclick="answer('${esc(wait.approval_id)}','allow-always')">Always</button>
+      <button class="ghost" onclick="answer('${esc(wait.approval_id)}','deny')">Deny</button>
+    </div>
+  </div>`;
+}
+
+window.answer = (approvalId, decision) => {
+  ws.send(JSON.stringify({ cmd: 'mcp-approve', approval_id: approvalId, decision }));
+  state.peek = null;
+};
+
+function renderBlocked() {
+  const n = Object.keys(state.awaiting).length;
+  const el = $('blocked');
+  el.classList.toggle('hidden', n === 0);
+  el.textContent = n === 1 ? '1 lane needs input' : `${n} lanes need input`;
+  el.onclick = () => {
+    // Jump to the first waiting lane and open its peek.
+    const key = Object.keys(state.awaiting)[0];
+    const idx = Number(key.split('#')[1]);
+    if (!Number.isNaN(idx)) { state.peek = idx; renderRoster(); }
+  };
 }
 
 async function showLane(index) {
@@ -373,6 +432,20 @@ function connect() {
       case 'session-done':
         if (lane !== undefined) { state.activity[lane] = 'finished — awaiting verification'; renderRoster(); }
         else if (f.session === state.session) state.streaming = null;
+        break;
+      case 'mcp-approval-required':
+        if (f.run) { state.awaiting[f.run] = { approval_id: f.approval_id, question: `approve ${f.tool_display} on ${f.server}?`, since: f.requested_at }; renderRoster(); }
+        break;
+      case 'mcp-approval-resolved':
+        for (const k of Object.keys(state.awaiting))
+          if (state.awaiting[k].approval_id === f.approval_id) delete state.awaiting[k];
+        renderRoster();
+        break;
+      case 'snapshot':
+        // A reload must still show which lanes are stuck — that is why the
+        // daemon keeps this on the run rather than only announcing it once.
+        for (const r of f.runs || []) if (r.awaiting) state.awaiting[r.workflow] = r.awaiting;
+        renderRoster();
         break;
       case 'lane-verified':
         state.verdicts[f.index] = { index: f.index, passed: f.passed, changed_files: f.changed_files, touched_tests: f.touched_tests || [] };
