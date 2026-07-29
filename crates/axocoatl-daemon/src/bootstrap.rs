@@ -2421,6 +2421,8 @@ impl AxocoatlDaemon {
             let usage_sandbox = sandbox.clone();
             let usage_key = session.id.clone();
             let lane_model = mo.clone();
+            let trace: Arc<StdMutex<Vec<crate::trajectory::Action>>> =
+                Arc::new(StdMutex::new(Vec::new()));
             tokio::spawn(async move {
                 let started = std::time::Instant::now();
                 // Announce the lane's identity once, so a viewer can attribute
@@ -2436,9 +2438,28 @@ impl AxocoatlDaemon {
                 let _ = bus.send(crate::stream::StreamFrame::SessionStart {
                     session: rid.clone(),
                 });
-                let outcome =
-                    Self::stream_agent_run(bus.clone(), actor, rid.clone(), aid, inp, mo).await;
+                let outcome = Self::stream_agent_run(
+                    bus.clone(),
+                    actor,
+                    rid.clone(),
+                    aid,
+                    inp,
+                    mo,
+                    Some(trace.clone()),
+                )
+                .await;
                 let duration_ms = started.elapsed().as_millis() as u64;
+                // Written on both paths: a lane that errored still took a route,
+                // and *where* it went wrong is the most useful trajectory there
+                // is. Persisting only successes would lose exactly that.
+                Self::record_lane_trajectory(
+                    &usage_sandbox,
+                    crate::trajectory::Trajectory {
+                        index,
+                        actions: trace.lock().map(|s| s.clone()).unwrap_or_default(),
+                    },
+                )
+                .await;
                 match outcome {
                     Ok(out) => {
                         // Record what this lane spent, so the run's economics
@@ -2503,6 +2524,32 @@ impl AxocoatlDaemon {
             "{}/.axo-variants/usage-{}.json",
             sandbox.root().display(),
             usage.index
+        );
+        let _ = sandbox
+            .exec_stdin(
+                &["sh", "-c", &format!("cat > '{path}'")],
+                &json,
+                Duration::from_secs(10),
+            )
+            .await;
+    }
+
+    /// Record one lane's normalised trajectory, in that lane's own file.
+    ///
+    /// Same shape and same reasoning as [`Self::record_lane_usage`]: one file per
+    /// lane because lanes finish concurrently, stored beside the worktrees so the
+    /// comparison outlives the process that produced it.
+    async fn record_lane_trajectory(
+        sandbox: &Arc<dyn Sandbox>,
+        trajectory: crate::trajectory::Trajectory,
+    ) {
+        let Ok(json) = serde_json::to_string(&trajectory) else {
+            return;
+        };
+        let path = format!(
+            "{}/.axo-variants/trace-{}.json",
+            sandbox.root().display(),
+            trajectory.index
         );
         let _ = sandbox
             .exec_stdin(
@@ -2578,6 +2625,57 @@ impl AxocoatlDaemon {
             .collect();
         out.sort_by_key(|u: &crate::git::LaneUsage| u.index);
         out
+    }
+
+    /// The lanes' trajectories, aligned against `baseline`.
+    ///
+    /// `baseline` names the lane every other lane is read against — the same
+    /// choice the scoreboard exposes, so re-basing there re-bases this. An
+    /// unknown baseline is an error rather than a silent fallback to lane 0: the
+    /// whole reading of the table depends on which column is the reference, and
+    /// quietly answering a different question than the one asked is worse than
+    /// refusing.
+    pub async fn variants_trajectories(
+        &self,
+        session_id: &str,
+        baseline: usize,
+    ) -> Result<crate::trajectory::Alignment, DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let indexes =
+            Self::list_variant_indexes(&sandbox, &self.session_dir(session_id).await?).await?;
+        if indexes.is_empty() {
+            return Ok(crate::trajectory::Alignment::default());
+        }
+        if !indexes.contains(&baseline) {
+            return Err(DaemonError::Session(format!(
+                "lane {baseline} is not part of this comparison"
+            )));
+        }
+        // Baseline first, then the rest in lane order — the column order the
+        // scoreboard uses, so the two views cannot disagree about which is which.
+        let order = std::iter::once(baseline).chain(indexes.into_iter().filter(|i| *i != baseline));
+        let mut trajectories = Vec::new();
+        for i in order {
+            trajectories.push(
+                self.read_variant_meta::<crate::trajectory::Trajectory>(
+                    &sandbox,
+                    &format!("trace-{i}.json"),
+                )
+                .await
+                // A lane with no recorded trajectory is a lane that took no
+                // steps, which is a real and reportable outcome — it must still
+                // hold a column.
+                .unwrap_or(crate::trajectory::Trajectory {
+                    index: i,
+                    actions: Vec::new(),
+                }),
+            );
+        }
+        Ok(crate::trajectory::align(&trajectories))
     }
 
     /// Everything known about the session's current comparison, in one read.
@@ -3470,6 +3568,9 @@ impl AxocoatlDaemon {
             agent_label.to_string(),
             input.to_string(),
             model_override,
+            // Trajectories are a comparison artifact; a single run has nothing
+            // to be compared against.
+            None,
         )
         .await
     }
@@ -3478,6 +3579,14 @@ impl AxocoatlDaemon {
     /// keyed by `run_id` and labelled `agent_label`. Standalone (no `&self`)
     /// so it can run inside a spawned task — e.g. a variant lane keyed
     /// `{session}#{i}`.
+    /// `trace`, when supplied, accumulates this run's normalised trajectory.
+    ///
+    /// Recorded here rather than by subscribing to the bus because the bus is a
+    /// broadcast for viewers: frames there are dropped when nobody is listening
+    /// and when a slow receiver lags. A trajectory that exists only if someone
+    /// had the page open is not evidence, and the whole point of Tier 2 is to
+    /// answer "how did they differ" *after* the run, when the tab that watched
+    /// it is long gone.
     async fn stream_agent_run(
         bus: tokio::sync::broadcast::Sender<crate::stream::StreamFrame>,
         actor: ractor::ActorRef<axocoatl_actor::AgentMessage>,
@@ -3485,6 +3594,7 @@ impl AxocoatlDaemon {
         agent_label: String,
         input: String,
         model_override: Option<String>,
+        trace: Option<Arc<StdMutex<Vec<crate::trajectory::Action>>>>,
     ) -> Result<axocoatl_core::AgentOutput, DaemonError> {
         let (sink_tx, mut sink_rx) =
             tokio::sync::mpsc::unbounded_channel::<axocoatl_actor::AgentStreamChunk>();
@@ -3492,10 +3602,42 @@ impl AxocoatlDaemon {
             let bus = bus.clone();
             let rid = run_id.clone();
             let aid = agent_label.clone();
+            let trace = trace.clone();
             tokio::spawn(async move {
                 use crate::stream::StreamFrame as F;
                 use axocoatl_actor::AgentStreamChunk as C;
+                // Maps a tool call's id to its position in the trajectory, so the
+                // result frame can mark the step that failed. A model can have
+                // several calls open at once, so this cannot be "the last step".
+                let mut at: HashMap<String, usize> = HashMap::new();
                 while let Some(chunk) = sink_rx.recv().await {
+                    if let Some(t) = &trace {
+                        match &chunk {
+                            C::ToolCallStarted {
+                                id,
+                                name,
+                                arguments,
+                            } => {
+                                if let Ok(mut steps) = t.lock() {
+                                    let seq = steps.len();
+                                    steps.push(crate::trajectory::Action::from_call(
+                                        seq,
+                                        name,
+                                        Some(arguments),
+                                    ));
+                                    at.insert(id.clone(), seq);
+                                }
+                            }
+                            C::ToolCallResult { id, is_error, .. } if *is_error => {
+                                if let (Ok(mut steps), Some(&i)) = (t.lock(), at.get(id)) {
+                                    if let Some(step) = steps.get_mut(i) {
+                                        step.failed = true;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     let frame = match chunk {
                         C::Text(d) => F::Token {
                             workflow: rid.clone(),

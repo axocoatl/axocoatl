@@ -177,6 +177,44 @@
   .board .rebase:hover { color: var(--accent); text-decoration: underline; }
   .boardopt { display: flex; gap: 6px; align-items: center; margin-top: 9px; font-size: 11.5px; color: var(--muted); }
   .boardopt input { width: auto; }
+
+  /* Tier 2 — aligned trajectories. Same column order as the scoreboard, so the
+     two views are read as one comparison. */
+  .traj { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .traj th, .traj td {
+    text-align: left; padding: 5px 9px; vertical-align: top;
+    border-bottom: 1px solid var(--line);
+  }
+  .traj th { color: var(--muted); font-weight: 500; white-space: nowrap; font-size: 12.5px; }
+  .traj td { font: 11.5px var(--mono); }
+  .traj tr.diverged { background: #1a1512; }
+  .traj tr.diverged td { border-left: 2px solid var(--warn); }
+  .traj tr.diverged td:first-child { border-left: 0; }
+  /* On a divergence row, the lanes that still matched the baseline recede and the
+     ones that went their own way come forward — so "which of these differ" is
+     answered by looking, not by reading every cell. */
+  .traj tr.diverged td.same { opacity: .45; }
+  .traj tr.diverged td.off { box-shadow: inset 2px 0 0 var(--warn); }
+  .traj .n { color: var(--dim); width: 1%; white-space: nowrap; }
+  /* Observation vs mutation, at a glance: what a lane looked at is context,
+     what it changed is the decision. */
+  .k { font: 600 9.5px var(--mono); letter-spacing: .06em; text-transform: uppercase;
+       border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; margin-right: 5px; }
+  .k.read, .k.list, .k.search { color: var(--dim); }
+  .k.edit, .k.write { color: var(--accent); }
+  .k.run { color: var(--warn); }
+  .k.other { color: var(--muted); }
+  .det { color: var(--muted); display: block; margin-top: 2px; white-space: pre-wrap; word-break: break-word; }
+  .none { color: var(--dim); }
+  .bad-step { color: var(--fail); }
+  /* A run of steps every lane took identically. Collapsed by default: it is the
+     part that carries no information about how they differ. */
+  .fold td { padding: 4px 9px; }
+  .fold button {
+    background: none; border: 0; color: var(--dim); font: 11.5px var(--sans);
+    cursor: pointer; padding: 0;
+  }
+  .fold button:hover { color: var(--accent); }
   .err { color: var(--fail); font: 12px var(--mono); margin-top: 8px; white-space: pre-wrap; }
   .badge {
     font: 600 9.5px var(--mono); letter-spacing: .06em; text-transform: uppercase;
@@ -204,6 +242,10 @@
     <details class="module shut" id="boardmod" open>
       <summary>Scoreboard</summary>
       <div class="inner"><div id="board"></div></div>
+    </details>
+    <details class="module shut" id="trajmod">
+      <summary>Trajectories <span id="trajgist" style="text-transform:none;letter-spacing:0;font-weight:400"></span></summary>
+      <div class="inner"><div id="traj"></div></div>
     </details>
     <div id="transcript"></div>
     <div class="composer">
@@ -492,7 +534,110 @@ function renderScoreboard() {
       only differences${hidden ? ` — ${hidden} identical row${hidden === 1 ? '' : 's'} hidden` : ''}</label>`;
   $('diffonly').onchange = (e) => { boardDiffOnly = e.target.checked; renderScoreboard(); };
   host.querySelectorAll('.rebase').forEach(b => {
-    b.onclick = () => { boardBase = Number(b.dataset.lane); renderScoreboard(); };
+    b.onclick = () => {
+      boardBase = Number(b.dataset.lane);
+      renderScoreboard();
+      // The trajectory is read against the same baseline, so re-basing here
+      // re-bases there. Two views of one comparison must never disagree about
+      // which column is the reference.
+      trajOpen = new Set();
+      loadTrajectories();
+    };
+  });
+}
+
+/** Tier 2: aligned trajectories.
+ *
+ *  The scoreboard answers "which one won". It cannot answer the case that
+ *  actually needs judgement — two candidates that both pass — because the
+ *  numbers tie and the difference is in the route each took.
+ *
+ *  Rows are aligned steps, columns are lanes. Stretches every lane walked
+ *  identically fold away by default: that is the part carrying no information
+ *  about how they differ, and leaving it expanded is how a comparison of forty
+ *  steps hides the three that matter. */
+let trajectory = null;      // the alignment as served
+let trajOpen = new Set();   // indexes of folds the user has expanded
+
+// `same` marks a cell that did what the baseline did. Past three columns the
+// row-level verdict stops being enough — you need to see which lanes went their
+// own way without reading every cell.
+function stepCell(a, same) {
+  const cls = [same ? 'same' : 'off', a?.failed ? 'bad-step' : ''].filter(Boolean).join(' ');
+  if (!a) return `<td class="none ${cls}">—</td>`;
+  const kind = esc(a.kind);
+  return `<td class="${cls}">`
+    + `<span class="k ${kind}" title="${esc(a.tool)}">${kind}</span>${esc(a.target)}`
+    + (a.detail ? `<span class="det">${esc(a.detail)}</span>` : '')
+    + (a.failed ? '<span class="det">failed</span>' : '')
+    + '</td>';
+}
+
+/** Group consecutive agreeing rows so they can fold as one unit. */
+function trajGroups(rows) {
+  const out = [];
+  for (const [i, r] of rows.entries()) {
+    const last = out[out.length - 1];
+    if (r.agree && last && last.agree) last.rows.push([i, r]);
+    else out.push({ agree: r.agree, rows: [[i, r]] });
+  }
+  return out;
+}
+
+async function loadTrajectories() {
+  const mod = $('trajmod');
+  if (!state.session || state.lanes.length < 2) { mod.classList.add('shut'); return; }
+  try {
+    trajectory = await api(`/api/sessions/${state.session}/variants/trajectories?baseline=${boardBase}`);
+    renderTrajectories();
+  } catch (e) { fail(e); }
+}
+
+function renderTrajectories() {
+  const mod = $('trajmod'), host = $('traj'), gist = $('trajgist');
+  if (!trajectory || !trajectory.rows?.length) {
+    // No recorded steps is not an empty state worth any screen.
+    mod.classList.add('shut');
+    return;
+  }
+  mod.classList.remove('shut');
+  const lanes = trajectory.lanes;
+  const total = trajectory.rows.length;
+  const diverged = total - trajectory.agreed;
+  gist.textContent = diverged === 0
+    ? `— ${total} steps, identical throughout`
+    : `— ${diverged} of ${total} steps diverged`;
+
+  const label = (i) => {
+    const l = state.lanes.find(x => x.index === i);
+    return l ? laneLabel(l) : `lane ${i}`;
+  };
+  const head = `<tr><th class="n"></th>${lanes.map((i, n) =>
+    `<th>${esc(label(i))}${n === 0 ? '<div class="base">baseline</div>' : ''}</th>`).join('')}</tr>`;
+
+  const body = trajGroups(trajectory.rows).map((g, gi) => {
+    // A single agreeing row is not worth a fold control.
+    if (g.agree && g.rows.length > 1 && !trajOpen.has(gi)) {
+      return `<tr class="fold"><td class="n"></td><td colspan="${lanes.length}">`
+        + `<button data-fold="${gi}">▸ ${g.rows.length} identical steps</button></td></tr>`;
+    }
+    const rows = g.rows.map(([i, r]) =>
+      `<tr class="${r.agree ? '' : 'diverged'}"><td class="n">${i + 1}</td>`
+      + r.cells.map((c, n) => stepCell(c, r.agree || r.matches_baseline?.[n])).join('') + '</tr>').join('');
+    if (g.agree && g.rows.length > 1) {
+      return `<tr class="fold"><td class="n"></td><td colspan="${lanes.length}">`
+        + `<button data-fold="${gi}">▾ ${g.rows.length} identical steps</button></td></tr>` + rows;
+    }
+    return rows;
+  }).join('');
+
+  host.innerHTML = `<table class="traj">${head}${body}</table>`;
+  host.querySelectorAll('[data-fold]').forEach(b => {
+    b.onclick = () => {
+      const k = Number(b.dataset.fold);
+      trajOpen.has(k) ? trajOpen.delete(k) : trajOpen.add(k);
+      renderTrajectories();
+    };
   });
 }
 
@@ -773,12 +918,14 @@ async function restoreRun() {
     // Prices the restored usage rather than trusting the raw counts — the
     // baseline comparison is computed from config, which lives server-side.
     await loadCost();
+    await loadTrajectories();
   } catch { /* no variants dir yet — the normal case */ }
 }
 
 $('session').onchange = (e) => {
   state.session = e.target.value || null;
   state.lanes = []; state.verdicts = {}; state.activity = {}; state.ranks = {}; state.runToLane = {}; state.usage = {};
+  trajectory = null; trajOpen = new Set(); boardBase = 0; $('trajmod').classList.add('shut');
   $('transcript').innerHTML = ''; renderRoster();
   restoreRun();
 };
@@ -887,6 +1034,7 @@ grade.onclick = async () => {
       j.candidates.map(c => `<div style="margin-top:8px;font-size:12.5px"><b>#${c.rank} lane ${c.index}</b> — ${esc(c.tradeoffs)}</div>`).join(''));
 
     await loadCost();
+    await loadTrajectories();
   } catch (e) { fail(e); } finally { grade.disabled = false; }
 };
 document.querySelector('.acts').insertBefore(grade, $('models'));

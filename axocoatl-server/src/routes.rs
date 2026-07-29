@@ -1211,6 +1211,32 @@ pub async fn session_variants_results(
 }
 
 #[derive(serde::Deserialize)]
+pub struct TrajectoryQuery {
+    /// Lane every other lane is read against. Defaults to the first lane, which
+    /// is what the scoreboard shows before the user re-bases.
+    #[serde(default)]
+    pub baseline: usize,
+}
+
+/// GET /api/sessions/{id}/variants/trajectories?baseline=… — the lanes' routes,
+/// normalised and aligned, with each row marked agreed or diverged.
+///
+/// Answers the question a scoreboard cannot: when two candidates both pass, how
+/// did they get there, and where exactly did they part.
+pub async fn session_variants_trajectories(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<TrajectoryQuery>,
+) -> Result<Json<axocoatl_daemon::trajectory::Alignment>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .variants_trajectories(&id, q.baseline)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
+#[derive(serde::Deserialize)]
 pub struct VerifyBody {
     /// The project's own check command — tests, build, typecheck. Run through
     /// `sh` inside each lane's worktree.
