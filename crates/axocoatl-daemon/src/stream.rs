@@ -79,6 +79,37 @@ pub enum StreamFrame {
     },
     /// A directory-session run failed.
     SessionError { session: String, error: String },
+    /// A variants lane started, announcing what it is.
+    ///
+    /// Every other frame for the lane is keyed `{session}#{index}` — an encoded
+    /// convention that a client would otherwise have to parse, and which cannot
+    /// say *which model* a lane runs. This is emitted once per lane so a viewer
+    /// can build run-key → lane identity for itself and label live output
+    /// correctly, rather than inferring from a string.
+    LaneStarted {
+        /// The run key subsequent frames carry — `{session}#{index}`.
+        run: String,
+        session: String,
+        index: usize,
+        /// Model this lane runs; `None` means the agent's configured default.
+        model: Option<String>,
+        agent: String,
+    },
+    /// A lane finished its check — the fan-in half, reported as it happens.
+    ///
+    /// Verification used to be a single blocking request that returned every
+    /// verdict at once, so a roster could show nothing until all lanes were
+    /// done. Emitting per lane lets survivors and eliminations appear as they
+    /// resolve.
+    LaneVerified {
+        session: String,
+        index: usize,
+        passed: bool,
+        changed_files: usize,
+        /// Test files this lane changed — a pass earned against tests the lane
+        /// itself rewrote is not evidence.
+        touched_tests: Vec<String>,
+    },
     /// Sent once to a freshly-connected client — the state of every run
     /// currently in flight, so the dashboard can re-attach its live view.
     Snapshot { runs: Vec<RunState> },

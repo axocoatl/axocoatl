@@ -66,6 +66,8 @@
   .badge.pass { color: var(--pass); } .badge.fail { color: var(--fail); }
   .badge.rank { color: var(--accent); } .badge.run { color: var(--warn); }
   .badge.warn { color: var(--warn); }
+  .live { font: 11.5px var(--mono); color: var(--accent); margin-top: 6px; }
+  .live::before { content: "▸ "; color: var(--dim); }
   .why { margin-top: 10px; font-size: 12.5px; }
   .why b { color: var(--muted); font-weight: 500; display: block; font-size: 11px; margin-top: 7px; }
   pre {
@@ -145,7 +147,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { session: null, lanes: [], verdicts: {}, ranks: {}, winner: null, diffs: {} };
+const state = { session: null, lanes: [], verdicts: {}, ranks: {}, winner: null, diffs: {}, activity: {}, runToLane: {} };
 
 const api = async (path, opts) => {
   const r = await fetch(path, opts);
@@ -165,6 +167,11 @@ function renderLanes() {
   for (const lane of state.lanes) {
     const v = state.verdicts[lane.index];
     const rank = state.ranks[lane.index];
+    // What this lane is doing right now, from the stream. With N lanes the
+    // headline is the whole UI — a spinner tells you nothing about which lane
+    // is stuck.
+    const act = state.activity[lane.index];
+    const live = !v && act ? act : '';
     const el = document.createElement('div');
     el.className = 'lane'
       + (v && !v.passed ? ' eliminated' : '')
@@ -187,6 +194,7 @@ function renderLanes() {
     el.innerHTML = `
       <h3>Lane ${lane.index} ${badge} ${empty} ${tainted} ${rankBadge}</h3>
       <div class="model">${lane.model || 'agent default'}</div>
+      ${live ? `<div class="live">${esc(live)}</div>` : ''}
       ${rank ? `<div class="why"><b>Approach</b>${esc(rank.approach)}<b>Trade-off</b>${esc(rank.tradeoffs)}</div>` : ''}
       ${v && !v.passed ? `<pre>${esc(tail(v.output))}</pre>` : ''}
       <div style="margin-top:10px;display:flex;gap:8px">
@@ -357,6 +365,57 @@ async function adopt(branch) {
     $('reasoning').textContent = `Adopted ${branch}. It is merged into the session's branch.`;
   } catch (e) { fail(e); step('s-ado'); }
 }
+
+// ── live stream ──────────────────────────────────────────────────────
+// Lanes used to jump from "running" straight to a verdict, which is exactly
+// the twenty-minute blind spot the whole surface exists to remove.
+function connectStream() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.onmessage = (ev) => {
+    let f; try { f = JSON.parse(ev.data); } catch { return; }
+    const laneOf = (key) => state.runToLane[key];
+    switch (f.kind) {
+      case 'lane-started':
+        // Identity announced once; every later frame keys off the run id.
+        state.runToLane[f.run] = f.index;
+        state.activity[f.index] = 'starting';
+        renderLanes();
+        break;
+      case 'tool-call': {
+        const i = laneOf(f.workflow);
+        if (i === undefined) break;
+        // Name the file being touched — "editing orders.ts" beats "working".
+        const arg = f.arguments && (f.arguments.path || f.arguments.command || '');
+        state.activity[i] = `${f.name}${arg ? ' ' + String(arg).split('/').pop() : ''}`
+          + (f.phase === 'result' ? (f.is_error ? ' — failed' : ' ✓') : '…');
+        renderLanes();
+        break;
+      }
+      case 'token': {
+        const i = laneOf(f.workflow);
+        if (i !== undefined && !state.activity[i]) { state.activity[i] = 'thinking'; renderLanes(); }
+        break;
+      }
+      case 'session-done': {
+        const i = laneOf(f.session);
+        if (i !== undefined) { state.activity[i] = 'finished — awaiting verification'; renderLanes(); }
+        break;
+      }
+      case 'lane-verified':
+        // Verdicts now arrive per lane as each check resolves.
+        state.verdicts[f.index] = Object.assign({}, state.verdicts[f.index], {
+          index: f.index, passed: f.passed,
+          changed_files: f.changed_files, touched_tests: f.touched_tests || [],
+        });
+        delete state.activity[f.index];
+        renderLanes();
+        break;
+    }
+  };
+  ws.onclose = () => setTimeout(connectStream, 1500);
+}
+connectStream();
 
 // Planning is its own step, and its output lands back in the task box as
 // editable text. A plan is one expensive call; correcting it before fanning out

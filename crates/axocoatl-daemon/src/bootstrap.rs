@@ -2391,6 +2391,16 @@ impl AxocoatlDaemon {
             let usage_key = session.id.clone();
             let lane_model = mo.clone();
             tokio::spawn(async move {
+                // Announce the lane's identity once, so a viewer can attribute
+                // every later frame to the right lane and model without parsing
+                // the run key.
+                let _ = bus.send(crate::stream::StreamFrame::LaneStarted {
+                    run: rid.clone(),
+                    session: usage_key.clone(),
+                    index,
+                    model: lane_model.clone(),
+                    agent: aid.clone(),
+                });
                 let _ = bus.send(crate::stream::StreamFrame::SessionStart {
                     session: rid.clone(),
                 });
@@ -2504,6 +2514,17 @@ impl AxocoatlDaemon {
                 .filter(|p| crate::git::looks_like_test(p))
                 .cloned()
                 .collect();
+            // Report this lane the moment it resolves rather than holding
+            // every verdict until the last check finishes.
+            let _ = self
+                .stream_bus
+                .send(crate::stream::StreamFrame::LaneVerified {
+                    session: session_id.to_string(),
+                    index,
+                    passed: r.exit_code == 0,
+                    changed_files: changed.len(),
+                    touched_tests: touched_tests.clone(),
+                });
             verdicts.push(crate::git::LaneVerdict {
                 index,
                 passed: r.exit_code == 0,
