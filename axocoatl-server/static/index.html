@@ -1677,17 +1677,11 @@
   .file-search-clear { color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 16px; line-height: 1; user-select: none; }
   .file-search-clear:hover { color: var(--text); }
   .file-search-clear.hide { display: none; }
-  .file-tree { flex: 1; overflow: auto; padding: 5px 4px; font-size: 12.5px; }
-  .file-tree.no-matches { padding-top: 14px; }
-  .file-tree-empty { color: var(--muted); font-size: 11.5px; text-align: center; padding: 10px; }
+  /* <ax-file-tree> owns its rows; the shell owns how much room it gets. */
+  ax-file-tree { flex: 1; min-height: 0; }
+  ax-file-tree.hide { display: none; }
   .file-viewer { flex: 1; overflow: auto; padding: 0; }
   .file-viewer pre { margin: 0; padding: 10px 12px; font-size: 12px; }
-  .ftn { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
-  .ftn:hover { background: var(--bg-3); }
-  .ftn.sel { background: rgba(var(--axo-jade-rgb),.15); }
-  .ftn.hide { display: none; }
-  .ftn-name { overflow: hidden; text-overflow: ellipsis; }
-  .ftn-match { color: var(--accent); font-weight: 600; }
   /* Quick-open modal — Ctrl+P file picker overlay. */
   .quick-open { position: fixed; inset: 0; z-index: 4000; background: rgba(0,0,0,.45); display: flex; align-items: flex-start; justify-content: center; padding-top: 96px; }
   .quick-open-card { background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: 8px; width: min(640px, 92vw); box-shadow: 0 12px 48px rgba(0,0,0,.55); overflow: hidden; display: flex; flex-direction: column; max-height: 60vh; }
@@ -1701,8 +1695,6 @@
   .quick-open-empty { padding: 14px; color: var(--muted); text-align: center; font-size: 12px; }
   /* Tree icons rendered via the @vscode/codicons font.  Chevron sits in
      a fixed slot so file/folder rows align at the same x. */
-  .ftn-chev { width: 12px; text-align: center; opacity: .65; font-size: 11px; flex-shrink: 0; transition: transform .12s ease; }
-  .ftn-chev.open { transform: rotate(90deg); }
   .ftn-ico { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
   .ftn-ico.codicon { font-size: 14px; line-height: 16px; }
   /* Language tint for file-type icons. */
@@ -1710,7 +1702,6 @@
   .ftn-ico.tint-bronze { color: var(--axo-bronze); }
   .ftn-ico.tint-blue { color: #6cc1d9; }
   .ftn-ico.tint-mute { color: var(--muted); }
-  .ftn-kids { margin-left: 18px; }
   .ftn-kids.hide { display: none; }
   /* Active-agents chip row at the top of the Activity pane. */
   .session-active { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; min-height: 36px; align-items: center; }
@@ -2851,6 +2842,14 @@
 </style>
 <link rel="stylesheet" href="/vendor/highlight.css">
 <link rel="stylesheet" href="/vendor/codicons/codicon.css">
+<!-- App UI modules. Transitional bridge: this document is still a classic
+     script, so the module graph is loaded here and the one helper the classic
+     code still needs is handed across. It goes away when the shell itself
+     becomes a module. -->
+<script type="module">
+  import { iconForFile } from '/ui/file-tree.js';
+  window.iconForFile = iconForFile;
+</script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/highlight.min.js"></script>
 <script src="/vendor/markdown-it.min.js"></script>
@@ -3313,7 +3312,7 @@
                     placeholder="Search files…" spellcheck="false" autocomplete="off" />
                   <span class="file-search-clear hide" id="file-search-clear" title="Clear">×</span>
                 </div>
-                <div class="file-tree" id="file-tree"></div>
+                <ax-file-tree id="file-tree"></ax-file-tree>
                 <!-- Source Control view — the agent's changes, live. -->
                 <div class="git-view hide" id="git-view">
                   <div class="git-bar">
@@ -9807,7 +9806,9 @@ function openCockpit(s) {
   $('#file-tabs').innerHTML = '';
   $('#file-viewer').innerHTML = '<div class="empty small">Select a file to view</div>';
   updateFilesEditor();       // editor collapsed until a file/diff is opened
-  loadFileTree('', $('#file-tree'));
+  const _tree = $('#file-tree');
+  if (_tree) { _tree.session = s.id; _tree.selected = ''; }
+  refreshFileTree();
   sessionLatticeBuild(s);   // no-ops (lattice pane is gone) but still emits status frames
   renderSessionActive(s);
   populateSessionModelPicker(s);
@@ -10470,215 +10471,49 @@ function teardownXterms() {
   S.xterms.clear();
 }
 
-// ── File tree + viewer ──
+// ── File tree ──
 //
-// File icons are rendered via the vendored @vscode/codicons font.  The
-// table maps a file extension (lowercase, no dot) to a codicon name plus
-// a brand-palette tint class.  Unknown files fall through to `file`.
-const FILE_ICONS = {
-  // Rust / systems
-  rs: ['file-code', 'tint-jade'],
-  toml: ['settings-gear', 'tint-bronze'], cargo: ['settings-gear', 'tint-bronze'],
-  // Web
-  js: ['file-code', 'tint-bronze'], mjs: ['file-code', 'tint-bronze'], cjs: ['file-code', 'tint-bronze'],
-  ts: ['file-code', 'tint-blue'], tsx: ['file-code', 'tint-blue'],
-  jsx: ['file-code', 'tint-bronze'],
-  html: ['file-code', 'tint-bronze'], htm: ['file-code', 'tint-bronze'],
-  css: ['file-code', 'tint-blue'], scss: ['file-code', 'tint-blue'], sass: ['file-code', 'tint-blue'], less: ['file-code', 'tint-blue'],
-  svg: ['symbol-color', 'tint-jade'],
-  // Data
-  json: ['json', 'tint-bronze'],
-  yaml: ['file', 'tint-mute'], yml: ['file', 'tint-mute'],
-  csv: ['table', 'tint-mute'],
-  // Markdown / docs
-  md: ['markdown', 'tint-jade'], markdown: ['markdown', 'tint-jade'],
-  txt: ['file-text', 'tint-mute'],
-  // Languages
-  py: ['file-code', 'tint-blue'],
-  go: ['file-code', 'tint-blue'],
-  java: ['file-code', 'tint-bronze'],
-  c: ['file-code', 'tint-mute'], h: ['file-code', 'tint-mute'],
-  cpp: ['file-code', 'tint-mute'], cc: ['file-code', 'tint-mute'], cxx: ['file-code', 'tint-mute'], hpp: ['file-code', 'tint-mute'],
-  sh: ['terminal', 'tint-mute'], bash: ['terminal', 'tint-mute'],
-  sql: ['database', 'tint-blue'],
-  xml: ['file-code', 'tint-mute'],
-  // Shell / config
-  env: ['settings-gear', 'tint-mute'],
-  gitignore: ['file', 'tint-mute'], dockerfile: ['file', 'tint-blue'],
-  // Locks / freeze
-  lock: ['lock', 'tint-mute'],
-  // Images
-  png: ['file-media', 'tint-jade'], jpg: ['file-media', 'tint-jade'],
-  jpeg: ['file-media', 'tint-jade'], gif: ['file-media', 'tint-jade'],
-  webp: ['file-media', 'tint-jade'], ico: ['file-media', 'tint-jade'],
-  // PDFs / archives
-  pdf: ['file-pdf', 'tint-bronze'],
-  zip: ['file-zip', 'tint-mute'], tar: ['file-zip', 'tint-mute'], gz: ['file-zip', 'tint-mute'],
-};
+// The tree itself is <ax-file-tree> (see /ui/file-tree.js): a shadow-DOM
+// component that loads folders on demand, filters, and reports `file-open`
+// rather than opening anything itself. What stays here is the wiring — which
+// session it shows, what happens when a row is activated, and the search input
+// that drives its `filter` attribute.
 
-function iconForFile(name) {
-  const lower = name.toLowerCase();
-  // Special-case some filenames that have no extension.
-  if (lower === 'dockerfile') return ['file', 'tint-blue'];
-  if (lower === 'license' || lower === 'license.md') return ['law', 'tint-mute'];
-  if (lower === 'readme.md' || lower === 'readme') return ['book', 'tint-bronze'];
-  const dotIdx = lower.lastIndexOf('.');
-  const ext = dotIdx >= 0 ? lower.slice(dotIdx + 1) : '';
-  return FILE_ICONS[ext] || ['file', 'tint-mute'];
-}
+/** Re-read the tree from disk. Called whenever the project changes underneath. */
+function refreshFileTree() { $('#file-tree')?.reload?.(); }
 
-// Render a single tree node row.  Returns the row element.  `e` is the
-// backend entry `{ name, path, kind }`.
-function buildTreeNode(e) {
-  const node = el('div', 'ftn');
-  if (e.kind === 'dir') {
-    const chev = el('i', 'codicon codicon-chevron-right ftn-chev', '');
-    const ico  = el('i', 'codicon codicon-folder ftn-ico tint-bronze', '');
-    const name = el('span', 'ftn-name', e.name);
-    node.appendChild(chev); node.appendChild(ico); node.appendChild(name);
-  } else {
-    const chevSlot = el('span', 'ftn-chev'); // empty spacer so files align with folders
-    const [iconName, tint] = iconForFile(e.name);
-    const ico  = el('i', 'codicon codicon-' + iconName + ' ftn-ico ' + tint, '');
-    const name = el('span', 'ftn-name', e.name);
-    node.appendChild(chevSlot); node.appendChild(ico); node.appendChild(name);
-  }
-  return node;
-}
-
-async function loadFileTree(relPath, container) {
-  container.innerHTML = '';
-  let entries = [];
-  try {
-    entries = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/tree'
-      + (relPath ? '?path=' + encodeURIComponent(relPath) : '')).then(r => r.json());
-  } catch {}
-  if (!Array.isArray(entries)) entries = [];
-  if (!entries.length && !relPath) {
-    container.appendChild(el('div', 'file-tree-empty', 'Empty directory'));
-    return;
-  }
-  entries.forEach(e => {
-    const node = buildTreeNode(e);
-    if (e.kind === 'dir') {
-      const kids = el('div', 'ftn-kids hide');
-      const chev = node.querySelector('.ftn-chev');
-      const ico  = node.querySelector('.ftn-ico');
-      let loaded = false;
-      node.addEventListener('click', async () => {
-        const willOpen = kids.classList.contains('hide');
-        kids.classList.toggle('hide', !willOpen);
-        if (chev) chev.classList.toggle('open', willOpen);
-        if (ico)  ico.className = 'codicon codicon-' + (willOpen ? 'folder-opened' : 'folder') + ' ftn-ico tint-bronze';
-        if (willOpen && !loaded) { loaded = true; await loadFileTree(e.path, kids); }
-      });
-      const wrap = el('div');
-      wrap.appendChild(node); wrap.appendChild(kids);
-      container.appendChild(wrap);
-    } else {
-      node.addEventListener('click', () => {
-        $$('.ftn.sel').forEach(n => n.classList.remove('sel'));
-        node.classList.add('sel');
-        openFile(e.path);
-      });
-      container.appendChild(node);
-    }
-  });
-}
-
-// ── Tree filter (search-as-you-type) ──
-//
-// As the user types in the file-search input we walk every loaded tree
-// node and hide rows whose name doesn't contain the query (case
-// insensitive, simple substring). Parent folders containing at least
-// one match are auto-expanded so the hits are visible.
-function applyTreeFilter(query) {
-  const tree = $('#file-tree'); if (!tree) return;
-  const clearBtn = $('#file-search-clear');
-  if (clearBtn) clearBtn.classList.toggle('hide', !query);
-  const q = query.trim().toLowerCase();
-  // Reset to default visibility on empty query.
-  if (!q) {
-    tree.querySelectorAll('.ftn').forEach(n => n.classList.remove('hide'));
-    tree.querySelectorAll('.ftn-name').forEach(n => { n.innerHTML = escHtml(n.textContent); });
-    tree.classList.remove('no-matches');
-    return;
-  }
-  // For each name span: highlight match, set parent .ftn visibility,
-  // and expand parent folders that contain hits.
-  let totalMatches = 0;
-  const wraps = tree.children;
-  function walk(container) {
-    let hits = 0;
-    const rows = Array.from(container.children);
-    rows.forEach(rowOrWrap => {
-      const node = rowOrWrap.classList && rowOrWrap.classList.contains('ftn')
-        ? rowOrWrap
-        : rowOrWrap.querySelector(':scope > .ftn');
-      if (!node) return;
-      const kids = rowOrWrap.querySelector(':scope > .ftn-kids');
-      const nameEl = node.querySelector('.ftn-name');
-      const raw = nameEl ? nameEl.textContent : '';
-      const isDir = !!kids;
-      if (isDir) {
-        const myHit = raw.toLowerCase().includes(q) ? 1 : 0;
-        const childHits = kids ? walk(kids) : 0;
-        const visible = myHit > 0 || childHits > 0;
-        node.classList.toggle('hide', !visible);
-        // Auto-expand when there's at least one match below.
-        if (kids && childHits > 0 && kids.classList.contains('hide')) {
-          kids.classList.remove('hide');
-          const chev = node.querySelector('.ftn-chev');
-          if (chev) chev.classList.add('open');
-        }
-        if (nameEl) nameEl.innerHTML = myHit
-          ? highlightMatch(raw, q) : escHtml(raw);
-        hits += visible ? 1 : 0;
-      } else {
-        const match = raw.toLowerCase().includes(q);
-        node.classList.toggle('hide', !match);
-        if (nameEl) nameEl.innerHTML = match ? highlightMatch(raw, q) : escHtml(raw);
-        if (match) hits += 1;
-      }
-    });
-    return hits;
-  }
-  totalMatches = walk(tree);
-  tree.classList.toggle('no-matches', totalMatches === 0);
-}
-
-function highlightMatch(text, q) {
-  const lower = text.toLowerCase();
-  const idx = lower.indexOf(q);
-  if (idx < 0) return escHtml(text);
-  return escHtml(text.slice(0, idx))
-    + '<span class="ftn-match">' + escHtml(text.slice(idx, idx + q.length)) + '</span>'
-    + escHtml(text.slice(idx + q.length));
-}
-
-// Wire the search input + clear button once the DOM exists.
-(function initFileSearchOnce() {
+(function initFileTreeOnce() {
   function attach() {
-    const input = $('#file-search-input'); if (!input) return;
-    if (input._wired) return; input._wired = true;
-    input.addEventListener('input', () => applyTreeFilter(input.value));
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { input.value = ''; applyTreeFilter(''); input.blur(); }
-    });
-    const clearBtn = $('#file-search-clear');
-    if (clearBtn) clearBtn.addEventListener('click', () => {
-      input.value = ''; applyTreeFilter(''); input.focus();
-    });
+    const tree = $('#file-tree'); if (!tree || tree._wired) return;
+    tree._wired = true;
+
+    // The component decides nothing about what a file opens into; the shell
+    // does. That is what lets the same tree feed the editor, a diff, or a
+    // preview without knowing any of them exist.
+    tree.addEventListener('file-open', (e) => openFile(e.detail.path));
+
+    const input = $('#file-search-input');
+    if (input && !input._wired) {
+      input._wired = true;
+      const clearBtn = $('#file-search-clear');
+      const setFilter = (v) => {
+        tree.filter = v;
+        if (clearBtn) clearBtn.classList.toggle('hide', !v);
+      };
+      input.addEventListener('input', () => setFilter(input.value));
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { input.value = ''; setFilter(''); input.blur(); }
+      });
+      if (clearBtn) clearBtn.addEventListener('click', () => {
+        input.value = ''; setFilter(''); input.focus();
+      });
+    }
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', attach);
   } else attach();
 })();
 
-// ── Quick-open (Ctrl/Cmd+P) ──
-//
-// Fuzzy filename picker for the active session. Flat-list crawl of the
-// backend `/tree` endpoint, cached per session and rebuilt on first use
 // (or after refresh). Subsequence + substring scoring.
 S.quickOpen = { index: null, indexFor: null, building: false };
 
@@ -11294,7 +11129,7 @@ function sessionToolResult(d) {
   // A write changed the project — refresh the file tree and re-render any
   // open file that just changed (which makes the Preview iframe auto-reload).
   if (!d.is_error && (d.name === 'write_file' || d.name === 'edit_file' || d.name === 'bash')) {
-    loadFileTree('', $('#file-tree'));
+    refreshFileTree();
     refreshGitPane(); // the agent changed files — update Source Control live
     if (d.name === 'write_file' || d.name === 'edit_file') {
       const edited = d.result && d.result.path;
@@ -11614,7 +11449,7 @@ async function gitDiscard(path) {
       body: JSON.stringify({ path }),
     });
     await refreshGitPane();
-    loadFileTree('', $('#file-tree'));
+    refreshFileTree();
     reloadOpenFileIfMatch(path);
   } catch (e) { toast('Discard failed', String(e), 'err'); }
 }
@@ -11671,7 +11506,7 @@ async function gitCheckout(ref) {
     const badge = $('#git-badge'); if (badge) { const n = (st.files||[]).length; badge.textContent = String(n); badge.classList.toggle('hide', n === 0); }
     syncBranchSelect(st.branch);
     refreshOpenDiff();
-    loadFileTree('', $('#file-tree'));
+    refreshFileTree();
     toast('Switched branch', ref, 'ok');
   } catch (e) {
     toast('Checkout failed', String(e), 'err');
@@ -11979,7 +11814,7 @@ async function keepActiveVariant() {
     collapseVariantTurn(i);
     stopThreadVariantPoll();
     refreshGitPane();
-    loadFileTree('', $('#file-tree'));
+    refreshFileTree();
     setCockpitLive('done', 'done');
     $('#cockpit-status').textContent = 'kept option ' + (i + 1);
   } catch (e) { toast('Keep failed', String(e), 'err'); tv.keepBtn.disabled = false; }
@@ -13800,7 +13635,7 @@ function handleWsFrame(d) {
         $('#cockpit-status').textContent =
           'done · ' + (d.input_tokens || 0) + ' in / ' + (d.output_tokens || 0) + ' out';
         setCockpitLive('done', 'done');
-        loadFileTree('', $('#file-tree'));
+        refreshFileTree();
         refreshGitPane();
         appendChangeCard();   // the agent's edits, as a card in the flow
         if (window.hljs) {
