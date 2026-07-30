@@ -139,6 +139,27 @@ pub async fn axo_tap_script() -> Response {
 #[folder = "static/vendor/"]
 struct VendorAssets;
 
+/// The app's own UI modules — `ax-*` custom elements and the token sheet.
+///
+/// Separate from `vendor/` (third-party) and from `packages/lattice` (a
+/// published library with its own release cycle). Embedded the same way, so
+/// nested paths work and there is no build step: the browser imports these as a
+/// native ES module graph.
+#[derive(rust_embed::RustEmbed)]
+#[folder = "static/ui/"]
+struct UiAssets;
+
+pub async fn ui_asset(Path(file): Path<String>) -> Response {
+    let Some(content) = UiAssets::get(&file) else {
+        return (StatusCode::NOT_FOUND, "ui asset not found").into_response();
+    };
+    let ctype = mime_guess::from_path(&file)
+        .first_or_octet_stream()
+        .as_ref()
+        .to_string();
+    ([(header::CONTENT_TYPE, ctype)], content.data.into_owned()).into_response()
+}
+
 pub async fn vendor_asset(Path(file): Path<String>) -> Response {
     let Some(content) = VendorAssets::get(&file) else {
         return (StatusCode::NOT_FOUND, "vendor asset not found").into_response();

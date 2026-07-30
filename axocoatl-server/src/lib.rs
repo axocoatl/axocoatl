@@ -32,6 +32,7 @@ pub fn build_router(
         .route("/app", get(routes::app_page))
         .route("/lattice/{file}", get(routes::lattice_asset))
         .route("/vendor/{*file}", get(routes::vendor_asset))
+        .route("/ui/{*file}", get(routes::ui_asset))
         .route("/health", get(routes::health))
         .route("/health/ready", get(routes::health_ready))
         .route("/health/live", get(routes::health_live))

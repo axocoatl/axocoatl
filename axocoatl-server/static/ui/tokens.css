@@ -1,0 +1,145 @@
+/*
+ * Axocoatl design tokens — the single source of truth for the app's surface.
+ *
+ * Lifted verbatim out of index.html so the shell and every component read the
+ * same values. Custom properties inherit through shadow boundaries, so an
+ * `ax-*` element gets the brand for free by writing `var(--accent)`; nothing
+ * has to be passed in or re-declared per component.
+ *
+ * Colour, elevation and focus were already here and are unchanged. The spacing,
+ * type, radius and motion scales at the bottom are new — the app had no scale
+ * for any of them, which is why spacing landed on 5/6/7/9/13px and a single
+ * font size did the work of a hierarchy.
+ */
+
+:root {
+  /* ── Dark theme (default) — pure neutral grays.
+     Brand neutrals Ink/Stone have a blue undertone that reads as
+     "purple-blue" on screen — explicitly rejected by user.
+     Scale mirrors Apple's macOS dark Material: black canvas with
+     progressively lighter neutral grays for surfaces. Zero hue. ── */
+  --bg:           #000000;   /* pure black canvas */
+  --bg-2:         #0A0A0A;   /* sidebars */
+  --bg-3:         #141414;   /* input wells, code blocks */
+  --panel:        #1C1C1E;   /* card / panel surface */
+  --panel-2:      #232325;   /* raised panel — popovers */
+  --border:       #2C2C2E;
+  --border-strong:#3A3A3C;
+  --text:         #ECECEC;   /* neutral off-white, no warm/cool cast */
+  --muted:        #9A9A9A;
+  --muted-2:      #6A6A6A;
+
+  /* Axocoatl brand palette — single source of truth. */
+  --axo-jade:        #3E7C5C;
+  --axo-bronze:      #B5904A;
+  --axo-blue:        #3FA9C8;
+  /* Brighter "glow" siblings — used by node pulses, active states,
+     and any "this is firing right now" affordance. Same hue, more
+     luminance so they read on the ink background. */
+  --axo-jade-glow:   #4FCB8E;
+  --axo-bronze-glow: #E8C275;
+  --axo-blue-glow:   #6FD3EE;
+  /* Brand-color rgb triples — used in rgba(...) for tints, chip
+     backgrounds, and subtle hovers. These match the base hex.
+     For *halos* (glowing pulses, active rings) use *-glow-rgb. */
+  --axo-jade-rgb:    62, 124, 92;
+  --axo-bronze-rgb:  181, 144, 74;
+  --axo-blue-rgb:    63, 169, 200;
+  --axo-jade-glow-rgb:   79, 203, 142;
+  --axo-bronze-glow-rgb: 232, 194, 117;
+  --axo-blue-glow-rgb:   111, 211, 238;
+
+  /* Semantic accents — aliased to brand colors so the 80+ existing
+     --accent / --accent-2 callsites cascade automatically. */
+  --accent:   var(--axo-jade);
+  --accent-2: var(--axo-blue);
+
+  /* Status colors — tuned for the ink background. */
+  --warn: #E8B25A;   /* warmer, in family with bronze */
+  --err:  #E26A6A;
+  --ok:   #5BCC8A;   /* derived from jade-glow */
+
+  /* Team palette — all brand-derived, no off-brand hues. */
+  --team-eng:  var(--axo-jade);     /* Engineering = primary */
+  --team-res:  var(--axo-blue);     /* Research = circuit */
+  --team-ops:  var(--axo-bronze);   /* Ops = metalwork */
+  --team-cust: var(--ok);           /* Customer = success-green (semantic) */
+
+  /* Elevation tokens — Apple-feel layered shadows. */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.30);
+  --shadow-md: 0 2px 8px rgba(0,0,0,.40);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,.50);
+  /* Focus ring — jade at low alpha. */
+  --focus-ring: 0 0 0 3px rgba(var(--axo-jade-glow-rgb), .35);
+}
+
+[data-theme="light"] {
+  --bg:           #F7F1E3;   /* between parchment and vellum — soft canvas */
+  --bg-2:         #F4ECDA;   /* parchment proper — sidebars */
+  --bg-3:         #ECE3CB;   /* darker parchment — input wells */
+  --panel:        #FFFFFF;   /* vellum — cards on parchment */
+  --panel-2:      #FBF7EC;   /* tinted vellum — raised panels */
+  --border:       #DCD2B6;
+  --border-strong:#B5A88A;
+  --text:         #1B2027;   /* stone — body text */
+  --muted:        #6B6555;
+  --muted-2:      #968F7A;
+
+  /* Brand colors — slightly darkened so they pass contrast on the
+     light backdrop. Same identity, dialed for readability. */
+  --axo-jade:        #2F6248;
+  --axo-bronze:      #8E6E36;
+  --axo-blue:        #2E8BA8;
+  --axo-jade-glow:   #3E9A6F;
+  --axo-bronze-glow: #B98B45;
+  --axo-blue-glow:   #4FB0CD;
+  --axo-jade-rgb:        47, 98, 72;
+  --axo-bronze-rgb:      142, 110, 54;
+  --axo-blue-rgb:        46, 139, 168;
+  --axo-jade-glow-rgb:   62, 154, 111;
+  --axo-bronze-glow-rgb: 185, 139, 69;
+  --axo-blue-glow-rgb:   79, 176, 205;
+
+  --accent:   var(--axo-jade);
+  --accent-2: var(--axo-blue);
+
+  --warn: #B57820;
+  --err:  #C04141;
+  --ok:   #2E8A4A;
+
+  --team-eng:  var(--axo-jade);
+  --team-res:  var(--axo-blue);
+  --team-ops:  var(--axo-bronze);
+  --team-cust: var(--ok);
+
+  --shadow-sm: 0 1px 2px rgba(30,40,60,.08);
+  --shadow-md: 0 2px 10px rgba(30,40,60,.12);
+  --shadow-lg: 0 12px 32px rgba(30,40,60,.18);
+  --focus-ring: 0 0 0 3px rgba(var(--axo-jade-rgb), .30);
+}
+
+/* ── Spacing — a 4px rhythm. Everything that positions anything picks from this
+   ladder; ad-hoc pixel values are how a layout stops feeling deliberate. ── */
+:root {
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 64px;
+
+  /* ── Type — one ramp, so size carries hierarchy. `body` is the default, `sm`
+     is secondary text, `xs` is labels and metadata only. Below xs is
+     unreadable and means the layout is too dense. ── */
+  --fs-xs: 11px; --fs-sm: 12.5px; --fs-body: 13.5px;
+  --fs-lg: 16px; --fs-xl: 20px;   --fs-2xl: 28px;
+  --lh-tight: 1.25; --lh-body: 1.55;
+  --fw-normal: 400; --fw-medium: 500; --fw-bold: 600;
+  --font-sans: 'Space Grotesk', ui-sans-serif, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ── Radius ── */
+  --r-sm: 4px; --r-md: 6px; --r-lg: 10px; --r-xl: 14px; --r-pill: 999px;
+
+  /* ── Motion — short enough to stay out of the way, long enough to be seen.
+     State change in a multi-agent view is the point of the UI; an instant swap
+     reads as a glitch rather than as something happening. ── */
+  --dur-fast: 90ms; --dur-base: 160ms; --dur-slow: 260ms;
+  --ease: cubic-bezier(.2, 0, .2, 1);
+}
