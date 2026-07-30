@@ -162,8 +162,9 @@
      tab icons stacked, theme + overflow at the bottom.  Clicking the
      mark expands the strip to 180 px so each icon gets a label next to
      it (VS Code-style activity-bar + label rail). */
-  .app { display: grid; grid-template-columns: 40px 1fr; grid-template-rows: 1fr; grid-template-areas: 'strip main'; height: 100vh; min-height: 0; transition: grid-template-columns .18s ease; }
-  body.strip-expanded .app { grid-template-columns: 180px 1fr; }
+  .app { display: grid; grid-template-columns: 40px auto 1fr; grid-template-rows: 1fr; grid-template-areas: 'strip rail main'; height: 100vh; min-height: 0; transition: grid-template-columns .18s ease; }
+  ax-rail { grid-area: rail; }
+  body.strip-expanded .app { grid-template-columns: 180px auto 1fr; }
   body.side-mini   { --side-w: 56px; }
   body.side-hidden { --side-w: 0; }
   body.side-mini .logo-name, body.side-mini .logo-tag, body.side-mini .logo-ver { display: none; }
@@ -2848,6 +2849,7 @@
      becomes a module. -->
 <script type="module">
   import { iconForFile } from '/ui/file-tree.js';
+  import '/ui/rail.js';
   window.iconForFile = iconForFile;
 </script>
 <link rel="stylesheet" href="/vendor/xterm.css">
@@ -2862,16 +2864,9 @@
        top doubles as the expand toggle (click to widen the strip + show
        labels next to each icon).  Status info (daemon/agents/tokens)
        lives in the .status-pearls overlay inside .main rather than up here. -->
+  <ax-rail id="rail"></ax-rail>
   <div class="strip">
     <div class="strip-mark" id="strip-mark" title="Toggle labels"><span class="strip-icon"><img src="/brand/mark.png" alt="Axocoatl" /></span><span class="strip-mark-label">Axocoatl</span></div>
-    <div class="strip-item" data-tab="chat"            title="Chat"><span class="strip-icon">✦</span><span class="strip-label">Chat</span></div>
-    <div class="strip-item" data-tab="files"           title="Files"><span class="strip-icon">▤</span><span class="strip-label">Files</span></div>
-    <div class="strip-item active" data-tab="sessions" title="Sessions"><span class="strip-icon">▣</span><span class="strip-label">Sessions</span></div>
-    <div class="strip-item" data-tab="automations"     title="Automations"><span class="strip-icon">⟳</span><span class="strip-label">Automations</span></div>
-    <div class="strip-item" data-tab="studio"          title="Studio"><span class="strip-icon">◉</span><span class="strip-label">Studio</span></div>
-    <div class="strip-item" data-tab="agents"          title="Agents"><span class="strip-icon">⌬</span><span class="strip-label">Agents</span></div>
-    <div class="strip-item" data-tab="skills"          title="Skills"><span class="strip-icon">◈</span><span class="strip-label">Skills</span></div>
-    <div class="strip-item" data-tab="mcp"             title="MCP servers"><span class="strip-icon">◇</span><span class="strip-label">MCP servers</span></div>
     <div class="strip-spacer"></div>
     <div class="strip-foot">
       <a class="strip-item" href="https://docs.axocoatl.ai" target="_blank" rel="noopener" title="Documentation"><span class="strip-icon">◫</span><span class="strip-label">Docs</span></a>
@@ -9808,6 +9803,9 @@ function openCockpit(s) {
   updateFilesEditor();       // editor collapsed until a file/diff is opened
   const _tree = $('#file-tree');
   if (_tree) { _tree.session = s.id; _tree.selected = ''; }
+  const _rail = $('#rail');
+  if (_rail) { _rail.current = s.id; _rail.refresh(); }
+  try { localStorage.setItem(LAST_SESSION_KEY, s.id); } catch {}
   refreshFileTree();
   sessionLatticeBuild(s);   // no-ops (lattice pane is gone) but still emits status frames
   renderSessionActive(s);
@@ -10481,6 +10479,53 @@ function teardownXterms() {
 
 /** Re-read the tree from disk. Called whenever the project changes underneath. */
 function refreshFileTree() { $('#file-tree')?.reload?.(); }
+
+// ── Rail ──
+//
+// Navigation is one kind of thing now: sessions, grouped by the directory they
+// are anchored to. Opening one goes through the same openCockpit the finder
+// used, so there is exactly one path into a session.
+const LAST_SESSION_KEY = 'axo.session.last.v1';
+
+/** Open the session you were last in, if it still exists. */
+async function restoreLastSession() {
+  const id = localStorage.getItem(LAST_SESSION_KEY);
+  if (!id) return false;
+  try {
+    // There is no GET for a single session; the list is the source.
+    const list = await fetch('/api/sessions').then(r => r.json());
+    const s = (Array.isArray(list) ? list : []).find(x => x.id === id);
+    if (!s) return false;
+    openCockpit(s);
+    return true;
+  } catch { return false; }
+}
+
+(function initRailOnce() {
+  function attach() {
+    const rail = $('#rail'); if (!rail || rail._wired) return;
+    rail._wired = true;
+    rail.addEventListener('session-open', async (e) => {
+      const s = (S.sessions || []).find(x => x.id === e.detail.id);
+      if (s) { openCockpit(s); return; }
+      try {
+        const list = await fetch('/api/sessions').then(r => r.json());
+        const found = (Array.isArray(list) ? list : []).find(x => x.id === e.detail.id);
+        if (found) openCockpit(found);
+      } catch {}
+    });
+    rail.addEventListener('settings-open', () => switchTab('agents'));
+    // Land in work rather than on a browser.
+    restoreLastSession();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', attach);
+  } else attach();
+})();
+
+/** Mirror live lane state onto the rail so a stuck attempt is visible from
+ *  anywhere, not only from inside the session running it. */
+function railAttempts(sessionId, states) { $('#rail')?.setAttempts?.(sessionId, states); }
 
 (function initFileTreeOnce() {
   function attach() {
