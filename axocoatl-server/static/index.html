@@ -2850,6 +2850,7 @@
 <script type="module">
   import { iconForFile } from '/ui/file-tree.js';
   import '/ui/rail.js';
+  import '/ui/launcher.js';
   // Boot diagnostics: an exception during init() silently strands the app —
   // the live socket never opens and nothing says why. Record them where they
   // can be read instead of vanishing into an empty console.
@@ -2871,6 +2872,7 @@
        labels next to each icon).  Status info (daemon/agents/tokens)
        lives in the .status-pearls overlay inside .main rather than up here. -->
   <ax-rail id="rail"></ax-rail>
+  <ax-launcher id="launcher"></ax-launcher>
   <div class="strip">
     <div class="strip-mark" id="strip-mark" title="Toggle labels"><span class="strip-icon"><img src="/brand/mark.png" alt="Axocoatl" /></span><span class="strip-mark-label">Axocoatl</span></div>
     <div class="strip-spacer"></div>
@@ -10506,6 +10508,46 @@ async function restoreLastSession() {
     return true;
   } catch { return false; }
 }
+
+// ── Module launcher ────────────────────────────────────────────────────
+//
+// Opening a pane used to mean going to a menu and flipping a switch, which is a
+// settings gesture. It is an action you take mid-thought, so it lives on a
+// shortcut. The launcher lists every module with its binding, because a
+// shortcut nobody can discover is one nobody uses.
+const MODULE_KEYS = { p: 'files', a: 'stream', t: 'terminal', b: 'browser', g: 'trace' };
+
+function openModule(id) {
+  if (!SURFACES[id]) return;
+  const order = (S.cockpitLayout.paneOrder || DEFAULT_PANE_ORDER);
+  // Already on? Focus is what you meant; turning it off would be a surprise.
+  if (!order.includes(id)) toggleSurface(id, true);
+  renderPanesMenu();
+  syncLauncherState();
+}
+
+function syncLauncherState() {
+  $('#launcher')?.setOpenModules?.(S.cockpitLayout.paneOrder || DEFAULT_PANE_ORDER);
+}
+
+(function initLauncherOnce() {
+  function attach() {
+    const l = $('#launcher'); if (!l || l._wired) return;
+    l._wired = true;
+    l.addEventListener('module-open', (e) => openModule(e.detail.id));
+    document.addEventListener('keydown', (e) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      // Shift+P lists them; the bare letters go straight there.
+      if (k === 'p' && e.shiftKey) { e.preventDefault(); syncLauncherState(); l.show(); return; }
+      if (e.shiftKey || e.altKey) return;
+      if (MODULE_KEYS[k]) { e.preventDefault(); openModule(MODULE_KEYS[k]); }
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', attach);
+  } else attach();
+})();
 
 (function initRailOnce() {
   function attach() {
