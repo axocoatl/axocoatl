@@ -2850,6 +2850,12 @@
 <script type="module">
   import { iconForFile } from '/ui/file-tree.js';
   import '/ui/rail.js';
+  // Boot diagnostics: an exception during init() silently strands the app —
+  // the live socket never opens and nothing says why. Record them where they
+  // can be read instead of vanishing into an empty console.
+  window.__bootErrors = [];
+  addEventListener('error', (e) => window.__bootErrors.push(String(e.message)));
+  addEventListener('unhandledrejection', (e) => window.__bootErrors.push('reject: ' + (e.reason?.message || e.reason)));
   window.iconForFile = iconForFile;
 </script>
 <link rel="stylesheet" href="/vendor/xterm.css">
@@ -13562,7 +13568,66 @@ function setConnDot(ok) {
   if (el) { el.classList.toggle('on', !!ok); el.classList.toggle('off', !ok); }
 }
 
+// ── Attempts, across every session ─────────────────────────────────────
+//
+// A run key is `{session}#{i}`, so a lane frame can be attributed to its session
+// without that session being the one on screen. That is the whole point: the
+// failure of parallel work is not being unable to see it, it is not noticing one
+// stopped — and the one that stopped is usually in a session you navigated away
+// from.
+const _attempts = new Map();   // session id -> Map(lane index -> state)
+
+/** Split `{session}#{n}` into its parts, or null if it is not a lane key. */
+function laneKeyParts(key) {
+  const i = String(key || '').lastIndexOf('#');
+  if (i < 0) return null;
+  const n = parseInt(key.slice(i + 1), 10);
+  return Number.isInteger(n) ? { session: key.slice(0, i), lane: n } : null;
+}
+
+function noteAttempt(key, state) {
+  const p = laneKeyParts(key); if (!p) return;
+  if (!_attempts.has(p.session)) _attempts.set(p.session, new Map());
+  const m = _attempts.get(p.session);
+  // "needs you" outranks live activity: an attempt can keep emitting frames
+  // while it waits, and losing the blocked state to a later token is exactly
+  // the miss this exists to prevent. A verdict clears it — that is a decision.
+  const settled = state === 'pass' || state === 'fail';
+  if (settled || state === 'need' || m.get(p.lane) !== 'need') m.set(p.lane, state);
+  railAttempts(p.session, [...m.entries()].sort((a, c) => a[0] - c[0]).map((e) => e[1]));
+}
+
+/** Drop a session's attempts — a fresh fan-out replaces the whole set. */
+function resetAttempts(sessionId) {
+  _attempts.delete(sessionId);
+  railAttempts(sessionId, []);
+}
+
 function handleWsFrame(d) {
+  // Attribute every lane-scoped frame before the per-kind handling, so the rail
+  // reflects sessions the cockpit is not currently showing.
+  switch (d.kind) {
+    case 'lane-started': noteAttempt(d.run || d.workflow, 'run'); break;
+    case 'token':
+    case 'reasoning':
+    case 'tool-call': noteAttempt(d.workflow, 'run'); break;
+    case 'session-error': noteAttempt(d.session, 'fail'); break;
+    case 'mcp-approval-required': if (d.run) noteAttempt(d.run, 'need'); break;
+    case 'mcp-approval-resolved':
+      // Resolved elsewhere; the next frame from that lane restores 'run'.
+      break;
+    case 'lane-verified': {
+      const sess = d.session;
+      if (sess) {
+        if (!_attempts.has(sess)) _attempts.set(sess, new Map());
+        _attempts.get(sess).set(d.index, d.passed && d.changed_files > 0 ? 'pass' : 'fail');
+        const m = _attempts.get(sess);
+        railAttempts(sess, [...m.entries()].sort((a, c) => a[0] - c[0]).map((e) => e[1]));
+      }
+      break;
+    }
+  }
+
   switch (d.kind) {
     case 'ready':
     case 'pong':
@@ -13961,14 +14026,21 @@ function renderRunView() {
 
 // ╔══════════════════════════════ Init ══════════════════════════════╗
 async function init() {
-  await refreshStatus();
-  await loadAll();
+  // The live socket comes up FIRST and never waits on anything.
+  //
+  // It used to be opened after two awaited fetches. If either rejected — daemon
+  // mid-restart — init aborted; if either merely *hung*, init stalled with no
+  // error at all, and the app sat there permanently disconnected saying
+  // nothing. The socket reconnects on its own and depends on no data, so
+  // nothing should be able to strand it.
+  connectWs();
+  try { await refreshStatus(); } catch {}
+  try { await loadAll(); } catch {}
   applyStudioMode();
   // Sessions is the default tab. Show it before the WS opens so the first
   // paint is on the page the user actually uses.
   switchTab('sessions');
   refreshTopStats();
-  connectWs();
   setInterval(refreshStatus, 5000);
   setInterval(refreshTopStats, 8000);
   setInterval(refreshInterrupts, 3000);  // pending HITL pings
