@@ -1681,6 +1681,8 @@
   /* <ax-file-tree> owns its rows; the shell owns how much room it gets. */
   ax-file-tree { flex: 1; min-height: 0; }
   ax-compare { flex: 1; min-height: 0; }
+  /* The popover hangs above the composer row it belongs to. */
+  .session-input-row { position: relative; }
   ax-file-tree.hide { display: none; }
   .file-viewer { flex: 1; overflow: auto; padding: 0; }
   .file-viewer pre { margin: 0; padding: 10px 12px; font-size: 12px; }
@@ -2843,6 +2845,7 @@
   }
 </style>
 <link rel="stylesheet" href="/vendor/highlight.css">
+<link rel="stylesheet" href="/ui/tokens.css">
 <link rel="stylesheet" href="/vendor/codicons/codicon.css">
 <!-- App UI modules. Transitional bridge: this document is still a classic
      script, so the module graph is loaded here and the one helper the classic
@@ -2853,6 +2856,7 @@
   import '/ui/rail.js';
   import '/ui/launcher.js';
   import '/ui/compare.js';
+  import '/ui/fanout.js';
   // Boot diagnostics: an exception during init() silently strands the app —
   // the live socket never opens and nothing says why. Record them where they
   // can be read instead of vanishing into an empty console.
@@ -3375,26 +3379,7 @@
                   <span class="fanout-glyph">⑂</span><span class="fanout-n" id="fanout-n">1</span>
                 </button>
                 <button class="btn" id="session-send">Send</button>
-              </div>
-              <div id="fanout-pop" class="fanout-pop hide">
-                <div class="fp-head">
-                  <span class="fp-title">Explore several ways</span>
-                  <button class="fp-x" id="fanout-pop-x" title="Close">✕</button>
-                </div>
-                <div class="fp-row">
-                  <span class="fp-label">Fan out this prompt</span>
-                  <ax-toggle id="fanout-pop-toggle"></ax-toggle>
-                </div>
-                <div class="fp-row fp-count" id="fanout-count-row">
-                  <span class="fp-label">How many</span>
-                  <div class="fp-stepper">
-                    <button class="fp-step" data-d="-1" title="Fewer">−</button>
-                    <input class="fp-num" id="fanout-count" type="number" min="2" max="100" value="3"
-                           inputmode="numeric" aria-label="Number of variants">
-                    <button class="fp-step" data-d="1" title="More">+</button>
-                  </div>
-                </div>
-                <div class="fp-hint" id="fanout-hint"></div>
+                <ax-fanout id="fanout"></ax-fanout>
               </div>
             </div>
           </div>
@@ -8722,7 +8707,6 @@ function initCockpitChrome() {
   const gbranch = $('#git-branch');
   if (gbranch) gbranch.addEventListener('change', (e) => { gitCheckout(e.target.value); });
   const fanout = $('#fanout-btn'); if (fanout) fanout.addEventListener('click', toggleFanoutPop);
-  wireFanoutPop();
   // The "+ Add to chat" floating bubble now lives inside Monaco — see
   // onMonacoSelectionChange.  We still install a global mousedown
   // listener so a click outside the bubble hides it.
@@ -11656,8 +11640,12 @@ function sendSessionMessage() {
 
   // Fan-out: explore the prompt several ways at once, in the thread. It's a
   // persistent mode — stays on across turns until you switch it off.
-  const fanout = (S.session.fanoutOn && (S.session.fanout || 1) > 1) ? S.session.fanout : 1;
-  if (fanout > 1) { startThreadVariants(fullText, fanout); return; }
+  // Attempts are configured rows now, not a count. The count still drives the
+  // optimistic UI, but what the backend receives is the actual per-attempt
+  // agent and model — otherwise choosing them would be a control that changes
+  // nothing.
+  const laneCfg = (S.session.fanoutOn && S.session.fanoutLanes) || [];
+  if (laneCfg.length > 1) { startThreadVariants(fullText, laneCfg.length, laneCfg); return; }
 
   setThinking($('#session-msgs'), true);
   S.session.streamEl = null;
@@ -11684,21 +11672,15 @@ function sendSessionMessage() {
 // assistant turn. Flip between them; keep the one you like; the rest dissolve.
 // The git worktrees/branches/merge underneath are never named.
 
-// Fan-out is a persistent on/off mode with a user-set count. The backend caps
-// at FANOUT_MAX; we let the user dial all the way there and degrade gracefully.
-const FANOUT_MAX = 100;
+// How many attempts a fresh session offers before you configure them. The
+// ceiling and the per-attempt configuration live in <ax-fanout>.
 const FANOUT_RECOMMENDED = 3;
 
-function clampFanout(n) {
-  n = Math.round(Number(n) || 0);
-  if (!Number.isFinite(n)) n = 2;
-  return Math.max(2, Math.min(FANOUT_MAX, n));
-}
 
 // The composer button: ⑂ N when on (N = the count), ⑂ 1 when off.
 function updateFanoutBtn() {
   const on = !!S.session.fanoutOn;
-  const n = on ? clampFanout(S.session.fanout || FANOUT_RECOMMENDED) : 1;
+  const n = on ? Math.max(2, S.session.fanout || FANOUT_RECOMMENDED) : 1;
   const lbl = $('#fanout-n'); if (lbl) lbl.textContent = String(n);
   const b = $('#fanout-btn');
   if (b) {
@@ -11709,95 +11691,54 @@ function updateFanoutBtn() {
   }
 }
 
-// ── Fan-out config popover ──────────────────────────────────────────────
-function wireFanoutPop() {
-  const x = $('#fanout-pop-x');
-  if (x) x.addEventListener('click', closeFanoutPop);
-  const tog = $('#fanout-pop-toggle');
-  if (tog) tog.addEventListener('change', () => {
-    S.session.fanoutOn = tog.checked;
-    if (S.session.fanoutOn && (S.session.fanout || 0) < 2) S.session.fanout = FANOUT_RECOMMENDED;
-    renderFanoutPop(); updateFanoutBtn();
-  });
-  const num = $('#fanout-count');
-  if (num) {
-    const commit = () => { S.session.fanout = clampFanout(num.value); renderFanoutPop(); updateFanoutBtn(); };
-    num.addEventListener('change', commit);
-    num.addEventListener('blur', commit);
-  }
-  document.querySelectorAll('#fanout-count-row .fp-step').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const d = parseInt(btn.getAttribute('data-d'), 10) || 0;
-      S.session.fanout = clampFanout((S.session.fanout || FANOUT_RECOMMENDED) + d);
-      renderFanoutPop(); updateFanoutBtn();
-    });
-  });
-}
-
-// Sync the popover controls to state.
-function renderFanoutPop() {
-  const on = !!S.session.fanoutOn;
-  const n = clampFanout(S.session.fanout || FANOUT_RECOMMENDED);
-  const tog = $('#fanout-pop-toggle'); if (tog) tog.checked = on;
-  const num = $('#fanout-count'); if (num) num.value = String(n);
-  const row = $('#fanout-count-row'); if (row) row.classList.toggle('off', !on);
-  const hint = $('#fanout-hint');
-  if (hint) {
-    hint.textContent = n > 16
-      ? (n + ' ways at once is a lot — each runs in its own branch, so it works, but expect it to be slow and heavy on local models. Up to ' + FANOUT_MAX + '.')
-      : ('A few ways — 3 or 4 — run comfortably in parallel. You can go up to ' + FANOUT_MAX + '; more than a handful gets slow on local models.');
-  }
-}
+// ── Fan-out control ────────────────────────────────────────────────────
+//
+// The attempts are configured by <ax-fanout> (see /ui/fanout.js): one row per
+// attempt, each choosing its own agent and model. What stays here is the button
+// that opens it and the state it reports.
 
 function toggleFanoutPop() {
-  const pop = $('#fanout-pop');
-  if (!pop) return;
-  if (!pop.classList.contains('hide')) { closeFanoutPop(); return; }
-  renderFanoutPop();
-  pop.classList.remove('hide');
-  positionFanoutPop();
-  setTimeout(() => document.addEventListener('mousedown', closeFanoutPopOutside, { capture: true }), 0);
+  const f = $('#fanout'); if (!f) return;
+  f.open = !f.open;
 }
 
-function closeFanoutPop() {
-  const pop = $('#fanout-pop'); if (pop) pop.classList.add('hide');
-  document.removeEventListener('mousedown', closeFanoutPopOutside, { capture: true });
-}
+function closeFanoutPop() { const f = $('#fanout'); if (f) f.open = false; }
 
-function closeFanoutPopOutside(e) {
-  const pop = $('#fanout-pop'); const btn = $('#fanout-btn');
-  if (!pop) return;
-  if (pop.contains(e.target) || (btn && btn.contains(e.target))) return;
-  closeFanoutPop();
-}
+(function initFanoutOnce() {
+  function attach() {
+    const f = $('#fanout'); if (!f || f._wired) return;
+    f._wired = true;
+    f.enabled = !!S.session.fanoutOn;
+    f.addEventListener('change', (e) => {
+      S.session.fanoutOn = e.detail.enabled;
+      S.session.fanoutLanes = e.detail.lanes;
+      S.session.fanout = e.detail.lanes.length || 1;
+      updateFanoutBtn();
+    });
+    // Clicking away closes it, but not a click on its own button.
+    document.addEventListener('mousedown', (ev) => {
+      if (!f.open) return;
+      const btn = $('#fanout-btn');
+      if (f.contains(ev.target) || ev.composedPath().includes(f) || (btn && btn.contains(ev.target))) return;
+      f.open = false;
+    }, { capture: true });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', attach);
+  } else attach();
+})();
+
 
 // Anchor above the ⑂ button, right-aligned to it, clamped to the viewport.
-function positionFanoutPop() {
-  const pop = $('#fanout-pop'); const btn = $('#fanout-btn');
-  if (!pop || !btn) return;
-  pop.style.visibility = 'hidden';
-  const r = btn.getBoundingClientRect();
-  const pw = pop.offsetWidth || 264;
-  const ph = pop.offsetHeight || 180;
-  const margin = 8;
-  let left = r.right - pw;
-  if (left < margin) left = margin;
-  if (left + pw > window.innerWidth - margin) left = window.innerWidth - pw - margin;
-  let top = r.top - ph - 6;                       // prefer above the composer
-  if (top < margin) top = r.bottom + 6;           // fall back to below
-  pop.style.left = left + 'px';
-  pop.style.top = top + 'px';
-  pop.style.visibility = '';
-}
 
-async function startThreadVariants(input, n) {
+async function startThreadVariants(input, n, lanes) {
   buildVariantTurn(n);                       // optimistic shell
   $('#cockpit-status').textContent = 'exploring ' + n + ' ways…';
   setCockpitLive('live', 'live');
   try {
     const variants = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/variants', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ input, n }),
+      body: JSON.stringify(lanes && lanes.length ? { input, lanes } : { input, n }),
     }).then(r => r.json());
     if (!Array.isArray(variants)) {
       toast('Could not explore', (variants && variants.error) || 'error', 'err');
