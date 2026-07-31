@@ -28,8 +28,6 @@ pub fn build_router(
     let auth_for_mw = auth.clone();
     Router::new()
         .route("/", get(routes::dashboard))
-        .route("/variants", get(routes::variants_page))
-        .route("/app", get(routes::app_page))
         .route("/lattice/{file}", get(routes::lattice_asset))
         .route("/vendor/{*file}", get(routes::vendor_asset))
         .route("/ui/{*file}", get(routes::ui_asset))
