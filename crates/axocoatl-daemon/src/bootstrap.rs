@@ -1114,6 +1114,18 @@ impl AxocoatlDaemon {
     }
 
     /// Rename a session (display name only).
+    pub async fn set_session_check(
+        &self,
+        id: &str,
+        cmd: Option<String>,
+    ) -> Result<Session, DaemonError> {
+        self.session_store
+            .lock()
+            .await
+            .set_check_command(id, cmd)
+            .map_err(|e| DaemonError::Session(e.to_string()))
+    }
+
     pub async fn rename_session(&self, id: &str, new_name: &str) -> Result<Session, DaemonError> {
         self.session_store
             .lock()
@@ -2804,11 +2816,25 @@ impl AxocoatlDaemon {
         /// Test suites are slow; give a lane's check real room before killing it.
         const CHECK_TIMEOUT: Duration = Duration::from_secs(900);
 
-        if check.trim().is_empty() {
-            return Err(DaemonError::Session(
-                "a check command is required to verify variants".to_string(),
-            ));
-        }
+        // An empty request means "use the project's own command", which lives on
+        // the session. Only when neither exists is this actually unanswerable —
+        // guessing here would rule attempts out with a command the project never
+        // runs.
+        let owned;
+        let check = if check.trim().is_empty() {
+            owned = self
+                .get_session(session_id)
+                .await
+                .and_then(|s| s.check_command)
+                .ok_or_else(|| {
+                    DaemonError::Session(
+                        "no check command: set one on the session, or pass one".to_string(),
+                    )
+                })?;
+            owned.as_str()
+        } else {
+            check
+        };
         let session = self
             .get_session(session_id)
             .await

@@ -58,6 +58,28 @@ const CSS = `
 .seg button[aria-pressed="true"] { background: var(--bg-3); color: var(--text); }
 .seg button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .gist { color: var(--muted-2); font-size: var(--fs-xs); margin-left: auto; }
+button.run {
+  background: none; border: 1px solid var(--border-strong); color: var(--text);
+  border-radius: var(--r-md); padding: 3px var(--sp-3); cursor: pointer;
+  font: var(--fw-medium) var(--fs-xs) var(--font-sans); flex-shrink: 0;
+}
+button.run:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button.run:disabled { opacity: .45; cursor: not-allowed; }
+button.run:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* The arbiter, stated. It decides which attempts survive, so it should never be
+   something the user has to guess at or discover by being surprised. */
+.check {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border);
+  font-size: var(--fs-xs); color: var(--muted-2); flex-shrink: 0;
+}
+.check input {
+  flex: 1; min-width: 0; background: var(--bg-3); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 3px var(--sp-2); font: var(--fs-xs) var(--font-mono);
+}
+.check input:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.check.unset { color: var(--warn); }
 .body { flex: 1; overflow: auto; padding: var(--sp-3); min-height: 0; }
 .empty { color: var(--muted-2); font-size: var(--fs-sm); padding: var(--sp-5); text-align: center; }
 
@@ -97,7 +119,10 @@ tr.diverged td.same-as-base { opacity: .45; }
 export class AxCompare extends HTMLElement {
   static get observedAttributes() { return ['session', 'view']; }
 
-  #root; #bar; #body; #gist;
+  #root; #bar; #body; #gist; #check;
+  /** The project's own check command, as the session records it. */
+  #checkCmd = null;
+  #busy = false;
   #results = null;
   #alignment = null;
   #base = 0;
@@ -113,15 +138,21 @@ export class AxCompare extends HTMLElement {
           <button data-view="outcome">Outcome</button>
           <button data-view="route">Route</button>
         </div>
+        <button class="run" data-act="verify" title="Run the project's own checks in every attempt">Run checks</button>
+        <button class="run" data-act="judge" title="Rank the survivors and say why">Judge</button>
         <span class="gist"></span>
       </div>
+      <div class="check"></div>
       <div class="body"></div>`;
     this.#bar = this.#root.querySelector('.bar');
     this.#body = this.#root.querySelector('.body');
     this.#gist = this.#root.querySelector('.gist');
+    this.#check = this.#root.querySelector('.check');
     this.#bar.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-view]');
-      if (b) this.view = b.dataset.view;
+      const v = e.target.closest('[data-view]');
+      if (v) { this.view = v.dataset.view; return; }
+      const a = e.target.closest('[data-act]');
+      if (a) this.#run(a.dataset.act);
     });
     adopt(this.#root, CSS);
   }
@@ -140,10 +171,80 @@ export class AxCompare extends HTMLElement {
     if (name === 'view') this.render();
   }
 
+  /**
+   * Run the project's checks, or the judge, across the attempts.
+   *
+   * Verify sends no command: the session holds the project's own, so the arbiter
+   * is a property of the repository rather than something retyped — and a typo
+   * here would decide which attempt survives.
+   */
+  async #run(act) {
+    if (this.#busy || !this.session) return;
+    this.#busy = true; this.#syncButtons();
+    const s = encodeURIComponent(this.session);
+    try {
+      if (act === 'verify') {
+        const r = await fetch(`/api/sessions/${s}/variants/verify`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ check: this.#checkCmd || '' }),
+        });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'verify failed');
+      } else {
+        const r = await fetch(`/api/sessions/${s}/variants/judge`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ task: 'the task these attempts share', provider: 'ollama' }),
+        });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'judge failed');
+      }
+      await this.refresh();
+    } catch (e) {
+      this.dispatchEvent(new CustomEvent('compare-error', {
+        detail: { message: String(e.message || e) }, bubbles: true, composed: true,
+      }));
+    } finally { this.#busy = false; this.#syncButtons(); }
+  }
+
+  #syncButtons() {
+    for (const b of this.#bar.querySelectorAll('[data-act]')) {
+      b.disabled = this.#busy || (this.#results?.lanes || []).length < 2;
+    }
+    const v = this.#bar.querySelector('[data-act="verify"]');
+    if (v) v.textContent = this.#busy ? 'Running…' : 'Run checks';
+  }
+
+  /** Show the arbiter, and let it be corrected in place. */
+  #renderCheck() {
+    if ((this.#results?.lanes || []).length < 2) { this.#check.innerHTML = ''; return; }
+    this.#check.classList.toggle('unset', !this.#checkCmd);
+    this.#check.innerHTML = this.#checkCmd
+      ? '<span>Checks</span><input spellcheck="false">'
+      : '<span>No check command — attempts cannot be ruled out until you set one</span><input spellcheck="false" placeholder="npm test">';
+    const input = this.#check.querySelector('input');
+    input.value = this.#checkCmd || '';
+    const commit = async () => {
+      const next = input.value.trim();
+      if (next === (this.#checkCmd || '')) return;
+      await fetch(`/api/sessions/${encodeURIComponent(this.session)}/check`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ check_command: next || null }),
+      }).catch(() => {});
+      this.#checkCmd = next || null;
+      this.#renderCheck();
+      this.#syncButtons();
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+  }
+
   /** Re-read the run. Safe to call whenever the attempts change. */
   async refresh() {
     if (!this.session) return;
     const s = encodeURIComponent(this.session);
+    try {
+      const list = await fetch('/api/sessions').then((r) => r.json());
+      this.#checkCmd = (Array.isArray(list) ? list : [])
+        .find((x) => x.id === this.session)?.check_command || null;
+    } catch { /* keep what we had */ }
     try {
       this.#results = await fetch(`/api/sessions/${s}/variants/results`).then((r) => r.json());
     } catch { this.#results = null; }
@@ -154,6 +255,8 @@ export class AxCompare extends HTMLElement {
         `/api/sessions/${s}/variants/trajectories?baseline=${this.#base}`).then((r) => r.json());
     } catch { this.#alignment = null; }
     this.render();
+    this.#renderCheck();
+    this.#syncButtons();
   }
 
   render() {

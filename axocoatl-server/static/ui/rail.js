@@ -156,7 +156,10 @@ export class AxRail extends HTMLElement {
   async refresh() {
     try {
       const list = await fetch('/api/sessions').then((r) => r.json());
-      this.#sessions = Array.isArray(list) ? list : [];
+      // Closing a session is how you say "I am done with this". Listing it
+      // afterwards makes the act look like it failed, and the rail is for the
+      // work you are doing rather than the work you have finished.
+      this.#sessions = (Array.isArray(list) ? list : []).filter((s) => s.status !== 'closed');
     } catch {
       this.#sessions = [];
     }

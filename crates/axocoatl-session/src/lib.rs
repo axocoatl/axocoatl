@@ -86,6 +86,16 @@ pub struct Session {
     /// `devcontainer.json`'s `postCreateCommand` when present.
     #[serde(default)]
     pub post_create_commands: Vec<String>,
+    /// The project's own command for deciding whether a change is good —
+    /// tests, a build, a typecheck.
+    ///
+    /// A property of the repository, not of a run. It is the arbiter that rules
+    /// attempts out, so retyping it per comparison invites a typo deciding which
+    /// attempt survives, and hardcoding a default would quietly make this a
+    /// JavaScript tool. Detected on create from what the project actually has;
+    /// `None` means we could not tell and the user must say.
+    #[serde(default)]
+    pub check_command: Option<String>,
     /// Unix-seconds timestamps.
     pub created_at: u64,
     pub last_active: u64,
@@ -122,6 +132,7 @@ impl Session {
         } else {
             exposed_ports
         };
+        let check_command = detect_check_command(&working_dir);
         Self {
             id: format!("ses-{}", uuid::Uuid::new_v4()),
             name,
@@ -132,10 +143,51 @@ impl Session {
             exposed_ports: ports,
             image,
             post_create_commands,
+            check_command,
             created_at: now,
             last_active: now,
         }
     }
+}
+
+/// Guess the project's check command from what it actually contains.
+///
+/// Ordered so the most specific signal wins: a script the project defined for
+/// itself beats a language-wide convention, because someone who wrote
+/// `"check"` in their package.json has already answered this question. Returns
+/// `None` rather than a guess when nothing matches — an arbitrary default here
+/// would rule attempts out using a command the project never runs, which is
+/// worse than asking.
+pub fn detect_check_command(dir: &std::path::Path) -> Option<String> {
+    let has = |f: &str| dir.join(f).exists();
+
+    if has("package.json") {
+        if let Ok(txt) = std::fs::read_to_string(dir.join("package.json")) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+                let scripts = v.get("scripts").and_then(|s| s.as_object());
+                if let Some(scripts) = scripts {
+                    for name in ["check", "test", "ci", "build"] {
+                        if scripts.contains_key(name) {
+                            return Some(format!("npm run {name}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if has("Cargo.toml") {
+        return Some("cargo test".to_string());
+    }
+    if has("go.mod") {
+        return Some("go test ./...".to_string());
+    }
+    if has("pyproject.toml") || has("setup.py") || has("pytest.ini") {
+        return Some("pytest".to_string());
+    }
+    if has("Makefile") || has("makefile") {
+        return Some("make test".to_string());
+    }
+    None
 }
 
 /// Persistent store of sessions — JSON files under `{data_dir}/sessions/`.
@@ -266,6 +318,22 @@ impl SessionStore {
     }
 
     /// Rename a session in place — same id, same working_dir, new display name.
+    /// Set the project's check command. `None` or empty clears it.
+    pub fn set_check_command(
+        &mut self,
+        id: &str,
+        cmd: Option<String>,
+    ) -> Result<Session, SessionError> {
+        let s = self
+            .sessions
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        s.check_command = cmd.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+        let out = s.clone();
+        self.persist(&out)?;
+        Ok(out)
+    }
+
     pub fn rename(
         &mut self,
         id: &str,
@@ -321,6 +389,52 @@ impl SessionStore {
 
 #[cfg(test)]
 mod tests {
+    fn tmp() -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("axo-detect-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn detect_prefers_a_script_the_project_defined_for_itself() {
+        let d = tmp();
+        std::fs::write(
+            d.join("package.json"),
+            r#"{"scripts":{"build":"tsc","check":"tsc && node --test"}}"#,
+        )
+        .unwrap();
+        // `check` wins over `build` — the project already answered this.
+        assert_eq!(detect_check_command(&d).as_deref(), Some("npm run check"));
+    }
+
+    #[test]
+    fn detect_falls_back_through_the_scripts_it_knows() {
+        let d = tmp();
+        std::fs::write(d.join("package.json"), r#"{"scripts":{"build":"tsc"}}"#).unwrap();
+        assert_eq!(detect_check_command(&d).as_deref(), Some("npm run build"));
+    }
+
+    #[test]
+    fn detect_reads_language_conventions() {
+        let d = tmp();
+        std::fs::write(d.join("Cargo.toml"), "[package]\nname='x'").unwrap();
+        assert_eq!(detect_check_command(&d).as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn detect_says_nothing_rather_than_guessing() {
+        // An arbitrary default would rule attempts out with a command the
+        // project never runs — worse than asking the user.
+        assert_eq!(detect_check_command(&tmp()), None);
+    }
+
+    #[test]
+    fn detect_survives_malformed_package_json() {
+        let d = tmp();
+        std::fs::write(d.join("package.json"), "{not json").unwrap();
+        assert_eq!(detect_check_command(&d), None);
+    }
+
     use super::*;
     use tempfile::tempdir;
 

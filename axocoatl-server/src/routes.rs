@@ -1499,6 +1499,34 @@ pub struct RenameSessionBody {
     pub name: String,
 }
 
+#[derive(serde::Deserialize)]
+pub struct CheckBody {
+    /// The project's check command. Null or empty clears it.
+    #[serde(default)]
+    pub check_command: Option<String>,
+}
+
+/// PUT /api/sessions/{id}/check — set the project's own check command.
+pub async fn set_session_check(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<CheckBody>,
+) -> Result<Json<axocoatl_session::Session>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .set_session_check(&id, body.check_command)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })
+}
+
 pub async fn rename_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
