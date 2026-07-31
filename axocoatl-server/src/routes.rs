@@ -1116,6 +1116,41 @@ pub struct GitDiscardBody {
     pub path: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+pub struct StageBody {
+    /// Paths to stage or unstage. Empty means everything.
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+/// POST /api/sessions/{id}/git/stage
+pub async fn git_stage(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<StageBody>,
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .git_stage(&id, &body.paths)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
+/// POST /api/sessions/{id}/git/unstage
+pub async fn git_unstage(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<StageBody>,
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .git_unstage(&id, &body.paths)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
 /// POST /api/sessions/{id}/git/discard
 pub async fn git_discard(
     State(state): State<AppState>,

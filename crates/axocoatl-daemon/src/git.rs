@@ -26,6 +26,17 @@ pub struct GitFile {
     /// Lines removed, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub removed: Option<u32>,
+    /// The index holds a change to this file.
+    ///
+    /// Porcelain reports two independent columns — what is staged (X) and what
+    /// is only in the working tree (Y) — and a file can be in both at once: an
+    /// edit staged, then edited again. Collapsing them, as this did, makes
+    /// staging unrepresentable, which is why there was no way to stage anything.
+    #[serde(default)]
+    pub staged: bool,
+    /// The working tree holds a change that is not staged.
+    #[serde(default)]
+    pub unstaged: bool,
 }
 
 /// Working-tree status: current branch + changed files.
@@ -452,11 +463,21 @@ pub fn parse_status(stdout: &str) -> GitStatus {
             continue;
         }
         let xy = &line[..2];
+        let mut chars = xy.chars();
+        let (x, y) = (chars.next().unwrap_or(' '), chars.next().unwrap_or(' '));
         let mut path = line[3..].to_string();
-        let state = if xy == "??" {
+        let untracked = xy == "??";
+        // X is the index, Y the working tree. Untracked files are in neither
+        // until added, so they count as unstaged rather than as both.
+        let staged = !untracked && x != ' ';
+        let unstaged = untracked || y != ' ';
+        // The state names what happened to the file; prefer whichever column
+        // actually carries a code, since a staged-only change has a blank Y.
+        let code = if x != ' ' && !untracked { x } else { y };
+        let state = if untracked {
             "untracked"
         } else {
-            match xy.trim().chars().next().unwrap_or(' ') {
+            match code {
                 'A' => "added",
                 'D' => "deleted",
                 'R' => "renamed",
@@ -475,6 +496,8 @@ pub fn parse_status(stdout: &str) -> GitStatus {
             // Counts come from a separate numstat pass; porcelain has none.
             added: None,
             removed: None,
+            staged,
+            unstaged,
         });
     }
     let clean = files.is_empty();
@@ -504,11 +527,12 @@ mod tests {
 
     #[test]
     fn status_parses_branch_and_states() {
-        let out = "## main...origin/main [ahead 1]\n\
-                    M  src/lib.rs\n\
-                   ?? new.txt\n\
-                   A  added.rs\n\
-                    D gone.rs\n";
+        // Written without line continuations on purpose: `\` strips the leading
+        // whitespace of the next line, which silently turns " D" (deleted in the
+        // working tree) into "D " (deleted in the index) — the two columns this
+        // parser now has to tell apart.
+        let out =
+            "## main...origin/main [ahead 1]\nM  src/lib.rs\n?? new.txt\nA  added.rs\n D gone.rs\n";
         let s = parse_status(out);
         assert_eq!(s.branch, "main");
         assert!(!s.clean);
@@ -520,11 +544,17 @@ mod tests {
                 state: "modified".into(),
                 added: None,
                 removed: None,
+                staged: true,
+                unstaged: false,
             }
         );
         assert_eq!(s.files[1].state, "untracked");
         assert_eq!(s.files[2].state, "added");
         assert_eq!(s.files[3].state, "deleted");
+        assert!(
+            s.files[3].unstaged && !s.files[3].staged,
+            "deleted in the working tree"
+        );
     }
 
     #[test]
@@ -545,6 +575,8 @@ mod tests {
                 state: "renamed".into(),
                 added: None,
                 removed: None,
+                staged: true,
+                unstaged: false,
             }
         );
     }
@@ -604,6 +636,38 @@ mod tests {
     }
 
     #[test]
+    fn status_separates_the_index_from_the_working_tree() {
+        // The four cases that matter, and the third is the one collapsing X and
+        // Y used to lose: a file staged *and* edited again since.
+        let s = parse_status(
+            "## main\nM  staged.rs\n M unstaged.rs\nMM both.rs\n?? new.rs\nA  added.rs\n",
+        );
+        let f = |p: &str| s.files.iter().find(|f| f.path == p).unwrap();
+        assert!(f("staged.rs").staged && !f("staged.rs").unstaged);
+        assert!(!f("unstaged.rs").staged && f("unstaged.rs").unstaged);
+        assert!(
+            f("both.rs").staged && f("both.rs").unstaged,
+            "staged then edited again"
+        );
+        assert!(
+            !f("new.rs").staged && f("new.rs").unstaged,
+            "untracked is not staged"
+        );
+        assert_eq!(f("added.rs").state, "added");
+        assert!(f("added.rs").staged);
+    }
+
+    #[test]
+    fn a_staged_only_change_still_names_its_state() {
+        // Y is blank when a change is staged and untouched since, so reading the
+        // state from Y alone would report every staged file as "modified".
+        let s = parse_status("## main\nD  gone.rs\nR  old.rs -> new.rs\n");
+        assert_eq!(s.files[0].state, "deleted");
+        assert_eq!(s.files[1].state, "renamed");
+        assert_eq!(s.files[1].path, "new.rs");
+    }
+
+    #[test]
     fn numstat_sizes_the_changes_and_admits_when_it_cannot() {
         let mut st = GitStatus {
             branch: "main".into(),
@@ -614,18 +678,24 @@ mod tests {
                     state: "modified".into(),
                     added: None,
                     removed: None,
+                    staged: false,
+                    unstaged: true,
                 },
                 GitFile {
                     path: "img/logo.png".into(),
                     state: "modified".into(),
                     added: None,
                     removed: None,
+                    staged: false,
+                    unstaged: true,
                 },
                 GitFile {
                     path: "new.txt".into(),
                     state: "untracked".into(),
                     added: None,
                     removed: None,
+                    staged: false,
+                    unstaged: true,
                 },
             ],
         };
@@ -654,6 +724,8 @@ mod tests {
                 state: "renamed".into(),
                 added: None,
                 removed: None,
+                staged: false,
+                unstaged: true,
             }],
         };
         apply_numstat(&mut st, "4\t1\tlib/old.ts => lib/new.ts\n");

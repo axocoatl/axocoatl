@@ -88,6 +88,8 @@ pub fn build_router(
         .route("/api/sessions/{id}/git/diff", get(routes::git_diff))
         .route("/api/sessions/{id}/git/branches", get(routes::git_branches))
         .route("/api/sessions/{id}/git/commit", post(routes::git_commit))
+        .route("/api/sessions/{id}/git/stage", post(routes::git_stage))
+        .route("/api/sessions/{id}/git/unstage", post(routes::git_unstage))
         .route("/api/sessions/{id}/git/discard", post(routes::git_discard))
         .route(
             "/api/sessions/{id}/git/checkout",

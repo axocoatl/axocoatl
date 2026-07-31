@@ -2082,6 +2082,62 @@ impl AxocoatlDaemon {
 
     /// Discard working changes — one file (`Some(path)`) or all (`None`,
     /// including untracked). Returns the fresh status.
+    /// Stage paths, or everything when none are given.
+    ///
+    /// Git's own verb, deliberately. "Accept" and "reject" are an invented
+    /// vocabulary that maps onto nothing a user can inspect afterwards; staging
+    /// is a real thing in a real index, visible from any other tool and
+    /// reversible by the obvious means. Returns the fresh status so a caller
+    /// never has to guess what the index now holds.
+    pub async fn git_stage(
+        &self,
+        session_id: &str,
+        paths: &[String],
+    ) -> Result<crate::git::GitStatus, DaemonError> {
+        self.ensure_session_git(session_id).await?;
+        if paths.is_empty() {
+            self.session_git(session_id, &["add", "-A"]).await?;
+        } else {
+            for p in paths {
+                if p.contains("..") {
+                    return Err(DaemonError::Session(format!("invalid path '{p}'")));
+                }
+                self.session_git(session_id, &["add", "--", p]).await?;
+            }
+        }
+        self.git_status(session_id).await
+    }
+
+    /// Unstage paths, or everything when none are given.
+    ///
+    /// `reset` leaves the working tree alone: unstaging is about the index, and
+    /// silently reverting the file as well would destroy work the user only
+    /// meant to un-mark. Discarding is a separate verb because it is a separate
+    /// intent.
+    pub async fn git_unstage(
+        &self,
+        session_id: &str,
+        paths: &[String],
+    ) -> Result<crate::git::GitStatus, DaemonError> {
+        self.ensure_session_git(session_id).await?;
+        if paths.is_empty() {
+            let _ = self.session_git(session_id, &["reset", "-q"]).await;
+        } else {
+            for p in paths {
+                if p.contains("..") {
+                    return Err(DaemonError::Session(format!("invalid path '{p}'")));
+                }
+                // Ignore the exit code: `reset` reports non-zero on a repo with
+                // no commits yet, where there is nothing to reset *to* but the
+                // file is still correctly removed from the index.
+                let _ = self
+                    .session_git(session_id, &["reset", "-q", "--", p])
+                    .await;
+            }
+        }
+        self.git_status(session_id).await
+    }
+
     pub async fn git_discard(
         &self,
         session_id: &str,
