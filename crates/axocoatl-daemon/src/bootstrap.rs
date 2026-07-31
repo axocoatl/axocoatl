@@ -106,6 +106,13 @@ pub struct AxocoatlDaemon {
     /// Live session isolation instances (local Podman container or remote
     /// microVM), keyed by session id. Trait-typed so the backend is pluggable.
     session_sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
+    /// Files the session's agent wrote during its most recent turn.
+    ///
+    /// Recorded in the daemon rather than assembled in a viewer from live
+    /// frames: "what did the agent just change" has to survive a reload, and a
+    /// fact that only exists while a tab is open is not one a reviewer can rely
+    /// on. Replaced wholesale each turn — it answers *last*, not *ever*.
+    session_last_turn: Arc<StdMutex<HashMap<String, Vec<String>>>>,
     /// Ring buffer of the most recent lattice events (capped at 200).
     pub event_log: Arc<StdMutex<VecDeque<LatticeEvent>>>,
     /// The observability stream bus — flattened events + live agent tokens.
@@ -556,6 +563,7 @@ impl AxocoatlDaemon {
             pending_interrupts: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             run_store,
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            session_last_turn: Arc::new(StdMutex::new(HashMap::new())),
             event_log,
             stream_bus,
             active_runs,
@@ -1736,9 +1744,14 @@ impl AxocoatlDaemon {
             }
         };
 
-        let output = axocoatl_actor::execute_agent(&actor, axocoatl_core::AgentInput::text(input))
-            .await
-            .map_err(DaemonError::AgentSpawn)?;
+        // Routed through the streaming runner even though this caller does not
+        // stream. A session turn must mean the same thing however it was
+        // started: run it two different ways and "what did the agent just
+        // change" is recorded for one and silently absent for the other, which
+        // makes the answer depend on which button was pressed.
+        let output = self
+            .run_session_agent_streamed(&actor, session_id, "session", input, None)
+            .await?;
 
         let _ = self.session_store.lock().await.touch(session_id);
         Ok(output)
@@ -1924,6 +1937,22 @@ impl AxocoatlDaemon {
                 &["status", "--porcelain=v1", "-b", "--untracked-files=all"],
             )
             .await?;
+        // A failed status must not read as a clean tree. `session_git_at`
+        // returns Ok for any exit code, so a git that could not run at all —
+        // sandbox gone, directory not a repo — produced empty stdout, and
+        // `parse_status("")` yields `clean: true`. That is the worst possible
+        // wrong answer here: a reviewer concludes the agent changed nothing.
+        if !r.ok() {
+            let why = r.stderr.trim();
+            return Err(DaemonError::Session(format!(
+                "cannot read the working tree{}",
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", why.lines().next().unwrap_or(why))
+                }
+            )));
+        }
         let mut status = crate::git::parse_status(&r.stdout);
         // Size the changes. `--numstat` covers tracked files; untracked ones are
         // absent from it, so `HEAD --` picks up staged and unstaged together and
@@ -1934,6 +1963,7 @@ impl AxocoatlDaemon {
         {
             crate::git::apply_numstat(&mut status, &n.stdout);
         }
+        crate::git::mark_last_turn(&mut status, &self.session_last_turn_files(session_id));
         Ok(status)
     }
 
@@ -3653,18 +3683,53 @@ impl AxocoatlDaemon {
         input: &str,
         model_override: Option<String>,
     ) -> Result<axocoatl_core::AgentOutput, DaemonError> {
-        Self::stream_agent_run(
+        // The same recorder the attempts use. Here it answers a different
+        // question — which files this turn touched — so the reviewer can filter
+        // git by "what the agent just did" without that becoming a second
+        // concept alongside staged and unstaged.
+        let trace: Arc<StdMutex<Vec<crate::trajectory::Action>>> =
+            Arc::new(StdMutex::new(Vec::new()));
+        let out = Self::stream_agent_run(
             self.stream_bus.clone(),
             actor.clone(),
             run_id.to_string(),
             agent_label.to_string(),
             input.to_string(),
             model_override,
-            // Trajectories are a comparison artifact; a single run has nothing
-            // to be compared against.
-            None,
+            Some(trace.clone()),
         )
-        .await
+        .await;
+
+        // Only writes count. A turn that read twenty files and changed one has
+        // changed one, and listing the reads would bury it.
+        if let Ok(steps) = trace.lock() {
+            let mut touched: Vec<String> = steps
+                .iter()
+                .filter(|a| {
+                    matches!(
+                        a.kind,
+                        crate::trajectory::ActionKind::Edit | crate::trajectory::ActionKind::Write
+                    ) && !a.failed
+                        && !a.target.is_empty()
+                })
+                .map(|a| a.target.clone())
+                .collect();
+            touched.sort();
+            touched.dedup();
+            if let Ok(mut store) = self.session_last_turn.lock() {
+                store.insert(run_id.to_string(), touched);
+            }
+        }
+        out
+    }
+
+    /// Files the session's agent wrote in its most recent turn.
+    pub fn session_last_turn_files(&self, session_id: &str) -> Vec<String> {
+        self.session_last_turn
+            .lock()
+            .ok()
+            .and_then(|s| s.get(session_id).cloned())
+            .unwrap_or_default()
     }
 
     /// Drive one agent run, forwarding its stream chunks to the bus as frames

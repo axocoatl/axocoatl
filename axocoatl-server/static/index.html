@@ -1682,6 +1682,15 @@
   ax-file-tree { flex: 1; min-height: 0; }
   ax-compare { flex: 1; min-height: 0; }
   /* Source Control sections — staged and not staged are separate facts. */
+  .git-views { display: flex; gap: var(--sp-1); padding: var(--sp-2) var(--sp-2) 0; flex-wrap: wrap; }
+  .git-view {
+    background: none; border: 1px solid transparent; color: var(--muted);
+    border-radius: var(--r-md); padding: 2px var(--sp-2); cursor: pointer;
+    font: var(--fs-xs) var(--font-sans);
+  }
+  .git-view:hover { color: var(--text); }
+  .git-view.on { background: var(--bg-3); border-color: var(--border); color: var(--text); }
+  .git-file-turn { color: var(--accent); font-size: var(--fs-xs); flex-shrink: 0; }
   .git-section { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-2) var(--sp-1); }
   .git-section-title { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .07em; color: var(--muted-2); }
   .git-section-act { margin-left: auto; background: none; border: 0; color: var(--muted); cursor: pointer; font: var(--fs-xs) var(--font-sans); }
@@ -11438,10 +11447,45 @@ async function gitStageOp(op, paths) {
  * them, as this pane used to, is what made staging unrepresentable and left
  * "Commit all" as the only way to commit anything.
  */
+/**
+ * Which slice of the working tree the pane is showing.
+ *
+ * "Last turn" sits here as a peer of the git states rather than as its own
+ * panel, which is the point: what the agent just did becomes a filter over git,
+ * answered in the vocabulary you already use for your own work, instead of a
+ * parallel universe with its own concepts.
+ */
+let gitView = 'all';
+
+const GIT_VIEWS = [
+  ['all', 'All', (f) => true],
+  ['lastTurn', 'Last turn', (f) => f.last_turn],
+  ['staged', 'Staged', (f) => f.staged],
+  ['unstaged', 'Not staged', (f) => f.unstaged],
+];
+
 function renderGitFiles(st) {
   const host = $('#git-files'); if (!host) return;
   host.innerHTML = '';
-  const files = st.files || [];
+  const all = st.files || [];
+
+  const sel = el('div', 'git-views');
+  GIT_VIEWS.forEach(([id, label, pred]) => {
+    const n = all.filter(pred).length;
+    const b = el('button', 'git-view' + (gitView === id ? ' on' : ''), label + (n ? ' ' + n : ''));
+    // A slice with nothing in it is still worth showing as empty rather than
+    // hidden — "the agent changed nothing" is an answer.
+    b.addEventListener('click', () => { gitView = id; renderGitFiles(st); });
+    sel.appendChild(b);
+  });
+  host.appendChild(sel);
+
+  const pred = (GIT_VIEWS.find(v => v[0] === gitView) || GIT_VIEWS[0])[2];
+  const files = all.filter(pred);
+  if (all.length && !files.length) {
+    host.appendChild(el('div', 'git-empty', 'Nothing in this view.'));
+    return;
+  }
   if (!files.length) {
     host.appendChild(el('div', 'git-empty', st.clean ? 'No changes — working tree clean.' : ''));
     return;
@@ -11461,6 +11505,11 @@ function renderGitFiles(st) {
       const row = el('div', 'git-file');
       row.appendChild(el('span', 'git-file-badge ' + f.state, badgeChar[f.state] || '•'));
       row.appendChild(el('span', 'git-file-name', f.path));
+      if (f.last_turn && gitView !== 'lastTurn') {
+        // Only worth marking where the view mixes sources; inside "Last turn"
+        // every row is the agent's and the badge would be noise.
+        row.appendChild(el('span', 'git-file-turn', '\u2726'));
+      }
       if (f.added != null || f.removed != null) {
         const n = el('span', 'git-file-n');
         n.appendChild(el('span', 'git-n-add', '+' + (f.added || 0)));

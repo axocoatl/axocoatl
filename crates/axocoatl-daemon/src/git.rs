@@ -37,6 +37,13 @@ pub struct GitFile {
     /// The working tree holds a change that is not staged.
     #[serde(default)]
     pub unstaged: bool,
+    /// The agent wrote this file in its most recent turn.
+    ///
+    /// Carried on the file rather than served as a separate list so "what the
+    /// agent just did" is a *filter over git* instead of a parallel universe
+    /// with its own vocabulary and its own way of being stale.
+    #[serde(default)]
+    pub last_turn: bool,
 }
 
 /// Working-tree status: current branch + changed files.
@@ -438,6 +445,18 @@ pub fn apply_numstat(status: &mut GitStatus, numstat: &str) {
     }
 }
 
+/// Mark the files an agent turn wrote.
+///
+/// Paths come from the turn's recorded actions, which are repo-relative, so they
+/// compare directly against status paths. A file the agent wrote and the user
+/// has since staged is still a file the agent wrote — the flags are independent
+/// facts, not a state machine.
+pub fn mark_last_turn(status: &mut GitStatus, touched: &[String]) {
+    for f in status.files.iter_mut() {
+        f.last_turn = touched.iter().any(|t| t == &f.path);
+    }
+}
+
 /// Parse `git status --porcelain=v1 -b --untracked-files=all`.
 pub fn parse_status(stdout: &str) -> GitStatus {
     let mut branch = String::new();
@@ -498,6 +517,7 @@ pub fn parse_status(stdout: &str) -> GitStatus {
             removed: None,
             staged,
             unstaged,
+            last_turn: false,
         });
     }
     let clean = files.is_empty();
@@ -546,6 +566,7 @@ mod tests {
                 removed: None,
                 staged: true,
                 unstaged: false,
+                last_turn: false,
             }
         );
         assert_eq!(s.files[1].state, "untracked");
@@ -577,6 +598,7 @@ mod tests {
                 removed: None,
                 staged: true,
                 unstaged: false,
+                last_turn: false,
             }
         );
     }
@@ -636,6 +658,28 @@ mod tests {
     }
 
     #[test]
+    fn last_turn_is_a_filter_over_git_not_a_separate_state() {
+        let mut st = parse_status("## main\nM  agent.rs\n M mine.rs\n");
+        mark_last_turn(&mut st, &["agent.rs".to_string()]);
+        let f = |p: &str| st.files.iter().find(|f| f.path == p).unwrap();
+        assert!(f("agent.rs").last_turn);
+        assert!(!f("mine.rs").last_turn, "my own edit is not the agent's");
+        // Independent facts: the agent wrote it *and* it is staged. Treating
+        // these as one state would make either unrepresentable.
+        assert!(f("agent.rs").staged && f("agent.rs").last_turn);
+    }
+
+    #[test]
+    fn a_second_turn_replaces_the_first() {
+        let mut st = parse_status("## main\n M a.rs\n M b.rs\n");
+        mark_last_turn(&mut st, &["a.rs".to_string()]);
+        mark_last_turn(&mut st, &["b.rs".to_string()]);
+        let f = |p: &str| st.files.iter().find(|f| f.path == p).unwrap();
+        assert!(!f("a.rs").last_turn, "it answers *last* turn, not *ever*");
+        assert!(f("b.rs").last_turn);
+    }
+
+    #[test]
     fn status_separates_the_index_from_the_working_tree() {
         // The four cases that matter, and the third is the one collapsing X and
         // Y used to lose: a file staged *and* edited again since.
@@ -680,6 +724,7 @@ mod tests {
                     removed: None,
                     staged: false,
                     unstaged: true,
+                    last_turn: false,
                 },
                 GitFile {
                     path: "img/logo.png".into(),
@@ -688,6 +733,7 @@ mod tests {
                     removed: None,
                     staged: false,
                     unstaged: true,
+                    last_turn: false,
                 },
                 GitFile {
                     path: "new.txt".into(),
@@ -696,6 +742,7 @@ mod tests {
                     removed: None,
                     staged: false,
                     unstaged: true,
+                    last_turn: false,
                 },
             ],
         };
@@ -726,6 +773,7 @@ mod tests {
                 removed: None,
                 staged: false,
                 unstaged: true,
+                last_turn: false,
             }],
         };
         apply_numstat(&mut st, "4\t1\tlib/old.ts => lib/new.ts\n");
