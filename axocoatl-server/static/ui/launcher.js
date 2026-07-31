@@ -31,6 +31,7 @@ import { adopt } from './sheets.js';
 export const MODULES = [
   { id: 'files',    title: 'Files',      hint: 'Project tree and editor',   key: 'p',  ico: '▤' },
   { id: 'stream',   title: 'Activity',   hint: 'What the agents are doing', key: 'a',  ico: '✦' },
+  { id: 'compare',  title: 'Attempts',   hint: 'Compare several ways at once', key: 'e', ico: '⑂' },
   { id: 'terminal', title: 'Terminal',   hint: 'A shell in the sandbox',    key: 't',  ico: '❯' },
   { id: 'browser',  title: 'Browser',    hint: 'Preview the running app',   key: 'b',  ico: '◈' },
   { id: 'trace',    title: 'Agent graph',hint: 'How the work coordinated',  key: 'g',  ico: '◉' },

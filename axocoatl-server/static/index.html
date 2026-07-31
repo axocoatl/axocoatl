@@ -1680,6 +1680,7 @@
   .file-search-clear.hide { display: none; }
   /* <ax-file-tree> owns its rows; the shell owns how much room it gets. */
   ax-file-tree { flex: 1; min-height: 0; }
+  ax-compare { flex: 1; min-height: 0; }
   ax-file-tree.hide { display: none; }
   .file-viewer { flex: 1; overflow: auto; padding: 0; }
   .file-viewer pre { margin: 0; padding: 10px 12px; font-size: 12px; }
@@ -2851,6 +2852,7 @@
   import { iconForFile } from '/ui/file-tree.js';
   import '/ui/rail.js';
   import '/ui/launcher.js';
+  import '/ui/compare.js';
   // Boot diagnostics: an exception during init() silently strands the app —
   // the live socket never opens and nothing says why. Record them where they
   // can be read instead of vanishing into an empty console.
@@ -3441,6 +3443,16 @@
               <button class="pane-btn" data-pane="trace" data-act="collapse" title="Collapse">▶</button>
             </div>
             <div class="trace-body" id="session-lattice-host"></div>
+          </div>
+          <!-- Several attempts at one task, compared by outcome and by route. -->
+          <div class="cockpit-pane" id="cockpit-compare">
+            <div class="pane-head" data-pane="compare" draggable="true">
+              <span class="pane-head-title">Attempts</span>
+              <span class="pane-head-meta" id="pane-meta-compare"></span>
+              <button class="pane-btn" data-pane="compare" data-act="focus" title="Focus">⛶</button>
+              <button class="pane-btn" data-pane="compare" data-act="collapse" title="Collapse">▶</button>
+            </div>
+            <ax-compare id="compare"></ax-compare>
           </div>
           <!-- Terminal as a first-class grid surface (Debug preset).  The live
                terminal body (#terminals-body) is re-parented here from the
@@ -7911,6 +7923,7 @@ const SURFACES = {
   browser: { el: '#cockpit-browser', title: 'Browser',     defaultW: 240, min: 180, max: 1100, collapsible: true },
   trace:   { el: '#cockpit-trace',   title: 'Agent graph', defaultW: 420, min: 240, max: 1200, collapsible: true },
   terminal:{ el: '#cockpit-terminal',title: 'Terminal',    defaultW: 360, min: 220, max: 1100, collapsible: true },
+  compare: { el: '#cockpit-compare', title: 'Attempts',    defaultW: 520, min: 320, max: 1400, collapsible: true },
 };
 const DEFAULT_PANE_ORDER = ['files', 'stream', 'browser'];
 // Which surface stretches to fill (1fr) is a property of the active layout,
@@ -8196,7 +8209,7 @@ const DEFAULT_LAYOUT = {
 
 // The cockpit is one configurable workspace; this menu shows/hides each
 // surface. The conversation (Activity) is the canvas — always on.
-const TOGGLEABLE_SURFACES = ['stream', 'files', 'browser', 'terminal', 'trace'];
+const TOGGLEABLE_SURFACES = ['stream', 'files', 'compare', 'browser', 'terminal', 'trace'];
 // A small toggle switch in the cockpit's own dark/accent vibe — reusable
 // across the app. <ax-toggle checked disabled>; emits 'change' with {checked}.
 // Shadow-DOM styled, but reads the page's CSS custom properties (they pierce
@@ -9813,6 +9826,8 @@ function openCockpit(s) {
   if (_tree) { _tree.session = s.id; _tree.selected = ''; }
   const _rail = $('#rail');
   if (_rail) { _rail.current = s.id; _rail.refresh(); }
+  const _cmp = $('#compare');
+  if (_cmp) _cmp.session = s.id;
   try { localStorage.setItem(LAST_SESSION_KEY, s.id); } catch {}
   refreshFileTree();
   sessionLatticeBuild(s);   // no-ops (lattice pane is gone) but still emits status frames
@@ -10515,7 +10530,7 @@ async function restoreLastSession() {
 // settings gesture. It is an action you take mid-thought, so it lives on a
 // shortcut. The launcher lists every module with its binding, because a
 // shortcut nobody can discover is one nobody uses.
-const MODULE_KEYS = { p: 'files', a: 'stream', t: 'terminal', b: 'browser', g: 'trace' };
+const MODULE_KEYS = { p: 'files', a: 'stream', e: 'compare', t: 'terminal', b: 'browser', g: 'trace' };
 
 function openModule(id) {
   if (!SURFACES[id]) return;
@@ -13659,6 +13674,9 @@ function handleWsFrame(d) {
       // Resolved elsewhere; the next frame from that lane restores 'run'.
       break;
     case 'lane-verified': {
+      // A verdict changes the scoreboard; re-read rather than patch, so the
+      // pane and the daemon cannot drift.
+      if (d.session === S.session.id) $('#compare')?.refresh?.();
       const sess = d.session;
       if (sess) {
         if (!_attempts.has(sess)) _attempts.set(sess, new Map());
