@@ -2857,6 +2857,7 @@
   import '/ui/launcher.js';
   import '/ui/compare.js';
   import '/ui/fanout.js';
+  import '/ui/changes.js';
   // Boot diagnostics: an exception during init() silently strands the app —
   // the live socket never opens and nothing says why. Record them where they
   // can be read instead of vanishing into an empty console.
@@ -11691,6 +11692,27 @@ function updateFanoutBtn() {
   }
 }
 
+// ── What a turn changed ────────────────────────────────────────────────
+//
+// A run emits a card per tool call, which answers "what happened" and not the
+// question a reviewer has: what did this turn do to the repository. One card per
+// turn summarises it, with per-file counts so you know which file to read first.
+function appendChangesCard() {
+  if (!S.session.id) return;
+  const card = document.createElement('ax-changes');
+  card.session = S.session.id;
+  card.addEventListener('file-open', (e) => openFile(e.detail.path));
+  card.addEventListener('review', () => {
+    openModule('files');
+    setExplorerTab('git');
+  });
+  appendSessionEl(card);
+  // The working tree is read after the turn settles; the element hides itself
+  // when nothing changed, so a no-op turn adds no noise.
+  card.refresh();
+  return card;
+}
+
 // ── Fan-out control ────────────────────────────────────────────────────
 //
 // The attempts are configured by <ax-fanout> (see /ui/fanout.js): one row per
@@ -13737,6 +13759,9 @@ function handleWsFrame(d) {
       }
       break;
     case 'session-done': {
+      // Only the session's own turn: an attempt finishing is reported by the
+      // attempts pane, and a card per attempt would bury the thread.
+      if (d.session === S.session.id) setTimeout(appendChangesCard, 300);
       const ln = variantLaneFor(d.session);
       if (ln !== null) { if (S.session.threadVariants) threadVariantStatus(ln, 'done'); break; }
       if (S.session.id === d.session) {

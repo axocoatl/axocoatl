@@ -14,6 +14,18 @@ pub struct GitFile {
     pub path: String,
     /// `added` | `modified` | `deleted` | `renamed` | `untracked`.
     pub state: String,
+    /// Lines added, when known.
+    ///
+    /// Porcelain status reports *that* a file changed, never how much. A
+    /// reviewer deciding what to look at first needs the size of the change,
+    /// and "3 files" tells them nothing about whether that is a typo fix or a
+    /// rewrite. Filled from `--numstat`; `None` for binaries and for files git
+    /// cannot diff, which is different from zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added: Option<u32>,
+    /// Lines removed, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub removed: Option<u32>,
 }
 
 /// Working-tree status: current branch + changed files.
@@ -390,6 +402,31 @@ pub struct VariantStatus {
     pub agent: Option<String>,
 }
 
+/// Merge `git diff --numstat` output into a status, by path.
+///
+/// numstat reports `adds\tdels\tpath`, with `-` for binary files — which is
+/// why the counts are optional rather than defaulting to zero: "we cannot count
+/// this" and "nothing changed" are different facts and a reviewer reads them
+/// differently.
+pub fn apply_numstat(status: &mut GitStatus, numstat: &str) {
+    for line in numstat.lines() {
+        let mut parts = line.split('\t');
+        let (Some(a), Some(d), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        // Renames read `old => new` inside the path field; match on the new one.
+        let path = path
+            .rsplit(" => ")
+            .next()
+            .unwrap_or(path)
+            .trim_end_matches('}');
+        if let Some(f) = status.files.iter_mut().find(|f| f.path == path) {
+            f.added = a.parse().ok();
+            f.removed = d.parse().ok();
+        }
+    }
+}
+
 /// Parse `git status --porcelain=v1 -b --untracked-files=all`.
 pub fn parse_status(stdout: &str) -> GitStatus {
     let mut branch = String::new();
@@ -435,6 +472,9 @@ pub fn parse_status(stdout: &str) -> GitStatus {
         files.push(GitFile {
             path,
             state: state.to_string(),
+            // Counts come from a separate numstat pass; porcelain has none.
+            added: None,
+            removed: None,
         });
     }
     let clean = files.is_empty();
@@ -477,7 +517,9 @@ mod tests {
             s.files[0],
             GitFile {
                 path: "src/lib.rs".into(),
-                state: "modified".into()
+                state: "modified".into(),
+                added: None,
+                removed: None,
             }
         );
         assert_eq!(s.files[1].state, "untracked");
@@ -500,7 +542,9 @@ mod tests {
             s.files[0],
             GitFile {
                 path: "new.rs".into(),
-                state: "renamed".into()
+                state: "renamed".into(),
+                added: None,
+                removed: None,
             }
         );
     }
@@ -557,6 +601,63 @@ mod tests {
             !j.contains("model"),
             "an unset model still stays off the wire"
         );
+    }
+
+    #[test]
+    fn numstat_sizes_the_changes_and_admits_when_it_cannot() {
+        let mut st = GitStatus {
+            branch: "main".into(),
+            clean: false,
+            files: vec![
+                GitFile {
+                    path: "lib/a.ts".into(),
+                    state: "modified".into(),
+                    added: None,
+                    removed: None,
+                },
+                GitFile {
+                    path: "img/logo.png".into(),
+                    state: "modified".into(),
+                    added: None,
+                    removed: None,
+                },
+                GitFile {
+                    path: "new.txt".into(),
+                    state: "untracked".into(),
+                    added: None,
+                    removed: None,
+                },
+            ],
+        };
+        // `-` is git's way of saying a file cannot be counted, not that it is
+        // unchanged — the two must not collapse into the same reading.
+        apply_numstat(&mut st, "12\t3\tlib/a.ts\n-\t-\timg/logo.png\n");
+        assert_eq!(st.files[0].added, Some(12));
+        assert_eq!(st.files[0].removed, Some(3));
+        assert_eq!(
+            st.files[1].added, None,
+            "a binary reports no count, not zero"
+        );
+        assert_eq!(
+            st.files[2].added, None,
+            "untracked files are absent from numstat"
+        );
+    }
+
+    #[test]
+    fn numstat_follows_a_rename_to_its_new_path() {
+        let mut st = GitStatus {
+            branch: "main".into(),
+            clean: false,
+            files: vec![GitFile {
+                path: "lib/new.ts".into(),
+                state: "renamed".into(),
+                added: None,
+                removed: None,
+            }],
+        };
+        apply_numstat(&mut st, "4\t1\tlib/old.ts => lib/new.ts\n");
+        assert_eq!(st.files[0].added, Some(4));
     }
 
     #[test]

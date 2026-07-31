@@ -1912,7 +1912,17 @@ impl AxocoatlDaemon {
                 &["status", "--porcelain=v1", "-b", "--untracked-files=all"],
             )
             .await?;
-        Ok(crate::git::parse_status(&r.stdout))
+        let mut status = crate::git::parse_status(&r.stdout);
+        // Size the changes. `--numstat` covers tracked files; untracked ones are
+        // absent from it, so `HEAD --` picks up staged and unstaged together and
+        // anything still uncounted keeps `None` rather than a misleading zero.
+        if let Ok(n) = self
+            .session_git(session_id, &["diff", "--numstat", "HEAD", "--"])
+            .await
+        {
+            crate::git::apply_numstat(&mut status, &n.stdout);
+        }
+        Ok(status)
     }
 
     /// Before/after content for one file (for the diff editor). `old` is the
