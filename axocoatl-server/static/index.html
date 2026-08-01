@@ -2876,6 +2876,7 @@
   import '/ui/compare.js';
   import '/ui/fanout.js';
   import '/ui/changes.js';
+  import '/ui/settings.js';
   // Boot diagnostics: an exception during init() silently strands the app —
   // the live socket never opens and nothing says why. Record them where they
   // can be read instead of vanishing into an empty console.
@@ -2898,6 +2899,7 @@
        lives in the .status-pearls overlay inside .main rather than up here. -->
   <ax-rail id="rail"></ax-rail>
   <ax-launcher id="launcher"></ax-launcher>
+  <ax-settings id="settings"></ax-settings>
   <div class="strip">
     <div class="strip-mark" id="strip-mark" title="Toggle labels"><span class="strip-icon"><img src="/brand/mark.png" alt="Axocoatl" /></span><span class="strip-mark-label">Axocoatl</span></div>
     <div class="strip-spacer"></div>
@@ -10548,6 +10550,29 @@ function syncLauncherState() {
   $('#launcher')?.setOpenModules?.(S.cockpitLayout.paneOrder || DEFAULT_PANE_ORDER);
 }
 
+// A hosted panel still needs whatever switchTab used to do for it — refreshing
+// its list, building its table. The surface owns the framing; the shell keeps
+// owning what each panel means.
+(function initSettingsOnce() {
+  function attach() {
+    const st = $('#settings'); if (!st || st._wired) return;
+    st._wired = true;
+    st.addEventListener('section-change', (e) => {
+      const id = e.detail.id;
+      if (id === 'agents') refreshAgents();
+      else if (id === 'skills') renderSkills();
+      else if (id === 'mcp') refreshMcp();
+      else if (id === 'automations') renderAutomations();
+    });
+    // Returning from settings must land back in the session, not on whatever
+    // section happened to be showing underneath.
+    st.addEventListener('close', () => switchTab('sessions'));
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', attach);
+  } else attach();
+})();
+
 (function initLauncherOnce() {
   function attach() {
     const l = $('#launcher'); if (!l || l._wired) return;
@@ -10580,7 +10605,7 @@ function syncLauncherState() {
         if (found) openCockpit(found);
       } catch {}
     });
-    rail.addEventListener('settings-open', () => switchTab('agents'));
+    rail.addEventListener('settings-open', () => $('#settings')?.show('agents'));
     // Land in work rather than on a browser.
     restoreLastSession();
   }
