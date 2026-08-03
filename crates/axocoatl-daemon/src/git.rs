@@ -445,6 +445,75 @@ pub fn apply_numstat(status: &mut GitStatus, numstat: &str) {
     }
 }
 
+/// One hunk of a unified diff, with everything needed to apply it alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Hunk {
+    /// Position in the file's diff, 0-based — how a caller names one.
+    pub index: usize,
+    /// The `@@ -a,b +c,d @@` line, verbatim.
+    pub header: String,
+    /// The hunk's body lines, verbatim, including their leading ` `/`+`/`-`.
+    pub lines: Vec<String>,
+    pub added: u32,
+    pub removed: u32,
+}
+
+/// Split a file's unified diff into its preamble and hunks.
+///
+/// The preamble is every line before the first `@@` — `diff --git`, `index`,
+/// `---`/`+++`, and any `new file mode`. Applying one hunk means re-emitting
+/// that preamble with only that hunk under it, so git still knows which file is
+/// being patched and how.
+pub fn parse_hunks(diff: &str) -> (String, Vec<Hunk>) {
+    let mut preamble = Vec::new();
+    let mut hunks: Vec<Hunk> = Vec::new();
+    for line in diff.lines() {
+        if line.starts_with("@@") {
+            hunks.push(Hunk {
+                index: hunks.len(),
+                header: line.to_string(),
+                lines: Vec::new(),
+                added: 0,
+                removed: 0,
+            });
+            continue;
+        }
+        match hunks.last_mut() {
+            None => preamble.push(line.to_string()),
+            Some(h) => {
+                // "\ No newline at end of file" is part of the hunk and must be
+                // carried through, or applying it corrupts the file's ending.
+                if line.starts_with('+') {
+                    h.added += 1;
+                } else if line.starts_with('-') {
+                    h.removed += 1;
+                }
+                h.lines.push(line.to_string());
+            }
+        }
+    }
+    (preamble.join("\n"), hunks)
+}
+
+/// Rebuild a patch containing exactly one hunk.
+///
+/// Trailing newline is required: git rejects a patch that does not end in one,
+/// with an error that reads like a corrupt patch rather than a missing byte.
+pub fn one_hunk_patch(preamble: &str, hunk: &Hunk) -> String {
+    let mut out = String::new();
+    if !preamble.is_empty() {
+        out.push_str(preamble);
+        out.push('\n');
+    }
+    out.push_str(&hunk.header);
+    out.push('\n');
+    for l in &hunk.lines {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
+}
+
 /// Mark the files an agent turn wrote.
 ///
 /// Paths come from the turn's recorded actions, which are repo-relative, so they
@@ -654,6 +723,62 @@ mod tests {
         assert!(
             !j.contains("model"),
             "an unset model still stays off the wire"
+        );
+    }
+
+    // No line continuations: `\` strips the next line's leading whitespace, and
+    // in a diff that leading space *is* the context marker. The same trap made a
+    // status fixture silently test the wrong thing.
+    const TWO_HUNK_DIFF: &str = concat!(
+        "diff --git a/lib/a.ts b/lib/a.ts\n",
+        "index 111..222 100644\n",
+        "--- a/lib/a.ts\n",
+        "+++ b/lib/a.ts\n",
+        "@@ -1,3 +1,4 @@\n",
+        " const x = 1;\n",
+        "+const y = 2;\n",
+        " const z = 3;\n",
+        " \n",
+        "@@ -20,4 +21,3 @@ function f() {\n",
+        "   return 1;\n",
+        "-  // dead\n",
+        " }\n",
+    );
+
+    #[test]
+    fn hunks_split_on_at_at_and_keep_the_preamble() {
+        let (pre, hunks) = parse_hunks(TWO_HUNK_DIFF);
+        assert!(pre.starts_with("diff --git"), "preamble names the file");
+        assert!(pre.contains("+++ b/lib/a.ts"));
+        assert_eq!(hunks.len(), 2);
+        assert_eq!(hunks[0].added, 1);
+        assert_eq!(hunks[0].removed, 0);
+        assert_eq!(hunks[1].added, 0);
+        assert_eq!(hunks[1].removed, 1);
+        assert_eq!(hunks[1].index, 1);
+    }
+
+    #[test]
+    fn one_hunk_patch_carries_the_preamble_and_ends_in_a_newline() {
+        // Without the preamble git does not know which file this patches; with
+        // no trailing newline it reports the patch as corrupt.
+        let (pre, hunks) = parse_hunks(TWO_HUNK_DIFF);
+        let patch = one_hunk_patch(&pre, &hunks[1]);
+        assert!(patch.starts_with("diff --git a/lib/a.ts"));
+        assert!(patch.contains("@@ -20,4 +21,3 @@"));
+        assert!(!patch.contains("+const y = 2;"), "only the chosen hunk");
+        assert!(patch.ends_with('\n'));
+    }
+
+    #[test]
+    fn hunk_body_is_kept_verbatim() {
+        // Context lines can be a bare space, and a stripped or trimmed line
+        // makes the patch fail to apply for reasons that are hard to see.
+        let (_, hunks) = parse_hunks(TWO_HUNK_DIFF);
+        assert!(hunks[0].lines.contains(&" const x = 1;".to_string()));
+        assert!(
+            hunks[0].lines.contains(&" ".to_string()),
+            "blank context line survives"
         );
     }
 

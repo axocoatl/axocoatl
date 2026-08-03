@@ -2124,6 +2124,98 @@ impl AxocoatlDaemon {
 
     /// Discard working changes — one file (`Some(path)`) or all (`None`,
     /// including untracked). Returns the fresh status.
+    /// The hunks of one file's unstaged diff, or of its staged diff.
+    ///
+    /// Two different questions: "what could I stage" and "what could I unstage",
+    /// and they are different sets of hunks against different baselines.
+    pub async fn git_hunks(
+        &self,
+        session_id: &str,
+        path: &str,
+        staged: bool,
+    ) -> Result<Vec<crate::git::Hunk>, DaemonError> {
+        if path.contains("..") {
+            return Err(DaemonError::Session("invalid path".to_string()));
+        }
+        self.ensure_session_git(session_id).await?;
+        let mut args = vec!["diff"];
+        if staged {
+            args.push("--cached");
+        }
+        args.extend_from_slice(&["--no-color", "--", path]);
+        let r = self.session_git(session_id, &args).await?;
+        Ok(crate::git::parse_hunks(&r.stdout).1)
+    }
+
+    /// Stage or unstage a single hunk of a file.
+    ///
+    /// Rebuilds a patch containing that hunk alone and hands it to `git apply
+    /// --cached`, which is how git itself does this. Unstaging applies the
+    /// staged hunk in reverse, so the working tree is untouched either way —
+    /// this moves a change between the index and the tree, and nothing else.
+    pub async fn git_apply_hunk(
+        &self,
+        session_id: &str,
+        path: &str,
+        index: usize,
+        stage: bool,
+    ) -> Result<crate::git::GitStatus, DaemonError> {
+        let hunks = self.git_hunks(session_id, path, !stage).await?;
+        let hunk = hunks
+            .get(index)
+            .ok_or_else(|| DaemonError::Session(format!("no hunk {index} in '{path}'")))?;
+
+        // Re-read the preamble from the same diff the hunk came from, so the
+        // patch names the file exactly as git just described it.
+        let mut args = vec!["diff"];
+        if !stage {
+            args.push("--cached");
+        }
+        args.extend_from_slice(&["--no-color", "--", path]);
+        let raw = self.session_git(session_id, &args).await?;
+        let (preamble, _) = crate::git::parse_hunks(&raw.stdout);
+        let patch = crate::git::one_hunk_patch(&preamble, hunk);
+
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let dir = sandbox.root().to_string_lossy().to_string();
+        let mut argv: Vec<&str> = vec![
+            "git",
+            "-c",
+            "safe.directory=*",
+            "-C",
+            &dir,
+            "apply",
+            "--cached",
+        ];
+        if !stage {
+            argv.push("--reverse");
+        }
+        argv.push("-");
+        let r = sandbox
+            .exec_stdin(&argv, &patch, Duration::from_secs(30))
+            .await
+            .map_err(|e| DaemonError::Session(e.to_string()))?;
+        if !r.ok() {
+            // git's own message says why — a patch that does not apply usually
+            // means the file moved under us, and paraphrasing that helps nobody.
+            let why = r.stderr.trim();
+            return Err(DaemonError::Session(format!(
+                "could not {} that change{}",
+                if stage { "stage" } else { "unstage" },
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", why.lines().next().unwrap_or(why))
+                }
+            )));
+        }
+        self.git_status(session_id).await
+    }
+
     /// Stage paths, or everything when none are given.
     ///
     /// Git's own verb, deliberately. "Accept" and "reject" are an invented

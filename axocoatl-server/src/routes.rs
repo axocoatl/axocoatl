@@ -1123,6 +1123,55 @@ pub struct StageBody {
     pub paths: Vec<String>,
 }
 
+#[derive(serde::Deserialize)]
+pub struct HunksQuery {
+    pub path: String,
+    /// Look at the staged diff instead of the working-tree one.
+    #[serde(default)]
+    pub staged: bool,
+}
+
+/// GET /api/sessions/{id}/git/hunks?path=…&staged=…
+pub async fn git_hunks(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<HunksQuery>,
+) -> Result<Json<Vec<axocoatl_daemon::git::Hunk>>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .git_hunks(&id, &q.path, q.staged)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
+#[derive(serde::Deserialize)]
+pub struct HunkBody {
+    pub path: String,
+    pub index: usize,
+    /// True to stage this hunk, false to unstage it.
+    #[serde(default = "yes")]
+    pub stage: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// POST /api/sessions/{id}/git/hunk — stage or unstage one hunk.
+pub async fn git_apply_hunk(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<HunkBody>,
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .git_apply_hunk(&id, &body.path, body.index, body.stage)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
 /// POST /api/sessions/{id}/git/stage
 pub async fn git_stage(
     State(state): State<AppState>,

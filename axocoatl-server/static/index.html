@@ -1690,6 +1690,14 @@
   }
   .git-view:hover { color: var(--text); }
   .git-view.on { background: var(--bg-3); border-color: var(--border); color: var(--text); }
+  .git-hunks { padding: 0 0 var(--sp-1) var(--sp-5); }
+  .git-hunk {
+    display: flex; align-items: center; gap: var(--sp-2);
+    padding: 2px var(--sp-2); border-radius: var(--r-sm);
+    font: var(--fs-xs) var(--font-mono); color: var(--muted);
+  }
+  .git-hunk:hover { background: var(--bg-3); }
+  .git-hunk-head { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .git-file-turn { color: var(--accent); font-size: var(--fs-xs); flex-shrink: 0; }
   .git-section { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-2) var(--sp-1); }
   .git-section-title { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .07em; color: var(--muted-2); }
@@ -11451,6 +11459,55 @@ async function refreshGitPane() {
   } catch {}
 }
 
+/**
+ * Stage or unstage one hunk.
+ *
+ * File-level staging answers "is this file's work wanted"; a file often holds
+ * two changes where only one is. Git has always allowed this, so the pane
+ * should too rather than forcing an all-or-nothing decision on a file.
+ */
+async function gitHunkOp(path, index, stage) {
+  if (!S.session.id) return;
+  try {
+    const st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/hunk', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path, index, stage }),
+    }).then(r => r.json());
+    if (st && st.error) { toast('Could not apply that change', st.error, 'err'); return; }
+    if (st) { S.session.gitStatus = st; renderGitFiles(st); refreshOpenDiff(); }
+  } catch (e) { toast('Could not apply that change', String(e), 'err'); }
+}
+
+/** Show a file's hunks, each stageable on its own. */
+async function toggleHunks(row, path, staged) {
+  const open = row.nextElementSibling?.classList?.contains('git-hunks');
+  if (open) { row.nextElementSibling.remove(); return; }
+  let hunks = [];
+  try {
+    hunks = await fetch('/api/sessions/' + encodeURIComponent(S.session.id)
+      + '/git/hunks?path=' + encodeURIComponent(path) + (staged ? '&staged=true' : '')).then(r => r.json());
+  } catch {}
+  const host = el('div', 'git-hunks');
+  if (!Array.isArray(hunks) || !hunks.length) {
+    host.appendChild(el('div', 'git-empty', 'No separable changes in this file.'));
+  } else {
+    hunks.forEach(h => {
+      const hr = el('div', 'git-hunk');
+      hr.appendChild(el('span', 'git-hunk-head', h.header));
+      const n = el('span', 'git-file-n');
+      n.appendChild(el('span', 'git-n-add', '+' + h.added));
+      n.appendChild(el('span', 'git-n-del', '\u2212' + h.removed));
+      hr.appendChild(n);
+      const b = el('button', 'git-file-act', staged ? '\u2212' : '+');
+      b.title = staged ? 'Unstage just this change' : 'Stage just this change';
+      b.addEventListener('click', (e) => { e.stopPropagation(); gitHunkOp(path, h.index, !staged); });
+      hr.appendChild(b);
+      host.appendChild(hr);
+    });
+  }
+  row.after(host);
+}
+
 /** Stage or unstage paths, then re-read. The status comes back from the call,
  *  so the pane never guesses what the index now holds. */
 async function gitStageOp(op, paths) {
@@ -11540,6 +11597,14 @@ function renderGitFiles(st) {
         n.appendChild(el('span', 'git-n-add', '+' + (f.added || 0)));
         n.appendChild(el('span', 'git-n-del', '\u2212' + (f.removed || 0)));
         row.appendChild(n);
+      }
+      // Untracked files have no diff to split, so offering hunks would open an
+      // empty list — the whole file is the change.
+      if (f.state !== 'untracked') {
+        const chev = el('button', 'git-file-act', '\u2261');
+        chev.title = 'Show the separate changes in this file';
+        chev.addEventListener('click', (e) => { e.stopPropagation(); toggleHunks(row, f.path, act === 'unstage'); });
+        row.appendChild(chev);
       }
       const b = el('button', 'git-file-act', glyph);
       b.title = hint;
