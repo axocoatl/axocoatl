@@ -10614,6 +10614,9 @@ function syncLauncherState() {
       } catch {}
     });
     rail.addEventListener('settings-open', () => $('#settings')?.show('agents'));
+    // Both reuse the existing flows rather than growing second versions of them.
+    rail.addEventListener('session-new', () => { closeCockpit(); openFolderPicker(); });
+    rail.addEventListener('sessions-browse', () => closeCockpit());
     // Land in work rather than on a browser.
     restoreLastSession();
   }

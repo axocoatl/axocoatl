@@ -22,8 +22,9 @@ import { adopt } from './sheets.js';
  * @attr {boolean} collapsed  Icon-width only.
  *
  * @fires session-open     detail: {id}
- * @fires session-new      detail: {dir}
- * @fires settings-open    detail: {}
+ * @fires session-new      start a session somewhere new
+ * @fires sessions-browse  open the browse-everything view
+ * @fires settings-open
  *
  * @cssprop --ax-rail-w   Expanded width (default 248px)
  */
@@ -134,9 +135,18 @@ export class AxRail extends HTMLElement {
       </div>
       <div class="scroll"></div>
       <div class="foot">
+        <button class="item" id="new"><span class="ico">＋</span><span class="label">New session</span></button>
+        <button class="item" id="browse"><span class="ico">▤</span><span class="label">All sessions</span></button>
         <button class="item" id="settings"><span class="ico">◇</span><span class="label">Settings</span></button>
       </div>`;
     this.#scroll = this.#root.querySelector('.scroll');
+    // Starting work is a navigation act, so it belongs in the navigation. It
+    // used to require going back to the browse view first, which made "new
+    // session" something you found rather than something you did.
+    this.#root.querySelector('#new').addEventListener('click', () =>
+      this.dispatchEvent(new CustomEvent('session-new', { bubbles: true, composed: true })));
+    this.#root.querySelector('#browse').addEventListener('click', () =>
+      this.dispatchEvent(new CustomEvent('sessions-browse', { bubbles: true, composed: true })));
     this.#root.querySelector('#settings').addEventListener('click', () =>
       this.dispatchEvent(new CustomEvent('settings-open', { bubbles: true, composed: true })));
     adopt(this.#root, CSS);
