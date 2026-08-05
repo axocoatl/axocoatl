@@ -1681,6 +1681,7 @@
   /* <ax-file-tree> owns its rows; the shell owns how much room it gets. */
   ax-file-tree { flex: 1; min-height: 0; }
   ax-compare { flex: 1; min-height: 0; }
+  ax-terminal { flex: 1; min-height: 0; min-width: 0; }
   /* Source Control sections — staged and not staged are separate facts. */
   .git-views { display: flex; gap: var(--sp-1); padding: var(--sp-2) var(--sp-2) 0; flex-wrap: wrap; }
   .git-view {
@@ -2885,6 +2886,7 @@
   import '/ui/fanout.js';
   import '/ui/changes.js';
   import '/ui/settings.js';
+  import '/ui/terminal.js';
   // Boot diagnostics: an exception during init() silently strands the app —
   // the live socket never opens and nothing says why. Record them where they
   // can be read instead of vanishing into an empty console.
@@ -8197,16 +8199,9 @@ function relayoutEmbeddedEditors() {
     const ed = S.session && S.session.monaco && S.session.monaco.editor;
     if (ed && typeof ed.layout === 'function') ed.layout();
   } catch {}
-  try {
-    if (S.xterms) S.xterms.forEach(entry => {
-      try {
-        entry.fit && entry.fit.fit();
-        if (entry.ws && entry.ws.readyState === WebSocket.OPEN && entry.term) {
-          entry.ws.send(JSON.stringify({ kind: 'resize', rows: entry.term.rows, cols: entry.term.cols }));
-        }
-      } catch {}
-    });
-  } catch {}
+  // Each terminal re-measures itself and tells its far end; the shell only has
+  // to say that the layout moved.
+  try { S.xterms?.forEach((elx) => { try { elx.fit(); } catch {} }); } catch {}
 }
 
 // Panes menu — the safety net for "I collapsed a pane and now it's gone."
@@ -10279,13 +10274,12 @@ function renderTerminals() {
   out.appendChild(bar);
 
   if (active.kind === 'terminal') {
-    const entry = getOrCreateXterm(active.id);
-    if (entry) {
-      out.appendChild(entry.container);
-      setTimeout(() => {
-        try { entry.fit && entry.fit.fit(); } catch {}
-        try { entry.term.focus(); } catch {}
-      }, 0);
+    const elx = getOrCreateXterm(active.id);
+    if (elx) {
+      out.appendChild(elx);
+      // The element re-fits itself on resize; this is for the mount, where it
+      // has just been given dimensions for the first time.
+      setTimeout(() => { elx.fit(); elx.focus(); }, 0);
     } else {
       out.appendChild(el('div', 'term-empty-output', 'xterm.js failed to load.'));
     }
@@ -10411,99 +10405,33 @@ async function submitNewTerminal() {
 // ── xterm.js bridge ──
 // One Terminal instance per terminal id we've seen, so switching back and
 // forth doesn't lose state.
-S.xterms = new Map();   // id → { term, fit, ws, container }
+// ── Terminals ──
+//
+// A terminal is <ax-terminal> (see /ui/terminal.js): it owns its xterm, its PTY
+// socket, the brand theme and the resize protocol. What stays here is which
+// terminals exist and where the active one is shown.
+//
+// Elements are created once per task and reused. Everything about a terminal is
+// stateful and expensive to recreate — scrollback, the running process, the
+// socket — so it is moved between containers, never rebuilt.
+S.xterms = new Map();   // task id → <ax-terminal>
 
 function getOrCreateXterm(taskId) {
-  let entry = S.xterms.get(taskId);
-  if (entry) return entry;
+  let elx = S.xterms.get(taskId);
+  if (elx) return elx;
   if (typeof Terminal === 'undefined') return null;
-  const container = document.createElement('div');
-  container.style.cssText = 'flex:1; min-height:0; padding:6px;';
-  // Axocoatl jade terminal theme — matches the marketing cockpit mock.
-  // ANSI green / brightGreen map to the brand jade glow so shell prompts,
-  // `ls --color` directories, npm/pytest success markers, etc., all
-  // render in the brand palette.  Other colors stay close to default
-  // but pulled into the warm-dark palette so the chrome reads as one.
-  const term = new Terminal({
-    fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
-    fontSize: 12,
-    lineHeight: 1.35,
-    convertEol: true,
-    cursorBlink: true,
-    cursorStyle: 'block',
-    theme: {
-      background:         '#000000',
-      foreground:         '#C8CBD1',
-      cursor:             '#4FCB8E',
-      cursorAccent:       '#000000',
-      selectionBackground:'rgba(79,203,142,0.30)',
-      black:        '#0A0A0A',
-      red:          '#E88A8A',
-      green:        '#4FCB8E',  // jade glow
-      yellow:       '#E8C275',  // bronze glow
-      blue:         '#7FB8D6',
-      magenta:      '#C7A6E0',
-      cyan:         '#3FA9C8',  // brand blue
-      white:        '#C8CBD1',
-      brightBlack:  '#636366',
-      brightRed:    '#FFB0B0',
-      brightGreen:  '#7DEBB0',  // brighter jade
-      brightYellow: '#FFD89A',
-      brightBlue:   '#A6D2E8',
-      brightMagenta:'#E0C2F0',
-      brightCyan:   '#7FCEE0',
-      brightWhite:  '#ECECEC',
-    },
-  });
-  const fitAddon = (window.FitAddon && window.FitAddon.FitAddon)
-    ? new window.FitAddon.FitAddon() : null;
-  if (fitAddon) term.loadAddon(fitAddon);
-  term.open(container);
-  setTimeout(() => { try { fitAddon && fitAddon.fit(); } catch {} }, 0);
-
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url = proto + '//' + location.host
-    + '/api/sessions/' + encodeURIComponent(S.session.id)
-    + '/terminals/' + encodeURIComponent(taskId) + '/ws';
-  const ws = new WebSocket(url);
-  ws.binaryType = 'arraybuffer';
-  ws.onopen = () => {
-    if (fitAddon) {
-      try {
-        fitAddon.fit();
-        ws.send(JSON.stringify({ kind: 'resize', rows: term.rows, cols: term.cols }));
-      } catch {}
-    }
-  };
-  ws.onmessage = (ev) => {
-    if (ev.data instanceof ArrayBuffer) {
-      term.write(new Uint8Array(ev.data));
-    } else if (typeof ev.data === 'string') {
-      // Could be an error envelope; try JSON first, else write raw.
-      try {
-        const j = JSON.parse(ev.data);
-        if (j && j.kind === 'error') term.write('\r\n\x1b[31m[' + j.message + ']\x1b[0m\r\n');
-        else term.write(ev.data);
-      } catch { term.write(ev.data); }
-    }
-  };
-  ws.onclose = () => { term.write('\r\n\x1b[2m[disconnected]\x1b[0m\r\n'); };
-  term.onData((data) => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(data);
-  });
-
-  entry = { term, fit: fitAddon, ws, container };
-  S.xterms.set(taskId, entry);
-  return entry;
+  elx = document.createElement('ax-terminal');
+  elx.session = S.session.id;
+  elx.task = taskId;
+  S.xterms.set(taskId, elx);
+  return elx;
 }
 
 function teardownXterms() {
-  S.xterms.forEach((entry) => {
-    try { entry.ws.close(); } catch {}
-    try { entry.term.dispose(); } catch {}
-  });
+  S.xterms.forEach((elx) => { try { elx.destroy(); } catch {} });
   S.xterms.clear();
 }
+
 
 // ── File tree ──
 //
