@@ -169,8 +169,6 @@
   body.side-hidden { --side-w: 0; }
   body.side-mini .logo-name, body.side-mini .logo-tag, body.side-mini .logo-ver { display: none; }
   body.side-mini .nav-section { display: none; }
-  body.side-mini .nav-item { padding: 9px 6px; justify-content: center; gap: 0; }
-  body.side-mini .nav-item > span:nth-child(2) { display: none; }
   /* Mini sidebar: hide wordmark + tag, show just the standalone mark. */
   body.side-mini .logo { padding: 0; align-items: center; }
   body.side-mini .logo-wordmark, body.side-mini .logo-tag, body.side-mini .logo-ver { display: none; }
@@ -437,10 +435,6 @@
      on .strip-item. */
   .side { display: none; }
   .nav-section { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .1em; color: var(--muted-2); padding: 14px 10px 8px; }
-  .nav-item { display: flex; align-items: center; gap: 12px; padding: 9px 11px; margin: 1px 0; border-radius: var(--r-md); color: var(--muted); cursor: pointer; transition: background .12s, color .12s; font-size: var(--fs-body); user-select: none; }
-  .nav-item:hover { background: var(--bg-3); color: var(--text); }
-  .nav-item.active { background: rgba(var(--axo-jade-rgb),.13); color: var(--text); }
-  .nav-item.active .nav-ico { color: var(--accent); }
   .nav-ico { width: 16px; display: inline-block; text-align: center; font-size: var(--fs-body); }
   .nav-counter { margin-left: auto; font-size: var(--fs-xs); color: var(--muted-2); }
   .side-foot { margin-top: 18px; padding: 12px 10px; font-size: var(--fs-xs); color: var(--muted-2); line-height: 1.55; border-top: 1px solid var(--border); }
@@ -1715,6 +1709,14 @@
   .git-n-add { color: var(--ok); } .git-n-del { color: var(--err); margin-left: 4px; }
   .git-file-act { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0 var(--sp-1); flex-shrink: 0; }
   .git-file-act:hover { color: var(--accent); }
+  /* Destructive acts read as destructive on hover, not at rest — a row of red
+     buttons would make throwing work away the thing your eye goes to. */
+  .git-file-act.danger:hover { color: var(--err); }
+  /* A ghost danger button states its intent in the text rather than filling
+     with error colour, which `.btn.danger` does and which is far too loud for
+     a control that sits next to Commit. */
+  .btn.ghost.danger { color: var(--err); border-color: transparent; background: none; }
+  .btn.ghost.danger:hover { background: var(--bg-3); border-color: var(--err); filter: none; }
   /* The popover hangs above the composer row it belongs to. */
   .session-input-row { position: relative; }
   ax-file-tree.hide { display: none; }
@@ -1791,7 +1793,11 @@
   .etab.active { color: var(--text); border-bottom-color: var(--accent, var(--axo-jade-glow)); }
   .etab-badge { background: var(--axo-jade-glow); color: #03110b; border-radius: var(--r-lg);
                 font-size: 9.5px; padding: 0 5px; min-width: 14px; text-align: center; font-weight: 600; }
-  .git-view { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  /* The Source Control pane. Named apart from `.git-view`, the filter chips:
+     both were `git-view`, so the chips inherited `flex:1` and a column layout
+     (they stretched edge-to-edge and could clip their labels) while the pane
+     inherited chip padding, muted text and a pointer cursor. */
+  .git-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .git-bar { display: flex; gap: 5px; padding: 6px; flex-shrink: 0; }
   .git-msg { flex: 1; min-width: 0; background: var(--bg-2); border: 1px solid var(--border);
              border-radius: var(--r-sm); color: var(--text); font-size: var(--fs-sm); padding: 4px 7px; }
@@ -3365,11 +3371,12 @@
                 </div>
                 <ax-file-tree id="file-tree"></ax-file-tree>
                 <!-- Source Control view — the agent's changes, live. -->
-                <div class="git-view hide" id="git-view">
+                <div class="git-pane hide" id="git-view">
                   <div class="git-bar">
                     <input type="text" class="git-msg" id="git-msg" placeholder="Commit message…" spellcheck="false" />
                     <button class="btn sm" id="git-commit" title="Commit what you have staged">Commit</button>
                     <button class="btn sm ghost" id="git-commit-all" title="Stage everything, then commit">Stage all + commit</button>
+                    <button class="btn sm ghost danger" id="git-discard-all" title="Throw away every working change">Discard all</button>
                   </div>
                   <div class="git-branchline">
                     <span class="git-branch-glyph" aria-hidden="true">⎇</span>
@@ -4211,13 +4218,6 @@ $('#detail-close').addEventListener('click', closeDetail);
 $('#detail-maximize').addEventListener('click', toggleDetailFull);
 
 // ───── Tabs ─────
-// Strip items + any lingering .nav-item references both route through
-// switchTab so the active state updates in lockstep.
-$$('.strip-item, .nav-item').forEach(n => {
-  if (!n.dataset.tab) return;
-  n.addEventListener('click', () => switchTab(n.dataset.tab));
-});
-
 // Strip-mark toggle — clicking the brand mark expands / collapses the
 // strip.  Collapsed = 40 px icons only (default); expanded = 180 px
 // icons + labels (VS Code-style activity-bar + label rail).  State
@@ -4235,8 +4235,10 @@ const STRIP_EXPANDED_KEY = 'axo:strip-expanded';
     try { localStorage.setItem(STRIP_EXPANDED_KEY, next ? '1' : '0'); } catch {}
   });
 })();
+// The `.tab` sections are no longer destinations — <ax-settings> hosts them —
+// so this only shows one and hides the rest. The active-state sweep it used to
+// do went with the navigation that had the states.
 function switchTab(tab) {
-  $$('.strip-item, .nav-item').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
   $$('.tab').forEach(t => t.classList.add('hide'));
   const el = $('#tab-' + tab); if (!el) return;
   el.classList.remove('hide');
@@ -8730,6 +8732,7 @@ function initCockpitChrome() {
   });
   const gcommit = $('#git-commit'); if (gcommit) gcommit.addEventListener('click', () => gitCommit(false));
   const gcommitAll = $('#git-commit-all'); if (gcommitAll) gcommitAll.addEventListener('click', () => gitCommit(true));
+  const gdiscardAll = $('#git-discard-all'); if (gdiscardAll) gdiscardAll.addEventListener('click', gitDiscardAll);
   const grefresh = $('#git-refresh'); if (grefresh) grefresh.addEventListener('click', () => { refreshGitPane(); loadGitBranches(); });
   const gmsg = $('#git-msg');
   if (gmsg) gmsg.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); gitCommit(false); } });
@@ -11264,10 +11267,76 @@ async function toggleHunks(row, path, staged) {
       b.title = staged ? 'Unstage just this change' : 'Stage just this change';
       b.addEventListener('click', (e) => { e.stopPropagation(); gitHunkOp(path, h.index, !staged); });
       hr.appendChild(b);
+      // Reviewing a turn means keeping some of what the agent did and dropping
+      // the rest. Only offered on unstaged hunks: a staged change is not in the
+      // working tree to throw away — unstage it first, then decide.
+      if (!staged) {
+        const d = el('button', 'git-file-act danger', '\u21ba');
+        d.title = 'Discard just this change';
+        d.addEventListener('click', (e) => { e.stopPropagation(); gitHunkDiscard(path, h.index, h.header); });
+        hr.appendChild(d);
+      }
       host.appendChild(hr);
     });
   }
   row.after(host);
+}
+
+/**
+ * Throw away one hunk of a file's working changes.
+ *
+ * Destructive and unrecoverable — git keeps no record of a change that was
+ * never committed — so it asks first, and names the hunk it is about to drop
+ * rather than the file, because the whole point is that the rest survives.
+ */
+async function gitHunkDiscard(path, index, header) {
+  if (!S.session.id) return;
+  const ok = await axoConfirm({
+    title: 'Discard this change?',
+    body: `Throw away ${header} in "${path}"? The rest of the file is untouched. This can't be undone.`,
+    okLabel: 'Discard', okKind: 'danger',
+  });
+  if (!ok) return;
+  try {
+    const st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/hunk/discard', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path, index }),
+    }).then(r => r.json());
+    if (st && st.error) { toast('Discard failed', st.error, 'err'); return; }
+    S.session.gitStatus = st; renderGitFiles(st);
+    refreshFileTree();
+    reloadOpenFileIfMatch(path);
+  } catch (e) { toast('Discard failed', String(e), 'err'); }
+}
+
+/**
+ * Throw away every working change, tracked and untracked.
+ *
+ * The daemon has always been able to do this — `git_discard(None)` — and
+ * nothing ever called it, so "undo everything this turn did" had no answer
+ * short of the terminal. It names the count, because the number is the thing
+ * you want to know before agreeing.
+ */
+async function gitDiscardAll() {
+  if (!S.session.id) return;
+  const n = (S.session.gitStatus?.files || []).length;
+  if (!n) { toast('Nothing to discard', 'The working tree is clean.', 'warn'); return; }
+  const ok = await axoConfirm({
+    title: 'Discard all changes?',
+    body: `Throw away working changes to ${n} file${n === 1 ? '' : 's'}, including untracked ones. This can't be undone.`,
+    okLabel: 'Discard all', okKind: 'danger',
+  });
+  if (!ok) return;
+  try {
+    const st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/discard', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    }).then(r => r.json());
+    if (st && st.error) { toast('Discard failed', st.error, 'err'); return; }
+    S.session.gitStatus = st; renderGitFiles(st);
+    refreshFileTree();
+    toast('Discarded', `${n} file${n === 1 ? '' : 's'} restored.`, 'ok');
+  } catch (e) { toast('Discard failed', String(e), 'err'); }
 }
 
 /** Stage or unstage paths, then re-read. The status comes back from the call,
@@ -13575,11 +13644,6 @@ function noteAttempt(key, state) {
   railAttempts(p.session, [...m.entries()].sort((a, c) => a[0] - c[0]).map((e) => e[1]));
 }
 
-/** Drop a session's attempts — a fresh fan-out replaces the whole set. */
-function resetAttempts(sessionId) {
-  _attempts.delete(sessionId);
-  railAttempts(sessionId, []);
-}
 
 function handleWsFrame(d) {
   // Attribute every lane-scoped frame before the per-kind handling, so the rail

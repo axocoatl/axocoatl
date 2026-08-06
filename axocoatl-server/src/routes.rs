@@ -1224,6 +1224,26 @@ pub struct GitCheckoutBody {
     pub reference: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct GitHunkDiscardBody {
+    pub path: String,
+    pub index: usize,
+}
+
+/// POST /api/sessions/{id}/git/hunk/discard — throw away one unstaged hunk.
+pub async fn git_revert_hunk(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<GitHunkDiscardBody>,
+) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let daemon = state.read().await;
+    daemon
+        .git_revert_hunk(&id, &body.path, body.index)
+        .await
+        .map(Json)
+        .map_err(git_err)
+}
+
 /// POST /api/sessions/{id}/git/checkout
 pub async fn git_checkout(
     State(state): State<AppState>,

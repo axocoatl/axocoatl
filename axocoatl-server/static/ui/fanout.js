@@ -31,7 +31,6 @@ import { adopt } from './sheets.js';
 
 /** Beyond a handful, local models make this slow rather than parallel. */
 const MAX = 100;
-const RECOMMENDED = 3;
 
 const CSS = `
 :host { display: contents; }

@@ -93,6 +93,10 @@ pub fn build_router(
             axum::routing::put(routes::set_session_check),
         )
         .route("/api/sessions/{id}/git/hunks", get(routes::git_hunks))
+        .route(
+            "/api/sessions/{id}/git/hunk/discard",
+            post(routes::git_revert_hunk),
+        )
         .route("/api/sessions/{id}/git/hunk", post(routes::git_apply_hunk))
         .route("/api/sessions/{id}/git/stage", post(routes::git_stage))
         .route("/api/sessions/{id}/git/unstage", post(routes::git_unstage))

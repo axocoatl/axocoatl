@@ -1121,7 +1121,7 @@ impl AxocoatlDaemon {
             .map_err(|e| DaemonError::Session(e.to_string()))
     }
 
-    /// Rename a session (display name only).
+    /// Set the session's check command. `None` or empty clears it.
     pub async fn set_session_check(
         &self,
         id: &str,
@@ -2129,6 +2129,70 @@ impl AxocoatlDaemon {
         let _ = self
             .session_git(session_id, &["commit", "-q", "-m", msg])
             .await;
+        self.git_status(session_id).await
+    }
+
+    /// Discard one hunk of a file's unstaged diff, in the working tree.
+    ///
+    /// The counterpart to staging a hunk. Reviewing a turn means keeping some of
+    /// what the agent did and dropping the rest, and without this the smallest
+    /// thing you could drop was a whole file — so a file with one good change
+    /// and one bad one had no answer except editing it by hand.
+    ///
+    /// Reverse-applies the hunk to the worktree rather than to the index, which
+    /// is the one-character difference from unstaging (`--cached`) and a
+    /// completely different act: unstaging moves a change back to the working
+    /// tree, this destroys it.
+    pub async fn git_revert_hunk(
+        &self,
+        session_id: &str,
+        path: &str,
+        index: usize,
+    ) -> Result<crate::git::GitStatus, DaemonError> {
+        // Always the unstaged diff: a staged change is not in the working tree
+        // to revert, so unstage it first and then decide.
+        let hunks = self.git_hunks(session_id, path, false).await?;
+        let hunk = hunks
+            .get(index)
+            .ok_or_else(|| DaemonError::Session(format!("no hunk {index} in '{path}'")))?;
+
+        let raw = self
+            .session_git(session_id, &["diff", "--no-color", "--", path])
+            .await?;
+        let (preamble, _) = crate::git::parse_hunks(&raw.stdout);
+        let patch = crate::git::one_hunk_patch(&preamble, hunk);
+
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let dir = sandbox.root().to_string_lossy().to_string();
+        let argv: Vec<&str> = vec![
+            "git",
+            "-c",
+            "safe.directory=*",
+            "-C",
+            &dir,
+            "apply",
+            "--reverse",
+            "-",
+        ];
+        let r = sandbox
+            .exec_stdin(&argv, &patch, Duration::from_secs(30))
+            .await
+            .map_err(|e| DaemonError::Session(e.to_string()))?;
+        if !r.ok() {
+            let why = r.stderr.trim();
+            return Err(DaemonError::Session(format!(
+                "could not discard that change{}",
+                if why.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", why.lines().next().unwrap_or(why))
+                }
+            )));
+        }
         self.git_status(session_id).await
     }
 

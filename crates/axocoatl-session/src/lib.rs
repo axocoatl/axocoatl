@@ -317,7 +317,6 @@ impl SessionStore {
         self.persist(&snapshot)
     }
 
-    /// Rename a session in place — same id, same working_dir, new display name.
     /// Set the project's check command. `None` or empty clears it.
     pub fn set_check_command(
         &mut self,
