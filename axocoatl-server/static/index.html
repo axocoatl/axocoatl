@@ -1683,6 +1683,12 @@
   ax-compare { flex: 1; min-height: 0; }
   ax-terminal { flex: 1; min-height: 0; min-width: 0; }
   ax-browser { flex: 1; min-height: 0; min-width: 0; }
+  /* The editor fills the viewer. It is light DOM, so its column layout and the
+     host's share of it are stated here rather than inside the component. */
+  ax-editor { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
+  ax-editor > .monaco-host { flex: 1; min-height: 0; height: auto; }
+  ax-editor > .file-truncated-banner { flex-shrink: 0; }
+  .ftab.dirty .ftab-close { color: var(--accent); }
   /* Source Control sections — staged and not staged are separate facts. */
   .git-views { display: flex; gap: var(--sp-1); padding: var(--sp-2) var(--sp-2) 0; flex-wrap: wrap; }
   .git-view {
@@ -2889,6 +2895,9 @@
   import '/ui/settings.js';
   import '/ui/terminal.js';
   import '/ui/browser.js';
+  import { loadMonaco } from '/ui/editor.js';
+  // One AMD load for the page: the diff editor in the shell shares it.
+  window.axLoadMonaco = loadMonaco;
   // Boot diagnostics: an exception during init() silently strands the app —
   // the live socket never opens and nothing says why. Record them where they
   // can be read instead of vanishing into an empty console.
@@ -3378,6 +3387,7 @@
                   <button class="vmode active" data-mode="edit">Editor</button>
                   <button class="vmode" data-mode="preview">Preview</button>
                   <span class="vmode-spacer"></span>
+                  <button class="vmode-action" id="viewer-cancel" title="Discard unsaved changes">Revert</button>
                   <button class="vmode-action" id="viewer-save" title="Save (Ctrl+S)">Save</button>
                   <span class="vmode-hint" id="viewer-hint"></span>
                 </div>
@@ -7854,7 +7864,7 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 // ───── Sessions cockpit ─────
-S.session = { id: null, dir: '', name: '', streamEl: null, streamBuf: '', toolCards: {}, openFiles: [], activeFile: null };
+S.session = { id: null, dir: '', name: '', streamEl: null, streamBuf: '', toolCards: {} };
 S.fpPath = '';
 S.cockpitLayout = {
   // The cockpit is a row of N "surfaces" (panes) drawn from the SURFACES
@@ -8190,8 +8200,7 @@ function attachTermDrawerToggle() {
 
 function relayoutEmbeddedEditors() {
   try {
-    const ed = S.session && S.session.monaco && S.session.monaco.editor;
-    if (ed && typeof ed.layout === 'function') ed.layout();
+    axEditor().layout();
   } catch {}
   // Each terminal re-measures itself and tells its far end; the shell only has
   // to say that the layout moved.
@@ -8725,16 +8734,15 @@ function initCockpitChrome() {
   const gbranch = $('#git-branch');
   if (gbranch) gbranch.addEventListener('change', (e) => { gitCheckout(e.target.value); });
   const fanout = $('#fanout-btn'); if (fanout) fanout.addEventListener('click', toggleFanoutPop);
-  // The "+ Add to chat" floating bubble now lives inside Monaco — see
-  // onMonacoSelectionChange.  We still install a global mousedown
-  // listener so a click outside the bubble hides it.
+  // The editor reports selections; the bubble is ours. A click anywhere else
+  // dismisses it.
   document.addEventListener('mousedown', (e) => {
     if (_selBubble && !_selBubble.contains(e.target)) hideSelBubble();
   }, true);
   const viewerCancelBtn = $('#viewer-cancel');
   if (viewerCancelBtn) viewerCancelBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
-    const f = (S.session.openFiles || []).find(x => x.path === S.session.activeFile);
+    const f = axEditor().activeFile;
     if (!f) return;
     if (f.dirty) {
       const ok = await axoConfirm({
@@ -8745,7 +8753,11 @@ function initCockpitChrome() {
       });
       if (!ok) return;
     }
-    f.draft = null; f.dirty = false; f.viewMode = 'code';
+    // `files` hands out snapshots, so the revert has to go through the editor:
+    // clearing the fields on the copy would leave the buffer dirty and only
+    // look like it worked.
+    axEditor().revert(f.path);
+    _viewModes.set(f.path, 'edit');
     renderActiveFile();
   });
   const pbtn = $('#panes-menu-btn');
@@ -9786,7 +9798,6 @@ function openCockpit(s) {
   S.session = {
     id: s.id, dir: sessionDir(s), name: s.name,
     streamEl: null, streamBuf: '', toolCards: {},
-    openFiles: [], activeFile: null,
     refs: [],
     autoTerminalDone: false,
   };
@@ -9812,8 +9823,13 @@ function openCockpit(s) {
   if (typeof updateFanoutBtn === 'function') updateFanoutBtn();
   if (typeof stopThreadVariantPoll === 'function') stopThreadVariantPoll();
   setExplorerTab('files');   // default to the file tree; git refreshes lazily
+  // Files belong to the session that was open, so the editor starts empty and
+  // is re-pointed before anything can ask it to load.
+  const _ed = axEditor();
+  _ed.reset();
+  _ed.session = s.id;
   $('#file-tabs').innerHTML = '';
-  $('#file-viewer').innerHTML = '<div class="empty small">Select a file to view</div>';
+  viewerShow('<div class="empty small">Select a file to view</div>');
   updateFilesEditor();       // editor collapsed until a file/diff is opened
   const _tree = $('#file-tree');
   if (_tree) { _tree.session = s.id; _tree.selected = ''; }
@@ -10487,6 +10503,23 @@ function syncLauncherState() {
  *  anywhere, not only from inside the session running it. */
 function railAttempts(sessionId, states) { $('#rail')?.setAttempts?.(sessionId, states); }
 
+/** Give the editor element its place in the app: tabs, toasts, references. */
+function wireEditor(ed) {
+  ed.addEventListener('files-changed', () => { renderFileTabs(); renderActiveFile(); updateFilesEditor(); });
+  ed.addEventListener('state-changed', () => renderFileTabs());
+  ed.addEventListener('save-result', (e) => {
+    const d = e.detail;
+    if (d.ok) toast('Saved', `${d.path} (${d.bytes} bytes)`, 'ok');
+    else toast('Save failed', d.error || 'unknown error', 'err');
+  });
+  // The selection exists so it can become a reference in the conversation —
+  // which is the conversation's business, so the shell owns the bubble.
+  ed.addEventListener('selection', (e) => {
+    if (!e.detail.text) { hideSelBubble(); return; }
+    showSelBubbleFor(e.detail);
+  });
+}
+
 (function initFileTreeOnce() {
   function attach() {
     const tree = $('#file-tree'); if (!tree || tree._wired) return;
@@ -10603,7 +10636,7 @@ async function openQuickOpen() {
     const q = input.value.trim();
     if (!q) {
       // Default view: most-recent first (the openFiles tabs sit on top).
-      const recent = (S.session.openFiles || []).map(f => ({ name: f.path.split('/').pop(), path: f.path }));
+      const recent = (axEditor().files || []).map(f => ({ name: f.path.split('/').pop(), path: f.path }));
       _quickOpenHits = recent;
     } else {
       const idx = S.quickOpen.index || [];
@@ -10681,147 +10714,60 @@ document.addEventListener('keydown', (e) => {
     }
   }
 });
-// ── Monaco editor singleton ─────────────────────────────────────────
-// One editor instance for the whole Sessions cockpit; one model per
-// open file with viewState saved/restored per tab swap (the way VS Code
-// preserves cursor + scroll + folds when you change tabs).
+// ── Editor ──
 //
-// S.session.monaco = {
-//   editor:        the Monaco editor instance (created lazily)
-//   modelsByPath:  Map<path, { model, viewState, disposer }>
-//   ready:         cached Promise that resolves with `monaco`
-//   hostEl:        the <div> the editor is mounted on
-//   firstLoad:     true until Monaco has been loaded once (for placeholder text)
-// }
-function ensureMonacoState() {
-  if (!S.session.monaco) {
-    S.session.monaco = {
-      editor: null,
-      modelsByPath: new Map(),
-      ready: null,
-      hostEl: null,
-      firstLoad: true,
-    };
+// Monaco and everything around it — models, per-tab view state, dirty tracking,
+// saving — live in <ax-editor> (see /ui/editor.js). It is deliberately light
+// DOM: Monaco injects its stylesheet into document.head and measures against
+// the document, so inside a shadow root it renders nothing.
+//
+// What stays here is the chrome around it: the tab bar, the view-mode switch,
+// and the preview renderer, which is a different way of showing a file rather
+// than part of the editor.
+
+/** One AMD load for the page. The diff editor below shares it. */
+function loadMonacoOnce() { return window.axLoadMonaco(); }
+
+/** Enough room for the tree plus a readable editor beside it. */
+const FILES_PANE_WITH_EDITOR = 720;
+
+/**
+ * Give the Files pane room for an editor.
+ *
+ * A pane sized for a file tree leaves the editor about seventy pixels, which
+ * renders — line numbers, syntax, everything — and is unreadable. Widening only
+ * when we are below the threshold leaves a pane someone has deliberately made
+ * wider alone.
+ */
+function widenFilesForEditor() {
+  document.querySelector('#cockpit-files .files-pane-inner')?.classList.remove('editor-collapsed');
+  if (surfaceWidth('files') < FILES_PANE_WITH_EDITOR) {
+    S.cockpitLayout.widths.files = FILES_PANE_WITH_EDITOR;
+    applyCockpitLayout();
   }
-  return S.session.monaco;
-}
-
-// Map the backend's `.lang` (file extension or common name) to Monaco's
-// language IDs.  Most names match directly; we only translate the few
-// common mismatches.  Falls through to `plaintext` for unknowns.
-const MONACO_LANG_ALIASES = {
-  rs: 'rust', ts: 'typescript', tsx: 'typescript',
-  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-  py: 'python', md: 'markdown', sh: 'shell', bash: 'shell',
-  yml: 'yaml', tf: 'hcl', htm: 'html', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
-};
-function mapMonacoLang(raw) {
-  const k = (raw || '').toLowerCase();
-  return MONACO_LANG_ALIASES[k] || k || 'plaintext';
-}
-
-// Inject the AMD loader once, then require editor.main.  Cached so
-// subsequent file opens skip the network.  Returns the global `monaco`.
-function loadMonacoOnce() {
-  const s = ensureMonacoState();
-  if (s.ready) return s.ready;
-  s.ready = new Promise((resolve, reject) => {
-    // AMD loader needs to be a real <script>, not eval.
-    const tag = document.createElement('script');
-    tag.src = '/vendor/monaco/vs/loader.js';
-    tag.onload = () => {
-      // Workers are served same-origin via the vendor route — no Blob
-      // shim needed.
-      self.MonacoEnvironment = {
-        getWorkerUrl: () => '/vendor/monaco/vs/assets/editor.worker-Be8ye1pW.js',
-      };
-      window.require.config({ paths: { vs: '/vendor/monaco/vs' } });
-      window.require(['vs/editor/editor.main'], () => {
-        // Initial theme sync from the dashboard's current preference.
-        try {
-          const dt = document.documentElement.getAttribute('data-theme');
-          window.monaco.editor.setTheme(dt === 'light' ? 'vs' : 'vs-dark');
-        } catch {}
-        resolve(window.monaco);
-      }, reject);
-    };
-    tag.onerror = () => reject(new Error('Failed to load /vendor/monaco/vs/loader.js'));
-    document.head.appendChild(tag);
-  });
-  return s.ready;
 }
 
 async function openFile(relPath) {
-  if (!S.session.openFiles) S.session.openFiles = [];
-  document.querySelector('#cockpit-files .files-pane-inner')?.classList.remove('editor-collapsed');
-  // Already open → just activate.
-  const existing = S.session.openFiles.find(f => f.path === relPath);
-  if (existing) {
-    S.session.activeFile = relPath;
-    renderFileTabs(); renderActiveFile();
-    return;
-  }
-  const v = $('#file-viewer');
-  const s = ensureMonacoState();
-  // First-ever open shows "Loading editor…"; later opens just "Loading…".
-  v.innerHTML = '<div class="empty small">' +
-    (s.firstLoad ? 'Loading editor…' : 'Loading…') + '</div>';
-  let j;
-  try {
-    j = await fetch('/api/sessions/' + encodeURIComponent(S.session.id)
-      + '/file?path=' + encodeURIComponent(relPath)).then(r => r.json());
-  } catch (e) { v.innerHTML = '<div class="empty small">' + escHtml(String(e)) + '</div>'; return; }
-  if (j.error) { v.innerHTML = '<div class="empty small">' + escHtml(j.error) + '</div>'; return; }
-  const lang = (j.lang || '').toLowerCase();
-  S.session.openFiles.push({
-    path: relPath,
-    content: j.content || '',
-    lang: j.lang || '',
-    truncated: !!j.truncated,
-    // Previewable files (md / html / svg) land in Preview mode by default;
-    // everything else opens straight into the editor.
-    viewMode: PREVIEWABLE_LANGS.has(lang) ? 'preview' : 'edit',
-  });
-  S.session.activeFile = relPath;
-  renderFileTabs();
-  renderActiveFile();
+  widenFilesForEditor();
+  await axEditor().open(relPath);
 }
 
-function closeFile(relPath) {
-  if (!S.session.openFiles) return;
-  const idx = S.session.openFiles.findIndex(f => f.path === relPath);
-  if (idx === -1) return;
-  // Dispose the Monaco model + content-change disposer so we don't leak
-  // memory or double-fire dirty events.
-  const s = S.session.monaco;
-  if (s && s.modelsByPath.has(relPath)) {
-    const entry = s.modelsByPath.get(relPath);
-    try { entry.disposer && entry.disposer.dispose(); } catch {}
-    try { entry.model && entry.model.dispose(); } catch {}
-    s.modelsByPath.delete(relPath);
-  }
-  S.session.openFiles.splice(idx, 1);
-  if (S.session.activeFile === relPath) {
-    S.session.activeFile = S.session.openFiles.length
-      ? S.session.openFiles[Math.max(0, idx - 1)].path
-      : null;
-  }
-  renderFileTabs(); renderActiveFile();
-}
+function closeFile(relPath) { axEditor().close(relPath); }
 
 function renderFileTabs() {
   const bar = $('#file-tabs'); if (!bar) return;
+  const ed = axEditor();
   bar.innerHTML = '';
-  (S.session.openFiles || []).forEach(f => {
-    const tab = el('div', 'ftab' + (f.path === S.session.activeFile ? ' active' : ''));
-    tab.title = f.path;
+  ed.files.forEach(f => {
+    // A dot rather than a word: it has to be readable at a glance across a row
+    // of tabs, and "unsaved" spelled out on every tab is noise.
+    const tab = el('div', 'ftab' + (f.active ? ' active' : '') + (f.dirty ? ' dirty' : ''));
+    tab.title = f.path + (f.dirty ? ' — unsaved changes' : '');
     tab.appendChild(el('span', 'ftab-name', f.path.split('/').pop() || f.path));
-    const x = el('span', 'ftab-close', '×');
+    const x = el('span', 'ftab-close', f.dirty ? '•' : '×');
     x.addEventListener('click', (e) => { e.stopPropagation(); closeFile(f.path); });
     tab.appendChild(x);
-    tab.addEventListener('click', () => {
-      S.session.activeFile = f.path; renderFileTabs(); renderActiveFile();
-    });
+    tab.addEventListener('click', () => ed.activate(f.path));
     bar.appendChild(tab);
   });
   updateFilesEditor();
@@ -10833,10 +10779,45 @@ function renderFileTabs() {
 function updateFilesEditor() {
   const inner = document.querySelector('#cockpit-files .files-pane-inner');
   if (!inner) return;
-  const hasContent = ((S.session.openFiles || []).length > 0) || !!S.session.gitDiff;
+  const hasContent = axEditor().files.length > 0 || !!S.session.gitDiff;
   const wasCollapsed = inner.classList.contains('editor-collapsed');
   inner.classList.toggle('editor-collapsed', !hasContent);
   if (hasContent && wasCollapsed) requestAnimationFrame(() => relayoutEmbeddedEditors());
+}
+
+/**
+ * Replace what the viewer is showing, keeping the editor alive.
+ *
+ * The editor holds every open model and its view state, so it must be detached
+ * rather than destroyed — clearing `innerHTML` around it would silently throw
+ * away unsaved work and every cursor position. Callers that want the editor
+ * back call `renderActiveFile()`.
+ */
+function viewerShow(node) {
+  const v = $('#file-viewer'); if (!v) return null;
+  const ed = axEditor();
+  if (ed.parentNode === v) v.removeChild(ed);
+  v.textContent = '';
+  if (typeof node === 'string') v.innerHTML = node;
+  else if (node) v.append(node);
+  return v;
+}
+
+/**
+ * The one editor element, created on first use and never replaced.
+ *
+ * Held in a variable rather than looked up by id: the element spends time
+ * detached — while a preview or a diff has the pane — and a lookup would miss
+ * it and build a second editor with none of the open files.
+ */
+let _editorEl = null;
+function axEditor() {
+  if (!_editorEl) {
+    _editorEl = document.createElement('ax-editor');
+    _editorEl.id = 'editor';
+    wireEditor(_editorEl);
+  }
+  return _editorEl;
 }
 
 const PREVIEWABLE_LANGS = new Set(['html', 'htm', 'svg', 'md', 'markdown']);
@@ -10870,25 +10851,31 @@ function renderMarkdownDoc(text) {
   </style></head><body>${body}</body></html>`;
 }
 
+/**
+ * Show the active file: either the preview renderer or the editor.
+ *
+ * Preview is a different way of showing the same file, not part of the editor,
+ * so it lives here and the editor element is simply set aside while it shows.
+ */
 function renderActiveFile() {
   const v = $('#file-viewer'); if (!v) return;
+  const ed = axEditor();
   const modes = $('#viewer-modes');
   const hint = $('#viewer-hint');
   const saveBtn = $('#viewer-save');
-  const f = (S.session.openFiles || []).find(x => x.path === S.session.activeFile);
+  const f = ed.activeFile;
   if (!f) {
     if (modes) modes.style.display = 'none';
-    v.innerHTML = '<div class="empty small">Select a file to view</div>';
+    viewerShow('<div class="empty small">Select a file to view</div>');
     return;
   }
   const previewable = PREVIEWABLE_LANGS.has((f.lang || '').toLowerCase());
-  const mode = f.viewMode || 'edit';
+  const mode = viewModeFor(f);
   if (modes) {
     modes.style.display = 'flex';
     $$('.vmode').forEach(b => {
       const m = b.dataset.mode;
       b.classList.toggle('active', m === mode);
-      // Preview button only shown when the file type can render.
       b.style.display = (m === 'preview' && !previewable) ? 'none' : '';
     });
     if (hint) {
@@ -10898,104 +10885,51 @@ function renderActiveFile() {
         f.dirty            ? 'Unsaved changes — Ctrl+S to save' :
                              'Editing — Ctrl+S to save';
     }
-    // Save button visible in editor mode unless the file is truncated.
     if (saveBtn) saveBtn.classList.toggle('hide', mode !== 'edit' || !!f.truncated);
+    const revertBtn = $('#viewer-cancel');
+    if (revertBtn) revertBtn.classList.toggle('hide', mode !== 'edit' || !f.dirty);
   }
+
   if (mode === 'preview') {
     const iframe = document.createElement('iframe');
     iframe.className = 'file-preview';
     iframe.setAttribute('sandbox', 'allow-scripts');
     const lang = (f.lang || '').toLowerCase();
-    const doc = MARKDOWN_LANGS.has(lang) ? renderMarkdownDoc(f.content || '') : (f.content || '');
-    iframe.setAttribute('srcdoc', doc);
-    v.innerHTML = '';
-    v.appendChild(iframe);
+    iframe.setAttribute('srcdoc',
+      MARKDOWN_LANGS.has(lang) ? renderMarkdownDoc(ed.contentOf(f.path)) : ed.contentOf(f.path));
+    viewerShow(iframe);
     return;
   }
-  // Editor mode (Monaco). Build / reuse the persistent host element so
-  // the editor instance survives tab switches.
-  const s = ensureMonacoState();
-  v.innerHTML = '';
-  if (f.truncated) {
-    const banner = el('div', 'file-truncated-banner',
-      '⚠ File truncated by backend — saves are disabled. Use the CLI to edit large files.');
-    v.appendChild(banner);
+  // The editor moves back into the pane rather than being rebuilt — it is
+  // holding a model and a cursor position for every open file.
+  if (ed.parentNode !== v) {
+    // A diff was showing; it is not any more, and holding its editor would keep
+    // the pane open around an empty view once the last file is closed.
+    if (S.session.gitDiff) gitDisposeDiff(window.monaco);
+    v.textContent = '';
+    v.append(ed);
   }
-  if (!s.hostEl) {
-    s.hostEl = el('div', 'monaco-host');
-    s.hostEl.id = 'monaco-host';
-  } else {
-    // Detach from previous parent before re-appending.
-    if (s.hostEl.parentNode) s.hostEl.parentNode.removeChild(s.hostEl);
+  ed.layout();
+  ed.focus();
+}
+
+/** Which way a file is being shown. Previewable types start rendered. */
+const _viewModes = new Map();   // path → 'edit' | 'preview'
+function viewModeFor(f) {
+  if (!_viewModes.has(f.path)) {
+    _viewModes.set(f.path,
+      PREVIEWABLE_LANGS.has((f.lang || '').toLowerCase()) ? 'preview' : 'edit');
   }
-  v.appendChild(s.hostEl);
-  // Lazy-load Monaco on first call, then mount + activate the model.
-  loadMonacoOnce().then(monaco => {
-    s.firstLoad = false;
-    // Create editor on first call.
-    if (!s.editor) {
-      s.editor = monaco.editor.create(s.hostEl, {
-        automaticLayout: true,
-        minimap: { enabled: true },
-        fontSize: 13,
-        scrollBeyondLastLine: false,
-        wordWrap: 'off',
-        tabSize: 2,
-      });
-      // Ctrl+S → save (matches the existing keyboard convention).
-      s.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveActiveFile());
-      // Selection-aware "+ Add to chat" bubble — shows whenever a non-
-      // empty selection exists, hides on collapse.  The bubble itself
-      // pulls text + line numbers straight from the editor's selection.
-      s.editor.onDidChangeCursorSelection(() => onMonacoSelectionChange(s.editor, monaco));
-      s.editor.onDidScrollChange(() => {
-        // Reposition the bubble so it tracks scroll while a selection persists.
-        if (_selBubble) onMonacoSelectionChange(s.editor, monaco);
-      });
-    }
-    // Get or build the model for this file.
-    let entry = s.modelsByPath.get(f.path);
-    if (!entry) {
-      const uri = monaco.Uri.parse('axo://session/' + encodeURIComponent(f.path));
-      const existingModel = monaco.editor.getModel(uri);
-      const model = existingModel || monaco.editor.createModel(
-        f.content || '', mapMonacoLang(f.lang), uri,
-      );
-      entry = { model, viewState: null, disposer: null };
-      s.modelsByPath.set(f.path, entry);
-      // Dirty tracking — listener stored so closeFile can dispose it.
-      entry.disposer = entry.model.onDidChangeContent(() => {
-        f.draft = entry.model.getValue();
-        f.dirty = f.draft !== (f.content || '');
-        const h = $('#viewer-hint');
-        if (h) h.textContent = f.dirty
-          ? 'Unsaved changes — Ctrl+S to save'
-          : 'Editing — Ctrl+S to save';
-      });
-    }
-    // Save outgoing tab's viewState (cursor/scroll/folds) so it restores
-    // when the user comes back.
-    if (s.editor.getModel() && s.editor.getModel() !== entry.model) {
-      const prevPath = [...s.modelsByPath.entries()]
-        .find(([_, e]) => e.model === s.editor.getModel());
-      if (prevPath) prevPath[1].viewState = s.editor.saveViewState();
-    }
-    s.editor.setModel(entry.model);
-    if (entry.viewState) s.editor.restoreViewState(entry.viewState);
-    s.editor.updateOptions({ readOnly: !!f.truncated });
-    s.editor.focus();
-  }).catch(err => {
-    v.innerHTML = '<div class="empty small">Editor failed to load: ' + escHtml(String(err)) + '</div>';
-  });
+  return _viewModes.get(f.path);
 }
 
 async function onViewerModeClick(e) {
   const b = e.target.closest('.vmode'); if (!b) return;
-  const f = (S.session.openFiles || []).find(x => x.path === S.session.activeFile);
-  if (!f) return;
+  const ed = axEditor();
+  const f = ed.activeFile; if (!f) return;
   const next = b.dataset.mode;
-  // Leaving edit mode with unsaved changes: real modal confirm.
-  if (f.viewMode === 'edit' && next !== 'edit' && f.dirty) {
+  // Leaving the editor with unsaved work is a decision, not a side effect.
+  if (viewModeFor(f) === 'edit' && next !== 'edit' && f.dirty) {
     const ok = await axoConfirm({
       title: 'Discard unsaved changes?',
       body: `"${f.path}" has unsaved edits. Switching view will lose them.`,
@@ -11003,45 +10937,13 @@ async function onViewerModeClick(e) {
       okKind: 'danger',
     });
     if (!ok) return;
-    // Revert the Monaco model back to the on-disk content.
-    const entry = S.session.monaco && S.session.monaco.modelsByPath.get(f.path);
-    if (entry && entry.model) entry.model.setValue(f.content || '');
-    f.draft = null;
-    f.dirty = false;
+    ed.revert(f.path);
   }
-  f.viewMode = next;
+  _viewModes.set(f.path, next);
   renderActiveFile();
 }
 
-async function saveActiveFile() {
-  const f = (S.session.openFiles || []).find(x => x.path === S.session.activeFile);
-  if (!f || !S.session.id) return;
-  if (f.truncated) {
-    toast('Save blocked', 'File was truncated — use the CLI to edit.', 'warn');
-    return;
-  }
-  // Source of truth for content: the Monaco model if loaded, else draft/content.
-  const entry = S.session.monaco && S.session.monaco.modelsByPath.get(f.path);
-  const content = entry && entry.model ? entry.model.getValue()
-                : (f.draft != null ? f.draft : (f.content || ''));
-  try {
-    const r = await fetch('/api/sessions/' + encodeURIComponent(S.session.id)
-      + '/file?path=' + encodeURIComponent(f.path), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) { toast('Save failed', j.error || ('HTTP ' + r.status), 'err'); return; }
-    f.content = content;
-    f.draft = null;
-    f.dirty = false;
-    toast('Saved', f.path + ' (' + j.bytes + ' bytes)', 'ok');
-    const h = $('#viewer-hint'); if (h) h.textContent = 'Editing — Ctrl+S to save';
-  } catch (e) {
-    toast('Save failed', String(e), 'err');
-  }
-}
+function saveActiveFile() { return axEditor().save(); }
 
 /// Does this edit affect a file we have open? Path comparison handles both
 /// absolute paths and paths relative to the session's working dir.
@@ -11053,20 +10955,17 @@ function pathMatchesOpen(editedPath, openPath) {
 }
 
 async function reloadOpenFileIfMatch(editedPath) {
-  const files = S.session.openFiles || [];
-  if (!files.length || !editedPath) return;
-  const match = files.find(f => pathMatchesOpen(editedPath, f.path));
-  if (!match) return;
-  try {
-    const j = await fetch('/api/sessions/' + encodeURIComponent(S.session.id)
-      + '/file?path=' + encodeURIComponent(match.path)).then(r => r.json());
-    if (j && !j.error) {
-      match.content = j.content || '';
-      match.truncated = !!j.truncated;
-      if (j.lang) match.lang = j.lang;
-      if (S.session.activeFile === match.path) renderActiveFile();
-    }
-  } catch {}
+  const ed = axEditor(); if (!ed) return;
+  // Match on either an absolute path or one relative to the working dir.
+  const hit = ed.files.find(f => pathMatchesOpen(editedPath, f.path));
+  if (!hit) return;
+  const done = await ed.reload(hit.path);
+  // A file with unsaved work is left alone rather than overwritten; say so
+  // instead of letting the buffer and the disk quietly disagree.
+  if (!done && hit.dirty) {
+    toast('File changed on disk', hit.path + ' has unsaved edits — not reloaded.', 'warn');
+  }
+  renderActiveFile();
 }
 
 // ── Activity stream ──
@@ -11495,29 +11394,30 @@ async function openGitDiff(path) {
   const v = $('#file-viewer'); if (!v || !S.session.id) return;
   // Open the editor column (it's collapsed when nothing's shown) so Monaco
   // lays out at a real size.
-  document.querySelector('#cockpit-files .files-pane-inner')?.classList.remove('editor-collapsed');
+  widenFilesForEditor();
   const modes = $('#viewer-modes'); if (modes) modes.style.display = 'none';
-  v.innerHTML = '<div class="empty small">Loading diff…</div>';
+  viewerShow('<div class="empty small">Loading diff…</div>');
   let d;
   try {
     d = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/diff?path=' + encodeURIComponent(path)).then(r => r.json());
-  } catch { v.innerHTML = '<div class="empty small">Diff failed to load.</div>'; return; }
-  if (!d || d.error) { v.innerHTML = '<div class="empty small">Diff failed to load.</div>'; return; }
+  } catch { viewerShow('<div class="empty small">Diff failed to load.</div>'); return; }
+  if (!d || d.error) { viewerShow('<div class="empty small">Diff failed to load.</div>'); return; }
   const monaco = await loadMonacoOnce();
   // Tear down any prior diff editor + models.
   gitDisposeDiff(monaco);
-  S.session.activeFile = null; // keep renderActiveFile from clobbering the view
+  // The diff owns the pane while it is up; the editor keeps its files and is
+  // put back the next time one is activated.
   // Binary or oversized files have no inline diff — show a sentinel, but still
   // remember the path so a live refresh can recover if it shrinks/changes.
   if (d.binary || d.too_large) {
-    v.innerHTML = '<div class="empty small">' +
+    viewerShow('<div class="empty small">' +
       (d.binary ? 'Binary file — no inline diff.' : 'File too large to diff inline (over 512 KB).') +
-      '</div>';
+      '</div>');
     S.session.gitDiff = { path, sentinel: true };
     return;
   }
-  v.innerHTML = '';
-  const host = el('div', 'monaco-host'); v.appendChild(host);
+  const host = el('div', 'monaco-host');
+  viewerShow(host);
   const de = monaco.editor.createDiffEditor(host, {
     automaticLayout: true, readOnly: true, renderSideBySide: true,
     minimap: { enabled: false }, fontSize: 13, scrollBeyondLastLine: false,
@@ -11542,8 +11442,7 @@ async function refreshOpenDiff() {
   if (!changed) {
     const monaco = await loadMonacoOnce();
     gitDisposeDiff(monaco);
-    const v = $('#file-viewer');
-    if (v) v.innerHTML = '<div class="empty small">No changes — committed or reverted.</div>';
+    viewerShow('<div class="empty small">No changes — committed or reverted.</div>');
     updateFilesEditor();   // collapse the editor if nothing else is open
     return;
   }
@@ -12130,71 +12029,54 @@ function buildRefsContext(refs) {
   return lines.join('\n');
 }
 
-// Picks up the current selection inside the file viewer, computes file
-// line numbers (best-effort via indexOf in the original content), and
-// Add the editor's current selection as a chat reference. Uses Monaco's
-// own selection API — text + line numbers come directly from the editor
-// rather than the host DOM (Monaco draws via its own widgets so
-// `window.getSelection()` doesn't see anything).
-function addMonacoSelectionAsRef(editor) {
-  if (!editor) return;
-  const sel = editor.getSelection();
-  const model = editor.getModel();
-  if (!sel || !model || sel.isEmpty()) return;
-  const text = model.getValueInRange(sel);
-  if (!text.trim()) return;
-  const f = (S.session.openFiles || []).find(x => x.path === S.session.activeFile);
-  if (!f) return;
-  addRef({
-    kind: 'code',
-    path: f.path,
-    lang: f.lang || '',
-    startLine: sel.startLineNumber,
-    endLine: sel.endLineNumber,
-    text,
-    preview: text.length > 200 ? text.slice(0, 200) + '…' : text,
-  });
-  hideSelBubble();
-  toast('Reference added', f.path + ':' + sel.startLineNumber, 'ok');
-}
-
-// Floating "+ Add to chat" bubble.  Anchored to the active selection's
-// end position inside Monaco — visible only when a non-empty selection
-// exists; hides when the selection collapses or scrolls out of view.
+/**
+ * The "+ Add to chat" bubble over an editor selection.
+ *
+ * Selecting code in order to talk about it is a conversation act, so the shell
+ * owns this: the editor only reports that a selection exists and where it is.
+ */
 let _selBubble = null;
-function showSelBubble(x, y, onClick) {
+let _selDetail = null;
+
+function showSelBubbleFor(detail) {
   hideSelBubble();
+  if (!detail.at) return;
+  _selDetail = detail;
   const b = document.createElement('div');
   b.className = 'sel-bubble';
   b.textContent = '+ Add to chat';
-  b.style.left = Math.max(8, x) + 'px';
-  b.style.top  = Math.max(8, y) + 'px';
+  b.style.left = Math.max(8, detail.at.x) + 'px';
+  b.style.top = Math.max(8, detail.at.y) + 'px';
+  // Mousedown would move focus out of the editor and collapse the very
+  // selection the click is about.
   b.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
-  b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onClick && onClick(); });
+  b.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    addSelectionAsRef();
+  });
   document.body.appendChild(b);
   _selBubble = b;
 }
+
 function hideSelBubble() {
   if (_selBubble) { _selBubble.remove(); _selBubble = null; }
+  _selDetail = null;
 }
 
-// Called on Monaco selection change.  Hides the bubble when the
-// selection collapses; otherwise positions it just above the selection's
-// end position in viewport coordinates.
-function onMonacoSelectionChange(editor, monaco) {
-  const sel = editor.getSelection();
-  if (!sel || sel.isEmpty()) { hideSelBubble(); return; }
-  // Anchor on whichever endpoint is currently the "live" one.
-  const anchorPos = sel.getEndPosition();
-  const dom = editor.getScrolledVisiblePosition(anchorPos);
-  if (!dom) { hideSelBubble(); return; }
-  const host = editor.getDomNode();
-  if (!host) { hideSelBubble(); return; }
-  const rect = host.getBoundingClientRect();
-  // Above the line; clamp to the editor's viewport.
-  const x = rect.left + dom.left + 6;
-  const y = rect.top  + dom.top  - 30;
-  showSelBubble(x, y, () => addMonacoSelectionAsRef(editor));
+function addSelectionAsRef() {
+  const d = _selDetail;
+  if (!d || !d.text || !d.text.trim()) return;
+  addRef({
+    kind: 'code',
+    path: d.path,
+    lang: d.lang || '',
+    startLine: d.startLine,
+    endLine: d.endLine,
+    text: d.text,
+    preview: d.text.length > 200 ? d.text.slice(0, 200) + '…' : d.text,
+  });
+  toast('Reference added', d.path + ':' + d.startLine, 'ok');
+  hideSelBubble();
 }
 
 // ── Live lattice panel ──
