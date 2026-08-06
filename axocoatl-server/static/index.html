@@ -1682,6 +1682,7 @@
   ax-file-tree { flex: 1; min-height: 0; }
   ax-compare { flex: 1; min-height: 0; }
   ax-terminal { flex: 1; min-height: 0; min-width: 0; }
+  ax-browser { flex: 1; min-height: 0; min-width: 0; }
   /* Source Control sections — staged and not staged are separate facts. */
   .git-views { display: flex; gap: var(--sp-1); padding: var(--sp-2) var(--sp-2) 0; flex-wrap: wrap; }
   .git-view {
@@ -2887,6 +2888,7 @@
   import '/ui/changes.js';
   import '/ui/settings.js';
   import '/ui/terminal.js';
+  import '/ui/browser.js';
   // Boot diagnostics: an exception during init() silently strands the app —
   // the live socket never opens and nothing says why. Record them where they
   // can be read instead of vanishing into an empty console.
@@ -3422,19 +3424,11 @@
               <button class="pane-btn" data-pane="browser" data-act="collapse" title="Collapse">▶</button>
             </div>
             <div class="browser-toolbar">
-              <button class="bx-btn" id="bx-back"    title="Back">←</button>
-              <button class="bx-btn" id="bx-forward" title="Forward">→</button>
-              <button class="bx-btn" id="bx-reload"  title="Reload">⟳</button>
-              <input type="text" class="bx-url" id="bx-url" placeholder="http://localhost:8765" spellcheck="false">
               <button class="bx-btn" id="bx-pick" title="Pick a DOM element and reference it in chat">🎯 Pick</button>
-              <button class="bx-btn" id="bx-go" title="Go">Go</button>
-              <button class="bx-btn" id="bx-open" title="Open in real browser">↗</button>
             </div>
             <div class="bx-suggest hide" id="bx-suggest"></div>
+            <ax-browser id="browser"></ax-browser>
             <div class="browser-body" id="browser-body">
-              <div class="empty small" id="bx-placeholder" style="padding:14px;">
-                Enter a URL above, or run a dev server in the Terminals pane — detected URLs appear here as one-click chips.
-              </div>
               <div class="dom-hier hide" id="dom-hier">
                 <div class="dom-hier-head">
                   <span>Element hierarchy</span>
@@ -8777,19 +8771,10 @@ function initCockpitChrome() {
     else if (e.key === 'Escape') { e.preventDefault(); closeTerminalPop(); }
   });
   // Browser controls
-  const bBack = $('#bx-back'); if (bBack) bBack.addEventListener('click', browserBack);
-  const bFwd  = $('#bx-forward'); if (bFwd) bFwd.addEventListener('click', browserForward);
-  const bRel  = $('#bx-reload'); if (bRel) bRel.addEventListener('click', browserReload);
-  const bGo   = $('#bx-go'); if (bGo) bGo.addEventListener('click', () => browserGo($('#bx-url').value));
-  const bOpen = $('#bx-open'); if (bOpen) bOpen.addEventListener('click', browserOpenExternal);
   const bPick = $('#bx-pick'); if (bPick) bPick.addEventListener('click', toggleBrowserPick);
   const hClose   = $('#dom-hier-close');   if (hClose)   hClose.addEventListener('click', () => closeDomHier(false));
   const hCancel  = $('#dom-hier-cancel');  if (hCancel)  hCancel.addEventListener('click', () => closeDomHier(false));
   const hConfirm = $('#dom-hier-confirm'); if (hConfirm) hConfirm.addEventListener('click', confirmDomHier);
-  const bUrl  = $('#bx-url');
-  if (bUrl) bUrl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); browserGo(bUrl.value); }
-  });
   updateBrowserNavButtons();
   applyCockpitLayout();
 }
@@ -9836,6 +9821,8 @@ function openCockpit(s) {
   if (_rail) { _rail.current = s.id; _rail.refresh(); }
   const _cmp = $('#compare');
   if (_cmp) _cmp.session = s.id;
+  const _bx = $('#browser');
+  if (_bx) _bx.session = s.id;
   try { localStorage.setItem(LAST_SESSION_KEY, s.id); } catch {}
   refreshFileTree();
   sessionLatticeBuild(s);   // no-ops (lattice pane is gone) but still emits status frames
@@ -9955,60 +9942,36 @@ function renderBrowserSuggestions() {
 // session sandbox. Same-origin makes the DOM picker possible. Non-localhost
 // URLs go through directly (they'll be opaque to the picker, but the user
 // can still view them).
-function proxyUrlFor(logical) {
-  try {
-    const u = new URL(logical);
-    const isLocal = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '0.0.0.0';
-    if (!isLocal || !S.session.id) return logical;
-    const port = u.port || (u.protocol === 'https:' ? '443' : '80');
-    const tail = u.pathname.replace(/^\//, '') + (u.search || '');
-    return '/api/sessions/' + encodeURIComponent(S.session.id) + '/proxy/' + port + (tail ? '/' + tail : '');
-  } catch { return logical; }
-}
-
-// Swap just the iframe inside #browser-body — never touches the placeholder
-// or the #dom-hier panel that live as siblings. Earlier impl did
-// `body.innerHTML = ''` which silently destroyed the picker UI.
-function mountBrowserIframe(srcUrl) {
-  const body = $('#browser-body'); if (!body) return;
-  const ph = $('#bx-placeholder'); if (ph) ph.style.display = 'none';
-  body.querySelectorAll('iframe').forEach(f => f.remove());
-  const iframe = document.createElement('iframe');
-  iframe.src = srcUrl;
-  iframe.setAttribute('sandbox',
-    'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
-  body.appendChild(iframe);
-}
-
+// Navigation, history and the same-origin proxy live in <ax-browser>. What
+// stays here is where URLs come from — the shell watches what the agents run —
+// and the element picker, which exists to put a reference into the conversation.
 function browserGo(rawUrl) {
-  let url = (rawUrl || '').trim();
-  if (!url) return;
-  if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
-  if (S.browser.histIdx < S.browser.history.length - 1) {
-    S.browser.history = S.browser.history.slice(0, S.browser.histIdx + 1);
-  }
-  if (S.browser.history[S.browser.history.length - 1] !== url) {
-    S.browser.history.push(url);
-    S.browser.histIdx = S.browser.history.length - 1;
-  }
-  S.browser.url = url;
-  $('#bx-url').value = url;
-  mountBrowserIframe(proxyUrlFor(url));
-  if (S.cockpitLayout && S.cockpitLayout.collapsed && S.cockpitLayout.collapsed.browser) {
+  const bx = $('#browser'); if (!bx) return;
+  bx.go(rawUrl);
+  if (S.cockpitLayout?.collapsed?.browser) {
     S.cockpitLayout.collapsed.browser = false;
     applyCockpitLayout();
   }
-  updateBrowserNavButtons();
-  // Picking is a per-page state — clear it on navigation.
+  // Picking is per-page state; a navigation ends it.
   setBrowserPicking(false);
   if (S.browser.hier) closeDomHier(false);
 }
 
-// ── DOM picker ──
-function getBrowserIframe() {
-  const body = $('#browser-body');
-  return body && body.querySelector('iframe');
+function browserBack() { $('#browser')?.back(); }
+function browserForward() { $('#browser')?.forward(); }
+function browserReload() { $('#browser')?.reload(); }
+function browserOpenExternal() {
+  const u = $('#browser')?.url;
+  if (u) window.open(u, '_blank', 'noopener');
 }
+/** The component owns its own back/forward state. */
+function updateBrowserNavButtons() {}
+
+// ── DOM picker ──
+// The frame lives inside the component's shadow root now, so the picker asks
+// for it rather than querying the document — the same reference, reached the
+// way the component publishes it.
+function getBrowserIframe() { return $('#browser')?.frame || null; }
 
 function setBrowserPicking(on) {
   S.browser.picking = !!on;
@@ -10122,39 +10085,6 @@ window.addEventListener('message', (e) => {
   }
 });
 
-function browserBack() {
-  if (S.browser.histIdx <= 0) return;
-  S.browser.histIdx -= 1;
-  const u = S.browser.history[S.browser.histIdx];
-  S.browser.url = u; $('#bx-url').value = u;
-  mountBrowserIframe(proxyUrlFor(u));
-  updateBrowserNavButtons();
-  setBrowserPicking(false);
-  if (S.browser.hier) closeDomHier(false);
-}
-function browserForward() {
-  if (S.browser.histIdx >= S.browser.history.length - 1) return;
-  S.browser.histIdx += 1;
-  const u = S.browser.history[S.browser.histIdx];
-  S.browser.url = u; $('#bx-url').value = u;
-  mountBrowserIframe(proxyUrlFor(u));
-  updateBrowserNavButtons();
-  setBrowserPicking(false);
-  if (S.browser.hier) closeDomHier(false);
-}
-function browserReload() {
-  const body = $('#browser-body');
-  const f = body && body.querySelector('iframe');
-  if (f) { const src = f.src; f.src = 'about:blank'; setTimeout(() => f.src = src, 30); }
-}
-function browserOpenExternal() {
-  if (S.browser.url) window.open(S.browser.url, '_blank', 'noopener,noreferrer');
-}
-function updateBrowserNavButtons() {
-  const back = $('#bx-back'), fwd = $('#bx-forward');
-  if (back) back.disabled = S.browser.histIdx <= 0;
-  if (fwd)  fwd.disabled  = S.browser.histIdx >= S.browser.history.length - 1;
-}
 function termStatusClass(status) {
   const s = String(status || '');
   if (s.startsWith('running')) return 'running';
