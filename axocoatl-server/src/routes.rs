@@ -1095,6 +1095,10 @@ pub async fn git_branches(
 #[derive(serde::Deserialize)]
 pub struct GitCommitBody {
     pub message: Option<String>,
+    /// Stage the whole tree first. Absent means commit the index as the user
+    /// built it — the only reading under which staging a hunk means anything.
+    #[serde(default)]
+    pub stage_all: bool,
 }
 
 /// POST /api/sessions/{id}/git/commit
@@ -1105,7 +1109,7 @@ pub async fn git_commit(
 ) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
     daemon
-        .git_commit(&id, body.message.as_deref().unwrap_or(""))
+        .git_commit(&id, body.message.as_deref().unwrap_or(""), body.stage_all)
         .await
         .map(Json)
         .map_err(git_err)
@@ -4433,5 +4437,30 @@ mod tests {
         let body: ExecuteRequest = serde_json::from_str(r#"{"input":"hi"}"#).unwrap();
         assert!(body.system_override.is_none());
         assert!(body.model_override.is_none());
+    }
+
+    /// A commit with no `stage_all` must commit the index as the user built it.
+    ///
+    /// This is the whole point of staging a file or a hunk, and it used to be
+    /// the other way round: `git_commit` always ran `add -A` first, so every
+    /// staging decision was discarded at the moment it was meant to take
+    /// effect. Flipping this default silently restores that, which is why the
+    /// default is asserted rather than left to the reader of the struct.
+    #[test]
+    fn commit_body_defaults_to_committing_only_the_index() {
+        let body: GitCommitBody = serde_json::from_str(r#"{"message":"only staged"}"#).unwrap();
+        assert!(
+            !body.stage_all,
+            "an absent stage_all must mean 'commit the index', not 'stage everything'"
+        );
+
+        let explicit: GitCommitBody =
+            serde_json::from_str(r#"{"message":"everything","stage_all":true}"#).unwrap();
+        assert!(explicit.stage_all);
+
+        // A commit with no message at all still defaults the same way.
+        let bare: GitCommitBody = serde_json::from_str("{}").unwrap();
+        assert!(!bare.stage_all);
+        assert!(bare.message.is_none());
     }
 }

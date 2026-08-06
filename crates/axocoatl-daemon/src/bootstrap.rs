@@ -2102,15 +2102,25 @@ impl AxocoatlDaemon {
         Ok(crate::git::parse_branches(&cur.stdout, &list.stdout))
     }
 
-    /// Stage everything and commit. Returns the fresh status. A no-op commit
-    /// (nothing staged) is not an error — the status just comes back unchanged.
+    /// Commit. Returns the fresh status. A no-op commit (nothing staged) is not
+    /// an error — the status just comes back unchanged.
+    ///
+    /// `stage_all` decides which of two different acts this is. `false` commits
+    /// the index exactly as the user built it, which is the whole point of
+    /// staging a file or a hunk at a time; an earlier version always ran
+    /// `add -A` first, so every staging decision was silently discarded at the
+    /// moment it was meant to take effect. `true` is the deliberate
+    /// stage-everything-and-commit, still worth having as one motion.
     pub async fn git_commit(
         &self,
         session_id: &str,
         message: &str,
+        stage_all: bool,
     ) -> Result<crate::git::GitStatus, DaemonError> {
         self.ensure_session_git(session_id).await?;
-        self.session_git(session_id, &["add", "-A"]).await?;
+        if stage_all {
+            self.session_git(session_id, &["add", "-A"]).await?;
+        }
         let msg = if message.trim().is_empty() {
             "axocoatl: snapshot"
         } else {

@@ -3368,7 +3368,8 @@
                 <div class="git-view hide" id="git-view">
                   <div class="git-bar">
                     <input type="text" class="git-msg" id="git-msg" placeholder="Commit message…" spellcheck="false" />
-                    <button class="btn sm" id="git-commit" title="Stage all + commit">Commit all</button>
+                    <button class="btn sm" id="git-commit" title="Commit what you have staged">Commit</button>
+                    <button class="btn sm ghost" id="git-commit-all" title="Stage everything, then commit">Stage all + commit</button>
                   </div>
                   <div class="git-branchline">
                     <span class="git-branch-glyph" aria-hidden="true">⎇</span>
@@ -8727,10 +8728,11 @@ function initCockpitChrome() {
   if (etabs) etabs.addEventListener('click', (e) => {
     const b = e.target.closest('.etab'); if (b) setExplorerTab(b.dataset.etab);
   });
-  const gcommit = $('#git-commit'); if (gcommit) gcommit.addEventListener('click', gitCommit);
+  const gcommit = $('#git-commit'); if (gcommit) gcommit.addEventListener('click', () => gitCommit(false));
+  const gcommitAll = $('#git-commit-all'); if (gcommitAll) gcommitAll.addEventListener('click', () => gitCommit(true));
   const grefresh = $('#git-refresh'); if (grefresh) grefresh.addEventListener('click', () => { refreshGitPane(); loadGitBranches(); });
   const gmsg = $('#git-msg');
-  if (gmsg) gmsg.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); gitCommit(); } });
+  if (gmsg) gmsg.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); gitCommit(false); } });
   const gbranch = $('#git-branch');
   if (gbranch) gbranch.addEventListener('change', (e) => { gitCheckout(e.target.value); });
   const fanout = $('#fanout-btn'); if (fanout) fanout.addEventListener('click', toggleFanoutPop);
@@ -11469,15 +11471,30 @@ function gitDisposeDiff(monaco) {
   S.session.gitDiff = null;
 }
 
-async function gitCommit() {
+/**
+ * Commit.
+ *
+ * Two verbs, because they are two different acts. `Commit` writes the index as
+ * you built it — the only reading under which staging a file or a hunk means
+ * anything. `Stage all + commit` is the deliberate everything-in-one-motion.
+ * There used to be one button that always ran `add -A`, which quietly threw away
+ * every staging decision at the moment it was supposed to take effect.
+ */
+async function gitCommit(stageAll = false) {
   if (!S.session.id) return;
   const msg = ($('#git-msg')?.value || '').trim();
+  const staged = (S.session.gitStatus?.files || []).filter(f => f.staged);
+  if (!stageAll && !staged.length) {
+    toast('Nothing staged', 'Stage a file or a hunk first, or use "Stage all + commit".', 'warn');
+    return;
+  }
   try {
     const st = await fetch('/api/sessions/' + encodeURIComponent(S.session.id) + '/git/commit', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message: msg }),
+      body: JSON.stringify({ message: msg, stage_all: stageAll }),
     }).then(r => r.json());
-    if (st && !st.error) {
+    if (st && st.error) { toast('Commit failed', st.error, 'err'); return; }
+    if (st) {
       $('#git-msg').value = '';
       S.session.gitStatus = st; renderGitFiles(st);
       const badge = $('#git-badge'); if (badge) { const n = (st.files||[]).length; badge.textContent = String(n); badge.classList.toggle('hide', n === 0); }

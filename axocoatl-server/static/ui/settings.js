@@ -109,7 +109,15 @@ export class AxSettings extends HTMLElement {
       this.#nav.append(b);
     }
     this.#root.querySelector('.x').addEventListener('click', () => this.hide());
-    this.addEventListener('click', (e) => { if (e.target === this) this.hide(); });
+    // Dismiss on a backdrop click — but the test has to be "did this land
+    // outside the card", not "is the target the host". Inside a shadow root
+    // every click retargets to the host on the way out, so `e.target === this`
+    // was true for the nav buttons too: choosing any section closed the dialog,
+    // and only the section shown on open was ever reachable.
+    this.addEventListener('click', (e) => {
+      const card = this.#root.querySelector('.card');
+      if (!e.composedPath().includes(card)) this.hide();
+    });
     document.addEventListener('keydown', (e) => {
       if (this.open && e.key === 'Escape') { e.preventDefault(); this.hide(); }
     });

@@ -48,6 +48,30 @@ const CSS = `
 :host(:not([open])) .pop { display: none; }
 .head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
 .head h3 { margin: 0; font-size: var(--fs-sm); font-weight: var(--fw-medium); }
+/* Fan-out is a mode you switch on, not something a send implies. Without this
+   the configured rows are discarded by the enabled guard and no run starts. */
+.sw {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  cursor: pointer; user-select: none; font-size: var(--fs-xs); color: var(--muted);
+}
+.sw input { position: absolute; opacity: 0; width: 0; height: 0; }
+.track {
+  width: 30px; height: 17px; border-radius: 999px; flex-shrink: 0;
+  background: var(--bg-3); border: 1px solid var(--border);
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  position: relative;
+}
+.track::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 11px; height: 11px; border-radius: 50%; background: var(--muted-2);
+  transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+:host([enabled]) .track { background: var(--accent); border-color: var(--accent); }
+:host([enabled]) .track::after { transform: translateX(13px); background: var(--c-ink, #0A0A0A); }
+:host([enabled]) .sw { color: var(--text); }
+.sw input:focus-visible + .track { box-shadow: var(--focus-ring); }
+/* The rows are configuration for a mode that is off — show that, do not hide it. */
+:host(:not([enabled])) .rows, :host(:not([enabled])) .acts { opacity: .45; }
 .head .x { margin-left: auto; background: none; border: 0; color: var(--muted); cursor: pointer; font-size: var(--fs-lg); line-height: 1; }
 .rows { display: flex; flex-direction: column; gap: var(--sp-1); }
 .row {
@@ -78,7 +102,7 @@ button.add:disabled { opacity: .4; cursor: not-allowed; }
 export class AxFanout extends HTMLElement {
   static get observedAttributes() { return ['open', 'enabled']; }
 
-  #root; #rows; #note; #add;
+  #root; #rows; #note; #add; #sw; #swLabel;
   #agents = [];
   #models = [];
   /** One entry per attempt. `{}` means "the session's own agent and model". */
@@ -91,6 +115,11 @@ export class AxFanout extends HTMLElement {
       <div class="pop" role="dialog" aria-label="Configure attempts">
         <div class="head">
           <h3>Explore several ways</h3>
+          <label class="sw">
+            <input type="checkbox" class="on" />
+            <span class="track"></span>
+            <span class="sw-label">Off</span>
+          </label>
           <button class="x" title="Close">×</button>
         </div>
         <div class="rows"></div>
@@ -100,6 +129,13 @@ export class AxFanout extends HTMLElement {
     this.#rows = this.#root.querySelector('.rows');
     this.#note = this.#root.querySelector('.note');
     this.#add = this.#root.querySelector('.add');
+    this.#sw = this.#root.querySelector('.on');
+    this.#swLabel = this.#root.querySelector('.sw-label');
+    // The only way fan-out turns on. It was lost when this component was
+    // extracted from the shell, which left `enabled` write-only: the rows were
+    // configurable, the `lanes` getter returned [] regardless, and no run could
+    // ever start. Configuration you cannot act on is not a control.
+    this.#sw.onchange = () => { this.enabled = this.#sw.checked; this.#emit(); };
     this.#root.querySelector('.x').onclick = () => { this.open = false; };
     this.#add.onclick = () => {
       if (this.#lanes.length >= MAX) return;
@@ -126,12 +162,22 @@ export class AxFanout extends HTMLElement {
 
   get count() { return this.enabled ? this.#lanes.length : 1; }
 
+  /** Keep the switch and its label showing the truth of the attribute. */
+  #syncSwitch() {
+    if (!this.#sw) return;
+    this.#sw.checked = this.enabled;
+    this.#swLabel.textContent = this.enabled ? `On — ${this.#lanes.length} attempts` : 'Off';
+  }
+
   async connectedCallback() {
     await this.loadChoices();
     this.#render();
   }
 
-  attributeChangedCallback(name) { if (name === 'open' && this.open) this.#render(); }
+  attributeChangedCallback(name) {
+    if (name === 'open' && this.open) this.#render();
+    if (name === 'enabled') this.#syncSwitch();
+  }
 
   /** Read the agents and models actually installed, so the menus offer reality. */
   async loadChoices() {
@@ -159,6 +205,7 @@ export class AxFanout extends HTMLElement {
   }
 
   #render() {
+    this.#syncSwitch();
     this.#rows.textContent = '';
     this.#lanes.forEach((lane, i) => {
       const row = document.createElement('div');
