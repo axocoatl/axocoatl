@@ -82,6 +82,29 @@ button.run:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .check.unset { color: var(--warn); }
 .body { flex: 1; overflow: auto; padding: var(--sp-3); min-height: 0; }
 .empty { color: var(--muted-2); font-size: var(--fs-sm); padding: var(--sp-5); text-align: center; }
+.empty.loading { opacity: .6; }
+.branches {
+  border-bottom: 1px solid var(--border); padding: var(--sp-2) var(--sp-3);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.branches[hidden] { display: none; }
+.brow { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-xs); }
+.brow .bn { color: var(--muted-2); font-family: var(--font-mono); flex-shrink: 0; }
+.brow code { font-family: var(--font-mono); color: var(--accent-2); }
+.brow code.wt {
+  color: var(--muted-2); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; direction: rtl; text-align: left;
+}
+.run.ghost { margin-left: auto; }
+.empty.failed { color: var(--err); }
+.retry {
+  display: block; margin: var(--sp-2) auto 0; background: none;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--text); font: var(--fs-xs) var(--font-sans);
+  padding: 2px var(--sp-2); cursor: pointer;
+}
+.retry:hover { border-color: var(--accent); }
+.retry:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 th, td { text-align: left; padding: 5px var(--sp-3); border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -119,11 +142,13 @@ tr.diverged td.same-as-base { opacity: .45; }
 export class AxCompare extends HTMLElement {
   static get observedAttributes() { return ['session', 'view']; }
 
-  #root; #bar; #body; #gist; #check;
+  #root; #bar; #body; #gist; #check; #branches;
   /** The project's own check command, as the session records it. */
   #checkCmd = null;
   #busy = false;
   #results = null;
+  #error = null;
+  #loading = false;
   #alignment = null;
   #base = 0;
   #diffOnly = false;
@@ -141,18 +166,23 @@ export class AxCompare extends HTMLElement {
         <button class="run" data-act="verify" title="Run the project's own checks in every attempt">Run checks</button>
         <button class="run" data-act="judge" title="Rank the survivors and say why">Judge</button>
         <span class="gist"></span>
+        <button class="run ghost" data-act="branches" title="Show the git branch and worktree behind each attempt">Show the branches</button>
       </div>
       <div class="check"></div>
+      <div class="branches" hidden></div>
       <div class="body"></div>`;
     this.#bar = this.#root.querySelector('.bar');
     this.#body = this.#root.querySelector('.body');
     this.#gist = this.#root.querySelector('.gist');
     this.#check = this.#root.querySelector('.check');
+    this.#branches = this.#root.querySelector('.branches');
     this.#bar.addEventListener('click', (e) => {
       const v = e.target.closest('[data-view]');
       if (v) { this.view = v.dataset.view; return; }
       const a = e.target.closest('[data-act]');
-      if (a) this.#run(a.dataset.act);
+      if (!a) return;
+      if (a.dataset.act === 'branches') { this.#toggleBranches(); return; }
+      this.#run(a.dataset.act);
     });
     adopt(this.#root, CSS);
   }
@@ -212,6 +242,51 @@ export class AxCompare extends HTMLElement {
     if (v) v.textContent = this.#busy ? 'Running…' : 'Run checks';
   }
 
+  /**
+   * The git truth, one click away.
+   *
+   * The surface deliberately says "attempts" and never names a worktree — the
+   * decision recorded in the plan is that the product must not spell
+   * git-specific nouns, because it has to work with other version control
+   * later. But hiding it entirely reads as a toy to the person this is built
+   * for, who wants to know it is real git underneath and scriptable. So the
+   * branch and worktree of every attempt are exactly one click from the
+   * scoreboard, and nowhere else on the surface.
+   */
+  #toggleBranches() {
+    const btn = this.#bar.querySelector('[data-act="branches"]');
+    if (!this.#branches.hidden) {
+      this.#branches.hidden = true;
+      btn.textContent = 'Show the branches';
+      return;
+    }
+    const lanes = this.#results?.lanes || [];
+    this.#branches.textContent = '';
+    if (!lanes.length) {
+      const e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = 'No attempts yet — nothing to show.';
+      this.#branches.append(e);
+    }
+    for (const l of lanes) {
+      const row = document.createElement('div');
+      row.className = 'brow';
+      const n = document.createElement('span');
+      n.className = 'bn';
+      n.textContent = `#${(l.index ?? 0) + 1}`;
+      const br = document.createElement('code');
+      br.textContent = l.branch || '—';
+      const wt = document.createElement('code');
+      wt.className = 'wt';
+      wt.textContent = l.worktree || '—';
+      wt.title = l.worktree || '';
+      row.append(n, br, wt);
+      this.#branches.append(row);
+    }
+    this.#branches.hidden = false;
+    btn.textContent = 'Hide the branches';
+  }
+
   /** Show the arbiter, and let it be corrected in place. */
   #renderCheck() {
     if ((this.#results?.lanes || []).length < 2) { this.#check.innerHTML = ''; return; }
@@ -240,14 +315,31 @@ export class AxCompare extends HTMLElement {
   async refresh() {
     if (!this.session) return;
     const s = encodeURIComponent(this.session);
+    // Say that we are reading before we read, so the pane is never blank in a
+    // way that means "there is nothing" while it actually means "not yet".
+    if (!this.#results) {
+      this.#loading = true;
+      this.render();
+    }
     try {
       const list = await fetch('/api/sessions').then((r) => r.json());
       this.#checkCmd = (Array.isArray(list) ? list : [])
         .find((x) => x.id === this.session)?.check_command || null;
     } catch { /* keep what we had */ }
+    // A failed read and "no attempts yet" are opposite facts. Conflating them
+    // showed the invitation to explore a task several ways at exactly the
+    // moment the app could not tell whether you already had.
+    this.#error = null;
     try {
-      this.#results = await fetch(`/api/sessions/${s}/variants/results`).then((r) => r.json());
-    } catch { this.#results = null; }
+      const r = await fetch(`/api/sessions/${s}/variants/results`);
+      const body = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(body?.error || `HTTP ${r.status}`);
+      this.#results = body;
+    } catch (e) {
+      this.#results = null;
+      this.#error = String(e.message || e);
+    }
+    this.#loading = false;
     // The route view is only meaningful once there is something to align, and a
     // failed fetch must not blank a scoreboard that did load.
     try {
@@ -264,6 +356,25 @@ export class AxCompare extends HTMLElement {
       b.setAttribute('aria-pressed', String(b.dataset.view === this.view));
     }
     const attempts = this.#results?.lanes || [];
+    if (this.#loading) {
+      this.#gist.textContent = '';
+      this.#body.innerHTML = '<div class="empty loading">Reading the attempts…</div>';
+      return;
+    }
+    if (this.#error) {
+      this.#gist.textContent = '';
+      this.#body.textContent = '';
+      const box = document.createElement('div');
+      box.className = 'empty failed';
+      box.textContent = `Could not read the attempts: ${this.#error}`;
+      const retry = document.createElement('button');
+      retry.className = 'retry';
+      retry.textContent = 'Try again';
+      retry.addEventListener('click', () => void this.refresh());
+      box.append(retry);
+      this.#body.append(box);
+      return;
+    }
     if (attempts.length < 2) {
       this.#gist.textContent = '';
       this.#body.innerHTML = '<div class="empty">Explore a task several ways to compare the attempts.</div>';

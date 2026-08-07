@@ -566,6 +566,44 @@
   .palette input { width: 100%; background: transparent; border: 0; border-bottom: 1px solid var(--border); padding: 14px 18px; color: var(--text); font-size: var(--fs-body); outline: none; }
   .palette-list { max-height: 360px; overflow-y: auto; }
   .palette-item { padding: 10px 18px; cursor: pointer; display: flex; gap: 12px; align-items: center; }
+  /* A search that finds nothing should say so. Silence reads as a broken box. */
+  .palette-empty { padding: 14px 18px; color: var(--muted-2); font-size: var(--fs-sm); }
+
+  /* ── Narrow windows ──────────────────────────────────────────────────
+     This is a desktop tool and does not pretend to be a phone app, but a
+     laptop at 1280 — or a window docked to half a screen — is ordinary, and
+     the layout had nothing to say about it: zero media queries, so panes kept
+     their remembered widths and pushed the chat spine off the edge. The caps
+     in applyCockpitLayout do the load-bearing work; these handle the chrome
+     that grid tracks cannot reach. */
+  @media (max-width: 1100px) {
+    /* The icon strip and a rail and a chat is one column too many here. */
+    .app { grid-template-columns: 40px auto 1fr; }
+    body.strip-expanded .app { grid-template-columns: 40px auto 1fr; }
+    body.strip-expanded .strip-label,
+    body.strip-expanded .strip-mark-label { display: none; }
+    .card-row { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+    .detail-section .field-row { grid-template-columns: 100px 1fr; }
+  }
+  @media (max-width: 860px) {
+    /* Below this the rail is a pane's worth of width for a list you can reach
+       from the palette, so it goes away entirely and ⌘K becomes navigation. */
+    .app { grid-template-columns: 40px 0 1fr; }
+    ax-rail { display: none; }
+    .detail-section .grid-2 { grid-template-columns: 1fr; }
+    .quick-open-card, .palette-card { width: min(94vw, 640px); }
+  }
+  /* Motion is decoration; someone who has asked for less should not get it.
+     The app animates panes, popovers and the rail, none of which carry
+     meaning that survives only in the movement. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
   .palette-item:hover, .palette-item.sel { background: var(--bg-3); }
   .palette-item .kind { font-size: var(--fs-xs); color: var(--muted-2); text-transform: uppercase; letter-spacing: .07em; min-width: 70px; }
   .palette-item .nm { font-weight: 500; }
@@ -702,7 +740,10 @@
     flex: 1; display: grid;
     grid-template-columns: 260px 6px 1fr 6px 240px;
     gap: 0; min-height: 0;
-    margin-right: var(--term-rail-w, 40px);
+    /* The terminal docks along the bottom, so the grid gives up height to it
+       rather than width. Terminals live at the bottom of every editor and
+       fighting that muscle memory buys nothing. */
+    margin-bottom: var(--term-rail-w, 32px);
   }
   .col-resizer { cursor: col-resize; background: transparent; transition: background .15s; user-select: none; touch-action: none; }
   .col-resizer:hover, .col-resizer.dragging { background: var(--accent); opacity: .55; }
@@ -800,32 +841,33 @@
   body.axo-resizing, body.axo-resizing * { user-select: none !important; cursor: col-resize !important; }
   body.axo-vresizing, body.axo-vresizing * { user-select: none !important; cursor: row-resize !important; }
   .cockpit-pane { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel); min-height: 0; overflow: hidden; }
-  /* ── Terminals overlay drawer ───────────────────────────────────────
-     Anchored to the right edge of .cockpit-shell.  Two states:
-       closed → 40px rail with vertical terminal names (term-drawer-rail)
-       open   → user-resizable drawer with list+output split inside
-     The grid's `margin-right: var(--term-rail-w)` reserves the rail's
-     space whether open or closed, so the rest of the panes don't shift
-     when the drawer expands. */
+  /* ── Terminals bottom dock ──────────────────────────────────────────
+     Anchored to the bottom edge of .cockpit-shell, where terminals live in
+     every editor. Two states:
+       closed → a 32px strip of terminal names (term-drawer-rail)
+       open   → user-resizable dock with list+output split inside
+     The grid's `margin-bottom: var(--term-rail-w)` reserves the strip's
+     space whether open or closed, so the panes don't shift when it
+     expands — it grows over them and gets out of the way again. */
   .cockpit-terminals-drawer {
-    position: absolute; top: 0; right: 0; bottom: 0;
-    width: var(--term-rail-w, 40px);
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: var(--term-rail-w, 32px);
     background: var(--panel);
-    border-left: 1px solid var(--border);
+    border-top: 1px solid var(--border);
     display: flex; flex-direction: column;
     overflow: hidden;
-    transition: width .22s cubic-bezier(.2,.7,.3,1);
+    transition: height .22s cubic-bezier(.2,.7,.3,1);
     z-index: 12;
   }
   .cockpit-terminals-drawer.is-open {
-    width: var(--term-open-w, 460px);
-    box-shadow: -10px 0 30px rgba(0,0,0,.40), -1px 0 0 var(--border);
+    height: var(--term-open-w, 320px);
+    box-shadow: 0 -10px 30px rgba(0,0,0,.40), 0 -1px 0 var(--border);
   }
   /* Outer-left resize handle — only active when the drawer is open. */
   .term-drawer-outer-resizer {
-    position: absolute; left: 0; top: 0; bottom: 0;
-    width: 6px;
-    cursor: col-resize;
+    position: absolute; left: 0; right: 0; top: 0;
+    height: 6px;
+    cursor: row-resize;
     background: transparent;
     transition: background .15s;
     z-index: 2;
@@ -839,9 +881,9 @@
      at the top. */
   .term-drawer-rail {
     flex: 1; min-height: 0;
-    display: flex; flex-direction: column; align-items: center;
-    padding: 6px 0 8px;
-    gap: 8px;
+    display: flex; flex-direction: row; align-items: center;
+    padding: 0 var(--sp-2);
+    gap: var(--sp-2);
   }
   .cockpit-terminals-drawer.is-open .term-drawer-rail { display: none; }
   .term-rail-toggle, .term-rail-new {
@@ -854,20 +896,17 @@
   .term-rail-toggle { color: var(--axo-jade-glow); }
   .term-rail-toggle:hover, .term-rail-new:hover { background: rgba(var(--axo-jade-rgb), .14); }
   .term-rail-label {
-    writing-mode: vertical-rl;
-    transform: rotate(180deg);
     font-family: 'Space Grotesk', sans-serif;
     font-size: var(--fs-xs); font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 1.2px;
     color: var(--muted-2);
-    margin: 4px 0;
+    margin: 0;
+    flex-shrink: 0;
   }
-  .term-rail-list { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; overflow-y: auto; overflow-x: hidden; padding: 4px 0; min-height: 0; width: 100%; }
+  .term-rail-list { flex: 1; display: flex; flex-direction: row; align-items: center; gap: 4px; overflow-x: auto; overflow-y: hidden; padding: 0; min-width: 0; height: 100%; }
   .term-rail-row {
-    writing-mode: vertical-rl;
-    transform: rotate(180deg);
-    padding: 8px 4px;
+    padding: 4px var(--sp-2);
     font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: var(--fs-xs);
     color: var(--muted);
@@ -875,9 +914,10 @@
     border-radius: var(--r-sm);
     display: flex; align-items: center; gap: 6px;
     white-space: nowrap;
-    max-height: 200px;
+    max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex-shrink: 0;
   }
   .term-rail-row:hover { color: var(--fg); background: rgba(255,255,255,.04); }
   .term-rail-row.active { color: var(--accent); }
@@ -2902,6 +2942,12 @@
   import '/ui/terminal.js';
   import '/ui/browser.js';
   import { loadMonaco } from '/ui/editor.js';
+  import { MODULES as AX_MODULES } from '/ui/launcher.js';
+  import { SETTINGS_SECTIONS as AX_SETTINGS_SECTIONS } from '/ui/settings.js';
+  // The palette lists the same modules and settings sections the launcher and
+  // the settings dialog do — one source, so a new module appears everywhere.
+  window.PALETTE_MODULES = AX_MODULES;
+  window.PALETTE_SETTINGS = AX_SETTINGS_SECTIONS;
   // One AMD load for the page: the diff editor in the shell shares it.
   window.axLoadMonaco = loadMonaco;
   // Boot diagnostics: an exception during init() silently strands the app —
@@ -3508,7 +3554,7 @@
                names (the user clicks one to open the drawer to that
                terminal). -->
           <div class="term-drawer-rail" id="term-drawer-rail">
-            <button class="term-rail-toggle" id="term-rail-toggle" title="Open terminals (Ctrl+5)" aria-label="Open terminals">◀</button>
+            <button class="term-rail-toggle" id="term-rail-toggle" title="Open terminals (Ctrl+5)" aria-label="Open terminals">▲</button>
             <div class="term-rail-label">TERMINALS</div>
             <div class="term-rail-list" id="term-rail-list"></div>
             <button class="pane-btn term-rail-new" id="term-rail-new-btn" title="New terminal">＋</button>
@@ -7883,7 +7929,7 @@ S.cockpitLayout = {
   // Files/browser/terminal/graph appear when you reach for them (Panes menu).
   paneOrder: ['stream'],
   termOpen: false,        // false = thin rail, true = drawer expanded
-  termOpenW: 460,         // drawer width when open (drag-resizable)
+  termOpenW: 320,         // dock height when open (drag-resizable)
   termInnerListW: 140,    // inner list width (drag-resizable inside the drawer)
 };
 S.sidebarMode = 'full';         // 'full' | 'mini' | 'hidden'
@@ -7893,7 +7939,10 @@ S.sidebarMode = 'full';         // 'full' | 'mini' | 'hidden'
 // dropped from Sessions.  v3: terminals became an overlay drawer.
 // v6: presets retired — the cockpit is one configurable workspace; surfaces
 // are toggled via the Panes menu. Bumped so old persisted presets reset.
-const LAYOUT_KEY = 'axo.cockpit.v8';
+// v9: terminals moved from a right-hand drawer to a bottom dock, so the
+// remembered `termOpenW` is a width being read as a height — it describes a
+// different axis of a different thing and is not a preference to carry over.
+const LAYOUT_KEY = 'axo.cockpit.v9';
 const SIDEBAR_KEY = 'axo.sidebar.v1';
 function persistLayout() {
   try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(S.cockpitLayout)); } catch {}
@@ -7924,7 +7973,12 @@ function loadPersistedLayout() {
         S.cockpitLayout.paneOrder = s.paneOrder.slice();
       }
       if (typeof s.termOpen     === 'boolean') S.cockpitLayout.termOpen     = s.termOpen;
-      if (typeof s.termOpenW    === 'number' && s.termOpenW    > 200) S.cockpitLayout.termOpenW    = s.termOpenW;
+      // Clamped rather than trusted: this value used to be a drawer *width*,
+      // so a remembered 900 would open a dock tall enough to bury the app.
+      if (typeof s.termOpenW === 'number') {
+        S.cockpitLayout.termOpenW =
+          Math.max(TERM_DRAWER_MIN, Math.min(TERM_DRAWER_MAX, s.termOpenW));
+      }
       if (typeof s.termInnerListW === 'number' && s.termInnerListW > 60) S.cockpitLayout.termInnerListW = s.termInnerListW;
       // Don't restore focused on reload — start fresh, no jarring jump.
     }
@@ -7977,9 +8031,32 @@ function applyCockpitLayout() {
 
   // Build the track template: surface, 6px, surface, 6px, …  A solo surface
   // fills (1fr); otherwise flex surfaces take 1fr and the rest their px width.
+  // Cap the fixed columns so the flexible one always survives. Widths are
+  // remembered per surface, so opening a third module at a narrow window could
+  // ask for more track than exists — CSS grid then overflows rather than
+  // shrinking, and the chat spine, which is the point of the app, ends up a
+  // sliver or off-screen entirely. The cap is applied to the layout, not
+  // written back to the remembered width: widen the window and your sizes
+  // return.
+  const CHAT_MIN = 380;                          // below this the spine is unusable
+  const gutters = Math.max(0, visible.length - 1) * 6;
+  const room = Math.max(0, grid.getBoundingClientRect().width - gutters);
+  const fixed = visible.filter(id => !isFlexSurface(id));
+  const wanted = fixed.reduce((n, id) => n + surfaceWidth(id), 0);
+  const spare = room - CHAT_MIN;
+  // Scale every fixed column by the same factor rather than starving the last
+  // one, so the layout keeps its proportions as the window narrows.
+  const squeeze = (!solo && room > 0 && wanted > spare && wanted > 0)
+    ? Math.max(0.35, spare / wanted)
+    : 1;
+  const capped = (id) => {
+    const sf = SURFACES[id] || {};
+    return Math.max(sf.min || 150, Math.round(surfaceWidth(id) * squeeze));
+  };
+
   const tracks = [];
   visible.forEach((id, i) => {
-    tracks.push(solo ? '1fr' : (isFlexSurface(id) ? '1fr' : px(surfaceWidth(id))));
+    tracks.push(solo ? '1fr' : (isFlexSurface(id) ? `minmax(${CHAT_MIN}px, 1fr)` : px(capped(id))));
     if (i < visible.length - 1) tracks.push('6px');
   });
   grid.style.gridTemplateColumns = tracks.length ? tracks.join(' ') : '1fr';
@@ -8050,14 +8127,14 @@ function ensureResizerPool(n) {
   }
 }
 
-// ── Terminals overlay drawer ──────────────────────────────────────
-// The drawer is independent of the cockpit-grid: a thin 40px rail when
-// closed, a configurable-width panel when open.  The grid reserves the
-// rail's space via `margin-right: var(--term-rail-w)` so opening the
-// drawer overlays only the right-edge of the panes — never shifts them.
-const TERM_RAIL_W      = 40;
-const TERM_DRAWER_MIN  = 280;
-const TERM_DRAWER_MAX  = 900;
+// ── Terminals bottom dock ─────────────────────────────────────────
+// Independent of the cockpit-grid: a thin strip of terminal names when
+// closed, a configurable-height dock when open. The grid reserves the
+// strip's space via `margin-bottom: var(--term-rail-w)` so opening the
+// dock overlays only the bottom edge of the panes — never shifts them.
+const TERM_RAIL_W      = 32;
+const TERM_DRAWER_MIN  = 160;
+const TERM_DRAWER_MAX  = 800;
 const TERM_INNER_MIN   = 80;
 
 // Re-home the live terminal body: into the grid surface when a preset puts
@@ -8090,7 +8167,7 @@ function applyTerminalsDrawer() {
   drawer.style.display = '';
   // Reserve rail space on the grid's right margin.
   shell.style.setProperty('--term-rail-w', TERM_RAIL_W + 'px');
-  shell.style.setProperty('--term-open-w', (L.termOpenW || 460) + 'px');
+  shell.style.setProperty('--term-open-w', (L.termOpenW || 320) + 'px');
   drawer.classList.toggle('is-open', !!L.termOpen);
   // Inner split: list width is exact, output flexes.
   const list = document.getElementById('terminals-list');
@@ -8138,11 +8215,11 @@ function attachTermDrawerOuterResizer() {
     try { h.setPointerCapture(e.pointerId); } catch {}
     h.classList.add('dragging');
     document.body.classList.add('axo-resizing');
-    const startX = e.clientX;
+    const startY = e.clientY;
     const startW = S.cockpitLayout.termOpenW;
     const onMove = (ev) => {
-      const dx = startX - ev.clientX; // drag LEFT grows
-      const w  = Math.max(TERM_DRAWER_MIN, Math.min(TERM_DRAWER_MAX, startW + dx));
+      const dy = startY - ev.clientY; // drag UP grows, as a bottom dock does
+      const w  = Math.max(TERM_DRAWER_MIN, Math.min(TERM_DRAWER_MAX, startW + dy));
       S.cockpitLayout.termOpenW = w;
       applyCockpitLayout();
     };
@@ -8171,7 +8248,9 @@ function attachTermInnerResizer() {
     document.body.classList.add('axo-resizing');
     const startX = e.clientX;
     const startW = S.cockpitLayout.termInnerListW;
-    const max    = (S.cockpitLayout.termOpenW || 460) - 80;
+    const drawer = document.getElementById('cockpit-terminals');
+    const max = Math.max(TERM_INNER_MIN + 80,
+      (drawer ? drawer.getBoundingClientRect().width : 800) - 80);
     const onMove = (ev) => {
       const dx = ev.clientX - startX;
       S.cockpitLayout.termInnerListW = Math.max(TERM_INNER_MIN, Math.min(max, startW + dx));
@@ -8218,7 +8297,7 @@ const DEFAULT_LAYOUT = {
   focused: null,
   paneOrder: ['stream'],
   termOpen: false,
-  termOpenW: 460,
+  termOpenW: 320,
   termInnerListW: 140,
 };
 
@@ -8841,6 +8920,9 @@ function loadFinderFavorites() {
 }
 function saveFinderFavorites(list) {
   try { localStorage.setItem(FAV_KEY, JSON.stringify(list)); } catch {}
+  // The rail shows the same pins, so it learns about a change here rather than
+  // re-reading storage on a timer or going stale until a reload.
+  const rail = $('#rail'); if (rail) rail.favourites = list;
 }
 
 S.finder = {
@@ -10479,6 +10561,36 @@ function syncLauncherState() {
   } else attach();
 })();
 
+const RAIL_COLLAPSED_KEY = 'axo.rail.collapsed.v1';
+
+// The column caps are computed from the window's actual width, so they have to
+// be recomputed when it changes. Without this the layout is only ever correct
+// for the width it was last built at: shrink the window and the panes keep
+// their old tracks and push the chat spine off the edge.
+(function relayoutOnResize() {
+  let queued = false;
+  window.addEventListener('resize', () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      applyCockpitLayout();
+      relayoutEmbeddedEditors();
+      // Below a laptop width there is not room for a rail and a readable chat
+      // at once. It collapses itself rather than being fought with, and the
+      // preference is left alone so it comes back when the window does.
+      const rail = $('#rail');
+      if (rail) {
+        const narrow = window.innerWidth < 1100;
+        if (narrow) rail.collapsed = true;
+        else {
+          try { rail.collapsed = localStorage.getItem(RAIL_COLLAPSED_KEY) === '1'; } catch {}
+        }
+      }
+    });
+  });
+})();
+
 (function initRailOnce() {
   function attach() {
     const rail = $('#rail'); if (!rail || rail._wired) return;
@@ -10496,6 +10608,20 @@ function syncLauncherState() {
     // Both reuse the existing flows rather than growing second versions of them.
     rail.addEventListener('session-new', () => { closeCockpit(); openFolderPicker(); });
     rail.addEventListener('sessions-browse', () => closeCockpit());
+    // The switcher and the pins both mean "take me to this directory", which is
+    // the browse view already pointed at a path — not a second navigator.
+    rail.addEventListener('workspace-open', (e) => {
+      closeCockpit();
+      finderNavigate(e.detail.dir);
+    });
+    // Where the rail sits is a preference, so it belongs to the shell.
+    rail.addEventListener('collapse-change', (e) => {
+      try { localStorage.setItem(RAIL_COLLAPSED_KEY, e.detail.collapsed ? '1' : '0'); } catch {}
+    });
+    try { rail.collapsed = localStorage.getItem(RAIL_COLLAPSED_KEY) === '1'; } catch {}
+    // Pins are the finder's, and the rail shows them so they are reachable
+    // without going to the one view you open in order to stop browsing.
+    rail.favourites = loadFinderFavorites();
     // Land in work rather than on a browser.
     restoreLastSession();
   }
@@ -13537,24 +13663,87 @@ function openPalette() { $('#palette-mask').classList.add('open'); $('#palette-i
 function closePalette() { $('#palette-mask').classList.remove('open'); }
 $('#palette-mask').addEventListener('click', e => { if (e.target === $('#palette-mask')) closePalette(); });
 
+/**
+ * Everything you can reach by typing.
+ *
+ * The palette used to offer three "Open …" rows that called `switchTab`, which
+ * stopped being navigation when the tab strip retired — the destinations no
+ * longer existed, so the rows did nothing. What the app is now is sessions,
+ * modules that open around them, and settings, so that is what it offers, with
+ * the same shortcut printed beside each module as the launcher shows.
+ */
+function paletteItems() {
+  const items = [];
+
+  // Sessions first: the thing you are most often looking for is other work.
+  for (const s of (S.sessions || [])) {
+    if (s.status === 'closed') continue;
+    items.push({
+      kind: 'session',
+      label: s.name || (s.working_dir || '').split('/').pop() || s.id,
+      sub: s.working_dir || '',
+      action: () => openCockpit(s),
+    });
+  }
+
+  // Modules, only while a session is open — there is nothing to open them onto
+  // otherwise, and offering them would be offering a dead end.
+  if (S.session && S.session.id) {
+    for (const m of PALETTE_MODULES) {
+      items.push({
+        kind: 'module',
+        label: m.title,
+        sub: `⌘${m.key.toUpperCase()}`,
+        action: () => openModule(m.id),
+      });
+    }
+  }
+
+  for (const sec of PALETTE_SETTINGS) {
+    items.push({
+      kind: 'settings',
+      label: sec.title,
+      sub: 'Settings',
+      action: () => $('#settings')?.show(sec.id),
+    });
+  }
+
+  items.push({ kind: 'session', label: 'New session', sub: 'Choose a folder',
+               action: () => { closeCockpit(); openFolderPicker(); } });
+  items.push({ kind: 'session', label: 'All sessions', sub: 'Browse',
+               action: () => closeCockpit() });
+
+  // Automations, agents and skills stay reachable by name — they are things you
+  // fire mid-thought, which is exactly what a palette is for.
+  (S.automations || []).forEach(a => items.push({
+    kind: 'automation', label: a.name || a.id, sub: 'Run now',
+    action: () => { a.runner ? a.runner() : null; toast('Started', a.name || a.id, 'info'); },
+  }));
+  (S.agents || []).forEach(a => items.push({
+    kind: 'agent', label: a.id, sub: 'Restart',
+    action: async () => { await fetch(`/api/agents/${a.id}/restart`, { method: 'POST' }); toast('Restarted', a.id, 'ok'); },
+  }));
+  (S.skills || []).forEach(g => items.push({
+    kind: 'skill', label: g.name, sub: 'Fire',
+    action: async () => { await fetch(`/api/skills/${g.id}/fire`, { method: 'POST' }); toast(`Fired '${g.name}'`, '', 'ok'); },
+  }));
+
+  return items;
+}
+
 function renderPalette(query) {
   const list = $('#palette-list'); list.innerHTML = '';
-  const q = query.toLowerCase();
-  const items = [];
-  S.workflows.forEach(w => items.push({ kind: 'workflow', label: w.name || w.id, sub: 'Run', action: () => { fireWorkflowSilent(w.id, defaultInputFor(w.id)); switchTab('studio'); toast('Workflow fired', w.name, 'info'); } }));
-  S.skills.forEach(g => items.push({ kind: 'skill', label: g.name, sub: 'Fire', action: async () => { await fetch(`/api/skills/${g.id}/fire`, { method: 'POST' }); toast(`Fired '${g.name}'`, '', 'ok'); switchTab('studio'); } }));
-  S.agents.forEach(a => items.push({ kind: 'agent', label: a.id, sub: 'Restart', action: async () => { await fetch(`/api/agents/${a.id}/restart`, { method: 'POST' }); toast('Restarted', a.id, 'ok'); } }));
-  S.schedules.forEach(s => items.push({ kind: 'schedule', label: s.name, sub: 'Run now', action: async () => { await fetch(`/api/schedules/${s.id}/run`, { method: 'POST' }); toast('Schedule ran', s.name, 'ok'); } }));
-  items.push({ kind: 'nav', label: 'Open Lattice', sub: '→', action: () => switchTab('studio') });
-  items.push({ kind: 'nav', label: 'Open Studio', sub: '→', action: () => switchTab('studio') });
-  items.push({ kind: 'nav', label: 'Open Chat', sub: '→', action: () => switchTab('chat') });
-
-  const matches = items.filter(i => {
+  const q = query.trim().toLowerCase();
+  const matches = paletteItems().filter(i => {
     if (!q) return true;
     return i.label.toLowerCase().includes(q)
       || i.kind.toLowerCase().includes(q)
       || (i.sub || '').toLowerCase().includes(q);
   });
+  if (!matches.length) {
+    list.appendChild(el('div', 'palette-empty', `Nothing matches “${query.trim()}”`));
+    return;
+  }
   matches.slice(0, 50).forEach((it, i) => {
     const row = el('div', 'palette-item' + (i === 0 ? ' sel' : ''));
     row.appendChild(el('span', 'kind', it.kind));

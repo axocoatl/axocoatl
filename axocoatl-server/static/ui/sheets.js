@@ -46,6 +46,30 @@ export function sharedSheet(url) {
 export const CODICONS = '/vendor/codicons/codicon.css';
 
 /**
+ * Reduced motion, inside every shadow root.
+ *
+ * The document's `prefers-reduced-motion` block cannot reach in here — selector
+ * rules stop at the boundary — so a component's own keyframes would keep
+ * running for someone who asked the OS for less movement. The rail's status
+ * dots are the sharp case: they pulse *forever*, so ignoring the preference
+ * means a permanently animating page.
+ *
+ * Adopted before each component's own rules, and deliberately `!important`, so
+ * a component cannot re-enable motion by being more specific.
+ */
+const REDUCED_MOTION = `
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}`;
+
+const motionSheet = new CSSStyleSheet();
+motionSheet.replaceSync(REDUCED_MOTION);
+
+/**
  * Adopt shared sheets into a shadow root, then the component's own rules.
  *
  * Order matters: shared first so a component can override it. Awaiting means a
@@ -59,7 +83,10 @@ export const CODICONS = '/vendor/codicons/codicon.css';
 export async function adopt(root, ownCss, sharedUrls = [CODICONS]) {
   const own = new CSSStyleSheet();
   own.replaceSync(ownCss);
-  root.adoptedStyleSheets = [own];
+  // The motion sheet is last so it wins over the component's own transitions,
+  // and it is applied on the first pass too — a root that renders before its
+  // icons land must not animate in the meantime.
+  root.adoptedStyleSheets = [own, motionSheet];
   const shared = await Promise.all(sharedUrls.map(sharedSheet));
-  root.adoptedStyleSheets = [...shared, own];
+  root.adoptedStyleSheets = [...shared, own, motionSheet];
 }

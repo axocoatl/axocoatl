@@ -97,6 +97,16 @@ const CSS = `
   padding: var(--ax-file-tree-pad, var(--sp-1)) var(--sp-1);
   font-size: var(--fs-sm);
 }
+.empty.loading { opacity: .6; }
+.empty.failed { color: var(--err); }
+.retry {
+  display: block; margin: var(--sp-2) auto 0; background: none;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--text); font: var(--fs-xs) var(--font-sans);
+  padding: 2px var(--sp-2); cursor: pointer;
+}
+.retry:hover { border-color: var(--accent); }
+.retry:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .empty {
   color: var(--muted);
   font-size: var(--fs-xs);
@@ -198,23 +208,60 @@ export class AxFileTree extends HTMLElement {
     this.#applyFilter();
   }
 
+  /**
+   * Read a directory.
+   *
+   * Returns the failure instead of hiding it. An earlier version returned `[]`
+   * on error, which the caller then drew as "Empty directory" — a directory
+   * that could not be read and one with nothing in it are opposite facts, and
+   * showing the reassuring one is how a broken session looks like a finished
+   * one.
+   */
   async #fetch(relPath) {
     const url = `/api/sessions/${encodeURIComponent(this.session)}/tree`
       + (relPath ? `?path=${encodeURIComponent(relPath)}` : '');
     try {
-      const entries = await fetch(url).then((r) => r.json());
-      return Array.isArray(entries) ? entries : [];
-    } catch {
-      // A tree that cannot be read is reported as empty rather than thrown:
-      // the pane is one part of a session and must not take the page with it.
-      return [];
+      const r = await fetch(url);
+      const body = await r.json().catch(() => null);
+      if (!r.ok) return { error: body?.error || `HTTP ${r.status}` };
+      if (body && body.error) return { error: body.error };
+      return { entries: Array.isArray(body) ? body : [] };
+    } catch (e) {
+      // The pane is one part of a session and must not take the page with it,
+      // so this is caught — but it is reported, not swallowed.
+      return { error: String(e.message || e) };
     }
   }
 
   async #load(relPath, container, gen) {
-    const entries = await this.#fetch(relPath);
+    // Reading a directory over a socket is not instant, and an empty container
+    // in the meantime is indistinguishable from an empty directory.
+    const wait = document.createElement('div');
+    wait.className = 'empty loading';
+    wait.textContent = 'Reading…';
+    container.append(wait);
+
+    const res = await this.#fetch(relPath);
     if (gen !== this.#gen) return; // superseded while fetching
-    if (!entries.length && !relPath) {
+    wait.remove();
+
+    if (res.error) {
+      const err = document.createElement('div');
+      err.className = 'empty failed';
+      err.textContent = res.error;
+      const retry = document.createElement('button');
+      retry.className = 'retry';
+      retry.textContent = 'Try again';
+      retry.addEventListener('click', () => {
+        container.textContent = '';
+        void this.#load(relPath, container, this.#gen);
+      });
+      err.append(retry);
+      container.append(err);
+      return;
+    }
+    const entries = res.entries;
+    if (!entries.length) {
       const empty = document.createElement('div');
       empty.className = 'empty';
       empty.textContent = 'Empty directory';

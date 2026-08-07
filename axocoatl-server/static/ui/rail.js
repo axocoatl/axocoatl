@@ -21,9 +21,13 @@ import { adopt } from './sheets.js';
  * @attr {string} current   Id of the open session.
  * @attr {boolean} collapsed  Icon-width only.
  *
+ * @prop {Array<{path: string, label?: string}>} favourites  Pinned directories.
+ *
  * @fires session-open     detail: {id}
  * @fires session-new      start a session somewhere new
  * @fires sessions-browse  open the browse-everything view
+ * @fires workspace-open   detail: {dir} — go to a directory
+ * @fires collapse-change  detail: {collapsed} — so the shell can remember it
  * @fires settings-open
  *
  * @cssprop --ax-rail-w   Expanded width (default 248px)
@@ -85,6 +89,8 @@ const CSS = `
   display: flex; align-items: baseline; gap: var(--sp-2);
   padding: var(--sp-2) var(--sp-2) 2px;
 }
+.badge { display: inline-flex; align-items: center; gap: var(--sp-1); flex-shrink: 0; }
+:host([collapsed]) .badge .count { display: none; }
 .ws-name { font-size: var(--fs-sm); font-weight: var(--fw-medium); }
 .ws-path {
   font-size: var(--fs-xs); color: var(--muted-2); overflow: hidden;
@@ -107,6 +113,56 @@ const CSS = `
   flex-shrink: 0;
 }
 
+/* The workspace switcher. The rail lists sessions grouped by directory, and
+   with several directories in play the list gets long — this jumps to one
+   without scrolling for it, and names which one you are in. */
+.switch {
+  display: flex; align-items: center; gap: var(--sp-1);
+  width: calc(100% - var(--sp-4)); margin: 0 var(--sp-2) var(--sp-1);
+  padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md);
+  background: var(--bg-3); border: 1px solid var(--border);
+  color: var(--text); font: var(--fs-xs) var(--font-mono); cursor: pointer;
+  text-align: left;
+}
+.switch:hover { border-color: var(--accent); }
+.switch:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.switch .cur {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;
+}
+.switch .caret { color: var(--muted-2); flex-shrink: 0; }
+:host([collapsed]) .switch { display: none; }
+
+.menu {
+  position: absolute; z-index: 60; left: var(--sp-2); right: var(--sp-2);
+  background: var(--panel-2); border: 1px solid var(--border-strong);
+  border-radius: var(--r-md); box-shadow: var(--shadow-lg);
+  padding: var(--sp-1); max-height: 50vh; overflow-y: auto;
+}
+.menu[hidden] { display: none; }
+.menu button {
+  display: flex; align-items: center; gap: var(--sp-2); width: 100%;
+  background: none; border: 0; color: var(--text); cursor: pointer;
+  padding: var(--sp-1) var(--sp-2); border-radius: var(--r-sm);
+  font: var(--fs-xs) var(--font-mono); text-align: left;
+}
+.menu button:hover { background: var(--bg-3); }
+.menu button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.menu .m-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Pinned directories. They were only reachable from the browse view, which is
+   the one place you go to stop browsing — a pin you have to navigate to is not
+   a pin. */
+.fav .item .ico { color: var(--accent-2); }
+
+.top-collapse {
+  background: none; border: 0; color: var(--muted-2); cursor: pointer;
+  padding: 0 var(--sp-1); font-size: var(--fs-body); line-height: 1; flex-shrink: 0;
+  border-radius: var(--r-sm);
+}
+.top-collapse:hover { color: var(--text); }
+.top-collapse:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
 .foot { flex-shrink: 0; border-top: 1px solid var(--border); padding: var(--sp-2); }
 .empty { color: var(--muted-2); font-size: var(--fs-xs); padding: var(--sp-3) var(--sp-2); }
 `;
@@ -119,6 +175,10 @@ export class AxRail extends HTMLElement {
 
   #root;
   #scroll;
+  #switch;
+  #menu;
+  /** Pinned directories, as the shell knows them. */
+  #favourites = [];
   /** Sessions as served, newest activity first. */
   #sessions = [];
   /** session id → [{state}] for lanes currently running. */
@@ -132,7 +192,12 @@ export class AxRail extends HTMLElement {
         <img class="mark" src="/brand/mark.png" alt="" />
         <div class="brand label">Axocoatl</div>
         <div class="grow"></div>
+        <button class="top-collapse" id="collapse" title="Collapse the rail" aria-label="Collapse the rail">⟨</button>
       </div>
+      <button class="switch" id="switch" aria-haspopup="true" aria-expanded="false">
+        <span class="cur">no workspace</span><span class="caret">▾</span>
+      </button>
+      <div class="menu" id="menu" role="menu" hidden></div>
       <div class="scroll"></div>
       <div class="foot">
         <button class="item" id="new"><span class="ico">＋</span><span class="label">New session</span></button>
@@ -140,6 +205,23 @@ export class AxRail extends HTMLElement {
         <button class="item" id="settings"><span class="ico">◇</span><span class="label">Settings</span></button>
       </div>`;
     this.#scroll = this.#root.querySelector('.scroll');
+    this.#switch = this.#root.querySelector('#switch');
+    this.#menu = this.#root.querySelector('#menu');
+    this.#switch.addEventListener('click', (e) => { e.stopPropagation(); this.#toggleMenu(); });
+    // A menu that outlives the click that opened it is a menu you have to
+    // dismiss on purpose; this closes on any click elsewhere and on Escape.
+    document.addEventListener('click', () => this.#closeMenu());
+    this.#root.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !this.#menu.hidden) { e.stopPropagation(); this.#closeMenu(); }
+    });
+    // Collapsing is the shell's to remember, so it is announced rather than
+    // stored here — the component does not own where preferences live.
+    this.#root.querySelector('#collapse').addEventListener('click', () => {
+      this.collapsed = !this.collapsed;
+      this.dispatchEvent(new CustomEvent('collapse-change', {
+        detail: { collapsed: this.collapsed }, bubbles: true, composed: true,
+      }));
+    });
     // Starting work is a navigation act, so it belongs in the navigation. It
     // used to require going back to the browse view first, which made "new
     // session" something you found rather than something you did.
@@ -156,11 +238,77 @@ export class AxRail extends HTMLElement {
   set current(v) { v ? this.setAttribute('current', v) : this.removeAttribute('current'); }
 
   get collapsed() { return this.hasAttribute('collapsed'); }
-  set collapsed(v) { v ? this.setAttribute('collapsed', '') : this.removeAttribute('collapsed'); }
+  set collapsed(v) {
+    v ? this.setAttribute('collapsed', '') : this.removeAttribute('collapsed');
+    this.#root.querySelector('#collapse').textContent = v ? '⟩' : '⟨';
+    this.#root.querySelector('#collapse').title = v ? 'Expand the rail' : 'Collapse the rail';
+  }
+
+  get favourites() { return this.#favourites.slice(); }
+  set favourites(v) { this.#favourites = Array.isArray(v) ? v.slice() : []; this.render(); }
 
   connectedCallback() { this.refresh(); }
 
-  attributeChangedCallback(name) { if (name === 'current') this.#markCurrent(); }
+  attributeChangedCallback(name) {
+    if (name === 'current') { this.#markCurrent(); this.#syncSwitch(); }
+  }
+
+  /** The directory of the open session — what the switcher is showing. */
+  get currentDir() {
+    return this.#sessions.find((s) => s.id === this.current)?.working_dir || '';
+  }
+
+  #syncSwitch() {
+    const dir = this.currentDir;
+    const cur = this.#root.querySelector('.cur');
+    cur.textContent = dir || 'no workspace';
+    cur.title = dir || '';
+  }
+
+  #toggleMenu() { this.#menu.hidden ? this.#openMenu() : this.#closeMenu(); }
+
+  #closeMenu() {
+    this.#menu.hidden = true;
+    this.#switch.setAttribute('aria-expanded', 'false');
+  }
+
+  /**
+   * Every directory you could go to: the ones you have sessions in, plus the
+   * ones you pinned but may have no session in yet.
+   */
+  #openMenu() {
+    const dirs = [...new Set(this.#sessions.map((s) => s.working_dir).filter(Boolean))];
+    for (const f of this.#favourites) if (f.path && !dirs.includes(f.path)) dirs.push(f.path);
+    this.#menu.textContent = '';
+    if (!dirs.length) {
+      const e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = 'No workspaces yet.';
+      this.#menu.append(e);
+    }
+    for (const d of dirs) {
+      const b = document.createElement('button');
+      b.setAttribute('role', 'menuitem');
+      const pinned = this.#favourites.some((f) => f.path === d);
+      const ico = document.createElement('span');
+      ico.textContent = pinned ? '★' : '▸';
+      const name = document.createElement('span');
+      name.className = 'm-name';
+      name.textContent = d;
+      name.title = d;
+      b.append(ico, name);
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.#closeMenu();
+        this.dispatchEvent(new CustomEvent('workspace-open', {
+          detail: { dir: d }, bubbles: true, composed: true,
+        }));
+      });
+      this.#menu.append(b);
+    }
+    this.#menu.hidden = false;
+    this.#switch.setAttribute('aria-expanded', 'true');
+  }
 
   /** Re-read the session list. */
   async refresh() {
@@ -200,11 +348,13 @@ export class AxRail extends HTMLElement {
       Math.max(...a[1].map((s) => s.last_active || 0)));
 
     this.#scroll.textContent = '';
+    this.#renderFavourites();
     if (!ordered.length) {
       const e = document.createElement('div');
       e.className = 'empty';
       e.textContent = 'No sessions yet.';
       this.#scroll.append(e);
+      this.#syncSwitch();
       return;
     }
 
@@ -227,6 +377,12 @@ export class AxRail extends HTMLElement {
       path.textContent = dir;
       path.title = dir;
       h.append(name, path);
+      // The workspace's own live state, so a collapsed rail — or one scrolled
+      // past this group — still shows that something in here is running or
+      // waiting on you. Per-session dots answer "which session"; this answers
+      // "is there anything at all in this directory".
+      const wsStates = sessions.flatMap((s) => this.#attempts.get(s.id) || []);
+      if (wsStates.length) h.append(this.#stateBadge(wsStates));
       ws.append(h);
 
       const list = document.createElement('div');
@@ -237,6 +393,7 @@ export class AxRail extends HTMLElement {
       this.#scroll.append(ws);
     }
     this.#markCurrent();
+    this.#syncSwitch();
   }
 
   #sessionRow(s) {
@@ -254,24 +411,70 @@ export class AxRail extends HTMLElement {
     row.append(ico, label);
 
     const states = this.#attempts.get(s.id);
-    if (states?.length) {
-      const count = document.createElement('span');
-      count.className = 'count';
-      count.textContent = `⑂${states.length}`;
-      const dots = document.createElement('span');
-      dots.className = 'dots';
-      for (const st of states) {
-        const d = document.createElement('span');
-        d.className = `dot ${st}`;
-        dots.append(d);
-      }
-      row.append(count, dots);
-    }
+    if (states?.length) row.append(this.#stateBadge(states));
 
     row.addEventListener('click', () => this.dispatchEvent(new CustomEvent('session-open', {
       detail: { id: s.id }, bubbles: true, composed: true,
     })));
     return row;
+  }
+
+  /**
+   * `⑂N` and one dot per attempt, wrapped so it can be appended anywhere.
+   *
+   * The same shape serves a session row and a workspace header, because it is
+   * the same question at two scales — and answering it differently at each
+   * would make the rail two vocabularies instead of one.
+   */
+  #stateBadge(states) {
+    const wrap = document.createElement('span');
+    wrap.className = 'badge';
+    const count = document.createElement('span');
+    count.className = 'count';
+    count.textContent = `⑂${states.length}`;
+    const dots = document.createElement('span');
+    dots.className = 'dots';
+    // A workspace can run more attempts than there is room for; the count
+    // stays exact while the dots stop at a readable number.
+    for (const st of states.slice(0, 6)) {
+      const d = document.createElement('span');
+      d.className = `dot ${st}`;
+      dots.append(d);
+    }
+    wrap.append(count, dots);
+    return wrap;
+  }
+
+  /** Pinned directories, above the workspaces you happen to have open. */
+  #renderFavourites() {
+    if (!this.#favourites.length) return;
+    const head = document.createElement('div');
+    head.className = 'group-h';
+    head.textContent = 'Pinned';
+    const list = document.createElement('div');
+    list.className = 'sessions fav';
+    for (const f of this.#favourites) {
+      const b = document.createElement('button');
+      b.className = 'item';
+      const ico = document.createElement('span');
+      ico.className = 'ico';
+      ico.textContent = '★';
+      const label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = f.label || baseName(f.path);
+      label.title = f.path;
+      b.append(ico, label);
+      // A pinned directory may have live work in it even with no session open.
+      const states = this.#sessions
+        .filter((s) => s.working_dir === f.path)
+        .flatMap((s) => this.#attempts.get(s.id) || []);
+      if (states.length) b.append(this.#stateBadge(states));
+      b.addEventListener('click', () => this.dispatchEvent(new CustomEvent('workspace-open', {
+        detail: { dir: f.path }, bubbles: true, composed: true,
+      })));
+      list.append(b);
+    }
+    this.#scroll.append(head, list);
   }
 
   #markCurrent() {
