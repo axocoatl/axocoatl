@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "axocoatl")]
-#[command(about = "Axocoatl — The agentic AI framework that doesn't waste tokens")]
+#[command(about = "Axocoatl - local-first coding workbench and agent runtime")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -64,8 +64,8 @@ enum Commands {
         #[arg(short, long, default_value = "axocoatl.yaml")]
         config: PathBuf,
 
-        /// Resume a previous session
-        #[arg(long)]
+        /// Legacy display label only; does not select or resume stored chat history
+        #[arg(long, value_name = "LABEL")]
         session: Option<String>,
     },
 
@@ -350,16 +350,31 @@ fn cmd_service_install(config: &str) {
     };
     // The service runs an absolute path — relative paths in a unit file are
     // the #1 failure mode.
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
+    let exe = match std::env::current_exe().and_then(|path| path.canonicalize()) {
+        Ok(path) if path.is_file() => path,
+        Ok(path) => {
+            eprintln!(
+                "✗ the resolved axocoatl executable is not a file: {}",
+                path.display()
+            );
+            std::process::exit(1);
+        }
         Err(e) => {
-            eprintln!("✗ could not locate the axocoatl binary: {e}");
+            eprintln!("✗ could not resolve the axocoatl binary: {e}");
             std::process::exit(1);
         }
     };
-    let config_abs = std::path::Path::new(config)
-        .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from(config));
+    let config_abs = match std::path::Path::new(config).canonicalize() {
+        Ok(path) if path.is_file() => path,
+        Ok(path) => {
+            eprintln!("✗ the service config is not a file: {}", path.display());
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("✗ could not resolve service config '{config}': {error}");
+            std::process::exit(1);
+        }
+    };
     match mgr.install(&exe, &config_abs) {
         Ok(()) => {
             println!("✓ Always-On Service installed ({} backend)", mgr.backend());
@@ -409,7 +424,7 @@ fn cmd_service_status() {
             println!(
                 "\nNote: this is the Always-On *Service* (keeps the daemon \
                  process alive).\nProactive Agents — agents that act on their \
-                 own — are configured separately in axocoatl.yaml."
+                 own — are managed as Automations in Settings."
             );
         }
         Err(e) => {
@@ -739,7 +754,7 @@ async fn cmd_onboard(install_daemon: bool) {
     // 1. Provider
     let providers = [
         "Ollama (local, no API key)",
-        "OpenRouter (cloud, every model behind one key)",
+        "OpenRouter (cloud, models available to your account)",
         "Anthropic",
         "OpenAI",
     ];
@@ -844,7 +859,7 @@ server:
             (cfg, String::from("# No API keys needed for local Ollama\n"))
         }
         1 => {
-            // OpenRouter — every model behind one key.
+            // OpenRouter — one key for the model IDs available to the account.
             let key: String = Input::new()
                 .with_prompt("OpenRouter API key (leave blank to set later in .env)")
                 .allow_empty(true)
@@ -857,8 +872,8 @@ server:
                 .unwrap_or_else(|_| "openai/gpt-4o-mini".to_string());
             let cfg = format!(
                 r#"# Axocoatl — OpenRouter setup
-# OpenRouter is OpenAI-compatible; every model on openrouter.ai is
-# reachable through this single key. See https://openrouter.ai/models.
+# OpenRouter is OpenAI-compatible. Choose a model ID available to your
+# OpenRouter account; browse the catalog at https://openrouter.ai/models.
 agents:
   - id: assistant
     name: "Assistant"
@@ -1032,6 +1047,39 @@ async fn cmd_validate(config_path: &std::path::Path) {
     }
 }
 
+/// Singleton reservation acquired before daemon bootstrap. Development and
+/// service/serve mode share this exact boundary, so a second daemon exits
+/// before it can spawn actors or touch runtime state.
+struct CliIpcReservation {
+    socket_path: std::path::PathBuf,
+    listener: tokio::net::UnixListener,
+}
+
+async fn reserve_cli_ipc() -> CliIpcReservation {
+    let socket_path = axocoatl_daemon::ipc::default_socket_path();
+    let listener = match axocoatl_daemon::ipc::bind_ipc_listener(&socket_path).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("Failed to reserve the CLI IPC socket: {error}");
+            eprintln!("Another Axocoatl daemon may already be running.");
+            std::process::exit(1);
+        }
+    };
+    CliIpcReservation {
+        socket_path,
+        listener,
+    }
+}
+
+/// Attach initialized state to the socket reserved before bootstrap.
+fn start_cli_ipc(
+    reservation: CliIpcReservation,
+    state: std::sync::Arc<tokio::sync::RwLock<axocoatl_daemon::AxocoatlDaemon>>,
+) -> tokio::task::JoinHandle<()> {
+    println!("  IPC:    {}", reservation.socket_path.display());
+    axocoatl_daemon::ipc::serve_ipc_listener(reservation.listener, state)
+}
+
 async fn cmd_dev(config_path: &std::path::Path) {
     let config = match axocoatl_config::load_config(config_path).await {
         Ok(c) => c,
@@ -1043,6 +1091,7 @@ async fn cmd_dev(config_path: &std::path::Path) {
 
     let host = config.server.host.clone();
     let port = config.server.port;
+    let ipc_reservation = reserve_cli_ipc().await;
 
     println!("Axocoatl dev mode");
     println!("  Config: {}", config_path.display());
@@ -1062,36 +1111,22 @@ async fn cmd_dev(config_path: &std::path::Path) {
     // Shared state for both IPC and HTTP
     let state: std::sync::Arc<tokio::sync::RwLock<axocoatl_daemon::AxocoatlDaemon>> =
         std::sync::Arc::new(tokio::sync::RwLock::new(daemon));
+    let _ipc_handle = start_cli_ipc(ipc_reservation, state.clone());
 
-    // Start the schedule runner (scheduled tasks).
-    let (schedule_table, schedules) = {
+    // One live runtime dispatches every canonical Automation trigger. Legacy
+    // schedules/proactive YAML was already used (once) to seed that store.
+    let automatic_count = {
+        use axocoatl_config::AutomationTrigger;
         let d = state.read().await;
-        (d.schedule_table.clone(), d.config.schedules.clone())
+        d.list_automations()
+            .await
+            .iter()
+            .filter(|automation| !matches!(&automation.trigger, AutomationTrigger::Manual))
+            .count()
     };
-    let sched_count = schedules.len();
-    axocoatl_daemon::scheduler::start_scheduler(schedule_table, state.clone(), schedules);
-    if sched_count > 0 {
-        println!("  Schedules: {sched_count} loaded");
-    }
-
-    // Start the proactive agents (act-on-their-own from a timer or event).
-    let (proactive_table, proactive, lattice) = {
-        let d = state.read().await;
-        (
-            d.proactive_table.clone(),
-            d.config.proactive.clone(),
-            d.event_lattice.clone(),
-        )
-    };
-    let proactive_count = proactive.len();
-    axocoatl_daemon::proactive::start_proactive_runners(
-        proactive_table,
-        state.clone(),
-        proactive,
-        lattice,
-    );
-    if proactive_count > 0 {
-        println!("  Proactive agents: {proactive_count} active");
+    axocoatl_daemon::start_automation_runtime(state.clone()).await;
+    if automatic_count > 0 {
+        println!("  Automations: {automatic_count} automatic triggers active");
     }
 
     // Supervise agents: restart any that crash, from their last checkpoint.
@@ -1101,17 +1136,6 @@ async fn cmd_dev(config_path: &std::path::Path) {
     // facts from semantic memory into their curated core-memory blocks.
     let consolidation = { state.read().await.config.consolidation.clone() };
     axocoatl_daemon::consolidation::start_consolidation(state.clone(), consolidation);
-
-    // Start IPC server for CLI clients
-    let socket_path = axocoatl_daemon::ipc::default_socket_path();
-    match axocoatl_daemon::ipc::start_ipc_server(state.clone(), &socket_path).await {
-        Ok(_handle) => {
-            println!("  IPC:    {}", socket_path.display());
-        }
-        Err(e) => {
-            eprintln!("  IPC:    failed to start ({e})");
-        }
-    }
 
     println!("  Server: http://{host}:{port}");
     println!("  Health: http://{host}:{port}/health");
@@ -1136,6 +1160,7 @@ async fn cmd_serve(config_path: &std::path::Path) {
 
     let host = config.server.host.clone();
     let port = config.server.port;
+    let ipc_reservation = reserve_cli_ipc().await;
 
     let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap(config).await {
         Ok(d) => d,
@@ -1147,30 +1172,11 @@ async fn cmd_serve(config_path: &std::path::Path) {
 
     println!("Axocoatl server starting on {host}:{port}");
 
-    // Wrap in Arc<RwLock> so the scheduler can call execute_workflow.
+    // Shared runtime state for the HTTP server and background services.
     let state: std::sync::Arc<tokio::sync::RwLock<axocoatl_daemon::AxocoatlDaemon>> =
         std::sync::Arc::new(tokio::sync::RwLock::new(daemon));
-    let (schedule_table, schedules) = {
-        let d = state.read().await;
-        (d.schedule_table.clone(), d.config.schedules.clone())
-    };
-    axocoatl_daemon::scheduler::start_scheduler(schedule_table, state.clone(), schedules);
-
-    // Start the proactive agents (act-on-their-own from a timer or event).
-    let (proactive_table, proactive, lattice) = {
-        let d = state.read().await;
-        (
-            d.proactive_table.clone(),
-            d.config.proactive.clone(),
-            d.event_lattice.clone(),
-        )
-    };
-    axocoatl_daemon::proactive::start_proactive_runners(
-        proactive_table,
-        state.clone(),
-        proactive,
-        lattice,
-    );
+    let _ipc_handle = start_cli_ipc(ipc_reservation, state.clone());
+    axocoatl_daemon::start_automation_runtime(state.clone()).await;
 
     // Supervise agents: restart any that crash, from their last checkpoint.
     axocoatl_daemon::supervision::start_supervision(state.clone());
@@ -1397,8 +1403,21 @@ fn display_tool_calls(tool_calls: &[axocoatl_core::ToolCallRecord]) {
     }
 }
 
+const LEGACY_CHAT_SESSION_WARNING: &str = "warning: `chat --session` is a legacy display label only; it does not select or resume stored chat history";
+
+fn resolve_chat_label(session_label: Option<String>) -> (String, Option<&'static str>) {
+    let warning = session_label.as_ref().map(|_| LEGACY_CHAT_SESSION_WARNING);
+    let label = session_label.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    (label, warning)
+}
+
 async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Option<String>) {
     use std::io::{self, BufRead, Write};
+
+    let (chat_label, legacy_session_warning) = resolve_chat_label(session_id);
+    if let Some(warning) = legacy_session_warning {
+        eprintln!("{warning}");
+    }
 
     let config = match axocoatl_config::load_config(config_path).await {
         Ok(c) => c,
@@ -1415,8 +1434,6 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
         .find(|a| a.id == agent_id)
         .map(|a| a.model.clone())
         .unwrap_or_else(|| "unknown".to_string());
-
-    let session = session_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     // Try connecting to a running daemon via IPC first
     let socket_path = axocoatl_daemon::ipc::default_socket_path();
@@ -1443,7 +1460,7 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
 
     println!("Axocoatl Chat");
     println!("  Agent:   {agent_id} ({agent_model})");
-    println!("  Session: {session}");
+    println!("  Label:   {chat_label}");
     if using_ipc {
         println!("  Mode:    connected to daemon (IPC)");
     } else {
@@ -1480,10 +1497,12 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
 
         // Execute via IPC or in-process
         if let Some(ref mut client) = ipc {
+            // Keep carrying the legacy field for wire compatibility. It is a
+            // display label here, not conversation ownership or history.
             let req = axocoatl_daemon::ipc::IpcRequest::Execute {
                 agent_id: agent_id.to_string(),
                 input: input.to_string(),
-                session_id: session.clone(),
+                session_id: chat_label.clone(),
             };
             match client.request(&req).await {
                 Ok(axocoatl_daemon::ipc::IpcResponse::Response {
@@ -1510,7 +1529,7 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
                     total_input_tokens += input_tokens;
                     total_output_tokens += output_tokens;
                     println!(
-                        "  (tokens: {} in / {} out | session total: {} in / {} out)",
+                        "  (tokens: {} in / {} out | chat total: {} in / {} out)",
                         input_tokens, output_tokens, total_input_tokens, total_output_tokens,
                     );
                     println!();
@@ -1536,7 +1555,7 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
                     total_input_tokens += output.token_usage.input_tokens;
                     total_output_tokens += output.token_usage.output_tokens;
                     println!(
-                        "  (tokens: {} in / {} out | session total: {} in / {} out)",
+                        "  (tokens: {} in / {} out | chat total: {} in / {} out)",
                         output.token_usage.input_tokens,
                         output.token_usage.output_tokens,
                         total_input_tokens,
@@ -1552,13 +1571,13 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
     }
 
     println!();
-    println!("Session summary:");
+    println!("Chat summary:");
     println!("  Turns:  {turn_count}");
     println!(
         "  Tokens: {total_input_tokens} in / {total_output_tokens} out ({} total)",
         total_input_tokens + total_output_tokens
     );
-    println!("  Session ID: {session} (use --session {session} to resume)");
+    println!("  Label:  {chat_label}");
     println!();
     println!("Goodbye!");
     if let Some(daemon) = daemon {
@@ -1960,17 +1979,87 @@ async fn cmd_mcp_tools(config_path: &std::path::Path, server: Option<String>) {
 }
 
 async fn cmd_workflow_list(config_path: &std::path::Path) {
-    let config = match axocoatl_config::load_config(config_path).await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Configuration error:\n{e}");
+    use axocoatl_config::{AutomationNodeKind, AutomationTrigger};
+    use axocoatl_daemon::ipc::{IpcRequest, IpcResponse, IpcWorkflowInfo};
+
+    let socket_path = axocoatl_daemon::ipc::default_socket_path();
+    let workflows = if let Ok(mut client) =
+        axocoatl_daemon::ipc::IpcClient::connect(&socket_path).await
+    {
+        match client.request(&IpcRequest::ListWorkflows).await {
+            Ok(IpcResponse::Workflows { workflows }) => workflows,
+            Ok(IpcResponse::Error { message }) => {
+                eprintln!("Workflow error: {message}");
+                std::process::exit(1);
+            }
+            Ok(_) => {
+                eprintln!("Unexpected response from daemon");
+                std::process::exit(1);
+            }
+            Err(error) => {
+                eprintln!("IPC error: {error}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        // No daemon is running, so open the same canonical store bootstrap
+        // uses. Legacy YAML can seed a missing file once; an existing `[]`
+        // remains an intentional empty Settings state.
+        let config = match axocoatl_config::load_config(config_path).await {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!("Configuration error:\n{error}");
+                std::process::exit(1);
+            }
+        };
+        let data_dir = std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
+        let path = std::path::Path::new(&data_dir).join("automations.json");
+        let mut store = match axocoatl_daemon::automation_store::AutomationStore::open(&path) {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("Could not open Automation store: {error}");
+                std::process::exit(1);
+            }
+        };
+        if let Err(error) = store.seed_from_legacy_if_empty(&config) {
+            eprintln!("Could not initialize Automation store: {error}");
             std::process::exit(1);
         }
+        store
+            .list()
+            .into_iter()
+            .filter(|automation| matches!(&automation.trigger, AutomationTrigger::Manual))
+            .map(|automation| {
+                let agents = automation
+                    .nodes
+                    .iter()
+                    .filter_map(|node| match &node.kind {
+                        AutomationNodeKind::Agent { agent_id, .. } => Some(agent_id.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let entry_point = automation.nodes.iter().find_map(|node| {
+                    let has_incoming = automation.edges.iter().any(|edge| edge.to == node.id);
+                    match (&node.kind, has_incoming) {
+                        (AutomationNodeKind::Agent { agent_id, .. }, false) => {
+                            Some(agent_id.clone())
+                        }
+                        _ => None,
+                    }
+                });
+                IpcWorkflowInfo {
+                    id: automation.id,
+                    name: automation.name,
+                    agents,
+                    entry_point,
+                }
+            })
+            .collect()
     };
 
-    if config.workflows.is_empty() {
-        println!("No workflows configured.");
-        println!("Add a 'workflows:' section to your axocoatl.yaml.");
+    if workflows.is_empty() {
+        println!("No manual Automations configured.");
+        println!("Create one in Settings → Automations.");
         return;
     }
 
@@ -1979,7 +2068,7 @@ async fn cmd_workflow_list(config_path: &std::path::Path) {
         "ID", "NAME", "AGENTS", "ENTRY POINT"
     );
     println!("{}", "-".repeat(85));
-    for w in &config.workflows {
+    for w in &workflows {
         println!(
             "{:<25} {:<25} {:<20} {:<15}",
             w.id,
@@ -2074,7 +2163,30 @@ async fn cmd_workflow_run(config_path: &std::path::Path, workflow_id: &str, inpu
 
     println!("Running workflow '{workflow_id}'...\n");
 
-    match daemon.execute_workflow(workflow_id, input).await {
+    let context =
+        axocoatl_daemon::automation_executor::AutomationExecutionContext::from_daemon(&daemon);
+    let result = match context.get_automation(workflow_id).await {
+        Some(automation)
+            if matches!(
+                &automation.trigger,
+                axocoatl_config::AutomationTrigger::Manual
+            ) =>
+        {
+            let result = axocoatl_daemon::automation_executor::execute_automation_in_context(
+                &context,
+                &automation,
+                input,
+            )
+            .await;
+            axocoatl_daemon::record_automation_outcome(&context, &automation, &result);
+            result
+        }
+        _ => Err(axocoatl_daemon::DaemonError::WorkflowNotFound(
+            workflow_id.to_string(),
+        )),
+    };
+
+    match result {
         Ok(output) => {
             println!("Workflow '{}' completed.\n", output.workflow_id);
             println!("Agent outputs:");
@@ -2118,4 +2230,44 @@ async fn cmd_benchmark(name: &str) {
     println!("Running benchmark: {name}");
     println!("Use 'cargo bench' for detailed benchmarks.");
     println!("Available: token, routing, isolation, actor, all");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn legacy_chat_session_flag_is_only_a_display_label() {
+        let cli = Cli::try_parse_from(["axocoatl", "chat", "--session", "legacy-label"])
+            .expect("legacy flag should remain parseable");
+        let Commands::Chat { session, .. } = cli.command else {
+            panic!("expected chat command");
+        };
+
+        let (label, warning) = resolve_chat_label(session);
+        assert_eq!(label, "legacy-label");
+        assert_eq!(warning, Some(LEGACY_CHAT_SESSION_WARNING));
+    }
+
+    #[test]
+    fn chat_help_says_the_legacy_label_does_not_resume_history() {
+        let mut command = Cli::command();
+        let help = command
+            .find_subcommand_mut("chat")
+            .expect("chat subcommand should exist")
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("Legacy display label only"));
+        assert!(help.contains("does not select or resume stored chat history"));
+    }
+
+    #[test]
+    fn generated_chat_label_does_not_emit_the_legacy_warning() {
+        let (label, warning) = resolve_chat_label(None);
+
+        assert!(uuid::Uuid::parse_str(&label).is_ok());
+        assert_eq!(warning, None);
+    }
 }

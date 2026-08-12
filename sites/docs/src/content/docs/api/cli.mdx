@@ -1,13 +1,14 @@
 ---
-title: CLI
-description: Every axocoatl subcommand.
+title: CLI overview
+description: Core axocoatl commands and where to find the authoritative help.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="caution">
-This page is currently hand-written. A future build step will auto-generate
-it from the `clap` definitions in `axocoatl-cli/src/main.rs`.
+This page is a selected command overview, not a generated reference. Run
+`axocoatl --help` and `axocoatl <subcommand> --help` against your installed
+version for the authoritative flags and subcommands.
 </Aside>
 
 ## Lifecycle
@@ -18,8 +19,8 @@ it from the `clap` definitions in `axocoatl-cli/src/main.rs`.
 | `axocoatl doctor` | Environment health check (Rust, config, Ollama, podman, data dir, daemon reachable). |
 | `axocoatl init <name>` | Scaffold a project non-interactively. Drops `axocoatl.yaml`, `.env.example`, `data/`. |
 | `axocoatl validate <config>` | Validate a config file without booting. |
-| `axocoatl dev` | Start the daemon, IPC, and dashboard for local development. |
-| `axocoatl serve` | Start the daemon, IPC, and dashboard for production. |
+| `axocoatl dev` | Start the daemon, IPC, and browser app for local development. |
+| `axocoatl serve` | Start the production daemon, IPC, and HTTP/browser app. This is also the service-install runtime. |
 
 ## Service (always-on)
 
@@ -28,20 +29,28 @@ it from the `clap` definitions in `axocoatl-cli/src/main.rs`.
 | `axocoatl service install` | Install the daemon as a system service (systemd on Linux, launchd on macOS). |
 | `axocoatl service start` | Start the installed service. |
 | `axocoatl service stop` | Stop it. |
+| `axocoatl service status` | Show whether the service is installed and running. |
 | `axocoatl service uninstall` | Remove the service unit. |
 
 ## Chat
 
 | Command | Purpose |
 |---------|---------|
-| `axocoatl chat -a <agent>` | Interactive chat against a single agent. Use `--session <id>` to resume a previous session. |
+| `axocoatl chat -a <agent>` | Legacy interactive console backed by the configured agent's global actor transcript. |
+
+<Aside type="caution" title="`chat --session` is not a workspace Session">
+The CLI currently accepts `--session`, but the daemon does not use that value to
+select or restore an isolated transcript. Different values still reach the same
+agent-global actor state. Use the workbench at `/` or `axocoatl session …` when
+workspace Session identity matters.
+</Aside>
 
 ## Workflows
 
 | Command | Purpose |
 |---------|---------|
-| `axocoatl workflow list` | List configured workflows. |
-| `axocoatl workflow run <id> -i "<input>"` | Fire a workflow with an input. |
+| `axocoatl workflow list` | Compatibility view of manual records in the canonical Automation store. |
+| `axocoatl workflow run <id> -i "<input>"` | Run one canonical manual Automation. |
 
 ## Sessions
 
@@ -49,6 +58,8 @@ it from the `clap` definitions in `axocoatl-cli/src/main.rs`.
 |---------|---------|
 | `axocoatl session new <dir> --agent <agent>` | Start a new session in a directory. |
 | `axocoatl session list` | List active sessions. |
+| `axocoatl session exec <id> "<input>"` | Send an instruction to a directory session. |
+| `axocoatl session close <id>` | Close a directory session. |
 
 ## Agents
 
@@ -64,12 +75,26 @@ it from the `clap` definitions in `axocoatl-cli/src/main.rs`.
 |---------|---------|
 | `axocoatl tokens report` | Per-agent token usage since boot. |
 
+## Skills
+
+| Command | Purpose |
+|---------|---------|
+| `axocoatl skills list` | List configured Skills. |
+| `axocoatl skills run <name> [key=value …]` | Run a Skill with optional parameters. |
+
 ## MCP
 
 | Command | Purpose |
 |---------|---------|
 | `axocoatl mcp servers` | List connected MCP servers. |
 | `axocoatl mcp tools` | List every tool exposed by every connected MCP server. |
+| `axocoatl mcp serve` | Expose configured agents as MCP tools over stdio. |
+
+## Benchmarks
+
+| Command | Purpose |
+|---------|---------|
+| `axocoatl benchmark [token|routing|isolation|actor|all]` | Run the selected local benchmark harness. |
 
 ## Help
 

@@ -1,10 +1,10 @@
-# local-only — fully local inference via Ollama, zero API keys
+# local-only — local inference via Ollama, zero hosted-provider API keys
 #
 # Prerequisites: ollama serve && ollama pull llama3.2  (no cloud credentials)
 # Run:           axocoatl validate examples/configs/local-only.yaml
 #                axocoatl dev -c examples/configs/local-only.yaml
-# Expected:      both agents run against the local Ollama endpoint — no provider
-#                api_key anywhere, so your prompts and data never leave the box.
+# Expected:      both agents use the local Ollama endpoint. Session tool egress
+#                is disabled; downloading the model happens before this run.
 
 agents:
   - id: assistant
@@ -24,3 +24,7 @@ agents:
 providers:
   ollama:
     base_url: "http://localhost:11434"
+
+sandbox:
+  backend: podman
+  network: none

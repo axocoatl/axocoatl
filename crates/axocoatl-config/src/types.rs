@@ -37,8 +37,9 @@ pub struct AxocoatlConfig {
     pub webhooks: Vec<WebhookConfigYaml>,
     /// Model prices, in dollars per million tokens, used to report what a
     /// variants run cost against what it would have cost on one expensive model.
-    /// Models absent from this map price at zero — which is the right default
-    /// for anything running locally.
+    /// Models absent from this map have an unknown price. The daemon separately
+    /// recognizes explicitly selected Ollama models as known-free, so an unpriced
+    /// remote model is never misreported as costing $0.
     #[serde(default)]
     pub pricing: std::collections::HashMap<String, ModelPriceYaml>,
 }

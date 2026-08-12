@@ -11,7 +11,7 @@ pub enum SupervisionDecision {
 }
 
 /// A chunk of an agent's streamed output, forwarded to observers (the daemon
-/// stream bus → the dashboard WebSocket) while the agent is generating.
+/// stream bus → the app WebSocket) while the agent is generating.
 #[derive(Debug, Clone)]
 pub enum AgentStreamChunk {
     /// Assistant text token(s).

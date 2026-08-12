@@ -26,8 +26,8 @@ fixes may roll into the next regular release.
 In scope:
 
 - Axocoatl daemon, CLI, server, and library crates in this repository.
-- The dashboard served by `axocoatl-server` (XSS, CSRF, privilege escalation,
-  data exfiltration).
+- The browser workbench served at `/` by `axocoatl-server` (XSS, CSRF,
+  privilege escalation, data exfiltration).
 - The MCP approval/permission gate.
 - The session sandbox (container escape, host filesystem leakage).
 

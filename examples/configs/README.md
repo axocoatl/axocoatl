@@ -9,10 +9,10 @@ prerequisites, run command, and expected output.
 
 | File | Agents | Demonstrates |
 | --- | --- | --- |
-| [research-pipeline.yaml](research-pipeline.yaml) | 2 | `depends_on` workflow — summarizer waits on researcher |
-| [feature-dev.yaml](feature-dev.yaml) | 5 | linear DAG (architect → planner → coder → reviewer → docs) |
-| [incident-response.yaml](incident-response.yaml) | 3 | Skills (`emits` / `reacts_to`) + an ops agent |
-| [local-only.yaml](local-only.yaml) | 2 | Ollama, no API keys — data never leaves the box |
+| [research-pipeline.yaml](research-pipeline.yaml) | 2 | legacy workflow seed → manual Automation DAG |
+| [feature-dev.yaml](feature-dev.yaml) | 5 | legacy linear DAG seed (architect → planner → coder → reviewer → docs) |
+| [incident-response.yaml](incident-response.yaml) | 3 | Skill event declarations; add an Automation for a reachable reaction |
+| [local-only.yaml](local-only.yaml) | 2 | Ollama, no API keys, and `sandbox.network: none` for session tools |
 | [mcp-tools.yaml](mcp-tools.yaml) | 1 | a single MCP server (stdio transport) |
 | [event-webhooks.yaml](event-webhooks.yaml) | 2 | outbound event egress — signed webhooks on `TaskCompleted` / `AgentFailed` |
 

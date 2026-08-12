@@ -6,19 +6,16 @@
 //!   2. Resolves the node's `input` (the message shown to the operator).
 //!   3. Registers a `PendingInterrupt` in the daemon's `pending_interrupts`
 //!      map, keyed by `{automation_id}:{run_id}:{node_id}`.
-//!   4. Emits a `StreamFrame::Event { event_type: "Interrupted" }` so the
-//!      dashboard's activity feed lights up.
+//!   4. Emits a `StreamFrame::Event { event_type: "Interrupted" }` for run
+//!      observers; the pending-interrupt collection drives the app's rail and
+//!      Settings surfaces.
 //!   5. Awaits `notify.notified()` — blocks until the operator resumes.
 //!
-//! `POST /api/automations/{id}/runs/{run_id}/resume` writes the resume value
-//! into the matching `PendingInterrupt`, removes it from the map, and
-//! signals the notify. The executor wakes and continues with the resumed
-//! value as this node's output (or appended, per `ResumeStrategy`).
-//!
-//! Run IDs are random per execution — caller wires them through. We don't
-//! persist them across daemon restarts in v0.1; a restart cancels any
-//! pending interrupts. That's a known limitation paired with the
-//! "checkpoint store" follow-up which would make resume durable.
+//! `POST /api/automations/{id}/runs/{run_id}/resume` atomically claims the
+//! matching `PendingInterrupt`. A live executor is woken through its notifier.
+//! After a daemon restart, bootstrap recreates the entry from the persisted
+//! run and `interrupt_parked` checkpoint; resolving that entry starts a new
+//! continuation from the saved outputs and active edges.
 
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -46,6 +43,10 @@ pub struct PendingInterrupt {
     /// when it wakes, emits a distinct "Cancelled" event, and proceeds with
     /// this node's output set to empty.
     pub cancelled: Arc<std::sync::atomic::AtomicBool>,
+    /// `true` when bootstrap reconstructed this entry from a durable run.
+    /// There is no process-local executor to notify in that case; resolution
+    /// must start a checkpoint continuation instead.
+    pub(crate) recovered: bool,
 }
 
 impl PendingInterrupt {
@@ -76,4 +77,12 @@ impl<'a> From<&'a PendingInterrupt> for PendingInterruptView<'a> {
             created_at_unix: p.created_at_unix,
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum InterruptResolutionError {
+    #[error("no pending interrupt at {0}")]
+    NotFound(String),
+    #[error("cannot recover pending interrupt at {key}: {reason}")]
+    Recovery { key: String, reason: String },
 }

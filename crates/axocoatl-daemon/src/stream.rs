@@ -1,12 +1,13 @@
 //! The observability stream bus.
 //!
-//! One broadcast channel carries everything the dashboard's WebSocket needs:
-//! flattened lattice coordination events plus live, token-by-token agent
-//! output. The daemon owns the sender; each WebSocket connection subscribes.
+//! One broadcast channel carries the live session/run state the app observes,
+//! plus retained lattice/workflow/chat compatibility frames. The daemon owns
+//! the sender; each WebSocket connection subscribes.
 
 use serde::Serialize;
 
 use axocoatl_coordination::{EventNotification, EventType};
+use axocoatl_mcp::approval::ApprovalContext;
 
 /// Why a run is blocked on a human, and what it needs to proceed.
 #[derive(Debug, Clone, Serialize)]
@@ -26,6 +27,40 @@ pub struct AwaitingInput {
 /// colon in both cases.
 pub fn run_of_scoped_agent(agent_id: &str) -> Option<String> {
     agent_id.rfind(':').map(|i| agent_id[..i].to_string())
+}
+
+/// One MCP permission decision that is still parked in the runtime gate.
+///
+/// Unlike [`AwaitingInput`], this is the complete decision payload. It also
+/// represents approvals whose agent id is not scoped to a live run, so the
+/// reconnect snapshot cannot be reconstructed from `RunState::awaiting`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PendingMcpApproval {
+    pub approval_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    pub agent_id: String,
+    pub server: String,
+    pub tool: String,
+    pub tool_display: String,
+    pub arguments_preview: String,
+    pub requested_at: u64,
+}
+
+impl From<ApprovalContext> for PendingMcpApproval {
+    fn from(context: ApprovalContext) -> Self {
+        let run = run_of_scoped_agent(&context.agent_id);
+        Self {
+            approval_id: context.approval_id,
+            run,
+            agent_id: context.agent_id,
+            server: context.server,
+            tool: context.tool,
+            tool_display: context.tool_display,
+            arguments_preview: context.arguments_preview,
+            requested_at: context.requested_at,
+        }
+    }
 }
 
 /// A frame on the stream bus — serialized straight to the WebSocket as JSON.
@@ -109,6 +144,10 @@ pub enum StreamFrame {
     LaneStarted {
         /// The run key subsequent frames carry — `{session}#{index}`.
         run: String,
+        /// Durable identity of the attempt set that owns this lane. The legacy
+        /// `run` key is reused by later sets, so clients must use this value to
+        /// reject buffered frames from an older exploration.
+        attempt_set_id: String,
         session: String,
         index: usize,
         /// Model this lane runs; `None` means the agent's configured default.
@@ -122,6 +161,8 @@ pub enum StreamFrame {
     /// done. Emitting per lane lets survivors and eliminations appear as they
     /// resolve.
     LaneVerified {
+        /// Durable identity of the attempt set whose evidence changed.
+        attempt_set_id: String,
         session: String,
         index: usize,
         passed: bool,
@@ -132,7 +173,13 @@ pub enum StreamFrame {
     },
     /// Sent once to a freshly-connected client — the state of every run
     /// currently in flight, so the dashboard can re-attach its live view.
-    Snapshot { runs: Vec<RunState> },
+    Snapshot {
+        runs: Vec<RunState>,
+        /// Complete, authoritative pending approvals from the MCP gate. This
+        /// includes parallel approvals and approvals not associated with a
+        /// scoped session/attempt run.
+        approvals: Vec<PendingMcpApproval>,
+    },
     /// An agent is about to call an MCP tool that has no recorded permission
     /// decision — the dashboard should prompt the user. Carries the data the
     /// user needs to decide: which agent, which server+tool, a preview of the
@@ -192,8 +239,8 @@ pub struct RunAgent {
     pub tokens: u64,
 }
 
-/// Live state of one in-flight run (workflow or session), rebuilt purely from
-/// stream frames.
+/// Live state of one in-flight run (workflow, session, or attempt lane), rebuilt
+/// purely from stream frames.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct RunState {
     /// What this run is blocked on, if anything.
@@ -207,7 +254,13 @@ pub struct RunState {
     pub awaiting: Option<AwaitingInput>,
     /// The run id — a workflow id or a session id.
     pub workflow: String,
-    /// `"workflow"` or `"session"` — lets the dashboard re-attach the right view.
+    /// The durable attempt-set identity when this is an attempt lane. The
+    /// legacy lane run key (`{session}#{index}`) is not globally unique across
+    /// successive explorations, so snapshots must carry both values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_set_id: Option<String>,
+    /// `"workflow"`, `"session"`, or `"attempt"` — lets the dashboard
+    /// re-attach the right view.
     #[serde(default)]
     pub kind: String,
     pub agents: Vec<RunAgent>,
@@ -340,6 +393,30 @@ pub fn apply_frame(runs: &mut std::collections::HashMap<String, RunState>, frame
         StreamFrame::SessionDone { session, .. } | StreamFrame::SessionError { session, .. } => {
             runs.remove(session);
         }
+        StreamFrame::LaneStarted {
+            run,
+            attempt_set_id,
+            ..
+        } => {
+            let state = run_for(runs, run);
+            state.kind = "attempt".to_string();
+            state.attempt_set_id = Some(attempt_set_id.clone());
+        }
+        StreamFrame::LaneVerified {
+            attempt_set_id,
+            session,
+            index,
+            ..
+        } => {
+            // Verification normally happens after the live run has been
+            // removed. Do not resurrect a completed lane just to snapshot its
+            // verdict, but preserve set identity when a live state remains.
+            let run = format!("{session}#{index}");
+            if let Some(state) = runs.get_mut(&run) {
+                state.kind = "attempt".to_string();
+                state.attempt_set_id = Some(attempt_set_id.clone());
+            }
+        }
         StreamFrame::CoordinatorPlan {
             workflow,
             coordinator,
@@ -356,7 +433,7 @@ pub fn apply_frame(runs: &mut std::collections::HashMap<String, RunState>, frame
 }
 
 /// Flatten a lattice notification into an `Event` frame. This is the single
-/// place lattice `EventType`s are mapped to the wire shape the dashboard sees.
+/// place lattice `EventType`s are mapped to the WebSocket wire shape.
 pub fn event_frame(notif: &EventNotification) -> StreamFrame {
     let (kind, mut agent, task, name) = match &notif.event_type {
         EventType::TaskAvailable { task_type } => {
@@ -552,5 +629,118 @@ mod supervision_tests {
             runs["ses-x#1"].awaiting.is_some(),
             "the other lane is still waiting"
         );
+    }
+
+    #[test]
+    fn lane_frames_serialize_the_durable_attempt_set_identity() {
+        let started = serde_json::to_value(StreamFrame::LaneStarted {
+            run: "ses-x#0".into(),
+            attempt_set_id: "set-new".into(),
+            session: "ses-x".into(),
+            index: 0,
+            model: Some("model-a".into()),
+            agent: "coder".into(),
+        })
+        .unwrap();
+        assert_eq!(started["kind"], "lane-started");
+        assert_eq!(started["attempt_set_id"], "set-new");
+
+        let verified = serde_json::to_value(StreamFrame::LaneVerified {
+            attempt_set_id: "set-new".into(),
+            session: "ses-x".into(),
+            index: 0,
+            passed: true,
+            changed_files: 1,
+            touched_tests: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(verified["kind"], "lane-verified");
+        assert_eq!(verified["attempt_set_id"], "set-new");
+    }
+
+    #[test]
+    fn snapshot_serializes_complete_scoped_and_unscoped_approvals() {
+        fn approval(id: &str, agent_id: &str, requested_at: u64) -> PendingMcpApproval {
+            ApprovalContext {
+                approval_id: id.into(),
+                agent_id: agent_id.into(),
+                server: "filesystem".into(),
+                tool: "mcp__filesystem__write".into(),
+                tool_display: "write".into(),
+                arguments_preview: format!(r#"{{"approval":"{id}"}}"#),
+                requested_at,
+            }
+            .into()
+        }
+
+        let frame = serde_json::to_value(StreamFrame::Snapshot {
+            runs: Vec::new(),
+            approvals: vec![
+                approval("ap-lane-0", "ses-x#0:coder", 10),
+                approval("ap-lane-1", "ses-x#1:reviewer", 11),
+                approval("ap-unscoped", "automation-agent", 12),
+            ],
+        })
+        .expect("snapshot serializes");
+
+        assert_eq!(frame["kind"], "snapshot");
+        let approvals = frame["approvals"].as_array().expect("approval list");
+        assert_eq!(approvals.len(), 3, "parallel approvals are not collapsed");
+        assert_eq!(approvals[0]["run"], "ses-x#0");
+        assert_eq!(approvals[1]["run"], "ses-x#1");
+        assert!(
+            approvals[2].get("run").is_none(),
+            "unscoped approvals remain present without a fabricated owner"
+        );
+        assert_eq!(approvals[2]["agent_id"], "automation-agent");
+        assert_eq!(
+            approvals[2]["arguments_preview"],
+            r#"{"approval":"ap-unscoped"}"#
+        );
+    }
+
+    #[test]
+    fn lane_folding_keeps_set_identity_without_resurrecting_finished_runs() {
+        let mut runs = std::collections::HashMap::new();
+        apply_frame(
+            &mut runs,
+            &StreamFrame::LaneStarted {
+                run: "ses-x#0".into(),
+                attempt_set_id: "set-new".into(),
+                session: "ses-x".into(),
+                index: 0,
+                model: None,
+                agent: "coder".into(),
+            },
+        );
+        assert_eq!(runs["ses-x#0"].kind, "attempt");
+        assert_eq!(runs["ses-x#0"].attempt_set_id.as_deref(), Some("set-new"));
+
+        apply_frame(
+            &mut runs,
+            &StreamFrame::LaneVerified {
+                attempt_set_id: "set-new".into(),
+                session: "ses-x".into(),
+                index: 0,
+                passed: true,
+                changed_files: 1,
+                touched_tests: Vec::new(),
+            },
+        );
+        assert_eq!(runs["ses-x#0"].attempt_set_id.as_deref(), Some("set-new"));
+
+        runs.remove("ses-x#0");
+        apply_frame(
+            &mut runs,
+            &StreamFrame::LaneVerified {
+                attempt_set_id: "set-old".into(),
+                session: "ses-x".into(),
+                index: 0,
+                passed: false,
+                changed_files: 0,
+                touched_tests: Vec::new(),
+            },
+        );
+        assert!(!runs.contains_key("ses-x#0"));
     }
 }

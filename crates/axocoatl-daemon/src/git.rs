@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 /// One changed path in the working tree.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GitFile {
     pub path: String,
     /// `added` | `modified` | `deleted` | `renamed` | `untracked`.
@@ -47,7 +47,7 @@ pub struct GitFile {
 }
 
 /// Working-tree status: current branch + changed files.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GitStatus {
     pub branch: String,
     pub files: Vec<GitFile>,
@@ -116,19 +116,91 @@ pub struct LaneConfig {
 pub struct Variant {
     /// 0-based lane index.
     pub index: usize,
-    /// Branch name — `axo/variant-{index}`.
+    /// Set-scoped branch name. The attempt-set id and lane index together keep a
+    /// later run from reusing this lane's branch.
     pub branch: String,
-    /// Absolute worktree path — `{working_dir}/.axo-variants/{index}`.
+    /// Absolute path to this lane's set-scoped worktree.
     pub worktree: String,
-    /// Model this lane ran, when the lane overrode the agent's default. Carried
-    /// on the response so a comparison view can label each candidate with the
-    /// model that produced it.
+    /// Model this lane ran, when known. Carried on the response so a comparison
+    /// view can label each candidate and price its usage accurately.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Agent this lane ran. Present whenever lanes differ by agent, so a
     /// scoreboard can name the thing being compared.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Provider that served this lane, when known. Older persisted rosters did
+    /// not record it, so absence remains a valid backwards-compatible value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+}
+
+/// Lifecycle of one attempt set as a whole.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptSetState {
+    Preparing,
+    Running,
+    Ready,
+    /// Repository checks are running or were interrupted and may be retried.
+    Checking,
+    Verified,
+    Judged,
+    Failed,
+    /// Discard/rollback was durably authorized; exact cleanup may be retried.
+    Discarding,
+    /// Keep was authorized and its patch may be in the process of applying.
+    Applying,
+    /// The selected delta is present in the primary workspace.
+    Applied,
+    /// The chosen answer is durable in the session transcript; cleanup may be retried.
+    TranscriptRecorded,
+}
+
+/// Execution lifecycle of one lane within an attempt set.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptLaneState {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    Interrupted,
+}
+
+/// Persisted lifecycle facts for one lane.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AttemptLaneStatus {
+    pub index: usize,
+    pub state: AttemptLaneState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<u64>,
+}
+
+/// Durable identity and immutable inputs for one set of parallel attempts.
+///
+/// Runtime status is recorded separately as [`AttemptLaneStatus`] so lane
+/// completion can be updated without rewriting the identity of the set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttemptSet {
+    pub id: String,
+    pub session_id: String,
+    pub task: String,
+    pub instruction: String,
+    pub base_sha: String,
+    pub base_tree: String,
+    pub state: AttemptSetState,
+    /// Lane selected by a resumable Keep transaction. Persisting this before
+    /// apply prevents a retry from switching candidates mid-transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept_index: Option<usize>,
+    pub created_at: u64,
+    pub lanes: Vec<Variant>,
 }
 
 /// How one lane fared against the project's own check command.
@@ -163,6 +235,10 @@ pub struct LaneVerdict {
     /// `passed`, and the decision is left to a human who can see it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub touched_tests: Vec<String>,
+    /// Digest of the exact base-relative binary patch that passed this check.
+    /// Keep recomputes it after freezing the lane and refuses stale verdicts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch_sha256: Option<String>,
 }
 
 /// Whether a repo path looks like a test the check command would run.
@@ -285,8 +361,17 @@ pub struct LaneUsage {
     pub model: Option<String>,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Whether the token totals are complete. A failed remote request can cost
+    /// something before returning no usage data; its persisted zeroes are an
+    /// unknown volume, not evidence that no tokens were billed.
+    #[serde(default)]
+    pub token_usage_known: bool,
     /// What those tokens cost at this model's price. Local models are 0.
     pub cost_usd: f64,
+    /// Whether `cost_usd` was resolved from a known price. False distinguishes
+    /// an unknown price from a genuinely free local model.
+    #[serde(default)]
+    pub cost_known: bool,
     /// Wall-clock the lane's agent ran for, measured in the daemon.
     ///
     /// Timed here rather than in the viewer so a reload mid-run does not lose
@@ -294,6 +379,17 @@ pub struct LaneUsage {
     /// between two frames arriving over a socket.
     #[serde(default)]
     pub duration_ms: u64,
+}
+
+/// One attempt's durable natural-language outcome.
+///
+/// Code changes remain Git's source of truth, but the answer is part of the
+/// visible session outcome and must survive reloads before the user chooses
+/// which attempt to keep.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AttemptLaneOutput {
+    pub index: usize,
+    pub content: String,
 }
 
 /// The economics of a variants run: what it cost, against what the same work
@@ -308,13 +404,21 @@ pub struct RunCost {
     pub lanes: Vec<LaneUsage>,
     /// Sum of what the lanes actually cost.
     pub total_usd: f64,
+    /// True only when every lane had a known price. If false, `total_usd` is
+    /// the known subtotal and must not be presented as the run's full cost.
+    #[serde(default)]
+    pub actual_cost_known: bool,
     /// The model the comparison is drawn against.
     pub baseline_model: String,
     /// What the same tokens would have cost on `baseline_model`.
     pub baseline_usd: f64,
+    /// Whether the baseline model has a configured (or known-local) price.
+    #[serde(default)]
+    pub baseline_cost_known: bool,
     /// `baseline_usd - total_usd`, floored at 0.
     pub saved_usd: f64,
-    /// True when every lane priced at 0 — i.e. the run was entirely local.
+    /// True when every lane has a known zero price — i.e. the run was entirely
+    /// local, rather than containing an unpriced remote model.
     pub all_local: bool,
 }
 
@@ -361,6 +465,73 @@ pub struct Judgment {
     pub reasoning: String,
 }
 
+/// Validate a judge response against the exact lanes that survived Checks.
+///
+/// Model-generated JSON is untrusted even after it deserializes: a judge can
+/// omit a candidate, invent one, duplicate a rank, or recommend something that
+/// was not ranked first. Persisting any of those would make the comparison lie
+/// about the set it actually judged, so the daemon rejects them at the seam.
+pub fn validate_judgment(judgment: &Judgment, expected_survivors: &[usize]) -> Result<(), String> {
+    use std::collections::BTreeSet;
+
+    let expected: BTreeSet<usize> = expected_survivors.iter().copied().collect();
+    if expected.len() != expected_survivors.len() {
+        return Err("expected survivor indices contain duplicates".to_string());
+    }
+    if expected.is_empty() {
+        return Err("a judgment requires at least one surviving candidate".to_string());
+    }
+
+    let candidates: BTreeSet<usize> = judgment
+        .candidates
+        .iter()
+        .map(|candidate| candidate.index)
+        .collect();
+    if candidates.len() != judgment.candidates.len() {
+        return Err("the judgment contains a candidate more than once".to_string());
+    }
+    if candidates != expected {
+        let missing: Vec<usize> = expected.difference(&candidates).copied().collect();
+        let unexpected: Vec<usize> = candidates.difference(&expected).copied().collect();
+        return Err(format!(
+            "the judgment does not match the surviving candidates (missing: {missing:?}; unexpected: {unexpected:?})"
+        ));
+    }
+
+    let ranks: BTreeSet<usize> = judgment
+        .candidates
+        .iter()
+        .map(|candidate| candidate.rank)
+        .collect();
+    let expected_ranks: BTreeSet<usize> = (1..=expected.len()).collect();
+    if ranks.len() != judgment.candidates.len() || ranks != expected_ranks {
+        return Err(format!(
+            "candidate ranks must be unique and cover 1 through {}",
+            expected.len()
+        ));
+    }
+
+    if !expected.contains(&judgment.winner) {
+        return Err(format!(
+            "winner {} is not a surviving candidate",
+            judgment.winner
+        ));
+    }
+    let winner_rank = judgment
+        .candidates
+        .iter()
+        .find(|candidate| candidate.index == judgment.winner)
+        .map(|candidate| candidate.rank);
+    if winner_rank != Some(1) {
+        return Err(format!(
+            "winner {} must be the candidate ranked 1",
+            judgment.winner
+        ));
+    }
+
+    Ok(())
+}
+
 /// Everything a scoreboard needs about one comparison, in a single read.
 ///
 /// A variants run outlives the page that started it: worktrees persist, checks
@@ -370,20 +541,92 @@ pub struct Judgment {
 /// rather than the browser being the only place they were ever assembled.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct RunResults {
+    /// The attempt-set identity and immutable inputs. Absent for results written
+    /// before attempt sets became first-class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_set: Option<AttemptSet>,
     /// The lanes, with the model or agent each one ran.
+    ///
+    /// Kept alongside `attempt_set.lanes` for wire compatibility with existing
+    /// clients while they migrate to the set-scoped shape.
     pub lanes: Vec<Variant>,
+    /// Current per-lane execution state. Older results did not persist it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lane_states: Vec<AttemptLaneStatus>,
     /// Verdicts from the last `verify`, empty if it has not been run.
     pub verdicts: Vec<LaneVerdict>,
     /// Token spend and wall-clock per lane, for lanes that have finished.
     pub usage: Vec<LaneUsage>,
+    /// Completed natural-language outcomes, for lanes that produced one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<AttemptLaneOutput>,
     /// The last ranking, if a judge has been run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judgment: Option<Judgment>,
 }
 
+/// Derive the externally visible attempt-set state from its durable lane facts
+/// and fan-in results.
+///
+/// Active work always wins over stale fan-in metadata. An all-terminal set in
+/// which no lane completed is a failed set. Otherwise judgment outranks
+/// verification, and a terminal set with at least one completed lane is ready
+/// for fan-in.
+pub fn derive_attempt_set_state(
+    lanes: &[AttemptLaneStatus],
+    verdicts: &[LaneVerdict],
+    judgment: Option<&Judgment>,
+) -> AttemptSetState {
+    if lanes.iter().any(|lane| {
+        matches!(
+            lane.state,
+            AttemptLaneState::Queued | AttemptLaneState::Running
+        )
+    }) {
+        return AttemptSetState::Running;
+    }
+
+    let all_terminal_without_completion = !lanes.is_empty()
+        && lanes.iter().all(|lane| {
+            matches!(
+                lane.state,
+                AttemptLaneState::Failed
+                    | AttemptLaneState::Cancelled
+                    | AttemptLaneState::Interrupted
+            )
+        });
+    if all_terminal_without_completion {
+        return AttemptSetState::Failed;
+    }
+    if judgment.is_some() {
+        return AttemptSetState::Judged;
+    }
+    if !verdicts.is_empty() {
+        return AttemptSetState::Verified;
+    }
+    AttemptSetState::Ready
+}
+
 /// Largest patch carried into the judge prompt, per lane. Enough for a real
 /// change; short of pasting a refactor of the whole tree into the context.
 pub const JUDGE_PATCH_MAX: usize = 24 * 1024;
+
+/// Bound a patch for the judge prompt without splitting a UTF-8 code point.
+///
+/// Returns the borrowed prefix and whether any bytes were omitted. Callers can
+/// use the flag to add an explicit truncation marker without comparing lengths
+/// or slicing the original string a second time.
+pub fn truncate_judge_patch(patch: &str) -> (&str, bool) {
+    if patch.len() <= JUDGE_PATCH_MAX {
+        return (patch, false);
+    }
+
+    let mut end = JUDGE_PATCH_MAX;
+    while !patch.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&patch[..end], true)
+}
 
 /// Strip a ``` fence if a model wrapped its JSON in one, so the payload parses.
 pub fn unfence_json(s: &str) -> &str {
@@ -432,17 +675,85 @@ pub fn apply_numstat(status: &mut GitStatus, numstat: &str) {
         let (Some(a), Some(d), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
             continue;
         };
-        // Renames read `old => new` inside the path field; match on the new one.
-        let path = path
-            .rsplit(" => ")
-            .next()
-            .unwrap_or(path)
-            .trim_end_matches('}');
+        // Renames read either `old => new` or `dir/{old => new}/file`; rebuild
+        // the destination path so it matches `--name-status`'s explicit new path.
+        let path = numstat_destination_path(path);
         if let Some(f) = status.files.iter_mut().find(|f| f.path == path) {
             f.added = a.parse().ok();
             f.removed = d.parse().ok();
         }
     }
+}
+
+fn numstat_destination_path(path: &str) -> String {
+    if let Some(open) = path.find('{') {
+        if let Some(close_offset) = path[open + 1..].find('}') {
+            let close = open + 1 + close_offset;
+            if let Some((_, destination)) = path[open + 1..close].split_once(" => ") {
+                return format!("{}{}{}", &path[..open], destination, &path[close + 1..]);
+            }
+        }
+    }
+    path.rsplit_once(" => ")
+        .map(|(_, destination)| destination.to_string())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// Build an attempt lane's changed-file status relative to its snapshot base.
+///
+/// Unlike porcelain status, `git diff <base>` includes changes already committed
+/// on the lane branch. `name_status` should be the output of
+/// `git diff --name-status <base> --`; `numstat` should come from the same diff.
+/// Staging flags remain false because these two base-relative reports cannot say
+/// whether a change currently lives in HEAD, the index, or the working tree.
+pub fn parse_base_diff_status(branch: &str, name_status: &str, numstat: &str) -> GitStatus {
+    let mut files = Vec::new();
+    for line in name_status.lines() {
+        let mut parts = line.split('\t');
+        let Some(status) = parts.next().filter(|status| !status.is_empty()) else {
+            continue;
+        };
+        let Some(first_path) = parts.next() else {
+            continue;
+        };
+        let code = status.chars().next().unwrap_or('M');
+        let (path, state) = match code {
+            'A' => (first_path, "added"),
+            'D' => (first_path, "deleted"),
+            'R' => {
+                let Some(destination) = parts.next() else {
+                    continue;
+                };
+                (destination, "renamed")
+            }
+            // A detected copy leaves its source in place, so the destination is
+            // an addition rather than a rename in the existing wire vocabulary.
+            'C' => {
+                let Some(destination) = parts.next() else {
+                    continue;
+                };
+                (destination, "added")
+            }
+            _ => (first_path, "modified"),
+        };
+        files.push(GitFile {
+            path: path.to_string(),
+            state: state.to_string(),
+            added: None,
+            removed: None,
+            staged: false,
+            unstaged: false,
+            last_turn: false,
+        });
+    }
+
+    let mut status = GitStatus {
+        branch: branch.trim().to_string(),
+        clean: files.is_empty(),
+        files,
+    };
+    apply_numstat(&mut status, numstat);
+    status
 }
 
 /// One hunk of a unified diff, with everything needed to apply it alone.
@@ -714,6 +1025,7 @@ mod tests {
             worktree: "/w/.axo-variants/0".into(),
             model: None,
             agent: Some("careful".into()),
+            provider: None,
         };
         let j = serde_json::to_string(&v).unwrap();
         assert!(
@@ -891,18 +1203,73 @@ mod tests {
         let mut st = GitStatus {
             branch: "main".into(),
             clean: false,
-            files: vec![GitFile {
-                path: "lib/new.ts".into(),
-                state: "renamed".into(),
-                added: None,
-                removed: None,
-                staged: false,
-                unstaged: true,
-                last_turn: false,
-            }],
+            files: vec![
+                GitFile {
+                    path: "lib/new.ts".into(),
+                    state: "renamed".into(),
+                    added: None,
+                    removed: None,
+                    staged: false,
+                    unstaged: true,
+                    last_turn: false,
+                },
+                GitFile {
+                    path: "src/new/name.rs".into(),
+                    state: "renamed".into(),
+                    added: None,
+                    removed: None,
+                    staged: false,
+                    unstaged: true,
+                    last_turn: false,
+                },
+            ],
         };
-        apply_numstat(&mut st, "4\t1\tlib/old.ts => lib/new.ts\n");
+        apply_numstat(
+            &mut st,
+            "4\t1\tlib/old.ts => lib/new.ts\n3\t2\tsrc/{old => new}/name.rs\n",
+        );
         assert_eq!(st.files[0].added, Some(4));
+        assert_eq!(st.files[1].added, Some(3));
+        assert_eq!(st.files[1].removed, Some(2));
+    }
+
+    #[test]
+    fn base_diff_status_includes_changes_already_committed_by_an_attempt() {
+        // These reports come from `git diff <attempt-base>`, so `committed.rs`
+        // remains visible even when ordinary porcelain status is otherwise clean.
+        let status = parse_base_diff_status(
+            "axo/attempt-deadbeef-0",
+            "M\tcommitted.rs\nA\tsrc/new.rs\nD\tgone.rs\nR100\tsrc/old.rs\tsrc/new_name.rs\nC075\ttemplate.rs\tcopy.rs\nT\tmode.sh\n",
+            "1\t2\tcommitted.rs\n4\t0\tsrc/new.rs\n0\t5\tgone.rs\n3\t1\tsrc/{old.rs => new_name.rs}\n8\t0\ttemplate.rs => copy.rs\n-\t-\tmode.sh\n",
+        );
+
+        assert_eq!(status.branch, "axo/attempt-deadbeef-0");
+        assert!(!status.clean);
+        assert_eq!(status.files.len(), 6);
+        let file = |path: &str| status.files.iter().find(|file| file.path == path).unwrap();
+        assert_eq!(file("committed.rs").state, "modified");
+        assert_eq!(file("committed.rs").added, Some(1));
+        assert_eq!(file("committed.rs").removed, Some(2));
+        assert_eq!(file("src/new.rs").state, "added");
+        assert_eq!(file("gone.rs").state, "deleted");
+        assert_eq!(file("src/new_name.rs").state, "renamed");
+        assert_eq!(file("src/new_name.rs").added, Some(3));
+        assert_eq!(file("copy.rs").state, "added");
+        assert_eq!(file("copy.rs").added, Some(8));
+        assert_eq!(file("mode.sh").state, "modified");
+        assert_eq!(file("mode.sh").added, None, "binary count stays unknown");
+        assert!(status
+            .files
+            .iter()
+            .all(|file| !file.staged && !file.unstaged));
+    }
+
+    #[test]
+    fn empty_base_diff_is_clean() {
+        let status = parse_base_diff_status("  attempt  ", "", "");
+        assert_eq!(status.branch, "attempt");
+        assert!(status.clean);
+        assert!(status.files.is_empty());
     }
 
     #[test]
@@ -917,6 +1284,7 @@ mod tests {
                 worktree: "/w/.axo-variants/0".into(),
                 model: None,
                 agent: Some("careful".into()),
+                provider: Some("ollama".into()),
             },
             Variant {
                 index: 1,
@@ -924,6 +1292,7 @@ mod tests {
                 worktree: "/w/.axo-variants/1".into(),
                 model: Some("qwen3:8b".into()),
                 agent: None,
+                provider: None,
             },
         ];
         let back: Vec<Variant> =
@@ -932,16 +1301,203 @@ mod tests {
     }
 
     #[test]
+    fn attempt_states_use_stable_snake_case_wire_values() {
+        let set_states = [
+            (AttemptSetState::Preparing, "preparing"),
+            (AttemptSetState::Running, "running"),
+            (AttemptSetState::Ready, "ready"),
+            (AttemptSetState::Checking, "checking"),
+            (AttemptSetState::Verified, "verified"),
+            (AttemptSetState::Judged, "judged"),
+            (AttemptSetState::Failed, "failed"),
+            (AttemptSetState::Discarding, "discarding"),
+            (AttemptSetState::Applying, "applying"),
+            (AttemptSetState::Applied, "applied"),
+            (AttemptSetState::TranscriptRecorded, "transcript_recorded"),
+        ];
+        for (state, wire) in set_states {
+            let json = format!("\"{wire}\"");
+            assert_eq!(serde_json::to_string(&state).unwrap(), json);
+            assert_eq!(
+                serde_json::from_str::<AttemptSetState>(&json).unwrap(),
+                state
+            );
+        }
+
+        let lane_states = [
+            (AttemptLaneState::Queued, "queued"),
+            (AttemptLaneState::Running, "running"),
+            (AttemptLaneState::Completed, "completed"),
+            (AttemptLaneState::Failed, "failed"),
+            (AttemptLaneState::Cancelled, "cancelled"),
+            (AttemptLaneState::Interrupted, "interrupted"),
+        ];
+        for (state, wire) in lane_states {
+            let json = format!("\"{wire}\"");
+            assert_eq!(serde_json::to_string(&state).unwrap(), json);
+            assert_eq!(
+                serde_json::from_str::<AttemptLaneState>(&json).unwrap(),
+                state
+            );
+        }
+    }
+
+    #[test]
+    fn attempt_set_round_trip_keeps_identity_and_resolved_lane_provider() {
+        let attempt = AttemptSet {
+            id: "attempt-019".into(),
+            session_id: "session-1".into(),
+            task: "Make the parser streaming".into(),
+            instruction: "Implement the reviewed plan".into(),
+            base_sha: "abc123".into(),
+            base_tree: "def456".into(),
+            state: AttemptSetState::Running,
+            kept_index: None,
+            created_at: 1_722_222_222,
+            lanes: vec![Variant {
+                index: 0,
+                branch: "axo/attempt-019/0".into(),
+                worktree: "/w/.axo-variants/attempt-019/0".into(),
+                model: Some("qwen3-coder".into()),
+                agent: Some("careful".into()),
+                provider: Some("ollama".into()),
+            }],
+        };
+
+        let json = serde_json::to_string(&attempt).unwrap();
+        let back: AttemptSet = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, attempt);
+        assert!(json.contains(r#""state":"running""#));
+        assert_eq!(back.lanes[0].provider.as_deref(), Some("ollama"));
+    }
+
+    #[test]
+    fn attempt_types_read_pre_attempt_set_results() {
+        let old_variant: Variant = serde_json::from_str(
+            r#"{"index":0,"branch":"axo/variant-0","worktree":"/w/.axo-variants/0","model":null,"agent":"careful"}"#,
+        )
+        .expect("a roster without provider still parses");
+        assert!(old_variant.provider.is_none());
+
+        let old_results: RunResults = serde_json::from_str(
+            r#"{"lanes":[{"index":0,"branch":"axo/variant-0","worktree":"/w/.axo-variants/0","model":null,"agent":null}],"verdicts":[],"usage":[{"index":0,"model":null,"input_tokens":10,"output_tokens":2,"cost_usd":0.0}]}"#,
+        )
+        .expect("results written before attempt-set identity still parse");
+        assert!(old_results.attempt_set.is_none());
+        assert!(old_results.lane_states.is_empty());
+        assert!(!old_results.usage[0].cost_known);
+    }
+
+    fn attempt_lane(index: usize, state: AttemptLaneState) -> AttemptLaneStatus {
+        AttemptLaneStatus {
+            index,
+            state,
+            error: None,
+            started_at: None,
+            finished_at: None,
+        }
+    }
+
+    fn passing_verdict(index: usize) -> LaneVerdict {
+        LaneVerdict {
+            index,
+            passed: true,
+            exit_code: 0,
+            output: "ok".into(),
+            changed_files: 1,
+            touched_tests: vec![],
+            patch_sha256: Some("abc".into()),
+        }
+    }
+
+    fn sample_judgment() -> Judgment {
+        Judgment {
+            winner: 0,
+            candidates: vec![],
+            reasoning: "best fit".into(),
+        }
+    }
+
+    #[test]
+    fn attempt_set_state_follows_lifecycle_precedence() {
+        let verdicts = vec![passing_verdict(0)];
+        let judgment = sample_judgment();
+
+        assert_eq!(
+            derive_attempt_set_state(
+                &[
+                    attempt_lane(0, AttemptLaneState::Completed),
+                    attempt_lane(1, AttemptLaneState::Running),
+                ],
+                &verdicts,
+                Some(&judgment),
+            ),
+            AttemptSetState::Running,
+            "active work outranks stale fan-in results"
+        );
+        assert_eq!(
+            derive_attempt_set_state(
+                &[
+                    attempt_lane(0, AttemptLaneState::Failed),
+                    attempt_lane(1, AttemptLaneState::Cancelled),
+                    attempt_lane(2, AttemptLaneState::Interrupted),
+                ],
+                &verdicts,
+                Some(&judgment),
+            ),
+            AttemptSetState::Failed,
+            "an all-terminal set with no completion failed"
+        );
+        assert_eq!(
+            derive_attempt_set_state(
+                &[
+                    attempt_lane(0, AttemptLaneState::Completed),
+                    attempt_lane(1, AttemptLaneState::Failed),
+                ],
+                &verdicts,
+                Some(&judgment),
+            ),
+            AttemptSetState::Judged
+        );
+        assert_eq!(
+            derive_attempt_set_state(
+                &[attempt_lane(0, AttemptLaneState::Completed)],
+                &verdicts,
+                None,
+            ),
+            AttemptSetState::Verified
+        );
+        assert_eq!(
+            derive_attempt_set_state(&[attempt_lane(0, AttemptLaneState::Completed)], &[], None,),
+            AttemptSetState::Ready
+        );
+        assert_eq!(
+            derive_attempt_set_state(&[], &[], None),
+            AttemptSetState::Ready,
+            "an empty persisted status does not vacuously fail"
+        );
+    }
+
+    #[test]
     fn run_results_round_trip_keeps_every_axis_the_board_compares() {
         // One read has to carry identity, outcome, spend and ranking: the
         // scoreboard renders all four, and a reload rebuilds it from this alone.
         let results = RunResults {
+            attempt_set: None,
             lanes: vec![Variant {
                 index: 0,
                 branch: "axo/variant-0".into(),
                 worktree: "/w/.axo-variants/0".into(),
                 model: None,
                 agent: Some("careful".into()),
+                provider: Some("ollama".into()),
+            }],
+            lane_states: vec![AttemptLaneStatus {
+                index: 0,
+                state: AttemptLaneState::Completed,
+                error: None,
+                started_at: Some(1_000),
+                finished_at: Some(1_004),
             }],
             verdicts: vec![LaneVerdict {
                 index: 0,
@@ -950,14 +1506,21 @@ mod tests {
                 output: "ok".into(),
                 changed_files: 2,
                 touched_tests: vec![],
+                patch_sha256: Some("def".into()),
             }],
             usage: vec![LaneUsage {
                 index: 0,
                 model: None,
                 input_tokens: 100,
                 output_tokens: 20,
+                token_usage_known: true,
                 cost_usd: 0.0,
+                cost_known: true,
                 duration_ms: 4_200,
+            }],
+            outputs: vec![AttemptLaneOutput {
+                index: 0,
+                content: "Implemented the selected route.".into(),
             }],
             judgment: Some(Judgment {
                 winner: 0,
@@ -968,8 +1531,12 @@ mod tests {
         let json = serde_json::to_string(&results).unwrap();
         let back: RunResults = serde_json::from_str(&json).unwrap();
         assert_eq!(back.lanes[0].agent.as_deref(), Some("careful"));
+        assert_eq!(back.lanes[0].provider.as_deref(), Some("ollama"));
+        assert_eq!(back.lane_states[0].state, AttemptLaneState::Completed);
         assert!(back.verdicts[0].passed);
         assert_eq!(back.usage[0].duration_ms, 4_200);
+        assert!(back.usage[0].cost_known);
+        assert_eq!(back.outputs[0].content, "Implemented the selected route.");
         assert_eq!(back.judgment.unwrap().winner, 0);
     }
 
@@ -982,6 +1549,8 @@ mod tests {
         )
         .expect("a record without duration_ms still parses");
         assert_eq!(old.duration_ms, 0);
+        assert!(!old.token_usage_known);
+        assert!(!old.cost_known);
     }
 
     #[test]
@@ -1016,6 +1585,29 @@ mod tests {
         let multi = "é".repeat(VERDICT_OUTPUT_MAX);
         let tail = verdict_tail(&multi);
         assert!(tail.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn judge_patch_truncation_is_bounded_and_utf8_safe() {
+        let short = "small patch";
+        assert_eq!(truncate_judge_patch(short), (short, false));
+
+        let exact = "x".repeat(JUDGE_PATCH_MAX);
+        let (kept, truncated) = truncate_judge_patch(&exact);
+        assert_eq!(kept.len(), JUDGE_PATCH_MAX);
+        assert!(!truncated);
+
+        // The byte limit lands between the two bytes of the final `é`.
+        let crossing = format!("{}é", "x".repeat(JUDGE_PATCH_MAX - 1));
+        let (kept, truncated) = truncate_judge_patch(&crossing);
+        assert!(truncated);
+        assert_eq!(kept.len(), JUDGE_PATCH_MAX - 1);
+        assert!(kept.chars().all(|ch| ch == 'x'));
+
+        let long_ascii = "y".repeat(JUDGE_PATCH_MAX + 100);
+        let (kept, truncated) = truncate_judge_patch(&long_ascii);
+        assert!(truncated);
+        assert_eq!(kept.len(), JUDGE_PATCH_MAX);
     }
 
     #[test]
@@ -1117,6 +1709,86 @@ mod tests {
         assert_eq!(parsed, j);
     }
 
+    fn candidate(index: usize, rank: usize) -> CandidateRationale {
+        CandidateRationale {
+            index,
+            rank,
+            approach: format!("candidate {index}"),
+            tradeoffs: "trade-off".into(),
+        }
+    }
+
+    #[test]
+    fn judgment_validation_requires_the_exact_survivors_and_ranks() {
+        let valid = Judgment {
+            winner: 2,
+            candidates: vec![candidate(5, 2), candidate(2, 1)],
+            reasoning: "two is the best fit".into(),
+        };
+        assert_eq!(validate_judgment(&valid, &[2, 5]), Ok(()));
+
+        let mut invalid = valid.clone();
+        invalid.candidates.pop();
+        assert!(validate_judgment(&invalid, &[2, 5])
+            .unwrap_err()
+            .contains("missing: [2]"));
+
+        let mut invalid = valid.clone();
+        invalid.candidates[1].index = 5;
+        assert!(validate_judgment(&invalid, &[2, 5])
+            .unwrap_err()
+            .contains("more than once"));
+
+        let mut invalid = valid.clone();
+        invalid.candidates[0].index = 7;
+        let error = validate_judgment(&invalid, &[2, 5]).unwrap_err();
+        assert!(error.contains("missing: [5]"));
+        assert!(error.contains("unexpected: [7]"));
+
+        let mut invalid = valid.clone();
+        invalid.candidates[0].rank = 1;
+        assert!(validate_judgment(&invalid, &[2, 5])
+            .unwrap_err()
+            .contains("unique and cover 1 through 2"));
+
+        let mut invalid = valid.clone();
+        invalid.candidates[0].rank = 3;
+        assert!(validate_judgment(&invalid, &[2, 5])
+            .unwrap_err()
+            .contains("unique and cover 1 through 2"));
+
+        let mut invalid = valid.clone();
+        invalid.winner = 9;
+        assert!(validate_judgment(&invalid, &[2, 5])
+            .unwrap_err()
+            .contains("not a surviving candidate"));
+
+        let mut invalid = valid;
+        invalid.winner = 5;
+        assert!(validate_judgment(&invalid, &[2, 5])
+            .unwrap_err()
+            .contains("ranked 1"));
+
+        assert!(validate_judgment(
+            &Judgment {
+                winner: 0,
+                candidates: vec![],
+                reasoning: String::new(),
+            },
+            &[],
+        )
+        .is_err());
+        assert!(validate_judgment(&candidate_judgment_for_test(), &[2, 2]).is_err());
+    }
+
+    fn candidate_judgment_for_test() -> Judgment {
+        Judgment {
+            winner: 2,
+            candidates: vec![candidate(2, 1)],
+            reasoning: "only survivor".into(),
+        }
+    }
+
     #[test]
     fn variant_omits_model_when_not_overridden() {
         // Uniform runs stay wire-compatible: no `model` key at all.
@@ -1126,6 +1798,7 @@ mod tests {
             worktree: "/w/.axo-variants/0".into(),
             model: None,
             agent: None,
+            provider: None,
         };
         let json = serde_json::to_string(&v).unwrap();
         assert!(

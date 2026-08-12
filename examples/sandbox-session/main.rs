@@ -114,9 +114,10 @@ fn print_threat_model() {
     }
     println!();
     println!(
-        "\x20 • Network.    Untrusted runs can start with `--network none` — no\n\
-         \x20   outbound connections at all (cuts off exfiltration / C2 / SSRF).\n\
-         \x20   Bridged networking is opt-in, per policy.\n"
+        "\x20 • Network.    Bridged networking is the default so installs and\n\
+         \x20   development servers work. Set `sandbox.network: none` for an\n\
+         \x20   untrusted run that must have no outbound connection (cuts off\n\
+         \x20   exfiltration / C2 / SSRF).\n"
     );
     println!(
         "\x20 • Resources.  Memory / CPU / PID caps (2 GB / 2 CPUs / 512 pids)\n\
@@ -139,9 +140,9 @@ fn print_threat_model() {
          \x20   outside this layer's control.\n"
     );
     println!(
-        "\x20 • What you explicitly grant.  Bridged networking, mounted\n\
-         \x20   credentials, or a permissive tool policy widen the surface — by\n\
-         \x20   your choice.\n"
+        "\x20 • What the policy grants.  Bridged networking (the default),\n\
+         \x20   mounted credentials, or a permissive tool policy widen the\n\
+         \x20   surface.\n"
     );
 }
 

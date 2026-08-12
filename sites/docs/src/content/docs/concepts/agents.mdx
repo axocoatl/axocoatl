@@ -11,7 +11,8 @@ survives the process through periodic checkpoints.
 
 ## Anatomy of an agent
 
-Every agent has seven knobs you control in YAML:
+A typical agent configuration combines identity, provider/model selection,
+instructions, dependencies, budgets, and optional generation controls:
 
 ```yaml
 - id: coder
@@ -27,18 +28,19 @@ Every agent has seven knobs you control in YAML:
     per_call:      4000
     overflow_policy: warn
   sampling:
-    temperature: 0          # deterministic — same input, same output
-    response_format: json   # ask the model for JSON (native mode per provider)
+    temperature: 0          # asks supported adapters for lower-variance output
+    response_format: json   # support and implementation vary by adapter
 ```
 
-- **`id`** — the agent's name in the lattice. Other agents `depends_on`
-  this id.
+- **`id`** — the stable config id used by sessions, Automations, APIs, and
+  coordination metadata.
 - **`provider`** + **`model`** — which LLM backs this agent. Each agent
   can use a different one. Local for cheap tasks, frontier for hard ones,
   same workflow.
 - **`system_prompt`** — the agent's role and operating instructions.
-- **`depends_on`** — which agents must complete before this one
-  activates. Drives the DAG.
+- **`depends_on`** — dependency metadata used when legacy workflow YAML is
+  projected into an Automation DAG and when a multi-agent directory session
+  determines execution order.
 - **`token_budget`** — a pre-flight check, enforced *before* every LLM
   call. The agent can't spend more than `per_call` in any single call or
   more than `per_execution` across one full activation. `overflow_policy`
@@ -47,12 +49,14 @@ Every agent has seven knobs you control in YAML:
   **deprecated alias that now maps to `warn`** — context compaction toward
   the model window is automatic (see [Memory](/concepts/memory/)) and no
   longer a spend policy.
-- **`sampling`** — per-agent generation controls, all optional:
+- **`sampling`** — generation controls for the default-agent execution path,
+  all optional:
   `temperature`, `top_p`, `max_tokens`, and `response_format` (`text` or
-  `json`). Set `temperature: 0` for reproducible structured tasks like a
-  classifier or a JSON extractor; `response_format: json` maps to each
-  provider's native JSON mode (and a prompt-enforced fallback where a
-  provider has none). Omit any field to keep the provider's default.
+  `json`). The current coordinator path does not carry these settings, and
+  adapter support is not uniform: some fields are native request parameters,
+  while JSON output may be prompt-assisted or unavailable. Temperature zero
+  can reduce variability but does not make a generative model mathematically
+  deterministic. Omit any field to keep the provider's default.
 
 ## Lifecycle
 
@@ -60,14 +64,14 @@ Every agent has seven knobs you control in YAML:
    `ractor::Actor` spawned. Agents are spawned *parentless* (no ractor
    supervisor tree); liveness is handled by the supervision loop below.
 2. **Idle** — the actor sits in its mailbox loop, waiting for messages.
-3. **Activate** — the lattice routes work to it via an `Execute` message
-   when its dependencies fire.
-4. **Stream** — the LLM call streams tokens internally (always). The
-   dashboard's Studio rail reflects them live.
+3. **Execute** — a session, Automation node, coordinator, or direct API/CLI
+   caller sends it work.
+4. **Stream** — the LLM call streams tokens internally (always). The session's
+   Activity and Agent graph modules reflect execution live.
 5. **Checkpoint** — periodically the actor writes its session transcript
    to disk so a crash + restart can resume the conversation.
-6. **Complete** — publishes `TaskCompleted` to the lattice with the
-   output. Other agents activate.
+6. **Complete** — returns the output and emits the relevant lifecycle/event
+   records for observers and trigger subscribers.
 
 ## Supervision
 
@@ -81,7 +85,7 @@ from restarting forever.
 The restart restores the **conversation transcript only** — the messages from
 the last checkpoint. It does *not* restore token-usage accounting or
 tool/plan state; the agent resumes the conversation and rebuilds the rest.
-The dashboard shows the restart in the agent's status line.
+The app shows the restart in the agent's status line.
 
 ## Providers
 
@@ -90,7 +94,8 @@ provider ids are wired:
 
 - `ollama` — local Ollama daemon (default).
 - `openai` — OpenAI chat completions. Honors a configurable `base_url`, so
-  it also targets any OpenAI-compatible endpoint (LM Studio, MLX, vLLM, …).
+  it can also target compatible implementations such as LM Studio, MLX, and
+  vLLM.
 - `openrouter` — the OpenAI client re-pointed at openrouter.ai, with the
   Axocoatl attribution headers attached.
 - `anthropic` — Anthropic messages API.
@@ -99,7 +104,7 @@ provider ids are wired:
 
 Each agent's configured `model` is sent as a per-request override, so a
 shared provider still serves every agent its own model. Keys live in `.env`.
-The dashboard's onboarding wizard fills the right keys for you.
+The app's onboarding wizard fills the right keys for you.
 
 ## Restart, manually
 

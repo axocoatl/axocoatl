@@ -52,6 +52,7 @@ axocoatl.local.yaml
 # Sites — generated / synced artifacts
 sites/marketing/assets/*
 !sites/marketing/assets/og-home.png
+!sites/marketing/assets/workbench-session.png
 !sites/marketing/assets/lattice.mp4
 !sites/marketing/assets/session.mp4
 !sites/marketing/assets/demos/

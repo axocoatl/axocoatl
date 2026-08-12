@@ -20,11 +20,12 @@
 //! git clone); the boundary statement — "the sandbox is the boundary" — holds for
 //! both, which is why the tools take `Arc<dyn Sandbox>` and never see the backend.
 
+use std::collections::HashSet;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use crate::error::IsolationError;
@@ -32,6 +33,26 @@ use crate::podman;
 
 /// The container runtime executable — always podman.
 const PODMAN: &str = "podman";
+
+/// A named-container removal is allowed to block for this long before its
+/// Podman client is killed. Callers that own a tighter product deadline can
+/// pass it to [`SessionSandbox::remove_named_many`].
+const NAMED_REMOVE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+/// Killing the local Podman client must also reap it before cleanup continues.
+const COMMAND_REAP_TIMEOUT: Duration = Duration::from_secs(2);
+/// Podman on macOS proxies removal into a VM. The remote removal can finish
+/// just after its local client hits a deadline, so reconcile exact names before
+/// deciding that cleanup failed or retrying it.
+const NAMED_REMOVE_RECONCILE_TIMEOUT: Duration = Duration::from_secs(5);
+const NAMED_REMOVE_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const NAMED_REMOVE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+struct BoundedCommandOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: bool,
+}
 
 /// Default base image for session containers — small, with a POSIX shell and
 /// the busybox coreutils/grep/find the file + shell tools rely on.
@@ -155,6 +176,10 @@ pub struct SessionSandbox {
 }
 
 impl SessionSandbox {
+    fn container_name(session_id: &str) -> String {
+        format!("axo-ses-{session_id}")
+    }
+
     /// Start a sandbox container for `session_id` with `working_dir`
     /// bind-mounted read-write at the same path inside the container.
     ///
@@ -171,7 +196,7 @@ impl SessionSandbox {
     ) -> Result<Self, IsolationError> {
         podman::ensure_ready().await?;
 
-        let container = format!("axo-ses-{session_id}");
+        let container = Self::container_name(session_id);
         let dir = working_dir.to_string_lossy().to_string();
 
         // Gate non-default base images behind explicit trust. An attacker-chosen
@@ -341,11 +366,9 @@ impl SessionSandbox {
     }
 
     /// Build a handle that **reuses an existing container** but roots the
-    /// structured file tools at `working_dir` — a subtree of the original
-    /// session mount, e.g. a `git worktree`. Does NOT start or stop a
+    /// structured file tools at `working_dir`. Does NOT start or stop a
     /// container (the owning [`SessionSandbox`] controls that lifecycle); this
-    /// only re-points the confinement root. Used to run a "variant" agent
-    /// jailed to its own worktree inside the shared session container.
+    /// only re-points the confinement root.
     pub fn attach(container: &str, working_dir: &Path) -> Self {
         Self {
             container: container.to_string(),
@@ -353,6 +376,45 @@ impl SessionSandbox {
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Attach to the deterministic container owned by `session_id` without
+    /// exposing the container-name encoding to callers.
+    pub fn attach_named(session_id: &str, working_dir: &Path) -> Self {
+        Self::attach(&Self::container_name(session_id), working_dir)
+    }
+
+    /// Whether a deterministically named sandbox exists and is running.
+    /// Missing containers are `false`; Podman/runtime failures are errors.
+    pub async fn named_running(session_id: &str) -> Result<bool, IsolationError> {
+        let container = Self::container_name(session_id);
+        let exists = Command::new(PODMAN)
+            .args(["container", "exists", &container])
+            .status()
+            .await
+            .map_err(|error| IsolationError::OciContainerFailed(error.to_string()))?;
+        match exists.code() {
+            Some(0) => {}
+            Some(1) => return Ok(false),
+            code => {
+                return Err(IsolationError::OciContainerFailed(format!(
+                    "checking sandbox {container}: podman container exists exited {}",
+                    code.map_or_else(|| "without a status".to_string(), |code| code.to_string())
+                )));
+            }
+        }
+        let inspect = Command::new(PODMAN)
+            .args(["inspect", "--format", "{{.State.Running}}", &container])
+            .output()
+            .await
+            .map_err(|error| IsolationError::OciContainerFailed(error.to_string()))?;
+        if !inspect.status.success() {
+            return Err(IsolationError::OciContainerFailed(format!(
+                "inspecting sandbox {container}: {}",
+                String::from_utf8_lossy(&inspect.stderr).trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&inspect.stdout).trim() == "true")
     }
 
     /// Run `apk add` for the toolchain users expect when they pop open a
@@ -792,6 +854,274 @@ impl SessionSandbox {
             .output()
             .await;
     }
+
+    fn spawn_output_reader<R>(mut reader: R) -> tokio::task::JoinHandle<std::io::Result<Vec<u8>>>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+    {
+        tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).await?;
+            Ok(bytes)
+        })
+    }
+
+    async fn collect_output_reader(
+        mut reader: tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
+    ) -> Result<Vec<u8>, IsolationError> {
+        match tokio::time::timeout(COMMAND_REAP_TIMEOUT, &mut reader).await {
+            Ok(Ok(Ok(bytes))) => Ok(bytes),
+            Ok(Ok(Err(error))) => Err(IsolationError::Io(error)),
+            Ok(Err(error)) => Err(IsolationError::OciContainerFailed(format!(
+                "collecting Podman output: {error}"
+            ))),
+            Err(_) => {
+                reader.abort();
+                let _ = reader.await;
+                Err(IsolationError::OciContainerFailed(
+                    "collecting Podman output timed out after its process exited".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Spawn an owned subprocess, bound its running time, and reap it after a
+    /// forced kill. `kill_on_drop` is the cancellation fallback; the explicit
+    /// kill + wait is the normal deadline path so a timed-out Podman client
+    /// cannot continue mutating container state behind its caller's result.
+    async fn run_bounded_command_owned(
+        mut command: Command,
+        timeout: Duration,
+    ) -> Result<BoundedCommandOutput, IsolationError> {
+        command
+            .kill_on_drop(true)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .map_err(|error| IsolationError::OciContainerFailed(error.to_string()))?;
+        let stdout_reader = Self::spawn_output_reader(child.stdout.take().ok_or_else(|| {
+            IsolationError::OciContainerFailed("Podman stdout was not captured".to_string())
+        })?);
+        let stderr_reader = Self::spawn_output_reader(child.stderr.take().ok_or_else(|| {
+            IsolationError::OciContainerFailed("Podman stderr was not captured".to_string())
+        })?);
+
+        let waited = tokio::time::timeout(timeout, child.wait()).await;
+        let (status, timed_out) = match waited {
+            Ok(Ok(status)) => (status, false),
+            Ok(Err(error)) => {
+                stdout_reader.abort();
+                stderr_reader.abort();
+                return Err(IsolationError::OciContainerFailed(format!(
+                    "waiting for Podman: {error}"
+                )));
+            }
+            Err(_) => {
+                let kill_error = child.start_kill().err();
+                match tokio::time::timeout(COMMAND_REAP_TIMEOUT, child.wait()).await {
+                    Ok(Ok(status)) => (status, true),
+                    Ok(Err(error)) => {
+                        stdout_reader.abort();
+                        stderr_reader.abort();
+                        return Err(IsolationError::OciContainerFailed(format!(
+                            "reaping timed-out Podman process: {error}{}",
+                            kill_error.map_or_else(String::new, |kill| format!(
+                                "; initiating kill also failed: {kill}"
+                            ))
+                        )));
+                    }
+                    Err(_) => {
+                        stdout_reader.abort();
+                        stderr_reader.abort();
+                        return Err(IsolationError::OciContainerFailed(format!(
+                            "timed-out Podman process could not be reaped within {} seconds{}",
+                            COMMAND_REAP_TIMEOUT.as_secs(),
+                            kill_error.map_or_else(String::new, |kill| format!(
+                                "; initiating kill failed: {kill}"
+                            ))
+                        )));
+                    }
+                }
+            }
+        };
+        let (stdout, stderr) = tokio::join!(
+            Self::collect_output_reader(stdout_reader),
+            Self::collect_output_reader(stderr_reader)
+        );
+        Ok(BoundedCommandOutput {
+            status,
+            stdout: stdout?,
+            stderr: stderr?,
+            timed_out,
+        })
+    }
+
+    /// Keep subprocess ownership in a supervisor task. Dropping an HTTP
+    /// handler or another caller only detaches the join handle; the supervisor
+    /// still reaches its deadline, kills, and reaps the child.
+    async fn run_bounded_command(
+        command: Command,
+        timeout: Duration,
+    ) -> Result<BoundedCommandOutput, IsolationError> {
+        tokio::spawn(async move { Self::run_bounded_command_owned(command, timeout).await })
+            .await
+            .map_err(|error| {
+                IsolationError::OciContainerFailed(format!(
+                    "Podman command supervisor failed: {error}"
+                ))
+            })?
+    }
+
+    async fn remove_container_names_once(
+        containers: &[String],
+        timeout: Duration,
+    ) -> Result<BoundedCommandOutput, IsolationError> {
+        let mut command = Command::new(PODMAN);
+        // `--ignore` makes absence atomically successful. An exists-then-rm
+        // sequence races concurrent cancellation and teardown.
+        command.args(["rm", "-f", "--ignore"]).args(containers);
+        Self::run_bounded_command(command, timeout).await
+    }
+
+    fn exact_names_present(containers: &[String], output: &[u8]) -> Vec<String> {
+        let output = String::from_utf8_lossy(output);
+        let existing = output.lines().map(str::trim).collect::<HashSet<_>>();
+        containers
+            .iter()
+            .filter(|container| existing.contains(container.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    async fn named_containers_present(
+        containers: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<String>, IsolationError> {
+        let mut command = Command::new(PODMAN);
+        command.args(["ps", "-a", "--format", "{{.Names}}"]);
+        let output = Self::run_bounded_command(command, timeout).await?;
+        if output.timed_out {
+            return Err(IsolationError::OciContainerFailed(format!(
+                "listing Podman containers timed out after {} seconds",
+                timeout.as_secs_f64()
+            )));
+        }
+        if !output.status.success() {
+            return Err(IsolationError::OciContainerFailed(format!(
+                "listing Podman containers: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(Self::exact_names_present(containers, &output.stdout))
+    }
+
+    async fn reconcile_named_absence(
+        containers: &[String],
+        timeout: Duration,
+    ) -> Result<Vec<String>, IsolationError> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut last_observation = None;
+        let mut last_error = None;
+        loop {
+            let remaining_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining_budget.is_zero() {
+                break;
+            }
+            let probe_timeout = NAMED_REMOVE_PROBE_TIMEOUT.min(remaining_budget);
+            match Self::named_containers_present(containers, probe_timeout).await {
+                Ok(remaining) if remaining.is_empty() => return Ok(remaining),
+                Ok(remaining) => last_observation = Some(remaining),
+                Err(error) => last_error = Some(error),
+            }
+            let remaining_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining_budget.is_zero() {
+                break;
+            }
+            tokio::time::sleep(NAMED_REMOVE_POLL_INTERVAL.min(remaining_budget)).await;
+        }
+        if let Some(remaining) = last_observation {
+            Ok(remaining)
+        } else {
+            Err(last_error.unwrap_or_else(|| {
+                IsolationError::OciContainerFailed(
+                    "container removal could not be reconciled".to_string(),
+                )
+            }))
+        }
+    }
+
+    fn remove_failure(output: &BoundedCommandOutput, timeout: Duration) -> String {
+        if output.timed_out {
+            format!(
+                "Podman removal timed out after {} seconds",
+                timeout.as_secs_f64()
+            )
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = stderr.trim();
+            if stderr.is_empty() {
+                format!("Podman removal exited with {}", output.status)
+            } else {
+                format!("Podman removal exited with {}: {stderr}", output.status)
+            }
+        }
+    }
+
+    /// Remove a deterministically named sandbox even when no in-process handle
+    /// survived (for example after a daemon crash). Missing containers are a
+    /// successful no-op; any other Podman failure is surfaced so callers do not
+    /// delete a still-mounted workspace underneath a live process.
+    pub async fn remove_named(session_id: &str) -> Result<(), IsolationError> {
+        Self::remove_named_many(&[session_id.to_string()], NAMED_REMOVE_COMMAND_TIMEOUT).await
+    }
+
+    /// Remove several deterministic sandboxes with one owned Podman command.
+    /// A deadline kills and reaps the local client, then exact-name polling
+    /// reconciles a removal that may already be completing inside Podman's VM.
+    /// Only names that are proven to remain are retried.
+    pub async fn remove_named_many(
+        session_ids: &[String],
+        timeout: Duration,
+    ) -> Result<(), IsolationError> {
+        let mut seen = HashSet::new();
+        let containers = session_ids
+            .iter()
+            .map(|session_id| Self::container_name(session_id))
+            .filter(|container| seen.insert(container.clone()))
+            .collect::<Vec<_>>();
+        if containers.is_empty() {
+            return Ok(());
+        }
+
+        let first = Self::remove_container_names_once(&containers, timeout).await?;
+        if !first.timed_out && first.status.success() {
+            return Ok(());
+        }
+        let first_failure = Self::remove_failure(&first, timeout);
+        let remaining =
+            Self::reconcile_named_absence(&containers, NAMED_REMOVE_RECONCILE_TIMEOUT).await?;
+        if remaining.is_empty() {
+            return Ok(());
+        }
+
+        let retry = Self::remove_container_names_once(&remaining, timeout).await?;
+        if !retry.timed_out && retry.status.success() {
+            return Ok(());
+        }
+        let retry_failure = Self::remove_failure(&retry, timeout);
+        let remaining =
+            Self::reconcile_named_absence(&remaining, NAMED_REMOVE_RECONCILE_TIMEOUT).await?;
+        if remaining.is_empty() {
+            Ok(())
+        } else {
+            Err(IsolationError::OciContainerFailed(format!(
+                "removing sandboxes failed ({first_failure}; retry: {retry_failure}); exact containers still present: {}",
+                remaining.join(", ")
+            )))
+        }
+    }
 }
 
 /// The per-session runtime surface the session tools are written against.
@@ -905,6 +1235,50 @@ impl Sandbox for SessionSandbox {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn process_is_alive(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_pid(path: &Path) -> u32 {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(value) = tokio::fs::read_to_string(path).await {
+                return value.trim().parse().expect("child should record its pid");
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "child did not record its pid"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    async fn assert_process_stops(pid: u32) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while process_is_alive(pid) && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!process_is_alive(pid), "timed-out child {pid} survived");
+    }
+
+    #[cfg(unix)]
+    fn sleeping_command(pid_file: &Path) -> Command {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "printf %s $$ > \"$1\"; exec sleep 30", "sh"])
+            .arg(pid_file);
+        command
+    }
+
     #[test]
     fn port_conflict_detection_covers_proxy_already_running() {
         // The variants podman emits for a held host port — all must route to
@@ -937,6 +1311,53 @@ mod tests {
         assert!(r.ok());
         let r = ExecResult { exit_code: 1, ..r };
         assert!(!r.ok());
+    }
+
+    #[test]
+    fn container_reconciliation_uses_exact_names() {
+        let targets = vec![
+            "axo-ses-one".to_string(),
+            "axo-ses-two".to_string(),
+            "axo-ses-three".to_string(),
+        ];
+        let present = SessionSandbox::exact_names_present(
+            &targets,
+            b"axo-ses-one-more\n axo-ses-two \naxo-ses-three-old\n",
+        );
+        assert_eq!(present, vec!["axo-ses-two"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bounded_command_timeout_kills_and_reaps_child() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let output = SessionSandbox::run_bounded_command(
+            sleeping_command(&pid_file),
+            Duration::from_millis(250),
+        )
+        .await
+        .unwrap();
+        let pid = wait_for_pid(&pid_file).await;
+        assert!(output.timed_out);
+        assert_process_stops(pid).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn command_supervisor_reaps_child_after_caller_cancellation() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let caller = tokio::spawn(SessionSandbox::run_bounded_command(
+            sleeping_command(&pid_file),
+            Duration::from_millis(250),
+        ));
+        let pid = wait_for_pid(&pid_file).await;
+        assert!(process_is_alive(pid));
+
+        caller.abort();
+        let _ = caller.await;
+        assert_process_stops(pid).await;
     }
 
     #[test]

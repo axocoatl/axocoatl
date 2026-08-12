@@ -132,11 +132,16 @@ rm -f "$RESP_BODY"
 
 cat <<EOF
 
-Try it from the dashboard:
-  1. Open the Automations tab — you should see "Spec Review · multi-perspective with HITL"
-  2. Click the card → editor shows 6 nodes (architect → review-each → approval-gate → approve / planner)
-  3. Click ✎ Edit to inspect any node, or ▶ Run to fire it with a prompt
-  4. Watch Studio for live pulses; the Activity feed in the right rail shows every step
-  5. If the reviewers find BLOCKING issues, the ⏸ pill in the top bar lights up — resume from there
-  6. ⟲ Runs shows the full step-by-step history after each run
+Try it from the one app:
+  1. Open Settings → Automations from the rail or command palette.
+  2. Find "Spec Review · multi-perspective with HITL" and choose Open.
+  3. The graph shows 7 nodes, including the TextInput and Map body node. Use
+     View to inspect it or ✎ Edit to change nodes, edges, inputs, and trigger.
+  4. Choose ▶ Run, submit a spec prompt, then open ⟲ Runs to follow durable
+     run status and node checkpoints. Activity remains the session conversation;
+     the retired Studio event timeline is not part of this flow.
+  5. If the reviewers report BLOCKING issues, the ⏸ waiting status pearl appears.
+     Choose it to open the pending prompt in Settings → Automations, then resume.
+  6. Stop and restart the daemon while that top-level Interrupt is parked to
+     demonstrate that it reappears and continues without replaying completed nodes.
 EOF

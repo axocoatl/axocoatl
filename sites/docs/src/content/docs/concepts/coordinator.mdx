@@ -1,23 +1,21 @@
 ---
 title: The coordinator
-description: A hierarchical orchestrator nested inside one lattice node — decompose a goal, spawn workers at runtime, and assign each subtask by auction.
+description: Explicit hierarchical orchestration — decompose a goal, spawn workers at runtime, and assign each subtask by auction.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-The [lattice](/concepts/lattice/) is **Layer 1**: top-level agents coordinate
-by events, with no orchestrator between them. Sometimes one agent's task is
-itself a goal that needs to be broken down and farmed out at runtime. That's
-**Layer 2** — the **coordinator**.
+The [event lattice](/concepts/lattice/) carries notifications; Automations run
+explicit DAGs. The **coordinator** is a third path for a goal that must be
+decomposed and assigned dynamically at runtime.
 
-An agent with `role: coordinator` runs the coordinator behavior. It is still a
-single lattice node; the hierarchy lives *inside* that node. So "no
-orchestrator" remains true of Layer 1 — the coordinator never sits between
-your top-level agents, it sits underneath one of them.
+An agent with `role: coordinator` runs the coordinator behavior. The hierarchy
+lives inside that agent's execution: it plans, selects workers, joins their
+results, and returns one synthesized answer.
 
 ## What a coordinator does
 
-When a coordinator agent fires, it runs one coordination pass:
+When a coordinator agent executes, it runs one coordination pass:
 
 1. **Decompose** the goal into subtasks.
 2. **Auction** each subtask to the worker pool — the best fit by required
@@ -57,9 +55,8 @@ coordinator spawns an **ad-hoc worker** granted exactly the required tools and
 running on the coordinator's own model — so a subtask is never forced onto an
 unfit worker, and a worker with no model never falls back to a cloud default.
 
-This is the same auction the lattice deliberately *doesn't* have: the lattice
-fans out to every holder of a skill; arbitration to a single winner lives here,
-in the coordinator.
+The event lattice does not select a worker. Arbitration to a single winner
+lives here, in the coordinator.
 
 ## Workers are first-class agents
 
@@ -67,7 +64,7 @@ A worker isn't a bare provider-plus-tools shell. Every spawned worker gets the
 full agent stack: [checkpointing](/concepts/checkpointing/), the four
 [memory](/concepts/memory/) tiers (daily log, core memory, semantic recall),
 and the global hook registry. A worker is an agent that happens to be driven by
-its coordinator rather than by the lattice.
+its coordinator rather than by an Automation edge or direct session call.
 
 ## Resumable runs
 
@@ -109,21 +106,21 @@ workflows:
     htn_methods_file: ./methods.yaml
 ```
 
-The `lead` agent is the lattice node you fire. `researcher` and `writer` are
-its pool — they're scoped to the workflows whose `entry_point` is `lead`, and
-the coordinator spawns them on demand. The auction decides which worker takes
-each subtask; the `web_search` tool on `researcher` is what its bid for a
-search-shaped subtask is scored on.
+The legacy workflow record supplies coordinator worker membership and the
+optional HTN methods file. `researcher` and `writer` are the pool selected for
+`lead`, and the coordinator spawns workers on demand. The auction decides which
+worker takes each subtask; the `web_search` tool on `researcher` is what its bid
+for a search-shaped subtask is scored on.
 
-## Lattice vs. coordinator
+## Automation, events, and coordinator
 
-| | Lattice (Layer 1) | Coordinator (Layer 2) |
-|---|---|---|
-| Structure | Static DAG you declare with `depends_on` | Dynamic decomposition at runtime |
-| Who decides order | The dependency graph — no orchestrator | The coordinator |
-| Fan-out | Every skill holder activates | One winner per subtask, by auction |
-| Membership | Top-level agents | A worker pool nested in one node |
+| | Automation | Event lattice | Coordinator |
+|---|---|---|---|
+| Purpose | Execute a declared graph | Publish and subscribe to typed events | Decompose a goal dynamically |
+| Ordering | Explicit DAG edges | No product worker-ordering path | Coordinator plan + auction |
+| Worker choice | Agent id on each node | None | One winner per subtask |
+| Trigger | Manual, fixed interval, event, or Skill | Publisher-defined | A coordinator agent execution |
 
-The two don't compete. Use the lattice for a pipeline you can draw ahead of
-time; reach for a coordinator when one step is a goal that only resolves into
-subtasks once it's running.
+Use an Automation for a graph you can draw ahead of time, the lattice to
+decouple event producers from subscribers, and a coordinator when the task
+shape only becomes clear while it is running.

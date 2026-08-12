@@ -5,15 +5,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use dashmap::DashMap;
-use tokio::sync::mpsc;
-
 use axocoatl_actor::{
     AgentActor, AgentBehavior, AgentRegistry, CoordinatorBehavior, DefaultAgentBehavior,
     WorkerConfig, DEFAULT_WORKER_BUDGET,
 };
 use axocoatl_config::{AgentRoleYaml, AxocoatlConfig};
-use axocoatl_coordination::{EventId, EventLattice, EventType, LatticeEvent};
+use axocoatl_coordination::{EventLattice, LatticeEvent};
 use axocoatl_core::{AgentId, AgentRole};
 use axocoatl_isolation::session_sandbox::{ExecResult, Sandbox, SessionSandbox};
 use axocoatl_llm::ProviderRegistry;
@@ -28,14 +25,143 @@ use axocoatl_token::{ApproximateCounter, TokenCounter};
 use axocoatl_tools::ToolExecutor;
 use ractor::Actor;
 
-use crate::activation::{self, ActivationRequest};
 use crate::error::DaemonError;
 use crate::scheduler::ScheduleTable;
-use crate::workflow::{WorkflowExecution, WorkflowOutput};
 
 /// Max lifetime of a remote E2B sandbox (seconds). The remote VM self-terminates
 /// after this; keep-alive/refresh for very long remote sessions is a later pass.
 const E2B_SESSION_TIMEOUT_SECS: u64 = 3600;
+
+/// Runtime teardown is deliberately shorter than a lane command's normal
+/// timeout. Discard must be able to break a review call that is waiting on the
+/// very container being discarded, then acquire the workspace lease and remove
+/// the clone only after every process owner is gone.
+const ATTEMPT_ACTOR_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const ATTEMPT_CONTAINER_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+const ATTEMPT_OPERATION_RELEASE_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn judge_ranking_contract(candidate_indices: &[usize]) -> String {
+    let indices = candidate_indices
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Candidate indexes are exactly [{indices}]. Return every index exactly once. \
+         Assign unique integer ranks that are a permutation of 1 through {count}; \
+         ties are forbidden. The winner must be the candidate whose rank is 1. \
+         If candidates are otherwise indistinguishable, break the tie by lower \
+         candidate index and say that the tie was broken deterministically.",
+        count = candidate_indices.len(),
+    )
+}
+
+/// Runtime ownership for one unresolved attempt set.
+///
+/// The durable manifest says what exists; this entry owns the process-local
+/// things that must be joined before those files may be removed. A completed
+/// lane deliberately stays here until Keep or Discard so cleanup has one path
+/// for successful, failed, and still-running sets.
+struct ActiveAttemptRun {
+    set_id: String,
+    actors: Vec<(AgentId, ractor::ActorRef<axocoatl_actor::AgentMessage>)>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// One real filesystem boundary per lane. Stopping these also kills any
+    /// background command or PTY an attempt created outside its actor task.
+    sandboxes: Vec<Arc<dyn Sandbox>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct StoredCheckedTree {
+    index: usize,
+    commit_oid: String,
+    tree_oid: String,
+    patch_sha256: String,
+    #[serde(default)]
+    changes_gitlink: bool,
+}
+
+#[derive(Debug)]
+struct CapturedCandidate {
+    checked: StoredCheckedTree,
+    paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct StoredFileFingerprint {
+    kind: String,
+    sha256: String,
+    #[serde(default)]
+    executable: bool,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct StoredKeepPath {
+    path: String,
+    preimage: Option<StoredFileFingerprint>,
+    postimage: Option<StoredFileFingerprint>,
+}
+
+/// Durable write-ahead journal for installing one checked candidate.
+///
+/// `preimage_tree` is the exact Git view of the primary working tree at the
+/// Keep commit point. `postimage_tree` is computed by merging the protected
+/// checked candidate commit over a protected preimage commit with their shared
+/// attempt base. Only object ids cross process boundaries; the real index and
+/// lossy patch text are never transaction inputs. Every affected leaf is then
+/// copied once into the immutable raw `keep-apply/postimage` store before this
+/// journal is published, then installed with a same-filesystem atomic rename
+/// from a rebuildable `keep-apply/stage`. A retry classifies raw
+/// kind/mode/bytes as preimage or postimage and continues after cancellation or
+/// process death without depending on Git filters or container setup.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct StoredKeepApply {
+    index: usize,
+    patch_sha256: String,
+    candidate_tree: String,
+    preimage_tree: String,
+    postimage_tree: String,
+    paths: Vec<StoredKeepPath>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct StoredKeepReceipt {
+    set_id: String,
+    index: usize,
+    status: crate::git::GitStatus,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct StoredTranscriptCommit {
+    base_checkpoint_version: u64,
+    base_message_count: usize,
+    task_sha256: String,
+    assistant_sha256: String,
+}
+
+struct StreamAgentRunOptions {
+    model_override: Option<String>,
+    trace: Option<Arc<StdMutex<Vec<crate::trajectory::Action>>>>,
+    supplied_history: Option<Vec<axocoatl_core::ChatMessage>>,
+}
+
+impl ActiveAttemptRun {
+    fn new(set_id: impl Into<String>) -> Self {
+        Self {
+            set_id: set_id.into(),
+            actors: Vec::new(),
+            tasks: Vec::new(),
+            sandboxes: Vec::new(),
+        }
+    }
+}
 
 /// Register every discovered MCP tool into `executor` under its qualified
 /// `mcp__server__tool` name, so a model call reaches the `Mcp` backend and the
@@ -75,14 +201,14 @@ pub struct AxocoatlDaemon {
     /// so every agent's tool calls flow through the permission gate.
     pub hook_registry: Arc<axocoatl_tools::HookRegistry>,
     pub schedule_table: ScheduleTable,
-    /// Live state of every proactive agent — populated by
-    /// `start_proactive_runners`, exposed via `/api/proactive`.
+    /// Rebuildable observations for event- and Skill-triggered Automations,
+    /// exposed through the compatibility `/api/proactive` route.
     pub proactive_table: crate::proactive::ProactiveTable,
     /// Persistent store of directory sessions.
     pub session_store: Arc<tokio::sync::Mutex<SessionStore>>,
-    /// Persistent store of lightweight chats (the Chat tab — no directory,
-    /// no sandbox). Loaded from {data_dir}/chats/*.json at boot. Atomic
-    /// temp+rename JSON writes per chat — see [`ChatStore::persist`].
+    /// Persistent store for the retained lightweight-chat API (no directory or
+    /// sandbox). Loaded from {data_dir}/chats/*.json at boot. Atomic temp+rename
+    /// JSON writes per chat — see [`ChatStore::persist`].
     pub chat_store: Arc<tokio::sync::Mutex<ChatStore>>,
     /// Content-addressed file store — the local "Files API". Files are keyed
     /// by SHA-256 of their bytes, dedup'd across all chats that reference them.
@@ -93,10 +219,10 @@ pub struct AxocoatlDaemon {
     /// for what runs. Seeded once from the legacy YAML sections at first
     /// boot, after which the dashboard editor writes here directly.
     pub automation_store: Arc<tokio::sync::RwLock<crate::automation_store::AutomationStore>>,
-    /// Live HITL interrupts. When an Interrupt node fires, it parks here
-    /// keyed by `{automation_id}:{run_id}:{node_id}` and the executor
-    /// blocks on `notify.notified()`. The dashboard surfaces these as
-    /// pending; `POST /api/automations/{id}/runs/{run_id}/resume` wakes them.
+    /// HITL interrupts keyed by `{automation_id}:{run_id}:{node_id}`. Live
+    /// executors block on `notify.notified()`; bootstrap also reconstructs
+    /// entries from persisted `interrupt_parked` checkpoints so the dashboard
+    /// can resume them after process restart.
     pub pending_interrupts: Arc<
         tokio::sync::RwLock<std::collections::HashMap<String, crate::interrupt::PendingInterrupt>>,
     >,
@@ -106,6 +232,9 @@ pub struct AxocoatlDaemon {
     /// Live session isolation instances (local Podman container or remote
     /// microVM), keyed by session id. Trait-typed so the backend is pluggable.
     session_sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
+    /// Per-session singleflight for deterministic sandbox startup. Two starts
+    /// with the same Podman name would otherwise remove each other's container.
+    sandbox_starts: Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// Files the session's agent wrote during its most recent turn.
     ///
     /// Recorded in the daemon rather than assembled in a viewer from live
@@ -116,7 +245,7 @@ pub struct AxocoatlDaemon {
     /// Ring buffer of the most recent lattice events (capped at 200).
     pub event_log: Arc<StdMutex<VecDeque<LatticeEvent>>>,
     /// The observability stream bus — flattened events + live agent tokens.
-    /// Every dashboard WebSocket subscribes to this.
+    /// Every app or compatibility WebSocket subscribes to this.
     pub stream_bus: tokio::sync::broadcast::Sender<crate::stream::StreamFrame>,
     /// Live state of every in-flight workflow run, rebuilt from the bus.
     /// A freshly-connected WebSocket reads this to re-attach to a run.
@@ -128,10 +257,19 @@ pub struct AxocoatlDaemon {
     /// would require provider-level cancellation hooks.
     pub active_chat_turns:
         Arc<tokio::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>>,
+    /// Process-local ownership of attempt actors and lane tasks, keyed by
+    /// session id. The durable current-set manifest is the cross-restart source
+    /// of truth; this registry exists to make teardown ordered and awaitable.
+    active_attempts: Arc<tokio::sync::Mutex<HashMap<String, ActiveAttemptRun>>>,
+    /// Out-of-band cancellation marks let Discard/close interrupt live lanes or
+    /// a long repository check even while a review/check call owns the workspace
+    /// operation.
+    attempt_cancellations: Arc<tokio::sync::Mutex<HashSet<String>>>,
+    /// Serializes every workspace-owning operation for a session across the
+    /// full async operation, closing start/turn/review/decision TOCTOU races.
+    attempt_operations: Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     pub tool_executor: Arc<ToolExecutor>,
     shared_registry: Arc<axocoatl_memory::SharedBlockRegistry>,
-    activation_tx: mpsc::UnboundedSender<ActivationRequest>,
-    activation_handle: Option<tokio::task::JoinHandle<()>>,
     agent_handles: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
@@ -340,7 +478,8 @@ impl AxocoatlDaemon {
             agent_handles.push(handle);
         }
 
-        // 8. Set up event lattice for stigmergic coordination
+        // 8. Set up the event lattice used by Skills, Automation triggers,
+        //    webhooks, the recent-events API, and compatibility event frames.
         let event_lattice = Arc::new(EventLattice::new(256));
 
         for agent_yaml in &config.agents {
@@ -349,9 +488,9 @@ impl AxocoatlDaemon {
                 continue;
             }
             let agent_id = AgentId::new(&agent_yaml.id);
-            // Entry agents activate directly via execute_workflow(); downstream
-            // agents activate on accumulated TaskCompleted signals. Threshold and
-            // decay come from lattice_params (per-agent override, else the default).
+            // Preserve each agent's coordination metadata in the lattice.
+            // Runtime execution is owned by sessions and AutomationStore; there
+            // is no second config-owned activation runner.
             let (threshold, decay_rate) = lattice_params(agent_yaml);
             event_lattice.register_agent(agent_id, threshold, decay_rate);
         }
@@ -386,20 +525,9 @@ impl AxocoatlDaemon {
             });
         }
 
-        // 10. Spawn the activation loop
-        let (activation_tx, activation_rx) = mpsc::unbounded_channel();
-        let activation_handle = tokio::spawn(activation::run_activation_loop(
-            activation_rx,
-            agent_registry.clone(),
-            event_lattice.clone(),
-            activation_tx.clone(),
-            config.agents.clone(),
-            stream_bus.clone(),
-        ));
-
-        // 11. Spawn the event subscriber — keeps the last 200 lattice events in
-        // a ring buffer AND bridges every event onto the stream bus so the
-        // dashboard WebSocket sees the full coordination feed.
+        // 10. Spawn the event subscriber — keeps the last 200 lattice events in
+        // a ring buffer for the integration API and bridges every event onto
+        // the stream bus for app and compatibility WebSocket observers.
         let event_log: Arc<StdMutex<VecDeque<LatticeEvent>>> =
             Arc::new(StdMutex::new(VecDeque::with_capacity(200)));
         let log_for_task = event_log.clone();
@@ -408,9 +536,9 @@ impl AxocoatlDaemon {
         let bus_for_bridge = stream_bus.clone();
         tokio::spawn(async move {
             while let Ok(notif) = event_rx.recv().await {
-                // Bridge to the stream bus for the dashboard.
+                // Bridge to the stream bus for WebSocket observers.
                 let _ = bus_for_bridge.send(crate::stream::event_frame(&notif));
-                // Keep the ring buffer for the event timeline.
+                // Keep the ring buffer for the recent-events API.
                 if let Some(full) = lattice_for_task.get_event(&notif.event_id) {
                     if let Ok(mut log) = log_for_task.lock() {
                         if log.len() >= 200 {
@@ -422,7 +550,7 @@ impl AxocoatlDaemon {
             }
         });
 
-        // 12. Spawn the lattice event-egress (webhook) dispatcher — only when
+        // 11. Spawn the lattice event-egress (webhook) dispatcher — only when
         //     webhooks are configured, so a default install makes zero outbound
         //     requests and the air-gapped story holds.
         if !config.webhooks.is_empty() {
@@ -516,6 +644,22 @@ impl AxocoatlDaemon {
             crate::automation_runs::AutomationRunStore::open(format!("{data_dir}/runs"))
                 .map_err(|e| DaemonError::Session(e.to_string()))?,
         );
+        let abandoned_runs = run_store
+            .reconcile_orphaned_running(
+                "Daemon restarted before this Automation run reached a durable Interrupt or terminal state.",
+            )
+            .await
+            .map_err(|e| {
+                DaemonError::Session(format!(
+                    "could not reconcile Automation runs during restart: {e}"
+                ))
+            })?;
+        if !abandoned_runs.is_empty() {
+            tracing::warn!(
+                abandoned_runs = abandoned_runs.len(),
+                "marked orphaned Automation runs failed during restart"
+            );
+        }
 
         // Unified Automation store. Lives at {data_dir}/automations.json.
         // First-boot seed: project the legacy YAML sections through
@@ -525,19 +669,34 @@ impl AxocoatlDaemon {
             let path = std::path::PathBuf::from(format!("{data_dir}/automations.json"));
             let mut store = crate::automation_store::AutomationStore::open(&path)
                 .map_err(|e| DaemonError::Session(e.to_string()))?;
-            match store.seed_from_legacy_if_empty(&config) {
-                Ok(true) => tracing::info!(
+            let seeded = store
+                .seed_from_legacy_if_empty(&config)
+                .map_err(|e| DaemonError::Session(format!("automation store seed failed: {e}")))?;
+            if seeded {
+                tracing::info!(
                     automations = store.len(),
                     "seeded automation store from legacy YAML sections"
-                ),
-                Ok(false) => tracing::debug!(
+                );
+            } else {
+                tracing::debug!(
                     automations = store.len(),
-                    "automation store already populated; skipping legacy seed"
-                ),
-                Err(e) => tracing::warn!(error = %e, "automation store seed failed"),
+                    "automation store already initialized; skipping legacy seed"
+                );
             }
             Arc::new(tokio::sync::RwLock::new(store))
         };
+
+        let pending_interrupts = Arc::new(tokio::sync::RwLock::new(
+            crate::automation_executor::rehydrate_pending_interrupts(&automation_store, &run_store)
+                .await,
+        ));
+        let recovered_interrupts = pending_interrupts.read().await.len();
+        if recovered_interrupts > 0 {
+            tracing::info!(
+                recovered_interrupts,
+                "rehydrated pending Automation Interrupts from checkpoints"
+            );
+        }
 
         tracing::info!(agents = config.agents.len(), "Axocoatl daemon bootstrapped");
 
@@ -559,18 +718,20 @@ impl AxocoatlDaemon {
             chat_store,
             file_store,
             active_chat_turns: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            active_attempts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            attempt_cancellations: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+            attempt_operations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             automation_store,
-            pending_interrupts: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            pending_interrupts,
             run_store,
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            sandbox_starts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             session_last_turn: Arc::new(StdMutex::new(HashMap::new())),
             event_log,
             stream_bus,
             active_runs,
             tool_executor,
             shared_registry,
-            activation_tx,
-            activation_handle: Some(activation_handle),
             agent_handles: std::sync::Mutex::new(agent_handles),
         })
     }
@@ -1038,7 +1199,7 @@ impl AxocoatlDaemon {
     /// `system_override` / `model_override`. Lets a caller run a prompt or model
     /// variant of the agent for a single execution without reconfiguring the
     /// daemon; the override fields are honored by the agent behavior (the same
-    /// path the Chat tab uses).
+    /// path the retained lightweight-chat API uses).
     pub async fn execute_agent_input(
         &self,
         agent_id: &str,
@@ -1096,14 +1257,28 @@ impl AxocoatlDaemon {
 
     /// Close a session: stop its sandbox container and mark it closed.
     pub async fn close_session(&self, id: &str) -> Result<(), DaemonError> {
-        if let Some(sandbox) = self.session_sandboxes.lock().await.remove(id) {
-            sandbox.stop().await;
+        let current_set = self.peek_current_attempt_set(id).await?.map(|set| set.id);
+        let (_operation, _cancellation_requested) = self
+            .lock_attempt_operation_for_cleanup(id, current_set.as_deref())
+            .await?;
+        let result = async {
+            // Close is resumable, not a destructive decision. Quiesce actors
+            // and containers but preserve the attempt clones, verdicts, and
+            // current pointer so reopening can continue with Review/Discard.
+            self.quiesce_attempt_locked(id).await?;
+            self.stop_session_actors_checked(id).await?;
+            self.stop_session_sandbox_checked(id).await?;
+            self.session_store
+                .lock()
+                .await
+                .close(id)
+                .map_err(|e| DaemonError::Session(e.to_string()))
         }
-        self.session_store
-            .lock()
-            .await
-            .close(id)
-            .map_err(|e| DaemonError::Session(e.to_string()))
+        .await;
+        if let Some(set_id) = current_set {
+            self.clear_attempt_cancellation(id, &set_id).await;
+        }
+        result
     }
 
     /// Delete a session entirely — stop and remove its sandbox, then drop the
@@ -1111,14 +1286,101 @@ impl AxocoatlDaemon {
     /// left in place; a user that creates a new session pointing at the same
     /// directory gets a fresh memory slate (different session id).
     pub async fn delete_session(&self, id: &str) -> Result<(), DaemonError> {
-        if let Some(sandbox) = self.session_sandboxes.lock().await.remove(id) {
-            sandbox.stop().await;
+        let current_set = self.peek_current_attempt_set(id).await?.map(|set| set.id);
+        let (_operation, _cancellation_requested) = self
+            .lock_attempt_operation_for_cleanup(id, current_set.as_deref())
+            .await?;
+        let result = async {
+            self.remove_variant_worktrees_locked(id).await?;
+            self.stop_session_actors_checked(id).await?;
+            self.stop_session_sandbox_checked(id).await?;
+            self.session_store
+                .lock()
+                .await
+                .remove(id)
+                .map_err(|e| DaemonError::Session(e.to_string()))
         }
-        self.session_store
-            .lock()
+        .await;
+        if let Some(set_id) = current_set {
+            self.clear_attempt_cancellation(id, &set_id).await;
+        }
+        result
+    }
+
+    async fn stop_session_sandbox_checked(&self, id: &str) -> Result<(), DaemonError> {
+        let sandbox = self.session_sandboxes.lock().await.get(id).cloned();
+        if self.config.sandbox.backend == "e2b" {
+            if let Some(sandbox) = sandbox {
+                // The remote trait currently exposes best-effort stop only and
+                // needs its live remote handle.
+                sandbox.stop().await;
+            }
+        } else {
+            // Container names are deterministic. After a daemon restart the
+            // process-local map is empty but the preserved Podman container may
+            // still be running, so exact teardown must not depend on a handle.
+            SessionSandbox::remove_named(id)
+                .await
+                .map_err(|error| DaemonError::Session(error.to_string()))?;
+        }
+        self.session_sandboxes.lock().await.remove(id);
+        Ok(())
+    }
+
+    async fn stop_session_actors_checked(&self, session_id: &str) -> Result<(), DaemonError> {
+        let prefix = format!("{session_id}:");
+        let actor_ids: Vec<AgentId> = self
+            .agent_registry
+            .list_ids()
             .await
-            .remove(id)
-            .map_err(|e| DaemonError::Session(e.to_string()))
+            .into_iter()
+            .filter(|id| id.to_string().starts_with(&prefix))
+            .collect();
+        let mut shutdowns = tokio::task::JoinSet::new();
+        for actor_id in &actor_ids {
+            let Some(actor) = self.agent_registry.get(actor_id).await else {
+                continue;
+            };
+            let label = actor_id.to_string();
+            shutdowns.spawn(async move {
+                if matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+                    return (label, Ok(()));
+                }
+                let graceful = actor
+                    .stop_and_wait(None, Some(Duration::from_secs(10)))
+                    .await;
+                if graceful.is_ok() || matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+                    return (label, Ok(()));
+                }
+                let forced = actor.kill_and_wait(Some(Duration::from_secs(5))).await;
+                if forced.is_err() && matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+                    (label, Ok(()))
+                } else {
+                    (label, forced.map_err(|error| error.to_string()))
+                }
+            });
+        }
+        let mut failures = Vec::new();
+        while let Some(result) = shutdowns.join_next().await {
+            match result {
+                Ok((_, Ok(()))) => {}
+                Ok((actor, Err(error))) => {
+                    failures.push(format!("session actor '{actor}' did not stop: {error}"));
+                }
+                Err(error) => failures.push(format!("session actor shutdown failed: {error}")),
+            }
+        }
+        for actor_id in actor_ids {
+            self.agent_registry.remove(&actor_id).await;
+        }
+        if let Ok(mut runs) = self.active_runs.lock() {
+            runs.remove(session_id);
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(DaemonError::Session(failures.join("; ")))
+        }
     }
 
     /// Set the session's check command. `None` or empty clears it.
@@ -1541,6 +1803,18 @@ impl AxocoatlDaemon {
         if let Some(sb) = self.session_sandboxes.lock().await.get(&session.id) {
             return Ok(sb.clone());
         }
+        let start = {
+            let mut starts = self.sandbox_starts.lock().await;
+            starts
+                .entry(session.id.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _start = start.lock().await;
+        // Another caller may have completed while this one waited.
+        if let Some(sb) = self.session_sandboxes.lock().await.get(&session.id) {
+            return Ok(sb.clone());
+        }
         // Start the instance WITHOUT holding the global map lock — a remote boot
         // + git clone can take minutes, and holding the lock would serialize every
         // other session's file/git/exec op behind it (head-of-line blocking).
@@ -1575,17 +1849,66 @@ impl AxocoatlDaemon {
                 )));
             }
         };
-        // Publish under the lock. If a concurrent caller won the race for this
-        // session while we were starting, keep theirs and stop our duplicate
-        // (a wasted-but-correct extra VM/container, only on a rare same-session race).
-        let mut boxes = self.session_sandboxes.lock().await;
-        if let Some(existing) = boxes.get(&session.id) {
-            let winner = existing.clone();
-            drop(boxes);
-            sandbox.stop().await;
-            return Ok(winner);
+        self.session_sandboxes
+            .lock()
+            .await
+            .insert(session.id.clone(), sandbox.clone());
+        Ok(sandbox)
+    }
+
+    /// Recreate the primary local sandbox for an unresolved attempt without
+    /// running project setup again. After a daemon crash the workspace may be
+    /// between Keep journal entries; postCreate formatters/installers must not
+    /// get a chance to turn that classifiable pre/post state into a third one.
+    async fn ensure_attempt_recovery_sandbox(
+        &self,
+        session: &Session,
+    ) -> Result<Arc<dyn Sandbox>, DaemonError> {
+        if let Some(sandbox) = self.session_sandboxes.lock().await.get(&session.id) {
+            return Ok(sandbox.clone());
         }
-        boxes.insert(session.id.clone(), sandbox.clone());
+        Self::require_attempt_resolution_backend(&self.config.sandbox.backend)?;
+        let start = {
+            let mut starts = self.sandbox_starts.lock().await;
+            starts
+                .entry(session.id.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _start = start.lock().await;
+        if let Some(sandbox) = self.session_sandboxes.lock().await.get(&session.id) {
+            return Ok(sandbox.clone());
+        }
+        let config = &self.config.sandbox;
+        let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
+            allow_post_create: false,
+            allow_untrusted_image: config.allow_untrusted_images,
+            network: match config.network.as_str() {
+                "none" => axocoatl_isolation::session_sandbox::SandboxNetwork::None,
+                _ => axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge,
+            },
+            require_resource_limits: config.require_resource_limits,
+        };
+        let sandbox: Arc<dyn Sandbox> = Arc::new(
+            SessionSandbox::start(
+                &session.id,
+                &session.working_dir,
+                session.image.as_deref(),
+                &session.exposed_ports,
+                &[],
+                &policy,
+            )
+            .await
+            .map_err(|error| {
+                DaemonError::Session(format!(
+                    "starting attempt recovery sandbox without postCreate: {error}"
+                ))
+            })?,
+        );
+        self.session_sandboxes
+            .lock()
+            .await
+            .insert(session.id.clone(), sandbox.clone());
         Ok(sandbox)
     }
 
@@ -1728,6 +2051,9 @@ impl AxocoatlDaemon {
         session_id: &str,
         input: &str,
     ) -> Result<axocoatl_core::AgentOutput, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        self.require_no_unresolved_attempt(session_id).await?;
         let session = self
             .get_session(session_id)
             .await
@@ -1789,6 +2115,9 @@ impl AxocoatlDaemon {
     /// caller computes `keep` from the transcript returned by `session_messages`
     /// (a count of raw `StoredMessage`s), landing on a turn boundary.
     pub async fn rewind_session(&self, session_id: &str, keep: usize) -> Result<(), DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        self.require_no_unresolved_attempt(session_id).await?;
         let session = self
             .get_session(session_id)
             .await
@@ -1900,6 +2229,85 @@ impl AxocoatlDaemon {
             .map_err(|e| DaemonError::Session(e.to_string()))
     }
 
+    /// Run git with an alternate index, leaving the user's real index and
+    /// working tree untouched. This is the basis of an attempt snapshot: a
+    /// hidden commit can describe staged, unstaged, and untracked work without
+    /// staging or committing any of it in the session checkout.
+    async fn session_git_with_index(
+        &self,
+        session_id: &str,
+        cwd: &str,
+        index_path: &str,
+        args: &[&str],
+    ) -> Result<ExecResult, DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let mut argv = vec![
+            "env".to_string(),
+            format!("GIT_INDEX_FILE={index_path}"),
+            "git".to_string(),
+            "-c".to_string(),
+            "safe.directory=*".to_string(),
+            "-c".to_string(),
+            "user.email=agent@axocoatl.local".to_string(),
+            "-c".to_string(),
+            "user.name=Axocoatl".to_string(),
+            "-c".to_string(),
+            "core.filemode=true".to_string(),
+            "-c".to_string(),
+            "core.symlinks=true".to_string(),
+            "-C".to_string(),
+            cwd.to_string(),
+        ];
+        argv.extend(args.iter().map(|arg| (*arg).to_string()));
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        sandbox
+            .exec(&refs, Duration::from_secs(300))
+            .await
+            .map_err(|e| DaemonError::Session(e.to_string()))
+    }
+
+    /// Materialize selected paths from an alternate index into a separate
+    /// worktree. Both locations are daemon-derived; the user's real index and
+    /// primary files are not consulted or mutated by this command.
+    async fn session_git_stdin_with_index_work_tree(
+        &self,
+        session_id: &str,
+        git_dir: &str,
+        index_path: &str,
+        work_tree: &str,
+        args: &[&str],
+        stdin: &str,
+    ) -> Result<ExecResult, DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let mut argv = vec![
+            "env".to_string(),
+            format!("GIT_DIR={git_dir}"),
+            format!("GIT_INDEX_FILE={index_path}"),
+            format!("GIT_WORK_TREE={work_tree}"),
+            "git".to_string(),
+            "-c".to_string(),
+            "safe.directory=*".to_string(),
+            "-c".to_string(),
+            "core.filemode=true".to_string(),
+            "-c".to_string(),
+            "core.symlinks=true".to_string(),
+        ];
+        argv.extend(args.iter().map(|arg| (*arg).to_string()));
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        sandbox
+            .exec_stdin(&refs, stdin, Duration::from_secs(300))
+            .await
+            .map_err(|e| DaemonError::Session(e.to_string()))
+    }
+
     /// Ensure the session directory is a git repo — initialize it with a
     /// baseline commit if it isn't. Idempotent; a no-op for existing repos.
     pub async fn ensure_session_git(&self, session_id: &str) -> Result<(), DaemonError> {
@@ -1988,7 +2396,7 @@ impl AxocoatlDaemon {
             .root()
             .to_string_lossy()
             .to_string();
-        self.git_diff_at(session_id, &dir, path).await
+        self.git_diff_at(session_id, &dir, "HEAD", path).await
     }
 
     /// Before/after for one file **inside a variant lane's worktree**.
@@ -1999,14 +2407,26 @@ impl AxocoatlDaemon {
     pub async fn variant_diff(
         &self,
         session_id: &str,
+        set_id: &str,
         index: usize,
         path: &str,
     ) -> Result<crate::git::GitDiff, DaemonError> {
-        let dir = format!(
-            "{}/.axo-variants/{index}",
-            self.session_dir(session_id).await?
-        );
-        self.git_diff_at(session_id, &dir, path).await
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        let set = self.require_attempt_set(session_id, set_id).await?;
+        Self::require_review_storage(&set)?;
+        let lane = set
+            .lanes
+            .iter()
+            .find(|lane| lane.index == index)
+            .ok_or_else(|| DaemonError::Session(format!("attempt {} does not exist", index + 1)))?;
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let lane_sandbox = self.attempt_sandbox(&session, set_id, lane.index).await?;
+        let worktree = lane_sandbox.root().to_string_lossy().to_string();
+        Self::git_diff_in_sandbox(&lane_sandbox, &worktree, &set.base_sha, path).await
     }
 
     /// The diff machinery, rooted at any checkout inside the sandbox — the
@@ -2015,6 +2435,7 @@ impl AxocoatlDaemon {
         &self,
         session_id: &str,
         dir: &str,
+        reference: &str,
         path: &str,
     ) -> Result<crate::git::GitDiff, DaemonError> {
         if path.contains("..") {
@@ -2026,7 +2447,19 @@ impl AxocoatlDaemon {
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         let sandbox = self.ensure_sandbox(&session).await?;
-        let head_ref = format!("HEAD:{path}");
+        Self::git_diff_in_sandbox(&sandbox, dir, reference, path).await
+    }
+
+    async fn git_diff_in_sandbox(
+        sandbox: &Arc<dyn Sandbox>,
+        dir: &str,
+        reference: &str,
+        path: &str,
+    ) -> Result<crate::git::GitDiff, DaemonError> {
+        if path.contains("..") {
+            return Err(DaemonError::Session("invalid path".to_string()));
+        }
+        let head_ref = format!("{reference}:{path}");
         let old = sandbox
             .exec(
                 &[
@@ -2117,6 +2550,9 @@ impl AxocoatlDaemon {
         message: &str,
         stage_all: bool,
     ) -> Result<crate::git::GitStatus, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        self.require_no_unresolved_attempt(session_id).await?;
         self.ensure_session_git(session_id).await?;
         if stage_all {
             self.session_git(session_id, &["add", "-A"]).await?;
@@ -2149,6 +2585,9 @@ impl AxocoatlDaemon {
         path: &str,
         index: usize,
     ) -> Result<crate::git::GitStatus, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        self.require_no_unresolved_attempt(session_id).await?;
         // Always the unstaged diff: a staged change is not in the working tree
         // to revert, so unstage it first and then decide.
         let hunks = self.git_hunks(session_id, path, false).await?;
@@ -2234,6 +2673,9 @@ impl AxocoatlDaemon {
         index: usize,
         stage: bool,
     ) -> Result<crate::git::GitStatus, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        self.require_no_unresolved_attempt(session_id).await?;
         let hunks = self.git_hunks(session_id, path, !stage).await?;
         let hunk = hunks
             .get(index)
@@ -2302,6 +2744,9 @@ impl AxocoatlDaemon {
         session_id: &str,
         paths: &[String],
     ) -> Result<crate::git::GitStatus, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        self.require_no_unresolved_attempt(session_id).await?;
         self.ensure_session_git(session_id).await?;
         if paths.is_empty() {
             self.session_git(session_id, &["add", "-A"]).await?;
@@ -2327,6 +2772,9 @@ impl AxocoatlDaemon {
         session_id: &str,
         paths: &[String],
     ) -> Result<crate::git::GitStatus, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        self.require_no_unresolved_attempt(session_id).await?;
         self.ensure_session_git(session_id).await?;
         if paths.is_empty() {
             let _ = self.session_git(session_id, &["reset", "-q"]).await;
@@ -2351,6 +2799,9 @@ impl AxocoatlDaemon {
         session_id: &str,
         path: Option<&str>,
     ) -> Result<crate::git::GitStatus, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        self.require_no_unresolved_attempt(session_id).await?;
         self.ensure_session_git(session_id).await?;
         match path {
             Some(p) => {
@@ -2376,6 +2827,9 @@ impl AxocoatlDaemon {
         session_id: &str,
         reference: &str,
     ) -> Result<crate::git::GitStatus, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        self.require_no_unresolved_attempt(session_id).await?;
         self.ensure_session_git(session_id).await?;
         let r = self
             .session_git(session_id, &["checkout", reference])
@@ -2390,11 +2844,10 @@ impl AxocoatlDaemon {
     }
 
     // ── Variants: parallel branch exploration ───────────────────────────
-    // A variant is a `git worktree` on its own branch (`axo/variant-{i}`),
-    // living at `{root}/.axo-variants/{i}` so it stays under the one session
-    // instance (the file tools confine to it). `root` is the sandbox working
-    // dir — the bind-mounted repo for Podman, the in-VM clone for E2B. The dir
-    // is git-excluded so it never shows in the primary working tree's status.
+    // Every attempt is an independent clone on a set-scoped branch, stored
+    // below `{root}/.axo-variants/{session-key}/{set-key}/{index}` and mounted
+    // alone into its own Podman container. The reserved root is git-excluded so
+    // attempt metadata never appears as a primary workspace change.
 
     /// The in-sandbox working dir of a session, as a string. This is the
     /// sandbox root (== working_dir for Podman, the in-VM clone path for E2B),
@@ -2412,168 +2865,1708 @@ impl AxocoatlDaemon {
             .to_string())
     }
 
-    /// Create `n` variant worktrees off HEAD, each on its own branch. Clears
-    /// any prior variants first so re-runs start clean.
-    pub async fn create_variant_worktrees(
+    fn require_git_output(result: ExecResult, action: &str) -> Result<String, DaemonError> {
+        if result.ok() {
+            Ok(result.stdout.trim().to_string())
+        } else {
+            Err(DaemonError::Session(format!(
+                "{action}: {}",
+                result.stderr.trim()
+            )))
+        }
+    }
+
+    fn require_raw_git_output(result: ExecResult, action: &str) -> Result<String, DaemonError> {
+        if result.ok() {
+            Ok(result.stdout)
+        } else {
+            Err(DaemonError::Session(format!(
+                "{action}: {}",
+                result.stderr.trim()
+            )))
+        }
+    }
+
+    /// Materialize the session's exact working state as an unreachable commit.
+    ///
+    /// An alternate index makes this side-effect-free for the user: their real
+    /// staged/unstaged split, current branch, and working files are unchanged.
+    /// The resulting commit becomes reachable only through the attempt branches
+    /// created immediately afterward.
+    async fn snapshot_attempt_base(
         &self,
         session_id: &str,
-        n: usize,
-    ) -> Result<Vec<crate::git::Variant>, DaemonError> {
+        set_id: &str,
+    ) -> Result<(String, String), DaemonError> {
         self.ensure_session_git(session_id).await?;
+        let dir = self.session_dir(session_id).await?;
+        let git_dir = Self::require_git_output(
+            self.session_git(session_id, &["rev-parse", "--absolute-git-dir"])
+                .await?,
+            "locating the git directory for the attempt snapshot",
+        )?;
+        let common_git_dir = Self::require_git_output(
+            self.session_git(
+                session_id,
+                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            )
+            .await?,
+            "locating the common git directory for attempt exclusions",
+        )?;
+        let index_path = format!(
+            "{git_dir}/axo-attempt-index-{}",
+            crate::attempts::set_key(set_id)
+        );
         let session = self
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         let sandbox = self.ensure_sandbox(&session).await?;
-        // In-sandbox root: worktree paths built here must be addressable inside
-        // the instance (== working_dir for Podman, the in-VM clone for E2B).
-        let dir = sandbox.root().to_string_lossy().to_string();
-        // Keep the variants dir out of the primary status (idempotent).
-        let exclude = format!("{dir}/.git/info/exclude");
-        let script = format!(
-            "grep -qxF '.axo-variants/' '{exclude}' 2>/dev/null || echo '.axo-variants/' >> '{exclude}'"
-        );
-        let _ = sandbox
-            .exec(&["sh", "-c", &script], Duration::from_secs(10))
+        let tracked_internal = Self::require_git_output(
+            self.session_git(session_id, &["ls-files", "--", ".axo-variants"])
+                .await?,
+            "checking the reserved attempt metadata path",
+        )?;
+        if !tracked_internal.trim().is_empty() {
+            return Err(DaemonError::AttemptConflict(
+                "the repository tracks .axo-variants, which Axocoatl reserves for attempt metadata"
+                    .to_string(),
+            ));
+        }
+        let exclude = format!("{common_git_dir}/info/exclude");
+        let excluded = sandbox
+            .exec(
+                &["grep", "-qxF", ".axo-variants/", &exclude],
+                Duration::from_secs(10),
+            )
             .await;
-        // Fresh start, then (re)create the parent dir.
-        self.remove_variant_worktrees(session_id).await.ok();
-        let vdir = format!("{dir}/.axo-variants");
-        let _ = sandbox
-            .exec(&["mkdir", "-p", vdir.as_str()], Duration::from_secs(10))
-            .await;
-        let mut variants = Vec::new();
-        for i in 0..n {
-            let branch = format!("axo/variant-{i}");
-            let wt = format!("{dir}/.axo-variants/{i}");
-            // Drop a stale branch of the same name so the worktree can take it.
-            let _ = self
-                .session_git(session_id, &["branch", "-D", &branch])
-                .await;
-            let r = match self
-                .session_git(
-                    session_id,
-                    &["worktree", "add", "-q", "-b", &branch, &wt, "HEAD"],
+        if !matches!(excluded, Ok(ref result) if result.ok()) {
+            let append = sandbox
+                .exec_stdin(
+                    &["tee", "-a", &exclude],
+                    "\n.axo-variants/\n",
+                    Duration::from_secs(10),
                 )
                 .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    // Roll back the partial set so a failure leaves no debris.
-                    self.remove_variant_worktrees(session_id).await.ok();
-                    return Err(e);
-                }
-            };
-            if !r.ok() {
-                self.remove_variant_worktrees(session_id).await.ok();
+                .map_err(|error| DaemonError::Session(error.to_string()))?;
+            if !append.ok() {
                 return Err(DaemonError::Session(format!(
-                    "couldn't create variant {} of {n} ({}). Try fewer variants.",
-                    i + 1,
-                    r.stderr.trim()
+                    "excluding attempt worktrees from the session snapshot: {}",
+                    append.stderr.trim()
                 )));
             }
-            variants.push(crate::git::Variant {
-                index: i,
-                branch,
-                worktree: wt,
-                // Stamped by the caller once lanes are assigned.
-                model: None,
-                agent: None,
-            });
         }
-        Ok(variants)
+        let _ = sandbox
+            .exec(&["rm", "-f", &index_path], Duration::from_secs(10))
+            .await;
+
+        let outcome = async {
+            // A repository can be perfectly valid before its first commit.
+            // Seed from an empty tree there; otherwise preserve HEAD as the
+            // snapshot's parent so the attempt branches retain normal history.
+            let head_result = self
+                .session_git(session_id, &["rev-parse", "--verify", "HEAD"])
+                .await?;
+            let head = head_result
+                .ok()
+                .then(|| head_result.stdout.trim().to_string())
+                .filter(|value| !value.is_empty());
+            let seed = match head.as_deref() {
+                Some(parent) => {
+                    self.session_git_with_index(
+                        session_id,
+                        &dir,
+                        &index_path,
+                        &["read-tree", parent],
+                    )
+                    .await?
+                }
+                None => {
+                    self.session_git_with_index(
+                        session_id,
+                        &dir,
+                        &index_path,
+                        &["read-tree", "--empty"],
+                    )
+                    .await?
+                }
+            };
+            Self::require_git_output(seed, "seeding the attempt snapshot index")?;
+            Self::require_git_output(
+                self.session_git_with_index(session_id, &dir, &index_path, &["add", "-A"])
+                    .await?,
+                "capturing the session working tree for attempts",
+            )?;
+            let tree = Self::require_git_output(
+                self.session_git_with_index(session_id, &dir, &index_path, &["write-tree"])
+                    .await?,
+                "writing the attempt snapshot tree",
+            )?;
+            let message = format!(
+                "axocoatl attempt snapshot {}",
+                crate::attempts::set_key(set_id)
+            );
+            let commit_result = match head.as_deref() {
+                Some(parent) => {
+                    self.session_git_with_index(
+                        session_id,
+                        &dir,
+                        &index_path,
+                        &["commit-tree", &tree, "-p", parent, "-m", &message],
+                    )
+                    .await?
+                }
+                None => {
+                    self.session_git_with_index(
+                        session_id,
+                        &dir,
+                        &index_path,
+                        &["commit-tree", &tree, "-m", &message],
+                    )
+                    .await?
+                }
+            };
+            let commit =
+                Self::require_git_output(commit_result, "creating the attempt snapshot commit")?;
+            Ok((commit, tree))
+        }
+        .await;
+
+        // This path is derived from git's own absolute git-dir plus a UUID key;
+        // removing it cannot touch the user's real index.
+        let _ = sandbox
+            .exec(&["rm", "-f", &index_path], Duration::from_secs(10))
+            .await;
+        outcome
     }
 
-    /// Remove every variant worktree and its branch. Best-effort and
-    /// idempotent — safe to call when there are none.
-    pub async fn remove_variant_worktrees(&self, session_id: &str) -> Result<(), DaemonError> {
-        let dir = self.session_dir(session_id).await?;
-        // Unregister worktrees living under .axo-variants/.
-        if let Ok(list) = self
-            .session_git(session_id, &["worktree", "list", "--porcelain"])
+    async fn write_json_file<T: serde::Serialize>(
+        sandbox: &Arc<dyn Sandbox>,
+        path: &str,
+        value: &T,
+    ) -> Result<(), DaemonError> {
+        let parent = std::path::Path::new(path)
+            .parent()
+            .ok_or_else(|| DaemonError::Session(format!("invalid metadata path '{path}'")))?
+            .to_string_lossy()
+            .to_string();
+        let mk = sandbox
+            .exec(&["mkdir", "-p", &parent], Duration::from_secs(10))
             .await
-        {
-            for line in list.stdout.lines() {
-                if let Some(p) = line.strip_prefix("worktree ") {
-                    if p.contains("/.axo-variants/") {
-                        let _ = self
-                            .session_git(session_id, &["worktree", "remove", "--force", p])
-                            .await;
-                    }
+            .map_err(|e| DaemonError::Session(e.to_string()))?;
+        if !mk.ok() {
+            return Err(DaemonError::Session(format!(
+                "creating attempt metadata directory: {}",
+                mk.stderr.trim()
+            )));
+        }
+        let json = serde_json::to_string(value)
+            .map_err(|e| DaemonError::Session(format!("serializing attempt metadata: {e}")))?;
+        let tmp = format!("{path}.tmp");
+        let write = sandbox
+            .exec_stdin(&["tee", &tmp], &json, Duration::from_secs(10))
+            .await
+            .map_err(|e| DaemonError::Session(e.to_string()))?;
+        if !write.ok() {
+            return Err(DaemonError::Session(format!(
+                "writing attempt metadata: {}",
+                write.stderr.trim()
+            )));
+        }
+        let mv = sandbox
+            .exec(&["mv", &tmp, path], Duration::from_secs(10))
+            .await
+            .map_err(|e| DaemonError::Session(e.to_string()))?;
+        if !mv.ok() {
+            return Err(DaemonError::Session(format!(
+                "publishing attempt metadata: {}",
+                mv.stderr.trim()
+            )));
+        }
+        Ok(())
+    }
+
+    async fn read_json_file<T: serde::de::DeserializeOwned>(
+        sandbox: &Arc<dyn Sandbox>,
+        path: &str,
+    ) -> Result<Option<T>, DaemonError> {
+        let exists = sandbox
+            .exec(&["test", "-f", path], Duration::from_secs(10))
+            .await
+            .map_err(|e| DaemonError::Session(e.to_string()))?;
+        if !exists.ok() {
+            if exists.exit_code == 1 && exists.stderr.trim().is_empty() {
+                return Ok(None);
+            }
+            return Err(DaemonError::Session(format!(
+                "checking attempt metadata at '{path}': {}",
+                if exists.stderr.trim().is_empty() {
+                    format!("exit code {}", exists.exit_code)
+                } else {
+                    exists.stderr.trim().to_string()
                 }
-            }
+            )));
         }
-        // Wipe the dir + prune dangling worktree metadata.
-        if let Some(session) = self.get_session(session_id).await {
-            if let Ok(sandbox) = self.ensure_sandbox(&session).await {
-                let vdir = format!("{dir}/.axo-variants");
-                let _ = sandbox
-                    .exec(&["rm", "-rf", vdir.as_str()], Duration::from_secs(15))
-                    .await;
-            }
-        }
-        let _ = self.session_git(session_id, &["worktree", "prune"]).await;
-        // Delete the variant branches.
-        if let Ok(br) = self
-            .session_git(
-                session_id,
-                &[
-                    "branch",
-                    "--list",
-                    "axo/variant-*",
-                    "--format=%(refname:short)",
-                ],
-            )
+        let result = sandbox
+            .exec(&["cat", path], Duration::from_secs(10))
             .await
-        {
-            let branches: Vec<String> = br
-                .stdout
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect();
-            for b in &branches {
-                let _ = self.session_git(session_id, &["branch", "-D", b]).await;
+            .map_err(|e| DaemonError::Session(e.to_string()))?;
+        if !result.ok() {
+            return Err(DaemonError::Session(format!(
+                "reading attempt metadata at '{path}': {}",
+                result.stderr.trim()
+            )));
+        }
+        serde_json::from_str(&result.stdout).map(Some).map_err(|e| {
+            DaemonError::Session(format!(
+                "attempt metadata at '{path}' is corrupt; refusing to overwrite it: {e}"
+            ))
+        })
+    }
+
+    /// Read attempt metadata directly from the host without provisioning a
+    /// session sandbox. Background/reconnect reads use this path so observing
+    /// a soft-closed session cannot restart Podman or rerun postCreate hooks.
+    async fn read_host_json_file<T: serde::de::DeserializeOwned>(
+        path: &std::path::Path,
+    ) -> Result<Option<T>, DaemonError> {
+        let metadata = match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(DaemonError::Session(format!(
+                    "checking attempt metadata at '{}': {error}",
+                    path.display()
+                )))
+            }
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(DaemonError::Session(format!(
+                "attempt metadata at '{}' is not a regular file",
+                path.display()
+            )));
+        }
+        let json = tokio::fs::read_to_string(path).await.map_err(|error| {
+            DaemonError::Session(format!(
+                "reading attempt metadata at '{}': {error}",
+                path.display()
+            ))
+        })?;
+        serde_json::from_str(&json).map(Some).map_err(|error| {
+            DaemonError::Session(format!(
+                "attempt metadata at '{}' is corrupt; refusing to overwrite it: {error}",
+                path.display()
+            ))
+        })
+    }
+
+    async fn persist_attempt_set(
+        &self,
+        sandbox: &Arc<dyn Sandbox>,
+        set: &crate::git::AttemptSet,
+    ) -> Result<(), DaemonError> {
+        let root = sandbox.root().to_string_lossy();
+        let attempt_root = crate::attempts::attempt_root(
+            std::path::Path::new(root.as_ref()),
+            &set.session_id,
+            &set.id,
+        );
+        let current_root = crate::attempts::session_attempts_root(
+            std::path::Path::new(root.as_ref()),
+            &set.session_id,
+        );
+        Self::write_json_file(
+            sandbox,
+            &attempt_root.join("set.json").to_string_lossy(),
+            set,
+        )
+        .await?;
+        Self::write_json_file(
+            sandbox,
+            &current_root.join("current.json").to_string_lossy(),
+            set,
+        )
+        .await
+    }
+
+    async fn rollback_attempt_setup(
+        &self,
+        sandbox: &Arc<dyn Sandbox>,
+        session_id: &str,
+        set: &mut crate::git::AttemptSet,
+        original: DaemonError,
+    ) -> DaemonError {
+        set.state = crate::git::AttemptSetState::Discarding;
+        if let Err(mark_error) = self.persist_attempt_set(sandbox, set).await {
+            return DaemonError::Session(format!(
+                "{original}; rollback was not started because its durable cleanup marker could not be written: {mark_error}"
+            ));
+        }
+        match self.remove_attempt_worktrees(session_id, set).await {
+            Ok(()) => original,
+            Err(cleanup_error) => DaemonError::Session(format!(
+                "{original}; rollback is marked for retry after incomplete cleanup: {cleanup_error}"
+            )),
+        }
+    }
+
+    /// Read the durable current-set pointer without provisioning or attaching a
+    /// sandbox. This is the only safe probe for ordinary turns, Close/Delete,
+    /// and peer-session conflict checks: observing state must never create a
+    /// container, run postCreate commands, or allocate a paid remote VM.
+    async fn peek_current_attempt_set(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<crate::git::AttemptSet>, DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        // Attempt sets are created only by the local Podman backend, so their
+        // durable metadata always lives below the host workspace. Probe that
+        // host path even if configuration changed to E2B after a restart: an
+        // unresolved local set must keep owning the workspace rather than
+        // becoming invisible merely because the current backend is remote.
+        Self::read_current_attempt_set_host(&session.working_dir, session_id).await
+    }
+
+    async fn read_current_attempt_set_host(
+        workspace: &std::path::Path,
+        session_id: &str,
+    ) -> Result<Option<crate::git::AttemptSet>, DaemonError> {
+        let path =
+            crate::attempts::session_attempts_root(workspace, session_id).join("current.json");
+        let metadata = match tokio::fs::symlink_metadata(&path).await {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(DaemonError::Session(format!(
+                    "checking attempt metadata at '{}': {error}",
+                    path.display()
+                )))
+            }
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(DaemonError::Session(format!(
+                "attempt metadata at '{}' is not a regular file",
+                path.display()
+            )));
+        }
+        let json = tokio::fs::read_to_string(&path).await.map_err(|error| {
+            DaemonError::Session(format!(
+                "reading attempt metadata at '{}': {error}",
+                path.display()
+            ))
+        })?;
+        let set: crate::git::AttemptSet = serde_json::from_str(&json).map_err(|error| {
+            DaemonError::Session(format!(
+                "attempt metadata at '{}' is corrupt; refusing to overwrite it: {error}",
+                path.display()
+            ))
+        })?;
+        if set.session_id != session_id {
+            return Err(DaemonError::Session(format!(
+                "attempt metadata belongs to session '{}', not '{session_id}'",
+                set.session_id
+            )));
+        }
+        Ok(Some(set))
+    }
+
+    async fn current_attempt_set(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<crate::git::AttemptSet>, DaemonError> {
+        let set = self.peek_current_attempt_set(session_id).await?;
+        if let Some(set) = &set {
+            Self::require_attempt_resolution_backend(&self.config.sandbox.backend)?;
+            let session = self
+                .get_session(session_id)
+                .await
+                .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+            let sandbox = self.ensure_attempt_recovery_sandbox(&session).await?;
+            self.validate_attempt_set(&sandbox, set).await?;
+        }
+        Ok(set)
+    }
+
+    fn require_attempt_resolution_backend(backend: &str) -> Result<(), DaemonError> {
+        if backend == "e2b" {
+            Err(DaemonError::AttemptConflict(
+                "this workspace has an unresolved local attempt set; switch the sandbox backend back to Podman to review, Keep, or Discard it"
+                    .to_string(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn validate_attempt_set_identity(
+        root: &std::path::Path,
+        set: &crate::git::AttemptSet,
+    ) -> Result<(), DaemonError> {
+        let corrupt = |detail: String| {
+            DaemonError::Session(format!(
+                "attempt metadata is inconsistent; refusing to execute it: {detail}"
+            ))
+        };
+        if uuid::Uuid::parse_str(&set.id).is_err() {
+            return Err(corrupt("set id is not a UUID".to_string()));
+        }
+        if set.lanes.is_empty() || set.lanes.len() > 100 {
+            return Err(corrupt("lane count is outside 1..=100".to_string()));
+        }
+        let valid_oid = |value: &str| {
+            matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        };
+        if !valid_oid(&set.base_sha) || !valid_oid(&set.base_tree) {
+            return Err(corrupt("snapshot object ids are invalid".to_string()));
+        }
+        for (expected, lane) in set.lanes.iter().enumerate() {
+            if lane.index != expected {
+                return Err(corrupt(format!(
+                    "lane indices must be unique and contiguous; expected {expected}, found {}",
+                    lane.index
+                )));
+            }
+            let branch = crate::attempts::branch_name(&set.id, expected);
+            let worktree = crate::attempts::worktree_path(root, &set.session_id, &set.id, expected)
+                .to_string_lossy()
+                .to_string();
+            if lane.branch != branch || lane.worktree != worktree {
+                return Err(corrupt(format!(
+                    "lane {} storage identity does not match its set",
+                    expected + 1
+                )));
+            }
+        }
+        let keep_phase = matches!(
+            set.state,
+            crate::git::AttemptSetState::Applying
+                | crate::git::AttemptSetState::Applied
+                | crate::git::AttemptSetState::TranscriptRecorded
+        );
+        match (keep_phase, set.kept_index) {
+            (true, None) => Err(corrupt(
+                "Keep transaction is missing its selected lane".to_string(),
+            )),
+            (false, Some(_)) => Err(corrupt(
+                "selected Keep lane exists outside a Keep transaction".to_string(),
+            )),
+            (_, Some(index)) if index >= set.lanes.len() => Err(corrupt(format!(
+                "selected Keep lane {index} does not exist"
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    async fn validate_attempt_set(
+        &self,
+        sandbox: &Arc<dyn Sandbox>,
+        set: &crate::git::AttemptSet,
+    ) -> Result<(), DaemonError> {
+        Self::validate_attempt_set_identity(sandbox.root(), set)?;
+        let corrupt = |detail: String| {
+            DaemonError::Session(format!(
+                "attempt metadata is inconsistent; refusing to execute it: {detail}"
+            ))
+        };
+
+        // Cleanup can remove the protected ref and set directory before a
+        // failing current-pointer unlink is retried. At that final durable
+        // phase, identity validation above is sufficient and deletion remains
+        // derived rather than manifest-directed.
+        if !matches!(
+            set.state,
+            crate::git::AttemptSetState::Discarding
+                | crate::git::AttemptSetState::TranscriptRecorded
+        ) {
+            let protected = Self::require_git_output(
+                self.session_git(
+                    &set.session_id,
+                    &["rev-parse", "--verify", &crate::attempts::base_ref(&set.id)],
+                )
+                .await?,
+                "validating the protected attempt snapshot",
+            )?;
+            if protected != set.base_sha {
+                return Err(corrupt("protected snapshot ref changed".to_string()));
+            }
+            let tree_expr = format!("{}^{{tree}}", set.base_sha);
+            let tree = Self::require_git_output(
+                self.session_git(&set.session_id, &["rev-parse", &tree_expr])
+                    .await?,
+                "validating the attempt snapshot tree",
+            )?;
+            if tree != set.base_tree {
+                return Err(corrupt(
+                    "snapshot tree does not match its commit".to_string(),
+                ));
             }
         }
         Ok(())
     }
 
-    /// The single agent each variant runs. Variants explore one agent's work
-    /// N ways in parallel; for multi-agent sessions we take the entry agent.
-    fn primary_session_agent(&self, session: &Session) -> Result<String, DaemonError> {
-        match &session.mode {
-            SessionMode::SingleAgent { agent_id } => Ok(agent_id.clone()),
-            SessionMode::Custom { agents } => agents
-                .first()
-                .cloned()
-                .ok_or_else(|| DaemonError::Session("session has no agents".into())),
-            SessionMode::Lattice { workflow_id } => {
-                let wf = match workflow_id {
-                    Some(wid) => self.config.workflows.iter().find(|w| &w.id == wid),
-                    None => self.config.workflows.first(),
-                };
-                wf.and_then(|w| w.agents.first().cloned())
-                    .ok_or_else(|| DaemonError::Session("no workflow agent for variants".into()))
+    async fn require_attempt_set(
+        &self,
+        session_id: &str,
+        set_id: &str,
+    ) -> Result<crate::git::AttemptSet, DaemonError> {
+        let Some(set) = self.current_attempt_set(session_id).await? else {
+            return Err(DaemonError::Session(
+                "this session has no current attempt set".to_string(),
+            ));
+        };
+        if set.id != set_id {
+            return Err(DaemonError::AttemptConflict(format!(
+                "attempt set '{set_id}' is stale; the current set is '{}'",
+                set.id
+            )));
+        }
+        Ok(set)
+    }
+
+    async fn attempt_operation(&self, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        // SessionStore canonicalizes working_dir. Keying the lease by that
+        // path—not by session id—prevents two sessions opened on the same
+        // folder from snapshotting, checking, or applying concurrently.
+        let key = self
+            .get_session(session_id)
+            .await
+            .map(|session| format!("workspace:{}", session.working_dir.display()))
+            .unwrap_or_else(|| format!("session:{session_id}"));
+        let mut operations = self.attempt_operations.lock().await;
+        operations
+            .entry(key)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
+    /// Resolve the lane's own container boundary for daemon-controlled review
+    /// commands. A live run must already own a running container; after a
+    /// daemon restart, a clean replacement may be created over the durable
+    /// independent clone so status, diff, and Discard remain recoverable.
+    async fn attempt_sandbox(
+        &self,
+        session: &Session,
+        set_id: &str,
+        index: usize,
+    ) -> Result<Arc<dyn Sandbox>, DaemonError> {
+        let primary = self.ensure_sandbox(session).await?;
+        let worktree = crate::attempts::worktree_path(primary.root(), &session.id, set_id, index);
+        let container_id = crate::attempts::container_id(&session.id, set_id, index);
+        let running = SessionSandbox::named_running(&container_id)
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        if running {
+            return Ok(Arc::new(SessionSandbox::attach_named(
+                &container_id,
+                &worktree,
+            )));
+        }
+        let live = self
+            .active_attempts
+            .lock()
+            .await
+            .get(&session.id)
+            .is_some_and(|run| run.set_id == set_id);
+        if live {
+            return Err(DaemonError::Session(format!(
+                "attempt {} lost its isolated sandbox while it was running",
+                index + 1
+            )));
+        }
+        let sc = &self.config.sandbox;
+        let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
+            // Recreate the same explicitly trusted project setup used by the
+            // execution container. Checks should run in a clean process/container
+            // boundary, but not in a different dependency environment.
+            allow_post_create: sc.allow_post_create_command,
+            allow_untrusted_image: sc.allow_untrusted_images,
+            network: match sc.network.as_str() {
+                "none" => axocoatl_isolation::session_sandbox::SandboxNetwork::None,
+                _ => axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge,
+            },
+            require_resource_limits: sc.require_resource_limits,
+        };
+        Ok(Arc::new(
+            SessionSandbox::start(
+                &container_id,
+                &worktree,
+                session.image.as_deref(),
+                &[],
+                &session.post_create_commands,
+                &policy,
+            )
+            .await
+            .map_err(|error| {
+                DaemonError::Session(format!(
+                    "restoring isolated review sandbox for attempt {}: {error}",
+                    index + 1
+                ))
+            })?,
+        ))
+    }
+
+    async fn attempt_git(
+        sandbox: &Arc<dyn Sandbox>,
+        args: &[&str],
+    ) -> Result<ExecResult, DaemonError> {
+        let dir = sandbox.root().to_string_lossy().to_string();
+        let mut argv = vec![
+            "env",
+            "GIT_CONFIG_NOSYSTEM=1",
+            "GIT_CONFIG_GLOBAL=/dev/null",
+            "git",
+            "-c",
+            "safe.directory=*",
+            "-c",
+            "user.email=agent@axocoatl.local",
+            "-c",
+            "user.name=Axocoatl",
+            "-C",
+            &dir,
+        ];
+        argv.extend_from_slice(args);
+        sandbox
+            .exec(&argv, Duration::from_secs(60))
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))
+    }
+
+    /// Remove candidate-controlled Git commands before daemon review. Agents
+    /// can edit `.git/config`; clean/smudge filters and diff drivers there are
+    /// arbitrary programs. Review still runs in the lane container, but a
+    /// sanitized local config also makes the captured patch a passive read of
+    /// the checked files rather than another candidate execution step.
+    async fn sanitize_attempt_git_config_at(
+        attempt_root: &std::path::Path,
+        base_sha: &str,
+    ) -> Result<(), DaemonError> {
+        use tokio::io::AsyncWriteExt;
+
+        let git_dir = attempt_root.join(".git");
+        let metadata = tokio::fs::symlink_metadata(&git_dir)
+            .await
+            .map_err(|error| {
+                DaemonError::Session(format!("reading attempt Git directory: {error}"))
+            })?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(DaemonError::Session(
+                "attempt replaced its Git directory; this lane cannot be reviewed".to_string(),
+            ));
+        }
+        let config = if base_sha.len() == 64 {
+            "[core]\n\trepositoryformatversion = 1\n\tfilemode = true\n\tsymlinks = true\n\tbare = false\n\tlogallrefupdates = true\n[extensions]\n\tobjectFormat = sha256\n"
+        } else {
+            "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tsymlinks = true\n\tbare = false\n\tlogallrefupdates = true\n"
+        };
+        let path = git_dir.join("config");
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => {
+                tokio::fs::remove_file(&path).await.map_err(|error| {
+                    DaemonError::Session(format!("removing attempt Git config: {error}"))
+                })?;
+            }
+            Ok(_) => {
+                return Err(DaemonError::Session(
+                    "attempt replaced its Git config with a non-file".to_string(),
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(DaemonError::Session(format!(
+                    "reading attempt Git config: {error}"
+                )));
+            }
+        }
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await
+            .map_err(|error| {
+                DaemonError::Session(format!("creating safe attempt Git config: {error}"))
+            })?;
+        file.write_all(config.as_bytes()).await.map_err(|error| {
+            DaemonError::Session(format!("writing safe attempt Git config: {error}"))
+        })?;
+        file.sync_all().await.map_err(|error| {
+            DaemonError::Session(format!("syncing safe attempt Git config: {error}"))
+        })
+    }
+
+    /// Freeze a lane's checked working tree into Git objects without reviving
+    /// its container. The primary sandbox runs plumbing directly against the
+    /// stopped host clone, after its candidate-controlled config is replaced.
+    /// Only ASCII object ids cross the sandbox String boundary. The display
+    /// patch is written to a file and hashed as raw bytes.
+    async fn capture_attempt_candidate(
+        &self,
+        session_id: &str,
+        set: &crate::git::AttemptSet,
+        index: usize,
+        publish_in_primary: bool,
+    ) -> Result<CapturedCandidate, DaemonError> {
+        if !set.lanes.iter().any(|lane| lane.index == index) {
+            return Err(DaemonError::Session(format!(
+                "attempt {} does not exist",
+                index + 1
+            )));
+        }
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let primary = self.ensure_sandbox(&session).await?;
+        let worktree = crate::attempts::worktree_path(primary.root(), session_id, &set.id, index);
+        Self::sanitize_attempt_git_config_at(&worktree, &set.base_sha).await?;
+        let git_dir = worktree.join(".git");
+        let key = crate::attempts::set_key(&set.id);
+        let index_path = git_dir.join(format!("axo-checked-index-{key}-{index}"));
+        let raw_path = git_dir.join(format!("axo-checked-raw-{key}-{index}"));
+        let patch_path = git_dir.join(format!("axo-checked-patch-{key}-{index}"));
+        let worktree_string = worktree.to_string_lossy().to_string();
+        let index_string = index_path.to_string_lossy().to_string();
+        let raw_output = format!("--output={}", raw_path.to_string_lossy());
+        let patch_output = format!("--output={}", patch_path.to_string_lossy());
+
+        for path in [
+            index_path.clone(),
+            index_path.with_extension("lock"),
+            raw_path.clone(),
+            patch_path.clone(),
+        ] {
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(DaemonError::Session(format!(
+                        "removing stale checked-tree file '{}': {error}",
+                        path.display()
+                    )))
+                }
+            }
+        }
+
+        let outcome = async {
+            Self::require_git_output(
+                self.session_git_with_index(
+                    session_id,
+                    &worktree_string,
+                    &index_string,
+                    &["read-tree", &set.base_sha],
+                )
+                .await?,
+                &format!("seeding attempt {} checked-tree index", index + 1),
+            )?;
+            Self::require_git_output(
+                self.session_git_with_index(
+                    session_id,
+                    &worktree_string,
+                    &index_string,
+                    &["add", "-A"],
+                )
+                .await?,
+                &format!("capturing attempt {} checked tree", index + 1),
+            )?;
+            let tree_oid = Self::require_git_output(
+                self.session_git_with_index(
+                    session_id,
+                    &worktree_string,
+                    &index_string,
+                    &["write-tree"],
+                )
+                .await?,
+                &format!("writing attempt {} checked tree", index + 1),
+            )?;
+            let message = format!("axocoatl checked attempt {key} {index}");
+            let commit_oid = Self::require_git_output(
+                self.session_git_at(
+                    session_id,
+                    &worktree_string,
+                    &[
+                        "commit-tree",
+                        &tree_oid,
+                        "-p",
+                        &set.base_sha,
+                        "-m",
+                        &message,
+                    ],
+                )
+                .await?,
+                &format!("protecting attempt {} checked tree", index + 1),
+            )?;
+            let checked_ref = crate::attempts::checked_candidate_ref(&set.id, index);
+            Self::require_git_output(
+                self.session_git_at(
+                    session_id,
+                    &worktree_string,
+                    &["update-ref", &checked_ref, &commit_oid],
+                )
+                .await?,
+                &format!("publishing attempt {} checked tree", index + 1),
+            )?;
+            Self::require_git_output(
+                self.session_git_at(
+                    session_id,
+                    &worktree_string,
+                    &[
+                        "diff",
+                        "--raw",
+                        "-z",
+                        "--no-renames",
+                        &raw_output,
+                        &set.base_sha,
+                        &tree_oid,
+                    ],
+                )
+                .await?,
+                &format!("enumerating attempt {} checked paths", index + 1),
+            )?;
+            Self::require_git_output(
+                self.session_git_at(
+                    session_id,
+                    &worktree_string,
+                    &[
+                        "-c",
+                        "diff.algorithm=myers",
+                        "diff",
+                        "--binary",
+                        "--full-index",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--no-renames",
+                        &patch_output,
+                        &set.base_sha,
+                        &tree_oid,
+                    ],
+                )
+                .await?,
+                &format!("hashing attempt {} checked delta", index + 1),
+            )?;
+            let raw = tokio::fs::read(&raw_path).await.map_err(|error| {
+                DaemonError::Session(format!(
+                    "reading attempt {} raw checked paths: {error}",
+                    index + 1
+                ))
+            })?;
+            let patch = tokio::fs::read(&patch_path).await.map_err(|error| {
+                DaemonError::Session(format!(
+                    "reading attempt {} raw checked delta: {error}",
+                    index + 1
+                ))
+            })?;
+            let (paths, changes_gitlink) = Self::parse_raw_tree_diff(&raw)?;
+            let patch_sha256 = Self::bytes_sha256(&patch);
+
+            if publish_in_primary {
+                let refspec = format!("+{checked_ref}:{checked_ref}");
+                Self::require_git_output(
+                    self.session_git(
+                        session_id,
+                        &[
+                            "fetch",
+                            "--no-tags",
+                            "--no-write-fetch-head",
+                            "--force",
+                            &worktree_string,
+                            &refspec,
+                        ],
+                    )
+                    .await?,
+                    &format!("importing attempt {} checked tree", index + 1),
+                )?;
+                let imported = Self::require_git_output(
+                    self.session_git(session_id, &["rev-parse", "--verify", &checked_ref])
+                        .await?,
+                    &format!("validating attempt {} checked commit", index + 1),
+                )?;
+                let tree_expression = format!("{checked_ref}^{{tree}}");
+                let imported_tree = Self::require_git_output(
+                    self.session_git(session_id, &["rev-parse", &tree_expression])
+                        .await?,
+                    &format!("validating attempt {} checked tree", index + 1),
+                )?;
+                if imported != commit_oid || imported_tree != tree_oid {
+                    return Err(DaemonError::Session(format!(
+                        "attempt {} checked object import changed identity",
+                        index + 1
+                    )));
+                }
+            }
+
+            Ok(CapturedCandidate {
+                checked: StoredCheckedTree {
+                    index,
+                    commit_oid,
+                    tree_oid,
+                    patch_sha256,
+                    changes_gitlink,
+                },
+                paths,
+            })
+        }
+        .await;
+
+        for path in [
+            index_path.clone(),
+            index_path.with_extension("lock"),
+            raw_path,
+            patch_path,
+        ] {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+        outcome
+    }
+
+    fn bytes_sha256(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(bytes))
+    }
+
+    fn patch_sha256(patch: &str) -> String {
+        Self::bytes_sha256(patch.as_bytes())
+    }
+
+    fn validate_keep_path(path: &str) -> Result<(), DaemonError> {
+        use std::path::Component;
+
+        let candidate = std::path::Path::new(path);
+        if path.is_empty()
+            || path.contains('\u{fffd}')
+            || candidate.is_absolute()
+            || !candidate
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+            || path == ".axo-variants"
+            || path.starts_with(".axo-variants/")
+        {
+            return Err(DaemonError::AttemptConflict(format!(
+                "attempt changed unsupported or reserved path {path:?}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Parse `git diff --raw -z --no-renames`. Strict UTF-8 is intentional:
+    /// public path wire types are strings, so an unrepresentable filename must
+    /// be rejected rather than silently replaced and installed at another path.
+    fn parse_raw_tree_diff(raw: &[u8]) -> Result<(Vec<String>, bool), DaemonError> {
+        let mut fields = raw.split(|byte| *byte == 0).peekable();
+        let mut paths = Vec::new();
+        let mut changes_gitlink = false;
+        while let Some(header) = fields.next() {
+            if header.is_empty() {
+                if fields.peek().is_none() {
+                    break;
+                }
+                return Err(DaemonError::Session(
+                    "Git returned malformed raw attempt metadata".to_string(),
+                ));
+            }
+            let path = fields.next().ok_or_else(|| {
+                DaemonError::Session("Git omitted a path from raw attempt metadata".to_string())
+            })?;
+            if path.is_empty() {
+                return Err(DaemonError::Session(
+                    "Git returned an empty changed path".to_string(),
+                ));
+            }
+            let header = std::str::from_utf8(header).map_err(|_| {
+                DaemonError::Session("Git returned non-ASCII raw diff metadata".to_string())
+            })?;
+            let columns: Vec<&str> = header.split_ascii_whitespace().collect();
+            if columns.len() != 5
+                || !columns[0].starts_with(':')
+                || columns[0].len() != 7
+                || columns[1].len() != 6
+                || columns[4].len() != 1
+            {
+                return Err(DaemonError::Session(format!(
+                    "Git returned malformed raw diff header {header:?}"
+                )));
+            }
+            changes_gitlink |= &columns[0][1..] == "160000" || columns[1] == "160000";
+            let path = std::str::from_utf8(path).map_err(|_| {
+                DaemonError::AttemptConflict(
+                    "attempt changed a filename that is not valid UTF-8 and cannot be kept"
+                        .to_string(),
+                )
+            })?;
+            Self::validate_keep_path(path)?;
+            paths.push(path.to_string());
+        }
+        paths.sort();
+        paths.dedup();
+        Ok((paths, changes_gitlink))
+    }
+
+    fn parse_tree_entries(output: &str) -> Result<HashMap<String, String>, DaemonError> {
+        let mut entries = HashMap::new();
+        for record in output.split('\0').filter(|record| !record.is_empty()) {
+            let (identity, path) = record.split_once('\t').ok_or_else(|| {
+                DaemonError::Session("Git returned malformed tree metadata".to_string())
+            })?;
+            Self::validate_keep_path(path)?;
+            if entries
+                .insert(path.to_string(), identity.to_string())
+                .is_some()
+            {
+                return Err(DaemonError::Session(format!(
+                    "Git returned duplicate tree path {path:?}"
+                )));
+            }
+        }
+        Ok(entries)
+    }
+
+    fn keep_tree_leaf_matches_fingerprint(
+        identity: &str,
+        fingerprint: &Option<StoredFileFingerprint>,
+    ) -> bool {
+        let Some(fingerprint) = fingerprint.as_ref() else {
+            return false;
+        };
+        match identity.split_ascii_whitespace().next() {
+            Some("100644") => fingerprint.kind == "file" && !fingerprint.executable,
+            Some("100755") => fingerprint.kind == "file" && fingerprint.executable,
+            Some("120000") => fingerprint.kind == "symlink" && !fingerprint.executable,
+            _ => false,
+        }
+    }
+
+    async fn fingerprint_file(
+        path: &std::path::Path,
+    ) -> Result<Option<StoredFileFingerprint>, DaemonError> {
+        let metadata = match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata) => metadata,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(None)
+            }
+            Err(error) => {
+                return Err(DaemonError::Session(format!(
+                    "reading Keep path '{}': {error}",
+                    path.display()
+                )))
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            let target = tokio::fs::read_link(path).await.map_err(|error| {
+                DaemonError::Session(format!(
+                    "reading Keep symlink '{}': {error}",
+                    path.display()
+                ))
+            })?;
+            return Ok(Some(StoredFileFingerprint {
+                kind: "symlink".to_string(),
+                sha256: Self::bytes_sha256(target.as_os_str().as_encoded_bytes()),
+                executable: false,
+            }));
+        }
+        if metadata.is_dir() {
+            return Ok(Some(StoredFileFingerprint {
+                kind: "directory".to_string(),
+                sha256: String::new(),
+                executable: false,
+            }));
+        }
+        if !metadata.is_file() {
+            return Err(DaemonError::AttemptConflict(format!(
+                "Keep path '{}' is not a regular file or symlink",
+                path.display()
+            )));
+        }
+        let bytes = tokio::fs::read(path).await.map_err(|error| {
+            DaemonError::Session(format!("reading Keep path '{}': {error}", path.display()))
+        })?;
+        #[cfg(unix)]
+        let executable = {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode() & 0o111 != 0
+        };
+        #[cfg(not(unix))]
+        let executable = false;
+        Ok(Some(StoredFileFingerprint {
+            kind: "file".to_string(),
+            sha256: Self::bytes_sha256(&bytes),
+            executable,
+        }))
+    }
+
+    /// Fingerprint a workspace leaf without ever traversing an unexpected
+    /// symlink or non-directory parent. A non-directory parent that is itself
+    /// in the journal is a legitimate file/symlink→directory transition, so a
+    /// descendant is logically absent on that side of the transaction.
+    async fn fingerprint_keep_workspace_path(
+        workspace: &std::path::Path,
+        relative: &std::path::Path,
+        affected: &HashSet<String>,
+    ) -> Result<Option<StoredFileFingerprint>, DaemonError> {
+        let mut current = workspace.to_path_buf();
+        let mut logical = std::path::PathBuf::new();
+        if let Some(parent) = relative.parent() {
+            for component in parent.components() {
+                logical.push(component.as_os_str());
+                current.push(component.as_os_str());
+                match tokio::fs::symlink_metadata(&current).await {
+                    Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+                    Ok(_) => {
+                        let logical = logical.to_str().ok_or_else(|| {
+                            DaemonError::AttemptConflict("Keep path is not valid UTF-8".to_string())
+                        })?;
+                        if affected.contains(logical) {
+                            return Ok(None);
+                        }
+                        return Err(DaemonError::AttemptConflict(format!(
+                            "Keep path '{}' has a non-directory or symlink parent",
+                            workspace.join(relative).display()
+                        )));
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                        ) =>
+                    {
+                        return Ok(None)
+                    }
+                    Err(error) => {
+                        return Err(DaemonError::Session(format!(
+                            "checking Keep parent '{}': {error}",
+                            current.display()
+                        )))
+                    }
+                }
+            }
+        }
+        Self::fingerprint_file(&workspace.join(relative)).await
+    }
+
+    fn require_review_storage(set: &crate::git::AttemptSet) -> Result<(), DaemonError> {
+        if matches!(
+            set.state,
+            crate::git::AttemptSetState::Discarding
+                | crate::git::AttemptSetState::Applying
+                | crate::git::AttemptSetState::Applied
+                | crate::git::AttemptSetState::TranscriptRecorded
+        ) {
+            return Err(DaemonError::AttemptConflict(
+                "this attempt set is in decision cleanup; retry the active Keep or Discard action"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn attempt_cancel_key(session_id: &str, set_id: &str) -> String {
+        format!("{session_id}\0{set_id}")
+    }
+
+    async fn attempt_cancelled(&self, session_id: &str, set_id: &str) -> bool {
+        self.attempt_cancellations
+            .lock()
+            .await
+            .contains(&Self::attempt_cancel_key(session_id, set_id))
+    }
+
+    async fn clear_attempt_cancellation(&self, session_id: &str, set_id: &str) {
+        self.attempt_cancellations
+            .lock()
+            .await
+            .remove(&Self::attempt_cancel_key(session_id, set_id));
+    }
+
+    fn attempt_state_is_interruptible(state: crate::git::AttemptSetState) -> bool {
+        matches!(
+            state,
+            crate::git::AttemptSetState::Running | crate::git::AttemptSetState::Checking
+        )
+    }
+
+    fn attempt_is_interrupt_target(
+        expected_set_id: Option<&str>,
+        current_set_id: &str,
+        state: crate::git::AttemptSetState,
+    ) -> bool {
+        expected_set_id == Some(current_set_id) && Self::attempt_state_is_interruptible(state)
+    }
+
+    async fn wait_for_attempt_operation_after_interrupt<F>(
+        waiter: F,
+        timeout: Duration,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, DaemonError>
+    where
+        F: std::future::Future<Output = tokio::sync::OwnedMutexGuard<()>>,
+    {
+        tokio::time::timeout(timeout, waiter).await.map_err(|_| {
+            DaemonError::AttemptConflict(format!(
+                "attempt cancellation was requested, but another workspace operation did not release within {} seconds; retry the cleanup action",
+                timeout.as_secs()
+            ))
+        })
+    }
+
+    async fn request_attempt_cancellation(
+        &self,
+        session_id: &str,
+        set_id: &str,
+    ) -> Result<(), DaemonError> {
+        let set = self.require_attempt_set(session_id, set_id).await?;
+        if !Self::attempt_state_is_interruptible(set.state) {
+            return Err(DaemonError::AttemptConflict(
+                "only live attempts or an in-progress Checks run can be interrupted; wait for the current attempt operation to finish"
+                    .to_string(),
+            ));
+        }
+        self.attempt_cancellations
+            .lock()
+            .await
+            .insert(Self::attempt_cancel_key(session_id, set_id));
+        // This phase deliberately runs before the workspace lease is acquired.
+        // A live status/diff request can own that lease while blocked in a lane
+        // container; killing the exact set's actors and containers is what lets
+        // that request return. Clone/worktree deletion still happens only after
+        // the lease is held by `discard_attempt_locked`.
+        self.interrupt_attempt_runtime(session_id, &set).await
+    }
+
+    async fn lock_attempt_operation_for_cleanup(
+        &self,
+        session_id: &str,
+        expected_set_id: Option<&str>,
+    ) -> Result<(tokio::sync::OwnedMutexGuard<()>, bool), DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let mut waiter = Box::pin(operation.lock_owned());
+        let mut cancellation_requested = false;
+        loop {
+            tokio::select! {
+                guard = &mut waiter => return Ok((guard, cancellation_requested)),
+                _ = tokio::time::sleep(Duration::from_millis(100)),
+                    if expected_set_id.is_some() && !cancellation_requested =>
+                {
+                    let Some(set) = self.peek_current_attempt_set(session_id).await? else {
+                        continue;
+                    };
+                    if !Self::attempt_is_interrupt_target(
+                        expected_set_id,
+                        &set.id,
+                        set.state,
+                    ) {
+                        continue;
+                    }
+                    match self.request_attempt_cancellation(session_id, &set.id).await {
+                        Ok(()) => {
+                            cancellation_requested = true;
+                            let guard = Self::wait_for_attempt_operation_after_interrupt(
+                                &mut waiter,
+                                ATTEMPT_OPERATION_RELEASE_TIMEOUT,
+                            )
+                            .await?;
+                            return Ok((guard, cancellation_requested));
+                        }
+                        // Lane execution or Checks may have completed between
+                        // the state read and cancellation. The lease will then
+                        // become available normally; never cancel the next phase.
+                        Err(DaemonError::AttemptConflict(_)) => {}
+                        // Keep the marker on a partial teardown failure. It
+                        // prevents Checks from restarting against a half-stopped
+                        // set and makes a retry continue the same exact cleanup.
+                        Err(error) => return Err(error),
+                    }
+                }
             }
         }
     }
 
-    /// Spawn (or reuse) a variant agent actor: jailed to its worktree via an
-    /// attached sandbox, with a variant-discriminated scoped id
-    /// `{session}#{i}:{agent}` so its actor + checkpoint don't collide with the
-    /// primary session or the other variants.
+    /// A session turn and an unresolved attempt set cannot safely own the same
+    /// workspace at once. Besides producing an incoherent transcript, Keep
+    /// would otherwise have to stop a possibly-running canonical session actor
+    /// before it could append the chosen attempt. Waiting on the runtime lock
+    /// also serializes this check with attempt-set setup and teardown.
+    async fn require_no_unresolved_attempt(&self, session_id: &str) -> Result<(), DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let peers: Vec<String> = self
+            .list_sessions()
+            .await
+            .into_iter()
+            // Close preserves unresolved attempts for recovery, so closed peer
+            // sessions still own the workspace until Keep or explicit Discard.
+            .filter(|candidate| candidate.working_dir == session.working_dir)
+            .map(|candidate| candidate.id)
+            .collect();
+        let active = self.active_attempts.lock().await;
+        if let Some((owner, run)) = peers
+            .iter()
+            .find_map(|owner| active.get(owner).map(|run| (owner, run)))
+        {
+            return Err(DaemonError::AttemptConflict(format!(
+                "attempt set '{}' in session '{}' owns this workspace; keep or discard it before continuing",
+                run.set_id, owner
+            )));
+        }
+        drop(active);
+        for owner in peers {
+            if let Some(set) = self.peek_current_attempt_set(&owner).await? {
+                return Err(DaemonError::AttemptConflict(format!(
+                    "attempt set '{}' in session '{}' owns this workspace; keep or discard it before continuing",
+                    set.id, owner
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    async fn create_attempt_worktrees(
+        &self,
+        session_id: &str,
+        set: &crate::git::AttemptSet,
+    ) -> Result<(), DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let root = sandbox.root().to_string_lossy().to_string();
+        let base_ref = crate::attempts::base_ref(&set.id);
+        let clone_branch = crate::attempts::clone_branch(&set.id);
+        let clone_ref = format!("refs/heads/{clone_branch}");
+
+        // Keep the snapshot reachable for the lifetime of the set, and expose
+        // it briefly as a branch because `git clone --single-branch` only
+        // advertises heads. Every lane then removes its origin and owns a fully
+        // independent object database—no linked worktree/common Git directory
+        // is writable from an attempt container.
+        for (reference, action) in [
+            (base_ref.as_str(), "protecting the attempt snapshot"),
+            (
+                clone_ref.as_str(),
+                "advertising the attempt snapshot for clone",
+            ),
+        ] {
+            Self::require_git_output(
+                self.session_git(session_id, &["update-ref", reference, &set.base_sha])
+                    .await?,
+                action,
+            )?;
+        }
+
+        let outcome = async {
+            for variant in &set.lanes {
+                let worktree = crate::attempts::worktree_path(
+                    std::path::Path::new(&root),
+                    session_id,
+                    &set.id,
+                    variant.index,
+                )
+                .to_string_lossy()
+                .to_string();
+                let clone = sandbox
+                    .exec(
+                        &[
+                            "git",
+                            "-c",
+                            "safe.directory=*",
+                            "clone",
+                            "-q",
+                            "--no-hardlinks",
+                            "--dissociate",
+                            "--no-checkout",
+                            "--single-branch",
+                            "--branch",
+                            &clone_branch,
+                            &root,
+                            &worktree,
+                        ],
+                        Duration::from_secs(120),
+                    )
+                    .await
+                    .map_err(|error| DaemonError::Session(error.to_string()))?;
+                if !clone.ok() {
+                    return Err(DaemonError::Session(format!(
+                        "couldn't clone attempt {} of {}: {}",
+                        variant.index + 1,
+                        set.lanes.len(),
+                        clone.stderr.trim()
+                    )));
+                }
+                let lane_exclude = format!("{worktree}/.git/info/exclude");
+                let exclude = sandbox
+                    .exec_stdin(
+                        &["tee", "-a", &lane_exclude],
+                        "\n/.axo-variants/\n",
+                        Duration::from_secs(10),
+                    )
+                    .await
+                    .map_err(|error| DaemonError::Session(error.to_string()))?;
+                if !exclude.ok() {
+                    return Err(DaemonError::Session(format!(
+                        "reserving attempt {} internal paths: {}",
+                        variant.index + 1,
+                        exclude.stderr.trim()
+                    )));
+                }
+                let branch = crate::attempts::branch_name(&set.id, variant.index);
+                Self::require_git_output(
+                    self.session_git_at(
+                        session_id,
+                        &worktree,
+                        &["checkout", "-q", "-b", &branch, &set.base_sha],
+                    )
+                    .await?,
+                    &format!("checking out attempt {}", variant.index + 1),
+                )?;
+                Self::require_git_output(
+                    self.session_git_at(session_id, &worktree, &["branch", "-D", &clone_branch])
+                        .await?,
+                    &format!("removing attempt {}'s staging branch", variant.index + 1),
+                )?;
+                Self::require_git_output(
+                    self.session_git_at(session_id, &worktree, &["remote", "remove", "origin"])
+                        .await?,
+                    &format!(
+                        "disconnecting attempt {} from the workspace",
+                        variant.index + 1
+                    ),
+                )?;
+            }
+            Ok(())
+        }
+        .await;
+
+        // Never leave the primary checkout advertising a lane-setup branch.
+        let remove_clone_ref = self
+            .session_git(session_id, &["update-ref", "-d", &clone_ref])
+            .await?;
+        if !remove_clone_ref.ok() && outcome.is_ok() {
+            return Err(DaemonError::Session(format!(
+                "removing the temporary attempt clone ref: {}",
+                remove_clone_ref.stderr.trim()
+            )));
+        }
+        outcome
+    }
+
+    /// Remove only the named set's worktrees, branches, and metadata. Never
+    /// scan/delete every `.axo-variants` path: two sessions may anchor the same
+    /// repository and must not be able to erase one another's attempts.
+    async fn remove_attempt_worktrees(
+        &self,
+        session_id: &str,
+        set: &crate::git::AttemptSet,
+    ) -> Result<(), DaemonError> {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let root = sandbox.root().to_string_lossy();
+        let mut failures = Vec::new();
+        // Names come only from the validated session/set/index identity. Never
+        // execute a serialized path or branch from agent-adjacent metadata.
+        for lane in &set.lanes {
+            let container = crate::attempts::container_id(session_id, &set.id, lane.index);
+            if let Err(error) = SessionSandbox::remove_named(&container).await {
+                failures.push(format!("stop attempt {} sandbox: {error}", lane.index + 1));
+            }
+        }
+        if !failures.is_empty() {
+            return Err(DaemonError::Session(format!(
+                "attempt cleanup stopped before deleting files: {}",
+                failures.join("; ")
+            )));
+        }
+
+        let mut references = vec![
+            crate::attempts::base_ref(&set.id),
+            format!("refs/heads/{}", crate::attempts::clone_branch(&set.id)),
+            crate::attempts::keep_preimage_ref(&set.id),
+            crate::attempts::keep_postimage_ref(&set.id),
+        ];
+        references.extend(
+            set.lanes
+                .iter()
+                .map(|lane| crate::attempts::checked_candidate_ref(&set.id, lane.index)),
+        );
+        for reference in references {
+            match self
+                .session_git(session_id, &["update-ref", "-d", &reference])
+                .await
+            {
+                Ok(result) if result.ok() => {}
+                Ok(result) => failures.push(format!(
+                    "remove attempt ref '{reference}': {}",
+                    result.stderr.trim()
+                )),
+                Err(error) => failures.push(format!("remove attempt ref '{reference}': {error}")),
+            }
+        }
+        if !failures.is_empty() {
+            return Err(DaemonError::Session(format!(
+                "attempt cleanup stopped before deleting metadata: {}",
+                failures.join("; ")
+            )));
+        }
+
+        let set_root =
+            crate::attempts::attempt_root(std::path::Path::new(root.as_ref()), session_id, &set.id)
+                .to_string_lossy()
+                .to_string();
+        match sandbox
+            .exec(&["rm", "-rf", &set_root], Duration::from_secs(15))
+            .await
+        {
+            Ok(result) if result.ok() => {}
+            Ok(result) => {
+                failures.push(format!("remove attempt metadata: {}", result.stderr.trim()))
+            }
+            Err(error) => failures.push(format!("remove attempt metadata: {error}")),
+        }
+        if !failures.is_empty() {
+            return Err(DaemonError::Session(format!(
+                "attempt cleanup kept its current pointer for retry: {}",
+                failures.join("; ")
+            )));
+        }
+        let session_root =
+            crate::attempts::session_attempts_root(std::path::Path::new(root.as_ref()), session_id)
+                .to_string_lossy()
+                .to_string();
+        let current_path = format!("{session_root}/current.json");
+        match Self::read_json_file::<crate::git::AttemptSet>(&sandbox, &current_path).await {
+            Ok(Some(current)) if current.id == set.id => {
+                match sandbox
+                    .exec(&["rm", "-f", &current_path], Duration::from_secs(10))
+                    .await
+                {
+                    Ok(result) if result.ok() => {}
+                    Ok(result) => failures.push(format!(
+                        "clear current attempt pointer: {}",
+                        result.stderr.trim()
+                    )),
+                    Err(error) => failures.push(format!("clear current attempt pointer: {error}")),
+                }
+            }
+            Ok(_) => {}
+            Err(error) => failures.push(error.to_string()),
+        }
+        let _ = sandbox
+            .exec(&["rmdir", &session_root], Duration::from_secs(10))
+            .await;
+
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(DaemonError::Session(format!(
+                "attempt cleanup was incomplete: {}",
+                failures.join("; ")
+            )))
+        }
+    }
+
+    /// Backwards-compatible internal entry point used by older callers. New
+    /// callers must send the set id to [`Self::discard_attempt`] so a stale
+    /// request cannot delete a replacement set.
+    pub async fn remove_variant_worktrees(&self, session_id: &str) -> Result<(), DaemonError> {
+        let current_set = self
+            .peek_current_attempt_set(session_id)
+            .await?
+            .map(|set| set.id);
+        let (_operation, _cancellation_requested) = self
+            .lock_attempt_operation_for_cleanup(session_id, current_set.as_deref())
+            .await?;
+        let result = self.remove_variant_worktrees_locked(session_id).await;
+        if let Some(set_id) = current_set {
+            self.clear_attempt_cancellation(session_id, &set_id).await;
+        }
+        result
+    }
+
+    async fn remove_variant_worktrees_locked(&self, session_id: &str) -> Result<(), DaemonError> {
+        let Some(set) = self.current_attempt_set(session_id).await? else {
+            return Ok(());
+        };
+        self.discard_attempt_locked(session_id, set).await
+    }
+
+    async fn quiesce_attempt_locked(&self, session_id: &str) -> Result<(), DaemonError> {
+        let Some(set) = self.peek_current_attempt_set(session_id).await? else {
+            return Ok(());
+        };
+        if set.lanes.is_empty() || set.lanes.len() > 100 {
+            return Err(DaemonError::Session(
+                "attempt metadata has an invalid way count; refusing sandbox teardown".to_string(),
+            ));
+        }
+        let mut indexes: Vec<usize> = set.lanes.iter().map(|lane| lane.index).collect();
+        indexes.sort_unstable();
+        if indexes.iter().copied().ne(0..indexes.len()) {
+            return Err(DaemonError::Session(
+                "attempt metadata has invalid way indexes; refusing sandbox teardown".to_string(),
+            ));
+        }
+        self.stop_attempt_runtime(session_id, &set).await?;
+        // A daemon restart loses the in-memory runtime while intentionally
+        // preserving deterministic containers. Remove every exact lane name
+        // even when there was no runtime handle to join.
+        for lane in &set.lanes {
+            let container = crate::attempts::container_id(session_id, &set.id, lane.index);
+            SessionSandbox::remove_named(&container)
+                .await
+                .map_err(|error| DaemonError::Session(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// The single agent each attempt runs. Multi-agent session transcripts do
+    /// not yet have one canonical checkpoint to append a kept turn to, so the
+    /// public Explore path rejects those modes instead of silently choosing an
+    /// entry agent and losing the permanent chat on Keep.
+    fn primary_session_agent(&self, session: &Session) -> Result<String, DaemonError> {
+        match &session.mode {
+            SessionMode::SingleAgent { agent_id } => Ok(agent_id.clone()),
+            SessionMode::Custom { .. } | SessionMode::Lattice { .. } => {
+                Err(DaemonError::AttemptConflict(
+                    "Explore several ways currently requires a single-agent session".to_string(),
+                ))
+            }
+        }
+    }
+
+    /// Spawn a fresh attempt actor jailed to one set-scoped worktree.
+    ///
+    /// Attempt actors are never reused: their scope includes the set id, and a
+    /// registry collision is an error. Reuse here would revive an earlier
+    /// attempt's checkpoint/core memory or return a dead actor after a failed
+    /// lane.
     async fn variant_actor(
         &self,
         session: &Session,
+        set_id: &str,
         agent_id: &str,
         variant: &crate::git::Variant,
-        base: &Arc<dyn Sandbox>,
-    ) -> Result<ractor::ActorRef<axocoatl_actor::AgentMessage>, DaemonError> {
-        let scoped = format!("{}#{}:{}", session.id, variant.index, agent_id);
+    ) -> Result<
+        (
+            AgentId,
+            ractor::ActorRef<axocoatl_actor::AgentMessage>,
+            Arc<dyn Sandbox>,
+        ),
+        DaemonError,
+    > {
+        let scoped = crate::attempts::actor_scope(&session.id, set_id, variant.index, agent_id);
         let sid = AgentId::new(&scoped);
-        if let Some(actor) = self.agent_registry.get(&sid).await {
-            return Ok(actor);
+        if self.agent_registry.get(&sid).await.is_some() {
+            return Err(DaemonError::AttemptConflict(format!(
+                "attempt actor identity '{scoped}' already exists"
+            )));
         }
         let agent_yaml = self
             .config
@@ -2584,21 +4577,74 @@ impl AxocoatlDaemon {
                 DaemonError::Session(format!("agent '{agent_id}' is not in the config"))
             })?
             .clone();
-        // Reuse the session's isolation instance but root the tools at the
-        // worktree — works identically for a local container or a remote microVM.
-        let worktree = std::path::Path::new(&variant.worktree);
-        let sandbox = base.with_root(worktree);
-        let executor = self.build_session_executor(session, sandbox).await;
+        let root = self.session_dir(&session.id).await?;
+        let worktree = crate::attempts::worktree_path(
+            std::path::Path::new(&root),
+            &session.id,
+            set_id,
+            variant.index,
+        );
+        let container_id = crate::attempts::container_id(&session.id, set_id, variant.index);
+        let sc = &self.config.sandbox;
+        let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
+            allow_post_create: sc.allow_post_create_command,
+            allow_untrusted_image: sc.allow_untrusted_images,
+            network: match sc.network.as_str() {
+                "none" => axocoatl_isolation::session_sandbox::SandboxNetwork::None,
+                _ => axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge,
+            },
+            require_resource_limits: sc.require_resource_limits,
+        };
+        // This is a real filesystem boundary, not `with_root` on the primary
+        // session container. Only the independent lane clone is mounted, so an
+        // arbitrary shell command cannot reach the workspace, sibling lanes,
+        // their metadata, or the primary repository's Git directory.
+        let sandbox: Arc<dyn Sandbox> = Arc::new(
+            SessionSandbox::start(
+                &container_id,
+                &worktree,
+                session.image.as_deref(),
+                &[],
+                &session.post_create_commands,
+                &policy,
+            )
+            .await
+            .map_err(|error| {
+                DaemonError::Session(format!(
+                    "starting isolated sandbox for attempt {}: {error}",
+                    variant.index + 1
+                ))
+            })?,
+        );
+        let executor = self
+            .build_session_executor(session, sandbox.clone(), false)
+            .await;
         // Context path = the in-sandbox worktree (where the tools operate);
         // project instructions still come from the primary session's host repo.
-        self.spawn_session_agent(session, &agent_yaml, &scoped, Arc::new(executor), worktree)
+        let actor = match self
+            .spawn_session_agent(
+                session,
+                &agent_yaml,
+                &scoped,
+                Arc::new(executor),
+                &worktree,
+                false,
+            )
             .await
+        {
+            Ok(actor) => actor,
+            Err(error) => {
+                sandbox.stop().await;
+                return Err(error);
+            }
+        };
+        Ok((sid, actor, sandbox))
     }
 
-    /// Run one variant per entry in `lanes`, in parallel — each on its own git
-    /// worktree, each streamed to the bus under its own run key `{session}#{i}`
-    /// so the cockpit can show N live lanes. Returns the variant list
-    /// immediately; the runs stream asynchronously.
+    /// Run one attempt per entry in `lanes`, in parallel — each in an independent
+    /// clone/container, each streamed to the bus under run key `{session}#{i}`.
+    /// Returns the durable attempt set immediately; lane tasks remain owned by
+    /// `active_attempts` until Keep or Discard joins them.
     ///
     /// Lanes are **heterogeneous**: each carries its own model override, so an
     /// expensive model can plan once and several cheaper ones execute that plan
@@ -2607,9 +4653,12 @@ impl AxocoatlDaemon {
     pub async fn execute_session_variants(
         &self,
         session_id: &str,
-        input: &str,
+        task: &str,
+        instruction: &str,
         lanes: &[crate::git::LaneConfig],
-    ) -> Result<Vec<crate::git::Variant>, DaemonError> {
+    ) -> Result<crate::git::AttemptSet, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
         // A generous ceiling — the user configures the count. Beyond a handful
         // it gets slow on local models, but we let them push it and degrade
         // gracefully (a failed lane errors on its own; a failed worktree set
@@ -2621,89 +4670,262 @@ impl AxocoatlDaemon {
                 "variant count must be between 1 and {MAX_VARIANTS}"
             )));
         }
+        if self.config.sandbox.backend == "e2b" {
+            return Err(DaemonError::Session(
+                "parallel attempts currently require the local Podman backend so every way can receive its own filesystem boundary"
+                    .to_string(),
+            ));
+        }
         let session = self
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        if !matches!(session.mode, SessionMode::SingleAgent { .. }) {
+            return Err(DaemonError::AttemptConflict(
+                "Explore several ways currently requires a single-agent session so the kept task and answer remain in the permanent chat"
+                    .to_string(),
+            ));
+        }
+        let attempt_history: Vec<axocoatl_core::ChatMessage> = self
+            .session_messages(session_id)
+            .await?
+            .into_iter()
+            .map(|message| axocoatl_core::ChatMessage {
+                role: message.role,
+                content: axocoatl_core::MessageContent::Text(message.content),
+                name: message.name,
+                tool_calls: message
+                    .tool_calls
+                    .into_iter()
+                    .map(|call| axocoatl_core::ToolCall {
+                        id: call.id,
+                        name: call.name,
+                        arguments: serde_json::from_str(&call.arguments_json)
+                            .unwrap_or(serde_json::Value::Null),
+                    })
+                    .collect(),
+                tool_call_id: message.tool_call_id,
+            })
+            .collect();
         let default_agent = self.primary_session_agent(&session)?;
-        // A lane may run a different agent entirely — a different prompt, tools
-        // and memory, not just a different model. Validate every named agent
-        // before creating any worktrees, so a typo fails immediately instead of
-        // after the set is half built.
-        for lane in lanes {
-            if let Some(a) = &lane.agent {
-                if !self.config.agents.iter().any(|c| &c.id == a) {
-                    return Err(DaemonError::Session(format!(
-                        "lane agent '{a}' is not in the config"
-                    )));
-                }
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let set_id = uuid::Uuid::new_v4().to_string();
+        let root = sandbox.root().to_path_buf();
+
+        // Resolve every lane now. Persisting `None` for defaults makes costs and
+        // labels unknowable after reload; the set records what actually ran.
+        let mut variants = Vec::with_capacity(n);
+        for (index, lane) in lanes.iter().enumerate() {
+            let lane_agent = lane.agent.as_deref().unwrap_or(&default_agent);
+            let agent = self
+                .config
+                .agents
+                .iter()
+                .find(|candidate| candidate.id == lane_agent)
+                .ok_or_else(|| {
+                    DaemonError::Session(format!("lane agent '{lane_agent}' is not in the config"))
+                })?;
+            let model = lane
+                .model
+                .as_deref()
+                .filter(|model| !model.trim().is_empty())
+                .unwrap_or(&agent.model)
+                .to_string();
+            variants.push(crate::git::Variant {
+                index,
+                branch: crate::attempts::branch_name(&set_id, index),
+                worktree: crate::attempts::worktree_path(&root, session_id, &set_id, index)
+                    .to_string_lossy()
+                    .to_string(),
+                model: Some(model),
+                agent: Some(lane_agent.to_string()),
+                provider: Some(agent.provider.clone()),
+            });
+        }
+
+        self.require_no_unresolved_attempt(session_id).await?;
+        if self
+            .active_runs
+            .lock()
+            .is_ok_and(|runs| runs.contains_key(session_id))
+        {
+            return Err(DaemonError::AttemptConflict(
+                "this session is still running a turn; wait for it to finish before exploring several ways"
+                    .to_string(),
+            ));
+        }
+        let (base_sha, base_tree) = self.snapshot_attempt_base(session_id, &set_id).await?;
+        Self::require_git_output(
+            self.session_git(
+                session_id,
+                &["update-ref", &crate::attempts::base_ref(&set_id), &base_sha],
+            )
+            .await?,
+            "protecting the attempt snapshot",
+        )?;
+        let mut set = crate::git::AttemptSet {
+            id: set_id.clone(),
+            session_id: session_id.to_string(),
+            task: if task.trim().is_empty() {
+                instruction.to_string()
+            } else {
+                task.to_string()
+            },
+            instruction: instruction.to_string(),
+            base_sha,
+            base_tree,
+            state: crate::git::AttemptSetState::Preparing,
+            kept_index: None,
+            created_at: unix_now(),
+            lanes: variants,
+        };
+        if let Err(error) = self.persist_attempt_set(&sandbox, &set).await {
+            return Err(self
+                .rollback_attempt_setup(&sandbox, session_id, &mut set, error)
+                .await);
+        }
+        if let Err(error) = self.create_attempt_worktrees(session_id, &set).await {
+            return Err(self
+                .rollback_attempt_setup(&sandbox, session_id, &mut set, error)
+                .await);
+        }
+
+        let attempt_root = crate::attempts::attempt_root(&root, session_id, &set_id)
+            .to_string_lossy()
+            .to_string();
+        for lane in &set.lanes {
+            if let Err(error) = Self::record_lane_state(
+                &sandbox,
+                &attempt_root,
+                crate::git::AttemptLaneStatus {
+                    index: lane.index,
+                    state: crate::git::AttemptLaneState::Queued,
+                    error: None,
+                    started_at: None,
+                    finished_at: None,
+                },
+            )
+            .await
+            {
+                return Err(self
+                    .rollback_attempt_setup(&sandbox, session_id, &mut set, error)
+                    .await);
             }
         }
-        let sandbox = self.ensure_sandbox(&session).await?;
-        let mut variants = self.create_variant_worktrees(session_id, n).await?;
-        // Label each lane with the model it will run, so the comparison view can
-        // attribute every candidate diff to the model that produced it.
-        for (v, lane) in variants.iter_mut().zip(lanes) {
-            v.model.clone_from(&lane.model);
-            v.agent.clone_from(&lane.agent);
-        }
-        // Persist the roster beside the worktrees. `.axo-variants/` is already
-        // git-excluded and `lanes.json` is skipped by the numeric filter in
-        // `variants_status`, so it rides along with the thing it describes and
-        // dies with it.
-        if let Ok(json) = serde_json::to_string(&variants) {
-            let path = format!("{}/.axo-variants/lanes.json", sandbox.root().display());
-            let _ = sandbox
-                .exec_stdin(
-                    &["sh", "-c", &format!("cat > '{path}'")],
-                    &json,
-                    Duration::from_secs(10),
-                )
-                .await;
+        set.state = crate::git::AttemptSetState::Running;
+        if let Err(error) = self.persist_attempt_set(&sandbox, &set).await {
+            return Err(self
+                .rollback_attempt_setup(&sandbox, session_id, &mut set, error)
+                .await);
         }
 
         // Build every variant's actor *before* spawning any lane. If one fails
         // (e.g. a missing agent), nothing is running yet, so we can tear the
         // whole worktree set down and surface the error cleanly — rather than
         // returning with half the lanes streaming against orphaned worktrees.
-        let mut prepared = Vec::with_capacity(variants.len());
-        for v in &variants {
-            let lane_agent = lanes
-                .get(v.index)
-                .and_then(|l| l.agent.clone())
-                .unwrap_or_else(|| default_agent.clone());
-            match self.variant_actor(&session, &lane_agent, v, &sandbox).await {
-                Ok(actor) => prepared.push((v.index, actor)),
+        let mut runtime = ActiveAttemptRun::new(&set_id);
+        let mut prepared = Vec::with_capacity(set.lanes.len());
+        for variant in &set.lanes {
+            let lane_agent = variant.agent.as_deref().unwrap_or(&default_agent);
+            match self
+                .variant_actor(&session, &set_id, lane_agent, variant)
+                .await
+            {
+                Ok((actor_id, actor, lane_sandbox)) => {
+                    runtime.actors.push((actor_id, actor.clone()));
+                    runtime.sandboxes.push(lane_sandbox);
+                    prepared.push((variant.clone(), actor));
+                }
                 Err(e) => {
-                    self.remove_variant_worktrees(session_id).await.ok();
-                    return Err(e);
+                    for (actor_id, actor) in &runtime.actors {
+                        let _ = actor.kill_and_wait(Some(Duration::from_secs(10))).await;
+                        self.agent_registry.remove(actor_id).await;
+                        self.remove_attempt_memory(actor_id).await;
+                    }
+                    for lane_sandbox in &runtime.sandboxes {
+                        lane_sandbox.stop().await;
+                    }
+                    return Err(self
+                        .rollback_attempt_setup(&sandbox, session_id, &mut set, e)
+                        .await);
                 }
             }
         }
 
-        for (index, actor) in prepared {
-            let run_id = format!("{}#{}", session.id, index);
+        for (variant, actor) in prepared {
+            let index = variant.index;
+            let run_id = crate::attempts::run_id(&session.id, index);
             let bus = self.stream_bus.clone();
             let rid = run_id.clone();
-            let aid = lanes
-                .get(index)
-                .and_then(|l| l.agent.clone())
+            let aid = variant
+                .agent
+                .clone()
                 .unwrap_or_else(|| default_agent.clone());
-            let inp = input.to_string();
-            // This lane's own model — the heterogeneous part.
-            let mo = lanes.get(index).and_then(|l| l.model.clone());
+            let inp = instruction.to_string();
+            let mo = variant.model.clone();
             let usage_sandbox = sandbox.clone();
             let usage_key = session.id.clone();
             let lane_model = mo.clone();
+            let lane_provider = variant.provider.clone().unwrap_or_default();
+            let configured_price = lane_model
+                .as_deref()
+                .and_then(|model| self.config.pricing.get(model))
+                .map(|price| crate::git::ModelPrice {
+                    input_per_mtok: price.input_per_mtok,
+                    output_per_mtok: price.output_per_mtok,
+                });
+            let cost_known = lane_provider == "ollama" || configured_price.is_some();
+            let price = if lane_provider == "ollama" {
+                crate::git::ModelPrice::default()
+            } else {
+                configured_price.unwrap_or_default()
+            };
+            let lane_root = attempt_root.clone();
+            let lane_history = attempt_history.clone();
+            let lane_attempt_set_id = set_id.clone();
             let trace: Arc<StdMutex<Vec<crate::trajectory::Action>>> =
                 Arc::new(StdMutex::new(Vec::new()));
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let started = std::time::Instant::now();
+                let started_at = unix_now();
+                if let Err(error) = Self::record_lane_state(
+                    &usage_sandbox,
+                    &lane_root,
+                    crate::git::AttemptLaneStatus {
+                        index,
+                        state: crate::git::AttemptLaneState::Running,
+                        error: None,
+                        started_at: Some(started_at),
+                        finished_at: None,
+                    },
+                )
+                .await
+                {
+                    let message = format!("could not persist attempt start: {error}");
+                    let _ = Self::record_lane_state(
+                        &usage_sandbox,
+                        &lane_root,
+                        crate::git::AttemptLaneStatus {
+                            index,
+                            state: crate::git::AttemptLaneState::Failed,
+                            error: Some(message.clone()),
+                            started_at: Some(started_at),
+                            finished_at: Some(unix_now()),
+                        },
+                    )
+                    .await;
+                    let _ = bus.send(crate::stream::StreamFrame::SessionError {
+                        session: rid,
+                        error: message,
+                    });
+                    return;
+                }
                 // Announce the lane's identity once, so a viewer can attribute
                 // every later frame to the right lane and model without parsing
                 // the run key.
                 let _ = bus.send(crate::stream::StreamFrame::LaneStarted {
                     run: rid.clone(),
+                    attempt_set_id: lane_attempt_set_id.clone(),
                     session: usage_key.clone(),
                     index,
                     model: lane_model.clone(),
@@ -2718,16 +4940,20 @@ impl AxocoatlDaemon {
                     rid.clone(),
                     aid,
                     inp,
-                    mo,
-                    Some(trace.clone()),
+                    StreamAgentRunOptions {
+                        model_override: mo,
+                        trace: Some(trace.clone()),
+                        supplied_history: Some(lane_history),
+                    },
                 )
                 .await;
                 let duration_ms = started.elapsed().as_millis() as u64;
                 // Written on both paths: a lane that errored still took a route,
                 // and *where* it went wrong is the most useful trajectory there
                 // is. Persisting only successes would lose exactly that.
-                Self::record_lane_trajectory(
+                let trajectory_result = Self::record_lane_trajectory(
                     &usage_sandbox,
+                    &lane_root,
                     crate::trajectory::Trajectory {
                         index,
                         actions: trace.lock().map(|s| s.clone()).unwrap_or_default(),
@@ -2736,76 +4962,181 @@ impl AxocoatlDaemon {
                 .await;
                 match outcome {
                     Ok(out) => {
+                        let mut persistence_errors = Vec::new();
+                        if let Err(error) = trajectory_result {
+                            persistence_errors.push(error.to_string());
+                        }
+                        let cost = price.cost(
+                            out.token_usage.input_tokens as u64,
+                            out.token_usage.output_tokens as u64,
+                        );
                         // Record what this lane spent, so the run's economics
                         // outlive the stream that reported them.
-                        Self::record_lane_usage(
+                        if let Err(error) = Self::record_lane_usage(
                             &usage_sandbox,
+                            &lane_root,
                             crate::git::LaneUsage {
                                 index,
                                 model: lane_model,
                                 input_tokens: out.token_usage.input_tokens as u64,
                                 output_tokens: out.token_usage.output_tokens as u64,
-                                // Priced on read, where the config is available.
-                                cost_usd: 0.0,
+                                token_usage_known: true,
+                                cost_usd: cost,
+                                cost_known,
                                 duration_ms,
                             },
                         )
+                        .await
+                        {
+                            persistence_errors.push(error.to_string());
+                        }
+                        if let Err(error) = Self::record_lane_output(
+                            &usage_sandbox,
+                            &lane_root,
+                            index,
+                            &out.content,
+                        )
+                        .await
+                        {
+                            persistence_errors.push(error.to_string());
+                        }
+                        let persistence_error =
+                            (!persistence_errors.is_empty()).then(|| persistence_errors.join("; "));
+                        let final_state = if persistence_error.is_some() {
+                            crate::git::AttemptLaneState::Failed
+                        } else {
+                            crate::git::AttemptLaneState::Completed
+                        };
+                        let state_result = Self::record_lane_state(
+                            &usage_sandbox,
+                            &lane_root,
+                            crate::git::AttemptLaneStatus {
+                                index,
+                                state: final_state,
+                                error: persistence_error.clone(),
+                                started_at: Some(started_at),
+                                finished_at: Some(unix_now()),
+                            },
+                        )
                         .await;
-                        let _ = bus.send(crate::stream::StreamFrame::SessionDone {
-                            session: rid,
-                            input_tokens: out.token_usage.input_tokens as u64,
-                            output_tokens: out.token_usage.output_tokens as u64,
-                        });
+                        match (persistence_error, state_result) {
+                            (None, Ok(())) => {
+                                let _ = bus.send(crate::stream::StreamFrame::SessionDone {
+                                    session: rid,
+                                    input_tokens: out.token_usage.input_tokens as u64,
+                                    output_tokens: out.token_usage.output_tokens as u64,
+                                });
+                            }
+                            (error, state_result) => {
+                                let mut message = error.unwrap_or_else(|| {
+                                    "attempt result metadata could not be persisted".to_string()
+                                });
+                                if let Err(error) = state_result {
+                                    message.push_str(&format!("; final state: {error}"));
+                                }
+                                let _ = bus.send(crate::stream::StreamFrame::SessionError {
+                                    session: rid,
+                                    error: message,
+                                });
+                            }
+                        }
                     }
                     Err(e) => {
+                        let mut errors = vec![e.to_string()];
+                        if let Err(error) = trajectory_result {
+                            errors.push(format!("trajectory persistence: {error}"));
+                        }
                         // A lane that failed still ran for a while and is still
                         // one of the things being compared. Record it with zero
                         // tokens — unknown, not free — so the scoreboard can say
                         // how long it burned instead of showing a blank column.
-                        Self::record_lane_usage(
+                        if let Err(error) = Self::record_lane_usage(
                             &usage_sandbox,
+                            &lane_root,
                             crate::git::LaneUsage {
                                 index,
                                 model: lane_model,
                                 input_tokens: 0,
                                 output_tokens: 0,
+                                token_usage_known: false,
                                 cost_usd: 0.0,
+                                cost_known: lane_provider == "ollama",
                                 duration_ms,
                             },
                         )
-                        .await;
+                        .await
+                        {
+                            errors.push(format!("usage persistence: {error}"));
+                        }
+                        let message = errors.join("; ");
+                        if let Err(error) = Self::record_lane_state(
+                            &usage_sandbox,
+                            &lane_root,
+                            crate::git::AttemptLaneStatus {
+                                index,
+                                state: crate::git::AttemptLaneState::Failed,
+                                error: Some(message.clone()),
+                                started_at: Some(started_at),
+                                finished_at: Some(unix_now()),
+                            },
+                        )
+                        .await
+                        {
+                            tracing::error!(attempt = index, error = %error, "failed to persist terminal attempt state");
+                        }
                         let _ = bus.send(crate::stream::StreamFrame::SessionError {
                             session: rid,
-                            error: e.to_string(),
+                            error: message,
                         });
                     }
                 }
             });
+            runtime.tasks.push(handle);
         }
+        self.active_attempts
+            .lock()
+            .await
+            .insert(session_id.to_string(), runtime);
         let _ = self.session_store.lock().await.touch(session_id);
-        Ok(variants)
+        Ok(set)
     }
 
     /// Record what one lane spent, in that lane's own file.
     ///
     /// Static because it is called from the lane's spawned task, which outlives
     /// any borrow of the daemon.
-    async fn record_lane_usage(sandbox: &Arc<dyn Sandbox>, usage: crate::git::LaneUsage) {
-        let Ok(json) = serde_json::to_string(&usage) else {
-            return;
-        };
-        let path = format!(
-            "{}/.axo-variants/usage-{}.json",
-            sandbox.root().display(),
-            usage.index
-        );
-        let _ = sandbox
-            .exec_stdin(
-                &["sh", "-c", &format!("cat > '{path}'")],
-                &json,
-                Duration::from_secs(10),
-            )
-            .await;
+    async fn record_lane_usage(
+        sandbox: &Arc<dyn Sandbox>,
+        attempt_root: &str,
+        usage: crate::git::LaneUsage,
+    ) -> Result<(), DaemonError> {
+        let path = format!("{attempt_root}/usage-{}.json", usage.index);
+        Self::write_json_file(sandbox, &path, &usage).await
+    }
+
+    /// Persist the latest lifecycle fact for one lane. Each lane owns a file,
+    /// so concurrent completions cannot overwrite one another.
+    async fn record_lane_state(
+        sandbox: &Arc<dyn Sandbox>,
+        attempt_root: &str,
+        state: crate::git::AttemptLaneStatus,
+    ) -> Result<(), DaemonError> {
+        let path = format!("{attempt_root}/state-{}.json", state.index);
+        Self::write_json_file(sandbox, &path, &state).await
+    }
+
+    /// Persist the lane's final natural-language answer. Git is the source of
+    /// truth for code, but the answer is needed when Keep reconnects that chosen
+    /// turn to the session's permanent chat spine.
+    async fn record_lane_output(
+        sandbox: &Arc<dyn Sandbox>,
+        attempt_root: &str,
+        index: usize,
+        content: &str,
+    ) -> Result<(), DaemonError> {
+        let path = format!("{attempt_root}/output-{index}.json");
+        let value = serde_json::json!({ "index": index, "content": content });
+        Self::write_json_file(sandbox, &path, &value).await
     }
 
     /// Record one lane's normalised trajectory, in that lane's own file.
@@ -2815,23 +5146,11 @@ impl AxocoatlDaemon {
     /// comparison outlives the process that produced it.
     async fn record_lane_trajectory(
         sandbox: &Arc<dyn Sandbox>,
+        attempt_root: &str,
         trajectory: crate::trajectory::Trajectory,
-    ) {
-        let Ok(json) = serde_json::to_string(&trajectory) else {
-            return;
-        };
-        let path = format!(
-            "{}/.axo-variants/trace-{}.json",
-            sandbox.root().display(),
-            trajectory.index
-        );
-        let _ = sandbox
-            .exec_stdin(
-                &["sh", "-c", &format!("cat > '{path}'")],
-                &json,
-                Duration::from_secs(10),
-            )
-            .await;
+    ) -> Result<(), DaemonError> {
+        let path = format!("{attempt_root}/trace-{}.json", trajectory.index);
+        Self::write_json_file(sandbox, &path, &trajectory).await
     }
 
     /// Write one of the comparison's result files beside the worktrees.
@@ -2841,25 +5160,23 @@ impl AxocoatlDaemon {
     /// rebuild and a daemon restart, and they are deleted by the same teardown
     /// that removes the lanes. Best-effort — a failed write must never fail the
     /// verify or judge that produced the result.
-    async fn write_variant_meta(&self, session_id: &str, name: &str, json: &str) {
-        let Ok(session) = self
+    async fn write_variant_meta<T: serde::Serialize>(
+        &self,
+        session_id: &str,
+        set_id: &str,
+        name: &str,
+        value: &T,
+    ) -> Result<(), DaemonError> {
+        let session = self
             .get_session(session_id)
             .await
-            .ok_or_else(|| DaemonError::Session(String::new()))
-        else {
-            return;
-        };
-        let Ok(sandbox) = self.ensure_sandbox(&session).await else {
-            return;
-        };
-        let path = format!("{}/.axo-variants/{name}", sandbox.root().display());
-        let _ = sandbox
-            .exec_stdin(
-                &["sh", "-c", &format!("cat > '{path}'")],
-                json,
-                Duration::from_secs(10),
-            )
-            .await;
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let path = crate::attempts::attempt_root(sandbox.root(), session_id, set_id)
+            .join(name)
+            .to_string_lossy()
+            .to_string();
+        Self::write_json_file(&sandbox, &path, value).await
     }
 
     /// Read back what `write_variant_meta` stored. `None` for anything absent —
@@ -2867,38 +5184,191 @@ impl AxocoatlDaemon {
     async fn read_variant_meta<T: serde::de::DeserializeOwned>(
         &self,
         sandbox: &Arc<dyn Sandbox>,
+        attempt_root: &str,
         name: &str,
-    ) -> Option<T> {
-        let path = format!("{}/.axo-variants/{name}", sandbox.root().display());
-        let r = sandbox
-            .exec(&["cat", &path], Duration::from_secs(10))
-            .await
-            .ok()?;
-        serde_json::from_str(&r.stdout).ok()
+    ) -> Result<Option<T>, DaemonError> {
+        let path = format!("{attempt_root}/{name}");
+        Self::read_json_file(sandbox, &path).await
     }
 
-    /// Per-lane spend, collected in one exec rather than one per lane.
-    ///
-    /// Each lane owns its own file: lanes finish concurrently, and a single
-    /// shared file would have them racing to overwrite each other's numbers.
-    async fn read_lane_usage(&self, sandbox: &Arc<dyn Sandbox>) -> Vec<crate::git::LaneUsage> {
-        let dir = format!("{}/.axo-variants", sandbox.root().display());
-        let script =
-            format!("for f in '{dir}'/usage-*.json; do [ -f \"$f\" ] && cat \"$f\" && echo; done");
-        let Ok(r) = sandbox
-            .exec(&["sh", "-c", &script], Duration::from_secs(10))
+    async fn attempt_lane_states(
+        &self,
+        sandbox: &Arc<dyn Sandbox>,
+        set: &crate::git::AttemptSet,
+    ) -> Result<Vec<crate::git::AttemptLaneStatus>, DaemonError> {
+        let root = crate::attempts::attempt_root(sandbox.root(), &set.session_id, &set.id)
+            .to_string_lossy()
+            .to_string();
+        let is_live = self
+            .active_attempts
+            .lock()
             .await
-        else {
-            return Vec::new();
-        };
-        let mut out: Vec<crate::git::LaneUsage> = r
-            .stdout
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect();
-        out.sort_by_key(|u: &crate::git::LaneUsage| u.index);
-        out
+            .get(&set.session_id)
+            .is_some_and(|run| run.set_id == set.id);
+        let mut states = Vec::with_capacity(set.lanes.len());
+        for lane in &set.lanes {
+            let mut state = self
+                .read_variant_meta::<crate::git::AttemptLaneStatus>(
+                    sandbox,
+                    &root,
+                    &format!("state-{}.json", lane.index),
+                )
+                .await?
+                .unwrap_or(crate::git::AttemptLaneStatus {
+                    index: lane.index,
+                    state: if is_live {
+                        crate::git::AttemptLaneState::Queued
+                    } else {
+                        crate::git::AttemptLaneState::Interrupted
+                    },
+                    error: None,
+                    started_at: None,
+                    finished_at: None,
+                });
+            if !is_live
+                && matches!(
+                    state.state,
+                    crate::git::AttemptLaneState::Queued | crate::git::AttemptLaneState::Running
+                )
+            {
+                state.state = crate::git::AttemptLaneState::Interrupted;
+                state.error.get_or_insert_with(|| {
+                    "the daemon restarted before this attempt finished".to_string()
+                });
+                state.finished_at.get_or_insert_with(unix_now);
+            }
+            states.push(state);
+        }
+        states.sort_by_key(|state| state.index);
+        Ok(states)
+    }
+
+    async fn attempt_lane_states_host(
+        &self,
+        attempt_root: &std::path::Path,
+        set: &crate::git::AttemptSet,
+    ) -> Result<Vec<crate::git::AttemptLaneStatus>, DaemonError> {
+        let is_live = self
+            .active_attempts
+            .lock()
+            .await
+            .get(&set.session_id)
+            .is_some_and(|run| run.set_id == set.id);
+        let mut states = Vec::with_capacity(set.lanes.len());
+        for lane in &set.lanes {
+            let mut state = Self::read_host_json_file::<crate::git::AttemptLaneStatus>(
+                &attempt_root.join(format!("state-{}.json", lane.index)),
+            )
+            .await?
+            .unwrap_or(crate::git::AttemptLaneStatus {
+                index: lane.index,
+                state: if is_live {
+                    crate::git::AttemptLaneState::Queued
+                } else {
+                    crate::git::AttemptLaneState::Interrupted
+                },
+                error: None,
+                started_at: None,
+                finished_at: None,
+            });
+            if !is_live
+                && matches!(
+                    state.state,
+                    crate::git::AttemptLaneState::Queued | crate::git::AttemptLaneState::Running
+                )
+            {
+                state.state = crate::git::AttemptLaneState::Interrupted;
+                state.error.get_or_insert_with(|| {
+                    "the daemon restarted before this attempt finished".to_string()
+                });
+                state.finished_at.get_or_insert_with(unix_now);
+            }
+            states.push(state);
+        }
+        states.sort_by_key(|state| state.index);
+        Ok(states)
+    }
+
+    async fn read_lane_usage_host(
+        attempt_root: &std::path::Path,
+        indexes: &[usize],
+    ) -> Result<Vec<crate::git::LaneUsage>, DaemonError> {
+        let mut usage = Vec::new();
+        for index in indexes {
+            if let Some(record) = Self::read_host_json_file::<crate::git::LaneUsage>(
+                &attempt_root.join(format!("usage-{index}.json")),
+            )
+            .await?
+            {
+                usage.push(record);
+            }
+        }
+        usage.sort_by_key(|record| record.index);
+        Ok(usage)
+    }
+
+    async fn read_lane_outputs_host(
+        attempt_root: &std::path::Path,
+        indexes: &[usize],
+    ) -> Result<Vec<crate::git::AttemptLaneOutput>, DaemonError> {
+        let mut outputs = Vec::new();
+        for index in indexes {
+            if let Some(output) = Self::read_host_json_file::<crate::git::AttemptLaneOutput>(
+                &attempt_root.join(format!("output-{index}.json")),
+            )
+            .await?
+            {
+                if output.index != *index {
+                    return Err(DaemonError::Session(format!(
+                        "attempt output {} claims lane {}",
+                        attempt_root.join(format!("output-{index}.json")).display(),
+                        output.index
+                    )));
+                }
+                outputs.push(output);
+            }
+        }
+        outputs.sort_by_key(|output| output.index);
+        Ok(outputs)
+    }
+
+    fn attempt_lanes_terminal(states: &[crate::git::AttemptLaneStatus]) -> bool {
+        !states.is_empty()
+            && states.iter().all(|state| {
+                matches!(
+                    state.state,
+                    crate::git::AttemptLaneState::Completed
+                        | crate::git::AttemptLaneState::Failed
+                        | crate::git::AttemptLaneState::Cancelled
+                        | crate::git::AttemptLaneState::Interrupted
+                )
+            })
+    }
+
+    async fn require_terminal_attempt(
+        &self,
+        session_id: &str,
+        set_id: &str,
+    ) -> Result<(crate::git::AttemptSet, Vec<crate::git::AttemptLaneStatus>), DaemonError> {
+        let set = self.require_attempt_set(session_id, set_id).await?;
+        if set.state == crate::git::AttemptSetState::Discarding {
+            return Err(DaemonError::AttemptConflict(
+                "this attempt set is being discarded; retry Discard to finish cleanup".to_string(),
+            ));
+        }
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let states = self.attempt_lane_states(&sandbox, &set).await?;
+        if !Self::attempt_lanes_terminal(&states) {
+            return Err(DaemonError::AttemptConflict(
+                "attempts are still running; wait for every way to finish before reviewing"
+                    .to_string(),
+            ));
+        }
+        Ok((set, states))
     }
 
     /// The lanes' trajectories, aligned against `baseline`.
@@ -2912,15 +5382,18 @@ impl AxocoatlDaemon {
     pub async fn variants_trajectories(
         &self,
         session_id: &str,
+        set_id: &str,
         baseline: usize,
     ) -> Result<crate::trajectory::Alignment, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        let set = self.require_attempt_set(session_id, set_id).await?;
         let session = self
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         let sandbox = self.ensure_sandbox(&session).await?;
-        let indexes =
-            Self::list_variant_indexes(&sandbox, &self.session_dir(session_id).await?).await?;
+        let indexes: Vec<usize> = set.lanes.iter().map(|lane| lane.index).collect();
         if indexes.is_empty() {
             return Ok(crate::trajectory::Alignment::default());
         }
@@ -2932,14 +5405,18 @@ impl AxocoatlDaemon {
         // Baseline first, then the rest in lane order — the column order the
         // scoreboard uses, so the two views cannot disagree about which is which.
         let order = std::iter::once(baseline).chain(indexes.into_iter().filter(|i| *i != baseline));
+        let attempt_root = crate::attempts::attempt_root(sandbox.root(), session_id, set_id)
+            .to_string_lossy()
+            .to_string();
         let mut trajectories = Vec::new();
         for i in order {
             trajectories.push(
                 self.read_variant_meta::<crate::trajectory::Trajectory>(
                     &sandbox,
+                    &attempt_root,
                     &format!("trace-{i}.json"),
                 )
-                .await
+                .await?
                 // A lane with no recorded trajectory is a lane that took no
                 // steps, which is a real and reportable outcome — it must still
                 // hold a column.
@@ -2954,39 +5431,63 @@ impl AxocoatlDaemon {
 
     /// Everything known about the session's current comparison, in one read.
     ///
-    /// Lane identity comes off disk (it outlives the daemon); verdicts, spend
-    /// and ranking come from memory (they belong to this daemon's run). A
+    /// Identity, lifecycle, answers, verdicts, spend and ranking all come from
+    /// durable metadata. This read deliberately stays on the host: reconnecting
+    /// to a soft-closed session must not start Podman or rerun postCreate. A
     /// session with no variants returns an empty set rather than an error —
     /// "nothing to compare" is a normal state, not a failure.
     pub async fn run_results(
         &self,
         session_id: &str,
     ) -> Result<crate::git::RunResults, DaemonError> {
-        let lanes: Vec<crate::git::Variant> = self
-            .variants_status(session_id)
-            .await?
-            .into_iter()
-            .map(|v| crate::git::Variant {
-                index: v.index,
-                branch: v.branch,
-                worktree: v.worktree,
-                model: v.model,
-                agent: v.agent,
-            })
-            .collect();
+        // Attempt metadata is published with write+rename, so readers do not
+        // need the workspace mutation lease. In particular, a long Checks run
+        // must remain observable (including its partial verdicts) and
+        // cancellable from a reconnected browser.
+        let Some(mut set) = self.peek_current_attempt_set(session_id).await? else {
+            return Ok(crate::git::RunResults::default());
+        };
         let session = self
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
-        let sandbox = self.ensure_sandbox(&session).await?;
+        Self::validate_attempt_set_identity(&session.working_dir, &set)?;
+        let attempt_root = crate::attempts::attempt_root(&session.working_dir, session_id, &set.id);
+        let verdicts: Vec<crate::git::LaneVerdict> =
+            Self::read_host_json_file(&attempt_root.join("verdicts.json"))
+                .await?
+                .unwrap_or_default();
+        // Checks invalidate any earlier ranking by atomically publishing JSON
+        // `null`; reading as Option<Judgment> accepts both that tombstone and a
+        // later judgment object, while the outer Option represents no file yet.
+        let judgment: Option<crate::git::Judgment> = Self::read_host_json_file::<
+            Option<crate::git::Judgment>,
+        >(&attempt_root.join("judgment.json"))
+        .await?
+        .flatten();
+        let lane_states = self.attempt_lane_states_host(&attempt_root, &set).await?;
+        if !matches!(
+            set.state,
+            crate::git::AttemptSetState::Checking
+                | crate::git::AttemptSetState::Discarding
+                | crate::git::AttemptSetState::Applying
+                | crate::git::AttemptSetState::Applied
+                | crate::git::AttemptSetState::TranscriptRecorded
+        ) {
+            set.state =
+                crate::git::derive_attempt_set_state(&lane_states, &verdicts, judgment.as_ref());
+        }
+        let indexes: Vec<usize> = set.lanes.iter().map(|lane| lane.index).collect();
+        let usage = Self::read_lane_usage_host(&attempt_root, &indexes).await?;
+        let outputs = Self::read_lane_outputs_host(&attempt_root, &indexes).await?;
         Ok(crate::git::RunResults {
-            lanes,
-            verdicts: self
-                .read_variant_meta(&sandbox, "verdicts.json")
-                .await
-                .unwrap_or_default(),
-            usage: self.read_lane_usage(&sandbox).await,
-            judgment: self.read_variant_meta(&sandbox, "judgment.json").await,
+            attempt_set: Some(set.clone()),
+            lanes: set.lanes,
+            lane_states,
+            verdicts,
+            usage,
+            outputs,
+            judgment,
         })
     }
 
@@ -3007,10 +5508,19 @@ impl AxocoatlDaemon {
     pub async fn verify_variants(
         &self,
         session_id: &str,
+        set_id: &str,
         check: &str,
     ) -> Result<Vec<crate::git::LaneVerdict>, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
         /// Test suites are slow; give a lane's check real room before killing it.
         const CHECK_TIMEOUT: Duration = Duration::from_secs(900);
+
+        if self.attempt_cancelled(session_id, set_id).await {
+            return Err(DaemonError::AttemptConflict(
+                "Checks cancellation is pending; retry Discard or close the session".to_string(),
+            ));
+        }
 
         // An empty request means "use the project's own command", which lives on
         // the session. Only when neither exists is this actually unanswerable —
@@ -3031,25 +5541,125 @@ impl AxocoatlDaemon {
         } else {
             check
         };
+        let (mut set, states) = self.require_terminal_attempt(session_id, set_id).await?;
+        if matches!(
+            set.state,
+            crate::git::AttemptSetState::Applying
+                | crate::git::AttemptSetState::Applied
+                | crate::git::AttemptSetState::TranscriptRecorded
+        ) {
+            return Err(DaemonError::AttemptConflict(
+                "Keep is already in progress; retry Keep to finish it".to_string(),
+            ));
+        }
         let session = self
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         let sandbox = self.ensure_sandbox(&session).await?;
+        set.state = crate::git::AttemptSetState::Checking;
+        self.persist_attempt_set(&sandbox, &set).await?;
 
+        // Publish the new generation before any slow command. A cancelled or
+        // restarted request then exposes partial current verdicts under the
+        // explicit Checking state, never an old ranking over new results.
         let mut verdicts = Vec::new();
-        for index in self.variant_indexes(session_id).await? {
-            let wt = format!(
-                "{}/.axo-variants/{index}",
-                self.session_dir(session_id).await?
-            );
-            // `cd` into the lane's worktree so the check sees that candidate's
-            // tree, not the session's primary checkout.
-            let script = format!("cd {wt} && {check}");
-            let r = sandbox
-                .exec(&["sh", "-c", &script], CHECK_TIMEOUT)
+        let mut checked_trees: Vec<StoredCheckedTree> = Vec::new();
+        self.write_variant_meta(
+            session_id,
+            set_id,
+            "judgment.json",
+            &Option::<crate::git::Judgment>::None,
+        )
+        .await?;
+        self.write_variant_meta(session_id, set_id, "verdicts.json", &verdicts)
+            .await?;
+        self.write_variant_meta(session_id, set_id, "checked-trees.json", &checked_trees)
+            .await?;
+        for lane in &set.lanes {
+            let reference = crate::attempts::checked_candidate_ref(set_id, lane.index);
+            Self::require_git_output(
+                self.session_git(session_id, &["update-ref", "-d", &reference])
+                    .await?,
+                &format!("clearing attempt {} previous checked tree", lane.index + 1),
+            )?;
+        }
+        self.stop_attempt_runtime(session_id, &set).await?;
+
+        for lane in &set.lanes {
+            if self.attempt_cancelled(session_id, set_id).await {
+                return Err(DaemonError::AttemptConflict(
+                    "Checks were cancelled; retry Discard or run Checks again".to_string(),
+                ));
+            }
+            let index = lane.index;
+            let state = states.iter().find(|state| state.index == index);
+            if !matches!(
+                state.map(|state| state.state),
+                Some(crate::git::AttemptLaneState::Completed)
+            ) {
+                let output = state
+                    .and_then(|state| state.error.clone())
+                    .unwrap_or_else(|| "this attempt did not complete".to_string());
+                verdicts.push(crate::git::LaneVerdict {
+                    index,
+                    passed: false,
+                    exit_code: -1,
+                    output,
+                    changed_files: 0,
+                    touched_tests: Vec::new(),
+                    patch_sha256: None,
+                });
+                self.write_variant_meta(session_id, set_id, "verdicts.json", &verdicts)
+                    .await?;
+                continue;
+            }
+            let container_id = crate::attempts::container_id(session_id, set_id, lane.index);
+            // A previous cancelled Checks request may have left its command
+            // container alive. Remove it before creating this generation.
+            SessionSandbox::remove_named(&container_id)
                 .await
-                .map_err(|e| DaemonError::Session(format!("running check in lane {index}: {e}")))?;
+                .map_err(|error| DaemonError::Session(error.to_string()))?;
+            let lane_sandbox = self.attempt_sandbox(&session, set_id, lane.index).await?;
+            let check_args = ["sh", "-c", check];
+            let check_result = tokio::select! {
+                result = lane_sandbox.exec(&check_args, CHECK_TIMEOUT) => Some(result),
+                _ = async {
+                    loop {
+                        if self.attempt_cancelled(session_id, set_id).await {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                } => None,
+            };
+            // Freeze the exact filesystem state the check left behind and kill
+            // any watcher/background process before patch capture.
+            SessionSandbox::remove_named(&container_id)
+                .await
+                .map_err(|error| DaemonError::Session(error.to_string()))?;
+            let Some(check_result) = check_result else {
+                return Err(DaemonError::AttemptConflict(
+                    "Checks were cancelled; retry Discard or run Checks again".to_string(),
+                ));
+            };
+            let r = match check_result {
+                Ok(result) => result,
+                Err(error) => {
+                    verdicts.push(crate::git::LaneVerdict {
+                        index,
+                        passed: false,
+                        exit_code: -1,
+                        output: format!("running check in attempt {}: {error}", index + 1),
+                        changed_files: 0,
+                        touched_tests: Vec::new(),
+                        patch_sha256: None,
+                    });
+                    self.write_variant_meta(session_id, set_id, "verdicts.json", &verdicts)
+                        .await?;
+                    continue;
+                }
+            };
             let combined = if r.stderr.trim().is_empty() {
                 r.stdout
             } else {
@@ -3058,21 +5668,42 @@ impl AxocoatlDaemon {
             // A green check is only evidence if the tests judging this lane were
             // not written by it. Report any it changed, so "passed" can be read
             // with that in view rather than taken at face value.
-            let _ = self
-                .session_git_at(session_id, &wt, &["add", "-A", "-N"])
+            let capture_result = self
+                .capture_attempt_candidate(session_id, &set, index, true)
                 .await;
-            let changed: Vec<String> = self
-                .session_git_at(session_id, &wt, &["diff", "--name-only", "HEAD"])
-                .await
-                .map(|r| {
-                    r.stdout
-                        .lines()
-                        .map(str::trim)
-                        .filter(|p| !p.is_empty())
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
+            if self.attempt_cancelled(session_id, set_id).await {
+                return Err(DaemonError::AttemptConflict(
+                    "Checks were cancelled; retry Discard or run Checks again".to_string(),
+                ));
+            }
+            let capture = match capture_result {
+                Ok(capture) => capture,
+                Err(error) => {
+                    let _ = self
+                        .stream_bus
+                        .send(crate::stream::StreamFrame::LaneVerified {
+                            attempt_set_id: set_id.to_string(),
+                            session: session_id.to_string(),
+                            index,
+                            passed: false,
+                            changed_files: 0,
+                            touched_tests: Vec::new(),
+                        });
+                    verdicts.push(crate::git::LaneVerdict {
+                        index,
+                        passed: false,
+                        exit_code: -1,
+                        output: error.to_string(),
+                        changed_files: 0,
+                        touched_tests: Vec::new(),
+                        patch_sha256: None,
+                    });
+                    self.write_variant_meta(session_id, set_id, "verdicts.json", &verdicts)
+                        .await?;
+                    continue;
+                }
+            };
+            let changed = &capture.paths;
             let touched_tests: Vec<String> = changed
                 .iter()
                 .filter(|p| crate::git::looks_like_test(p))
@@ -3083,29 +5714,46 @@ impl AxocoatlDaemon {
             let _ = self
                 .stream_bus
                 .send(crate::stream::StreamFrame::LaneVerified {
+                    attempt_set_id: set_id.to_string(),
                     session: session_id.to_string(),
                     index,
-                    passed: r.exit_code == 0,
+                    passed: r.exit_code == 0 && !capture.checked.changes_gitlink,
                     changed_files: changed.len(),
                     touched_tests: touched_tests.clone(),
                 });
+            let passed = r.exit_code == 0 && !capture.checked.changes_gitlink;
+            let output = if capture.checked.changes_gitlink {
+                format!(
+                    "{}\nAxocoatl cannot safely Keep submodule/gitlink changes yet.",
+                    combined
+                )
+            } else {
+                combined
+            };
+            let patch_sha256 = capture.checked.patch_sha256.clone();
+            checked_trees.push(capture.checked);
+            checked_trees.sort_by_key(|checked| checked.index);
+            self.write_variant_meta(session_id, set_id, "checked-trees.json", &checked_trees)
+                .await?;
             verdicts.push(crate::git::LaneVerdict {
                 index,
-                passed: r.exit_code == 0,
+                passed,
                 exit_code: r.exit_code,
-                output: crate::git::verdict_tail(&combined),
+                output: crate::git::verdict_tail(&output),
                 changed_files: changed.len(),
                 touched_tests,
+                patch_sha256: Some(patch_sha256),
             });
+            self.write_variant_meta(session_id, set_id, "verdicts.json", &verdicts)
+                .await?;
         }
-        if let Ok(json) = serde_json::to_string(&verdicts) {
-            self.write_variant_meta(session_id, "verdicts.json", &json)
-                .await;
+        if self.attempt_cancelled(session_id, set_id).await {
+            return Err(DaemonError::AttemptConflict(
+                "Checks were cancelled; retry Discard or run Checks again".to_string(),
+            ));
         }
-        // A fresh check invalidates the old ranking: it was drawn over a
-        // different set of survivors.
-        self.write_variant_meta(session_id, "judgment.json", "null")
-            .await;
+        set.state = crate::git::AttemptSetState::Verified;
+        self.persist_attempt_set(&sandbox, &set).await?;
         Ok(verdicts)
     }
 
@@ -3259,7 +5907,11 @@ impl AxocoatlDaemon {
             {
                 if r.ok() {
                     let body = if r.stdout.len() > MAX_FILE_BYTES {
-                        &r.stdout[..MAX_FILE_BYTES]
+                        let mut end = MAX_FILE_BYTES;
+                        while !r.stdout.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        &r.stdout[..end]
                     } else {
                         &r.stdout
                     };
@@ -3311,12 +5963,18 @@ impl AxocoatlDaemon {
     ///
     /// The comparison is the point: fanning out to several cheap models is only
     /// worth doing if the arithmetic favours it, so this reports real token
-    /// counts priced from config rather than an estimate. A model with no
-    /// configured price costs 0 — the right answer for anything local.
+    /// counts priced from config rather than an estimate. A missing remote price
+    /// remains unknown; configured Ollama lanes are explicitly known-free.
+    fn complete_lane_token_volume(lanes: &[crate::git::LaneUsage], expected: usize) -> bool {
+        expected > 0 && lanes.len() == expected && lanes.iter().all(|lane| lane.token_usage_known)
+    }
+
     pub async fn variants_cost(
         &self,
         session_id: &str,
+        set_id: &str,
         baseline_model: &str,
+        baseline_provider: Option<&str>,
     ) -> Result<crate::git::RunCost, DaemonError> {
         let price = |model: &str| -> crate::git::ModelPrice {
             self.config
@@ -3328,28 +5986,69 @@ impl AxocoatlDaemon {
                 })
                 .unwrap_or_default()
         };
-        let baseline = price(baseline_model);
+        let baseline_is_local = match baseline_provider {
+            Some(provider) => provider == "ollama",
+            None => self
+                .config
+                .agents
+                .iter()
+                .any(|agent| agent.provider == "ollama" && agent.model == baseline_model),
+        };
+        let baseline = if baseline_is_local {
+            crate::git::ModelPrice::default()
+        } else {
+            price(baseline_model)
+        };
+        let baseline_price_known = baseline_is_local
+            || (!matches!(baseline_provider, Some("ollama"))
+                && self.config.pricing.contains_key(baseline_model));
 
+        let set = self
+            .peek_current_attempt_set(session_id)
+            .await?
+            .ok_or_else(|| {
+                DaemonError::AttemptConflict(
+                    "this session has no current attempt set to price".to_string(),
+                )
+            })?;
+        if set.id != set_id {
+            return Err(DaemonError::AttemptConflict(format!(
+                "attempt set '{set_id}' is stale; current set is '{}'",
+                set.id
+            )));
+        }
         let session = self
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
-        let sandbox = self.ensure_sandbox(&session).await?;
-        let mut lanes = self.read_lane_usage(&sandbox).await;
+        Self::validate_attempt_set_identity(&session.working_dir, &set)?;
+        let attempt_root = crate::attempts::attempt_root(&session.working_dir, session_id, set_id);
+        let indexes: Vec<usize> = set.lanes.iter().map(|lane| lane.index).collect();
+        let lanes = Self::read_lane_usage_host(&attempt_root, &indexes).await?;
 
         let mut total = 0.0;
         let mut baseline_total = 0.0;
-        for lane in &mut lanes {
-            let model = lane.model.clone().unwrap_or_default();
-            lane.cost_usd = price(&model).cost(lane.input_tokens, lane.output_tokens);
+        for lane in &lanes {
             total += lane.cost_usd;
             baseline_total += baseline.cost(lane.input_tokens, lane.output_tokens);
         }
+        let complete = lanes.len() == set.lanes.len();
+        let token_volume_known = Self::complete_lane_token_volume(&lanes, set.lanes.len());
+        let all_local = complete
+            && !set.lanes.is_empty()
+            && set
+                .lanes
+                .iter()
+                .all(|lane| lane.provider.as_deref() == Some("ollama"));
         Ok(crate::git::RunCost {
-            all_local: !lanes.is_empty() && total == 0.0,
+            all_local,
             total_usd: total,
+            actual_cost_known: complete
+                && !lanes.is_empty()
+                && lanes.iter().all(|lane| lane.cost_known),
             baseline_model: baseline_model.to_string(),
             baseline_usd: baseline_total,
+            baseline_cost_known: baseline_price_known && token_volume_known,
             saved_usd: (baseline_total - total).max(0.0),
             lanes,
         })
@@ -3389,25 +6088,141 @@ impl AxocoatlDaemon {
 
     /// The unified patch for one lane — what that candidate actually changed.
     ///
-    /// `git add -A -N` first so files the agent *created* appear in the diff;
-    /// without it a brand-new file is invisible to `git diff` and the judge would
-    /// rank a candidate on a fraction of its work.
+    /// Tracked changes come from a base-relative binary diff. Untracked files
+    /// are appended as independent no-index patches, so review never mutates
+    /// the candidate's Git index merely to make new files visible.
     pub async fn variant_patch(
         &self,
         session_id: &str,
+        set_id: &str,
         index: usize,
     ) -> Result<String, DaemonError> {
-        let dir = format!(
-            "{}/.axo-variants/{index}",
-            self.session_dir(session_id).await?
-        );
-        let _ = self
-            .session_git_at(session_id, &dir, &["add", "-A", "-N"])
-            .await;
-        let r = self
-            .session_git_at(session_id, &dir, &["diff", "HEAD"])
+        self.variant_patch_details(session_id, set_id, index)
+            .await
+            .map(|(patch, _)| patch)
+    }
+
+    async fn variant_patch_details(
+        &self,
+        session_id: &str,
+        set_id: &str,
+        index: usize,
+    ) -> Result<(String, Vec<String>), DaemonError> {
+        let set = self.require_attempt_set(session_id, set_id).await?;
+        Self::require_review_storage(&set)?;
+        let lane = set
+            .lanes
+            .iter()
+            .find(|lane| lane.index == index)
+            .ok_or_else(|| {
+                DaemonError::Session(format!(
+                    "lane {index} is not part of attempt set '{set_id}'"
+                ))
+            })?;
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let primary = self.ensure_sandbox(&session).await?;
+        let worktree =
+            crate::attempts::worktree_path(primary.root(), session_id, set_id, lane.index);
+        Self::sanitize_attempt_git_config_at(&worktree, &set.base_sha).await?;
+        let worktree = worktree.to_string_lossy().to_string();
+        let tracked_paths = Self::require_raw_git_output(
+            self.session_git_at(
+                session_id,
+                &worktree,
+                &[
+                    "diff",
+                    "--name-only",
+                    "-z",
+                    "--no-renames",
+                    &set.base_sha,
+                    "--",
+                ],
+            )
+            .await?,
+            &format!("reading attempt {} changed paths", index + 1),
+        )?;
+        let untracked_paths = Self::require_raw_git_output(
+            self.session_git_at(
+                session_id,
+                &worktree,
+                &["ls-files", "--others", "--exclude-standard", "-z"],
+            )
+            .await?,
+            &format!("reading attempt {} untracked paths", index + 1),
+        )?;
+        let mut paths: Vec<String> = tracked_paths
+            .split('\0')
+            .chain(untracked_paths.split('\0'))
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect();
+        paths.sort();
+        paths.dedup();
+        if paths
+            .iter()
+            .any(|path| path == ".axo-variants" || path.starts_with(".axo-variants/"))
+        {
+            return Err(DaemonError::AttemptConflict(format!(
+                "attempt {} changed Axocoatl's reserved .axo-variants metadata and cannot be reviewed or kept",
+                index + 1
+            )));
+        }
+        let tracked = self
+            .session_git_at(
+                session_id,
+                &worktree,
+                &[
+                    "diff",
+                    "--binary",
+                    "--full-index",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-renames",
+                    &set.base_sha,
+                ],
+            )
             .await?;
-        Ok(r.stdout)
+        if !tracked.ok() {
+            return Err(DaemonError::Session(format!(
+                "reading lane {index}'s patch: {}",
+                tracked.stderr.trim()
+            )));
+        }
+        // A patch is a byte-sensitive protocol document. Never trim it.
+        let mut patch = tracked.stdout;
+        for path in untracked_paths.split('\0').filter(|path| !path.is_empty()) {
+            let addition = self
+                .session_git_at(
+                    session_id,
+                    &worktree,
+                    &[
+                        "diff",
+                        "--no-index",
+                        "--binary",
+                        "--full-index",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--",
+                        "/dev/null",
+                        path,
+                    ],
+                )
+                .await?;
+            // `git diff --no-index` returns 1 when it successfully found a
+            // difference; 0 is an empty file/no delta, >1 is an actual error.
+            if !matches!(addition.exit_code, 0 | 1) {
+                return Err(DaemonError::Session(format!(
+                    "reading untracked file '{path}' in attempt {}: {}",
+                    index + 1,
+                    addition.stderr.trim()
+                )));
+            }
+            patch.push_str(&addition.stdout);
+        }
+        Ok((patch, paths))
     }
 
     /// Rank the candidates of a variants run and say **why**.
@@ -3423,38 +6238,138 @@ impl AxocoatlDaemon {
     pub async fn judge_variants(
         &self,
         session_id: &str,
-        task: &str,
+        set_id: &str,
         provider_id: &str,
         model: Option<String>,
-        only: Option<Vec<usize>>,
     ) -> Result<crate::git::Judgment, DaemonError> {
-        let lanes = match only {
-            Some(v) if !v.is_empty() => v,
-            _ => self.variant_indexes(session_id).await?,
-        };
-        if lanes.is_empty() {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        let (set, _) = self.require_terminal_attempt(session_id, set_id).await?;
+        if !matches!(
+            set.state,
+            crate::git::AttemptSetState::Verified | crate::git::AttemptSetState::Judged
+        ) {
+            return Err(DaemonError::AttemptConflict(
+                "run Checks to completion before asking Judge".to_string(),
+            ));
+        }
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let attempt_root = crate::attempts::attempt_root(sandbox.root(), session_id, set_id)
+            .to_string_lossy()
+            .to_string();
+        let verdicts: Vec<crate::git::LaneVerdict> = self
+            .read_variant_meta(&sandbox, &attempt_root, "verdicts.json")
+            .await?
+            .ok_or_else(|| {
+                DaemonError::AttemptConflict(
+                    "run Checks before asking a judge to compare attempts".to_string(),
+                )
+            })?;
+        let checked_trees: Vec<StoredCheckedTree> = self
+            .read_variant_meta(&sandbox, &attempt_root, "checked-trees.json")
+            .await?
+            .ok_or_else(|| {
+                DaemonError::AttemptConflict(
+                    "Checks were recorded without protected candidate trees; run Checks again"
+                        .to_string(),
+                )
+            })?;
+        let lanes: Vec<usize> = verdicts
+            .iter()
+            .filter(|verdict| verdict.passed && verdict.changed_files > 0)
+            .map(|verdict| verdict.index)
+            .collect();
+        if lanes.len() < 2 {
             return Err(DaemonError::Session(
-                "no variant lanes to judge".to_string(),
+                "Judge needs at least two passing attempts that changed files".to_string(),
             ));
         }
 
         let mut sections = String::new();
         for index in &lanes {
-            let patch = self.variant_patch(session_id, *index).await?;
+            let expected = verdicts
+                .iter()
+                .find(|verdict| verdict.index == *index)
+                .and_then(|verdict| verdict.patch_sha256.as_deref())
+                .ok_or_else(|| {
+                    DaemonError::AttemptConflict(
+                        "Checks were recorded without patch identities; run Checks again"
+                            .to_string(),
+                    )
+                })?;
+            let checked = checked_trees
+                .iter()
+                .find(|checked| checked.index == *index)
+                .ok_or_else(|| {
+                    DaemonError::AttemptConflict(format!(
+                        "attempt {} is missing its checked candidate tree; run Checks again",
+                        index + 1
+                    ))
+                })?;
+            if checked.patch_sha256 != expected || checked.changes_gitlink {
+                return Err(DaemonError::AttemptConflict(format!(
+                    "attempt {} checked identity is inconsistent; run Checks again before Judge",
+                    index + 1
+                )));
+            }
+            let reference = crate::attempts::checked_candidate_ref(set_id, *index);
+            let imported = Self::require_git_output(
+                self.session_git(session_id, &["rev-parse", "--verify", &reference])
+                    .await?,
+                &format!("validating attempt {} checked commit", index + 1),
+            )?;
+            let tree_expression = format!("{reference}^{{tree}}");
+            let imported_tree = Self::require_git_output(
+                self.session_git(session_id, &["rev-parse", &tree_expression])
+                    .await?,
+                &format!("validating attempt {} checked tree", index + 1),
+            )?;
+            if imported != checked.commit_oid || imported_tree != checked.tree_oid {
+                return Err(DaemonError::AttemptConflict(format!(
+                    "attempt {} protected checked tree changed; run Checks again",
+                    index + 1
+                )));
+            }
+            let patch = Self::require_raw_git_output(
+                self.session_git(
+                    session_id,
+                    &[
+                        "-c",
+                        "diff.algorithm=myers",
+                        "diff",
+                        "--binary",
+                        "--full-index",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--no-renames",
+                        &set.base_sha,
+                        &reference,
+                    ],
+                )
+                .await?,
+                &format!("rendering attempt {} checked delta", index + 1),
+            )?;
             let patch = if patch.trim().is_empty() {
                 "(this candidate changed nothing)".to_string()
-            } else if patch.len() > crate::git::JUDGE_PATCH_MAX {
-                format!(
-                    "{}\n… (patch truncated at {} bytes)",
-                    &patch[..crate::git::JUDGE_PATCH_MAX],
-                    crate::git::JUDGE_PATCH_MAX
-                )
             } else {
-                patch
+                let (prefix, truncated) = crate::git::truncate_judge_patch(&patch);
+                if truncated {
+                    format!(
+                        "{prefix}\n… (patch truncated at {} bytes)",
+                        crate::git::JUDGE_PATCH_MAX
+                    )
+                } else {
+                    patch
+                }
             };
             sections.push_str(&format!("\n## Candidate {index}\n```diff\n{patch}\n```\n"));
         }
 
+        let ranking_contract = judge_ranking_contract(&lanes);
         let prompt = format!(
             "You are reviewing {n} independent attempts at the same software task. \
              Every attempt below already passes the project's automated checks, so \
@@ -3465,12 +6380,14 @@ impl AxocoatlDaemon {
              # Candidates\n{sections}\n\n\
              Rank every candidate (rank 1 = best) and name the real trade-off for \
              each — what you gain and what you give up by taking it. Do not \
-             summarise the diff; say why one would be chosen over another.\n\n\
+             summarise the diff; say why one would be chosen over another. \
+             {ranking_contract}\n\n\
              Reply with JSON only, no prose outside it:\n\
              {{\"winner\": <candidate index>, \"reasoning\": \"<what separates them>\", \
              \"candidates\": [{{\"index\": <n>, \"rank\": <n>, \"approach\": \"<one sentence>\", \
              \"tradeoffs\": \"<gain vs give up>\"}}]}}",
             n = lanes.len(),
+            task = set.task,
         );
 
         // Resolve through the shared path so a local Ollama judge works — the
@@ -3482,9 +6399,17 @@ impl AxocoatlDaemon {
         // Ollama already carries the model from `resolve_provider`; for registry
         // providers this selects it per request.
         request.model_override = model;
-        let response = provider
-            .chat(request)
+        // Judge owns the workspace decision lease so Keep and Discard cannot
+        // race its reviewed patch set. Bound that external call: an unavailable
+        // provider must not make the set undiscardable forever.
+        let response = tokio::time::timeout(Duration::from_secs(300), provider.chat(request))
             .await
+            .map_err(|_| {
+                DaemonError::Provider(
+                    "judging attempts timed out after 5 minutes; retry Judge or Discard"
+                        .to_string(),
+                )
+            })?
             .map_err(|e| DaemonError::Provider(format!("judging variants: {e}")))?;
 
         let body = crate::git::unfence_json(&response.content);
@@ -3494,174 +6419,1687 @@ impl AxocoatlDaemon {
                 crate::git::verdict_tail(&response.content)
             ))
         })?;
+        crate::git::validate_judgment(&judgment, &lanes).map_err(|error| {
+            DaemonError::Session(format!("the judge returned an invalid ranking: {error}"))
+        })?;
         // Order best-first regardless of how the model emitted them.
         judgment.candidates.sort_by_key(|c| c.rank);
-        if let Ok(json) = serde_json::to_string(&judgment) {
-            self.write_variant_meta(session_id, "judgment.json", &json)
-                .await;
-        }
+        self.write_variant_meta(session_id, set_id, "judgment.json", &judgment)
+            .await?;
         Ok(judgment)
-    }
-
-    /// The lane indexes present under `.axo-variants`, ascending.
-    ///
-    /// An unreachable sandbox is an **error**, not an empty list. The two are
-    /// indistinguishable downstream — both render as "no lanes" — but they mean
-    /// opposite things: one is a session that never fanned out, the other is a
-    /// live comparison the caller cannot currently see. Reporting the second as
-    /// the first is the silent-wrong-answer failure this surface exists to
-    /// prevent, so it fails loudly instead of showing an empty scoreboard over
-    /// a run that is still going.
-    async fn list_variant_indexes(
-        sandbox: &Arc<dyn Sandbox>,
-        dir: &str,
-    ) -> Result<Vec<usize>, DaemonError> {
-        // `2>/dev/null` means a missing directory is a clean empty listing, so
-        // anything left over is a real failure to run the command at all.
-        let r = sandbox
-            .exec(
-                &[
-                    "sh",
-                    "-c",
-                    &format!("ls -1 '{dir}/.axo-variants' 2>/dev/null"),
-                ],
-                Duration::from_secs(10),
-            )
-            .await
-            .map_err(|e| {
-                DaemonError::Session(format!(
-                    "cannot reach this session's sandbox to read its variants ({e})"
-                ))
-            })?;
-        let mut out: Vec<usize> = r
-            .stdout
-            .lines()
-            .filter_map(|l| l.trim().parse::<usize>().ok())
-            .collect();
-        out.sort_unstable();
-        Ok(out)
-    }
-
-    async fn variant_indexes(&self, session_id: &str) -> Result<Vec<usize>, DaemonError> {
-        let dir = self.session_dir(session_id).await?;
-        let session = self
-            .get_session(session_id)
-            .await
-            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
-        let sandbox = self.ensure_sandbox(&session).await?;
-        Self::list_variant_indexes(&sandbox, &dir).await
     }
 
     pub async fn variants_status(
         &self,
         session_id: &str,
+        set_id: &str,
     ) -> Result<Vec<crate::git::VariantStatus>, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        let set = self.require_attempt_set(session_id, set_id).await?;
+        Self::require_review_storage(&set)?;
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let mut out = Vec::new();
+        for lane in set.lanes {
+            let lane_sandbox = self.attempt_sandbox(&session, set_id, lane.index).await?;
+            let worktree = lane_sandbox.root().to_string_lossy().to_string();
+            let name_status = Self::require_git_output(
+                Self::attempt_git(
+                    &lane_sandbox,
+                    &[
+                        "diff",
+                        "--name-status",
+                        "--find-renames",
+                        &set.base_sha,
+                        "--",
+                    ],
+                )
+                .await?,
+                &format!("reading attempt {} changed paths", lane.index + 1),
+            )?;
+            let numstat = Self::require_git_output(
+                Self::attempt_git(
+                    &lane_sandbox,
+                    &["diff", "--numstat", "--find-renames", &set.base_sha, "--"],
+                )
+                .await?,
+                &format!("sizing attempt {} changes", lane.index + 1),
+            )?;
+            let untracked = Self::require_raw_git_output(
+                Self::attempt_git(
+                    &lane_sandbox,
+                    &["ls-files", "--others", "--exclude-standard", "-z"],
+                )
+                .await?,
+                &format!("reading attempt {} untracked paths", lane.index + 1),
+            )?;
+            let branch = crate::attempts::branch_name(set_id, lane.index);
+            let mut status = crate::git::parse_base_diff_status(&branch, &name_status, &numstat);
+            for path in untracked.split('\0').filter(|path| !path.is_empty()) {
+                if status.files.iter().all(|file| file.path != path) {
+                    status.files.push(crate::git::GitFile {
+                        path: path.to_string(),
+                        state: "untracked".to_string(),
+                        added: None,
+                        removed: None,
+                        staged: false,
+                        unstaged: true,
+                        last_turn: false,
+                    });
+                }
+            }
+            status
+                .files
+                .sort_by(|left, right| left.path.cmp(&right.path));
+            status.clean = status.files.is_empty();
+            out.push(crate::git::VariantStatus {
+                index: lane.index,
+                branch,
+                worktree,
+                status,
+                model: lane.model,
+                agent: lane.agent,
+            });
+        }
+        out.sort_by_key(|lane| lane.index);
+        Ok(out)
+    }
+
+    async fn remove_attempt_containers_exact(
+        session_id: &str,
+        set: &crate::git::AttemptSet,
+    ) -> Vec<String> {
+        let containers = set
+            .lanes
+            .iter()
+            .map(|lane| crate::attempts::container_id(session_id, &set.id, lane.index))
+            .collect::<Vec<_>>();
+        match SessionSandbox::remove_named_many(&containers, ATTEMPT_CONTAINER_STOP_TIMEOUT).await {
+            Ok(()) => Vec::new(),
+            Err(error) => vec![format!("stop attempt sandboxes: {error}")],
+        }
+    }
+
+    /// Signal and await every process that can still target an attempt clone,
+    /// then exact-remove its deterministic container. This does not touch the
+    /// clone, protected refs, or current pointer, so it is safe to call before
+    /// acquiring the workspace operation in order to unblock a review command
+    /// that owns that operation.
+    async fn interrupt_attempt_runtime(
+        &self,
+        session_id: &str,
+        set: &crate::git::AttemptSet,
+    ) -> Result<(), DaemonError> {
+        let actors = {
+            let mut active = self.active_attempts.lock().await;
+            match active.get_mut(session_id) {
+                Some(run) if run.set_id != set.id => {
+                    return Err(DaemonError::AttemptConflict(format!(
+                        "attempt set '{}' is active, not '{}'",
+                        run.set_id, set.id
+                    )))
+                }
+                Some(runtime) => {
+                    // Abort wrapper tasks and signal every actor while the runtime is
+                    // still process-owned. Cancellation at a later await leaves this
+                    // entry available to a retry instead of orphaning live actors.
+                    for task in &runtime.tasks {
+                        task.abort();
+                    }
+                    for (_, actor) in &runtime.actors {
+                        actor.kill();
+                    }
+                    runtime.actors.clone()
+                }
+                // A restarted daemon has no actor handles, but exact names
+                // still let cleanup stop preserved lane/check containers.
+                None => Vec::new(),
+            }
+        };
+
+        // Force every actor down concurrently before a deterministic container
+        // name can be reused for Checks. A signal without the bounded wait has
+        // a small but real window where the old actor can target the freshly
+        // created review container through its surviving sandbox handle.
+        let mut failures = Vec::new();
+        let mut actor_shutdowns = tokio::task::JoinSet::new();
+        for (actor_id, actor) in &actors {
+            let actor_id = actor_id.to_string();
+            let actor = actor.clone();
+            actor_shutdowns.spawn(async move {
+                if matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+                    return (actor_id, Ok(()));
+                }
+                let result = actor.wait(Some(ATTEMPT_ACTOR_STOP_TIMEOUT)).await;
+                if result.is_err() && matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+                    (actor_id, Ok(()))
+                } else {
+                    (actor_id, result)
+                }
+            });
+        }
+        while let Some(result) = actor_shutdowns.join_next().await {
+            match result {
+                Ok((_, Ok(()))) => {}
+                Ok((actor_id, Err(error))) => {
+                    failures.push(format!("attempt actor '{actor_id}' did not stop: {error}"));
+                }
+                Err(error) => failures.push(format!("attempt actor shutdown failed: {error}")),
+            }
+        }
+        failures.extend(Self::remove_attempt_containers_exact(session_id, set).await);
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(DaemonError::Session(failures.join("; ")))
+        }
+    }
+
+    async fn stop_attempt_runtime(
+        &self,
+        session_id: &str,
+        set: &crate::git::AttemptSet,
+    ) -> Result<(), DaemonError> {
+        self.interrupt_attempt_runtime(session_id, set).await?;
+
+        // Actor death is the commit point for releasing runtime ownership: no
+        // surviving executor can target a subsequently recreated container.
+        let runtime = {
+            let mut active = self.active_attempts.lock().await;
+            match active.get(session_id) {
+                Some(run) if run.set_id != set.id => {
+                    return Err(DaemonError::AttemptConflict(format!(
+                        "attempt set '{}' became active while stopping '{}'",
+                        run.set_id, set.id
+                    )))
+                }
+                Some(_) => active.remove(session_id),
+                None => None,
+            }
+        };
+        let Some(runtime) = runtime else {
+            return Ok(());
+        };
+
+        let mut failures = Vec::new();
+        let mut task_shutdowns = tokio::task::JoinSet::new();
+        for task in runtime.tasks {
+            task_shutdowns
+                .spawn(async move { tokio::time::timeout(ATTEMPT_ACTOR_STOP_TIMEOUT, task).await });
+        }
+        while let Some(result) = task_shutdowns.join_next().await {
+            match result {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(error))) if error.is_cancelled() => {}
+                Ok(Ok(Err(error))) => {
+                    failures.push(format!("lane task did not join cleanly: {error}"));
+                }
+                Ok(Err(_)) => failures.push(format!(
+                    "lane task did not stop within {} seconds",
+                    ATTEMPT_ACTOR_STOP_TIMEOUT.as_secs()
+                )),
+                Err(error) => failures.push(format!("lane task shutdown failed: {error}")),
+            }
+        }
+        for (actor_id, _) in &runtime.actors {
+            self.agent_registry.remove(actor_id).await;
+            self.remove_attempt_memory(actor_id).await;
+        }
+        if let Ok(mut runs) = self.active_runs.lock() {
+            for lane in &set.lanes {
+                runs.remove(&crate::attempts::run_id(session_id, lane.index));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(DaemonError::Session(failures.join("; ")))
+        }
+    }
+
+    async fn remove_attempt_memory(&self, actor_id: &AgentId) {
+        let id = actor_id.to_string();
+        let checkpoint_dir = std::path::Path::new(&self.data_dir)
+            .join("checkpoints")
+            .join(&id);
+        let daily_dir = std::path::Path::new(&self.data_dir)
+            .join("memory")
+            .join("daily_log")
+            .join(&id);
+        let core_file = axocoatl_memory::core_store_path(&self.data_dir, &id);
+        let _ = tokio::fs::remove_dir_all(checkpoint_dir).await;
+        let _ = tokio::fs::remove_dir_all(daily_dir).await;
+        let _ = tokio::fs::remove_file(core_file).await;
+    }
+
+    async fn read_lane_output(
+        &self,
+        sandbox: &Arc<dyn Sandbox>,
+        set: &crate::git::AttemptSet,
+        index: usize,
+    ) -> Result<Option<String>, DaemonError> {
+        #[derive(serde::Deserialize)]
+        struct StoredOutput {
+            content: String,
+        }
+        let root = crate::attempts::attempt_root(sandbox.root(), &set.session_id, &set.id)
+            .to_string_lossy()
+            .to_string();
+        self.read_variant_meta::<StoredOutput>(sandbox, &root, &format!("output-{index}.json"))
+            .await
+            .map(|output| output.map(|output| output.content))
+    }
+
+    async fn append_kept_attempt_to_session(
+        &self,
+        session: &Session,
+        set: &crate::git::AttemptSet,
+        index: usize,
+        assistant: String,
+        sandbox: &Arc<dyn Sandbox>,
+    ) -> Result<(), DaemonError> {
+        let agent_id = match &session.mode {
+            SessionMode::SingleAgent { agent_id } => agent_id,
+            // Explore currently rejects these modes at start. Refuse again at
+            // the commit point so a forged/legacy set can never be marked
+            // TranscriptRecorded while the permanent chat silently loses it.
+            SessionMode::Lattice { .. } | SessionMode::Custom { .. } => {
+                return Err(DaemonError::AttemptConflict(
+                    "Keep cannot record a multi-agent session transcript yet".to_string(),
+                ));
+            }
+        };
+        let scoped = AgentId::new(format!("{}:{}", session.id, agent_id));
+        if let Some(actor) = self.agent_registry.get(&scoped).await {
+            if !matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+                let graceful = actor
+                    .stop_and_wait(None, Some(Duration::from_secs(10)))
+                    .await;
+                if graceful.is_err() && !matches!(actor.get_status(), ractor::ActorStatus::Stopped)
+                {
+                    actor
+                        .kill_and_wait(Some(Duration::from_secs(5)))
+                        .await
+                        .map_err(|error| {
+                            DaemonError::AttemptConflict(format!(
+                                "the session chat is still busy, so attempt {} could not be recorded: {error}",
+                                index + 1
+                            ))
+                        })?;
+                }
+            }
+            self.agent_registry.remove(&scoped).await;
+        }
+        let mut checkpoint = self
+            .checkpoint_store
+            .load_latest(&scoped)
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))?
+            .unwrap_or(axocoatl_memory::AgentCheckpoint {
+                version: 0,
+                agent_id: scoped.to_string(),
+                checkpoint_time: unix_now(),
+                session_messages: Vec::new(),
+                cumulative_token_usage: axocoatl_core::TokenUsageStats::default(),
+                behavior_state: None,
+            });
+        let task_sha256 = Self::patch_sha256(&set.task);
+        let assistant_sha256 = Self::patch_sha256(&assistant);
+        let attempt_root = crate::attempts::attempt_root(sandbox.root(), &set.session_id, &set.id)
+            .to_string_lossy()
+            .to_string();
+        let commit: StoredTranscriptCommit = match self
+            .read_variant_meta(sandbox, &attempt_root, "transcript-commit.json")
+            .await?
+        {
+            Some(commit) => commit,
+            None => {
+                let commit = StoredTranscriptCommit {
+                    base_checkpoint_version: checkpoint.version,
+                    base_message_count: checkpoint.session_messages.len(),
+                    task_sha256: task_sha256.clone(),
+                    assistant_sha256: assistant_sha256.clone(),
+                };
+                Self::write_json_file(
+                    sandbox,
+                    &format!("{attempt_root}/transcript-commit.json"),
+                    &commit,
+                )
+                .await?;
+                commit
+            }
+        };
+        if commit.task_sha256 != task_sha256 || commit.assistant_sha256 != assistant_sha256 {
+            return Err(DaemonError::Session(
+                "Keep transcript metadata does not match the selected attempt".to_string(),
+            ));
+        }
+        let tail_matches = checkpoint.session_messages.len() == commit.base_message_count + 2
+            && checkpoint.session_messages[commit.base_message_count].role
+                == axocoatl_core::MessageRole::User
+            && checkpoint.session_messages[commit.base_message_count].content == set.task
+            && checkpoint.session_messages[commit.base_message_count + 1].role
+                == axocoatl_core::MessageRole::Assistant
+            && checkpoint.session_messages[commit.base_message_count + 1].content == assistant;
+        if checkpoint.version == commit.base_checkpoint_version + 1 && tail_matches {
+            return Ok(());
+        }
+        if checkpoint.version != commit.base_checkpoint_version
+            || checkpoint.session_messages.len() != commit.base_message_count
+        {
+            return Err(DaemonError::AttemptConflict(
+                "the session transcript changed during Keep; retry after restoring the recorded session checkpoint"
+                    .to_string(),
+            ));
+        }
+        checkpoint.version += 1;
+        checkpoint.checkpoint_time = unix_now();
+        checkpoint
+            .session_messages
+            .push(axocoatl_memory::StoredMessage {
+                role: axocoatl_core::MessageRole::User,
+                content: set.task.clone(),
+                timestamp: unix_now(),
+                token_count: self.counter.count_text(&set.task),
+                name: None,
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            });
+        checkpoint
+            .session_messages
+            .push(axocoatl_memory::StoredMessage {
+                role: axocoatl_core::MessageRole::Assistant,
+                content: assistant.clone(),
+                timestamp: unix_now(),
+                token_count: self.counter.count_text(&assistant),
+                name: None,
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            });
+        self.checkpoint_store
+            .save(&checkpoint)
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))
+    }
+
+    async fn snapshot_primary_keep_tree(
+        &self,
+        session_id: &str,
+        set: &crate::git::AttemptSet,
+        label: &str,
+    ) -> Result<String, DaemonError> {
         let dir = self.session_dir(session_id).await?;
+        let git_dir = Self::require_git_output(
+            self.session_git(session_id, &["rev-parse", "--absolute-git-dir"])
+                .await?,
+            "locating Git storage for Keep",
+        )?;
+        let index_path = format!(
+            "{git_dir}/axo-keep-{}-{label}.index",
+            crate::attempts::set_key(&set.id)
+        );
+        for path in [&index_path, &format!("{index_path}.lock")] {
+            match tokio::fs::remove_file(path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(DaemonError::Session(format!(
+                        "removing stale Keep index '{path}': {error}"
+                    )))
+                }
+            }
+        }
+        let outcome = async {
+            Self::require_git_output(
+                self.session_git_with_index(
+                    session_id,
+                    &dir,
+                    &index_path,
+                    &["read-tree", &set.base_sha],
+                )
+                .await?,
+                "seeding the Keep working-tree snapshot",
+            )?;
+            Self::require_git_output(
+                self.session_git_with_index(session_id, &dir, &index_path, &["add", "-A"])
+                    .await?,
+                "capturing the primary working tree for Keep",
+            )?;
+            Self::require_git_output(
+                self.session_git_with_index(session_id, &dir, &index_path, &["write-tree"])
+                    .await?,
+                "writing the primary Keep tree",
+            )
+        }
+        .await;
+        let _ = tokio::fs::remove_file(&index_path).await;
+        let _ = tokio::fs::remove_file(format!("{index_path}.lock")).await;
+        outcome
+    }
+
+    async fn tree_entries_for_paths(
+        &self,
+        session_id: &str,
+        tree: &str,
+        paths: &[String],
+    ) -> Result<HashMap<String, String>, DaemonError> {
+        let wanted: HashSet<&str> = paths.iter().map(String::as_str).collect();
+        let mut entries = HashMap::new();
+        for chunk in paths.chunks(128) {
+            let mut args = vec![
+                "--literal-pathspecs".to_string(),
+                "ls-tree".to_string(),
+                "-r".to_string(),
+                "-z".to_string(),
+                "--full-tree".to_string(),
+                tree.to_string(),
+                "--".to_string(),
+            ];
+            args.extend(chunk.iter().cloned());
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let output = Self::require_raw_git_output(
+                self.session_git(session_id, &refs).await?,
+                "reading Keep tree entries",
+            )?;
+            for (path, identity) in Self::parse_tree_entries(&output)? {
+                if !wanted.contains(path.as_str()) {
+                    continue;
+                }
+                if entries
+                    .insert(path.clone(), identity.clone())
+                    .is_some_and(|prior| prior != identity)
+                {
+                    return Err(DaemonError::Session(format!(
+                        "Git returned inconsistent tree identity for {path:?}"
+                    )));
+                }
+            }
+        }
+        Ok(entries)
+    }
+
+    async fn reset_derived_directory(path: &std::path::Path) -> Result<(), DaemonError> {
+        match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                tokio::fs::remove_dir_all(path).await.map_err(|error| {
+                    DaemonError::Session(format!(
+                        "clearing Keep staging directory '{}': {error}",
+                        path.display()
+                    ))
+                })?;
+            }
+            Ok(_) => {
+                tokio::fs::remove_file(path).await.map_err(|error| {
+                    DaemonError::Session(format!(
+                        "clearing invalid Keep staging path '{}': {error}",
+                        path.display()
+                    ))
+                })?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(DaemonError::Session(format!(
+                    "checking Keep staging path '{}': {error}",
+                    path.display()
+                )))
+            }
+        }
+        tokio::fs::create_dir_all(path).await.map_err(|error| {
+            DaemonError::Session(format!(
+                "creating Keep staging directory '{}': {error}",
+                path.display()
+            ))
+        })
+    }
+
+    async fn materialize_keep_tree(
+        &self,
+        session_id: &str,
+        set: &crate::git::AttemptSet,
+        tree: &str,
+        stage_root: &std::path::Path,
+        paths: &[String],
+    ) -> Result<HashMap<String, String>, DaemonError> {
+        Self::reset_derived_directory(stage_root).await?;
+        let entries = self.tree_entries_for_paths(session_id, tree, paths).await?;
+        let git_dir = Self::require_git_output(
+            self.session_git(session_id, &["rev-parse", "--absolute-git-dir"])
+                .await?,
+            "locating Git storage for Keep staging",
+        )?;
+        let tree_key = tree.get(..12).unwrap_or(tree);
+        let index_path = format!(
+            "{git_dir}/axo-keep-{}-stage-{}.index",
+            crate::attempts::set_key(&set.id),
+            tree_key
+        );
+        let dir = self.session_dir(session_id).await?;
+        let _ = tokio::fs::remove_file(&index_path).await;
+        let _ = tokio::fs::remove_file(format!("{index_path}.lock")).await;
+        let outcome = async {
+            Self::require_git_output(
+                self.session_git_with_index(session_id, &dir, &index_path, &["read-tree", tree])
+                    .await?,
+                "loading the Keep staging tree",
+            )?;
+            let mut stdin = String::new();
+            for path in paths.iter().filter(|path| entries.contains_key(*path)) {
+                stdin.push_str(path);
+                stdin.push('\0');
+            }
+            if !stdin.is_empty() {
+                Self::require_git_output(
+                    self.session_git_stdin_with_index_work_tree(
+                        session_id,
+                        &git_dir,
+                        &index_path,
+                        &stage_root.to_string_lossy(),
+                        &[
+                            "--literal-pathspecs",
+                            "checkout-index",
+                            "--force",
+                            "--stdin",
+                            "-z",
+                        ],
+                        &stdin,
+                    )
+                    .await?,
+                    "materializing the Keep staging tree",
+                )?;
+            }
+            Ok(entries)
+        }
+        .await;
+        let _ = tokio::fs::remove_file(&index_path).await;
+        let _ = tokio::fs::remove_file(format!("{index_path}.lock")).await;
+        outcome
+    }
+
+    async fn copy_keep_leaf(
+        source: &std::path::Path,
+        destination: &std::path::Path,
+    ) -> Result<(), DaemonError> {
+        let parent = destination.parent().ok_or_else(|| {
+            DaemonError::Session(format!(
+                "invalid Keep backup path '{}''",
+                destination.display()
+            ))
+        })?;
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            DaemonError::Session(format!(
+                "creating Keep backup directory '{}': {error}",
+                parent.display()
+            ))
+        })?;
+        let metadata = tokio::fs::symlink_metadata(source).await.map_err(|error| {
+            DaemonError::Session(format!(
+                "reading Keep recovery leaf '{}': {error}",
+                source.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            let target = tokio::fs::read_link(source).await.map_err(|error| {
+                DaemonError::Session(format!(
+                    "reading Keep recovery symlink '{}': {error}",
+                    source.display()
+                ))
+            })?;
+            #[cfg(unix)]
+            tokio::fs::symlink(target, destination)
+                .await
+                .map_err(|error| {
+                    DaemonError::Session(format!(
+                        "copying Keep recovery symlink '{}': {error}",
+                        source.display()
+                    ))
+                })?;
+            #[cfg(not(unix))]
+            return Err(DaemonError::Session(
+                "symlink Keep is supported only on Unix hosts".to_string(),
+            ));
+        } else if metadata.is_file() {
+            tokio::fs::copy(source, destination)
+                .await
+                .map_err(|error| {
+                    DaemonError::Session(format!(
+                        "copying Keep recovery path '{}': {error}",
+                        source.display()
+                    ))
+                })?;
+            tokio::fs::set_permissions(destination, metadata.permissions())
+                .await
+                .map_err(|error| {
+                    DaemonError::Session(format!(
+                        "preserving Keep recovery mode '{}': {error}",
+                        source.display()
+                    ))
+                })?;
+        } else {
+            return Err(DaemonError::AttemptConflict(format!(
+                "Keep recovery leaf '{}' is not a file or symlink",
+                source.display()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Rebuild the consumable staging directory only from the durable raw
+    /// postimage store. The store is fully validated before `stage` is reset,
+    /// and every rebuilt leaf is validated before the caller can mutate the
+    /// workspace. Git checkout/filter behavior is intentionally absent here.
+    async fn rebuild_keep_stage_from_postimage(
+        apply_root: &std::path::Path,
+        plans: &[StoredKeepPath],
+        post_entries: &HashMap<String, String>,
+    ) -> Result<std::path::PathBuf, DaemonError> {
+        let postimage_root = apply_root.join("postimage");
+        let stage_root = apply_root.join("stage");
+        let affected: HashSet<String> = plans.iter().map(|plan| plan.path.clone()).collect();
+
+        // Validate every durable leaf before touching even derived staging
+        // state. This also ensures a later workspace delete cannot precede
+        // discovery of a corrupt/missing postimage for another path.
+        for plan in plans {
+            let relative = std::path::Path::new(&plan.path);
+            let stored =
+                Self::fingerprint_keep_workspace_path(&postimage_root, relative, &affected).await?;
+            if !Self::keep_fingerprint_matches(
+                &stored,
+                &plan.postimage,
+                !post_entries.contains_key(&plan.path),
+            ) {
+                return Err(DaemonError::Session(format!(
+                    "durable Keep postimage for {:?} changed bytes",
+                    plan.path
+                )));
+            }
+        }
+
+        Self::reset_derived_directory(&stage_root).await?;
+        for plan in plans
+            .iter()
+            .filter(|plan| post_entries.contains_key(&plan.path))
+        {
+            let relative = std::path::Path::new(&plan.path);
+            Self::copy_keep_leaf(&postimage_root.join(relative), &stage_root.join(relative))
+                .await?;
+        }
+
+        // Preflight all additions as one phase. Reconciliation may only begin
+        // deleting/replacing workspace leaves after this loop succeeds.
+        for plan in plans {
+            let relative = std::path::Path::new(&plan.path);
+            let staged =
+                Self::fingerprint_keep_workspace_path(&stage_root, relative, &affected).await?;
+            if !Self::keep_fingerprint_matches(
+                &staged,
+                &plan.postimage,
+                !post_entries.contains_key(&plan.path),
+            ) {
+                return Err(DaemonError::Session(format!(
+                    "rebuilt Keep postimage for {:?} changed bytes",
+                    plan.path
+                )));
+            }
+        }
+        Ok(stage_root)
+    }
+
+    async fn ensure_keep_parent_dirs(
+        workspace: &std::path::Path,
+        relative: &std::path::Path,
+    ) -> Result<(), DaemonError> {
+        let Some(parent) = relative.parent() else {
+            return Ok(());
+        };
+        let mut current = workspace.to_path_buf();
+        for component in parent.components() {
+            current.push(component.as_os_str());
+            match tokio::fs::symlink_metadata(&current).await {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+                Ok(_) => {
+                    return Err(DaemonError::AttemptConflict(format!(
+                        "Keep parent '{}' is not a real directory",
+                        current.display()
+                    )))
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    tokio::fs::create_dir(&current).await.map_err(|error| {
+                        DaemonError::Session(format!(
+                            "creating Keep parent '{}': {error}",
+                            current.display()
+                        ))
+                    })?;
+                }
+                Err(error) => {
+                    return Err(DaemonError::Session(format!(
+                        "checking Keep parent '{}': {error}",
+                        current.display()
+                    )))
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn remove_empty_keep_parents(workspace: &std::path::Path, relative: &std::path::Path) {
+        let mut current = relative.parent().map(|path| workspace.join(path));
+        while let Some(path) = current {
+            if path == workspace {
+                break;
+            }
+            match tokio::fs::remove_dir(&path).await {
+                Ok(()) => current = path.parent().map(std::path::Path::to_path_buf),
+                Err(_) => break,
+            }
+        }
+    }
+
+    fn keep_fingerprint_matches(
+        actual: &Option<StoredFileFingerprint>,
+        expected: &Option<StoredFileFingerprint>,
+        tree_entry_absent: bool,
+    ) -> bool {
+        actual == expected
+            // A file→directory transition has a safe crash point after the old
+            // leaf is deleted and before a descendant creates the new directory.
+            || (tree_entry_absent
+                && actual.is_none()
+                && expected
+                    .as_ref()
+                    .is_some_and(|fingerprint| fingerprint.kind == "directory"))
+    }
+
+    /// A completed Keep must not remain unresolved merely because a Git clean
+    /// filter from the old container is unavailable while rendering status.
+    /// This fallback intentionally reports every journal path as changed and
+    /// leaves line counts unknown; it is conservative, durable, and sufficient
+    /// for the success receipt. A later normal status read may refine it.
+    fn conservative_keep_status(apply: &StoredKeepApply) -> crate::git::GitStatus {
+        let files = apply
+            .paths
+            .iter()
+            .map(|plan| {
+                let pre_leaf = plan
+                    .preimage
+                    .as_ref()
+                    .is_some_and(|image| matches!(image.kind.as_str(), "file" | "symlink"));
+                let post_leaf = plan
+                    .postimage
+                    .as_ref()
+                    .is_some_and(|image| matches!(image.kind.as_str(), "file" | "symlink"));
+                let state = match (pre_leaf, post_leaf) {
+                    (false, true) => "added",
+                    (true, false) => "deleted",
+                    _ => "modified",
+                };
+                crate::git::GitFile {
+                    path: plan.path.clone(),
+                    state: state.to_string(),
+                    added: None,
+                    removed: None,
+                    staged: false,
+                    unstaged: true,
+                    last_turn: false,
+                }
+            })
+            .collect();
+        crate::git::GitStatus {
+            // The branch is presentation-only here. Avoid another fallible Git
+            // read between a completed transaction and its durable receipt.
+            branch: "HEAD".to_string(),
+            files,
+            clean: false,
+        }
+    }
+
+    fn completed_keep_receipt_allows_cleanup(
+        set: &crate::git::AttemptSet,
+        index: usize,
+    ) -> Result<bool, DaemonError> {
+        if set.state != crate::git::AttemptSetState::TranscriptRecorded {
+            return Ok(false);
+        }
+        if set.kept_index != Some(index) {
+            return Err(DaemonError::Session(
+                "the completed Keep receipt disagrees with current attempt metadata".to_string(),
+            ));
+        }
+        Ok(true)
+    }
+
+    async fn prepare_keep_apply(
+        &self,
+        session_id: &str,
+        set: &crate::git::AttemptSet,
+        checked: &StoredCheckedTree,
+    ) -> Result<StoredKeepApply, DaemonError> {
         let session = self
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         let sandbox = self.ensure_sandbox(&session).await?;
-        let indexes = Self::list_variant_indexes(&sandbox, &dir).await?;
-        // Lane labels, if this variant set was created by a fan-out that
-        // recorded them. Absent for worktrees made some other way — the status
-        // is still correct, it just has no name to hang on the column.
-        let roster: Vec<crate::git::Variant> = sandbox
-            .exec(
-                &["cat", &format!("{dir}/.axo-variants/lanes.json")],
-                Duration::from_secs(10),
+        let workspace = sandbox.root();
+        let apply_root = crate::attempts::keep_apply_root(workspace, session_id, &set.id);
+        Self::reset_derived_directory(&apply_root).await?;
+
+        let preimage_tree = self
+            .snapshot_primary_keep_tree(session_id, set, "prepare")
+            .await?;
+        let message = format!(
+            "axocoatl Keep preimage {}",
+            crate::attempts::set_key(&set.id)
+        );
+        let preimage_commit = Self::require_git_output(
+            self.session_git(
+                session_id,
+                &[
+                    "commit-tree",
+                    &preimage_tree,
+                    "-p",
+                    &set.base_sha,
+                    "-m",
+                    &message,
+                ],
             )
-            .await
-            .ok()
-            .and_then(|r| serde_json::from_str(&r.stdout).ok())
-            .unwrap_or_default();
-        let mut out = Vec::new();
-        for index in indexes {
-            let wt = format!("{dir}/.axo-variants/{index}");
-            let status = self
-                .session_git_at(
-                    session_id,
-                    &wt,
-                    &["status", "--porcelain=v1", "-b", "--untracked-files=all"],
-                )
-                .await
-                .ok()
-                .map(|r| crate::git::parse_status(&r.stdout))
-                .unwrap_or_else(|| crate::git::parse_status(""));
-            let labels = roster.iter().find(|v| v.index == index);
-            out.push(crate::git::VariantStatus {
-                index,
-                branch: format!("axo/variant-{index}"),
-                worktree: wt,
-                status,
-                model: labels.and_then(|v| v.model.clone()),
-                agent: labels.and_then(|v| v.agent.clone()),
+            .await?,
+            "protecting the Keep preimage",
+        )?;
+        let preimage_ref = crate::attempts::keep_preimage_ref(&set.id);
+        Self::require_git_output(
+            self.session_git(session_id, &["update-ref", &preimage_ref, &preimage_commit])
+                .await?,
+            "publishing the Keep preimage",
+        )?;
+
+        let candidate_ref = crate::attempts::checked_candidate_ref(&set.id, checked.index);
+        let candidate_commit = Self::require_git_output(
+            self.session_git(session_id, &["rev-parse", "--verify", &candidate_ref])
+                .await?,
+            "validating the checked candidate commit",
+        )?;
+        let candidate_tree_expression = format!("{candidate_ref}^{{tree}}");
+        let candidate_tree = Self::require_git_output(
+            self.session_git(session_id, &["rev-parse", &candidate_tree_expression])
+                .await?,
+            "validating the checked candidate tree",
+        )?;
+        if candidate_commit != checked.commit_oid || candidate_tree != checked.tree_oid {
+            return Err(DaemonError::AttemptConflict(
+                "the protected checked candidate changed; run Checks again".to_string(),
+            ));
+        }
+
+        // Both commits have the attempt snapshot as their parent. merge-tree
+        // therefore applies only base→candidate to the complete primary
+        // preimage, while preserving unrelated work already in the workspace.
+        let merge = self
+            .session_git(
+                session_id,
+                &["merge-tree", "--write-tree", &preimage_ref, &candidate_ref],
+            )
+            .await?;
+        if !merge.ok() {
+            return Err(DaemonError::AttemptConflict(format!(
+                "the workspace changed since these attempts started, and attempt {} conflicts with it: {}{}",
+                checked.index + 1,
+                merge.stdout.trim(),
+                merge.stderr.trim()
+            )));
+        }
+        let postimage_tree = merge.stdout.trim().to_string();
+        if !matches!(postimage_tree.len(), 40 | 64)
+            || !postimage_tree.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(DaemonError::Session(format!(
+                "Git returned an invalid Keep postimage tree {postimage_tree:?}"
+            )));
+        }
+        let postimage_ref = crate::attempts::keep_postimage_ref(&set.id);
+        Self::require_git_output(
+            self.session_git(session_id, &["update-ref", &postimage_ref, &postimage_tree])
+                .await?,
+            "publishing the Keep postimage",
+        )?;
+
+        let raw_path = apply_root.join("paths.raw");
+        let raw_output = format!("--output={}", raw_path.to_string_lossy());
+        Self::require_git_output(
+            self.session_git(
+                session_id,
+                &[
+                    "diff",
+                    "--raw",
+                    "-z",
+                    "--no-renames",
+                    &raw_output,
+                    &preimage_tree,
+                    &postimage_tree,
+                ],
+            )
+            .await?,
+            "enumerating the Keep transaction paths",
+        )?;
+        let raw = tokio::fs::read(&raw_path).await.map_err(|error| {
+            DaemonError::Session(format!("reading Keep transaction paths: {error}"))
+        })?;
+        let _ = tokio::fs::remove_file(&raw_path).await;
+        let (paths, changes_gitlink) = Self::parse_raw_tree_diff(&raw)?;
+        if changes_gitlink || checked.changes_gitlink {
+            return Err(DaemonError::AttemptConflict(
+                "Axocoatl cannot safely Keep submodule/gitlink changes yet".to_string(),
+            ));
+        }
+        if paths.is_empty() {
+            return Err(DaemonError::AttemptConflict(format!(
+                "attempt {} produced no change to Keep",
+                checked.index + 1
+            )));
+        }
+
+        let pre_entries = self
+            .tree_entries_for_paths(session_id, &preimage_tree, &paths)
+            .await?;
+        let stage_root = apply_root.join("stage");
+        let post_entries = self
+            .materialize_keep_tree(session_id, set, &postimage_tree, &stage_root, &paths)
+            .await?;
+        let backup_root = apply_root.join("preimage");
+        Self::reset_derived_directory(&backup_root).await?;
+        let postimage_root = apply_root.join("postimage");
+        Self::reset_derived_directory(&postimage_root).await?;
+
+        let affected: HashSet<String> = paths.iter().cloned().collect();
+        let mut plans = Vec::with_capacity(paths.len());
+        for path in paths {
+            let primary_path = workspace.join(&path);
+            let preimage = Self::fingerprint_keep_workspace_path(
+                workspace,
+                std::path::Path::new(&path),
+                &affected,
+            )
+            .await?;
+            let postimage = Self::fingerprint_keep_workspace_path(
+                &stage_root,
+                std::path::Path::new(&path),
+                &affected,
+            )
+            .await?;
+            let pre_entry = pre_entries.get(&path);
+            let post_entry = post_entries.get(&path);
+            if pre_entry
+                .is_some_and(|entry| !Self::keep_tree_leaf_matches_fingerprint(entry, &preimage))
+            {
+                return Err(DaemonError::AttemptConflict(format!(
+                    "the primary Keep preimage kind or mode for {path:?} does not match its captured Git leaf"
+                )));
+            }
+            if post_entry
+                .is_some_and(|entry| !Self::keep_tree_leaf_matches_fingerprint(entry, &postimage))
+                || (post_entry.is_none()
+                    && postimage
+                        .as_ref()
+                        .is_some_and(|image| image.kind != "directory"))
+            {
+                return Err(DaemonError::Session(format!(
+                    "the staged Keep postimage kind or mode for {path:?} does not match its protected Git leaf"
+                )));
+            }
+            if pre_entry.is_none() && post_entry.is_some() && preimage.is_some() {
+                let structural_directory = preimage
+                    .as_ref()
+                    .is_some_and(|image| image.kind == "directory")
+                    && pre_entries
+                        .keys()
+                        .any(|candidate| candidate.starts_with(&format!("{path}/")));
+                if !structural_directory {
+                    return Err(DaemonError::AttemptConflict(format!(
+                        "attempt {} would overwrite untracked path {path:?}",
+                        checked.index + 1
+                    )));
+                }
+            }
+            if pre_entry.is_some() {
+                Self::copy_keep_leaf(&primary_path, &backup_root.join(&path)).await?;
+                let backup = Self::fingerprint_file(&backup_root.join(&path)).await?;
+                if backup != preimage {
+                    return Err(DaemonError::Session(format!(
+                        "Keep preimage backup for {path:?} changed bytes"
+                    )));
+                }
+            }
+            if post_entry.is_some() {
+                Self::copy_keep_leaf(&stage_root.join(&path), &postimage_root.join(&path)).await?;
+            }
+            plans.push(StoredKeepPath {
+                path,
+                preimage,
+                postimage,
             });
         }
-        // `list_variant_indexes` already returns them ascending.
-        Ok(out)
+
+        // Prove the raw postimage store can reproduce every consumable stage
+        // leaf before publishing the journal. From this point onward recovery
+        // never checks the tree out again, so filter programs/container state
+        // are not transaction dependencies.
+        Self::rebuild_keep_stage_from_postimage(&apply_root, &plans, &post_entries).await?;
+
+        Ok(StoredKeepApply {
+            index: checked.index,
+            patch_sha256: checked.patch_sha256.clone(),
+            candidate_tree,
+            preimage_tree,
+            postimage_tree,
+            paths: plans,
+        })
     }
 
-    /// Adopt a variant: commit its worktree changes, merge its branch into the
-    /// session's primary checkout, then tear down every variant. Returns the
-    /// fresh primary status.
-    pub async fn adopt_variant(
+    async fn validate_keep_apply_refs(
         &self,
         session_id: &str,
-        branch: &str,
-    ) -> Result<crate::git::GitStatus, DaemonError> {
-        self.ensure_session_git(session_id).await?;
-        // Only ever adopt one of our own variant branches.
-        let idx = branch
-            .strip_prefix("axo/variant-")
-            .and_then(|s| s.parse::<usize>().ok())
-            .ok_or_else(|| DaemonError::Session(format!("not a variant branch: {branch}")))?;
-        let dir = self.session_dir(session_id).await?;
-        let wt = format!("{dir}/.axo-variants/{idx}");
-        // Capture the variant's working-tree edits as a commit on its branch —
-        // but only if it actually changed something, so we never make an empty
-        // adopt commit. (The agent may also have committed on its own; the
-        // merge below brings whatever is on the branch either way.)
-        let _ = self.session_git_at(session_id, &wt, &["add", "-A"]).await;
-        let dirty = self
-            .session_git_at(session_id, &wt, &["status", "--porcelain"])
-            .await
-            .map(|r| !r.stdout.trim().is_empty())
-            .unwrap_or(false);
-        if dirty {
-            // Do NOT ignore this result. If the commit fails, the branch still
-            // points at the base, the merge below reports "Already up to date"
-            // and exits 0, and the cleanup at the end then deletes the worktree
-            // — silently destroying the very work being adopted. Fail loudly
-            // instead, while the lane is still on disk and recoverable.
-            let commit = self
-                .session_git_at(
-                    session_id,
-                    &wt,
-                    &["commit", "-q", "-m", &format!("axocoatl: adopt {branch}")],
-                )
-                .await?;
-            if !commit.ok() {
+        set: &crate::git::AttemptSet,
+        apply: &StoredKeepApply,
+    ) -> Result<(), DaemonError> {
+        for (reference, expected) in [
+            (
+                crate::attempts::keep_preimage_ref(&set.id),
+                apply.preimage_tree.as_str(),
+            ),
+            (
+                crate::attempts::keep_postimage_ref(&set.id),
+                apply.postimage_tree.as_str(),
+            ),
+            (
+                crate::attempts::checked_candidate_ref(&set.id, apply.index),
+                apply.candidate_tree.as_str(),
+            ),
+        ] {
+            let expression = format!("{reference}^{{tree}}");
+            let actual = Self::require_git_output(
+                self.session_git(session_id, &["rev-parse", &expression])
+                    .await?,
+                "validating protected Keep objects",
+            )?;
+            if actual != expected {
                 return Err(DaemonError::Session(format!(
-                    "adopt could not commit {branch}'s changes, so nothing would be \
-                     merged: {}",
-                    commit.stderr.trim()
+                    "protected Keep object {reference:?} changed identity"
                 )));
             }
         }
-        // Merge the variant branch into the primary checkout.
-        let r = self
-            .session_git(session_id, &["merge", "--no-edit", branch])
+        Ok(())
+    }
+
+    async fn reconcile_keep_apply(
+        &self,
+        session_id: &str,
+        set: &crate::git::AttemptSet,
+        apply: &StoredKeepApply,
+    ) -> Result<(), DaemonError> {
+        self.validate_keep_apply_refs(session_id, set, apply)
             .await?;
-        if !r.ok() {
-            return Err(DaemonError::Session(format!(
-                "adopt failed to merge {branch}: {}",
-                r.stderr.trim()
+        let mut seen = HashSet::new();
+        let paths: Vec<String> = apply
+            .paths
+            .iter()
+            .map(|plan| {
+                Self::validate_keep_path(&plan.path)?;
+                if !seen.insert(plan.path.clone()) {
+                    return Err(DaemonError::Session(format!(
+                        "Keep journal repeats path {:?}",
+                        plan.path
+                    )));
+                }
+                Ok(plan.path.clone())
+            })
+            .collect::<Result<_, DaemonError>>()?;
+        let expected_raw_path = crate::attempts::keep_apply_root(
+            &self
+                .get_session(session_id)
+                .await
+                .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?
+                .working_dir,
+            session_id,
+            &set.id,
+        )
+        .join("verify-paths.raw");
+        let raw_output = format!("--output={}", expected_raw_path.to_string_lossy());
+        Self::require_git_output(
+            self.session_git(
+                session_id,
+                &[
+                    "diff",
+                    "--raw",
+                    "-z",
+                    "--no-renames",
+                    &raw_output,
+                    &apply.preimage_tree,
+                    &apply.postimage_tree,
+                ],
+            )
+            .await?,
+            "validating Keep journal paths",
+        )?;
+        let expected_raw = tokio::fs::read(&expected_raw_path).await.map_err(|error| {
+            DaemonError::Session(format!("reading validated Keep paths: {error}"))
+        })?;
+        let _ = tokio::fs::remove_file(&expected_raw_path).await;
+        let (expected_paths, changes_gitlink) = Self::parse_raw_tree_diff(&expected_raw)?;
+        if changes_gitlink || expected_paths != paths {
+            return Err(DaemonError::Session(
+                "Keep journal paths do not match its protected trees".to_string(),
+            ));
+        }
+
+        let pre_entries = self
+            .tree_entries_for_paths(session_id, &apply.preimage_tree, &paths)
+            .await?;
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let sandbox = self.ensure_sandbox(&session).await?;
+        let workspace = sandbox.root();
+        let post_entries = self
+            .tree_entries_for_paths(session_id, &apply.postimage_tree, &paths)
+            .await?;
+        let apply_root = crate::attempts::keep_apply_root(workspace, session_id, &set.id);
+        let stage_root =
+            Self::rebuild_keep_stage_from_postimage(&apply_root, &apply.paths, &post_entries)
+                .await?;
+
+        let mut pending = HashSet::new();
+        for plan in &apply.paths {
+            let fingerprint = Self::fingerprint_keep_workspace_path(
+                workspace,
+                std::path::Path::new(&plan.path),
+                &seen,
+            )
+            .await?;
+            // Current clean/smudge rules may themselves be one of the paths
+            // already installed before a crash. Classifying with a fresh Git
+            // blob would then reinterpret still-preimage bytes under postimage
+            // attributes. Raw kind/mode/bytes are the durable WAL identity.
+            let matches_post = Self::keep_fingerprint_matches(
+                &fingerprint,
+                &plan.postimage,
+                !post_entries.contains_key(&plan.path),
+            );
+            if matches_post {
+                continue;
+            }
+            let matches_pre = Self::keep_fingerprint_matches(
+                &fingerprint,
+                &plan.preimage,
+                !pre_entries.contains_key(&plan.path),
+            );
+            if !matches_pre {
+                return Err(DaemonError::AttemptConflict(format!(
+                    "workspace path {:?} is neither the Keep preimage nor postimage; restore or move that edit before retrying Keep",
+                    plan.path
+                )));
+            }
+            pending.insert(plan.path.clone());
+        }
+
+        let mut deletions: Vec<&StoredKeepPath> = apply
+            .paths
+            .iter()
+            .filter(|plan| pending.contains(&plan.path) && !post_entries.contains_key(&plan.path))
+            .collect();
+        deletions.sort_by_key(|plan| std::cmp::Reverse(plan.path.matches('/').count()));
+        for plan in deletions {
+            let relative = std::path::Path::new(&plan.path);
+            let target = workspace.join(relative);
+            let current = Self::fingerprint_keep_workspace_path(workspace, relative, &seen).await?;
+            if current != plan.preimage {
+                return Err(DaemonError::AttemptConflict(format!(
+                    "workspace path {:?} changed during Keep",
+                    plan.path
+                )));
+            }
+            tokio::fs::remove_file(&target).await.map_err(|error| {
+                DaemonError::Session(format!("deleting Keep path {:?}: {error}", plan.path))
+            })?;
+            Self::remove_empty_keep_parents(workspace, relative).await;
+        }
+
+        let mut additions: Vec<&StoredKeepPath> = apply
+            .paths
+            .iter()
+            .filter(|plan| pending.contains(&plan.path) && post_entries.contains_key(&plan.path))
+            .collect();
+        additions.sort_by_key(|plan| plan.path.matches('/').count());
+        for plan in additions {
+            let relative = std::path::Path::new(&plan.path);
+            let target = workspace.join(relative);
+            let stage = stage_root.join(relative);
+            let staged =
+                Self::fingerprint_keep_workspace_path(&stage_root, relative, &seen).await?;
+            if staged != plan.postimage {
+                return Err(DaemonError::Session(format!(
+                    "staged Keep postimage for {:?} changed bytes",
+                    plan.path
+                )));
+            }
+            Self::ensure_keep_parent_dirs(workspace, relative).await?;
+            match tokio::fs::symlink_metadata(&target).await {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                    let current =
+                        Self::fingerprint_keep_workspace_path(workspace, relative, &seen).await?;
+                    if current != plan.preimage {
+                        return Err(DaemonError::AttemptConflict(format!(
+                            "workspace directory {:?} changed during Keep",
+                            plan.path
+                        )));
+                    }
+                    tokio::fs::remove_dir(&target).await.map_err(|error| {
+                        DaemonError::AttemptConflict(format!(
+                            "Keep cannot replace non-empty directory {:?}: {error}",
+                            plan.path
+                        ))
+                    })?;
+                }
+                Ok(_) => {
+                    let current =
+                        Self::fingerprint_keep_workspace_path(workspace, relative, &seen).await?;
+                    if current != plan.preimage {
+                        return Err(DaemonError::AttemptConflict(format!(
+                            "workspace path {:?} changed during Keep",
+                            plan.path
+                        )));
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    if plan
+                        .preimage
+                        .as_ref()
+                        .is_some_and(|image| image.kind != "directory")
+                    {
+                        return Err(DaemonError::AttemptConflict(format!(
+                            "workspace path {:?} disappeared during Keep",
+                            plan.path
+                        )));
+                    }
+                }
+                Err(error) => {
+                    return Err(DaemonError::Session(format!(
+                        "checking Keep destination {:?}: {error}",
+                        plan.path
+                    )))
+                }
+            }
+            tokio::fs::rename(&stage, &target).await.map_err(|error| {
+                DaemonError::Session(format!("installing Keep path {:?}: {error}", plan.path))
+            })?;
+        }
+
+        // Validate every affected raw worktree leaf as one final phase. Do not
+        // reinterpret bytes through the current clean/smudge configuration:
+        // recovery deliberately cannot depend on filter programs that existed
+        // only in the pre-crash container.
+        for plan in &apply.paths {
+            let fingerprint = Self::fingerprint_keep_workspace_path(
+                workspace,
+                std::path::Path::new(&plan.path),
+                &seen,
+            )
+            .await?;
+            if !Self::keep_fingerprint_matches(
+                &fingerprint,
+                &plan.postimage,
+                !post_entries.contains_key(&plan.path),
+            ) {
+                return Err(DaemonError::Session(format!(
+                    "Keep did not reach the protected postimage at {:?}",
+                    plan.path
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Keep one attempt by applying only its delta onto the primary working
+    /// tree. This does not commit or merge: the chosen changes return to the
+    /// session for deliberate git review and commit.
+    pub async fn adopt_variant(
+        &self,
+        session_id: &str,
+        set_id: &str,
+        index: usize,
+    ) -> Result<crate::git::GitStatus, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let current = self.peek_current_attempt_set(session_id).await?;
+        let receipt_path =
+            crate::attempts::keep_receipt_path(&session.working_dir, session_id, set_id)
+                .to_string_lossy()
+                .to_string();
+        let receipt: Option<StoredKeepReceipt> =
+            Self::read_host_json_file(std::path::Path::new(&receipt_path)).await?;
+        if let Some(receipt) = receipt {
+            if receipt.set_id != set_id || receipt.index != index {
+                return Err(DaemonError::AttemptConflict(format!(
+                    "attempt set '{set_id}' was already kept using a different attempt"
+                )));
+            }
+            match current.as_ref() {
+                None => return Ok(receipt.status),
+                Some(current) if current.id != set_id => return Ok(receipt.status),
+                Some(current) if Self::completed_keep_receipt_allows_cleanup(current, index)? => {
+                    // Cleanup removes the set directory before current.json. A
+                    // crash in that narrow window leaves the receipt and current
+                    // roster as the only recovery inputs; both are sufficient
+                    // to finish exact, idempotent cleanup without reopening the
+                    // now-deleted apply journal.
+                    Self::require_attempt_resolution_backend(&self.config.sandbox.backend)?;
+                    self.ensure_attempt_recovery_sandbox(&session).await?;
+                    self.remove_attempt_worktrees(session_id, current)
+                        .await
+                        .map_err(|error| {
+                            DaemonError::Session(format!(
+                                "attempt {} was kept, but cleanup is still incomplete: {error}",
+                                index + 1
+                            ))
+                        })?;
+                    return Ok(receipt.status);
+                }
+                Some(_) => {}
+            }
+        }
+        let current = current.ok_or_else(|| {
+            DaemonError::Session("this session has no current attempt set".to_string())
+        })?;
+        if current.id != set_id {
+            return Err(DaemonError::AttemptConflict(format!(
+                "attempt set '{set_id}' is stale; the current set is '{}'",
+                current.id
             )));
         }
-        // Tear down all variants (worktrees + branches).
-        self.remove_variant_worktrees(session_id).await.ok();
-        self.git_status(session_id).await
+        Self::require_attempt_resolution_backend(&self.config.sandbox.backend)?;
+        let sandbox = self.ensure_attempt_recovery_sandbox(&session).await?;
+        let mut set = self.require_attempt_set(session_id, set_id).await?;
+        if set.state == crate::git::AttemptSetState::Discarding {
+            return Err(DaemonError::AttemptConflict(
+                "this attempt set is already being discarded; retry Discard to finish cleanup"
+                    .to_string(),
+            ));
+        }
+        if !set.lanes.iter().any(|lane| lane.index == index) {
+            return Err(DaemonError::Session(format!(
+                "attempt {} does not exist",
+                index + 1
+            )));
+        }
+        if let Some(selected) = set.kept_index {
+            if selected != index {
+                return Err(DaemonError::AttemptConflict(format!(
+                    "Keep is already in progress for attempt {}; retry that same attempt to finish",
+                    selected + 1
+                )));
+            }
+        } else if matches!(
+            set.state,
+            crate::git::AttemptSetState::Applying
+                | crate::git::AttemptSetState::Applied
+                | crate::git::AttemptSetState::TranscriptRecorded
+        ) {
+            return Err(DaemonError::Session(
+                "attempt metadata is missing the selected Keep lane".to_string(),
+            ));
+        }
+
+        let keep_phase = matches!(
+            set.state,
+            crate::git::AttemptSetState::Applying
+                | crate::git::AttemptSetState::Applied
+                | crate::git::AttemptSetState::TranscriptRecorded
+        );
+        let mut stored_apply = None;
+        if !keep_phase {
+            if !matches!(
+                set.state,
+                crate::git::AttemptSetState::Verified | crate::git::AttemptSetState::Judged
+            ) {
+                return Err(DaemonError::AttemptConflict(
+                    "run Checks to completion before Keep".to_string(),
+                ));
+            }
+            let (_, states) = self.require_terminal_attempt(session_id, set_id).await?;
+            if !matches!(
+                states
+                    .iter()
+                    .find(|state| state.index == index)
+                    .map(|state| state.state),
+                Some(crate::git::AttemptLaneState::Completed)
+            ) {
+                return Err(DaemonError::AttemptConflict(format!(
+                    "attempt {} did not complete and cannot be kept",
+                    index + 1
+                )));
+            }
+            let attempt_root = crate::attempts::attempt_root(sandbox.root(), session_id, set_id)
+                .to_string_lossy()
+                .to_string();
+            let verdicts: Vec<crate::git::LaneVerdict> = self
+                .read_variant_meta(&sandbox, &attempt_root, "verdicts.json")
+                .await?
+                .ok_or_else(|| {
+                    DaemonError::AttemptConflict("run Checks before keeping an attempt".to_string())
+                })?;
+            let verdict = verdicts
+                .iter()
+                .find(|verdict| verdict.index == index)
+                .ok_or_else(|| {
+                    DaemonError::AttemptConflict(format!(
+                        "attempt {} has not been checked",
+                        index + 1
+                    ))
+                })?;
+            if !verdict.passed || verdict.changed_files == 0 {
+                return Err(DaemonError::AttemptConflict(format!(
+                    "attempt {} did not pass Checks with a non-empty change",
+                    index + 1
+                )));
+            }
+            let expected = verdict.patch_sha256.as_deref().ok_or_else(|| {
+                DaemonError::AttemptConflict(
+                    "Checks were recorded without a patch identity; run Checks again before Keep"
+                        .to_string(),
+                )
+            })?;
+            let checked_trees: Vec<StoredCheckedTree> = self
+                .read_variant_meta(&sandbox, &attempt_root, "checked-trees.json")
+                .await?
+                .ok_or_else(|| {
+                    DaemonError::AttemptConflict(
+                        "Checks were recorded without protected candidate trees; run Checks again"
+                            .to_string(),
+                    )
+                })?;
+            let checked = checked_trees
+                .iter()
+                .find(|checked| checked.index == index)
+                .ok_or_else(|| {
+                    DaemonError::AttemptConflict(format!(
+                        "attempt {} is missing its checked candidate tree; run Checks again",
+                        index + 1
+                    ))
+                })?;
+            if checked.patch_sha256 != expected || checked.changes_gitlink {
+                return Err(DaemonError::AttemptConflict(format!(
+                    "attempt {} checked identity is inconsistent or unsupported; run Checks again before Keep",
+                    index + 1
+                )));
+            }
+            // Checks already froze and imported the candidate. Stop any stale
+            // process ownership before computing the primary pre/post trees.
+            self.stop_attempt_runtime(session_id, &set).await?;
+            let persisted = self.prepare_keep_apply(session_id, &set, checked).await?;
+            self.write_variant_meta(session_id, set_id, "keep-apply.json", &persisted)
+                .await?;
+            set.state = crate::git::AttemptSetState::Applying;
+            set.kept_index = Some(index);
+            self.persist_attempt_set(&sandbox, &set).await?;
+            stored_apply = Some(persisted);
+        } else if matches!(
+            set.state,
+            crate::git::AttemptSetState::Applying
+                | crate::git::AttemptSetState::Applied
+                | crate::git::AttemptSetState::TranscriptRecorded
+        ) {
+            let attempt_root = crate::attempts::attempt_root(sandbox.root(), session_id, set_id)
+                .to_string_lossy()
+                .to_string();
+            let persisted: StoredKeepApply = self
+                .read_variant_meta(&sandbox, &attempt_root, "keep-apply.json")
+                .await?
+                .ok_or_else(|| {
+                    DaemonError::Session(
+                        "Keep metadata is missing its durable apply journal; refusing to guess workspace state"
+                            .to_string(),
+                    )
+                })?;
+            if persisted.index != index || persisted.patch_sha256.len() != 64 {
+                return Err(DaemonError::Session(
+                    "Keep apply metadata is inconsistent; refusing to mutate the workspace"
+                        .to_string(),
+                ));
+            }
+            stored_apply = Some(persisted);
+        }
+
+        // From here onward only protected primary-repository objects and the
+        // durable per-path journal are authoritative. A retry never reopens or
+        // trusts the mutable lane checkout.
+        self.stop_attempt_runtime(session_id, &set).await?;
+
+        if set.state == crate::git::AttemptSetState::Applying {
+            let apply = stored_apply
+                .as_ref()
+                .ok_or_else(|| DaemonError::Session("Keep journal was not loaded".to_string()))?;
+            self.reconcile_keep_apply(session_id, &set, apply).await?;
+            set.state = crate::git::AttemptSetState::Applied;
+            self.persist_attempt_set(&sandbox, &set).await?;
+        }
+
+        if set.state == crate::git::AttemptSetState::Applied {
+            let apply = stored_apply
+                .as_ref()
+                .ok_or_else(|| DaemonError::Session("Keep journal was not loaded".to_string()))?;
+            self.reconcile_keep_apply(session_id, &set, apply).await?;
+        }
+
+        if set.state != crate::git::AttemptSetState::TranscriptRecorded {
+            let assistant = self
+                .read_lane_output(&sandbox, &set, index)
+                .await?
+                .filter(|content| !content.trim().is_empty())
+                .unwrap_or_else(|| {
+                    format!(
+                        "Kept attempt {}. Its changes are in the workspace for review.",
+                        index + 1
+                    )
+                });
+            self.append_kept_attempt_to_session(&session, &set, index, assistant, &sandbox)
+                .await
+                .map_err(|error| {
+                    DaemonError::Session(format!(
+                        "attempt {} was applied, but its chat turn could not be recorded: {error}",
+                        index + 1
+                    ))
+                })?;
+            set.state = crate::git::AttemptSetState::TranscriptRecorded;
+            self.persist_attempt_set(&sandbox, &set).await?;
+        }
+        // Read the committed success response before deleting recovery state.
+        // Status is presentation, not transaction authority: required Git
+        // filters may have existed only inside the pre-crash container. Falling
+        // back to the exact journal prevents a completed Keep from becoming
+        // permanently unresolvable for that reason.
+        let status = match self.git_status(session_id).await {
+            Ok(status) => status,
+            Err(error) => {
+                tracing::warn!(
+                    session_id,
+                    set_id,
+                    error = %error,
+                    "using conservative Keep receipt because Git status is unavailable"
+                );
+                Self::conservative_keep_status(stored_apply.as_ref().ok_or_else(|| {
+                    DaemonError::Session("Keep journal was not loaded".to_string())
+                })?)
+            }
+        };
+        Self::write_json_file(
+            &sandbox,
+            &receipt_path,
+            &StoredKeepReceipt {
+                set_id: set_id.to_string(),
+                index,
+                status: status.clone(),
+            },
+        )
+        .await?;
+        if let Err(error) = self.remove_attempt_worktrees(session_id, &set).await {
+            return Err(DaemonError::Session(format!(
+                "attempt {} was applied, but cleanup was incomplete: {error}",
+                index + 1
+            )));
+        }
+        Ok(status)
+    }
+
+    /// Cancel/join a running set if necessary, then remove only that set.
+    pub async fn discard_attempt(&self, session_id: &str, set_id: &str) -> Result<(), DaemonError> {
+        self.require_attempt_set(session_id, set_id).await?;
+        let (_operation, _cancellation_requested) = self
+            .lock_attempt_operation_for_cleanup(session_id, Some(set_id))
+            .await?;
+        let result = async {
+            let set = self.require_attempt_set(session_id, set_id).await?;
+            self.discard_attempt_locked(session_id, set).await
+        }
+        .await;
+        self.clear_attempt_cancellation(session_id, set_id).await;
+        result
+    }
+
+    async fn discard_attempt_locked(
+        &self,
+        session_id: &str,
+        mut set: crate::git::AttemptSet,
+    ) -> Result<(), DaemonError> {
+        if matches!(
+            set.state,
+            crate::git::AttemptSetState::Applying
+                | crate::git::AttemptSetState::Applied
+                | crate::git::AttemptSetState::TranscriptRecorded
+        ) {
+            return Err(DaemonError::AttemptConflict(
+                "Keep has already started for this set; retry Keep to finish its resumable apply/record/cleanup sequence"
+                    .to_string(),
+            ));
+        }
+        if set.state != crate::git::AttemptSetState::Discarding {
+            let session = self
+                .get_session(session_id)
+                .await
+                .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+            let sandbox = self.ensure_sandbox(&session).await?;
+            set.state = crate::git::AttemptSetState::Discarding;
+            self.persist_attempt_set(&sandbox, &set).await?;
+        }
+        self.stop_attempt_runtime(session_id, &set).await?;
+        self.remove_attempt_worktrees(session_id, &set).await?;
+        let _ = self.session_store.lock().await.touch(session_id);
+        Ok(())
     }
 
     /// Execute an instruction inside a session, streaming the agent's output
@@ -3675,6 +8113,9 @@ impl AxocoatlDaemon {
         target_agent: Option<String>,
         sink: axocoatl_actor::StreamSink,
     ) -> Result<axocoatl_core::AgentOutput, DaemonError> {
+        let operation = self.attempt_operation(session_id).await;
+        let _operation = operation.lock().await;
+        self.require_no_unresolved_attempt(session_id).await?;
         let session = self
             .get_session(session_id)
             .await
@@ -3861,8 +8302,11 @@ impl AxocoatlDaemon {
             run_id.to_string(),
             agent_label.to_string(),
             input.to_string(),
-            model_override,
-            Some(trace.clone()),
+            StreamAgentRunOptions {
+                model_override,
+                trace: Some(trace.clone()),
+                supplied_history: None,
+            },
         )
         .await;
 
@@ -3916,9 +8360,13 @@ impl AxocoatlDaemon {
         run_id: String,
         agent_label: String,
         input: String,
-        model_override: Option<String>,
-        trace: Option<Arc<StdMutex<Vec<crate::trajectory::Action>>>>,
+        options: StreamAgentRunOptions,
     ) -> Result<axocoatl_core::AgentOutput, DaemonError> {
+        let StreamAgentRunOptions {
+            model_override,
+            trace,
+            supplied_history,
+        } = options;
         let (sink_tx, mut sink_rx) =
             tokio::sync::mpsc::unbounded_channel::<axocoatl_actor::AgentStreamChunk>();
         let fwd = {
@@ -4006,13 +8454,18 @@ impl AxocoatlDaemon {
                 }
             })
         };
-        let out = axocoatl_actor::execute_agent_streaming(
-            &actor,
-            axocoatl_core::AgentInput::text(input).with_model_override(model_override),
-            sink_tx,
-        )
-        .await
-        .map_err(DaemonError::AgentSpawn)?;
+        let mut agent_input =
+            axocoatl_core::AgentInput::text(input).with_model_override(model_override);
+        if let Some(history) = supplied_history {
+            // Attempts own no durable transcript. They receive one identical
+            // request-local snapshot of the permanent session conversation,
+            // preserving follow-up context and the full streamed tool loop
+            // without writing candidate turns back into the canonical actor.
+            agent_input = agent_input.with_supplied_history(history);
+        }
+        let out = axocoatl_actor::execute_agent_streaming(&actor, agent_input, sink_tx)
+            .await
+            .map_err(DaemonError::AgentSpawn)?;
         let _ = fwd.await;
         Ok(out)
     }
@@ -4074,7 +8527,10 @@ impl AxocoatlDaemon {
         let scoped = format!("{}:{}", session.id, agent_id);
         let sid = AgentId::new(&scoped);
         if let Some(actor) = self.agent_registry.get(&sid).await {
-            return Ok(actor);
+            if self.agent_registry.is_alive(&sid).await {
+                return Ok(actor);
+            }
+            self.agent_registry.remove(&sid).await;
         }
         let agent_yaml = self
             .config
@@ -4087,13 +8543,14 @@ impl AxocoatlDaemon {
             .clone();
         let sandbox = self.ensure_sandbox(session).await?;
         let context_dir = sandbox.root().to_path_buf();
-        let executor = self.build_session_executor(session, sandbox).await;
+        let executor = self.build_session_executor(session, sandbox, true).await;
         self.spawn_session_agent(
             session,
             &agent_yaml,
             &scoped,
             Arc::new(executor),
             &context_dir,
+            true,
         )
         .await
     }
@@ -4106,9 +8563,17 @@ impl AxocoatlDaemon {
         &self,
         session: &Session,
         sandbox: Arc<dyn Sandbox>,
+        include_integrations: bool,
     ) -> ToolExecutor {
         let mut executor = ToolExecutor::new();
         axocoatl_tools::register_session_tools(&mut executor, sandbox);
+        if !include_integrations {
+            // Parallel candidates may be thrown away. Until external tools have
+            // set-scoped, reversible permission semantics, attempts are limited
+            // to their isolated repository container rather than duplicating
+            // writes to MCP servers, Skills, or search providers.
+            return executor;
+        }
         // Skills on the session's allowlist become callable tools — calling
         // one fires it into the lattice.
         for skill_id in &session.enabled_skills {
@@ -4147,6 +8612,10 @@ impl AxocoatlDaemon {
         // host repo for Podman, the in-VM clone/worktree for E2B. Project
         // instructions are read separately from the host path (`session.working_dir`).
         context_dir: &std::path::Path,
+        // Regular session actors participate in configured shared core blocks.
+        // Attempts must not: parallel candidates mutating the same durable block
+        // would influence one another despite isolated worktrees/transcripts.
+        use_shared_core: bool,
     ) -> Result<ractor::ActorRef<axocoatl_actor::AgentMessage>, DaemonError> {
         let mut agent_config = agent_yaml.to_core();
 
@@ -4160,14 +8629,16 @@ impl AxocoatlDaemon {
 
         let core_store =
             Self::build_core(scoped_id, &self.data_dir, &agent_config.memory.core).await;
+        let shared_core = if use_shared_core {
+            Self::resolve_shared(&agent_config.memory.core, &self.shared_registry)
+        } else {
+            HashMap::new()
+        };
         let behavior = DefaultAgentBehavior::new(provider, self.counter.clone())
             .with_checkpoint_store(self.checkpoint_store.clone())
             .with_tool_executor(tool_executor)
             .with_sampling(agent_config.sampling.clone())
-            .with_core_memory(
-                core_store,
-                Self::resolve_shared(&agent_config.memory.core, &self.shared_registry),
-            )
+            .with_core_memory(core_store, shared_core)
             .with_daily_log(Arc::new(axocoatl_memory::DailyLogMemory::new(
                 scoped_id.to_string(),
                 format!("{}/memory/daily_log", self.data_dir),
@@ -4190,147 +8661,50 @@ impl AxocoatlDaemon {
         self.agent_registry
             .register(AgentId::new(scoped_id), actor_ref.clone())
             .await;
-        self.agent_handles.lock().unwrap().push(handle);
+        if use_shared_core {
+            self.agent_handles.lock().unwrap().push(handle);
+        } else {
+            // Attempt actors are owned and joined through `ActiveAttemptRun`.
+            // Retaining every completed actor JoinHandle until daemon shutdown
+            // would make repeated Explore/Keep cycles grow this global vector.
+            drop(handle);
+        }
         tracing::info!(session = %session.id, agent = %scoped_id, "Session agent spawned");
         Ok(actor_ref)
     }
 
-    /// Execute a multi-agent workflow.
-    ///
-    /// Directly activates the entry agent(s) with the user's input.
-    /// As each agent completes, a TaskCompleted event is published to the lattice,
-    /// which accumulates pheromone signals on downstream agents. When a downstream
-    /// agent's threshold is crossed (based on its `depends_on` count), it activates
-    /// and receives the upstream outputs as context.
-    pub async fn execute_workflow(
-        &self,
-        workflow_id: &str,
-        input: &str,
-    ) -> Result<WorkflowOutput, DaemonError> {
-        // 1. Look up workflow config
-        let workflow = self
-            .config
-            .workflows
-            .iter()
-            .find(|w| w.id == workflow_id)
-            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.to_string()))?;
-
-        // 2. Build the set of expected agents and their dependency maps
-        let mut expected_agents = HashSet::new();
-        let depends_on_map: DashMap<AgentId, Vec<AgentId>> = DashMap::new();
-
-        for agent_id_str in &workflow.agents {
-            let agent_id = AgentId::new(agent_id_str);
-            expected_agents.insert(agent_id.clone());
-
-            // Look up this agent's depends_on from config
-            if let Some(agent_yaml) = self.config.agents.iter().find(|a| a.id == *agent_id_str) {
-                let deps: Vec<AgentId> = agent_yaml.depends_on.iter().map(AgentId::new).collect();
-                depends_on_map.insert(agent_id, deps);
-            }
-        }
-
-        if expected_agents.is_empty() {
-            return Err(DaemonError::WorkflowExecution(
-                "Workflow has no agents".to_string(),
-            ));
-        }
-
-        // 3. Create the execution tracker
-        let workflow_exec = Arc::new(WorkflowExecution::new(
-            workflow_id.to_string(),
-            expected_agents,
-            input.to_string(),
-            depends_on_map,
-        ));
-
-        // 4. Determine entry agents: use explicit entry_point from config,
-        //    or fall back to all workflow agents with no dependencies.
-        let entry_agents: Vec<AgentId> = if let Some(entry) = &workflow.entry_point {
-            vec![AgentId::new(entry)]
-        } else {
-            workflow
-                .agents
-                .iter()
-                .filter(|id| {
-                    self.config
-                        .agents
-                        .iter()
-                        .find(|a| &a.id == *id)
-                        .is_some_and(|a| a.depends_on.is_empty())
-                })
-                .map(AgentId::new)
-                .collect()
-        };
-
-        if entry_agents.is_empty() {
-            return Err(DaemonError::WorkflowExecution(
-                "Workflow has no entry agents (no entry_point and no agents with empty depends_on)"
-                    .to_string(),
-            ));
-        }
-
-        // 5. Publish a UserInput event (informational — for external observers, doesn't
-        //    drive activation). Then directly activate the entry agent(s) so the
-        //    stigmergic cascade begins with a clean state.
-        let kickoff_event = LatticeEvent {
-            id: EventId::random(),
-            event_type: EventType::UserInput,
-            payload: serde_json::json!({
-                "input": input,
-                "workflow_id": workflow_id,
-            }),
-            produced_by: "user".to_string(),
-            timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        };
-
-        tracing::info!(
-            workflow = %workflow_id,
-            entry_agents = ?entry_agents.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
-            "Workflow started — activating entry agents"
-        );
-
-        // 6. Directly send entry agents into the activation loop.
-        //    Downstream activations will happen via lattice.publish() calls
-        //    inside the activation loop after each agent completes.
-        for agent_id in entry_agents {
-            if workflow_exec.expected_agents.contains(&agent_id) {
-                let _ = self.activation_tx.send(ActivationRequest {
-                    agent_id,
-                    triggering_event: kickoff_event.clone(),
-                    workflow_exec: workflow_exec.clone(),
-                });
-            }
-        }
-
-        // 7. Wait for completion with timeout
-        let timeout_secs = 300u64;
-        match tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            workflow_exec.done.notified(),
-        )
-        .await
-        {
-            Ok(()) => {
-                tracing::info!(workflow = %workflow_id, "Workflow completed");
-                Ok(workflow_exec.into_output())
-            }
-            Err(_) => {
-                tracing::error!(workflow = %workflow_id, "Workflow timed out");
-                Err(DaemonError::WorkflowTimeout(timeout_secs))
-            }
-        }
-    }
-
-    /// Gracefully shut down all agents and the activation loop.
+    /// Gracefully shut down all agents and process-local attempt tasks.
     pub async fn shutdown(self) {
-        // Stop the activation loop
-        if let Some(handle) = self.activation_handle {
-            handle.abort();
-            let _ = handle.await;
+        // Attempt tasks are not ordinary supervised agents: their JoinHandles
+        // own metadata writes that must finish before the runtime disappears.
+        // Preserve their worktrees/current manifests for recovery, but stop and
+        // join the process-local execution just as Discard would before deletion.
+        let active_sets: Vec<(String, String)> = self
+            .active_attempts
+            .lock()
+            .await
+            .iter()
+            .map(|(session, run)| (session.clone(), run.set_id.clone()))
+            .collect();
+        for (session_id, set_id) in active_sets {
+            match self.require_attempt_set(&session_id, &set_id).await {
+                Ok(set) => {
+                    if let Err(error) = self.stop_attempt_runtime(&session_id, &set).await {
+                        tracing::warn!(
+                            session = %session_id,
+                            attempt_set = %set_id,
+                            error = %error,
+                            "failed to join an attempt set during shutdown"
+                        );
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    session = %session_id,
+                    attempt_set = %set_id,
+                    error = %error,
+                    "could not load an active attempt set during shutdown"
+                ),
+            }
         }
 
         let ids = self.agent_registry.list_ids().await;
@@ -4349,11 +8723,6 @@ impl AxocoatlDaemon {
     /// Number of running agents.
     pub async fn agent_count(&self) -> usize {
         self.agent_registry.count().await
-    }
-
-    /// Number of configured workflows.
-    pub fn workflow_count(&self) -> usize {
-        self.config.workflows.len()
     }
 }
 
@@ -4389,5 +8758,641 @@ agents:
             err.contains("mock"),
             "Error should mention mock provider: {err}"
         );
+    }
+
+    #[test]
+    fn cleanup_interrupts_running_lanes_and_checks_but_never_keep() {
+        use crate::git::AttemptSetState;
+
+        assert!(AxocoatlDaemon::attempt_state_is_interruptible(
+            AttemptSetState::Running
+        ));
+        assert!(AxocoatlDaemon::attempt_state_is_interruptible(
+            AttemptSetState::Checking
+        ));
+        assert!(AxocoatlDaemon::attempt_is_interrupt_target(
+            Some("set-current"),
+            "set-current",
+            AttemptSetState::Running
+        ));
+        assert!(
+            !AxocoatlDaemon::attempt_is_interrupt_target(
+                Some("set-stale"),
+                "set-current",
+                AttemptSetState::Running
+            ),
+            "a stale Discard must never interrupt the current set"
+        );
+        for state in [
+            AttemptSetState::Preparing,
+            AttemptSetState::Ready,
+            AttemptSetState::Verified,
+            AttemptSetState::Judged,
+            AttemptSetState::Failed,
+            AttemptSetState::Discarding,
+            AttemptSetState::Applying,
+            AttemptSetState::Applied,
+            AttemptSetState::TranscriptRecorded,
+        ] {
+            assert!(
+                !AxocoatlDaemon::attempt_state_is_interruptible(state),
+                "state {state:?} must not be interrupted out of band"
+            );
+        }
+    }
+
+    #[test]
+    fn judge_contract_forbids_ties_and_names_exact_candidates() {
+        let contract = judge_ranking_contract(&[0, 3, 7]);
+        assert!(contract.contains("Candidate indexes are exactly [0, 3, 7]"));
+        assert!(contract.contains("permutation of 1 through 3"));
+        assert!(contract.contains("ties are forbidden"));
+        assert!(contract.contains("winner must be the candidate whose rank is 1"));
+        assert!(contract.contains("lower candidate index"));
+    }
+
+    #[tokio::test]
+    async fn interrupted_cleanup_wait_acquires_a_released_workspace_lease() {
+        let operation = Arc::new(tokio::sync::Mutex::new(()));
+        let holder = operation.clone().lock_owned().await;
+        let waiter = Box::pin(operation.lock_owned());
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            drop(holder);
+        });
+
+        let guard = AxocoatlDaemon::wait_for_attempt_operation_after_interrupt(
+            waiter,
+            Duration::from_millis(250),
+        )
+        .await;
+        assert!(guard.is_ok(), "cleanup must acquire the released lease");
+        release.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn interrupted_cleanup_wait_is_bounded_when_a_lease_will_not_release() {
+        let operation = Arc::new(tokio::sync::Mutex::new(()));
+        let _holder = operation.clone().lock_owned().await;
+        let waiter = Box::pin(operation.lock_owned());
+        let started = std::time::Instant::now();
+
+        let result = AxocoatlDaemon::wait_for_attempt_operation_after_interrupt(
+            waiter,
+            Duration::from_millis(20),
+        )
+        .await;
+        assert!(matches!(result, Err(DaemonError::AttemptConflict(_))));
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "cleanup must return a retryable conflict instead of hanging"
+        );
+    }
+
+    #[test]
+    fn baseline_cost_requires_every_lanes_real_token_volume() {
+        let known = crate::git::LaneUsage {
+            index: 0,
+            model: Some("remote-model".to_string()),
+            input_tokens: 100,
+            output_tokens: 20,
+            token_usage_known: true,
+            cost_usd: 0.001,
+            cost_known: true,
+            duration_ms: 10,
+        };
+        let unknown = crate::git::LaneUsage {
+            index: 1,
+            model: Some("remote-model".to_string()),
+            input_tokens: 0,
+            output_tokens: 0,
+            token_usage_known: false,
+            cost_usd: 0.0,
+            cost_known: false,
+            duration_ms: 10,
+        };
+
+        assert!(AxocoatlDaemon::complete_lane_token_volume(
+            std::slice::from_ref(&known),
+            1
+        ));
+        assert!(!AxocoatlDaemon::complete_lane_token_volume(
+            std::slice::from_ref(&known),
+            2
+        ));
+        assert!(!AxocoatlDaemon::complete_lane_token_volume(
+            &[known, unknown],
+            2
+        ));
+    }
+
+    #[tokio::test]
+    async fn host_attempt_reads_restore_outputs_without_a_sandbox() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(
+            dir.path().join("output-1.json"),
+            r#"{"index":1,"content":"second"}"#,
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            dir.path().join("output-0.json"),
+            r#"{"index":0,"content":"first"}"#,
+        )
+        .await
+        .unwrap();
+
+        let outputs = AxocoatlDaemon::read_lane_outputs_host(dir.path(), &[1, 0])
+            .await
+            .unwrap();
+        assert_eq!(
+            outputs,
+            vec![
+                crate::git::AttemptLaneOutput {
+                    index: 0,
+                    content: "first".to_string(),
+                },
+                crate::git::AttemptLaneOutput {
+                    index: 1,
+                    content: "second".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn raw_checked_tree_diff_preserves_literal_paths_and_rejects_gitlinks() {
+        let raw = concat!(
+            ":100644 100644 1111111 2222222 M\0:(literal)x\0",
+            ":000000 100755 0000000 3333333 A\0dir/file name\n\0"
+        );
+        let (paths, gitlink) = AxocoatlDaemon::parse_raw_tree_diff(raw.as_bytes()).unwrap();
+        assert_eq!(
+            paths,
+            vec![":(literal)x".to_string(), "dir/file name\n".to_string()]
+        );
+        assert!(!gitlink);
+
+        let gitlink = b":160000 160000 1111111 2222222 M\0submodule\0";
+        assert!(AxocoatlDaemon::parse_raw_tree_diff(gitlink).unwrap().1);
+        let invalid_path = b":100644 100644 1111111 2222222 M\0bad-\xff\0";
+        assert!(matches!(
+            AxocoatlDaemon::parse_raw_tree_diff(invalid_path),
+            Err(DaemonError::AttemptConflict(_))
+        ));
+    }
+
+    #[test]
+    fn keep_tree_lookup_treats_git_pathspec_magic_as_a_literal_filename() {
+        use std::process::Command;
+
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(git(&["init", "-q"]).status.success());
+        std::fs::write(repo.path().join(":(literal)x"), b"literal").unwrap();
+        assert!(git(&["add", "-A"]).status.success());
+        let tree = git(&["write-tree"]);
+        assert!(tree.status.success());
+        let tree = String::from_utf8(tree.stdout).unwrap();
+        let output = git(&[
+            "--literal-pathspecs",
+            "ls-tree",
+            "-r",
+            "-z",
+            tree.trim(),
+            "--",
+            ":(literal)x",
+        ]);
+        assert!(output.status.success());
+        assert!(output.stdout.ends_with(b"\t:(literal)x\0"));
+    }
+
+    #[test]
+    fn structural_directory_is_a_resumable_keep_intermediate() {
+        let directory = Some(StoredFileFingerprint {
+            kind: "directory".to_string(),
+            sha256: String::new(),
+            executable: false,
+        });
+        assert!(AxocoatlDaemon::keep_fingerprint_matches(
+            &None, &directory, true
+        ));
+        assert!(!AxocoatlDaemon::keep_fingerprint_matches(
+            &None, &directory, false
+        ));
+        assert!(!AxocoatlDaemon::keep_fingerprint_matches(
+            &Some(StoredFileFingerprint {
+                kind: "file".to_string(),
+                sha256: "changed".to_string(),
+                executable: false,
+            }),
+            &directory,
+            true
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn keep_fingerprints_preserve_raw_bytes_and_never_follow_parent_symlinks() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        tokio::fs::write(outside.path().join("child"), b"outside-secret")
+            .await
+            .unwrap();
+        symlink(outside.path(), workspace.path().join("link")).unwrap();
+        let affected = HashSet::from(["link".to_string(), "link/child".to_string()]);
+        assert_eq!(
+            AxocoatlDaemon::fingerprint_keep_workspace_path(
+                workspace.path(),
+                std::path::Path::new("link/child"),
+                &affected,
+            )
+            .await
+            .unwrap(),
+            None,
+            "an affected parent symlink makes its descendant logically absent"
+        );
+
+        let raw_path = workspace.path().join("raw");
+        tokio::fs::write(&raw_path, [0xff, b'\n']).await.unwrap();
+        let mut permissions = tokio::fs::metadata(&raw_path).await.unwrap().permissions();
+        permissions.set_mode(0o755);
+        tokio::fs::set_permissions(&raw_path, permissions)
+            .await
+            .unwrap();
+        let fingerprint = AxocoatlDaemon::fingerprint_file(&raw_path)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fingerprint.kind, "file");
+        assert_eq!(
+            fingerprint.sha256,
+            AxocoatlDaemon::bytes_sha256(&[0xff, b'\n'])
+        );
+        assert!(fingerprint.executable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keep_checkout_forces_symlink_semantics_and_validates_tree_modes() {
+        use std::os::unix::fs::symlink;
+        use std::process::Command;
+
+        let repo = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(run(&["init", "-q"]).status.success());
+        std::fs::write(repo.path().join("target"), b"target").unwrap();
+        symlink("target", repo.path().join("link")).unwrap();
+        assert!(run(&["add", "target", "link"]).status.success());
+        let tree = String::from_utf8(run(&["write-tree"]).stdout).unwrap();
+        assert!(run(&["config", "core.symlinks", "false"]).status.success());
+
+        let stage = tempfile::tempdir().unwrap();
+        let index = repo.path().join("keep.index");
+        let git_dir = repo.path().join(".git");
+        let read_tree = Command::new("git")
+            .env("GIT_INDEX_FILE", &index)
+            .arg("-C")
+            .arg(repo.path())
+            .args(["read-tree", tree.trim()])
+            .output()
+            .unwrap();
+        assert!(read_tree.status.success());
+        let checkout = Command::new("git")
+            .env("GIT_DIR", &git_dir)
+            .env("GIT_INDEX_FILE", &index)
+            .env("GIT_WORK_TREE", stage.path())
+            .args([
+                "-c",
+                "core.filemode=true",
+                "-c",
+                "core.symlinks=true",
+                "checkout-index",
+                "--force",
+                "--all",
+            ])
+            .output()
+            .unwrap();
+        assert!(checkout.status.success());
+        assert!(std::fs::symlink_metadata(stage.path().join("link"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+
+        let symlink_fingerprint = Some(StoredFileFingerprint {
+            kind: "symlink".to_string(),
+            sha256: "target".to_string(),
+            executable: false,
+        });
+        let regular_fingerprint = Some(StoredFileFingerprint {
+            kind: "file".to_string(),
+            sha256: "target".to_string(),
+            executable: false,
+        });
+        assert!(AxocoatlDaemon::keep_tree_leaf_matches_fingerprint(
+            "120000 blob deadbeef",
+            &symlink_fingerprint
+        ));
+        assert!(!AxocoatlDaemon::keep_tree_leaf_matches_fingerprint(
+            "120000 blob deadbeef",
+            &regular_fingerprint
+        ));
+        assert!(AxocoatlDaemon::keep_tree_leaf_matches_fingerprint(
+            "100644 blob deadbeef",
+            &regular_fingerprint
+        ));
+        assert!(!AxocoatlDaemon::keep_tree_leaf_matches_fingerprint(
+            "100755 blob deadbeef",
+            &regular_fingerprint
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn keep_stage_resumes_from_immutable_raw_postimages() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let transaction = tempfile::tempdir().unwrap();
+        let apply_root = transaction.path();
+        let postimage_root = apply_root.join("postimage");
+        tokio::fs::create_dir_all(postimage_root.join("dir"))
+            .await
+            .unwrap();
+        tokio::fs::write(postimage_root.join("raw"), [0xff, 0x00, b'\n'])
+            .await
+            .unwrap();
+        let mut permissions = tokio::fs::metadata(postimage_root.join("raw"))
+            .await
+            .unwrap()
+            .permissions();
+        permissions.set_mode(0o755);
+        tokio::fs::set_permissions(postimage_root.join("raw"), permissions)
+            .await
+            .unwrap();
+        tokio::fs::write(postimage_root.join("dir/child"), b"post-child")
+            .await
+            .unwrap();
+        symlink("raw", postimage_root.join("link")).unwrap();
+
+        let paths = ["deleted", "dir", "dir/child", "link", "raw"];
+        let affected: HashSet<String> = paths.iter().map(|path| (*path).to_string()).collect();
+        let mut plans = Vec::new();
+        for path in paths {
+            plans.push(StoredKeepPath {
+                path: path.to_string(),
+                preimage: None,
+                postimage: AxocoatlDaemon::fingerprint_keep_workspace_path(
+                    &postimage_root,
+                    std::path::Path::new(path),
+                    &affected,
+                )
+                .await
+                .unwrap(),
+            });
+        }
+        let post_entries = HashMap::from([
+            ("dir/child".to_string(), "100644:child".to_string()),
+            ("link".to_string(), "120000:link".to_string()),
+            ("raw".to_string(), "100755:raw".to_string()),
+        ]);
+
+        let stage =
+            AxocoatlDaemon::rebuild_keep_stage_from_postimage(apply_root, &plans, &post_entries)
+                .await
+                .unwrap();
+        assert_eq!(
+            tokio::fs::read(stage.join("raw")).await.unwrap(),
+            [0xff, 0x00, b'\n']
+        );
+        assert!(
+            tokio::fs::metadata(stage.join("raw"))
+                .await
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o111
+                != 0
+        );
+        assert_eq!(
+            tokio::fs::read_link(stage.join("link")).await.unwrap(),
+            std::path::Path::new("raw")
+        );
+
+        // Model cancellation after atomic installs consumed two staged leaves.
+        let workspace = apply_root.join("workspace");
+        tokio::fs::create_dir_all(workspace.join("dir"))
+            .await
+            .unwrap();
+        tokio::fs::rename(stage.join("raw"), workspace.join("raw"))
+            .await
+            .unwrap();
+        tokio::fs::rename(stage.join("dir/child"), workspace.join("dir/child"))
+            .await
+            .unwrap();
+
+        // A restart reconstructs the exact consumable stage from raw backups;
+        // no Git checkout, filter, or old container is involved.
+        let rebuilt =
+            AxocoatlDaemon::rebuild_keep_stage_from_postimage(apply_root, &plans, &post_entries)
+                .await
+                .unwrap();
+        assert_eq!(
+            tokio::fs::read(rebuilt.join("raw")).await.unwrap(),
+            [0xff, 0x00, b'\n']
+        );
+        assert_eq!(
+            tokio::fs::read(rebuilt.join("dir/child")).await.unwrap(),
+            b"post-child"
+        );
+
+        // Corruption of any durable leaf is detected before the existing
+        // stage is reset, which in reconciliation is before workspace writes.
+        tokio::fs::write(rebuilt.join("raw"), b"stage-sentinel")
+            .await
+            .unwrap();
+        tokio::fs::write(postimage_root.join("dir/child"), b"corrupt")
+            .await
+            .unwrap();
+        assert!(AxocoatlDaemon::rebuild_keep_stage_from_postimage(
+            apply_root,
+            &plans,
+            &post_entries,
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            tokio::fs::read(rebuilt.join("raw")).await.unwrap(),
+            b"stage-sentinel"
+        );
+    }
+
+    #[test]
+    fn keep_retry_uses_raw_preimage_even_if_attributes_reinterpret_its_git_blob() {
+        let preimage = Some(StoredFileFingerprint {
+            kind: "file".to_string(),
+            sha256: AxocoatlDaemon::bytes_sha256(b"old\r\n"),
+            executable: false,
+        });
+        let postimage = Some(StoredFileFingerprint {
+            kind: "file".to_string(),
+            sha256: AxocoatlDaemon::bytes_sha256(b"new\n"),
+            executable: false,
+        });
+        let current = preimage.clone();
+        assert!(!AxocoatlDaemon::keep_fingerprint_matches(
+            &current, &postimage, false
+        ));
+        assert!(AxocoatlDaemon::keep_fingerprint_matches(
+            &current, &preimage, false
+        ));
+    }
+
+    #[test]
+    fn completed_keep_has_a_conservative_status_without_git_filters() {
+        let file = |sha256: &str| {
+            Some(StoredFileFingerprint {
+                kind: "file".to_string(),
+                sha256: sha256.to_string(),
+                executable: false,
+            })
+        };
+        let apply = StoredKeepApply {
+            index: 0,
+            patch_sha256: "a".repeat(64),
+            candidate_tree: "b".repeat(40),
+            preimage_tree: "c".repeat(40),
+            postimage_tree: "d".repeat(40),
+            paths: vec![
+                StoredKeepPath {
+                    path: "added".to_string(),
+                    preimage: None,
+                    postimage: file("post"),
+                },
+                StoredKeepPath {
+                    path: "deleted".to_string(),
+                    preimage: file("pre"),
+                    postimage: None,
+                },
+                StoredKeepPath {
+                    path: "modified".to_string(),
+                    preimage: file("before"),
+                    postimage: file("after"),
+                },
+            ],
+        };
+
+        let status = AxocoatlDaemon::conservative_keep_status(&apply);
+        assert!(!status.clean);
+        assert_eq!(status.branch, "HEAD");
+        assert_eq!(
+            status
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.state.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("added", "added"),
+                ("deleted", "deleted"),
+                ("modified", "modified")
+            ]
+        );
+        assert!(status.files.iter().all(|file| {
+            file.unstaged && !file.staged && file.added.is_none() && file.removed.is_none()
+        }));
+    }
+
+    #[test]
+    fn completed_keep_receipt_can_finish_cleanup_after_set_root_loss() {
+        let mut set = crate::git::AttemptSet {
+            id: "set".to_string(),
+            session_id: "session".to_string(),
+            task: "task".to_string(),
+            instruction: "task".to_string(),
+            base_sha: "1".repeat(40),
+            base_tree: "2".repeat(40),
+            state: crate::git::AttemptSetState::TranscriptRecorded,
+            kept_index: Some(1),
+            created_at: 1,
+            lanes: Vec::new(),
+        };
+        assert!(AxocoatlDaemon::completed_keep_receipt_allows_cleanup(&set, 1).unwrap());
+
+        // A receipt cannot authorize cleanup of a set whose transcript phase
+        // was never durably reached.
+        set.state = crate::git::AttemptSetState::Applied;
+        assert!(!AxocoatlDaemon::completed_keep_receipt_allows_cleanup(&set, 1).unwrap());
+        set.state = crate::git::AttemptSetState::TranscriptRecorded;
+        assert!(AxocoatlDaemon::completed_keep_receipt_allows_cleanup(&set, 0).is_err());
+    }
+
+    #[test]
+    fn unresolved_local_attempt_requires_local_backend_after_restart() {
+        assert!(AxocoatlDaemon::require_attempt_resolution_backend("podman").is_ok());
+        let error = AxocoatlDaemon::require_attempt_resolution_backend("e2b")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("switch"));
+        assert!(error.contains("Podman"));
+        assert!(error.contains("Keep"));
+        assert!(error.contains("Discard"));
+    }
+
+    #[tokio::test]
+    async fn durable_local_attempt_pointer_remains_visible_after_backend_change() {
+        let workspace = tempfile::tempdir().unwrap();
+        let session_id = "session-after-restart";
+        let set_id = "0190aabb-ccdd-7eef-8899-aabbccddeeff";
+        let set = crate::git::AttemptSet {
+            id: set_id.to_string(),
+            session_id: session_id.to_string(),
+            task: "try ways".to_string(),
+            instruction: "try ways".to_string(),
+            base_sha: "1".repeat(40),
+            base_tree: "2".repeat(40),
+            state: crate::git::AttemptSetState::Verified,
+            kept_index: None,
+            created_at: 1,
+            lanes: vec![crate::git::Variant {
+                index: 0,
+                branch: crate::attempts::branch_name(set_id, 0),
+                worktree: crate::attempts::worktree_path(workspace.path(), session_id, set_id, 0)
+                    .to_string_lossy()
+                    .to_string(),
+                model: None,
+                agent: None,
+                provider: None,
+            }],
+        };
+        let current = crate::attempts::session_attempts_root(workspace.path(), session_id)
+            .join("current.json");
+        tokio::fs::create_dir_all(current.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&current, serde_json::to_vec(&set).unwrap())
+            .await
+            .unwrap();
+
+        let recovered = AxocoatlDaemon::read_current_attempt_set_host(workspace.path(), session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.id, set_id);
+        assert!(AxocoatlDaemon::require_attempt_resolution_backend("e2b").is_err());
     }
 }

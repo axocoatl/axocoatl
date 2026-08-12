@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Why Axocoatl — built for production</title>
-  <meta name="description" content="The agent-tooling industry has a theater problem. Axocoatl is built for production: real workflows, local-first, one 26 MB Rust binary.">
+  <meta name="description" content="The agent-tooling industry has a theater problem. Axocoatl is one local-first coding workbench backed by a durable Rust agent runtime.">
   <meta name="author" content="Axocoatl Contributors">
   <meta name="theme-color" content="#3E7C5C">
   <link rel="canonical" href="https://axocoatl.ai/why">
@@ -13,17 +13,17 @@
   <meta property="og:locale" content="en_US">
   <meta property="og:url" content="https://axocoatl.ai/why">
   <meta property="og:title" content="Why Axocoatl — built for production">
-  <meta property="og:description" content="The agent-tooling industry has a theater problem. Axocoatl is built for production: real workflows, local-first, one 26 MB Rust binary.">
+  <meta property="og:description" content="The agent-tooling industry has a theater problem. Axocoatl is one local-first coding workbench backed by a durable Rust agent runtime.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Why Axocoatl — built for production">
+  <meta property="og:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:site" content="@axocoatl">
   <meta name="twitter:title" content="Why Axocoatl — built for production">
-  <meta name="twitter:description" content="The agent-tooling industry has a theater problem. Axocoatl is built for production: real workflows, local-first, one 26 MB Rust binary.">
+  <meta name="twitter:description" content="The agent-tooling industry has a theater problem. Axocoatl is one local-first coding workbench backed by a durable Rust agent runtime.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="Why Axocoatl — built for production">
+  <meta name="twitter:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -64,7 +64,7 @@
       "@id": "https://axocoatl.ai/why#webpage",
       "url": "https://axocoatl.ai/why",
       "name": "Why Axocoatl — built for production",
-      "description": "The agent-tooling industry has a theater problem. Axocoatl is built for production: real workflows, local-first, one 26 MB Rust binary.",
+      "description": "The agent-tooling industry has a theater problem. Axocoatl is one local-first coding workbench backed by a durable Rust agent runtime.",
       "inLanguage": "en-US",
       "isPartOf": { "@id": "https://axocoatl.ai/#website" },
       "primaryImageOfPage": { "@type": "ImageObject", "url": "https://axocoatl.ai/assets/og-home.png" }
@@ -72,7 +72,7 @@
     {
       "@type": "Article",
       "headline": "Why Axocoatl — built for production",
-      "description": "The agent-tooling industry has a theater problem. Axocoatl is built for production: real workflows, local-first, one 26 MB Rust binary.",
+      "description": "The agent-tooling industry has a theater problem. Axocoatl is one local-first coding workbench backed by a durable Rust agent runtime.",
       "url": "https://axocoatl.ai/why",
       "image": "https://axocoatl.ai/assets/og-home.png",
       "author": { "@type": "Organization", "@id": "https://axocoatl.ai/#organization" },
@@ -103,64 +103,58 @@
           agents run my business." The optics have eaten the output.
           Watch any timeline for ten minutes and you'll see a thousand
           demos of agents doing nothing, gracefully. Axocoatl is for the
-          opposite kind of team, the one with actual work to ship.
+          opposite kind of engineer, the one with actual work to ship.
         </p>
       </header>
 
       <section class="why-block">
         <h2>What we're not.</h2>
         <p>
-          We are not a personal coding copilot. We are not a chat
-          interface with a hidden agent loop. We are not a framework
-          you wire up in Python notebooks. We are not optimized for
-          screenshots.
+          We are not an opaque single-answer agent. We are not a set of
+          disconnected runtime dashboards. We are not a framework you wire up
+          in Python notebooks. We are not optimized for screenshots.
         </p>
         <p>
           Most of what gets called "agent tooling" today is a wrapper
           around a single chat completion with a tool-calling loop on
           top. It looks productive in a demo. It falls apart in a real
-          business because the agent has no memory, no persistence, no
-          supervision, no coordination, no schedule. The first time the
-          process crashes (or the laptop sleeps), the work disappears.
+          repository because it gives one opaque answer, loses durable context,
+          hides the checks and diff, and offers no isolated alternatives. The
+          first time the process crashes (or the laptop sleeps), the work
+          disappears.
         </p>
       </section>
 
       <section class="why-block">
         <h2>What we are.</h2>
         <p>
-          Axocoatl is a <strong>runtime</strong>. A single 26 MB Rust
-          binary that runs on your box, supervises a constellation of
-          agents, and routes work between them through a coordination
-          layer called the event lattice. Agents declare what they
-          depend on; the lattice cascades work without an orchestrator.
-          They survive process restarts via checkpointing. They run on
-          your LLM of choice. They execute on schedules and react to
-          events without you in the loop.
+          Axocoatl is one <strong>coding workbench backed by a runtime</strong>.
+          A Rust binary serves the app, supervises agents, preserves memory and
+          checkpoints, executes Automation DAGs, publishes typed events, and
+          supports explicit coordinator and multi-agent session paths.
+          Agents survive process restarts and run on the LLMs you choose.
         </p>
         <p>
-          The dashboard is a real control panel: live agent telemetry,
-          a directory-scoped session sandbox, an automations editor,
-          an MCP server gallery, and a chat surface for the moments
-          you do want to be in the loop. None of it leaves the box
-          unless you wire it to.
+          A folder-anchored session chat is the permanent spine. Files, editor,
+          terminal, browser, activity, attempts, comparison, git, and agent graph
+          open around it. Ask for one answer or several real ways, run repository
+          checks, compare the work, and keep one. Podman is local by default;
+          remote isolation is used only when you choose it.
         </p>
       </section>
 
       <section class="why-block">
         <h2>What it's actually for.</h2>
         <p>
-          The teams we're building for are the ones who already
-          automate the boring parts of their business and want agents
-          that do the same. Release pulse. Support triage. Daily
-          briefings. Bug bisection. Customer follow-up. Contract
-          review. The unglamorous, recurring work that adds up to a
-          margin. Not the work that makes a video.
+          We are building for engineers who need agents to work in a real
+          repository and show enough evidence to trust the result. Bug fixes.
+          Refactors. Tests. Migrations. The unglamorous work whose diff and checks
+          matter more than its demo.
         </p>
         <p>
           If that's the work you're trying to do, we built this for
-          you. The rest of this page is the comparison frame: what
-          changes, concretely, when you pick a runtime over a
-          framework, and a local binary over a cloud platform.
+          you. The rest of this page is the comparison frame: what changes,
+          concretely, when the workbench and runtime are one owned product.
         </p>
       </section>
 
@@ -178,13 +172,13 @@
         </div>
         <div class="comparison">
           <ax-comparison-row header label="Dimension" them="Most AI tooling" us="Axocoatl"></ax-comparison-row>
-          <ax-comparison-row label="What it is" them="A framework you wire up" us="A runtime that runs."></ax-comparison-row>
-          <ax-comparison-row label="Where it runs" them="On your laptop, while awake" us="Anywhere. As a service. Always on."></ax-comparison-row>
-          <ax-comparison-row label="Persistence" them="Process dies, state dies" us="Checkpointed. Resumes."></ax-comparison-row>
-          <ax-comparison-row label="Coordination" them="Central scheduler" us="Stigmergic event lattice"></ax-comparison-row>
+          <ax-comparison-row label="What it is" them="A loop or framework you assemble" us="A workbench backed by a runtime."></ax-comparison-row>
+          <ax-comparison-row label="Where it runs" them="A vendor-controlled cloud" us="Local by default; remote when chosen."></ax-comparison-row>
+          <ax-comparison-row label="Persistence" them="Process-local context" us="Agent conversations and coordinator progress are checkpointed."></ax-comparison-row>
+          <ax-comparison-row label="Coordination" them="One opaque execution loop" us="Explicit DAGs, typed events, and a coordinator path."></ax-comparison-row>
           <ax-comparison-row label="LLM" them="Their cloud" us="Your choice. Local if you want."></ax-comparison-row>
-          <ax-comparison-row label="Footprint" them="100s of MB + a venv" us="One 26 MB binary"></ax-comparison-row>
-          <ax-comparison-row label="Data flow" them="Telemetry on by default" us="No telemetry. Air-gappable."></ax-comparison-row>
+          <ax-comparison-row label="Footprint" them="A service stack you assemble" us="One Rust binary"></ax-comparison-row>
+          <ax-comparison-row label="Data flow" them="Telemetry on by default" us="No Axocoatl telemetry. You choose providers and sandbox."></ax-comparison-row>
           <ax-comparison-row label="Looks like" them="A demo" us="A tool."></ax-comparison-row>
         </div>
       </div>
@@ -203,9 +197,11 @@
         <p>
           This isn't a strategic loss-leader funnel into a hosted
           version. We don't plan to ship one. Local-first is part of
-          the brand, not a launch tactic. The promise that nothing
-          leaves your box unless you wire it to is the whole point;
-          flipping that later would invalidate the original choice.
+          the brand, not a launch tactic. Axocoatl has no vendor telemetry or
+          control plane; outbound traffic comes from the provider, model-weight
+          download, integration, webhook, or remote sandbox you configure.
+          Set <code>sandbox.network: none</code> when session tools must have no
+          outbound route.
         </p>
       </section>
     </article>
@@ -215,7 +211,7 @@
         <div>
           <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Stop performing AI. Start running it.</h2>
           <p class="muted" style="margin: 0;">
-            One command. Sixty seconds. The runtime is on your box.
+            Install with one command. The runtime is on infrastructure you control.
           </p>
         </div>
         <div style="display: flex; gap: var(--s-3);">

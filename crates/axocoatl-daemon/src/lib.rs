@@ -1,6 +1,7 @@
-pub mod activation;
+mod attempts;
 pub mod automation_executor;
 pub mod automation_runs;
+pub mod automation_runtime;
 pub mod automation_store;
 pub mod bootstrap;
 pub mod consolidation;
@@ -19,6 +20,7 @@ pub mod trajectory;
 pub mod webhook;
 pub mod workflow;
 
+pub use automation_runtime::*;
 pub use bootstrap::*;
 pub use error::*;
 pub use ipc::*;

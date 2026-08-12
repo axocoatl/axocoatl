@@ -4,7 +4,8 @@
 use std::sync::Arc;
 
 use axocoatl_core::{
-    AgentConfig, AgentInput, AgentOutput, ChatMessage, MessageRole, OverflowPolicy, TokenUsageStats,
+    AgentConfig, AgentInput, AgentOutput, ChatMessage, ConversationMode, MessageRole,
+    OverflowPolicy, TokenUsageStats,
 };
 use axocoatl_llm::{ChatRequest, LlmProvider, ToolCall};
 use axocoatl_memory::{AgentCheckpoint, CheckpointStore, SessionMemory};
@@ -601,9 +602,9 @@ impl DefaultAgentBehavior {
             response_format: self.sampling.response_format,
             stop_sequences: Vec::new(),
             provider_options: None,
-            // Per-request override (e.g. Chat tab) wins; otherwise use the
-            // agent's configured model so shared providers don't fall back to
-            // their hardcoded default.
+            // A per-request override (for example from the retained lightweight-
+            // chat API) wins; otherwise use the agent's configured model so
+            // shared providers do not fall back to their hardcoded default.
             model_override: model_override.or_else(|| self.configured_model.clone()),
         }
     }
@@ -687,7 +688,6 @@ impl DefaultAgentBehavior {
             response.usage =
                 TokenUsageStats::new(est_input, self.counter.count_text(&response.content));
         }
-
         Ok(AgentOutput {
             content: response.content,
             tool_calls: Vec::new(),
@@ -1029,13 +1029,38 @@ impl AgentBehavior for DefaultAgentBehavior {
     async fn execute(&mut self, input: AgentInput) -> Result<AgentOutput, AgentError> {
         // A stateless call is a pure function of its input — no session, no
         // checkpoint, no memory. The right mode for per-request variants + eval.
-        if input.stateless {
+        // `stateless` remains authoritative for older serialized callers that
+        // predate ConversationMode.
+        let conversation_mode = input.effective_conversation_mode();
+        if conversation_mode == ConversationMode::Stateless {
             return self.execute_stateless(input).await;
         }
 
-        // Append user input to session memory FIRST — the session is the
-        // canonical conversation history. This enables multi-turn: the LLM
-        // sees all prior user/assistant exchanges from this actor's lifetime.
+        // Lightweight chats persist their transcript in ChatStore, not in this
+        // configured agent's lifetime session/checkpoint. Seed a request-local
+        // Tier-1 transcript, then run the *normal* execution path so streaming,
+        // tools, hooks, spend tracking, and agent-scoped Tier-3/Tier-4 memory all
+        // remain available. AgentActor serializes Execute messages, so swapping
+        // the active transcript for the awaited call cannot overlap another
+        // turn. Every Result path restores the canonical actor transcript below;
+        // a panic terminates the actor, whose restart restores its last canonical
+        // checkpoint rather than this call-local transcript.
+        let canonical_session = if conversation_mode == ConversationMode::SuppliedHistory {
+            let mut supplied_session = SessionMemory::new();
+            let counter = self.counter.clone();
+            supplied_session
+                .replace_with_chat_messages(&input.history, |text| counter.count_text(text));
+            Some(std::mem::replace(&mut self.session, supplied_session))
+        } else {
+            None
+        };
+        let persist_actor_session = canonical_session.is_none();
+
+        let outcome = async {
+
+        // Append user input to the active Tier-1 transcript first. In the
+        // default mode this is the actor-owned lifetime session; in supplied
+        // mode it is the caller-owned, request-local chat transcript above.
         let input_tokens = self.counter.count_text(&input.content);
         self.session
             .append(MessageRole::User, &input.content, input_tokens);
@@ -1049,12 +1074,15 @@ impl AgentBehavior for DefaultAgentBehavior {
         // when no pipeline is configured.
         let ctx_target = (self.provider.capabilities().max_context_tokens as f32
             * axocoatl_token::COMPRESSION_TRIGGER_PCT) as usize;
-        self.compact_session(ctx_target).await;
+        if persist_actor_session {
+            self.compact_session(ctx_target).await;
+        }
 
-        // Build from session (not from input.history) so the LLM sees full
-        // conversation history accumulated across all calls to this actor.
-        // `input.system_override` (when Some, e.g. from a Chat tab call) takes
-        // precedence over the agent's configured system_prompt for this turn.
+        // Build from the active transcript. Supplied history was copied into a
+        // request-local SessionMemory above; actor mode uses the durable session.
+        // `input.system_override` (when Some, for example from the retained
+        // lightweight-chat API) takes precedence over the agent's configured
+        // system_prompt for this turn.
         let mut request = self.build_request_from_session(
             input.system_override.as_deref(),
             input.model_override.clone(),
@@ -1107,6 +1135,7 @@ impl AgentBehavior for DefaultAgentBehavior {
             response.usage =
                 TokenUsageStats::new(est_input, self.counter.count_text(&response.content));
         }
+        let mut execution_usage = response.usage.clone();
 
         // Fallback: some models (notably small Ollama-served ones doing
         // function-calling) intermittently emit tool calls as JSON in the
@@ -1342,6 +1371,7 @@ impl AgentBehavior for DefaultAgentBehavior {
                     response.usage =
                         TokenUsageStats::new(est, self.counter.count_text(&response.content));
                 }
+                execution_usage.merge(&response.usage);
 
                 if let Some(tracker) = &self.tracker {
                     let _ = tracker
@@ -1374,27 +1404,31 @@ impl AgentBehavior for DefaultAgentBehavior {
             }
         }
 
-        // Checkpoint after execution, when the store's policy says to.
-        if let Some(store) = &self.checkpoint_store {
-            if store.should_checkpoint(self.session.messages().len()) {
-                self.checkpoint_version += 1;
-                let ckpt = AgentCheckpoint {
-                    version: self.checkpoint_version,
-                    agent_id: self.agent_id.clone(),
-                    checkpoint_time: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                    session_messages: self.session.messages().to_vec(),
-                    cumulative_token_usage: self
-                        .tracker
-                        .as_ref()
-                        .map(|t| TokenUsageStats::new(t.input_used(), t.output_used()))
-                        .unwrap_or_default(),
-                    behavior_state: None,
-                };
-                if let Err(e) = store.save(&ckpt).await {
-                    tracing::warn!(agent = %self.agent_id, error = %e, "Checkpoint save failed");
+        // Only the actor-owned transcript is checkpointed. ChatStore-owned
+        // histories must never overwrite the configured agent's canonical
+        // checkpoint (or make fork/delete/rewind ineffective).
+        if persist_actor_session {
+            if let Some(store) = &self.checkpoint_store {
+                if store.should_checkpoint(self.session.messages().len()) {
+                    self.checkpoint_version += 1;
+                    let ckpt = AgentCheckpoint {
+                        version: self.checkpoint_version,
+                        agent_id: self.agent_id.clone(),
+                        checkpoint_time: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                        session_messages: self.session.messages().to_vec(),
+                        cumulative_token_usage: self
+                            .tracker
+                            .as_ref()
+                            .map(|t| TokenUsageStats::new(t.input_used(), t.output_used()))
+                            .unwrap_or_default(),
+                        behavior_state: None,
+                    };
+                    if let Err(e) = store.save(&ckpt).await {
+                        tracing::warn!(agent = %self.agent_id, error = %e, "Checkpoint save failed");
+                    }
                 }
             }
         }
@@ -1402,8 +1436,16 @@ impl AgentBehavior for DefaultAgentBehavior {
         Ok(AgentOutput {
             content: response.content,
             tool_calls: tool_records,
-            token_usage: response.usage,
+            token_usage: execution_usage,
         })
+        }
+        .await;
+
+        if let Some(canonical_session) = canonical_session {
+            self.session = canonical_session;
+        }
+
+        outcome
     }
 
     /// Background "sleep-time" consolidation: an LLM memory-manager pass that
@@ -1799,6 +1841,7 @@ mod tests {
                         name: Some("echo".to_string()),
                         args_delta: "{\"text\":\"hi\"}".to_string(),
                     }),
+                    Ok(StreamEvent::Usage(TokenUsageStats::new(11, 3))),
                     Ok(StreamEvent::Done {
                         finish_reason: FinishReason::ToolUse,
                     }),
@@ -1808,6 +1851,7 @@ mod tests {
                     Ok(StreamEvent::TextDelta {
                         delta: "final answer".to_string(),
                     }),
+                    Ok(StreamEvent::Usage(TokenUsageStats::new(17, 5))),
                     Ok(StreamEvent::Done {
                         finish_reason: FinishReason::Stop,
                     }),
@@ -1875,6 +1919,8 @@ mod tests {
         assert_eq!(output.content, "final answer");
         assert_eq!(output.tool_calls.len(), 1);
         assert_eq!(output.tool_calls[0].tool_name, "echo");
+        assert_eq!(output.token_usage.input_tokens, 28);
+        assert_eq!(output.token_usage.output_tokens, 8);
 
         // The crux of the round-trip: the follow-up request must replay the
         // assistant's tool-call turn followed by the correlated tool result.
@@ -2464,7 +2510,7 @@ mod tests {
 
     #[tokio::test]
     async fn system_override_replaces_configured_prompt() {
-        // Regression for the Chat tab's per-chat system prompt feature.
+        // Regression for the lightweight-chat API's per-chat system prompt.
         // When AgentInput.system_override is Some, build_request_from_session
         // must use that string instead of self.system_prompt (memory context
         // still merges normally).
@@ -2523,6 +2569,62 @@ mod tests {
             ProviderError,
         > {
             self.captured.lock().unwrap().push(request);
+            let events = vec![
+                Ok(StreamEvent::TextDelta {
+                    delta: "ok".to_string(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                }),
+            ];
+            Ok(Box::pin(tokio_stream::iter(events)))
+        }
+    }
+
+    /// Captures requests and holds the first provider call at a gate. Used to
+    /// prove that dropping the caller waiting on an actor reply does not leave
+    /// the actor's canonical session swapped to a caller-owned chat transcript.
+    struct GatedCapturingLlm {
+        calls: std::sync::atomic::AtomicUsize,
+        captured: Arc<std::sync::Mutex<Vec<ChatRequest>>>,
+        first_started: Arc<tokio::sync::Notify>,
+        release_first: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for GatedCapturingLlm {
+        fn provider_id(&self) -> &str {
+            "gated-capture"
+        }
+
+        fn model_id(&self) -> &str {
+            "gated-capture-model"
+        }
+
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                streaming: true,
+                ..Default::default()
+            }
+        }
+
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            unimplemented!("uses chat_stream")
+        }
+
+        async fn chat_stream(
+            &self,
+            request: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            self.captured.lock().unwrap().push(request);
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                self.first_started.notify_one();
+                self.release_first.notified().await;
+            }
             let events = vec![
                 Ok(StreamEvent::TextDelta {
                     delta: "ok".to_string(),
@@ -2615,6 +2717,365 @@ mod tests {
 
         // The stateless call did not write to the session.
         assert_eq!(behavior.session().len(), len_before);
+    }
+
+    #[tokio::test]
+    async fn supplied_history_is_call_local_and_does_not_checkpoint() {
+        use axocoatl_memory::CheckpointPolicy;
+
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(CapturingLlm {
+            captured: captured.clone(),
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CheckpointStore::new(
+            tmp.path(),
+            CheckpointPolicy::EveryLlmCall,
+        ));
+        let config = AgentConfig {
+            id: AgentId::new("shared-agent"),
+            name: "Shared Agent".to_string(),
+            system_prompt: Some("SYSTEM".to_string()),
+            ..AgentConfig::default()
+        };
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter())
+            .with_checkpoint_store(store.clone());
+        behavior.on_start(&config).await.unwrap();
+
+        // Establish the configured agent's canonical transcript and checkpoint.
+        behavior
+            .execute(AgentInput::text("GLOBAL_POISON"))
+            .await
+            .unwrap();
+        let canonical_before = serde_json::to_value(behavior.session().messages()).unwrap();
+        assert_eq!(behavior.checkpoint_version, 1);
+
+        behavior
+            .execute(AgentInput::text("A_NEXT").with_supplied_history(vec![
+                ChatMessage::user("A_SEED"),
+                ChatMessage::assistant("A_REPLY"),
+            ]))
+            .await
+            .unwrap();
+        // Empty history is an explicit, meaningful new chat. It must not fall
+        // back to the configured agent's canonical session.
+        behavior
+            .execute(AgentInput::text("B_FIRST").with_supplied_history(Vec::new()))
+            .await
+            .unwrap();
+        // A fork replays only the prefix its ChatStore record supplied.
+        behavior
+            .execute(AgentInput::text("CHILD_NEXT").with_supplied_history(vec![
+                ChatMessage::user("A_SEED"),
+                ChatMessage::assistant("A_REPLY"),
+            ]))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(behavior.session().messages()).unwrap(),
+            canonical_before,
+            "caller-owned turns must not mutate the configured agent transcript"
+        );
+        assert_eq!(
+            behavior.checkpoint_version, 1,
+            "caller-owned turns must not advance the configured agent checkpoint"
+        );
+        let checkpoint = store
+            .load_latest(&AgentId::new("shared-agent"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(checkpoint.version, 1);
+        let checkpoint_text = checkpoint
+            .session_messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(checkpoint_text, vec!["GLOBAL_POISON", "ok"]);
+
+        // A later canonical turn resumes the configured agent transcript and
+        // still excludes every caller-owned chat/fork turn.
+        behavior
+            .execute(AgentInput::text("GLOBAL_NEXT"))
+            .await
+            .unwrap();
+
+        let request_texts = captured
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| {
+                request
+                    .messages
+                    .iter()
+                    .map(|message| message.text_content().unwrap_or("").to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(request_texts[0], vec!["SYSTEM", "GLOBAL_POISON"]);
+        assert_eq!(
+            request_texts[1],
+            vec!["SYSTEM", "A_SEED", "A_REPLY", "A_NEXT"]
+        );
+        assert_eq!(request_texts[2], vec!["SYSTEM", "B_FIRST"]);
+        assert_eq!(
+            request_texts[3],
+            vec!["SYSTEM", "A_SEED", "A_REPLY", "CHILD_NEXT"]
+        );
+        assert_eq!(
+            request_texts[4],
+            vec!["SYSTEM", "GLOBAL_POISON", "ok", "GLOBAL_NEXT"]
+        );
+
+        assert_eq!(behavior.checkpoint_version, 2);
+        let checkpoint = store
+            .load_latest(&AgentId::new("shared-agent"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(checkpoint.version, 2);
+        assert!(checkpoint
+            .session_messages
+            .iter()
+            .all(|message| !message.content.contains("A_")
+                && !message.content.contains("B_")
+                && !message.content.contains("CHILD_")));
+    }
+
+    #[tokio::test]
+    async fn supplied_history_restores_actor_session_after_provider_error() {
+        let mut behavior = DefaultAgentBehavior::new(Arc::new(FailingLlm), simple_counter());
+        behavior.on_start(&AgentConfig::default()).await.unwrap();
+        behavior.session.append(MessageRole::User, "GLOBAL_SAFE", 3);
+        let canonical_before = serde_json::to_value(behavior.session().messages()).unwrap();
+
+        let result = behavior
+            .execute(
+                AgentInput::text("CHAT_FAIL")
+                    .with_supplied_history(vec![ChatMessage::user("CHAT_SEED")]),
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            serde_json::to_value(behavior.session().messages()).unwrap(),
+            canonical_before
+        );
+    }
+
+    #[tokio::test]
+    async fn supplied_history_restores_actor_session_after_budget_abort() {
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(CapturingLlm {
+            captured: captured.clone(),
+        });
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter());
+        behavior
+            .on_start(&AgentConfig {
+                token_budget: Some(TokenBudget {
+                    per_call: 1,
+                    per_execution: 1,
+                    overflow_policy: OverflowPolicy::Abort,
+                }),
+                ..AgentConfig::default()
+            })
+            .await
+            .unwrap();
+        behavior.session.append(MessageRole::User, "GLOBAL_SAFE", 3);
+        let canonical_before = serde_json::to_value(behavior.session().messages()).unwrap();
+
+        let result = behavior
+            .execute(
+                AgentInput::text("CHAT_INPUT_THAT_EXCEEDS_ONE_TOKEN")
+                    .with_supplied_history(vec![ChatMessage::user("CHAT_SEED")]),
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(AgentError::TokenBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            serde_json::to_value(behavior.session().messages()).unwrap(),
+            canonical_before
+        );
+        assert!(captured.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn supplied_history_restores_actor_session_when_reply_waiter_is_cancelled() {
+        use crate::actor_impl::{execute_agent, execute_agent_streaming, AgentActor};
+        use ractor::Actor;
+
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let first_started = Arc::new(tokio::sync::Notify::new());
+        let release_first = Arc::new(tokio::sync::Notify::new());
+        let provider = Arc::new(GatedCapturingLlm {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            captured: captured.clone(),
+            first_started: first_started.clone(),
+            release_first: release_first.clone(),
+        });
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter());
+        behavior.session.append(MessageRole::User, "GLOBAL_SAFE", 3);
+        let config = AgentConfig {
+            id: AgentId::new("cancel-shared-agent"),
+            name: "Cancel Shared Agent".to_string(),
+            system_prompt: Some("SYSTEM".to_string()),
+            ..AgentConfig::default()
+        };
+        let (actor, handle) = AgentActor::spawn(
+            Some("cancel-shared-agent-test".to_string()),
+            AgentActor,
+            (config, Box::new(behavior) as Box<dyn AgentBehavior>),
+        )
+        .await
+        .unwrap();
+
+        let (sink, _chunks) = tokio::sync::mpsc::unbounded_channel();
+        let actor_for_chat = actor.clone();
+        let waiter = tokio::spawn(async move {
+            execute_agent_streaming(
+                &actor_for_chat,
+                AgentInput::text("CHAT_NEXT")
+                    .with_supplied_history(vec![ChatMessage::user("CHAT_SEED")]),
+                sink,
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), first_started.notified())
+            .await
+            .expect("caller-owned turn did not reach the provider");
+
+        // Mirrors ChatStop: the socket-side waiter is dropped, while the actor
+        // continues its already-enqueued Execute message to a safe boundary.
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        release_first.notify_one();
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            execute_agent(&actor, AgentInput::text("GLOBAL_NEXT")),
+        )
+        .await
+        .expect("canonical follow-up timed out")
+        .unwrap();
+
+        let request_texts = captured
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| {
+                request
+                    .messages
+                    .iter()
+                    .map(|message| message.text_content().unwrap_or("").to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(request_texts[0], vec!["SYSTEM", "CHAT_SEED", "CHAT_NEXT"]);
+        assert_eq!(
+            request_texts[1],
+            vec!["SYSTEM", "GLOBAL_SAFE", "GLOBAL_NEXT"]
+        );
+
+        actor.stop(None);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn supplied_history_preserves_streamed_tool_round_trip() {
+        use axocoatl_tools::{EchoTool, ToolExecutor};
+
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(ToolThenTextLlm {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            captured: captured.clone(),
+        });
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("echo", Arc::new(EchoTool));
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter())
+            .with_tool_executor(Arc::new(executor));
+        behavior.on_start(&AgentConfig::default()).await.unwrap();
+        behavior
+            .session
+            .append(MessageRole::User, "GLOBAL_TOOL_POISON", 4);
+        let canonical_before = serde_json::to_value(behavior.session().messages()).unwrap();
+
+        let (sink, mut chunks) = tokio::sync::mpsc::unbounded_channel();
+        behavior.set_stream_sink(Some(sink));
+        let output = behavior
+            .execute(AgentInput::text("CHAT_NEXT").with_supplied_history(vec![
+                ChatMessage::user("CHAT_SEED"),
+                ChatMessage::assistant("CHAT_REPLY"),
+            ]))
+            .await
+            .unwrap();
+        behavior.set_stream_sink(None);
+
+        assert_eq!(output.content, "final answer");
+        assert_eq!(output.tool_calls.len(), 1);
+        assert_eq!(output.token_usage.input_tokens, 28);
+        assert_eq!(output.token_usage.output_tokens, 8);
+        assert_eq!(
+            serde_json::to_value(behavior.session().messages()).unwrap(),
+            canonical_before
+        );
+
+        let requests = captured.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        for request in requests.iter() {
+            assert!(request
+                .messages
+                .iter()
+                .all(|message| message.text_content() != Some("GLOBAL_TOOL_POISON")));
+        }
+        let followup = &requests[1];
+        let texts = followup
+            .messages
+            .iter()
+            .filter_map(|message| message.text_content())
+            .collect::<Vec<_>>();
+        assert!(texts.starts_with(&["CHAT_SEED", "CHAT_REPLY", "CHAT_NEXT"]));
+        let assistant = followup
+            .messages
+            .iter()
+            .find(|message| {
+                message.role == MessageRole::Assistant && !message.tool_calls.is_empty()
+            })
+            .expect("assistant tool-call turn must be present");
+        assert_eq!(assistant.tool_calls[0].id, "call_1");
+        let tool_result = followup
+            .messages
+            .iter()
+            .find(|message| message.role == MessageRole::Tool)
+            .expect("correlated tool result must be present");
+        assert_eq!(tool_result.name.as_deref(), Some("echo"));
+        assert_eq!(tool_result.tool_call_id.as_deref(), Some("call_1"));
+        drop(requests);
+
+        let mut saw_started = false;
+        let mut saw_result = false;
+        while let Ok(chunk) = chunks.try_recv() {
+            match chunk {
+                crate::behavior::AgentStreamChunk::ToolCallStarted { name, .. }
+                    if name == "echo" =>
+                {
+                    saw_started = true;
+                }
+                crate::behavior::AgentStreamChunk::ToolCallResult { name, .. }
+                    if name == "echo" =>
+                {
+                    saw_result = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            saw_started && saw_result,
+            "tool frames must remain streamed"
+        );
     }
 
     #[tokio::test]

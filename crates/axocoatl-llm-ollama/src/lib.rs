@@ -333,6 +333,40 @@ impl OllamaProvider {
     fn endpoint(&self) -> String {
         format!("{}/v1/chat/completions", self.base_url)
     }
+
+    /// Build the OpenAI-compatible request body shared by the buffered and
+    /// streaming chat paths.
+    fn build_request_body(&self, request: &ChatRequest, stream: bool) -> serde_json::Value {
+        let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
+        let mut body = serde_json::json!({
+            "model": model_for_call,
+            "messages": ollama_messages(&request.messages),
+        });
+
+        if stream {
+            body["stream"] = serde_json::json!(true);
+        }
+        if let Some(max) = request.max_tokens {
+            body["max_tokens"] = serde_json::json!(max);
+        }
+        if let Some(temp) = request.temperature {
+            body["temperature"] = serde_json::json!(temp);
+        }
+        if let Some(top_p) = request.top_p {
+            body["top_p"] = serde_json::json!(top_p);
+        }
+        if request.response_format == Some(axocoatl_core::ResponseFormat::Json) {
+            // This provider targets Ollama's OpenAI-compatible endpoint. Its
+            // JSON-mode contract is OpenAI's `response_format` object, not the
+            // native `/api/chat` endpoint's top-level `format: "json"` field.
+            body["response_format"] = serde_json::json!({ "type": "json_object" });
+        }
+        if !request.tools.is_empty() {
+            body["tools"] = tools_json(&request.tools);
+        }
+
+        body
+    }
 }
 
 #[async_trait::async_trait]
@@ -359,32 +393,7 @@ impl LlmProvider for OllamaProvider {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
-        let messages = ollama_messages(&request.messages);
-
-        // `model_override` lets the Chat tab pick a different model per turn
-        // without spinning up a new provider instance. Falls back to the
-        // configured default when None.
-        let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
-        let mut body = serde_json::json!({
-            "model": model_for_call,
-            "messages": messages,
-        });
-
-        if let Some(max) = request.max_tokens {
-            body["max_tokens"] = serde_json::json!(max);
-        }
-        if let Some(temp) = request.temperature {
-            body["temperature"] = serde_json::json!(temp);
-        }
-        if let Some(top_p) = request.top_p {
-            body["top_p"] = serde_json::json!(top_p);
-        }
-        if request.response_format == Some(axocoatl_core::ResponseFormat::Json) {
-            body["format"] = serde_json::json!("json");
-        }
-        if !request.tools.is_empty() {
-            body["tools"] = tools_json(&request.tools);
-        }
+        let body = self.build_request_body(&request, false);
 
         let response = self
             .client
@@ -486,30 +495,7 @@ impl LlmProvider for OllamaProvider {
     {
         use tokio_stream::StreamExt;
 
-        let messages = ollama_messages(&request.messages);
-
-        let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
-        let mut body = serde_json::json!({
-            "model": model_for_call,
-            "messages": messages,
-            "stream": true,
-        });
-
-        if let Some(max) = request.max_tokens {
-            body["max_tokens"] = serde_json::json!(max);
-        }
-        if let Some(temp) = request.temperature {
-            body["temperature"] = serde_json::json!(temp);
-        }
-        if let Some(top_p) = request.top_p {
-            body["top_p"] = serde_json::json!(top_p);
-        }
-        if request.response_format == Some(axocoatl_core::ResponseFormat::Json) {
-            body["format"] = serde_json::json!("json");
-        }
-        if !request.tools.is_empty() {
-            body["tools"] = tools_json(&request.tools);
-        }
+        let body = self.build_request_body(&request, true);
 
         let response = self
             .client
@@ -762,6 +748,17 @@ mod bare_json_tool_call_tests {
 mod tests {
     use super::*;
 
+    fn assert_openai_json_mode(body: &serde_json::Value) {
+        assert_eq!(
+            body.get("response_format"),
+            Some(&serde_json::json!({ "type": "json_object" }))
+        );
+        assert!(
+            body.get("format").is_none(),
+            "the native Ollama `format` field is invalid on /v1/chat/completions"
+        );
+    }
+
     #[test]
     fn default_base_url() {
         let provider = OllamaProvider::new("llama3");
@@ -798,6 +795,30 @@ mod tests {
         assert!(!caps.vision);
         assert!(caps.tool_calling);
         assert_eq!(caps.max_context_tokens, 128_000);
+    }
+
+    #[test]
+    fn buffered_json_mode_request_uses_openai_compatible_shape() {
+        let provider = OllamaProvider::new("llama3");
+        let mut request = ChatRequest::simple("Return JSON");
+        request.response_format = Some(axocoatl_core::ResponseFormat::Json);
+
+        let body = provider.build_request_body(&request, false);
+
+        assert_openai_json_mode(&body);
+        assert!(body.get("stream").is_none());
+    }
+
+    #[test]
+    fn streaming_json_mode_request_uses_openai_compatible_shape() {
+        let provider = OllamaProvider::new("llama3");
+        let mut request = ChatRequest::simple("Return JSON");
+        request.response_format = Some(axocoatl_core::ResponseFormat::Json);
+
+        let body = provider.build_request_body(&request, true);
+
+        assert_openai_json_mode(&body);
+        assert_eq!(body.get("stream"), Some(&serde_json::json!(true)));
     }
 
     #[test]

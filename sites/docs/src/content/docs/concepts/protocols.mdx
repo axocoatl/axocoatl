@@ -45,7 +45,7 @@ bridges straight to that agent's execution and returns its output.
 
 MCP tool calls can be gated behind **human approval**. When the gate has no
 prior decision for a call, it pauses, surfaces the pending approval to the
-dashboard over the WebSocket stream, and waits for a verdict before the tool
+app over the WebSocket stream, and waits for a verdict before the tool
 runs.
 
 ## A2A — inbound tasks
@@ -81,10 +81,10 @@ webhooks:
       Authorization: ${INTERNAL_TOKEN}     # optional static headers
 ```
 
-**Opt-in.** With no `webhooks:` configured the dispatcher never runs, so a
-default install makes zero outbound requests. `axocoatl doctor` and the startup
-log name exactly which hosts receive egress, so you always see what leaves the
-box.
+**Opt-in.** With no `webhooks:` configured the webhook dispatcher sends no
+requests. Model providers, embedding-model downloads, MCP, web search, bridged
+session tools, and remote sandboxes are separate possible egress paths.
+`axocoatl doctor` and startup logs identify configured webhook hosts.
 
 **Payload** — a stable JSON schema:
 
@@ -117,8 +117,8 @@ restart** — pair with a message broker if you need stronger guarantees.
 
 <Aside type="note">
 Webhooks carry event data — including agent-output previews — to the endpoint
-you configure. That is consistent with the local-first promise: nothing leaves
-your box unless *you* wire it. The default is no egress.
+you configure. That is consistent with the local-first promise: this egress is
+opt-in and goes only to the endpoint you chose. No webhook is configured by default.
 </Aside>
 
 ## A2A vs. MCP vs. the HTTP execute endpoint

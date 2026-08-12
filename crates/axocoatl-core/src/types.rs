@@ -2,6 +2,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::token::TokenUsageStats;
 
+/// Which transcript owns an agent execution.
+///
+/// This is intentionally separate from the legacy [`AgentInput::stateless`]
+/// boolean so callers can distinguish a fully stateless inference from a turn
+/// whose complete, authoritative transcript is supplied with the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationMode {
+    /// Read and update the long-lived agent actor's session transcript.
+    #[default]
+    ActorSession,
+    /// Treat [`AgentInput::history`] as the complete transcript for this turn.
+    ///
+    /// The runtime must not read from, write to, or checkpoint the actor's
+    /// session while executing this request. Unlike [`Self::Stateless`], this
+    /// mode may still use the normal multi-step execution path, including tools.
+    SuppliedHistory,
+    /// Build a pure, single-shot request from the supplied input without using
+    /// or mutating the actor session.
+    Stateless,
+}
+
 /// One attached file the user dropped onto a chat. The runtime reads the
 /// bytes and routes them by MIME: images get base64-inlined to the vision
 /// model, text-bearing files (PDF/CSV/XLSX/plain) get their *extracted text*
@@ -33,7 +55,8 @@ pub struct AgentInput {
     pub history: Vec<ChatMessage>,
     /// Per-call system prompt override. When `Some`, replaces the agent's
     /// configured system prompt for this single turn (memory context still
-    /// merges as usual). Used by the Chat tab's "per-chat instructions" field.
+    /// merges as usual). Used by the retained lightweight-chat API's
+    /// per-chat instructions and by other stateless override callers.
     #[serde(default)]
     pub system_override: Option<String>,
     /// Per-call model override (e.g. `"llama3.2:1b"`). When `Some`, the request
@@ -46,11 +69,25 @@ pub struct AgentInput {
     /// for the provider in use.
     #[serde(default)]
     pub attachments: Vec<AgentAttachment>,
+    /// Transcript ownership for this execution. Missing fields deserialize as
+    /// [`ConversationMode::ActorSession`] so older wire payloads keep their
+    /// original behavior.
+    ///
+    /// The legacy [`Self::stateless`] flag remains part of the wire format. A
+    /// value of `true` always takes precedence and means
+    /// [`ConversationMode::Stateless`]; otherwise this field is authoritative.
+    /// Use [`Self::effective_conversation_mode`] when dispatching an input.
+    #[serde(default)]
+    pub conversation_mode: ConversationMode,
     /// Run this call statelessly — build the request from this input alone
     /// (system override or configured prompt + history + content), without
     /// reading or writing the agent's persistent session or checkpoint. A pure
     /// function of the input; the right mode for per-request prompt/model
     /// variants and for scoring an agent over independent inputs.
+    ///
+    /// Retained for backward-compatible deserialization. New execution code
+    /// should resolve this flag together with [`Self::conversation_mode`] via
+    /// [`Self::effective_conversation_mode`].
     #[serde(default)]
     pub stateless: bool,
 }
@@ -64,6 +101,7 @@ impl AgentInput {
             system_override: None,
             model_override: None,
             attachments: Vec::new(),
+            conversation_mode: ConversationMode::ActorSession,
             stateless: false,
         }
     }
@@ -83,6 +121,19 @@ impl AgentInput {
         self
     }
 
+    /// Supply the complete authoritative transcript for this turn.
+    ///
+    /// This is distinct from [`Self::with_history`], which preserves the
+    /// caller's existing conversation mode for backward compatibility. Builder
+    /// calls are last-write-wins: this method clears the legacy stateless flag,
+    /// while a later `with_stateless(true)` switches to stateless execution.
+    pub fn with_supplied_history(mut self, history: Vec<ChatMessage>) -> Self {
+        self.history = history;
+        self.conversation_mode = ConversationMode::SuppliedHistory;
+        self.stateless = false;
+        self
+    }
+
     pub fn with_system_override(mut self, system: Option<String>) -> Self {
         self.system_override = system;
         self
@@ -95,7 +146,23 @@ impl AgentInput {
 
     pub fn with_stateless(mut self, stateless: bool) -> Self {
         self.stateless = stateless;
+        self.conversation_mode = if stateless {
+            ConversationMode::Stateless
+        } else {
+            ConversationMode::ActorSession
+        };
         self
+    }
+
+    /// Resolve transcript ownership across the new mode field and the legacy
+    /// `stateless` wire flag. Legacy `stateless: true` wins even when a payload
+    /// also carries a different `conversation_mode`.
+    pub fn effective_conversation_mode(&self) -> ConversationMode {
+        if self.stateless {
+            ConversationMode::Stateless
+        } else {
+            self.conversation_mode
+        }
     }
 }
 
@@ -284,12 +351,84 @@ mod tests {
         assert_eq!(input.content, "hello");
         assert!(input.context.is_none());
         assert!(input.history.is_empty());
+        assert_eq!(
+            input.effective_conversation_mode(),
+            ConversationMode::ActorSession
+        );
     }
 
     #[test]
     fn agent_input_with_context() {
         let input = AgentInput::text("hello").with_context(serde_json::json!({"key": "value"}));
         assert!(input.context.is_some());
+    }
+
+    #[test]
+    fn supplied_history_builder_sets_authoritative_mode() {
+        let history = vec![
+            ChatMessage::user("first question"),
+            ChatMessage::assistant("first answer"),
+        ];
+        let input = AgentInput::text("follow up").with_supplied_history(history.clone());
+
+        assert_eq!(input.history.len(), history.len());
+        assert_eq!(
+            input.effective_conversation_mode(),
+            ConversationMode::SuppliedHistory
+        );
+        assert!(!input.stateless);
+
+        // The older builder still only assigns history; it must not silently
+        // change execution semantics for existing callers.
+        let legacy = AgentInput::text("follow up").with_history(history);
+        assert_eq!(
+            legacy.effective_conversation_mode(),
+            ConversationMode::ActorSession
+        );
+    }
+
+    #[test]
+    fn stateless_builder_keeps_legacy_flag_and_mode_in_sync() {
+        let input = AgentInput::text("classify")
+            .with_supplied_history(vec![ChatMessage::user("seed")])
+            .with_stateless(true);
+        assert!(input.stateless);
+        assert_eq!(input.conversation_mode, ConversationMode::Stateless);
+        assert_eq!(
+            input.effective_conversation_mode(),
+            ConversationMode::Stateless
+        );
+
+        let stateful = input.with_stateless(false);
+        assert!(!stateful.stateless);
+        assert_eq!(stateful.conversation_mode, ConversationMode::ActorSession);
+        assert_eq!(
+            stateful.effective_conversation_mode(),
+            ConversationMode::ActorSession
+        );
+    }
+
+    #[test]
+    fn conversation_mode_serde_defaults_and_honors_legacy_stateless() {
+        let legacy: AgentInput = serde_json::from_str(
+            r#"{"content":"hi","context":null,"history":[],"stateless":true}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.conversation_mode, ConversationMode::ActorSession);
+        assert_eq!(
+            legacy.effective_conversation_mode(),
+            ConversationMode::Stateless
+        );
+
+        let supplied =
+            AgentInput::text("next").with_supplied_history(vec![ChatMessage::user("seed")]);
+        let json = serde_json::to_string(&supplied).unwrap();
+        assert!(json.contains(r#""conversation_mode":"supplied_history""#));
+        let roundtrip: AgentInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            roundtrip.effective_conversation_mode(),
+            ConversationMode::SuppliedHistory
+        );
     }
 
     #[test]

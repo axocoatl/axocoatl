@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Showcase — real workflows · Axocoatl</title>
-  <meta name="description" content="Real workflows running on Axocoatl. Release pulse, support triage, daily briefings, bug bisection: the recurring work that adds up to a margin.">
+  <title>Showcase — workflow patterns · Axocoatl</title>
+  <meta name="description" content="Representative workflow patterns for Axocoatl: release pulse, support triage, daily briefings, bug bisection, and contract review.">
   <meta name="author" content="Axocoatl Contributors">
   <meta name="theme-color" content="#3E7C5C">
   <link rel="canonical" href="https://axocoatl.ai/showcase">
@@ -12,18 +12,18 @@
   <meta property="og:site_name" content="Axocoatl">
   <meta property="og:locale" content="en_US">
   <meta property="og:url" content="https://axocoatl.ai/showcase">
-  <meta property="og:title" content="Showcase — real workflows · Axocoatl">
-  <meta property="og:description" content="Real workflows running on Axocoatl. Release pulse, support triage, daily briefings, bug bisection: the recurring work that adds up to a margin.">
+  <meta property="og:title" content="Showcase — workflow patterns · Axocoatl">
+  <meta property="og:description" content="Representative workflow patterns for Axocoatl: release pulse, support triage, daily briefings, bug bisection, and contract review.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Showcase — real workflows · Axocoatl">
+  <meta property="og:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:site" content="@axocoatl">
-  <meta name="twitter:title" content="Showcase — real workflows · Axocoatl">
-  <meta name="twitter:description" content="Real workflows running on Axocoatl. Release pulse, support triage, daily briefings, bug bisection: the recurring work that adds up to a margin.">
+  <meta name="twitter:title" content="Showcase — workflow patterns · Axocoatl">
+  <meta name="twitter:description" content="Representative workflow patterns for Axocoatl: release pulse, support triage, daily briefings, bug bisection, and contract review.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="Showcase — real workflows · Axocoatl">
+  <meta name="twitter:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -75,13 +75,13 @@
       "@type": "CollectionPage",
       "@id": "https://axocoatl.ai/showcase#webpage",
       "url": "https://axocoatl.ai/showcase",
-      "name": "Showcase — real workflows · Axocoatl",
-      "description": "Real workflows running on Axocoatl. Release pulse, support triage, daily briefings, bug bisection: the recurring work that adds up to a margin.",
+      "name": "Showcase — workflow patterns · Axocoatl",
+      "description": "Representative workflow patterns for Axocoatl: release pulse, support triage, daily briefings, bug bisection, and contract review.",
       "inLanguage": "en-US",
       "isPartOf": { "@id": "https://axocoatl.ai/#website" },
       "publisher": { "@type": "Organization", "@id": "https://axocoatl.ai/#organization" }
     },
-    {"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://axocoatl.ai/"},{"@type":"ListItem","position":2,"name":"Showcase — real workflows · Axocoatl","item":"https://axocoatl.ai/showcase"}]}
+    {"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://axocoatl.ai/"},{"@type":"ListItem","position":2,"name":"Showcase — workflow patterns · Axocoatl","item":"https://axocoatl.ai/showcase"}]}
   ]
 }
   </script>
@@ -93,26 +93,27 @@
 
     <section class="container hero" style="padding-bottom: var(--s-7);">
       <span class="eyebrow">Showcase</span>
-      <h1>Real workflows. Not demos.</h1>
+      <h1>Workflow patterns to adapt.</h1>
       <p class="lede">
-        These are the recurring workflows our users run every day. None
-        of them make for a viral video. All of them save someone two
-        hours. The compound interest of automating the boring parts is
-        the whole product thesis.
+        These are representative workflow shapes built from Axocoatl's runtime
+        primitives, not customer testimonials. Connect the relevant repositories,
+        MCP servers, and delivery endpoints, then adapt them to your own work.
       </p>
     </section>
 
     <section class="container section">
 
       <div class="workflow">
-        <span class="workflow-trigger">▶ Trigger: schedule, every Monday 9am</span>
+        <span class="workflow-trigger">▶ Trigger: schedule, every 7d</span>
         <h3>Release pulse</h3>
         <p>
           A coordinator agent pulls the past week of git activity,
           opens issues for the next 72 hours, and produces a paragraph
           of release notes. It posts the draft to a team channel for
-          review. If no one objects within four hours, the draft is
-          committed to <code>CHANGELOG.md</code> automatically.
+          review. A top-level Interrupt node can hold the run for an explicit
+          human decision before a later node writes anything; that parked
+          decision reappears after a daemon restart and resumes without
+          replaying completed nodes.
         </p>
         <div class="meta">
           <span>activity-collector → issue-summarizer → release-writer → reviewer</span>
@@ -120,11 +121,11 @@
       </div>
 
       <div class="workflow">
-        <span class="workflow-trigger">⊛ Trigger: lattice event NewSupportEmail</span>
+        <span class="workflow-trigger">⊛ Trigger: external integration publishes NewSupportEmail</span>
         <h3>Support triage</h3>
         <p>
-          A proactive agent listens for incoming support email. For
-          each new message it classifies the request, attaches the
+          An email integration publishes a lattice event for each new message.
+          The matching Automation classifies the request, attaches the
           relevant history from the customer's previous tickets, and
           routes the thread to the right teammate with a one-line
           summary at the top. It also drafts an acknowledgement reply.
@@ -135,14 +136,13 @@
       </div>
 
       <div class="workflow">
-        <span class="workflow-trigger">▶ Trigger: schedule, every weekday 8am</span>
+        <span class="workflow-trigger">▶ Trigger: schedule, every 24h</span>
         <h3>Daily briefing</h3>
         <p>
           A planner agent reads the team's calendar, the last 24 hours
-          of activity, and any unresolved interrupts in the lattice. It
-          produces a five-bullet morning briefing that lands in your
-          inbox at 8am: what shipped, what's blocked, what needs you
-          today.
+          of activity, and any unresolved Automation interrupts. It
+          produces a five-bullet briefing on each interval: what shipped,
+          what's blocked, and what needs a person.
         </p>
         <div class="meta">
           <span>calendar-reader → activity-summarizer → briefing-writer</span>
@@ -156,7 +156,7 @@
           When a test starts failing, you open a directory session and
           tell the agent which test is broken. It runs
           <code>git bisect</code> inside the sandbox, identifies the
-          offending commit, opens the diff in the dashboard, and
+          offending commit, opens the diff in the app, and
           proposes a fix. You review and merge.
         </p>
         <div class="meta">
@@ -165,11 +165,11 @@
       </div>
 
       <div class="workflow">
-        <span class="workflow-trigger">◇ Trigger: Skill fires on ContractUploaded</span>
+        <span class="workflow-trigger">◇ Trigger: external watcher fires a Skill for ContractUploaded</span>
         <h3>Contract review</h3>
         <p>
-          A reviewer agent watches a folder for new contracts. When one
-          lands, it parses the document, flags non-standard clauses,
+          An external watcher publishes the contract event through a Skill.
+          The matching Automation parses the document, flags non-standard clauses,
           summarizes payment terms, and posts the findings to a review
           channel. Legal reads the summary, not the contract.
         </p>
@@ -184,10 +184,11 @@
       <div class="container-narrow" style="padding: 0;">
         <h2>Build your own.</h2>
         <p>
-          Every workflow above is a few dozen lines of YAML and a
-          couple of Skill declarations. The dashboard ships an editor
-          that lets you wire agents visually, then commits the result
-          back to disk.
+          Define agents in YAML. Create live Automations in Settings with a
+          runnable Input → Agent starter graph, or use the HTTP API for
+          programmatic CRUD. Edit and run them alongside Skills and MCP servers;
+          legacy workflow YAML is first-boot seed data. Use the
+          session app to run repository work and review its result.
         </p>
         <p style="margin-top: var(--s-5);">
           <a class="btn btn-primary" href="/install">Install →</a>

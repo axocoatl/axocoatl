@@ -17,13 +17,13 @@
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Pricing — Axocoatl">
+  <meta property="og:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:site" content="@axocoatl">
   <meta name="twitter:title" content="Pricing — Axocoatl">
   <meta name="twitter:description" content="Axocoatl is open source under Apache-2.0. The runtime is free. Paid support is available.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="Pricing — Axocoatl">
+  <meta name="twitter:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -77,8 +77,8 @@
 
         <h2>What you pay for.</h2>
         <p>
-          The runtime is free. Two things are not, and they're not ours
-          to sell:
+          Axocoatl has no software license fee. The services and infrastructure
+          you choose are separate, and they're not ours to sell:
         </p>
         <ol style="padding-left: 1.4rem; line-height: 1.85; color: var(--fg-soft); margin: var(--s-3) 0 0;">
           <li>
@@ -91,6 +91,11 @@
             <strong>The hardware.</strong> Your laptop, your server,
             your homelab, your AWS instance. We touch none of it.
           </li>
+          <li>
+            <strong>Optional infrastructure and integrations.</strong> An
+            E2B-compatible remote sandbox, hosted MCP server, webhook receiver,
+            web search service, or other external system may have its own bill.
+          </li>
         </ol>
 
         <h2 style="margin-top: var(--s-8);">No tiers, on purpose.</h2>
@@ -100,16 +105,14 @@
           procurement-friendly pricing. The runtime is the same
           whether one person uses it or a thousand. If your
           organization needs SSO, you wire it in front of the
-          dashboard yourself; the code is yours to modify.
+          app yourself; the code is yours to modify.
         </p>
 
-        <h2 style="margin-top: var(--s-8);">No hosted version planned.</h2>
+        <h2 style="margin-top: var(--s-8);">No Axocoatl control plane.</h2>
         <p>
-          We're not running a hosted Axocoatl product. Local-first is
-          a brand commitment, not a launch tactic. The promise that
-          nothing leaves your box unless you wire it to is the whole
-          thesis; flipping that later would invalidate the original
-          choice.
+          The open-source app does not require an Axocoatl-hosted account or control
+          plane. Podman keeps session execution local by default. If you choose a remote
+          sandbox or cloud model, it runs through the provider account you selected.
         </p>
 
         <h2 style="margin-top: var(--s-8);">If you need help.</h2>
@@ -127,10 +130,10 @@
     <section class="container section" style="padding-bottom: var(--s-10);">
       <div style="display: grid; grid-template-columns: 1fr auto; gap: var(--s-5); align-items: center; padding: var(--s-7); background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);">
         <div>
-          <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Use it for free.</h2>
+          <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">No Axocoatl license fee.</h2>
           <p class="muted" style="margin: 0;">
-            The only cost is your time to install and the inference
-            tokens you choose to pay for.
+            You pay only for the models, infrastructure, and integrations you
+            choose to bring.
           </p>
         </div>
         <div style="display: flex; gap: var(--s-3);">

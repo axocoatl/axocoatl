@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Concepts — Axocoatl</title>
-  <meta name="description" content="How Axocoatl coordinates agents: stigmergic event lattice, persistent runtime, sessions, skills, memory.">
+  <meta name="description" content="How Axocoatl fits together: explicit Automation DAGs, typed events, sessions, coordinators, Skills, and memory.">
   <meta name="author" content="Axocoatl Contributors">
   <meta name="theme-color" content="#3E7C5C">
   <link rel="canonical" href="https://axocoatl.ai/concepts">
@@ -13,17 +13,17 @@
   <meta property="og:locale" content="en_US">
   <meta property="og:url" content="https://axocoatl.ai/concepts">
   <meta property="og:title" content="Concepts — Axocoatl">
-  <meta property="og:description" content="How Axocoatl coordinates agents: stigmergic event lattice, persistent runtime, sessions, skills, memory.">
+  <meta property="og:description" content="How Axocoatl fits together: explicit Automation DAGs, typed events, sessions, coordinators, Skills, and memory.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Concepts — Axocoatl">
+  <meta property="og:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:site" content="@axocoatl">
   <meta name="twitter:title" content="Concepts — Axocoatl">
-  <meta name="twitter:description" content="How Axocoatl coordinates agents: stigmergic event lattice, persistent runtime, sessions, skills, memory.">
+  <meta name="twitter:description" content="How Axocoatl fits together: explicit Automation DAGs, typed events, sessions, coordinators, Skills, and memory.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="Concepts — Axocoatl">
+  <meta name="twitter:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -46,7 +46,7 @@
       "@id": "https://axocoatl.ai/concepts#webpage",
       "url": "https://axocoatl.ai/concepts",
       "name": "Concepts — Axocoatl",
-      "description": "How Axocoatl coordinates agents: stigmergic event lattice, persistent runtime, sessions, skills, memory.",
+      "description": "How Axocoatl fits together: explicit Automation DAGs, typed events, sessions, coordinators, Skills, and memory.",
       "inLanguage": "en-US",
       "isPartOf": { "@id": "https://axocoatl.ai/#website" },
       "primaryImageOfPage": { "@type": "ImageObject", "url": "https://axocoatl.ai/assets/og-home.png" }
@@ -54,7 +54,7 @@
     {
       "@type": "TechArticle",
       "headline": "Concepts — Axocoatl",
-      "description": "How Axocoatl coordinates agents: stigmergic event lattice, persistent runtime, sessions, skills, memory.",
+      "description": "How Axocoatl fits together: explicit Automation DAGs, typed events, sessions, coordinators, Skills, and memory.",
       "url": "https://axocoatl.ai/concepts",
       "image": "https://axocoatl.ai/assets/og-home.png",
       "author": { "@type": "Organization", "@id": "https://axocoatl.ai/#organization" },
@@ -74,12 +74,11 @@
 
     <section class="container hero" style="padding-bottom: var(--s-7);">
       <span class="eyebrow">Mental model · 5 minutes</span>
-      <h1>The lattice does<br>the routing.</h1>
+      <h1>Events connect<br>the runtime.</h1>
       <p class="lede">
-        Every other agentic framework puts a scheduler at the center:
-        "now run agent B." Axocoatl puts a coordination fabric at the
-        center and lets the agents decide for themselves when they're
-        ready. Here's what that means.
+        Axocoatl keeps graph execution explicit and publishes typed events to a
+        shared fabric. Skills, Automation triggers, webhooks, and integration
+        observers meet on that feed. Here's how the pieces fit.
       </p>
     </section>
 
@@ -89,18 +88,19 @@
           <span class="eyebrow">1 · The event lattice</span>
           <h2>A bulletin board for events.</h2>
           <p>
-            Agents publish events when they finish work, or fail, or
-            get interrupted. Every other agent watches for events it
-            cares about. When an agent's threshold is crossed (usually
-            one event from each dependency), it wakes up and runs.
+            Skills and runtime components publish typed events with a payload,
+            producer, and timestamp. The Automation trigger runtime, configured
+            webhooks, and integration observers subscribe to the same
+            notifications.
           </p>
           <p>
-            There's no orchestrator deciding the order. The order is
-            whatever the dependency graph implies. The lattice is what
-            makes the ordering work.
+            Manual Automations use an explicit DAG executor. Multi-agent
+            directory sessions run their configured agents in dependency order.
+            The daemon does not use lattice thresholds as a second workflow
+            scheduler.
           </p>
         </div>
-        <ax-finder-window title="research-and-summarize · running" no-sidebar>
+        <ax-finder-window title="lattice events · illustration" no-sidebar>
           <div class="lattice-stage" data-mount="lattice"></div>
         </ax-finder-window>
       </div>
@@ -128,38 +128,36 @@
 
     <section class="container section">
       <div class="container-narrow" style="padding: 0;">
-        <span class="eyebrow">3 · Skills are lattice-aware</span>
-        <h2>Capabilities that route themselves.</h2>
+        <span class="eyebrow">3 · Skills publish events</span>
+        <h2>Named capabilities with observable output.</h2>
         <p>
-          A Skill declares the events it <strong>emits</strong> and the
-          events it <strong>reacts to</strong>. The lattice broadcasts
-          each event to every agent: every agent that holds a Skill
-          reacting to it activates. The matching event fans out — there's
-          no central picker choosing one agent over another.
+          Enable a Skill for a session and it becomes a callable tool. Calling
+          or manually firing it publishes its declared <strong>emits</strong>
+          events, tagged with that Skill as producer.
         </p>
         <p>
-          You don't wire Skills to agents. You declare what each Skill
-          listens for, and the lattice fans every event out to all the
-          holders that react.
+          Use an <strong>OnSkill</strong> Automation to match that exact
+          producer or an <strong>OnEvent</strong> Automation to match an emitted
+          event type. The current daemon preserves <code>reacts_to</code> as
+          metadata; it does not automatically execute every holder from it.
         </p>
       </div>
     </section>
 
     <section class="container section">
       <div class="container-narrow" style="padding: 0;">
-        <span class="eyebrow">4 · Sessions are directories</span>
-        <h2>Build with your agents.</h2>
+        <span class="eyebrow">4 · Sessions anchor the work</span>
+        <h2>One workbench, one repository context.</h2>
         <p>
-          A Session is an agent (or a lattice of agents) running in a
-          single directory. The session sandbox is a container (podman)
-          bind-mounted to your folder. The agent reads, writes, and
-          runs commands inside. You see every action stream into the
-          dashboard.
+          A Workspace is an authorized project directory; a Session is
+          persistent work and conversation anchored to it. Chat remains the spine
+          while files, editor, terminal, browser, attempts, comparison, and git
+          open around it.
         </p>
         <p>
-          Close the laptop. Open it tomorrow. The session is still
-          there. Hot-restart from the last checkpoint. The agent picks
-          up where it left off.
+          Podman is the local sandbox by default. A session can instead use an
+          E2B-compatible remote backend when you explicitly choose one. The
+          checkpointed conversation can be restored after a restart.
         </p>
       </div>
     </section>
@@ -180,8 +178,8 @@
         <p>
           Checkpointing snapshots state for crash recovery, and while the
           agent is idle a background pass consolidates durable facts up
-          into the core blocks. All of it local-first. Nothing calls out
-          unless you tell it to.
+          into the core blocks. Embedding and storage stay local; model-provider,
+          integration, and remote-sandbox calls are the ones you configure.
         </p>
       </div>
     </section>
@@ -192,7 +190,7 @@
           <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Read the full docs.</h2>
           <p class="muted" style="margin: 0;">
             Every concept above has a full reference in the docs, with
-            embedded code and a live lattice demo on the page.
+            embedded code and an interactive event-lattice illustration.
           </p>
         </div>
         <div style="display: flex; gap: var(--s-3);">

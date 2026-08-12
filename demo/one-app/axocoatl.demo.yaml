@@ -1,0 +1,118 @@
+# Axocoatl one-app presenter configuration.
+#
+# This config deliberately uses one already-installed local model. The variety
+# in the Attempts comparison comes from different agent instructions, without
+# paying the model-load penalty during a live presentation.
+
+agents:
+  - id: coder
+    name: "Minimal Coder"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      You are a concise senior JavaScript engineer. Inspect the repository,
+      make the smallest correct production change, use repository tools, run
+      the configured checks, and report Root cause / Change / Proof. Do not
+      alter tests to make a failure disappear. /no_think
+    depends_on: []
+    token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
+
+  - id: defender
+    name: "Invariant Defender"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      You are a defensive JavaScript engineer. Treat tests as a contract, look
+      for boundary and invariant failures, keep the patch focused, run the
+      configured checks, and report Root cause / Change / Proof. Do not commit.
+      /no_think
+    depends_on: []
+    token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
+
+  - id: planner
+    name: "Acceptance Planner"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      Turn a coding task into concise acceptance criteria, constraints, and a
+      verification plan. Preserve the user's scope. /no_think
+    depends_on: []
+    token_budget: { per_execution: 4000, per_call: 2500, overflow_policy: warn }
+
+  - id: judge
+    name: "Evidence Judge"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      Rank candidate changes only from repository checks, diff quality, and
+      route evidence. Prefer the smallest complete change and state tradeoffs.
+      /no_think
+    depends_on: []
+    token_budget: { per_execution: 4000, per_call: 2500, overflow_policy: warn }
+
+  - id: architect
+    name: "Systems Architect"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      Turn a product proposal into a concrete technical design with explicit
+      assumptions, risks, and acceptance criteria. /no_think
+    depends_on: []
+    token_budget: { per_execution: 5000, per_call: 3000, overflow_policy: warn }
+
+  - id: reviewer
+    name: "Critical Reviewer"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      Review designs for correctness, security, performance, and operability.
+      Mark ship-blocking issues with the literal word BLOCKING. /no_think
+    depends_on: [architect]
+    token_budget: { per_execution: 5000, per_call: 3000, overflow_policy: warn }
+
+# On a fresh demo data directory this becomes a Manual Automation in Settings.
+workflows:
+  - id: release-review
+    name: "Release review"
+    description: "Architect a change, then review its risks."
+    agents: [architect, reviewer]
+    entry_point: architect
+
+skills:
+  - id: demo-health-check
+    name: "Demo health check"
+    description: "Publish a DemoRequested event into Activity."
+    emits: ["DemoRequested"]
+    reacts_to: []
+    agents: [judge]
+    prompt: "Report whether the current demonstration is ready."
+
+# This becomes an OnEvent Automation. Firing the Skill above exercises the
+# canonical Skill → event lattice → Automation path.
+proactive:
+  - id: demo-event-response
+    name: "Demo event response"
+    agent: judge
+    trigger:
+      type: on_event
+      event: DemoRequested
+    input: "A demo health event fired. Return three concise readiness checks."
+    enabled: true
+
+providers:
+  ollama:
+    base_url: "http://127.0.0.1:11434"
+
+server:
+  host: "127.0.0.1"
+  port: 18080
+
+sandbox:
+  backend: podman
+  allow_untrusted_images: true
+  allow_post_create_command: false
+  network: bridge
+  require_resource_limits: false
+
+consolidation:
+  enabled: false

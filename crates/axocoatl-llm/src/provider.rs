@@ -83,8 +83,8 @@ pub struct ChatRequest {
     pub provider_options: Option<serde_json::Value>,
     /// Per-call model override. When `Some`, the provider should use this
     /// model id instead of its configured default for this single request.
-    /// Used by the Chat tab's `model_override` feature; the provider, base
-    /// URL, and credentials stay the same.
+    /// Used by per-request callers, including the retained lightweight-chat
+    /// API; the provider, base URL, and credentials stay the same.
     pub model_override: Option<String>,
 }
 

@@ -1,14 +1,14 @@
 /**
  * <ax-automation-card
  *   trigger="schedule"
- *   trigger-detail="every Monday 9am"
+ *   trigger-detail="every 7d"
  *   name="Release pulse"
  *   agents="activity-collector → issue-summarizer → release-writer → reviewer"
  *   status="enabled">
  *   <p>Body copy describing the workflow.</p>
  * </ax-automation-card>
  *
- * Looks like a real Automation card from the dashboard. The trigger
+ * Marketing representation of an Automation card. The trigger
  * attribute picks the right glyph + label.
  */
 const TRIGGER_META = {

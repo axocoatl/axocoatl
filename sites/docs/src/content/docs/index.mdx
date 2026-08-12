@@ -1,6 +1,6 @@
 ---
 title: Axocoatl
-description: The open-source Rust runtime for self-coordinating multi-agent systems.
+description: The open-source, local-first coding workbench backed by a durable Rust agent runtime.
 template: splash
 hero:
   tagline: Real workflows. No theater.
@@ -16,22 +16,23 @@ hero:
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-Axocoatl is a Rust runtime for **self-coordinating multi-agent systems**.
-Agents persist their state, run as a system service, route work through a
-stigmergic event lattice, and finish what you start. One 26 MB binary.
-Your hardware. Your LLM. Your data.
+Axocoatl is a **local-first coding workbench** backed by a durable Rust agent
+runtime. Work in one folder-anchored session, ask one agent or explore several
+ways, run the repository's checks, compare what happened, and keep one inspectable
+result. The runtime has no Axocoatl telemetry; model providers, integrations,
+and remote isolation are the outbound paths you choose.
 
 ## Quick links
 
 <CardGrid>
-  <Card title="Get started in 60 seconds" icon="rocket">
-    Install, run `axocoatl doctor`, open the dashboard. [Quickstart →](/getting-started/)
+  <Card title="Get started" icon="rocket">
+    Install, run `axocoatl doctor`, open the app. [Quickstart →](/getting-started/)
   </Card>
-  <Card title="How the lattice works" icon="puzzle">
-    The coordination model that makes Axocoatl different. [Concepts →](/concepts/lattice/)
+  <Card title="Sessions and attempts" icon="puzzle">
+    The work model: one chat, several possible solutions, one kept result. [Concepts →](/concepts/sessions/)
   </Card>
   <Card title="Bring your own LLM" icon="setting">
-    Ollama for local, or any cloud provider. [Provider setup →](/guides/ollama-quickstart/)
+    Ollama for local inference, or one of the supported remote adapters. [Provider setup →](/guides/providers/)
   </Card>
   <Card title="Troubleshooting" icon="warning">
     What `axocoatl doctor` checks, and how to fix common failures. [Open →](/guides/troubleshooting/)
@@ -44,7 +45,8 @@ The agent-tooling industry has a theater problem. Mac mini farms, glowing
 terminals, demo videos. The optics have eaten the output. Axocoatl is for
 the opposite kind of team: the one with actual work to ship.
 
-We're a **runtime**, not a framework. A single binary that runs on your
-box, supervises a constellation of agents, persists their state through
-crashes and restarts, and lets you watch every step in the dashboard. The
-LLM is your choice. Nothing leaves the box unless you wire it to.
+The workbench is backed by a **runtime**, not a framework you must assemble into
+a product. One binary runs on your box, supervises agents, persists their state
+through crashes and restarts, and records the session activity, attempt Routes,
+Checks, and git changes it can observe. The LLM is your choice. Local Podman is
+the default session sandbox; a remote sandbox is used only when you choose it.

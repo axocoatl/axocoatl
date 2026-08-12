@@ -17,9 +17,10 @@ state down to durable recall:
 | 3 — Core memory | Named blocks, rendered into every prompt | Curated facts the agent keeps in context |
 | 4 — Semantic | On-device vector store | Lossless recall by meaning, not by key |
 
-All four tiers are **local-first**. The semantic embedder runs on your own
-hardware (see below); nothing leaves the machine unless you point a provider
-at a remote LLM.
+All four stores and semantic inference are **local-first**. The embedding model
+weights are fetched once unless already cached. Separately, the model provider,
+MCP servers, web search, webhooks, bridged session tools, and optional remote
+sandbox can make the outbound calls you configure.
 
 <Aside type="note">
 **Checkpointing is a separate mechanism, not a tier.** It snapshots the

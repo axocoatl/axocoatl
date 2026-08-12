@@ -27,6 +27,8 @@ condenses them, and the final summary plus per-agent token usage is printed.
 - Session memory across turns
 - Message-passing coordination between two agents
 
-For the real stigmergic workflow engine driving this pattern with live LLMs,
-see the `research-and-summarize` workflow in the root `axocoatl.yaml` and run
-`axocoatl workflow run research-and-summarize -i "..."`.
+For the product path with configured providers, start from a fresh data
+directory so the `research-and-summarize` legacy record in the root
+`axocoatl.yaml` seeds a manual Automation, then run
+`axocoatl workflow run research-and-summarize -i "..."`. That command uses the
+canonical explicit Automation DAG executor.

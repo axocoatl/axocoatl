@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Install — Axocoatl</title>
-  <meta name="description" content="Install Axocoatl in 60 seconds. One curl-pipe-sh command, or cargo install. Linux x86_64, macOS Intel and aarch64. SHA-256 verified.">
+  <meta name="description" content="Install Axocoatl with one shell command or Cargo. Prebuilt Linux and macOS releases include SHA-256 checksum files.">
   <meta name="author" content="Axocoatl Contributors">
   <meta name="theme-color" content="#3E7C5C">
   <link rel="canonical" href="https://axocoatl.ai/install">
@@ -13,17 +13,17 @@
   <meta property="og:locale" content="en_US">
   <meta property="og:url" content="https://axocoatl.ai/install">
   <meta property="og:title" content="Install — Axocoatl">
-  <meta property="og:description" content="Install Axocoatl in 60 seconds. One curl-pipe-sh command, or cargo install. Linux x86_64, macOS Intel and aarch64. SHA-256 verified.">
+  <meta property="og:description" content="Install Axocoatl with one shell command or Cargo. Prebuilt Linux and macOS releases include SHA-256 checksum files.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Install — Axocoatl">
+  <meta property="og:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:site" content="@axocoatl">
   <meta name="twitter:title" content="Install — Axocoatl">
-  <meta name="twitter:description" content="Install Axocoatl in 60 seconds. One curl-pipe-sh command, or cargo install. Linux x86_64, macOS Intel and aarch64. SHA-256 verified.">
+  <meta name="twitter:description" content="Install Axocoatl with one shell command or Cargo. Prebuilt Linux and macOS releases include SHA-256 checksum files.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="Install — Axocoatl">
+  <meta name="twitter:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -44,7 +44,7 @@
       "@id": "https://axocoatl.ai/install#webpage",
       "url": "https://axocoatl.ai/install",
       "name": "Install — Axocoatl",
-      "description": "Install Axocoatl in 60 seconds. One curl-pipe-sh command, or cargo install. Linux x86_64, macOS Intel and aarch64. SHA-256 verified.",
+      "description": "Install Axocoatl with one shell command or Cargo. Prebuilt Linux and macOS releases include SHA-256 checksum files.",
       "inLanguage": "en-US",
       "isPartOf": { "@id": "https://axocoatl.ai/#website" },
       "primaryImageOfPage": { "@type": "ImageObject", "url": "https://axocoatl.ai/assets/og-home.png" }
@@ -52,7 +52,7 @@
     {
       "@type": "TechArticle",
       "headline": "Install — Axocoatl",
-      "description": "Install Axocoatl in 60 seconds. One curl-pipe-sh command, or cargo install. Linux x86_64, macOS Intel and aarch64. SHA-256 verified.",
+      "description": "Install Axocoatl with one shell command or Cargo. Prebuilt Linux and macOS releases include SHA-256 checksum files.",
       "url": "https://axocoatl.ai/install",
       "image": "https://axocoatl.ai/assets/og-home.png",
       "author": { "@type": "Organization", "@id": "https://axocoatl.ai/#organization" },
@@ -72,11 +72,11 @@
 
     <section class="container hero" style="padding-bottom: var(--s-7);">
       <span class="eyebrow">Install</span>
-      <h1>One binary.<br>Sixty seconds.</h1>
+      <h1>One release binary.</h1>
       <p class="lede">
         Prebuilt binaries for Linux and macOS, x86_64 and aarch64 — and on
-        Windows, inside WSL2. The install script verifies a SHA-256 checksum
-        before installing anywhere on your PATH.
+        Windows, inside WSL2. Releases publish SHA-256 checksum files; the
+        installer verifies the archive when it can retrieve the matching file.
       </p>
     </section>
 
@@ -93,7 +93,7 @@
 
         <h2 style="margin-top: var(--s-8);">From source</h2>
         <p class="muted">The release binary lands at <code>target/release/axocoatl</code>.</p>
-        <ax-cli-snippet>git clone https://github.com/axocoatl/axocoatl && cd axocoatl && cargo build --release</ax-cli-snippet>
+        <ax-cli-snippet>git clone https://github.com/axocoatl/axocoatl &amp;&amp; cd axocoatl &amp;&amp; cargo build -p axocoatl-cli --release</ax-cli-snippet>
 
         <h2 style="margin-top: var(--s-8);">Windows (WSL2)</h2>
         <p class="muted">
@@ -116,10 +116,10 @@
       <div class="container-narrow" style="padding: 0;">
         <h2>After install</h2>
         <ol style="padding-left: 1.4rem; line-height: 1.85; color: var(--fg-soft); margin: var(--s-3) 0 0;">
-          <li><code>axocoatl doctor</code>: verify Ollama, podman, and the data dir are reachable.</li>
-          <li><code>axocoatl onboard</code>: interactive setup wizard. Picks a provider, scaffolds a project.</li>
-          <li><code>axocoatl dev</code>: start the daemon, IPC, and dashboard on <code>:8080</code>.</li>
-          <li>Open <code>http://localhost:8080</code>. Switch to Sessions. Click the seeded <strong>demo-counters</strong> session.</li>
+          <li><code>axocoatl onboard</code>: interactive setup wizard. Picks a provider and scaffolds a project.</li>
+          <li><code>axocoatl doctor</code>: verify Ollama, Podman, and the data directory are reachable.</li>
+          <li><code>axocoatl dev</code>: start the daemon, IPC, and app on <code>:8080</code>.</li>
+          <li>Open <code>http://localhost:8080</code>. Authorize a project and create a session from the workspace/session rail.</li>
         </ol>
         <p style="margin-top: var(--s-7);">
           <a class="btn btn-primary" href="https://docs.axocoatl.ai" target="_blank" rel="noopener">Open the docs →</a>

@@ -1,6 +1,5 @@
-/* Product UI mocks — used in the homepage to render parts of the
-   actual dashboard inline. Mirrors the dashboard's design tokens so a
-   visitor sees the real shapes before they ever install. */
+/* Historical product UI mock styles. The old Studio and Sessions illustrations
+   are retained as stale capture assets, not current one-app UI parity. */
 
 /* ── Studio mock (hero) ────────────────────────────────────────── */
 
@@ -15,7 +14,7 @@
   border: 1px solid var(--border);
 }
 
-/* Left vertical strip — matches the dashboard's ambient strip */
+/* Historical left vertical strip. */
 .studio-mock-strip {
   display: flex;
   flex-direction: column;
@@ -240,7 +239,7 @@
 
 /* Canvas — always dark regardless of site theme. The lattice itself
    renders on a dark backdrop, so the canvas needs to match in both
-   light and dark mode (just like the dashboard's Studio tab does).
+   light and dark mode for this historical Studio illustration.
    The lattice is also non-interactive on the hero so visitors can't
    accidentally pan/zoom the demo away. */
 .studio-mock-canvas {
@@ -376,10 +375,10 @@
 
 
 /* ── Lattice node states ──────────────────────────────────────────
-   The lattice package doesn't ship these — the dashboard's CSS does.
+   The lattice package doesn't ship these; they belong to the old illustration.
    Ported here so the marketing hero's scripted loop visibly pulses,
    activates (jade glow), and completes (bronze glow). Same vocabulary
-   the dashboard uses: .axo-pulse / .axo-active / .axo-completed. */
+   the illustration uses: .axo-pulse / .axo-active / .axo-completed. */
 
 @keyframes axoPulse {
   0%   { box-shadow: 0 0 0 0    rgba(var(--axo-jade-glow-rgb), .75),
@@ -912,7 +911,7 @@
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   Sessions mock v2 — mirrors the actual Axocoatl dashboard cockpit.
+   Historical Sessions mock v2 — does not mirror the current one-app shell.
    3 panes (Files / Activity / Browser) + 40px terminals rail.
    All `.sx-*` selectors so they don't collide with the older
    sessions-* rules above (which are dead code now).

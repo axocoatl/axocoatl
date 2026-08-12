@@ -1,10 +1,10 @@
 /**
  * <ax-sessions-mock></ax-sessions-mock>
  *
- * A faithful screenshot of the actual Sessions cockpit as it ships in
- * the Axocoatl dashboard.  The chrome (strip, title bar, 3 panes,
- * terminals rail, status pearls) mirrors the real product 1:1 — same
- * sections, same controls, same fonts, same colors.
+ * Historical Sessions-cockpit illustration. It is retained as a visual asset,
+ * not a current or 1:1 product screenshot. The one-app shell now uses a
+ * workspace/session rail, permanent chat spine, modules around chat, and a
+ * bottom terminal.
  *
  * Layout:
  *   ┌─────┬───────────────────────────────────────────────────┬─────┐
@@ -22,7 +22,7 @@ class AxSessionsMock extends HTMLElement {
     this._wired = true;
     this.innerHTML = `
       <div class="sx-mock">
-        <!-- ─── Strip (left rail, 40px, icons identical to dashboard) ─── -->
+        <!-- ─── Historical peer-destination strip ─── -->
         <aside class="sx-strip">
           <div class="sx-strip-mark"><img src="/assets/mark.png" alt=""></div>
           <div class="sx-strip-item" title="Chat">✦</div>

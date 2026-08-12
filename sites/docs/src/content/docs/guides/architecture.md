@@ -1,19 +1,19 @@
 ---
 title: Architecture
-description: "The mental model behind the codebase: lattice, actors, supervisors, memory tiers, isolation."
+description: "The mental model behind the one workbench: sessions, Automations, events, actors, memory, and isolation."
 ---
 
 # Axocoatl Architecture
 
-A practical overview of how Axocoatl runs and coordinates agents.
+A practical overview of how Axocoatl's one workbench runs and coordinates agents.
 
 ## The big picture
 
 ```
             ┌─────────────────────────── axocoatl daemon ───────────────────────────┐
- CLI / HTTP │  ProviderRegistry   AgentRegistry   EventLattice   McpToolRegistry     │
-   clients ─┼─▶ (per-agent LLMs)  (ractor actors)  (pheromones)   (MCP tools)         │
-   (IPC)    │        │                 │                │                            │
+ App / CLI  │  ProviderRegistry   AgentRegistry   EventLattice   McpToolRegistry     │
+ HTTP / WS ─┼─▶ (per-agent LLMs)  (ractor actors) (skills/events)  (MCP tools)         │
+    / IPC   │        │                 │                │                            │
             │        └──────── DefaultAgentBehavior ─────┘                            │
             │       session mem → memory → budget → LLM → tools → checkpoint          │
             └────────────────────────────────────────────────────────────────────────┘
@@ -21,8 +21,22 @@ A practical overview of how Axocoatl runs and coordinates agents.
 
 The **daemon** (`axocoatl-daemon`) bootstraps everything: providers, agents
 (spawned as `ractor` actors), the event lattice, MCP connections, and the
-activation loop. `axocoatl dev` adds a Unix-socket IPC server; `axocoatl serve`
-exposes the HTTP API.
+canonical Automation trigger runtime. Both `axocoatl dev` and `axocoatl serve`
+expose the Unix-socket IPC server and HTTP/browser app from the same daemon
+state; `serve` is also what the installed background service runs.
+
+## Product surface
+
+The browser app at `/` is the only supported interactive browser route. A
+workspace authorizes a project directory, and a session is persistent work and
+chat anchored to that directory. Files, editor, terminal, browser, activity,
+attempt comparison, git, and agent graph open around that chat. Agents, Skills,
+MCP servers, and Automations live in Settings.
+
+The visual shell does not erase the runtime's distinct state owners. Directory
+sessions, lightweight chats, Automation runs, and attempt sets have different
+transcript and lifecycle boundaries; changes at those seams must verify
+persistence, reconnect, cancellation, and cleanup end to end.
 
 ## Agents
 
@@ -47,7 +61,7 @@ once more on a graceful stop.
 Per-agent `token_budget` with `per_call`, `per_execution`, and an
 `overflow_policy`:
 
-- `abort` — refuse the call and terminate the agent (no wasted tokens)
+- `abort` — refuse the over-budget call
 - `warn` — log and continue
 
 Budgets are checked **before** the LLM call, so an over-budget request never
@@ -56,40 +70,31 @@ costs tokens. Both the `per_call` (single-call) and `per_execution`
 alias that now maps to `warn` — context compaction is automatic and
 independent of the spend budget; see [Memory tiers](#memory-tiers).)
 
-## Stigmergic coordination
+## Coordination paths
 
-The differentiator. Agents declare `depends_on`; the daemon registers each in
-an `EventLattice` with a pheromone threshold:
+Axocoatl has three related paths; they should not be collapsed into one claim:
 
-- **Entry agents** (`depends_on: []`) — activated directly by
-  `execute_workflow` with the user input.
-- **Downstream agents** — threshold = `N × 0.5` where N = number of
-  dependencies. Each upstream `TaskCompleted` event emits a signal of strength
-  `0.5`; when accumulated signal crosses the threshold, the agent activates and
-  receives its upstream outputs as context.
-
-There is **no scheduler**. Coordination emerges from events:
-
-```
-execute_workflow → activate entry agent
-   → agent completes → publish TaskCompleted
-       → lattice raises downstream pheromone signals
-           → threshold crossed → downstream agent activates
-               → … → all expected agents done → workflow returns
-```
-
-A cycle guard (`max_activations = agents × 3`) and acyclic-DAG validation make
-runaway activation impossible.
-
-This stigmergic event lattice is the **shipped** coordination layer. There is
-no scheduler and no central orchestrator — coordination is entirely emergent
-from `depends_on` declarations and `TaskCompleted` signal strength.
+- **Automations.** `AutomationStore` is the canonical persisted source for
+  manual, fixed-interval, event-triggered, and Skill-triggered graphs. The
+  explicit DAG executor schedules ready nodes and records node/run outcomes.
+  Legacy `workflows:`, `schedules:`, and `proactive:` YAML seed this store only
+  when its canonical file does not exist. The workflow CLI and HTTP routes are
+  compatibility views of manual Automation records.
+- **Multi-agent directory sessions.** A `Lattice` session uses a selected legacy
+  workflow as its agent-membership definition. Session-scoped actors run in
+  dependency order inside one sandbox and stream lifecycle frames under the
+  session id. This is a bounded foreground path, not a background YAML-owned
+  workflow runner.
+- **Event lattice.** Skills and runtime components publish typed events. The
+  Automation trigger runtime, activity timeline, and configured webhooks
+  subscribe to that feed. The coordination crate still exposes reusable
+  pheromone/signal primitives, but the product daemon does not consume their
+  returned activation ids through a second execution loop.
 
 ### Hierarchical coordinator (role-based orchestration)
 
-The lattice is the *peer-to-peer* layer. On top of it, an agent with
-`role: coordinator` runs a `CoordinatorBehavior` that orchestrates a pool of
-`role: worker` agents top-down. On a run it:
+Separately, an agent with `role: coordinator` runs a `CoordinatorBehavior` that
+orchestrates a pool of `role: worker` agents top-down. On a run it:
 
 1. **Decomposes** the goal into subtasks. With a symbolic
    [HTN](https://en.wikipedia.org/wiki/Hierarchical_task_network) planner when
@@ -102,8 +107,8 @@ The lattice is the *peer-to-peer* layer. On top of it, an agent with
 4. Runs the workers in parallel, then stops and joins them at the end of the
    run.
 
-Both the auction-based worker assignment and the coordinator role are
-**shipped** on the live execute path. The symbolic HTN planner is **opt-in**:
+Both the auction-based worker assignment and the coordinator role are on the
+live execute path. The symbolic HTN planner is **opt-in**:
 it only runs when a workflow provides an `htn_methods_file`; with no methods
 file the coordinator falls back to LLM decomposition.
 
@@ -137,15 +142,16 @@ agent restores its conversation transcript.
 
 ## Sandbox isolation
 
-Directory sessions run inside a **hardened rootless podman container** — this
-is the shipped isolation boundary. Session file/shell tools execute inside it;
-hardening drops dangerous capabilities and sets `no-new-privileges`.
+Local directory sessions use a **hardened rootless Podman container** by
+default. Session file/shell tools execute inside it; hardening drops dangerous
+capabilities and sets `no-new-privileges`. Networking is bridged by default so
+package installation and development servers work; set `sandbox.network: none`
+when session tools must have no outbound route. An E2B-compatible remote
+backend is an explicit per-session choice.
 
-Other isolation tiers are not part of the default build. The Wasmtime/WASM tool
-tier is an experimental opt-in (`--features wasmtime-sandbox`); the
-OCI/Firecracker-class microVM tiers are feature-gated out entirely
-(`firecracker-isolation` / `oci-isolation`) and remain stubs behind those
-features.
+The isolation crate includes a Wasmtime implementation in its default feature
+set, but the daemon's agent tool executor does not expose that backend. Do not
+present WASM, OCI, or Firecracker as selectable product isolation tiers.
 
 ## Crate map
 
@@ -154,9 +160,10 @@ features.
 coordinator role) · `axocoatl-memory` · `axocoatl-coordination` (the lattice +
 the shipped HTN-planner and auction primitives the coordinator uses) ·
 `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` · `axocoatl-isolation`
-(rootless podman sandbox; WASM tier is an experimental opt-in feature) ·
+(local Podman and optional E2B session backends; an unwired Wasmtime
+implementation also lives in the crate) ·
 `axocoatl-daemon` · `axocoatl-server` · `axocoatl-cli`.
 
-It all ships as a single ~26 MB release binary. (`axocoatl-graph` exists as a
+It all ships as a single release binary. (`axocoatl-graph` exists as a
 standalone, experimental graph-validation crate, but it is not wired into the
 runtime.)

@@ -1,25 +1,30 @@
 # Axocoatl
 
-**The Rust runtime for self-coordinating multi-agent systems.**
+**A local-first coding workbench for running, comparing, and keeping agent work.**
 
 [![CI](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml/badge.svg)](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/axocoatl-cli.svg)](https://crates.io/crates/axocoatl-cli)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src="docs/img/demo.gif" alt="Axocoatl crash-restart — kill the server mid-run and the agent resumes from its last checkpoint, fully local" width="760">
+  <img src="sites/marketing/assets/workbench-session.png" alt="The current Axocoatl workbench showing a completed coding session and its attempt controls" width="760">
 </p>
 
-<p align="center"><em>Kill the server mid-task — the agent restarts from its last checkpoint, not from zero. 100% local.</em></p>
+<p align="center"><em>A real session after a verified coding attempt was kept. Chat remains the spine; planning, model choice, attempts, and cost stay visible beside it.</em></p>
 
-Axocoatl runs persistent AI agents that coordinate through a **stigmergic event
-lattice** — agents activate when their dependencies complete, driven by
-pheromone-style signals with no central orchestrator. Built in Rust on the
-`ractor` actor model: low memory, fast cold start, provider-agnostic.
+Axocoatl gives you one folder-anchored session where agents work against a real
+repository. Ask for one solution or explore several ways with different agents and
+models. Watch what each attempt does, run the repository's checks, compare outcome and
+route, keep one, and review the resulting git changes.
+
+The workbench is backed by a Rust runtime with persistent actors, memory,
+checkpointing, sandboxed tools, provider-neutral LLM access, explicit Automation
+DAGs, and a typed event lattice shared by Skills, triggers, webhooks, and API
+observers.
 
 ---
 
-## 60-second quickstart
+## Quickstart
 
 ```bash
 # 1. Install (no Rust toolchain required)
@@ -31,41 +36,42 @@ axocoatl onboard
 # 3. Check your environment
 axocoatl doctor
 
-# 4. Start the daemon + API, then chat
+# 4. Start the daemon and open the one app
 axocoatl dev
-axocoatl chat -a assistant
+# http://localhost:8080
 ```
 
 Prefer Cargo? `cargo install axocoatl-cli` (requires Rust 1.82+).
 
 > **Skipping `onboard`?** Copy [`axocoatl.example.yaml`](axocoatl.example.yaml)
-> to `axocoatl.yaml` — two agents and one workflow, fits on one screen.
-> The full `axocoatl.yaml` shipped in the repo is the larger demo (12 agents,
-> scheduled runs, MCP servers).
+> to `axocoatl.yaml` for a small starter config. The full `axocoatl.yaml`
+> shipped in the repo is a larger populated demo with interval triggers,
+> Skills, and MCP servers.
 
 ---
 
-## Why Axocoatl
+## One session, several ways
 
-Most agent tooling is a framework you wire together and a cloud you rent.
-Axocoatl is a runtime you own:
+Most agent tooling gives you one opaque answer or a framework you still have to turn
+into a product. Axocoatl gives you the work surface and the runtime underneath it:
 
-- **Stigmergic coordination, no orchestrator** — agents activate when their
-  dependencies complete, driven by pheromone-style signals. No central scheduler.
-- **A coordinator when you need one** — an agent can decompose a goal, auction the
-  subtasks to workers it spawns, and run them in parallel (symbolic HTN planning
-  when you provide methods, otherwise the LLM).
-- **Four-tier memory + checkpointing** — agents remember across runs and resume from
-  their last checkpoint after a crash.
-- **Per-agent token budgets** — enforced pre-flight, per agent.
-- **MCP client + server** — discover and call external MCP tools, and expose your own
-  agents as MCP tools. Inbound A2A too.
-- **Provider-agnostic** — Ollama, OpenAI, OpenRouter, Anthropic, Gemini, Mistral, or
-  any OpenAI-compatible endpoint. No lock-in.
-- **Local-first** — one binary, your hardware, your model, your data, zero telemetry.
+- **Chat stays the spine.** Files, editor, terminal, browser, activity, attempts,
+  comparison, git, and agent graph open around one persistent session.
+- **Attempts are real and heterogeneous.** Choose a different agent and model for each
+  way, then inspect the work rather than trusting a single answer. The current attempt
+  boundary requires a single-agent session on local Podman.
+- **Repository truth stays visible.** Run project checks, compare outcomes and routes,
+  keep one result, and review it through git.
+- **The runtime survives.** Actors, four-tier memory, checkpointing, and supervision
+  preserve work beyond a single request or process lifetime.
+- **The execution boundary is yours.** Rootless Podman is the local default; an
+  E2B-compatible remote sandbox is an explicit per-session choice.
+- **No provider lock-in.** Ollama, OpenAI, OpenRouter, Anthropic, Gemini, Mistral, and
+  OpenAI-compatible endpoints can coexist.
 
-The differentiator is the **coordination layer**: define agents with
-`depends_on`, and the event lattice cascades work through them automatically.
+Legacy `workflows:` YAML remains a first-boot seed for manual records in the
+canonical Automation store. Its `depends_on` declarations become explicit graph
+edges; the workflow CLI compatibility command runs that Automation DAG:
 
 ```yaml
 agents:
@@ -76,7 +82,7 @@ agents:
   - id: summarizer
     provider: ollama
     model: llama3.2
-    depends_on: [researcher]   # activates when researcher completes
+    depends_on: [researcher]   # becomes an explicit dependency edge
 
 workflows:
   - id: research-and-summarize
@@ -92,6 +98,9 @@ axocoatl workflow run research-and-summarize -i "What is photosynthesis?"
 
 ## See it work
 
+The clips in this section demonstrate runtime behaviors in an earlier interface;
+they are not captures of the current session-centered workbench.
+
 **Give it a goal — it builds the team.** A coordinator agent decomposes the goal
 into subtasks, spawns a worker to fit each one, and runs them in parallel. No
 orchestration code, no glue.
@@ -104,17 +113,22 @@ across runs.
 
 <p align="center"><img src="docs/img/memory.gif" alt="An agent stores a preference to core memory, then recalls it in a separate conversation" width="760"></p>
 
-**It never phones home.** Zero telemetry, no analytics, no accounts, no Axocoatl
-servers — nothing about you or your work is ever collected. The only outbound
-calls are the ones you can name: your model provider, and a one-time
-embedding-model download on first run. After that, air-gap it.
+**It does not phone home.** There is no Axocoatl telemetry, analytics account, or
+vendor control plane collecting your work. Outbound traffic is the traffic you choose:
+your model provider, a one-time embedding-model download, optional integrations, and an
+optional remote sandbox. Use a local model and set `sandbox.network: none` when
+session tools must have no outbound network path.
 
-<p align="center"><img src="docs/img/no-phone-home.gif" alt="A live lsof of the running daemon in steady state shows every socket is 127.0.0.1" width="760"></p>
+<p align="center"><img src="docs/img/no-phone-home.gif" alt="A local-only demo inspected in steady state shows only loopback sockets" width="760"></p>
 
 ---
 
 ## Core concepts
 
+- **Workspace** — an authorized project directory that groups persistent sessions.
+- **Session** — one durable work item and chat anchored to a workspace.
+- **Attempt** — a candidate solution, optionally run in parallel with different
+  agents and models, verified and resolved to one kept result.
 - **Agents** — persistent `ractor` actors with a provider, tools, 4-tier
   memory, and a token budget. Survive restarts via checkpointing.
 - **Hybrid memory recall** — relevant past exchanges are injected each turn, and
@@ -124,19 +138,30 @@ embedding-model download on first run. After that, air-gap it.
   …) the agent curates via tools and that render into its prompt each turn (the
   MemGPT/Letta model). Per-agent by default, shareable across agents. A
   background "sleep-time" pass consolidates idle agents' memory automatically.
-- **Stigmergic coordination** — agents publish `TaskCompleted` events; an
-  `EventLattice` accumulates pheromone signals and activates downstream agents
-  when thresholds are crossed. No scheduler, no glue code.
+- **Event lattice** — Skills and runtime components publish typed events;
+  Automation triggers, webhooks, and retained API/WebSocket observers consume
+  the shared notification feed. The coordination crate also exposes signal
+  primitives for library users.
 - **Coordinator role** — for explicit hierarchical work, an agent with
   `role: coordinator` decomposes a goal into subtasks (HTN or LLM), auctions them
   to worker agents, runs them in parallel, and synthesizes the results. The pass
   is resumable via checkpointing.
-- **Workflows** — declarative multi-agent DAGs via `depends_on` / `entry_point`.
+- **Workflow compatibility** — workflow commands and routes project manual
+  Automation records; legacy YAML seeds those records only on first boot.
+- **Automations** — explicit DAGs created, inspected, edited, and run in
+  Settings, with the HTTP API available for programmatic CRUD. New records start
+  with a valid Input → Agent graph. They can fire manually, on a fixed interval, by
+  lattice event type, or by one Skill. The persisted Automation store is live in
+  both `dev` and `serve`; legacy YAML is first-boot seed data only. A top-level
+  Interrupt parked at an operator decision survives a daemon restart and resumes
+  without replaying completed nodes; arbitrary in-flight calls and nested
+  Subgraph Interrupts do not have that recovery guarantee.
 - **Providers** — Ollama, OpenAI, Anthropic, Mistral, Gemini, OpenRouter. No lock-in.
 - **Protocols** — MCP (discover, call, and expose tools — agents invoke external
   MCP tools through the daemon over a persistent connection) and A2A (agent interop).
 
-See the [docs site](https://docs.axocoatl.ai) for the full picture, the
+See [`docs/PRODUCT.md`](docs/PRODUCT.md) for the product model, the
+[docs site](https://docs.axocoatl.ai) for the full guide, the
 [marketing site](https://axocoatl.ai) for the positioning, or
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and
 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for the in-repo
@@ -144,15 +169,10 @@ quick reference.
 
 ---
 
-## Roadmap
+## Selected CLI commands
 
-- **Stronger sandbox isolation tiers** — the shipped sandbox is a hardened
-  rootless Podman container (capabilities dropped, no-new-privileges,
-  network-isolatable); microVM-class isolation (Firecracker) is planned.
-
----
-
-## CLI
+Run `axocoatl --help` and `axocoatl <subcommand> --help` for the authoritative
+surface of the installed version.
 
 ```
 axocoatl onboard                 Interactive setup wizard
@@ -161,13 +181,17 @@ axocoatl init <name>             Scaffold a project non-interactively
 axocoatl validate <config>       Validate a config file
 axocoatl dev | serve             Run daemon (+ IPC) / production server
 axocoatl chat -a <agent>         Interactive chat
-axocoatl workflow list | run     Inspect / execute multi-agent workflows
+axocoatl workflow list | run     Compatibility view/run for manual Automations
 axocoatl agents list|status|restart
 axocoatl tokens report           Per-agent token usage
 axocoatl mcp servers|tools       Inspect connected MCP servers/tools
 ```
 
-## HTTP API
+## Selected HTTP endpoints
+
+This is a quick integration sketch, not an exhaustive route reference. See the
+[HTTP API overview](https://docs.axocoatl.ai/api/http/) and current server
+router for the full surface.
 
 ```
 GET  /health                          POST /api/agents/{id}/execute
@@ -184,8 +208,8 @@ Every example is runnable with a mock LLM — **no API keys needed** — unless
 noted. See [`examples/`](examples/).
 
 **Coordination & planning**
-- [`stigmergic-workflow`](examples/stigmergic-workflow) — the `EventLattice` + `depends_on` DAG. The running order *emerges* from pheromone signals crossing thresholds; no orchestrator decides it.
-- [`skills-lattice`](examples/skills-lattice) — event-driven Skills: one event fans out to every agent that `reacts_to` it (`emits`/`reacts_to`), distinct from a fixed DAG.
+- [`stigmergic-workflow`](examples/stigmergic-workflow) — a standalone harness for the reusable `EventLattice` signal primitives plus a `depends_on` DAG; this is not the daemon's Automation executor.
+- [`skills-lattice`](examples/skills-lattice) — a standalone demonstration of an example-owned `reacts_to` index and lattice fan-out. In the product daemon, Skills publish events and Automations provide reachable reactions.
 - [`htn-planner`](examples/htn-planner) — symbolic HTN decomposition; compound tasks expand via methods and only unresolved frontiers reach the LLM.
 - [`crash-recovery`](examples/crash-recovery) — kill a multi-step workflow mid-run and resume from the checkpoint; completed steps are not re-run.
 
@@ -200,7 +224,7 @@ noted. See [`examples/`](examples/).
 - [`sandbox-session`](examples/sandbox-session) — the rootless Podman sandbox for agent tool execution: threat model, config knobs, and a live integration test (needs Podman).
 
 **Autonomy & config**
-- [`proactive-agents`](examples/proactive-agents) — agents that fire on a schedule or on an event (here, reacting to `AgentFailed`), not on a user prompt.
+- [`proactive-agents`](examples/proactive-agents) — legacy YAML projected into canonical scheduled and event-triggered Automations, plus an offline guard demonstration.
 - [`configs/`](examples/configs) — a gallery of minimal YAML configs for common recipes (research pipeline, feature dev, incident response, local-only, MCP, event webhooks). No Rust.
 
 **Foundations**
@@ -211,8 +235,8 @@ noted. See [`examples/`](examples/).
 ```bash
 git clone https://github.com/axocoatl/axocoatl
 cd axocoatl
-cargo build --release          # binary: target/release/axocoatl
-cargo test --workspace         # 400+ tests
+cargo build -p axocoatl-cli --release  # binary: target/release/axocoatl
+cargo test --workspace
 ```
 
 ## License

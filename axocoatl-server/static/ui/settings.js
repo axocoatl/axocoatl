@@ -8,9 +8,8 @@ import { adopt } from './sheets.js';
  * this product is. They are not: they are how you set it up, visited rarely and
  * never while working. Navigation should list the work.
  *
- * The panels themselves are not rebuilt — they are the existing, working ones,
- * hosted here through a slot and returned to where they came from on close.
- * Rewriting them to change their framing would risk their behaviour for nothing.
+ * Each section is a permanent child component. The shell never relocates
+ * light-DOM panels or owns the section's domain state.
  *
  * @element ax-settings
  *
@@ -75,29 +74,38 @@ nav button small { display: block; color: var(--muted-2); font-size: var(--fs-xs
 .x:hover { color: var(--text); }
 .body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 ::slotted(*) { flex: 1; min-height: 0; }
+::slotted([hidden]) { display: none !important; }
+@media (max-width: 680px) {
+  .card { inset: 0; flex-direction: column; border: 0; border-radius: 0; }
+  nav {
+    width: auto; flex-direction: row; gap: var(--sp-1); overflow-x: auto;
+    padding: var(--sp-2); border-right: 0; border-bottom: 1px solid var(--border);
+  }
+  nav .h { display: none; }
+  nav button { width: auto; min-width: max-content; padding-inline: var(--sp-3); }
+  nav button small { display: none; }
+  .bar { padding: var(--sp-2) var(--sp-3); }
+}
 `;
 
 export class AxSettings extends HTMLElement {
   static get observedAttributes() { return ['open', 'section']; }
 
-  #root; #nav; #title; #slot;
-  /** Where each hosted panel came from, so it can be put back exactly. */
-  #home = new Map();
+  #root; #nav; #title; #returnFocus = null;
 
   constructor() {
     super();
     this.#root = this.attachShadow({ mode: 'open' });
     this.#root.innerHTML = `
-      <div class="card" role="dialog" aria-label="Settings">
+      <div class="card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <nav><div class="h">Settings</div></nav>
         <div class="main">
-          <div class="bar"><h2></h2><button class="x" title="Close">×</button></div>
+          <div class="bar"><h2 id="settings-title"></h2><button class="x" title="Close" aria-label="Close Settings">×</button></div>
           <div class="body"><slot></slot></div>
         </div>
       </div>`;
     this.#nav = this.#root.querySelector('nav');
     this.#title = this.#root.querySelector('h2');
-    this.#slot = this.#root.querySelector('slot');
 
     for (const s of SETTINGS_SECTIONS) {
       const b = document.createElement('button');
@@ -118,9 +126,7 @@ export class AxSettings extends HTMLElement {
       const card = this.#root.querySelector('.card');
       if (!e.composedPath().includes(card)) this.hide();
     });
-    document.addEventListener('keydown', (e) => {
-      if (this.open && e.key === 'Escape') { e.preventDefault(); this.hide(); }
-    });
+    document.addEventListener('keydown', (e) => this.#onKeyDown(e));
     adopt(this.#root, CSS);
   }
 
@@ -138,47 +144,30 @@ export class AxSettings extends HTMLElement {
 
   show(section) {
     if (section) this.setAttribute('section', section);
+    if (!this.open) this.#returnFocus = document.activeElement;
     this.open = true;
+    queueMicrotask(() => this.#nav.querySelector(`[data-id="${globalThis.CSS.escape(this.section)}"]`)?.focus());
   }
 
   hide() {
-    this.#restoreAll();
+    if (!this.open) return;
     this.open = false;
     this.dispatchEvent(new CustomEvent('close', { bubbles: true, composed: true }));
+    const target = this.#returnFocus;
+    this.#returnFocus = null;
+    queueMicrotask(() => target?.isConnected && target.focus?.());
   }
 
-  /**
-   * Host a panel by moving the real element in, remembering where it lived.
-   *
-   * Moving rather than copying means the panel keeps its listeners, its state
-   * and its identity — a copy would be a second, subtly different version of a
-   * surface that already works.
-   */
   #show(id) {
+    if (!SETTINGS_SECTIONS.some((section) => section.id === id)) id = SETTINGS_SECTIONS[0].id;
+    for (const panel of this.querySelectorAll('[data-settings-section]')) {
+      panel.hidden = panel.dataset.settingsSection !== id;
+    }
     this.dispatchEvent(new CustomEvent('section-change', {
       detail: { id }, bubbles: true, composed: true,
     }));
-    this.#restoreAll();
-    const panel = document.querySelector(`#tab-${id}`);
-    if (panel) {
-      this.#home.set(id, { parent: panel.parentElement, next: panel.nextSibling });
-      panel.classList.remove('hide');
-      this.append(panel);
-    }
     this.#title.textContent = SETTINGS_SECTIONS.find((s) => s.id === id)?.title || 'Settings';
     this.#markCurrent();
-  }
-
-  /** Put every hosted panel back where it was, hidden as it was found. */
-  #restoreAll() {
-    for (const [id, where] of this.#home) {
-      const panel = this.querySelector(`#tab-${id}`);
-      if (panel && where.parent) {
-        panel.classList.add('hide');
-        where.parent.insertBefore(panel, where.next);
-      }
-    }
-    this.#home.clear();
   }
 
   #markCurrent() {
@@ -186,6 +175,48 @@ export class AxSettings extends HTMLElement {
       b.setAttribute('aria-current', String(b.dataset.id === this.section));
     }
   }
+
+  #focusables() {
+    const selector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const found = [];
+    const seen = new Set();
+    const visit = (root) => {
+      for (const element of root.querySelectorAll(selector)) {
+        if (!seen.has(element) && !element.hidden && element.getClientRects().length > 0) {
+          seen.add(element);
+          found.push(element);
+        }
+        if (element.shadowRoot) visit(element.shadowRoot);
+      }
+      for (const host of root.querySelectorAll('*')) {
+        if (host.shadowRoot) visit(host.shadowRoot);
+      }
+    };
+    visit(this.#root);
+    visit(this);
+    return found;
+  }
+
+  #onKeyDown(event) {
+    if (!this.open) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.hide();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusables = this.#focusables();
+    if (!focusables.length) { event.preventDefault(); return; }
+    const current = event.composedPath()[0];
+    const index = focusables.indexOf(current);
+    if (event.shiftKey && index <= 0) {
+      event.preventDefault();
+      focusables[focusables.length - 1].focus();
+    } else if (!event.shiftKey && (index < 0 || index === focusables.length - 1)) {
+      event.preventDefault();
+      focusables[0].focus();
+    }
+  }
 }
 
-customElements.define('ax-settings', AxSettings);
+if (!customElements.get('ax-settings')) customElements.define('ax-settings', AxSettings);

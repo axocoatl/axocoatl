@@ -1,12 +1,12 @@
 ---
 title: Getting started
-description: Install Axocoatl, run doctor, open the dashboard, fire your first workflow.
+description: Install Axocoatl, run doctor, open the app, and start a workspace session.
 ---
 
 import { Steps, Tabs, TabItem, Code } from '@astrojs/starlight/components';
 
-This is the 5-minute path from "nothing installed" to "a workflow ran on
-my box." If anything breaks, see [Troubleshooting](/guides/troubleshooting/).
+This is the 5-minute path from "nothing installed" to "an agent worked in my
+repository." If anything breaks, see [Troubleshooting](/guides/troubleshooting/).
 
 ## Prerequisites
 
@@ -15,9 +15,10 @@ my box." If anything breaks, see [Troubleshooting](/guides/troubleshooting/).
 - [Ollama](https://ollama.com) for local LLM use (recommended for first
   contact). Five other providers work too — OpenAI, Anthropic, Mistral,
   Gemini, and OpenRouter; set the right key in `.env`. (The `openai` provider
-  also takes a `base_url`, so it targets any OpenAI-compatible endpoint —
-  LM Studio, vLLM, MLX, and the like.)
-- (Optional) `podman` if you want sandboxed directory sessions.
+  also takes a `base_url`, so it can target compatible implementations such as
+  LM Studio, vLLM, and MLX.)
+- `podman` for the default local session sandbox, or credentials for an explicitly
+  configured E2B-compatible remote backend.
 
 <Steps>
 
@@ -37,10 +38,13 @@ my box." If anything breaks, see [Troubleshooting](/guides/troubleshooting/).
      <TabItem label="From source">
        ```sh
        git clone https://github.com/axocoatl/axocoatl && cd axocoatl
-       cargo build --release
+       cargo build -p axocoatl-cli --release
        ```
      </TabItem>
    </Tabs>
+
+   If you use the from-source path, substitute `./target/release/axocoatl`
+   for `axocoatl` in the commands below.
 
 2. **Pull a model.**
 
@@ -64,14 +68,20 @@ my box." If anything breaks, see [Troubleshooting](/guides/troubleshooting/).
    axocoatl dev
    ```
 
-   This brings up the daemon, IPC, and the dashboard on `http://localhost:8080`.
+   This brings up the daemon, IPC, and the app on `http://localhost:8080`.
 
-5. **Open the dashboard and fire a workflow.**
+5. **Open the app and start a session.**
 
-   In your browser, open `http://localhost:8080`. Switch to **Studio**.
-   In the left rail, expand **Quick fire** and click **▶ Fire all
-   workflows**. Watch the lattice cascade through every agent on the
-   canvas.
+   In your browser, open `http://localhost:8080`. Authorize a project
+   directory from the workspace rail, create a session, and ask the agent to
+   inspect the repository. Chat remains the main work surface; Files, Activity,
+   Terminal, Browser, Attempts, and Agent graph open around it.
+
+   In a single-agent session on the default local Podman backend, enable
+   **Explore several ways** for a task where you want alternatives, choose the
+   agent and model for each attempt, and send the task. Open
+   **Attempts** to compare **Outcome** and **Route**, run the detected repository
+   checks, then keep one result.
 
 </Steps>
 
@@ -115,20 +125,17 @@ add a `[boot]` section with `systemd=true` to `/etc/wsl.conf`, then run
 
 ## What just happened?
 
-The daemon spawned a supervised actor for every agent in your config. The
-lattice published a `WorkflowStarted` event. Every agent that lists the
-workflow's entry point in its `depends_on` chain woke up and ran. Their
-outputs published `TaskCompleted` events; downstream agents activated as
-their thresholds were crossed. Nobody scheduled anything.
-
-Open a [directory session](/concepts/sessions/) to see the agent actually
-read, write, and execute commands inside a sandboxed copy of one of your
-folders.
+The daemon started the runtime and restored its durable state. Your session is
+anchored to the directory you authorized; its file, shell, and terminal tools run
+through the session sandbox. The app streams each action and keeps the conversation
+and git state together. If you chose several ways, each attempt used an isolated
+working copy until you kept one.
 
 ## Next
 
-- [The event lattice](/concepts/lattice/) — the coordination model.
+- [Sessions and attempts](/concepts/sessions/) — the primary work model.
+- [The event lattice](/concepts/lattice/) — the typed feed shared by events,
+  triggers, webhooks, and Activity.
 - [Agents](/concepts/agents/) — actor lifecycle, supervision, budgets.
-- [Skills](/concepts/skills/) — how the lattice routes work automatically.
-- [Sessions](/concepts/sessions/) — Claude-Code-style directory work,
-  locally.
+- [Skills](/concepts/skills/) — callable capabilities that publish events.
+- [Providers](/guides/providers/) — local and remote model configuration.

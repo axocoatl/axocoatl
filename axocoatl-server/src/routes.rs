@@ -25,9 +25,9 @@ pub async fn dashboard() -> Response {
 
 // --- @axocoatl/lattice — embedded graph-canvas ES modules ---
 //
-// The dashboard's Studio tab is built on @axocoatl/lattice. Its source files
-// are embedded at compile time and served at `/lattice/{file}.js` so the
-// browser can import them as a normal ES module graph (no build step).
+// The session Agent graph and Automation graph use @axocoatl/lattice. Its
+// source files are embedded at compile time and served at `/lattice/{file}.js`
+// so the browser can import them as a normal ES module graph (no build step).
 
 macro_rules! lattice_modules {
     ($($name:literal),* $(,)?) => {
@@ -324,6 +324,11 @@ pub struct AgentPatch {
     pub per_call_budget: Option<usize>,
     pub per_execution_budget: Option<usize>,
     pub overflow_policy: Option<String>,
+    /// Explicitly remove the configured spend cap. A missing budget field
+    /// cannot express this because `None` also means "leave unchanged" in a
+    /// PATCH request.
+    #[serde(default)]
+    pub clear_token_budget: bool,
     pub restart_now: Option<bool>,
 }
 
@@ -334,6 +339,53 @@ pub struct AgentPatchResponse {
     pub message: String,
 }
 
+fn apply_token_budget_patch(
+    current: &mut Option<axocoatl_config::TokenBudgetYaml>,
+    patch: &AgentPatch,
+) -> Result<(), String> {
+    use axocoatl_config::OverflowPolicyYaml;
+
+    let configures_budget = patch.per_call_budget.is_some()
+        || patch.per_execution_budget.is_some()
+        || patch.overflow_policy.is_some();
+    if patch.clear_token_budget {
+        if configures_budget {
+            return Err(
+                "clear_token_budget cannot be combined with token budget values".to_string(),
+            );
+        }
+        *current = None;
+        return Ok(());
+    }
+    if !configures_budget {
+        return Ok(());
+    }
+
+    let mut budget = current.clone().unwrap_or(axocoatl_config::TokenBudgetYaml {
+        per_call: 4096,
+        per_execution: 16000,
+        overflow_policy: OverflowPolicyYaml::Warn,
+    });
+    if let Some(value) = patch.per_call_budget {
+        budget.per_call = value;
+    }
+    if let Some(value) = patch.per_execution_budget {
+        budget.per_execution = value;
+    }
+    if let Some(policy) = patch.overflow_policy.as_deref() {
+        budget.overflow_policy = match policy {
+            "abort" => OverflowPolicyYaml::Abort,
+            "warn" => OverflowPolicyYaml::Warn,
+            // Kept for compatibility with older configs. The UI presents the
+            // current `warn` spelling, but API clients may still send it.
+            "summarize" => OverflowPolicyYaml::Summarize,
+            _ => return Err(format!("Unknown overflow policy '{policy}'")),
+        };
+    }
+    *current = Some(budget);
+    Ok(())
+}
+
 /// Update an agent's in-memory config. The next time the agent is restarted
 /// (or if `restart_now: true`) the new prompt/model/budget take effect.
 /// This is in-memory only for this session — save-to-YAML is a later session.
@@ -342,8 +394,6 @@ pub async fn patch_agent(
     Path(agent_id): Path<String>,
     Json(body): Json<AgentPatch>,
 ) -> Result<Json<AgentPatchResponse>, (StatusCode, Json<ErrorResponse>)> {
-    use axocoatl_config::OverflowPolicyYaml;
-
     // Update the config in-memory (write lock).
     {
         let mut daemon = state.write().await;
@@ -360,46 +410,24 @@ pub async fn patch_agent(
                     }),
                 )
             })?;
-        if let Some(n) = body.name {
-            agent.name = n;
+        // Validate the whole budget transition before mutating any agent
+        // fields so a rejected PATCH cannot partially apply identity edits.
+        let mut next_token_budget = agent.token_budget.clone();
+        apply_token_budget_patch(&mut next_token_budget, &body)
+            .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
+        if let Some(n) = body.name.as_ref() {
+            agent.name = n.clone();
         }
-        if let Some(m) = body.model {
-            agent.model = m;
+        if let Some(m) = body.model.as_ref() {
+            agent.model = m.clone();
         }
-        if let Some(sp) = body.system_prompt {
-            agent.system_prompt = Some(sp);
+        if let Some(sp) = body.system_prompt.as_ref() {
+            agent.system_prompt = Some(sp.clone());
         }
-        if let Some(d) = body.depends_on {
-            agent.depends_on = d;
+        if let Some(d) = body.depends_on.as_ref() {
+            agent.depends_on = d.clone();
         }
-        if body.per_call_budget.is_some()
-            || body.per_execution_budget.is_some()
-            || body.overflow_policy.is_some()
-        {
-            let mut b = agent
-                .token_budget
-                .clone()
-                .unwrap_or(axocoatl_config::TokenBudgetYaml {
-                    per_call: 4096,
-                    per_execution: 16000,
-                    overflow_policy: OverflowPolicyYaml::Warn,
-                });
-            if let Some(v) = body.per_call_budget {
-                b.per_call = v;
-            }
-            if let Some(v) = body.per_execution_budget {
-                b.per_execution = v;
-            }
-            if let Some(p) = body.overflow_policy {
-                b.overflow_policy = match p.as_str() {
-                    "abort" => OverflowPolicyYaml::Abort,
-                    "warn" => OverflowPolicyYaml::Warn,
-                    "summarize" => OverflowPolicyYaml::Summarize,
-                    _ => b.overflow_policy,
-                };
-            }
-            agent.token_budget = Some(b);
-        }
+        agent.token_budget = next_token_budget;
     }
 
     let want_restart = body.restart_now.unwrap_or(true);
@@ -481,6 +509,7 @@ pub async fn execute_agent(
         Ok(output) => Ok(Json(ExecuteResponse {
             output: output.content,
         })),
+        Err(e @ axocoatl_daemon::DaemonError::AttemptConflict(_)) => Err(attempt_err(e)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -536,18 +565,39 @@ pub struct WorkflowInfo {
 }
 
 pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowInfo>> {
+    use axocoatl_config::{AutomationNodeKind, AutomationTrigger};
+
     let daemon = state.read().await;
-    let workflows: Vec<WorkflowInfo> = daemon
-        .config
-        .workflows
-        .iter()
-        .map(|w| WorkflowInfo {
-            id: w.id.clone(),
-            name: w.name.clone(),
-            agents: w.agents.clone(),
-            entry_point: w.entry_point.clone(),
+    let mut workflows: Vec<WorkflowInfo> = daemon
+        .list_automations()
+        .await
+        .into_iter()
+        .filter(|automation| matches!(&automation.trigger, AutomationTrigger::Manual))
+        .map(|automation| {
+            let agents: Vec<String> = automation
+                .nodes
+                .iter()
+                .filter_map(|node| match &node.kind {
+                    AutomationNodeKind::Agent { agent_id, .. } => Some(agent_id.clone()),
+                    _ => None,
+                })
+                .collect();
+            let entry_point = automation.nodes.iter().find_map(|node| {
+                let has_incoming = automation.edges.iter().any(|edge| edge.to == node.id);
+                match (&node.kind, has_incoming) {
+                    (AutomationNodeKind::Agent { agent_id, .. }, false) => Some(agent_id.clone()),
+                    _ => None,
+                }
+            });
+            WorkflowInfo {
+                id: automation.id,
+                name: automation.name,
+                agents,
+                entry_point,
+            }
         })
         .collect();
+    workflows.sort_by(|a, b| a.id.cmp(&b.id));
     Json(workflows)
 }
 
@@ -579,8 +629,30 @@ pub async fn execute_workflow(
     Path(workflow_id): Path<String>,
     Json(body): Json<ExecuteRequest>,
 ) -> Result<Json<WorkflowResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let daemon = state.read().await;
-    match daemon.execute_workflow(&workflow_id, &body.input).await {
+    use axocoatl_config::AutomationTrigger;
+
+    let context = {
+        let daemon = state.read().await;
+        axocoatl_daemon::automation_executor::AutomationExecutionContext::from_daemon(&daemon)
+    };
+    let automation = context
+        .get_automation(&workflow_id)
+        .await
+        .filter(|automation| matches!(&automation.trigger, AutomationTrigger::Manual))
+        .ok_or_else(|| {
+            err(
+                StatusCode::NOT_FOUND,
+                format!("manual automation '{workflow_id}' not found"),
+            )
+        })?;
+    let result = axocoatl_daemon::automation_executor::execute_automation_in_context(
+        &context,
+        &automation,
+        &body.input,
+    )
+    .await;
+    axocoatl_daemon::record_automation_outcome(&context, &automation, &result);
+    match result {
         Ok(output) => Ok(Json(WorkflowResponse {
             workflow_id: output.workflow_id,
             output: output.final_content,
@@ -894,33 +966,67 @@ pub struct ScheduleEntry {
     pub last_fired_unix: Option<u64>,
     pub next_fire_unix: Option<u64>,
     pub last_outcome: Option<String>,
+    pub last_error: Option<String>,
     pub run_count: u64,
 }
 
 pub async fn list_schedules(State(state): State<AppState>) -> Json<Vec<ScheduleEntry>> {
-    let daemon = state.read().await;
-    let table = daemon.schedule_table.clone();
-    drop(daemon);
-    let entries = table
+    use axocoatl_config::AutomationTrigger;
+    use std::collections::HashMap;
+
+    let (automations, table) = {
+        let daemon = state.read().await;
+        (
+            daemon.list_automations().await,
+            daemon.schedule_table.clone(),
+        )
+    };
+    let observations: HashMap<String, axocoatl_daemon::ScheduleState> = table
         .lock()
-        .map(|v| {
-            v.iter()
-                .map(|s| ScheduleEntry {
-                    id: s.config.id.clone(),
-                    name: s.config.name.clone(),
-                    workflow: s.config.workflow.clone(),
-                    every: s.config.every.clone(),
-                    input: s.config.input.clone(),
-                    enabled: s.config.enabled,
-                    interval_secs: s.interval_secs,
-                    last_fired_unix: s.last_fired_unix,
-                    next_fire_unix: s.next_fire_unix(),
-                    last_outcome: s.last_outcome.clone(),
-                    run_count: s.run_count,
-                })
+        .map(|rows| {
+            rows.iter()
+                .cloned()
+                .map(|row| (row.automation_id.clone(), row))
                 .collect()
         })
         .unwrap_or_default();
+    let mut entries: Vec<ScheduleEntry> = automations
+        .into_iter()
+        .filter_map(|automation| {
+            // Legacy `pro:` schedule records remain represented by the
+            // compatibility proactive endpoint. Every other canonical
+            // Schedule projects here.
+            if automation.id.starts_with("pro:") {
+                return None;
+            }
+            let AutomationTrigger::Schedule { every, input } = automation.trigger else {
+                return None;
+            };
+            let observation = observations.get(&automation.id);
+            let interval_secs = observation
+                .map(|row| row.interval_secs)
+                .unwrap_or_else(|| axocoatl_daemon::parse_interval(&every).unwrap_or(0));
+            Some(ScheduleEntry {
+                id: automation
+                    .id
+                    .strip_prefix("sched:")
+                    .unwrap_or(&automation.id)
+                    .to_string(),
+                name: automation.name,
+                workflow: automation.id.clone(),
+                every,
+                input: input.unwrap_or_default(),
+                enabled: automation.enabled,
+                interval_secs,
+                last_fired_unix: observation.and_then(|row| row.last_fired_unix),
+                next_fire_unix: observation.and_then(|row| row.next_fire_unix()),
+                last_outcome: observation.and_then(|row| row.last_outcome.clone()),
+                last_error: observation.and_then(|row| row.last_error.clone()),
+                run_count: observation.map(|row| row.run_count).unwrap_or(0),
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
     Json(entries)
 }
 
@@ -1011,14 +1117,7 @@ pub async fn rewind_session(
         .rewind_session(&id, body.keep)
         .await
         .map(|_| Json(serde_json::json!({ "ok": true })))
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })
+        .map_err(attempt_err)
 }
 
 // ── Git pane routes — a session is (auto-)a git repo ────────────────────
@@ -1027,6 +1126,22 @@ fn git_err(e: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
         StatusCode::BAD_REQUEST,
         Json(ErrorResponse {
             error: e.to_string(),
+        }),
+    )
+}
+
+/// Attempt lifecycle conflicts are safe concurrency guards, not malformed
+/// requests. Keep all other git/attempt failures on the existing 400 contract.
+fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorResponse>) {
+    let status = if matches!(&error, axocoatl_daemon::DaemonError::AttemptConflict(_)) {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    (
+        status,
+        Json(ErrorResponse {
+            error: error.to_string(),
         }),
     )
 }
@@ -1061,15 +1176,16 @@ pub async fn git_diff(
 
 #[derive(serde::Deserialize)]
 pub struct VariantDiffQuery {
+    pub attempt_set_id: String,
     /// 0-based lane index.
     pub index: usize,
     pub path: String,
 }
 
-/// GET /api/sessions/{id}/variants/diff?index=…&path=…
+/// GET /api/sessions/{id}/variants/diff?attempt_set_id=…&index=…&path=…
 ///
-/// One file's before/after **within a single lane's worktree**. The comparison
-/// view calls this per candidate: same path, different lane, different answer.
+/// One file's before/after **within a single attempt's isolated checkout**. The
+/// comparison view calls this per attempt: same path, different answer.
 pub async fn session_variant_diff(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1077,10 +1193,10 @@ pub async fn session_variant_diff(
 ) -> Result<Json<axocoatl_daemon::git::GitDiff>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
     daemon
-        .variant_diff(&id, q.index, &q.path)
+        .variant_diff(&id, &q.attempt_set_id, q.index, &q.path)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 /// GET /api/sessions/{id}/git/branches
@@ -1112,7 +1228,7 @@ pub async fn git_commit(
         .git_commit(&id, body.message.as_deref().unwrap_or(""), body.stage_all)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -1173,7 +1289,7 @@ pub async fn git_apply_hunk(
         .git_apply_hunk(&id, &body.path, body.index, body.stage)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 /// POST /api/sessions/{id}/git/stage
@@ -1187,7 +1303,7 @@ pub async fn git_stage(
         .git_stage(&id, &body.paths)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 /// POST /api/sessions/{id}/git/unstage
@@ -1201,7 +1317,7 @@ pub async fn git_unstage(
         .git_unstage(&id, &body.paths)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 /// POST /api/sessions/{id}/git/discard
@@ -1215,7 +1331,7 @@ pub async fn git_discard(
         .git_discard(&id, body.path.as_deref())
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -1241,7 +1357,7 @@ pub async fn git_revert_hunk(
         .git_revert_hunk(&id, &body.path, body.index)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 /// POST /api/sessions/{id}/git/checkout
@@ -1255,7 +1371,7 @@ pub async fn git_checkout(
         .git_checkout(&id, &body.reference)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 // ── Variants — parallel branch exploration ──────────────────────────────
@@ -1266,7 +1382,11 @@ fn default_variant_count() -> usize {
 #[derive(serde::Deserialize)]
 pub struct VariantsBody {
     pub input: String,
-    /// Number of lanes, all on the agent's configured model. Ignored when
+    /// The task these attempts are solving. Defaults to `input`, which keeps
+    /// direct prompts and planned instructions on the same contract.
+    #[serde(default)]
+    pub task: Option<String>,
+    /// Number of attempts, all on the agent's configured model. Ignored when
     /// `lanes` is given.
     #[serde(default = "default_variant_count")]
     pub n: usize,
@@ -1277,34 +1397,52 @@ pub struct VariantsBody {
     pub lanes: Option<Vec<axocoatl_daemon::git::LaneConfig>>,
 }
 
-/// POST /api/sessions/{id}/variants — start N parallel variants of the
-/// session's agent. Returns the variant list; each lane streams over the WS
-/// keyed `{session}#{i}`.
+impl VariantsBody {
+    /// Resolve the wire defaults before crossing into the daemon contract.
+    fn into_attempt_run(self) -> (String, String, Vec<axocoatl_daemon::git::LaneConfig>) {
+        let task = self.task.unwrap_or_else(|| self.input.clone());
+        let lanes = self
+            .lanes
+            .unwrap_or_else(|| vec![axocoatl_daemon::git::LaneConfig::default(); self.n]);
+        (task, self.input, lanes)
+    }
+}
+
+/// POST /api/sessions/{id}/variants — start parallel attempts for the session.
+/// Returns their durable attempt set; each attempt streams over the WS keyed
+/// `{session}#{i}`.
 pub async fn session_variants(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<VariantsBody>,
-) -> Result<Json<Vec<axocoatl_daemon::git::Variant>>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<axocoatl_daemon::git::AttemptSet>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
-    // Explicit lanes define the run; otherwise `n` uniform lanes on the agent's model.
-    let lanes = body
-        .lanes
-        .unwrap_or_else(|| vec![axocoatl_daemon::git::LaneConfig::default(); body.n]);
+    let (task, input, lanes) = body.into_attempt_run();
     daemon
-        .execute_session_variants(&id, &body.input, &lanes)
+        .execute_session_variants(&id, &task, &input, &lanes)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
-/// GET /api/sessions/{id}/variants/status — per-lane changed-files for the
-/// Compare view.
+#[derive(serde::Deserialize)]
+pub struct AttemptSetQuery {
+    pub attempt_set_id: String,
+}
+
+/// GET /api/sessions/{id}/variants/status?attempt_set_id=… — per-attempt
+/// changed files for Compare.
 pub async fn session_variants_status(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(q): Query<AttemptSetQuery>,
 ) -> Result<Json<Vec<axocoatl_daemon::git::VariantStatus>>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
-    daemon.variants_status(&id).await.map(Json).map_err(git_err)
+    daemon
+        .variants_status(&id, &q.attempt_set_id)
+        .await
+        .map(Json)
+        .map_err(attempt_err)
 }
 
 /// GET /api/sessions/{id}/variants/results — the whole comparison in one read:
@@ -1315,19 +1453,21 @@ pub async fn session_variants_results(
     Path(id): Path<String>,
 ) -> Result<Json<axocoatl_daemon::git::RunResults>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
-    daemon.run_results(&id).await.map(Json).map_err(git_err)
+    daemon.run_results(&id).await.map(Json).map_err(attempt_err)
 }
 
 #[derive(serde::Deserialize)]
 pub struct TrajectoryQuery {
+    pub attempt_set_id: String,
     /// Lane every other lane is read against. Defaults to the first lane, which
     /// is what the scoreboard shows before the user re-bases.
     #[serde(default)]
     pub baseline: usize,
 }
 
-/// GET /api/sessions/{id}/variants/trajectories?baseline=… — the lanes' routes,
-/// normalised and aligned, with each row marked agreed or diverged.
+/// GET /api/sessions/{id}/variants/trajectories?attempt_set_id=…&baseline=…
+/// — the attempts' routes, normalised and aligned, with each row marked agreed
+/// or diverged.
 ///
 /// Answers the question a scoreboard cannot: when two candidates both pass, how
 /// did they get there, and where exactly did they part.
@@ -1338,22 +1478,22 @@ pub async fn session_variants_trajectories(
 ) -> Result<Json<axocoatl_daemon::trajectory::Alignment>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
     daemon
-        .variants_trajectories(&id, q.baseline)
+        .variants_trajectories(&id, &q.attempt_set_id, q.baseline)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 #[derive(serde::Deserialize)]
 pub struct VerifyBody {
+    pub attempt_set_id: String,
     /// The project's own check command — tests, build, typecheck. Run through
     /// `sh` inside each lane's worktree.
     pub check: String,
 }
 
-/// POST /api/sessions/{id}/variants/verify — run the project's check command in
-/// every lane and report which survive. Generating candidates is cheap; this is
-/// what keeps a human from having to read the failures.
+/// POST /api/sessions/{id}/variants/verify — run Checks for every attempt and
+/// report which survive, so a reviewer does not have to read known failures.
 pub async fn session_variants_verify(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1361,30 +1501,24 @@ pub async fn session_variants_verify(
 ) -> Result<Json<Vec<axocoatl_daemon::git::LaneVerdict>>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
     daemon
-        .verify_variants(&id, &body.check)
+        .verify_variants(&id, &body.attempt_set_id, &body.check)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 #[derive(serde::Deserialize)]
 pub struct JudgeBody {
-    /// The task the candidates were attempting — the judge needs to know what
-    /// "good" meant.
-    pub task: String,
+    pub attempt_set_id: String,
     /// Provider to judge with. Use a stronger model than the lanes ran:
     /// comparing solutions is harder than producing one.
     pub provider: String,
     #[serde(default)]
     pub model: Option<String>,
-    /// Lanes to rank — typically the survivors of `/variants/verify`. Omit to
-    /// judge every lane.
-    #[serde(default)]
-    pub only: Option<Vec<usize>>,
 }
 
-/// POST /api/sessions/{id}/variants/judge — rank the surviving candidates and
-/// say why, so a reviewer reads one diff with a reason instead of N without.
+/// POST /api/sessions/{id}/variants/judge — rank the surviving attempts and say
+/// why, so a reviewer reads one diff with a reason instead of N without.
 pub async fn session_variants_judge(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1392,10 +1526,10 @@ pub async fn session_variants_judge(
 ) -> Result<Json<axocoatl_daemon::git::Judgment>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
     daemon
-        .judge_variants(&id, &body.task, &body.provider, body.model, body.only)
+        .judge_variants(&id, &body.attempt_set_id, &body.provider, body.model)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 #[derive(serde::Deserialize)]
@@ -1419,7 +1553,7 @@ pub async fn variants_probe(
             daemon
                 .probe_lane_model(&q.provider, model)
                 .await
-                .map_err(git_err)?,
+                .map_err(attempt_err)?,
         );
     }
     Ok(Json(out))
@@ -1455,20 +1589,26 @@ pub async fn session_variants_plan(
     let plan = daemon
         .plan_task(&id, &body.task, &body.provider, body.model)
         .await
-        .map_err(git_err)?;
+        .map_err(attempt_err)?;
     let instruction = plan.render(&body.task);
     Ok(Json(PlanResponse { plan, instruction }))
 }
 
 #[derive(serde::Deserialize)]
 pub struct CostQuery {
+    pub attempt_set_id: String,
     /// Model to price the counterfactual against — the one expensive model you
     /// would otherwise have run the whole task on.
     pub baseline: String,
+    /// Provider serving the explicitly selected baseline. This distinguishes a
+    /// known-free Ollama model from an unpriced remote model with the same id.
+    #[serde(default)]
+    pub baseline_provider: Option<String>,
 }
 
-/// GET /api/sessions/{id}/variants/cost?baseline=… — what the run cost, and
-/// what the same tokens would have cost on one expensive model.
+/// GET /api/sessions/{id}/variants/cost?attempt_set_id=…&baseline=… — what
+/// these attempts cost, and what the same tokens would have cost on one
+/// expensive model.
 pub async fn session_variants_cost(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1476,19 +1616,25 @@ pub async fn session_variants_cost(
 ) -> Result<Json<axocoatl_daemon::git::RunCost>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
     daemon
-        .variants_cost(&id, &q.baseline)
+        .variants_cost(
+            &id,
+            &q.attempt_set_id,
+            &q.baseline,
+            q.baseline_provider.as_deref(),
+        )
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 #[derive(serde::Deserialize)]
 pub struct AdoptBody {
-    pub branch: String,
+    pub attempt_set_id: String,
+    pub index: usize,
 }
 
-/// POST /api/sessions/{id}/variants/adopt — merge a variant branch into the
-/// session's primary checkout and tear down the rest.
+/// POST /api/sessions/{id}/variants/adopt — Keep one attempt's changes in the
+/// session's primary workspace and tear down the rest.
 pub async fn session_variant_adopt(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1496,24 +1642,30 @@ pub async fn session_variant_adopt(
 ) -> Result<Json<axocoatl_daemon::git::GitStatus>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
     daemon
-        .adopt_variant(&id, &body.branch)
+        .adopt_variant(&id, &body.attempt_set_id, body.index)
         .await
         .map(Json)
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
-/// POST /api/sessions/{id}/variants/discard — tear down all variants without
-/// adopting any.
+#[derive(serde::Deserialize)]
+pub struct DiscardAttemptBody {
+    pub attempt_set_id: String,
+}
+
+/// POST /api/sessions/{id}/variants/discard — Discard this attempt set without
+/// keeping any of its changes.
 pub async fn session_variants_discard(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Json(body): Json<DiscardAttemptBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
     daemon
-        .remove_variant_worktrees(&id)
+        .discard_attempt(&id, &body.attempt_set_id)
         .await
         .map(|_| Json(serde_json::json!({ "ok": true })))
-        .map_err(git_err)
+        .map_err(attempt_err)
 }
 
 pub async fn execute_session(
@@ -1526,6 +1678,7 @@ pub async fn execute_session(
         Ok(output) => Ok(Json(ExecuteResponse {
             output: output.content,
         })),
+        Err(e @ axocoatl_daemon::DaemonError::AttemptConflict(_)) => Err(attempt_err(e)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
@@ -1621,8 +1774,9 @@ pub async fn rename_session(
 }
 
 // ─── Chats (lightweight, no directory) ────────────────────────────────
-// Backend for the dashboard's Chat tab. Distinct from sessions — see
-// crates/axocoatl-memory/src/chat.rs for the storage model and rationale.
+// Retained API/storage backend for directoryless chats. The one app has no
+// peer lightweight-Chat destination; see crates/axocoatl-memory/src/chat.rs
+// for the distinct transcript model and compatibility rationale.
 
 #[derive(Deserialize)]
 pub struct CreateChatBody {
@@ -1936,9 +2090,10 @@ pub async fn upload_chat_attachment(
 }
 
 // ─── /api/files — the cross-chat file browser ────────────────────────
-// Content-addressed reads from the FileStore. The Files browser tab
-// lists, searches, previews, renames, and deletes. Deleting a file here
-// also cleans up any chat reference (callers shouldn't see broken refs).
+// Content-addressed FileStore compatibility API: list, search, preview,
+// rename, and delete. The one app has no cross-chat Files destination.
+// Deleting a file also cleans up chat references so callers do not see
+// broken refs.
 
 #[derive(Deserialize)]
 pub struct FilesQuery {
@@ -2171,8 +2326,8 @@ pub async fn upload_file(
     Ok(Json(entry))
 }
 
-/// Attach an already-uploaded FileStore entry to a chat — the cross-chat
-/// "attach from My Files" path. Body: `{ file_id: string }`.
+/// Attach an already-uploaded FileStore entry through the retained chat API.
+/// Body: `{ file_id: string }`.
 #[derive(Deserialize)]
 pub struct AttachFromFilesBody {
     pub file_id: String,
@@ -2939,41 +3094,110 @@ pub struct ProactiveEntry {
     pub enabled: bool,
     pub last_fired_unix: Option<u64>,
     pub last_outcome: Option<String>,
+    pub last_error: Option<String>,
     pub run_count: u64,
 }
 
 pub async fn list_proactive(State(state): State<AppState>) -> Json<Vec<ProactiveEntry>> {
-    use axocoatl_config::ProactiveTrigger;
-    let daemon = state.read().await;
-    let table = daemon.proactive_table.clone();
-    drop(daemon);
-    let entries = table
+    use axocoatl_config::{AutomationNodeKind, AutomationTrigger};
+    use std::collections::HashMap;
+
+    let (automations, schedule_table, proactive_table) = {
+        let daemon = state.read().await;
+        (
+            daemon.list_automations().await,
+            daemon.schedule_table.clone(),
+            daemon.proactive_table.clone(),
+        )
+    };
+    let schedule_observations: HashMap<String, axocoatl_daemon::ScheduleState> = schedule_table
         .lock()
-        .map(|v| {
-            v.iter()
-                .map(|p| {
-                    let (trigger_kind, trigger_detail) = match &p.config.trigger {
-                        ProactiveTrigger::Schedule { every } => {
-                            ("schedule".to_string(), every.clone())
-                        }
-                        ProactiveTrigger::OnEvent { event } => ("event".to_string(), event.clone()),
-                    };
-                    ProactiveEntry {
-                        id: p.config.id.clone(),
-                        name: p.config.name.clone(),
-                        agent: p.config.agent.clone(),
-                        trigger_kind,
-                        trigger_detail,
-                        input: p.config.input.clone(),
-                        enabled: p.config.enabled,
-                        last_fired_unix: p.last_fired_unix,
-                        last_outcome: p.last_outcome.clone(),
-                        run_count: p.run_count,
-                    }
-                })
+        .map(|rows| {
+            rows.iter()
+                .cloned()
+                .map(|row| (row.automation_id.clone(), row))
                 .collect()
         })
         .unwrap_or_default();
+    let proactive_observations: HashMap<String, axocoatl_daemon::ProactiveState> = proactive_table
+        .lock()
+        .map(|rows| {
+            rows.iter()
+                .cloned()
+                .map(|row| (row.automation_id.clone(), row))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut entries: Vec<ProactiveEntry> = automations
+        .into_iter()
+        .filter_map(|automation| {
+            let (trigger_kind, trigger_detail, input, schedule_observation, proactive_observation) =
+                match &automation.trigger {
+                    AutomationTrigger::Schedule { every, input }
+                        if automation.id.starts_with("pro:") =>
+                    {
+                        (
+                            "schedule".to_string(),
+                            every.clone(),
+                            input.clone().unwrap_or_default(),
+                            schedule_observations.get(&automation.id),
+                            None,
+                        )
+                    }
+                    AutomationTrigger::OnEvent { event, input } => (
+                        "event".to_string(),
+                        event.clone(),
+                        input.clone().unwrap_or_default(),
+                        None,
+                        proactive_observations.get(&automation.id),
+                    ),
+                    AutomationTrigger::OnSkill { skill_id } => (
+                        "skill".to_string(),
+                        skill_id.clone(),
+                        String::new(),
+                        None,
+                        proactive_observations.get(&automation.id),
+                    ),
+                    _ => return None,
+                };
+            let agent = automation
+                .nodes
+                .iter()
+                .find_map(|node| match &node.kind {
+                    AutomationNodeKind::Agent { agent_id, .. } => Some(agent_id.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            Some(ProactiveEntry {
+                id: automation
+                    .id
+                    .strip_prefix("pro:")
+                    .unwrap_or(&automation.id)
+                    .to_string(),
+                name: automation.name,
+                agent,
+                trigger_kind,
+                trigger_detail,
+                input,
+                enabled: automation.enabled,
+                last_fired_unix: schedule_observation
+                    .and_then(|row| row.last_fired_unix)
+                    .or_else(|| proactive_observation.and_then(|row| row.last_fired_unix)),
+                last_outcome: schedule_observation
+                    .and_then(|row| row.last_outcome.clone())
+                    .or_else(|| proactive_observation.and_then(|row| row.last_outcome.clone())),
+                last_error: schedule_observation
+                    .and_then(|row| row.last_error.clone())
+                    .or_else(|| proactive_observation.and_then(|row| row.last_error.clone())),
+                run_count: schedule_observation
+                    .map(|row| row.run_count)
+                    .or_else(|| proactive_observation.map(|row| row.run_count))
+                    .unwrap_or(0),
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
     Json(entries)
 }
 
@@ -3059,7 +3283,7 @@ pub async fn fire_skill(
     }))
 }
 
-// --- Recent lattice events (for timeline / log) ---
+// --- Recent lattice events (retained integration/event-history API) ---
 
 #[derive(Serialize)]
 pub struct EventEntry {
@@ -3096,6 +3320,8 @@ pub async fn recent_events(State(state): State<AppState>) -> Json<Vec<EventEntry
 #[derive(Deserialize)]
 pub struct SchedulePatch {
     pub enabled: Option<bool>,
+    pub every: Option<String>,
+    pub input: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -3110,32 +3336,49 @@ pub async fn patch_schedule(
     Path(id): Path<String>,
     Json(body): Json<SchedulePatch>,
 ) -> Result<Json<ScheduleActionResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let daemon = state.read().await;
-    let table = daemon.schedule_table.clone();
-    drop(daemon);
-    let mut t = table.lock().map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "schedule table poisoned".into(),
-            }),
-        )
-    })?;
-    let Some(s) = t.iter_mut().find(|s| s.config.id == id) else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("schedule '{id}' not found"),
-            }),
-        ));
-    };
+    use axocoatl_config::AutomationTrigger;
+
+    let store = state.read().await.automation_store.clone();
+    let mut store = store.write().await;
+    let candidates = [id.clone(), format!("sched:{id}"), format!("pro:{id}")];
+    let mut automation = candidates
+        .iter()
+        .find_map(|candidate| {
+            store.get(candidate).filter(|automation| {
+                matches!(&automation.trigger, AutomationTrigger::Schedule { .. })
+            })
+        })
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("schedule '{id}' not found")))?;
     if let Some(enabled) = body.enabled {
-        s.config.enabled = enabled;
+        automation.enabled = enabled;
     }
+    if let AutomationTrigger::Schedule { every, input } = &mut automation.trigger {
+        if let Some(updated_every) = body.every {
+            let seconds = axocoatl_daemon::parse_interval(&updated_every)
+                .map_err(|error| err(StatusCode::BAD_REQUEST, error))?;
+            if seconds == 0 {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "schedule interval must be greater than zero",
+                ));
+            }
+            *every = updated_every;
+        }
+        if let Some(updated_input) = body.input {
+            *input = if updated_input.trim().is_empty() {
+                None
+            } else {
+                Some(updated_input)
+            };
+        }
+    }
+    let automation = store
+        .upsert(automation)
+        .map_err(|error| err(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     Ok(Json(ScheduleActionResponse {
         schedule_id: id,
         ok: true,
-        message: format!("enabled={}", s.config.enabled),
+        message: format!("enabled={}", automation.enabled),
     }))
 }
 
@@ -3143,29 +3386,42 @@ pub async fn run_schedule(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ScheduleActionResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let (workflow_id, input) = {
+    use axocoatl_config::AutomationTrigger;
+
+    let context = {
         let daemon = state.read().await;
-        let s = daemon.config.schedules.iter().find(|s| s.id == id).cloned();
-        match s {
-            Some(s) => (s.workflow.clone(), s.input.clone()),
-            None => {
-                return Err((
-                    StatusCode::NOT_FOUND,
-                    Json(ErrorResponse {
-                        error: format!("schedule '{id}' not found"),
-                    }),
-                ))
+        axocoatl_daemon::automation_executor::AutomationExecutionContext::from_daemon(&daemon)
+    };
+    let candidates = [id.clone(), format!("sched:{id}"), format!("pro:{id}")];
+    let mut automation = None;
+    for candidate in &candidates {
+        if let Some(found) = context.get_automation(candidate).await {
+            if matches!(&found.trigger, AutomationTrigger::Schedule { .. }) {
+                automation = Some(found);
+                break;
             }
         }
+    }
+    let automation = automation
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, format!("schedule '{id}' not found")))?;
+    let input = match &automation.trigger {
+        AutomationTrigger::Schedule { input, .. } => input.clone().unwrap_or_default(),
+        _ => unreachable!(),
     };
-    let daemon = state.read().await;
-    match daemon.execute_workflow(&workflow_id, &input).await {
+    let result = axocoatl_daemon::automation_executor::execute_automation_in_context(
+        &context,
+        &automation,
+        &input,
+    )
+    .await;
+    axocoatl_daemon::record_automation_outcome(&context, &automation, &result);
+    match result {
         Ok(out) => Ok(Json(ScheduleActionResponse {
             schedule_id: id,
             ok: true,
             message: format!(
-                "ran workflow '{}' · {} agents · {} tokens",
-                workflow_id,
+                "ran Automation '{}' · {} agents · {} tokens",
+                automation.id,
                 out.completed_agents.len(),
                 out.total_token_usage.input_tokens + out.total_token_usage.output_tokens
             ),
@@ -3208,9 +3464,10 @@ pub async fn restart_agent(
 
 // --- Unified live WebSocket ---
 //
-// One bidirectional socket per dashboard — the only live transport. The
-// server pushes every stream-bus frame (lattice events + live agent tokens);
-// the client sends commands (run-workflow, chat, ping).
+// One bidirectional socket per app client — the live transport for session
+// state, approvals, and agent output. It also retains workflow/chat commands
+// and frames for compatibility clients after those peer browser surfaces
+// retired.
 
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
@@ -3259,6 +3516,45 @@ fn default_once() -> String {
     "once".to_string()
 }
 
+/// Build one agent turn from the persisted chat transcript.
+///
+/// `ChatStore` owns this conversation, so every stored message is supplied as
+/// authoritative history rather than allowing the configured agent actor's
+/// lifetime session to replace it. The current user content stays separate:
+/// the actor appends it exactly once when it executes the turn.
+fn build_chat_agent_input(
+    chat: &axocoatl_memory::chat::Chat,
+    content: &str,
+    attachments: Vec<axocoatl_core::AgentAttachment>,
+) -> axocoatl_core::AgentInput {
+    let history = chat
+        .messages
+        .iter()
+        .map(|message| axocoatl_core::ChatMessage {
+            role: message.role.clone(),
+            content: axocoatl_core::MessageContent::Text(message.content.clone()),
+            name: message.name.clone(),
+            tool_calls: message
+                .tool_calls
+                .iter()
+                .map(|call| axocoatl_core::ToolCall {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    arguments: serde_json::from_str(&call.arguments_json)
+                        .unwrap_or(serde_json::Value::Null),
+                })
+                .collect(),
+            tool_call_id: message.tool_call_id.clone(),
+        })
+        .collect();
+
+    axocoatl_core::AgentInput::text(content)
+        .with_supplied_history(history)
+        .with_system_override(chat.system_override.clone())
+        .with_model_override(chat.model_override.clone())
+        .with_attachments(attachments)
+}
+
 pub async fn ws(
     ws: axum::extract::WebSocketUpgrade,
     State(state): State<AppState>,
@@ -3281,17 +3577,25 @@ async fn handle_ws(mut socket: axum::extract::ws::WebSocket, state: AppState) {
         ))
         .await;
 
-    // Snapshot of in-flight runs — lets a client that reloaded mid-run
-    // re-attach its live view instead of losing it.
-    let snapshot = {
+    // Snapshot of in-flight runs and every parked MCP approval — lets a client
+    // that reloaded mid-run restore both observation and decisions instead of
+    // depending on one-shot frames it may have missed.
+    let (runs, approval_gate) = {
         let daemon = state.read().await;
         let runs: Vec<_> = daemon
             .active_runs
             .lock()
             .map(|m| m.values().cloned().collect())
             .unwrap_or_default();
-        axocoatl_daemon::StreamFrame::Snapshot { runs }
+        (runs, daemon.mcp_approval_gate.clone())
     };
+    let approvals = approval_gate
+        .pending_contexts()
+        .await
+        .into_iter()
+        .map(axocoatl_daemon::stream::PendingMcpApproval::from)
+        .collect();
+    let snapshot = axocoatl_daemon::StreamFrame::Snapshot { runs, approvals };
     if let Ok(j) = serde_json::to_string(&snapshot) {
         let _ = socket.send(Message::Text(j.into())).await;
     }
@@ -3402,11 +3706,33 @@ async fn dispatch_ws_command(
         WsCommand::RunWorkflow { id, input } => {
             let state = state.clone();
             tokio::spawn(async move {
-                let (result, bus) = {
+                let (context, bus) = {
                     let daemon = state.read().await;
-                    let bus = daemon.stream_bus.clone();
-                    let result = daemon.execute_workflow(&id, &input).await;
-                    (result, bus)
+                    (
+                        axocoatl_daemon::automation_executor::AutomationExecutionContext::from_daemon(
+                            &daemon,
+                        ),
+                        daemon.stream_bus.clone(),
+                    )
+                };
+                let result = match context.get_automation(&id).await {
+                    Some(automation)
+                        if matches!(
+                            &automation.trigger,
+                            axocoatl_config::AutomationTrigger::Manual
+                        ) =>
+                    {
+                        let result =
+                            axocoatl_daemon::automation_executor::execute_automation_in_context(
+                                &context,
+                                &automation,
+                                &input,
+                            )
+                            .await;
+                        axocoatl_daemon::record_automation_outcome(&context, &automation, &result);
+                        result
+                    }
+                    _ => Err(axocoatl_daemon::DaemonError::WorkflowNotFound(id.clone())),
                 };
                 // Clear the run from the registry directly — don't depend on
                 // the tracker catching the WorkflowDone frame under token lag.
@@ -3628,20 +3954,6 @@ async fn dispatch_ws_command(
                     });
                 }
 
-                // Build the AgentInput from the chat's history. The user's
-                // content was already appended above, so we pass the rest as
-                // history and the new content as the live turn.
-                let history: Vec<axocoatl_core::ChatMessage> = chat
-                    .messages
-                    .iter()
-                    .map(|m| axocoatl_core::ChatMessage {
-                        role: m.role.clone(),
-                        content: axocoatl_core::MessageContent::Text(m.content.clone()),
-                        name: None,
-                        tool_calls: Vec::new(),
-                        tool_call_id: None,
-                    })
-                    .collect();
                 // Resolve FileStore entries to AgentAttachments. `path` points
                 // at the content-addressed file on disk; the executor reads the
                 // bytes once and inlines them (image → base64 vision, text →
@@ -3668,11 +3980,7 @@ async fn dispatch_ws_command(
                         })
                         .collect()
                 };
-                let agent_input = axocoatl_core::AgentInput::text(&content)
-                    .with_history(history)
-                    .with_system_override(chat.system_override.clone())
-                    .with_model_override(chat.model_override.clone())
-                    .with_attachments(core_attachments);
+                let agent_input = build_chat_agent_input(&chat, &content, core_attachments);
 
                 // Race the agent execution against the cancel signal.
                 let exec_fut =
@@ -3925,33 +4233,72 @@ pub struct ForkRunBody {
     pub input: Option<String>,
 }
 
-/// Fork: spawn a fresh run that starts from scratch with the same trigger
-/// input as a prior run (or a user-supplied override). v0.1 doesn't yet
-/// resume mid-graph from a checkpoint; this gives you "re-run with the
-/// same prompt" which closes 80% of the time-travel use case (reproduce
-/// a result, then iterate).
+/// Start a fresh whole-graph run using a prior run's inputs. The compatibility
+/// path still says `fork`, but this is deliberately a rerun from the beginning,
+/// not a checkpoint continuation. Its ancestry, trigger input, and TextInput
+/// values are persisted before the endpoint reports success.
 pub async fn fork_run(
     State(state): State<AppState>,
     Path((automation_id, run_id)): Path<(String, String)>,
     Json(body): Json<ForkRunBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let daemon = state.read().await;
-    let source = daemon
-        .get_run(&automation_id, &run_id)
-        .map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+    let (source, context) = {
+        let daemon = state.read().await;
+        let source = daemon
+            .get_run(&automation_id, &run_id)
+            .map_err(|e| err(StatusCode::NOT_FOUND, e.to_string()))?;
+        let context =
+            axocoatl_daemon::automation_executor::AutomationExecutionContext::from_daemon(&daemon);
+        (source, context)
+    };
+    let automation = context
+        .get_automation(&automation_id)
+        .await
+        .ok_or_else(|| {
+            err(
+                StatusCode::NOT_FOUND,
+                format!("automation '{automation_id}' not found"),
+            )
+        })?;
     let input = body.input.unwrap_or(source.trigger_input);
-    // Spawn in background — the new run gets its own run_id.
-    let auto_id = automation_id.clone();
-    let state2 = state.clone();
+    let text_inputs = source.text_inputs;
+    let forked_from = axocoatl_daemon::automation_runs::ForkSource {
+        source_run_id: run_id.clone(),
+        from_start: true,
+        from_step: 0,
+    };
+    let new_run_id = axocoatl_daemon::automation_executor::start_automation_run_in_context(
+        &context,
+        &automation,
+        &input,
+        &text_inputs,
+        Some(forked_from),
+    )
+    .await
+    .map_err(|error| err(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+
+    let spawned_run_id = new_run_id.clone();
     tokio::spawn(async move {
-        let d = state2.read().await;
-        if let Err(e) = d.execute_automation(&auto_id, &input).await {
+        let result =
+            axocoatl_daemon::automation_executor::execute_started_automation_run_in_context(
+                &context,
+                &automation,
+                &input,
+                &text_inputs,
+                &spawned_run_id,
+            )
+            .await;
+        axocoatl_daemon::record_automation_outcome(&context, &automation, &result);
+        if let Err(e) = result {
             tracing::warn!("forked run failed: {e}");
         }
     });
-    Ok(Json(
-        serde_json::json!({ "ok": true, "forked_from": run_id }),
-    ))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "run_id": new_run_id,
+        "forked_from": run_id,
+        "from_start": true,
+    })))
 }
 
 // --- HITL interrupts ---
@@ -3994,6 +4341,18 @@ pub struct ResumeBody {
     pub value: String,
 }
 
+fn interrupt_resolution_err(
+    error: axocoatl_daemon::interrupt::InterruptResolutionError,
+) -> (StatusCode, Json<ErrorResponse>) {
+    let status = match &error {
+        axocoatl_daemon::interrupt::InterruptResolutionError::NotFound(_) => StatusCode::NOT_FOUND,
+        axocoatl_daemon::interrupt::InterruptResolutionError::Recovery { .. } => {
+            StatusCode::CONFLICT
+        }
+    };
+    err(status, error.to_string())
+}
+
 /// Resume a parked interrupt by `{automation_id}:{run_id}:{node_id}`.
 /// The executor wakes and the automation continues from there.
 pub async fn resume_interrupt(
@@ -4002,17 +4361,20 @@ pub async fn resume_interrupt(
     Json(body): Json<ResumeBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let key = format!("{automation_id}:{run_id}:{node_id}");
-    let daemon = state.read().await;
-    let map = daemon.pending_interrupts.read().await;
-    let Some(pi) = map.get(&key).cloned() else {
-        return Err(err(
-            StatusCode::NOT_FOUND,
-            format!("no pending interrupt at {key}"),
-        ));
+    let context = {
+        let daemon = state.read().await;
+        axocoatl_daemon::automation_executor::AutomationExecutionContext::from_daemon(&daemon)
     };
-    drop(map);
-    *pi.resume_value.lock().await = Some(body.value);
-    pi.notify.notify_one();
+    axocoatl_daemon::automation_executor::resolve_pending_interrupt(
+        &context,
+        &automation_id,
+        &run_id,
+        &node_id,
+        body.value,
+        false,
+    )
+    .await
+    .map_err(interrupt_resolution_err)?;
     Ok(Json(serde_json::json!({ "ok": true, "key": key })))
 }
 
@@ -4024,19 +4386,20 @@ pub async fn cancel_interrupt(
     Path((automation_id, run_id, node_id)): Path<(String, String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let key = format!("{automation_id}:{run_id}:{node_id}");
-    let daemon = state.read().await;
-    let map = daemon.pending_interrupts.read().await;
-    let Some(pi) = map.get(&key).cloned() else {
-        return Err(err(
-            StatusCode::NOT_FOUND,
-            format!("no pending interrupt at {key}"),
-        ));
+    let context = {
+        let daemon = state.read().await;
+        axocoatl_daemon::automation_executor::AutomationExecutionContext::from_daemon(&daemon)
     };
-    drop(map);
-    pi.cancelled
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    *pi.resume_value.lock().await = Some(String::new());
-    pi.notify.notify_one();
+    axocoatl_daemon::automation_executor::resolve_pending_interrupt(
+        &context,
+        &automation_id,
+        &run_id,
+        &node_id,
+        String::new(),
+        true,
+    )
+    .await
+    .map_err(interrupt_resolution_err)?;
     Ok(Json(
         serde_json::json!({ "ok": true, "cancelled": true, "key": key }),
     ))
@@ -4056,9 +4419,8 @@ pub async fn list_tools(State(state): State<AppState>) -> Json<Vec<serde_json::V
 
 // --- Unified Automations API ---
 //
-// One concept = one endpoint. The data still lives in three legacy YAML
-// sections under the hood; the daemon projects them into `Vec<Automation>`
-// on demand. As phase 5 lands, this will become the authoritative store.
+// One concept = one endpoint. `AutomationStore` is authoritative; legacy
+// workflow, schedule, and proactive YAML only seeds it on first boot.
 
 pub async fn list_automations(
     State(state): State<AppState>,
@@ -4111,7 +4473,7 @@ pub async fn update_automation(
         .upsert_automation(body)
         .await
         .map(Json)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))
 }
 
 pub async fn delete_automation(
@@ -4238,16 +4600,37 @@ pub async fn run_automation(
     Path(id): Path<String>,
     Json(body): Json<RunAutomationBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let daemon = state.clone();
+    // Fail synchronously for an unknown id. The background task re-reads the
+    // record so an edit made between click and execution takes precedence.
+    let context = {
+        let daemon = state.read().await;
+        axocoatl_daemon::automation_executor::AutomationExecutionContext::from_daemon(&daemon)
+    };
+    if context.get_automation(&id).await.is_none() {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            format!("automation '{id}' not found"),
+        ));
+    }
     let input = body.input.clone();
     let inputs = body.inputs.clone();
     let id_clone = id.clone();
     tokio::spawn(async move {
-        let d = daemon.read().await;
-        if let Err(e) = d
-            .execute_automation_with_inputs(&id_clone, &input, &inputs)
-            .await
-        {
+        let Some(automation) = context.get_automation(&id_clone).await else {
+            return;
+        };
+        // The Automation is cloned before provider/tool execution, so the
+        // canonical store lock is never held across a run.
+        let result =
+            axocoatl_daemon::automation_executor::execute_automation_with_inputs_in_context(
+                &context,
+                &automation,
+                &input,
+                &inputs,
+            )
+            .await;
+        axocoatl_daemon::record_automation_outcome(&context, &automation, &result);
+        if let Err(e) = result {
             tracing::warn!(automation = %id_clone, error = %e, "automation run failed");
         }
     });
@@ -4440,6 +4823,153 @@ pub async fn a2a_receive_task(
 mod tests {
     use super::*;
 
+    fn stored_message(
+        role: axocoatl_core::MessageRole,
+        content: &str,
+    ) -> axocoatl_memory::session::StoredMessage {
+        axocoatl_memory::session::StoredMessage {
+            role,
+            content: content.to_string(),
+            timestamp: 1,
+            token_count: 0,
+            name: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }
+    }
+
+    fn persisted_chat(
+        messages: Vec<axocoatl_memory::session::StoredMessage>,
+    ) -> axocoatl_memory::chat::Chat {
+        axocoatl_memory::chat::Chat {
+            id: "chat-test".to_string(),
+            name: "Test chat".to_string(),
+            agent_id: "assistant".to_string(),
+            system_override: None,
+            model_override: None,
+            starred: false,
+            parent_id: None,
+            forked_at_message: None,
+            messages,
+            attachments: Vec::new(),
+            created_at: 1,
+            last_active: 1,
+        }
+    }
+
+    #[test]
+    fn chat_agent_input_preserves_history_order_without_duplicating_current_content() {
+        let chat = persisted_chat(vec![
+            stored_message(axocoatl_core::MessageRole::System, "chat system"),
+            stored_message(axocoatl_core::MessageRole::User, "first question"),
+            stored_message(axocoatl_core::MessageRole::Assistant, "first answer"),
+        ]);
+
+        let input = build_chat_agent_input(&chat, "current question", Vec::new());
+
+        assert_eq!(input.content, "current question");
+        assert_eq!(input.history.len(), 3);
+        assert_eq!(
+            input
+                .history
+                .iter()
+                .map(|message| message.role.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                axocoatl_core::MessageRole::System,
+                axocoatl_core::MessageRole::User,
+                axocoatl_core::MessageRole::Assistant,
+            ]
+        );
+        assert_eq!(input.history[0].text_content(), Some("chat system"));
+        assert_eq!(input.history[1].text_content(), Some("first question"));
+        assert_eq!(input.history[2].text_content(), Some("first answer"));
+        assert!(input
+            .history
+            .iter()
+            .all(|message| message.text_content() != Some("current question")));
+    }
+
+    #[test]
+    fn chat_agent_input_preserves_tool_correlation_and_argument_shape() {
+        let mut assistant = stored_message(axocoatl_core::MessageRole::Assistant, "calling");
+        assistant.name = Some("assistant-name".to_string());
+        assistant.tool_calls = vec![
+            axocoatl_memory::session::StoredToolCall {
+                id: "call-valid".to_string(),
+                name: "search".to_string(),
+                arguments_json: r#"{"q":"axocoatl"}"#.to_string(),
+            },
+            axocoatl_memory::session::StoredToolCall {
+                id: "call-invalid".to_string(),
+                name: "broken".to_string(),
+                arguments_json: "not-json".to_string(),
+            },
+        ];
+        let mut tool = stored_message(axocoatl_core::MessageRole::Tool, "search result");
+        tool.name = Some("search".to_string());
+        tool.tool_call_id = Some("call-valid".to_string());
+        let chat = persisted_chat(vec![assistant, tool]);
+
+        let input = build_chat_agent_input(&chat, "continue", Vec::new());
+
+        assert_eq!(input.history[0].name.as_deref(), Some("assistant-name"));
+        assert_eq!(input.history[0].tool_calls.len(), 2);
+        assert_eq!(
+            input.history[0].tool_calls[0].arguments,
+            serde_json::json!({ "q": "axocoatl" })
+        );
+        assert_eq!(
+            input.history[0].tool_calls[1].arguments,
+            serde_json::Value::Null
+        );
+        assert_eq!(input.history[1].name.as_deref(), Some("search"));
+        assert_eq!(input.history[1].tool_call_id.as_deref(), Some("call-valid"));
+    }
+
+    #[test]
+    fn chat_agent_input_carries_chat_overrides_and_turn_attachments() {
+        let mut chat = persisted_chat(Vec::new());
+        chat.system_override = Some("Use the chat rules".to_string());
+        chat.model_override = Some("qwen3:32b".to_string());
+        let attachment = axocoatl_core::AgentAttachment {
+            id: "sha256".to_string(),
+            name: "spec.md".to_string(),
+            mime: "text/markdown".to_string(),
+            path: "/tmp/spec.md".to_string(),
+            size: 42,
+            extracted_text: Some("the spec".to_string()),
+        };
+
+        let input = build_chat_agent_input(&chat, "review this", vec![attachment]);
+
+        assert_eq!(input.system_override.as_deref(), Some("Use the chat rules"));
+        assert_eq!(input.model_override.as_deref(), Some("qwen3:32b"));
+        assert_eq!(input.attachments.len(), 1);
+        assert_eq!(input.attachments[0].id, "sha256");
+        assert_eq!(input.attachments[0].name, "spec.md");
+        assert_eq!(input.attachments[0].mime, "text/markdown");
+        assert_eq!(input.attachments[0].path, "/tmp/spec.md");
+        assert_eq!(input.attachments[0].size, 42);
+        assert_eq!(
+            input.attachments[0].extracted_text.as_deref(),
+            Some("the spec")
+        );
+    }
+
+    #[test]
+    fn chat_agent_input_empty_chat_still_selects_supplied_history_mode() {
+        let chat = persisted_chat(Vec::new());
+
+        let input = build_chat_agent_input(&chat, "first turn", Vec::new());
+
+        assert!(input.history.is_empty());
+        assert_eq!(
+            input.conversation_mode,
+            axocoatl_core::ConversationMode::SuppliedHistory
+        );
+    }
+
     #[test]
     fn execute_request_parses_per_request_overrides() {
         let body: ExecuteRequest = serde_json::from_str(
@@ -4457,6 +4987,162 @@ mod tests {
         let body: ExecuteRequest = serde_json::from_str(r#"{"input":"hi"}"#).unwrap();
         assert!(body.system_override.is_none());
         assert!(body.model_override.is_none());
+    }
+
+    #[test]
+    fn agent_patch_can_explicitly_clear_a_token_budget() {
+        let patch: AgentPatch =
+            serde_json::from_str(r#"{"clear_token_budget":true,"restart_now":false}"#).unwrap();
+        let mut budget = Some(axocoatl_config::TokenBudgetYaml {
+            per_call: 2048,
+            per_execution: 8192,
+            overflow_policy: axocoatl_config::OverflowPolicyYaml::Abort,
+        });
+
+        apply_token_budget_patch(&mut budget, &patch).unwrap();
+
+        assert!(budget.is_none());
+        assert!(!patch.restart_now.unwrap());
+    }
+
+    #[test]
+    fn agent_patch_rejects_ambiguous_budget_clear_and_values() {
+        let patch: AgentPatch =
+            serde_json::from_str(r#"{"clear_token_budget":true,"per_call_budget":1024}"#).unwrap();
+        let mut budget = Some(axocoatl_config::TokenBudgetYaml {
+            per_call: 2048,
+            per_execution: 8192,
+            overflow_policy: axocoatl_config::OverflowPolicyYaml::Abort,
+        });
+
+        let error = apply_token_budget_patch(&mut budget, &patch).unwrap_err();
+
+        assert!(error.contains("cannot be combined"));
+        let unchanged = budget.expect("a rejected patch must leave the budget intact");
+        assert_eq!(unchanged.per_call, 2048);
+        assert_eq!(unchanged.per_execution, 8192);
+    }
+
+    #[test]
+    fn agent_patch_configures_budget_and_validates_policy() {
+        let patch: AgentPatch = serde_json::from_str(
+            r#"{"per_call_budget":1024,"per_execution_budget":4096,"overflow_policy":"abort"}"#,
+        )
+        .unwrap();
+        let mut budget = None;
+        apply_token_budget_patch(&mut budget, &patch).unwrap();
+        let configured = budget.as_ref().expect("budget should be configured");
+        assert_eq!(configured.per_call, 1024);
+        assert_eq!(configured.per_execution, 4096);
+        assert!(matches!(
+            configured.overflow_policy,
+            axocoatl_config::OverflowPolicyYaml::Abort
+        ));
+
+        let invalid: AgentPatch = serde_json::from_str(r#"{"overflow_policy":"ignore"}"#).unwrap();
+        let error = apply_token_budget_patch(&mut budget, &invalid).unwrap_err();
+        assert!(error.contains("Unknown overflow policy"));
+    }
+
+    #[test]
+    fn variants_body_defaults_task_to_input_and_resolves_lane_count() {
+        let body: VariantsBody = serde_json::from_str(r#"{"input":"implement it","n":2}"#)
+            .expect("minimal variants body should deserialize");
+
+        let (task, input, lanes) = body.into_attempt_run();
+
+        assert_eq!(task, "implement it");
+        assert_eq!(input, "implement it");
+        assert_eq!(lanes.len(), 2);
+
+        let body: VariantsBody = serde_json::from_str(
+            r#"{"task":"original task","input":"reviewed plan","lanes":[{"agent":"reviewer","model":"qwen3:32b"}]}"#,
+        )
+        .expect("planned attempt body should deserialize");
+        let (task, input, lanes) = body.into_attempt_run();
+        assert_eq!(task, "original task");
+        assert_eq!(input, "reviewed plan");
+        assert_eq!(lanes.len(), 1);
+        assert_eq!(lanes[0].agent.as_deref(), Some("reviewer"));
+        assert_eq!(lanes[0].model.as_deref(), Some("qwen3:32b"));
+    }
+
+    #[test]
+    fn attempt_set_queries_require_identity_and_keep_route_fields() {
+        let uri: axum::http::Uri = "/api/sessions/s/variants/status?attempt_set_id=set-1"
+            .parse()
+            .unwrap();
+        let Query(status) = Query::<AttemptSetQuery>::try_from_uri(&uri).unwrap();
+        assert_eq!(status.attempt_set_id, "set-1");
+
+        let missing: axum::http::Uri = "/api/sessions/s/variants/status".parse().unwrap();
+        assert!(Query::<AttemptSetQuery>::try_from_uri(&missing).is_err());
+
+        let uri: axum::http::Uri =
+            "/api/sessions/s/variants/diff?attempt_set_id=set-1&index=2&path=src%2Flib.rs"
+                .parse()
+                .unwrap();
+        let Query(diff) = Query::<VariantDiffQuery>::try_from_uri(&uri).unwrap();
+        assert_eq!(diff.attempt_set_id, "set-1");
+        assert_eq!(diff.index, 2);
+        assert_eq!(diff.path, "src/lib.rs");
+
+        let uri: axum::http::Uri =
+            "/api/sessions/s/variants/trajectories?attempt_set_id=set-1&baseline=3"
+                .parse()
+                .unwrap();
+        let Query(trajectories) = Query::<TrajectoryQuery>::try_from_uri(&uri).unwrap();
+        assert_eq!(trajectories.attempt_set_id, "set-1");
+        assert_eq!(trajectories.baseline, 3);
+
+        let uri: axum::http::Uri = "/api/sessions/s/variants/cost?attempt_set_id=set-1&baseline=gpt-5&baseline_provider=openai"
+            .parse()
+            .unwrap();
+        let Query(cost) = Query::<CostQuery>::try_from_uri(&uri).unwrap();
+        assert_eq!(cost.attempt_set_id, "set-1");
+        assert_eq!(cost.baseline, "gpt-5");
+        assert_eq!(cost.baseline_provider.as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn attempt_action_bodies_carry_attempt_set_identity() {
+        let verify: VerifyBody =
+            serde_json::from_str(r#"{"attempt_set_id":"set-1","check":"cargo test"}"#).unwrap();
+        assert_eq!(verify.attempt_set_id, "set-1");
+        assert_eq!(verify.check, "cargo test");
+        assert!(serde_json::from_str::<VerifyBody>(r#"{"check":"cargo test"}"#).is_err());
+
+        let judge: JudgeBody = serde_json::from_str(
+            r#"{"attempt_set_id":"set-1","provider":"openai","model":"gpt-5"}"#,
+        )
+        .unwrap();
+        assert_eq!(judge.attempt_set_id, "set-1");
+        assert_eq!(judge.provider, "openai");
+        assert_eq!(judge.model.as_deref(), Some("gpt-5"));
+
+        let keep: AdoptBody =
+            serde_json::from_str(r#"{"attempt_set_id":"set-1","index":2}"#).unwrap();
+        assert_eq!(keep.attempt_set_id, "set-1");
+        assert_eq!(keep.index, 2);
+
+        let discard: DiscardAttemptBody =
+            serde_json::from_str(r#"{"attempt_set_id":"set-1"}"#).unwrap();
+        assert_eq!(discard.attempt_set_id, "set-1");
+    }
+
+    #[test]
+    fn attempt_conflicts_map_to_http_409_and_other_errors_stay_400() {
+        let (status, Json(body)) = attempt_err(axocoatl_daemon::DaemonError::AttemptConflict(
+            "keep or discard first".to_string(),
+        ));
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(body.error.contains("keep or discard first"));
+
+        let (status, Json(body)) = attempt_err(axocoatl_daemon::DaemonError::Session(
+            "unknown attempt".to_string(),
+        ));
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.error.contains("unknown attempt"));
     }
 
     /// A commit with no `stage_all` must commit the index as the user built it.

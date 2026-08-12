@@ -61,9 +61,9 @@ agent:**
   `DAC_READ_SEARCH`, `MKNOD`, `AUDIT_WRITE`. The package-manager caps (`CHOWN`,
   `SETUID`/`SETGID`, `DAC_OVERRIDE`, `FOWNER`) are deliberately kept so
   `apk`/`apt`/`npm`/`pip` still work.
-- **Network.** Untrusted runs can start with `--network none` — no outbound
-  connections at all (cuts off exfiltration / C2 / SSRF). Bridged networking is
-  opt-in, per policy.
+- **Network.** Bridged networking is the default so installs and development
+  servers work. Set `sandbox.network: none` for an untrusted run that must have
+  no outbound connection; that also disables network-dependent setup and tools.
 - **Resources.** Memory / CPU / PID caps (2 GB / 2 CPUs / 512 pids) bound a
   runaway loop or fork bomb, where the host's cgroup delegation allows it.
 

@@ -50,28 +50,44 @@ impl SystemdManager {
     }
 }
 
+fn systemd_quote(path: &Path) -> String {
+    let escaped = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('%', "%%");
+    format!("\"{escaped}\"")
+}
+
+fn render_unit(exe: &Path, config: &Path) -> String {
+    let working_dir = config.parent().unwrap_or_else(|| Path::new("."));
+    format!(
+        "[Unit]\n\
+         Description=Axocoatl always-on agent daemon\n\
+         After=network.target\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         WorkingDirectory={working_dir}\n\
+         ExecStart={exe} serve --config {config}\n\
+         Restart=on-failure\n\
+         RestartSec=5\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n",
+        exe = systemd_quote(exe),
+        config = systemd_quote(config),
+        working_dir = systemd_quote(working_dir),
+    )
+}
+
 impl ServiceManager for SystemdManager {
     fn backend(&self) -> &'static str {
         "systemd"
     }
 
     fn install(&self, exe: &Path, config: &Path) -> Result<(), ServiceError> {
-        let unit = format!(
-            "[Unit]\n\
-             Description=Axocoatl always-on agent daemon\n\
-             After=network.target\n\
-             \n\
-             [Service]\n\
-             Type=simple\n\
-             ExecStart={exe} serve --config {config}\n\
-             Restart=on-failure\n\
-             RestartSec=5\n\
-             \n\
-             [Install]\n\
-             WantedBy=default.target\n",
-            exe = exe.display(),
-            config = config.display(),
-        );
+        let unit = render_unit(exe, config);
         if let Some(dir) = self.unit_path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -139,5 +155,20 @@ impl ServiceManager for SystemdManager {
              \x20 loginctl enable-linger \"$USER\""
                 .to_string(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_uses_config_directory_and_quotes_paths() {
+        let unit = render_unit(
+            Path::new("/opt/Axo tools/axocoatl"),
+            Path::new("/home/test/My % project/axocoatl.yaml"),
+        );
+        assert!(unit.contains("WorkingDirectory=\"/home/test/My %% project\""));
+        assert!(unit.contains("ExecStart=\"/opt/Axo tools/axocoatl\" serve --config \"/home/test/My %% project/axocoatl.yaml\""));
     }
 }

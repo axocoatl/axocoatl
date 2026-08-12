@@ -79,12 +79,13 @@ Cost contrast:
   the frontier step is 100% of the $0.01350 total ...
 ```
 
-The activation order (`triage → drafter → synthesizer`) is **not scripted** —
-it emerges from the `EventLattice`, exactly as in the
-[`stigmergic-workflow`](../stigmergic-workflow) example. The new thing here is
-the *provider per agent*, not the coordination. `synthesizer` has two
-dependencies, so its threshold is `0.5 × 2 = 1.0` and it fires only once
-**both** `triage` and `drafter` have completed.
+In the standalone mock binary, activation order
+(`triage → drafter → synthesizer`) comes from the example-owned queue and the
+`EventLattice`, as in the
+[`stigmergic-workflow`](../stigmergic-workflow) example. `synthesizer` has two
+dependencies, so its threshold is `0.5 × 2 = 1.0` and the example queues it only
+after both upstream signals arrive. The live daemon uses the same agent/provider
+shape through a Lattice session, but executes that session in dependency order.
 
 (The mock costs are illustrative public list prices, not a live quote.)
 
@@ -133,6 +134,10 @@ Anthropic provider has a non-empty API key — so you catch a missing key
 axocoatl dev --config axocoatl.multi-provider.yaml
 ```
 
+Then open the browser workbench, create or resume a Lattice session using the
+`route-and-synthesize` workflow, and send the instruction there. Starting the
+daemon loads the configuration; it does not itself spend frontier tokens.
+
 To use OpenAI instead of Anthropic, switch the `synthesizer` agent's
 `provider:` to `openai`, set its `model:` (e.g. `gpt-4o`), and add an `openai:`
 entry under `providers:` with `api_key: "${OPENAI_API_KEY}"`. The agent code
@@ -146,7 +151,7 @@ does not change — only the config.
   `axocoatl_llm_anthropic::AnthropicProvider`, `axocoatl_llm_openai::OpenAiProvider`
 - The per-agent `provider:` / `model:` config fields:
   [`crates/axocoatl-config/src/types.rs`](../../crates/axocoatl-config/src/types.rs)
-- The coordination this builds on: the
+- The standalone coordination primitive this binary demonstrates: the
   [`stigmergic-workflow`](../stigmergic-workflow) example and
   [`crates/axocoatl-coordination`](../../crates/axocoatl-coordination)
 - Architecture overview: [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md)

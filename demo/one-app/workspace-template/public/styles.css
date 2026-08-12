@@ -1,0 +1,99 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: #171a18;
+  color: #e6e9e7;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 85% 10%, rgba(62, 124, 92, .24), transparent 34rem),
+    #171a18;
+}
+
+main {
+  width: min(880px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 64px 0;
+}
+
+header { margin-bottom: 32px; }
+
+.eyebrow,
+.order-id,
+.amount span,
+.amount small {
+  margin: 0;
+  color: #96a19b;
+  font: 500 12px/1.4 ui-monospace, monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 8px 0;
+  font-size: clamp(36px, 7vw, 64px);
+  letter-spacing: -.04em;
+}
+
+header > p:last-child { color: #aeb6b1; }
+
+#orders { display: grid; gap: 12px; }
+
+article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 24px;
+  border: 1px solid #343a36;
+  border-radius: 12px;
+  background: rgba(31, 35, 32, .92);
+}
+
+article.invalid { border-color: #9a5148; }
+article.valid { border-color: #416c55; }
+
+h2 { margin: 4px 0; font-size: 20px; }
+article p { margin: 0; color: #aeb6b1; }
+
+.amount { min-width: 140px; text-align: right; }
+.amount strong { display: block; margin: 4px 0; font-size: 28px; }
+.invalid .amount strong,
+.summary.invalid { color: #e38a7d; }
+.valid .amount strong,
+.summary.valid { color: #75c899; }
+
+footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #343a36;
+}
+
+button {
+  padding: 10px 16px;
+  border: 1px solid #56896b;
+  border-radius: 8px;
+  background: #3e7c5c;
+  color: #f2f5f3;
+  font: 600 14px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+button:disabled { cursor: wait; opacity: .55; }
+.error { color: #e38a7d; }
+
+@media (max-width: 620px) {
+  main { padding: 32px 0; }
+  article { align-items: flex-start; flex-direction: column; }
+  .amount { text-align: left; }
+  footer { align-items: flex-start; flex-direction: column; }
+}

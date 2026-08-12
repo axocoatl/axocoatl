@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OpenRouter integration — Axocoatl</title>
-  <meta name="description" content="Use any LLM through one API key. Axocoatl ships OpenRouter as a first-class provider so you can route per-agent to Claude, GPT-4o, Llama, and 100+ others.">
+  <meta name="description" content="Configure OpenRouter as an Axocoatl provider and pin an OpenRouter model id per agent.">
   <meta name="author" content="Axocoatl Contributors">
   <meta name="theme-color" content="#3E7C5C">
   <link rel="canonical" href="https://axocoatl.ai/integrations/openrouter">
@@ -13,17 +13,17 @@
   <meta property="og:locale" content="en_US">
   <meta property="og:url" content="https://axocoatl.ai/integrations/openrouter">
   <meta property="og:title" content="OpenRouter integration — Axocoatl">
-  <meta property="og:description" content="Use any LLM through one API key. Axocoatl ships OpenRouter as a first-class provider so you can route per-agent to Claude, GPT-4o, Llama, and 100+ others.">
+  <meta property="og:description" content="Configure OpenRouter as an Axocoatl provider and pin an OpenRouter model id per agent.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="OpenRouter integration — Axocoatl">
+  <meta property="og:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:site" content="@axocoatl">
   <meta name="twitter:title" content="OpenRouter integration — Axocoatl">
-  <meta name="twitter:description" content="Use any LLM through one API key. Axocoatl ships OpenRouter as a first-class provider so you can route per-agent to Claude, GPT-4o, Llama, and 100+ others.">
+  <meta name="twitter:description" content="Configure OpenRouter as an Axocoatl provider and pin an OpenRouter model id per agent.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="OpenRouter integration — Axocoatl">
+  <meta name="twitter:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -46,7 +46,7 @@
       "@id": "https://axocoatl.ai/integrations/openrouter#webpage",
       "url": "https://axocoatl.ai/integrations/openrouter",
       "name": "OpenRouter integration — Axocoatl",
-      "description": "Use any LLM through one API key. Axocoatl ships OpenRouter as a first-class provider so you can route per-agent to Claude, GPT-4o, Llama, and 100+ others.",
+      "description": "Configure OpenRouter as an Axocoatl provider and pin an OpenRouter model id per agent.",
       "inLanguage": "en-US",
       "isPartOf": { "@id": "https://axocoatl.ai/#website" },
       "publisher": { "@type": "Organization", "@id": "https://axocoatl.ai/#organization" }
@@ -65,9 +65,9 @@
       <span class="eyebrow">Integration</span>
       <h1>Axocoatl × OpenRouter.</h1>
       <p class="lede">
-        Every model on OpenRouter, available to every agent in Axocoatl.
-        One API key, one config block. Per-agent model pinning, fallback
-        chains, and the rest of the runtime, unchanged.
+        One OpenRouter config block, with a model id pinned per agent. Model
+        availability and access come from your OpenRouter account. Axocoatl can
+        also retry once against one configured backup on an initial rate limit.
       </p>
     </section>
 
@@ -76,20 +76,19 @@
 
         <h2>Why pair them.</h2>
         <p>
-          OpenRouter routes your request to the right LLM provider:
-          OpenAI, Anthropic, Mistral, DeepSeek, Llama hosts, dozens
-          more. One API key, one URL, every model. You pay per token,
-          you switch models without touching billing, and you can A/B
-          two models on the same workflow without two integrations.
+          OpenRouter exposes models from multiple upstream providers through one
+          OpenAI-compatible endpoint. Use a model id available to your account,
+          and choose different ids for different agents or attempt lanes without
+          adding a separate Axocoatl provider adapter for each upstream.
         </p>
         <p>
           Axocoatl handles the orchestration. OpenRouter handles the
           inference. Pair them and you get a self-supervising runtime
-          on your hardware that can ask any frontier model when it
-          needs to, and a local model when it doesn't.
+          on your infrastructure that can use an OpenRouter model for one agent
+          and a local Ollama model for another.
         </p>
 
-        <h2 style="margin-top: var(--s-8);">Set it up in 30 seconds.</h2>
+        <h2 style="margin-top: var(--s-8);">Configure the provider.</h2>
         <p>
           Add an <code>openrouter</code> block to your <code>axocoatl.yaml</code>:
         </p>
@@ -101,20 +100,21 @@
 <span class="code-key">agents:</span>
   - <span class="code-key">id:</span> <span class="code-string">researcher</span>
     <span class="code-key">provider:</span> <span class="code-string">openrouter</span>
-    <span class="code-key">model:</span> <span class="code-string">"anthropic/claude-3.5-sonnet"</span>
+    <span class="code-key">model:</span> <span class="code-string">"${OPENROUTER_RESEARCH_MODEL}"</span>
   - <span class="code-key">id:</span> <span class="code-string">summarizer</span>
     <span class="code-key">provider:</span> <span class="code-string">openrouter</span>
-    <span class="code-key">model:</span> <span class="code-string">"openai/gpt-4o-mini"</span>      <span class="code-comment"># Mixed-model workflow, one config.</span></code></pre>
+    <span class="code-key">model:</span> <span class="code-string">"${OPENROUTER_SUMMARY_MODEL}"</span>      <span class="code-comment"># Two current catalog ids, one config.</span></code></pre>
 
         <p style="margin-top: var(--s-5);">
-          Put <code>OPENROUTER_API_KEY=…</code> in your <code>.env</code>.
-          Restart the daemon. That's the whole integration.
+          Put <code>OPENROUTER_API_KEY=…</code> in your <code>.env</code>, and
+          set the two model variables to ids currently available to your
+          OpenRouter account. Restart the daemon.
         </p>
 
         <h2 style="margin-top: var(--s-8);">Or do it through onboard.</h2>
         <p>
-          The interactive setup wizard picks OpenRouter for you when
-          you select <em>"cloud, model of my choice"</em>:
+          Select OpenRouter when the interactive setup wizard asks which
+          provider to configure:
         </p>
 
         <ax-cli-snippet>axocoatl onboard</ax-cli-snippet>
@@ -133,8 +133,9 @@
           <p>
             Use <code>openai/gpt-4o-mini</code> on every agent by
             default. Promote individual agents to
-            <code>anthropic/claude-3.5-sonnet</code> when they need
-            heavy reasoning. The lattice picks the right one per task.
+            another model id when they need a different capability. The agent
+            configuration or attempt lane selects the model; the lattice does
+            not choose it dynamically.
           </p>
         </ax-pillar>
         <ax-pillar glyph="·">
@@ -146,11 +147,12 @@
           </p>
         </ax-pillar>
         <ax-pillar glyph="·">
-          <h3>Failover chain</h3>
+          <h3>One rate-limit backup</h3>
           <p>
             Primary provider = OpenRouter. Fallback = direct Anthropic
-            credentials. If OpenRouter degrades, the daemon switches
-            without dropping the run.
+            credentials. If the initial OpenRouter request returns the runtime's
+            rate-limit error before streaming starts, the daemon retries once on
+            that configured provider/model. Other failures are returned.
           </p>
         </ax-pillar>
       </div>
@@ -159,14 +161,14 @@
     <section class="container section">
       <div class="container-narrow" style="padding: 0;">
 
-        <h2>About OpenRouter's leaderboard.</h2>
+        <h2>OpenRouter attribution.</h2>
         <p>
-          OpenRouter publishes an
-          <a href="https://openrouter.ai/apps" target="_blank" rel="noopener">app directory</a>
-          ranking the tools that route the most traffic through it.
-          Axocoatl is listed there. If you set up your daemon with
-          OpenRouter, your usage shows up under the Axocoatl entry.
-          You don't have to do anything special.
+          Axocoatl's OpenRouter client attaches the documented
+          <code>HTTP-Referer: https://axocoatl.ai</code> and
+          <code>X-Title: Axocoatl</code> attribution headers. Those headers
+          identify the calling app to OpenRouter. Directory eligibility and
+          listing are controlled by OpenRouter; Axocoatl does not claim a
+          current directory position or traffic rank.
         </p>
         <p>
           We're not optimizing for that leaderboard at the expense of
@@ -184,8 +186,7 @@
         <div>
           <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Get an API key. Set the config. Done.</h2>
           <p class="muted" style="margin: 0;">
-            OpenRouter's signup is free. The Axocoatl daemon is one
-            curl-pipe-sh away.
+            Create an OpenRouter key, then install and configure Axocoatl.
           </p>
         </div>
         <div style="display: flex; gap: var(--s-3);">

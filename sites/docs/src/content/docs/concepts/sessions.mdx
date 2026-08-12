@@ -1,32 +1,83 @@
 ---
-title: Sessions
-description: Sandboxed directory sessions, locally, with persistent state.
+title: Workspaces, sessions, and attempts
+description: The one-app work model for persistent, sandboxed repository work.
 ---
 
-A **Session** is an agent (or a lattice of agents) running inside a
-single directory. The session sandbox is a container (podman)
-bind-mounted to your directory.
-The agent reads, writes, and runs commands inside. You see every action
-stream into the dashboard.
+A **Workspace** is an authorized project directory. A **Session** is persistent
+work and conversation anchored to that workspace. Its chat is the app's permanent
+spine; files, editor, terminal, browser, activity, attempts, comparison, git, and
+agent graph open around it.
+
+With the default backend, session tools run in a rootless Podman container bound to
+the workspace. With `sandbox.backend: e2b`, normal sessions instead use an
+E2B-compatible remote sandbox. Exploring several ways currently requires a
+single-agent session on local Podman; multi-agent and E2B attempt sets are rejected
+until they can provide the same transcript and isolation guarantees.
 
 ## Starting a session
 
-From the dashboard:
+From the app:
 
-1. Open **Sessions**.
-2. Click **+ Add folder** in the sidebar to authorize a directory.
-3. Pick the folder, choose **Single agent**, pick an agent (`coder`
-   works for most coding tasks), click **Use this folder**.
+1. Use the workspace switcher in the left rail and choose **Add folder**.
+2. Authorize a directory, choose the session mode and agent, and create the session.
+3. Work from the session chat. Open modules around it only when you need them.
 
-A new session boots in a fresh container with your folder bind-mounted.
-The cockpit opens with Files / Activity / Lattice / Browser panes plus a
-Terminals pane at the bottom.
+A new local session boots in a fresh container with the folder bind-mounted. The
+app opens the chat with the workspace/session rail on the left and Terminal at the
+bottom. Files, Activity, Browser, Attempts, and Agent graph open as modules.
 
 From the CLI:
 
 ```sh
 axocoatl session new ./my-repo --agent coder
 ```
+
+## Exploring several ways
+
+For one answer, send normally. To compare alternatives, enable **Explore several
+ways** in the composer and choose an agent and model for each attempt. On the local
+Podman backend, Axocoatl snapshots the current dirty workspace, gives each attempt an
+independent Git clone with no `origin`, and mounts only that clone in a dedicated
+container. An attempt cannot use its repository tools to reach the primary workspace
+or a sibling attempt. The set reports queued, running, completed, failed, and
+interrupted state in the session and rail. Its hidden snapshot includes tracked
+changes and non-ignored untracked files without changing the real index, branch, or
+working tree.
+
+Open **Attempts** to review or edit a generated Plan, check that the selected models
+can call tools, compare **Outcome** and **Route**, inspect per-file diffs, and run the
+repository's configured **Checks**. Judge can rank the passing attempts and explain
+their trade-offs. Checks are required before Keep, and only a completed attempt with a
+passing Check and a non-empty change can be kept.
+
+Attempt execution cost is based on the models and token counts that actually ran.
+Optional Plan first and Judge provider calls are not included. Ollama is known-zero;
+an unconfigured remote price is shown as unknown rather than free. Until every attempt
+has a usage record, or when any remote price is missing, the displayed total is a known
+subtotal rather than a complete cost. The separately selected baseline has its own
+certainty state.
+
+Every attempt receives the same snapshot of the canonical session transcript plus the
+effective instruction and repository instructions. Its Tier-1 history is request-local,
+it cannot write configured shared core-memory blocks, and its set-scoped actor is not reused.
+Configured Skills, MCP tools, and web search are withheld from attempts because their
+external effects cannot yet be rolled back with a discarded set. File, shell, and
+terminal tools remain available inside each attempt container.
+
+A session has one unresolved set at a time. Keep one or discard the set before sending
+another session turn. When you keep an attempt, its delta returns to the session
+checkout for git review—uncommitted—and the other attempts are cleaned up. Keep records
+three durable phases: applying the selected delta, confirming it is applied, and
+completing transcript handling before cleanup. If a later phase fails, retry **Keep this one**
+for the same attempt; Discard is blocked after applying begins so the retry evidence is
+not erased. The original task and chosen answer are appended exactly once to the
+single-agent session transcript.
+
+If the daemon restarts mid-run, the durable set remains inspectable and in-flight
+attempts are reported as interrupted rather than silently reused. Outputs, usage,
+Routes, Checks, and Judgment that were already written remain attached to that exact set.
+Soft-closing a session quiesces its processes but preserves that unresolved set; reopening
+can resume review. Explicit Delete or Discard performs destructive cleanup.
 
 ## What the agent can do
 
@@ -36,12 +87,12 @@ Once running, the agent has tools to operate inside the sandbox:
 - `bash` — run a one-shot command and capture stdout/stderr.
 - `bash_background` — run a long-lived process in the background (e.g.,
   `python3 serve.py`). Lives until you kill it or the session ends.
-- `spawn_terminal` — open a PTY-backed terminal in the dashboard's
-  Terminals pane. You see the output live.
+- `spawn_terminal` — open a PTY-backed terminal in the bottom Terminal dock.
+  You see the output live.
 - `read_terminal` / `kill_terminal` — let the agent inspect or stop
   terminals it spawned.
 
-Every tool call shows up in the Activity pane as a chip with collapsible
+Every tool call shows up in the Activity module as a chip with collapsible
 output.
 
 ## State survives
@@ -58,15 +109,16 @@ which are persisted independently of the checkpoint.)
 
 On daemon boot, a demo session called `demo-counters` is auto-created in
 `{data_dir}/demos/counters` (if it doesn't already exist). It's a tiny
-folder you can experiment in safely. From the Sessions tab, click the
-`demo-counters` row to enter it. Ask the agent to make some counter
-files in Python; watch the bash terminal run them.
+folder you can experiment in safely. The current seed targets an agent whose id is
+`coder`; use it only when your config defines that agent. Otherwise, authorize a folder
+and create a session with one of your configured agents.
 
 ## Lattice mode
 
-`SessionMode::Lattice` runs *multiple agents* together inside one
-directory. The full lattice cascades work between them — exactly like a
-multi-agent workflow, but bounded to a folder: the session runs the
-workflow's agents in dependency order, scoped and sandboxed to that
-folder. `session new` on the CLI creates single-agent sessions today, so
-lattice-mode sessions are created through the API or dashboard.
+`SessionMode::Lattice` runs multiple agents against one directory. The session
+orders the selected agents by dependency and executes them sequentially, appending
+prior outputs as context for later agents. This is separate from the explicit
+Automation DAG executor; the event lattice carries notifications and trigger
+events rather than scheduling this session. `session new` on the CLI creates
+single-agent sessions today, so lattice-mode sessions are created through the
+API or app.

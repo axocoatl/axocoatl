@@ -1,47 +1,49 @@
-# Axocoatl brand & voice
+# Axocoatl brand and voice
 
-Single source of truth for how Axocoatl writes, looks, and feels. If a
-page, doc, or post can't be reconciled with this file, the page is
-wrong, not the file. The goal is consistency that compounds: every page
-reinforces every other page, and a year from now we still sound like
-ourselves.
+Source of truth for how Axocoatl writes, looks, and feels. Product structure and
+terminology live in `docs/PRODUCT.md`; implementation determines what ships. If a
+page, doc, or post conflicts with current product fact, fix the fact source and this
+file together. The goal is consistency that compounds: every page reinforces every
+other page, and a year from now we still sound like ourselves.
 
-Last updated: 2026-06-01.
+Last updated: 2026-08-10.
 
 ---
 
 ## 1 · What it's actually for
 
-Axocoatl exists for one reason: **the agent-tooling industry has a
-theater problem, and we're for the teams who actually ship.**
+Axocoatl exists for one reason: **the agent-tooling industry has a theater
+problem, and we are for engineers who need the work to hold up in a repository.**
 
 The competition optimizes for the *aesthetic* of AI work — Mac mini
 farms, glowing terminals, demo videos, screenshots of conversations.
 Their videos are great. Their throughput is theoretical. Their users
 churn after the demo high wears off.
 
-We optimize for the *unglamorous reality* — agents that run reliably
-for months, persist their state through restarts, follow real
-workflows, and finish the work. The release notes that ship every
-Monday. The support triage that runs at 3 a.m. The contract review
-that lands in legal's inbox at 9 sharp. Real workflows. Not demos.
+We optimize for the unglamorous reality: agents that work against real files, run
+repository checks, expose what they changed, survive restarts, and let the engineer
+choose among several real attempts. The diff that can be reviewed. The failing check
+that stays visible. The result that can be kept without hiding the git truth. Real
+workflows. Not demos.
 
 If a piece of copy could appear on a competitor's site without changing
 its meaning, the copy is wrong.
 
 ## 2 · Positioning statement
 
-> Axocoatl is the open-source agentic runtime for teams that ship.
-> Real workflows. Local-first. Your hardware, your LLM, your data.
-> One 26 MB Rust binary that runs, supervises, and survives.
+> Axocoatl is the open-source, local-first coding workbench for engineers who want
+> agents to try real solutions, show their work, and leave one inspectable result.
+> One Rust binary. Your repository. Your model choices. Your decision.
 
 Three pillars. Every page should reinforce one or more:
 
-1. **Built for production.** Actor-supervised, checkpointed, sandboxed.
-   Survives restarts. Runs as a system service.
-2. **Yours by default.** Your hardware. Your LLM. Your data. Air-gappable.
-3. **Real workflows, not chat.** The lattice cascades work between
-   agents automatically. Schedules, proactive triggers, automations.
+1. **One work surface.** A folder-anchored session chat is the spine. Files,
+   editor, terminal, browser, attempts, comparison, and git open around it.
+2. **Several real attempts.** Choose different agents and models, run repository
+   checks, compare outcome and route, and keep one.
+3. **Yours by default.** Actor-supervised, checkpointed, sandboxed, local-first.
+   No Axocoatl telemetry. Provider, integration, and remote-sandbox egress are
+   explicit choices.
 
 ## 3 · Voice
 
@@ -56,14 +58,14 @@ heavy, futuristic, mystical, urgent, hyperbolic.
 
 ### Good
 
-> "Axocoatl is a runtime, not a framework. The agents run, supervise
-> themselves, and persist their state. The lattice does the routing."
+> "Axocoatl is a workbench backed by a runtime, not a framework you have to turn
+> into a product. The agents run, persist, and show their work in one session."
 
 > "The agent-tooling industry has a theater problem."
 
 > "Real workflows. Not demos."
 
-> "One 26 MB binary. Your hardware. Your LLM. Your data."
+> "One Rust binary. Your repository. Your model choices. Your decision."
 
 > "Close the laptop. Open it tomorrow. The session is still there."
 
@@ -109,8 +111,8 @@ We use four headline shapes. Pick the one that fits the page; don't mix.
 
 1. **Verb–noun** (the work the user does): *Plan and ship work that
    agents actually do.*
-2. **Declaration** (a confident statement of fact): *The lattice does
-   the routing.*
+2. **Declaration** (a confident statement of fact): *Explicit work. Shared
+   events.*
 3. **Contrast** (us vs. the genre): *Real workflows. No theater.*
 4. **Imperative** (a command, used sparingly): *Stop performing AI.
    Start running it.*
@@ -142,13 +144,15 @@ to the system concept, lowercase when they refer to instances of it.
 | Concept | Capital | Lowercase | Notes |
 |---|---|---|---|
 | The product | Axocoatl | — | Always one word, capitalized A. Never "axocoatl" in body copy. |
-| The runtime | the daemon | — | Lowercase. It's the running process. |
-| Coordination fabric | the event lattice / Studio | — | "Lattice" capitalized only as the product name (Studio). |
+| The runtime | the daemon | — | Lowercase. It is the running process behind the app. |
+| Coordination fabric | the event lattice | — | An engine capability, not a destination. |
 | Unit of work | Workflow, Automation | a workflow, an automation | |
 | LLM-backed actor | Agent | an agent | |
-| Lattice-aware capability | Skill | a skill | (Not "skill" as in "skills.")|
-| Directory work surface | Session | a session | |
-| Activation tier | Lattice mode, Single-agent mode | — | These are SessionMode variants. |
+| Event-publishing capability | Skill | a skill | (Not "skill" as in "skills.")|
+| Authorized project directory | Workspace | a workspace | Groups sessions. |
+| Persistent work item | Session | a session | Anchored to a workspace; chat is its spine. |
+| Parallel candidate | Attempt | an attempt / a way | Do not expose lane or variant as the primary noun. |
+| Session execution mode | Lattice mode, Single-agent mode | — | Modes, not destinations. |
 | Marks | Mark, wordmark | — | Lowercase in copy unless start of sentence. |
 | Marketplace integration | MCP server | — | MCP all caps; "server" lowercase. |
 
@@ -222,8 +226,8 @@ No carousels. No sliders. No accordions. No tabs above the fold.
 
 Motion is restrained. The whole site has three motion patterns:
 
-- **The lattice canvas** pulses on a scripted loop (12–15 seconds) to
-  show the product is alive.
+- **The lattice illustration** pulses on a scripted loop to explain event and
+  coordination concepts. Label it as an illustration, not a live product run.
 - **Hover lifts** on cards: 1px translateY, 120ms ease-out, border shifts
   from `--border` to `--accent`.
 - **Theme morph** when the toggle fires: 200ms cross-fade on every
@@ -237,7 +241,7 @@ moves while the user is reading.
 
 The Axocoatl mark is the only logo. No icon set.
 
-Inline glyphs in copy use the existing typographic set the dashboard
+Inline glyphs in copy use the existing typographic set the app
 already established:
 
 - `◉` watch / observe
@@ -252,22 +256,20 @@ already established:
 Don't introduce new glyphs. If you need a new one, add it to this list
 first.
 
-## 9 · The lattice demo as a brand asset
+## 9 · Product demonstrations
 
-The hero on every relevant page should embed the live `<ax-lattice>`
-component running a scripted loop. This is our equivalent of Stripe's
-animated illustrations: we sell the product by showing the product.
+Show the actual one-app session loop whenever a page is about the product: prompt,
+several attempts, visible checks and comparison, one kept result, and git review.
+A demonstration must match a reachable current journey. Never label a mock 1:1 or
+exact unless it was compared to the current app in the same change.
 
-The scripted loop on the homepage is the canonical demo: a two-agent
-research→summarize workflow that pulses through the lattice on a
-12-second cycle. The same scripted loop runs in three places:
+The interactive `<ax-lattice>` remains a supporting illustration for event and
+runtime-concept pages, including the `/concepts` lattice section. A homepage hero
+must show the workbench's current signature loop rather than lead with a lattice
+or other runtime subsystem.
 
-- Homepage hero
-- `/concepts` lattice section
-- `/install` page footer
-
-Don't write a *different* scripted loop for each page. The repetition
-is the point — the lattice is the brand asset.
+Do not use the lattice canvas as a substitute for showing the workbench. It explains
+the engine; it is not the primary product shell.
 
 ## 10 · Comparison frame
 
@@ -280,8 +282,8 @@ Acceptable framings:
 
 - "Most agent frameworks." (referring to the open-source Python
   framework crowd)
-- "Personal coding copilots." (referring to single-developer IDE-bound
-  agent tools)
+- "Opaque single-answer coding agents." (referring to tools that hide execution and
+  comparison)
 - "Hosted agent platforms." (referring to closed cloud assistant /
   workbench products)
 
@@ -293,10 +295,9 @@ We don't fabricate. Until we have real testimonials, real customer
 logos, real download numbers, real GitHub stars — we don't put them on
 the site. The slot stays empty, or we use a *factual* trust signal:
 
-- "v0.1 · 340+ tests · Apache 2.0"
-- "26 MB Rust binary · zero telemetry"
-- "Runs against Ollama, OpenAI, Anthropic, Mistral, Gemini"
 - "Apache-2.0 licensed"
+- "One Rust binary · no Axocoatl telemetry"
+- "Provider adapters for Ollama, OpenAI, OpenRouter, Anthropic, Mistral, Gemini"
 
 Once we have real adoption signals, we lead with them. The first real
 GitHub-stars number that's worth showing is 500+. The first real
@@ -306,20 +307,18 @@ anonymous, we still cite the company and the role.
 
 ## 12 · OpenRouter positioning
 
-OpenRouter is a *first-class* recommended provider in Axocoatl, alongside
+OpenRouter is a supported provider in Axocoatl, alongside
 Ollama (local) and the direct provider clients (OpenAI / Anthropic /
-Mistral / Gemini). The `axocoatl onboard` wizard surfaces it as the
-"easiest cloud option."
+Mistral / Gemini). The `axocoatl onboard` wizard offers it as one cloud option.
 
 The marketing site has a dedicated `/integrations/openrouter` page that:
 
-- Shows the one-line config to swap Ollama for OpenRouter.
-- Shows how to pick a model from OpenRouter's catalog.
-- Links to OpenRouter's app directory so users can see Axocoatl listed.
+- Shows the config to select OpenRouter per agent.
+- Tells users to choose a model id available to their OpenRouter account.
+- Explains the attribution headers Axocoatl sends without claiming a current
+  directory listing or traffic rank.
 
-OpenRouter is the only third-party LLM router we feature this prominently
-on the marketing site. Other routers (Helicone, Portkey, LiteLLM) get a
-mention in the docs but not a dedicated page.
+OpenRouter is the third-party LLM router with a dedicated marketing page.
 
 ## 13 · The blog and changelog
 
@@ -341,9 +340,9 @@ release notes blog post is the curated story.
 
 Some things we won't change with the wind, because they're load-bearing.
 
-- The positioning. We are for teams that ship; we are against AI
-  theater. This doesn't change because the optics industry doesn't
-  change.
+- The product is one workbench backed by one runtime. Runtime subsystems do not become
+  separate products because a feature is easier to demo that way.
+- We are for engineers who ship and against AI theater. The work must be inspectable.
 - The mark. Single mark. No mascot. No alternate logo for "playful"
   contexts. The serpent is the brand.
 - Apache-2.0. We don't relicense. We don't dual-license. We don't move

@@ -11,7 +11,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
-description = "Core types, traits, and errors for the Axocoatl agentic AI framework"
+description = "Core types, traits, and errors for the Axocoatl agent runtime"
 
 [dependencies]
 serde = { workspace = true }

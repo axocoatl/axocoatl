@@ -18,8 +18,8 @@ class AxFooter extends HTMLElement {
                 <span>Axocoatl</span>
               </div>
               <p class="muted small" style="max-width: 28ch; margin: 0;">
-                An open-source agentic runtime, written in Rust.
-                Apache-2.0.
+                An open-source coding workbench backed by a durable Rust
+                agent runtime. Apache-2.0.
               </p>
             </div>
             <div class="footer-col">
@@ -36,7 +36,7 @@ class AxFooter extends HTMLElement {
               <h5>Docs</h5>
               <ul>
                 <li><a href="https://docs.axocoatl.ai/getting-started/" target="_blank" rel="noopener">Getting started</a></li>
-                <li><a href="https://docs.axocoatl.ai/concepts/lattice/" target="_blank" rel="noopener">The lattice</a></li>
+                <li><a href="https://docs.axocoatl.ai/concepts/sessions/" target="_blank" rel="noopener">Sessions and attempts</a></li>
                 <li><a href="https://docs.axocoatl.ai/api/http/" target="_blank" rel="noopener">HTTP API</a></li>
                 <li><a href="https://docs.axocoatl.ai/api/cli/" target="_blank" rel="noopener">CLI</a></li>
               </ul>

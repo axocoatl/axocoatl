@@ -30,6 +30,8 @@ import { adopt } from './sheets.js';
  * @fires collapse-change  detail: {collapsed} — so the shell can remember it
  * @fires settings-open
  *
+ * @slot utility  Shell-owned Docs, status, and theme controls.
+ *
  * @cssprop --ax-rail-w   Expanded width (default 248px)
  */
 
@@ -163,8 +165,27 @@ const CSS = `
 .top-collapse:hover { color: var(--text); }
 .top-collapse:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
+.utility {
+  flex-shrink: 0; min-height: 0; max-height: min(42vh, 300px); overflow: auto;
+  border-top: 1px solid var(--border); padding: var(--sp-2);
+}
+slot[name="utility"] { display: block; width: 100%; }
+::slotted([slot="utility"]) { width: 100%; min-width: 0; }
 .foot { flex-shrink: 0; border-top: 1px solid var(--border); padding: var(--sp-2); }
 .empty { color: var(--muted-2); font-size: var(--fs-xs); padding: var(--sp-3) var(--sp-2); }
+.load-error {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+  gap: var(--sp-2); margin: var(--sp-2) 0; padding: var(--sp-2);
+  border: 1px solid color-mix(in srgb, var(--err) 45%, var(--border));
+  border-radius: var(--r-md); color: var(--err); background: var(--panel);
+  font-size: var(--fs-xs); line-height: var(--lh-body);
+}
+.load-error button {
+  padding: 3px 7px; border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  background: var(--bg-3); color: var(--text); cursor: pointer; font: inherit;
+}
+.load-error button:hover { border-color: var(--accent); color: var(--accent); }
+.load-error button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 `;
 
 /** Trailing path segment — what a directory is actually called. */
@@ -183,6 +204,8 @@ export class AxRail extends HTMLElement {
   #sessions = [];
   /** session id → [{state}] for lanes currently running. */
   #attempts = new Map();
+  #refreshGeneration = 0;
+  #loadError = '';
 
   constructor() {
     super();
@@ -199,6 +222,7 @@ export class AxRail extends HTMLElement {
       </button>
       <div class="menu" id="menu" role="menu" hidden></div>
       <div class="scroll"></div>
+      <div class="utility"><slot name="utility"></slot></div>
       <div class="foot">
         <button class="item" id="new"><span class="ico">＋</span><span class="label">New session</span></button>
         <button class="item" id="browse"><span class="ico">▤</span><span class="label">All sessions</span></button>
@@ -247,7 +271,8 @@ export class AxRail extends HTMLElement {
   get favourites() { return this.#favourites.slice(); }
   set favourites(v) { this.#favourites = Array.isArray(v) ? v.slice() : []; this.render(); }
 
-  connectedCallback() { this.refresh(); }
+  connectedCallback() { void this.refresh(); }
+  disconnectedCallback() { this.#refreshGeneration += 1; }
 
   attributeChangedCallback(name) {
     if (name === 'current') { this.#markCurrent(); this.#syncSwitch(); }
@@ -312,16 +337,29 @@ export class AxRail extends HTMLElement {
 
   /** Re-read the session list. */
   async refresh() {
+    const generation = ++this.#refreshGeneration;
     try {
-      const list = await fetch('/api/sessions').then((r) => r.json());
+      const response = await fetch('/api/sessions');
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail?.error || `HTTP ${response.status}`);
+      }
+      const list = await response.json();
+      if (!this.isConnected || generation !== this.#refreshGeneration) return false;
+      if (!Array.isArray(list)) throw new Error('The sessions endpoint returned an invalid list.');
       // Closing a session is how you say "I am done with this". Listing it
       // afterwards makes the act look like it failed, and the rail is for the
       // work you are doing rather than the work you have finished.
-      this.#sessions = (Array.isArray(list) ? list : []).filter((s) => s.status !== 'closed');
-    } catch {
-      this.#sessions = [];
+      this.#sessions = list.filter((s) => s.status !== 'closed');
+      this.#loadError = '';
+    } catch (error) {
+      if (!this.isConnected || generation !== this.#refreshGeneration) return false;
+      // Navigation is durable state. A transient daemon or network failure must
+      // not replace the last-known list with a false empty state.
+      this.#loadError = String(error?.message || error);
     }
     this.render();
+    return !this.#loadError;
   }
 
   /**
@@ -349,11 +387,29 @@ export class AxRail extends HTMLElement {
 
     this.#scroll.textContent = '';
     this.#renderFavourites();
+    if (this.#loadError) {
+      const error = document.createElement('div');
+      error.className = 'load-error';
+      error.setAttribute('role', 'status');
+      const message = document.createElement('span');
+      message.textContent = this.#sessions.length
+        ? 'Sessions are temporarily unavailable. Showing the last known list.'
+        : 'Sessions are temporarily unavailable.';
+      message.title = this.#loadError;
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.textContent = 'Retry';
+      retry.addEventListener('click', () => void this.refresh());
+      error.append(message, retry);
+      this.#scroll.append(error);
+    }
     if (!ordered.length) {
-      const e = document.createElement('div');
-      e.className = 'empty';
-      e.textContent = 'No sessions yet.';
-      this.#scroll.append(e);
+      if (!this.#loadError) {
+        const e = document.createElement('div');
+        e.className = 'empty';
+        e.textContent = 'No sessions yet.';
+        this.#scroll.append(e);
+      }
       this.#syncSwitch();
       return;
     }

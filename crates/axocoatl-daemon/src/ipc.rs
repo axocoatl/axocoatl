@@ -19,8 +19,34 @@ use crate::bootstrap::AxocoatlDaemon;
 
 /// Default socket path for the daemon IPC.
 pub fn default_socket_path() -> PathBuf {
-    let data_dir = std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
-    PathBuf::from(data_dir).join("axocoatl.sock")
+    resolve_socket_path(
+        std::env::var_os("AXOCOATL_SOCKET_PATH"),
+        std::env::var_os("XDG_RUNTIME_DIR"),
+        std::env::var_os("HOME"),
+    )
+}
+
+fn resolve_socket_path(
+    explicit: Option<std::ffi::OsString>,
+    runtime_dir: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> PathBuf {
+    if let Some(path) = explicit.filter(|value| !value.is_empty()) {
+        return PathBuf::from(path);
+    }
+    if let Some(dir) = runtime_dir.filter(|value| !value.is_empty()) {
+        return PathBuf::from(dir).join("axocoatl").join("axocoatl.sock");
+    }
+    if let Some(dir) = home.filter(|value| !value.is_empty()) {
+        return PathBuf::from(dir)
+            .join(".axocoatl")
+            .join("run")
+            .join("axocoatl.sock");
+    }
+    // Last-resort compatibility for an environment without a user home or an
+    // XDG runtime directory. Normal desktop/service installs never take this
+    // branch; retaining it keeps constrained containers usable.
+    PathBuf::from("./data/axocoatl.sock")
 }
 
 // ── IPC Message Types ────────────────────────────────────────────
@@ -40,7 +66,7 @@ pub enum IpcRequest {
     Ping,
     /// Execute a multi-agent workflow.
     ExecuteWorkflow { workflow_id: String, input: String },
-    /// List configured workflows.
+    /// List canonical manual Automations through the workflow compatibility API.
     ListWorkflows,
     /// Per-agent token usage report (all agents if agent_id is None).
     GetTokenUsage { agent_id: Option<String> },
@@ -239,26 +265,86 @@ pub async fn read_message<T: serde::de::DeserializeOwned>(
 
 // ── IPC Server ───────────────────────────────────────────────────
 
-/// Start the IPC server on a Unix domain socket.
-/// Returns a JoinHandle that runs until the daemon shuts down.
-pub async fn start_ipc_server(
-    daemon: Arc<RwLock<AxocoatlDaemon>>,
-    socket_path: &Path,
-) -> std::io::Result<tokio::task::JoinHandle<()>> {
-    // Remove stale socket file
-    if socket_path.exists() {
-        tokio::fs::remove_file(socket_path).await?;
+/// Reserve the daemon's singleton Unix socket without needing runtime state.
+///
+/// CLI entrypoints call this immediately after config load, before bootstrap
+/// can spawn actors or mutate persisted state. Holding the returned listener
+/// holds the singleton reservation until it is attached with
+/// [`serve_ipc_listener`].
+pub async fn bind_ipc_listener(socket_path: &Path) -> std::io::Result<UnixListener> {
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+
+    // A second daemon must not unlink the live daemon's address. Only a socket
+    // that no process accepts is stale; a regular file or symlink is never an
+    // IPC cleanup target.
+    match tokio::fs::symlink_metadata(socket_path).await {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_socket() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "refusing to replace non-socket IPC path {}",
+                        socket_path.display()
+                    ),
+                ));
+            }
+            if UnixStream::connect(socket_path).await.is_ok() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AddrInUse,
+                    format!(
+                        "an Axocoatl daemon is already listening at {}",
+                        socket_path.display()
+                    ),
+                ));
+            }
+            tokio::fs::remove_file(socket_path).await?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
 
-    // Ensure parent directory exists
+    // Ensure the socket's immediate parent exists. Only chmod a directory we
+    // created ourselves: an explicit path such as `/tmp/axocoatl.sock` must
+    // never make daemon startup change permissions on `/tmp` (or any other
+    // pre-existing user directory).
     if let Some(parent) = socket_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        match tokio::fs::symlink_metadata(parent).await {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "refusing to use non-directory IPC parent {}",
+                        parent.display()
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tokio::fs::create_dir_all(parent).await?;
+                tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await?;
+            }
+            Err(error) => return Err(error),
+        }
     }
 
     let listener = UnixListener::bind(socket_path)?;
+    if let Err(error) =
+        tokio::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600)).await
+    {
+        drop(listener);
+        let _ = tokio::fs::remove_file(socket_path).await;
+        return Err(error);
+    }
     tracing::info!(path = %socket_path.display(), "IPC server listening");
+    Ok(listener)
+}
 
-    let handle = tokio::spawn(async move {
+/// Attach initialized daemon state to an already-reserved IPC listener.
+pub fn serve_ipc_listener(
+    listener: UnixListener,
+    daemon: Arc<RwLock<AxocoatlDaemon>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
         loop {
             match listener.accept().await {
                 Ok((stream, _addr)) => {
@@ -274,9 +360,18 @@ pub async fn start_ipc_server(
                 }
             }
         }
-    });
+    })
+}
 
-    Ok(handle)
+/// Compatibility helper that reserves and starts the IPC server in one call.
+/// New daemon entrypoints should reserve with [`bind_ipc_listener`] before
+/// bootstrap, then attach state through [`serve_ipc_listener`].
+pub async fn start_ipc_server(
+    daemon: Arc<RwLock<AxocoatlDaemon>>,
+    socket_path: &Path,
+) -> std::io::Result<tokio::task::JoinHandle<()>> {
+    let listener = bind_ipc_listener(socket_path).await?;
+    Ok(serve_ipc_listener(listener, daemon))
 }
 
 /// Handle a single IPC client connection.
@@ -330,8 +425,33 @@ async fn handle_client(
                 IpcResponse::Agents { ids }
             }
             IpcRequest::ExecuteWorkflow { workflow_id, input } => {
-                let daemon = daemon.read().await;
-                match daemon.execute_workflow(&workflow_id, &input).await {
+                let context = {
+                    let daemon = daemon.read().await;
+                    crate::automation_executor::AutomationExecutionContext::from_daemon(&daemon)
+                };
+                let result = match context.get_automation(&workflow_id).await {
+                    Some(automation)
+                        if matches!(
+                            &automation.trigger,
+                            axocoatl_config::AutomationTrigger::Manual
+                        ) =>
+                    {
+                        let result = crate::automation_executor::execute_automation_in_context(
+                            &context,
+                            &automation,
+                            &input,
+                        )
+                        .await;
+                        crate::automation_runtime::record_automation_outcome(
+                            &context,
+                            &automation,
+                            &result,
+                        );
+                        result
+                    }
+                    _ => Err(crate::DaemonError::WorkflowNotFound(workflow_id.clone())),
+                };
+                match result {
                     Ok(output) => IpcResponse::WorkflowResponse {
                         workflow_id: output.workflow_id,
                         content: output.final_content,
@@ -356,16 +476,40 @@ async fn handle_client(
                 }
             }
             IpcRequest::ListWorkflows => {
-                let daemon = daemon.read().await;
-                let workflows = daemon
-                    .config
-                    .workflows
-                    .iter()
-                    .map(|w| IpcWorkflowInfo {
-                        id: w.id.clone(),
-                        name: w.name.clone(),
-                        agents: w.agents.clone(),
-                        entry_point: w.entry_point.clone(),
+                use axocoatl_config::{AutomationNodeKind, AutomationTrigger};
+
+                let store = { daemon.read().await.automation_store.clone() };
+                let automations = store.read().await.list();
+                let workflows = automations
+                    .into_iter()
+                    .filter(|automation| matches!(&automation.trigger, AutomationTrigger::Manual))
+                    .map(|automation| {
+                        let agents = automation
+                            .nodes
+                            .iter()
+                            .filter_map(|node| match &node.kind {
+                                AutomationNodeKind::Agent { agent_id, .. } => {
+                                    Some(agent_id.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let entry_point = automation.nodes.iter().find_map(|node| {
+                            let has_incoming =
+                                automation.edges.iter().any(|edge| edge.to == node.id);
+                            match (&node.kind, has_incoming) {
+                                (AutomationNodeKind::Agent { agent_id, .. }, false) => {
+                                    Some(agent_id.clone())
+                                }
+                                _ => None,
+                            }
+                        });
+                        IpcWorkflowInfo {
+                            id: automation.id,
+                            name: automation.name,
+                            agents,
+                            entry_point,
+                        }
                     })
                     .collect();
                 IpcResponse::Workflows { workflows }
@@ -557,6 +701,52 @@ impl IpcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn socket_path_is_stable_across_working_directories() {
+        assert_eq!(
+            resolve_socket_path(
+                None,
+                Some("/run/user/501".into()),
+                Some("/Users/axo".into())
+            ),
+            PathBuf::from("/run/user/501/axocoatl/axocoatl.sock")
+        );
+        assert_eq!(
+            resolve_socket_path(None, None, Some("/Users/axo".into())),
+            PathBuf::from("/Users/axo/.axocoatl/run/axocoatl.sock")
+        );
+        assert_eq!(
+            resolve_socket_path(
+                Some("/tmp/custom-axo.sock".into()),
+                Some("/run/user/501".into()),
+                Some("/Users/axo".into()),
+            ),
+            PathBuf::from("/tmp/custom-axo.sock")
+        );
+    }
+
+    #[tokio::test]
+    async fn socket_reservation_rejects_a_second_daemon_before_state_exists() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let nonce = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "axo-ipc-reservation-test-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket_path = dir.join("axocoatl.sock");
+
+        let listener = bind_ipc_listener(&socket_path).await.unwrap();
+        let error = bind_ipc_listener(&socket_path).await.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+
+        drop(listener);
+        std::fs::remove_file(&socket_path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
 
     #[tokio::test]
     async fn ipc_message_round_trip() {

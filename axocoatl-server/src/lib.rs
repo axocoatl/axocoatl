@@ -236,7 +236,7 @@ pub fn build_router(
                 .delete(routes::delete_chat_attachment)
                 .patch(routes::pin_chat_attachment),
         )
-        // Cross-chat Files browser surface.
+        // Retained cross-chat FileStore API (no peer Files browser surface).
         .route(
             "/api/files",
             get(routes::list_files).post(routes::upload_file),

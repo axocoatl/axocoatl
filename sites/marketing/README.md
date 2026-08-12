@@ -19,11 +19,11 @@ python3 -m http.server 8000
 
 | File              | Purpose                                            |
 |-------------------|----------------------------------------------------|
-| `index.html`      | Hero + 3 pillars + install snippet + lattice demo |
-| `why.html`        | Positioning long-form, anonymous comparison table |
-| `concepts.html`   | Mental model — lattice, agents, skills, sessions  |
-| `showcase.html`   | Five concrete real-business workflows             |
-| `install.html`    | curl / cargo / from-source instructions           |
+| `index.html`      | Hero + one-app story + install + event illustration |
+| `why/index.html`  | Positioning long-form, anonymous comparison table  |
+| `concepts/index.html` | Mental model — events, agents, skills, sessions |
+| `showcase/index.html` | Five representative workflow patterns          |
+| `install/index.html` | prebuilt / cargo / source / WSL2 instructions   |
 | `_brand/`         | Hidden style guide. Not linked from nav. Designer reference. |
 
 ## Web Components
@@ -36,10 +36,11 @@ python3 -m http.server 8000
 | `<ax-cli-snippet>`      | Copy-on-click terminal snippet                |
 | `<ax-comparison-row>`   | One row of the us-vs-them table               |
 | `<ax-theme-toggle>`     | Light/dark/system three-state toggle          |
-| `<ax-lattice>`          | The actual product's lattice canvas, embedded |
+| `<ax-lattice>`          | Shared lattice Web Component used for an illustration |
 
-`<ax-lattice>` is `@axocoatl/lattice@1` from npm, loaded via the
-jsDelivr ESM CDN. Same package the dashboard ships.
+`<ax-lattice>` comes from the repository's `packages/lattice` source. The
+marketing wrapper scripts it as an illustration; it is not evidence of a live
+product run.
 
 ## Brand tokens
 

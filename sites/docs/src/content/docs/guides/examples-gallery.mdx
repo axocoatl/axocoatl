@@ -16,8 +16,8 @@ These examples teach the library; they are not a runtime feature.
 
 | Example | Demonstrates | Run |
 |---|---|---|
-| `stigmergic-workflow` | The `EventLattice` + `depends_on` DAG — running order *emerges* from pheromone signals crossing thresholds; no orchestrator decides it. | `cargo run -p stigmergic-workflow` |
-| `skills-lattice` | Event-driven Skills: one event fans out to every agent that `reacts_to` it (`emits`/`reacts_to`), distinct from a fixed DAG. | `cargo run -p skills-lattice` |
+| `stigmergic-workflow` | A standalone harness over the reusable `EventLattice` signal primitives and a `depends_on` DAG. The example owns its activation queue and completed guard; this is not the daemon's session or Automation executor. | `cargo run -p stigmergic-workflow` |
+| `skills-lattice` | A standalone, example-owned `reacts_to` index and holder fan-out over the reusable lattice. In the product, Skills publish events and an `OnSkill` or `OnEvent` Automation provides the reachable reaction path. | `cargo run -p skills-lattice` |
 | `htn-planner` | Symbolic HTN decomposition — compound tasks expand via methods; only unresolved frontiers reach the LLM. | `cargo run -p htn-planner` |
 | `crash-recovery` | Kill a multi-step workflow mid-run and resume from the checkpoint; completed steps are not re-run. | `cargo run -p crash-recovery` |
 
@@ -41,7 +41,7 @@ These examples teach the library; they are not a runtime feature.
 
 | Example | Demonstrates | Run |
 |---|---|---|
-| `proactive-agents` | Agents that fire on a schedule or on an event (here, reacting to `AgentFailed`), not on a user prompt. | `cargo run -p proactive-agents` |
+| `proactive-agents` | Legacy schedule/event YAML projected into canonical Automation records, including an `AgentFailed` trigger. | `cargo run -p proactive-agents` |
 | `configs/` | A gallery of minimal YAML configs (below). No Rust — validate and run with the CLI. | see [Config gallery](#config-gallery) |
 
 ## Foundations
@@ -63,11 +63,11 @@ comment lists its prerequisites, run command, and expected output.
 
 | File | Agents | Demonstrates |
 |---|---|---|
-| `research-pipeline.yaml` | 2 | `depends_on` workflow — summarizer waits on researcher |
-| `feature-dev.yaml` | 5 | Linear DAG (architect → planner → coder → reviewer → docs) |
-| `incident-response.yaml` | 3 | Skills (`emits` / `reacts_to`) + an ops agent |
-| `local-only.yaml` | 2 | Ollama, no API keys — data never leaves the box |
-| `event-webhooks.yaml` | 2 | Opt-in outbound event webhooks — the lattice POSTs signed events to a URL |
+| `research-pipeline.yaml` | 2 | Legacy workflow YAML that seeds a manual Automation DAG; the summarizer waits on the researcher |
+| `feature-dev.yaml` | 5 | Legacy workflow YAML that seeds a five-node manual Automation DAG |
+| `incident-response.yaml` | 3 | A manual Automation seed plus Skill event metadata; `reacts_to` alone does not dispatch an agent |
+| `local-only.yaml` | 2 | Ollama with no hosted-provider API keys; LLM prompts stay on the local endpoint |
+| `event-webhooks.yaml` | 2 | Opt-in webhook dispatcher that POSTs signed events from the lattice feed to a URL |
 | `mcp-tools.yaml` | 1 | A single MCP server (stdio transport) |
 
 Validate or run any of them:

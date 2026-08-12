@@ -1,577 +1,200 @@
 ---
-title: Ollama quickstart
-description: "End-to-end walkthrough of running Axocoatl against a local Ollama provider."
+title: Local verification with Ollama
+description: A bounded smoke-test checklist for the current workbench, sessions, attempts, Automations, and runtime gates.
 ---
 
-# Axocoatl Local Testing Guide
+# Local verification with Ollama
 
-Complete hands-on testing plan for all Axocoatl features using Ollama + llama3.2.
-
----
+This is a bounded smoke-test checklist for the current workbench and runtime.
+It deliberately does not promise coverage of every feature or provider. The
+browser app at `/` is the product seam; library unit tests are supporting
+evidence, not a substitute for exercising that journey.
 
 ## Prerequisites
 
-### Start Ollama
+- Rust 1.82 or newer.
+- Ollama with `llama3.2` available for the local-provider checks.
+- Podman for directory sessions and parallel attempts.
+- A disposable Git repository for any test that lets an agent change files.
+
+Start Ollama in a separate terminal if it is not already running:
+
 ```bash
-ollama serve &
+ollama serve
+ollama pull llama3.2
 ```
-Ollama listens on `http://localhost:11434`. The model `llama3.2` (2GB) is already pulled.
 
-### Verify Ollama is running
+Run the remaining commands from the Axocoatl repository root.
+
+## 1. Build and validate the starter config
+
 ```bash
-ollama list
-# Should show: llama3.2:latest
-
-curl -s http://localhost:11434/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"llama3.2","messages":[{"role":"user","content":"Say hello"}],"max_tokens":10}'
+cargo build -p axocoatl-cli
+cargo run -p axocoatl-cli -- validate axocoatl.example.yaml
 ```
 
-### Stop Ollama (when done)
+Expect validation to succeed. Do not assert an exact repository-wide test count
+or binary size; both change as the workspace evolves.
+
+## 2. Start a clean local runtime
+
+Use a fresh data directory so the starter config can perform its one-time legacy
+workflow-to-Automation seed:
+
 ```bash
-pkill ollama
+export AXOCOATL_TEST_DATA="$(mktemp -d)"
+AXOCOATL_DATA_DIR="$AXOCOATL_TEST_DATA" \
+  cargo run -p axocoatl-cli -- dev -c axocoatl.example.yaml
 ```
 
----
+Expect the daemon to expose IPC and the browser app at
+`http://localhost:8080`. In another terminal:
 
-All commands run from `~/repos/Axocoatl`.
-
----
-
-## Phase 1: Foundation — Config & Toolchain
-
-**1.1 — Config validation**
 ```bash
-cargo run -p axocoatl-cli -- validate axocoatl.yaml
+curl -fsS http://localhost:8080/health
+curl -fsS http://localhost:8080/health/ready
+curl -fsS http://localhost:8080/api/agents
+curl -fsS http://localhost:8080/api/automations
 ```
-Expect: "Config is valid" — lists 3 agents (assistant, researcher, summarizer), 1 workflow, Ollama provider.
 
-**1.2 — Config rejection (bad YAML)**
+The starter config has two Ollama agents. Its legacy `hello-world` record should
+appear as a manual record in the canonical Automation store on this first boot.
+If you reuse an existing data directory, its `automations.json` remains
+authoritative and YAML is not imported again.
+
+## 3. Exercise the one-app session loop
+
+Open `http://localhost:8080` and use a disposable Git repository.
+
+1. Authorize the repository as a workspace and create a session with the
+   `researcher` agent.
+2. Ask for a small, verifiable file change.
+3. Confirm chat remains in the main area while Files, editor, Terminal,
+   Activity, Browser, git, and Agent graph open around it.
+4. Run the repository's real check command from the workbench.
+5. Inspect the resulting git diff. The app must not commit automatically.
+6. Reload the page and resume the same session. Verify the transcript and
+   workspace identity remain attached to it.
+
+For UI changes, also inspect light, dark, narrow, and reduced-motion states and
+check the browser console. A DOM-only check is not visual verification.
+
+## 4. Exercise several attempts
+
+Parallel attempts currently require a single-agent session on the local Podman
+backend and a Git repository.
+
+1. From the session, choose **Explore several ways** and create at least two
+   attempts with deliberately different agent/model selections where available.
+2. Observe running, completed, failed, blocked, or interrupted states without
+   losing the session chat.
+3. Run **Checks** after every attempt is terminal.
+4. Compare **Outcome** and **Route**, then use **Judge** if configured.
+5. Choose **Keep this one** only for a passing, non-empty result.
+6. Confirm the selected delta is in the primary working tree, no commit was
+   created, and the unresolved attempt set is cleaned up.
+
+Also test **Discard** before Keep begins. Starting a second attempt set or a
+normal session turn while one is unresolved should return a lifecycle conflict,
+not silently replace it.
+
+## 5. Exercise the canonical Automation path
+
+The Settings page and `/api/automations` read the same `AutomationStore` used by
+the live dispatcher. Run the seeded manual record from **Settings →
+Automations**, or use the compatibility route:
+
 ```bash
-cat > /tmp/bad-config.yaml << 'EOF'
-agents:
-  - id: ""
-    provider: ollama
-    model: llama3.2
-  - id: assistant
-    provider: ollama
-    model: llama3.2
-    token_budget:
-      per_execution: 100
-      per_call: 200
-      overflow_policy: abort
-  - id: assistant
-    provider: ollama
-    model: llama3.2
-providers:
-  ollama:
-    base_url: "http://localhost:11434"
-EOF
-cargo run -p axocoatl-cli -- validate /tmp/bad-config.yaml
+curl -fsS -X POST \
+  http://localhost:8080/api/workflows/hello-world/execute \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"Explain ownership in two stages."}'
 ```
-Expect: Errors for empty agent ID, per_call > per_execution, and duplicate agent ID.
 
-**1.3 — Env var interpolation**
+Expect the explicit DAG executor to run the researcher node before the
+summarizer node. This is not a lattice-threshold activation loop.
+
+Create a net-new Automation with **+ Automation** in Settings. Choose its ID,
+name, starter Agent, and manual, interval, event, or Skill trigger; Settings
+persists a valid Input → Agent starter graph through `POST /api/automations`
+and opens it for editing. Verify the running daemon sees the new record and
+subsequent edits without a restart. The HTTP endpoint remains available for
+programmatic creation, and legacy YAML can seed the initial store when no
+canonical store file exists. Scheduled Automations accept fixed intervals such
+as `30s`, `5m`, `2h`, and `1d`; cron expressions are not supported.
+
+For a top-level Interrupt, stop the daemon while the run is parked, restart it,
+and verify the prompt reappears and resumes without replaying completed nodes.
+This recovery boundary does not reconstruct an arbitrary provider/tool call
+that was in flight, and an Interrupt inside a nested Subgraph remains
+process-local.
+
+## 6. Exercise directory-session CLI compatibility
+
+With the daemon running, use a disposable repository path:
+
 ```bash
-cat > /tmp/env-config.yaml << 'EOF'
-agents:
-  - id: assistant
-    provider: ollama
-    model: llama3.2
-providers:
-  ollama:
-    base_url: "${OLLAMA_URL}"
-EOF
-export OLLAMA_URL="http://localhost:11434"
-cargo run -p axocoatl-cli -- validate /tmp/env-config.yaml
-```
-Expect: Parses successfully with `${OLLAMA_URL}` replaced by the env var value.
-
-**1.4 — Init scaffolding**
-```bash
-cargo run -p axocoatl-cli -- init /tmp/test-axocoatl
-ls -la /tmp/test-axocoatl/
-cat /tmp/test-axocoatl/axocoatl.yaml
-rm -rf /tmp/test-axocoatl
-```
-Expect: Directory created with template YAML, .env.example, and data/ directory.
-
----
-
-## Phase 2: Single-Agent Chat (Core Pipeline)
-
-**2.1 — Basic chat (in-process)**
-```bash
-cargo run -p axocoatl-cli -- chat --agent assistant --config axocoatl.yaml
-```
-Type: `What is 2+2?`
-
-Expect: LLM responds with an answer, token counts displayed (input/output/total).
-
-**2.2 — Multi-turn conversation**
-
-Still in the same chat session, type:
-```
-What did I just ask you?
-```
-Expect: LLM references your previous question about 2+2 (session memory working).
-
-**2.3 — Token tracking per turn**
-
-Send a few more messages, observe the token count display after each.
-
-Expect: Counts increment with each turn. Total accumulates across the session.
-
-**2.4 — System prompt injection**
-
-The assistant agent has system_prompt "You are a helpful assistant powered by Axocoatl." — ask:
-```
-What are you?
-```
-Expect: Response references being an assistant/Axocoatl. Ctrl+C to exit.
-
----
-
-## Phase 3: Token Budget Enforcement
-
-**3.1 — Tight budget with abort policy**
-
-Create a test config:
-```bash
-cat > /tmp/budget-test.yaml << 'EOF'
-agents:
-  - id: budget-agent
-    provider: ollama
-    model: llama3.2
-    token_budget:
-      per_execution: 200
-      per_call: 100
-      overflow_policy: abort
-providers:
-  ollama:
-    base_url: "http://localhost:11434"
-EOF
-cargo run -p axocoatl-cli -- chat --agent budget-agent --config /tmp/budget-test.yaml
-```
-Send a message, then keep chatting until budget is exhausted.
-
-Expect: Execution stops with a budget exceeded error once tokens hit 200.
-
-**3.2 — Warn policy**
-
-Change to `overflow_policy: warn` in the file above, restart chat.
-
-Expect: Warning printed but execution continues past budget.
-
----
-
-## Phase 4: HTTP API (Dev Mode)
-
-**4.1 — Start dev server**
-```bash
-cargo run -p axocoatl-cli -- dev axocoatl.yaml
-```
-Expect: Prints startup info — config loaded, 3 agents spawned, IPC socket path, HTTP at `http://0.0.0.0:8080`.
-
-*Open a second terminal for the following:*
-
-**4.2 — Health endpoints**
-```bash
-curl -s http://localhost:8080/health | jq .
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health/ready
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health/live
-```
-Expect: Health returns `{status: "healthy", agents: 3}`. Ready returns 200. Live returns 200.
-
-**4.3 — List agents**
-```bash
-curl -s http://localhost:8080/api/agents | jq .
-```
-Expect: JSON array with 3 agents (assistant, researcher, summarizer) showing id, name, provider, model.
-
-**4.4 — Execute agent via API**
-```bash
-curl -s -X POST http://localhost:8080/api/agents/assistant/execute \
-  -H "Content-Type: application/json" \
-  -d '{"input": "What is the capital of France?"}' | jq .
-```
-Expect: `{"output": "Paris..."}` from Ollama.
-
-**4.5 — Agent status**
-```bash
-curl -s http://localhost:8080/api/agents/assistant/status | jq .
-```
-Expect: Agent status (Idle after execution completes).
-
-**4.6 — Invalid agent**
-```bash
-curl -s -X POST http://localhost:8080/api/agents/nonexistent/execute \
-  -H "Content-Type: application/json" \
-  -d '{"input": "hello"}' | jq .
-```
-Expect: Error response with "not found".
-
-**4.7 — WebSocket streaming**
-```bash
-# Install websocat if needed: cargo install websocat
-echo '{"agent_id":"assistant","input":"Count to 5"}' | websocat ws://localhost:8080/ws
-```
-Expect: Streamed text deltas arriving incrementally, then usage stats and done signal.
-
----
-
-## Phase 5: Workflow Execution (Stigmergic Coordination)
-
-This is the key feature — multi-agent workflows driven by the EventLattice.
-
-**5.1 — List workflows**
-```bash
-curl -s http://localhost:8080/api/workflows | jq .
-```
-Expect: JSON array with 1 workflow: `research-and-summarize` with agents `[researcher, summarizer]` and entry_point `researcher`.
-
-**5.2 — Execute workflow via API**
-```bash
-curl -s -X POST http://localhost:8080/api/workflows/research-and-summarize/execute \
-  -H "Content-Type: application/json" \
-  -d '{"input": "What is photosynthesis?"}' | jq .
-```
-Expect:
-- `agent_outputs` array with 2 entries: researcher's detailed answer, then summarizer's concise summary
-- `output` field contains the summarizer's final content (last agent in chain)
-- `completed_agents` shows `["researcher", "summarizer"]`
-- `total_tokens` shows combined usage
-- In the dev terminal, you should see logs showing: researcher activating, completing, then summarizer activating with the researcher's output as context
-
-**5.3 — Verify agent ordering**
-
-Check the dev terminal logs. You should see:
-```
-Workflow started — initial activation
-Activating agent in workflow  agent=researcher
-Agent completed in workflow   agent=researcher
-Activating agent in workflow  agent=summarizer
-Agent completed in workflow   agent=summarizer
-Workflow completed
-```
-This confirms stigmergic coordination: researcher's TaskCompleted event pushed the summarizer's pheromone signal past its threshold, triggering automatic activation.
-
-**5.4 — Workflow with different input**
-```bash
-curl -s -X POST http://localhost:8080/api/workflows/research-and-summarize/execute \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Explain the Rust ownership model"}' | jq .
-```
-Expect: Researcher gives detailed Rust ownership explanation, summarizer condenses it.
-
-**5.5 — Invalid workflow**
-```bash
-curl -s -X POST http://localhost:8080/api/workflows/nonexistent/execute \
-  -H "Content-Type: application/json" \
-  -d '{"input": "test"}' | jq .
-```
-Expect: Error "Workflow not found: nonexistent".
-
----
-
-## Phase 6: Workflow CLI Commands
-
-**6.1 — List workflows via CLI**
-```bash
-cargo run -p axocoatl-cli -- workflow list -c axocoatl.yaml
-```
-Expect: Table showing workflow ID, name, agents, entry point.
-
-**6.2 — Run workflow via CLI (in-process)**
-
-Without a running daemon:
-```bash
-cargo run -p axocoatl-cli -- workflow run research-and-summarize \
-  -i "What causes earthquakes?" -c axocoatl.yaml
-```
-Expect: Bootstraps in-process, runs workflow, prints per-agent outputs with token counts, then final output.
-
-**6.3 — Run workflow via CLI (IPC)**
-
-With dev server running in another terminal:
-```bash
-cargo run -p axocoatl-cli -- workflow run research-and-summarize \
-  -i "What is dark matter?" -c axocoatl.yaml
-```
-Expect: "Connected to daemon via IPC" — executes faster (no bootstrap), same output format.
-
----
-
-## Phase 7: Memory & Persistence
-
-**7.1 — Checkpoint creation**
-
-After any chat session, check for checkpoint files:
-```bash
-ls -la ./data/checkpoints/
-```
-Expect: `.ckpt` files exist for agents you chatted with.
-
-**7.2 — Checkpoint restoration**
-
-Start chat, have a conversation, Ctrl+C, then restart:
-```bash
-cargo run -p axocoatl-cli -- chat --agent assistant --config axocoatl.yaml
-```
-Ask: `What did we talk about before?`
-
-Expect: If session is restored from checkpoint, LLM may recall prior context.
-
-**7.3 — Sessions list**
-```bash
+cargo run -p axocoatl-cli -- session new /absolute/path/to/repository --agent researcher
 cargo run -p axocoatl-cli -- session list
-```
-Expect: Lists the active directory sessions (requires the daemon running).
-
-**7.4 — Checkpoint pruning**
-
-Have 4+ chat sessions. Check that only the 3 most recent checkpoints remain:
-```bash
-ls ./data/checkpoints/ | wc -l
-```
-Expect: 3 or fewer checkpoint files per agent.
-
----
-
-## Phase 8: IPC Communication
-
-**8.1 — Chat via IPC (two terminals)**
-
-Terminal 1:
-```bash
-cargo run -p axocoatl-cli -- dev axocoatl.yaml
+cargo run -p axocoatl-cli -- session exec <session-id> "Inspect the repository and report its checks."
+cargo run -p axocoatl-cli -- session close <session-id>
 ```
 
-Terminal 2:
-```bash
-cargo run -p axocoatl-cli -- chat --agent assistant --config axocoatl.yaml
-```
-Expect: Chat says "Mode: connected to daemon (IPC)", not "in-process".
+`axocoatl chat` is a legacy agent-global console. Its accepted `--session` value
+does not currently select or restore an isolated workspace Session; use the
+browser app or `session` subcommands when session identity matters.
 
-**8.2 — IPC fallback**
+## 7. Verify `serve` exposes HTTP and IPC
 
-Without a running daemon:
-```bash
-cargo run -p axocoatl-cli -- chat --agent assistant --config axocoatl.yaml
-```
-Expect: Falls back to in-process mode, still works.
-
----
-
-## Phase 9: Multi-Agent Configuration
-
-**9.1 — Verify all 3 agents**
-
-With dev server running:
-```bash
-curl -s http://localhost:8080/api/agents | jq '.[].id'
-```
-Expect: `"assistant"`, `"researcher"`, `"summarizer"`
-
-**9.2 — Execute each agent independently**
-```bash
-curl -s -X POST http://localhost:8080/api/agents/researcher/execute \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Explain quantum entanglement"}' | jq .output
-
-curl -s -X POST http://localhost:8080/api/agents/summarizer/execute \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Explain quantum entanglement"}' | jq .output
-```
-Expect: Researcher gives a detailed answer. Summarizer gives 1-2 sentences. Different personalities confirmed.
-
-**9.3 — Chat with specific agent**
-```bash
-cargo run -p axocoatl-cli -- chat --agent summarizer --config axocoatl.yaml
-```
-Expect: Concise responses matching the summarizer persona.
-
----
-
-## Phase 10: Built-in Tools
-
-**10.1 — Attempt tool trigger**
-
-In a chat session, try:
-```
-Use the echo tool to echo "hello world"
-```
-If tool calling works: tool call displayed, echo result shown, LLM incorporates result.
-If it doesn't trigger: expected — llama3.2 has limited function calling support.
-
-**10.2 — Verify tools are registered**
-
-Check the dev server startup output — it should mention registering built-in tools (echo, json_keys, text_split).
-
----
-
-## Phase 11: Serve Mode (Production)
-
-**11.1 — Start serve mode**
-
-Ctrl+C the dev server, then:
-```bash
-cargo run -p axocoatl-cli -- serve axocoatl.yaml
-```
-Expect: HTTP server starts, no IPC socket created. API endpoints still work.
-
-**11.2 — Verify API works in serve mode**
-```bash
-curl -s http://localhost:8080/health | jq .
-curl -s -X POST http://localhost:8080/api/agents/assistant/execute \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Hello"}' | jq .
-curl -s -X POST http://localhost:8080/api/workflows/research-and-summarize/execute \
-  -H "Content-Type: application/json" \
-  -d '{"input": "What is gravity?"}' | jq .
-```
-Expect: All endpoints work identically to dev mode.
-
----
-
-## Phase 12: Coordination Subsystem (Unit Tests)
+Stop `dev`, then start the same clean configuration in service mode:
 
 ```bash
-cargo test -p axocoatl-coordination -- --nocapture
+AXOCOATL_DATA_DIR="$AXOCOATL_TEST_DATA" \
+  cargo run -p axocoatl-cli -- serve -c axocoatl.example.yaml
 ```
-Expect: All tests pass — event lattice publish/subscribe, pheromone decay, threshold activation. The crate also unit-tests the HTN decomposition and auction-scoring primitives. These are **shipped**: the `role: coordinator` agent uses the auction to assign subtasks to worker agents on the live execute path, and the HTN planner runs when a workflow provides an `htn_methods_file` (otherwise the coordinator decomposes with the LLM).
 
----
+Expect this mode to expose both HTTP/browser and IPC against its daemon state. Recheck
+`/health`, list Automations, and run a directory-session CLI read. `serve` is not
+HTTP-only.
 
-## Phase 13: Workflow Graph (Unit Tests)
+## 8. Repository verification gates
 
-`axocoatl-graph` is an **experimental** graph-validation crate — it is **not
-wired into the runtime** (no daemon, actor, or CLI path imports it). It's kept
-as a standalone module; its tests still run on their own:
+Run the gates appropriate to the change. The baseline is:
 
 ```bash
-cargo test -p axocoatl-graph -- --nocapture
-```
-Expect: All tests pass — graph construction, topological sort, cycle detection, parallel groups.
-
----
-
-## Phase 14: MCP Protocol (Unit Tests)
-
-```bash
-cargo test -p axocoatl-mcp -- --nocapture
-```
-Expect: MCP server frame and tool discovery tests pass.
-
-MCP tool **execution** ships: the daemon discovers external MCP tools, keeps
-the client alive, and routes an LLM's `mcp__server__tool` call through to the
-live server. For an end-to-end walkthrough, run the bridge example:
-
-```bash
-cargo run -p mcp-bridge
-```
-See `examples/mcp-bridge/` for the source.
-
----
-
-## Phase 15: WASM Isolation (Unit Tests)
-
-The shipped directory-session sandbox is a **hardened rootless podman
-container**. The WASM isolation tier exercised below is **parked /
-experimental** — it's an opt-in `wasmtime-sandbox` Cargo feature, not part of
-the default build or the default tool path (where the podman session sandbox is
-the boundary). On the default path the WASM tool backend errors out by design.
-
-```bash
-cargo test -p axocoatl-isolation -- --nocapture
-```
-Expect: WASM compilation, sandbox execution, fuel metering tests pass.
-
----
-
-## Phase 16: A2A Protocol (Unit Tests)
-
-```bash
-cargo test -p axocoatl-a2a -- --nocapture
-```
-Expect: Agent card serialization and task submission tests pass.
-
----
-
-## Phase 17: Daemon Internals (Unit Tests)
-
-```bash
-cargo test -p axocoatl-daemon -- --nocapture
-```
-Expect: Workflow execution tracker, context building, cycle guard, IPC serialization tests all pass.
-
----
-
-## Phase 18: Stress & Edge Cases
-
-**18.1 — Long conversation**
-
-Start a chat and send 20+ messages back and forth.
-Expect: No crashes, memory stable, checkpoints keep rolling.
-
-**18.2 — Rapid-fire API requests**
-```bash
-for i in $(seq 1 10); do
-  curl -s -X POST http://localhost:8080/api/agents/assistant/execute \
-    -H "Content-Type: application/json" \
-    -d "{\"input\": \"Count to $i\"}" &
-done
-wait
-```
-Expect: All requests complete (some may queue), no panics.
-
-**18.3 — Ollama restart recovery**
-
-Mid-chat, stop Ollama (`pkill ollama`), send a message (expect error), restart Ollama (`ollama serve &`), send another message.
-Expect: Graceful error on failure, recovery after restart.
-
-**18.4 — Empty input**
-```bash
-curl -s -X POST http://localhost:8080/api/agents/assistant/execute \
-  -H "Content-Type: application/json" \
-  -d '{"input": ""}' | jq .
-```
-Expect: Handled gracefully (error or empty response, no panic).
-
-**18.5 — Full test suite**
-```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
+cargo test --doc --workspace
+cargo build -p axocoatl-cli
 ```
-Expect: 400+ tests, 0 failures.
 
----
+Some sandbox tests require Podman and are ignored by default. Webhook tests bind
+a local port; if an execution sandbox blocks that bind, rerun the same test in
+an environment that permits it rather than treating the denial as a product
+failure.
 
-## Phase 19: Benchmarks
+For focused runtime work, useful package gates include:
 
 ```bash
-cargo bench --bench token_efficiency
-cargo bench --bench routing_latency
-cargo bench --bench actor_throughput
-cargo bench --bench isolation_startup
+cargo test -p axocoatl-daemon
+cargo test -p axocoatl-server
+cargo test -p axocoatl-coordination
+cargo test -p axocoatl-isolation
 ```
-Expect: Benchmarks complete and report token-budget, routing-latency,
-actor-throughput, and sandbox-startup numbers.
 
----
+The coordination package tests its reusable event/signal, HTN, and auction
+primitives. Passing those tests does not prove that the product daemon uses the
+standalone example activation loops.
 
-## Quick Reference
+## Quick reference
 
 | Action | Command |
-|--------|---------|
-| Start Ollama | `ollama serve &` |
-| Stop Ollama | `pkill ollama` |
-| Check Ollama | `ollama list` |
-| Validate config | `cargo run -p axocoatl-cli -- validate axocoatl.yaml` |
-| Dev mode (IPC+HTTP) | `cargo run -p axocoatl-cli -- dev axocoatl.yaml` |
-| Serve mode (HTTP only) | `cargo run -p axocoatl-cli -- serve axocoatl.yaml` |
-| Interactive chat | `cargo run -p axocoatl-cli -- chat --agent assistant --config axocoatl.yaml` |
-| List workflows | `cargo run -p axocoatl-cli -- workflow list -c axocoatl.yaml` |
-| Run workflow (CLI) | `cargo run -p axocoatl-cli -- workflow run research-and-summarize -i "query" -c axocoatl.yaml` |
-| Run workflow (API) | `curl -X POST localhost:8080/api/workflows/research-and-summarize/execute -H 'Content-Type: application/json' -d '{"input":"query"}'` |
-| Run all tests | `cargo test --workspace` |
-| Run benchmarks | `cargo bench` |
+|---|---|
+| Validate starter | `cargo run -p axocoatl-cli -- validate axocoatl.example.yaml` |
+| Dev (IPC + HTTP) | `cargo run -p axocoatl-cli -- dev -c axocoatl.example.yaml` |
+| Serve (IPC + HTTP) | `cargo run -p axocoatl-cli -- serve -c axocoatl.example.yaml` |
+| List sessions | `cargo run -p axocoatl-cli -- session list` |
+| List manual Automations | `cargo run -p axocoatl-cli -- workflow list -c axocoatl.example.yaml` |
+| Build release CLI | `cargo build -p axocoatl-cli --release` |
+| Full test suite | `cargo test --workspace` |

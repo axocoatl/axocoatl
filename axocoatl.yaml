@@ -1,7 +1,9 @@
-# Axocoatl — Populated demo organization (Acme Software Co.)
+# Axocoatl — populated one-workbench demo (Acme Software Co.)
 #
-# 12 agents in 4 teams · 5 workflows · 3 scheduled runs · 4 Skills
-# All running locally via Ollama + llama3.2 — your data never leaves the box.
+# The legacy workflow/schedule sections below are first-boot seed data for the
+# canonical Automation store. Agent inference uses local Ollama in this demo.
+# Session tools use bridged networking by default below; set
+# `sandbox.network: none` to block their egress.
 
 # ─────────────────────────── AGENTS ───────────────────────────
 
@@ -110,7 +112,10 @@ agents:
     depends_on: []
     token_budget: { per_execution: 4000, per_call: 2000, overflow_policy: warn }
 
-# ─────────────────────────── WORKFLOWS ────────────────────────
+# ───────────── LEGACY AUTOMATION SEED INPUT ───────────────────
+# These workflow, schedule, and proactive records seed AutomationStore only
+# when its canonical automations file does not exist. After first boot, edit
+# Automations in Settings; this YAML is no longer a second live registry.
 
 workflows:
   - id: feature-dev
@@ -138,15 +143,16 @@ workflows:
     agents: [secretary]
     entry_point: secretary
 
-# ─────────────────────────── SCHEDULES (cron) ─────────────────
-# Background-fired workflows. The daemon's scheduler wakes them up.
+# ─────────────────────────── INTERVALS ─────────────────────────
+# Interval-triggered Automations. Exact wall-clock/cron scheduling is not part
+# of the current trigger contract.
 
 schedules:
   - id: morning-briefing
-    name: "Morning Briefing"
+    name: "Hourly Team Pulse"
     workflow: daily-briefing
     every: "1h"
-    input: "Produce a 5-bullet briefing on what's likely on the team's plate today."
+    input: "Produce a 5-bullet update on changes, blockers, and next actions since the last run."
     enabled: true
 
   - id: release-pulse
@@ -159,15 +165,14 @@ schedules:
   - id: research-sync
     name: "Weekly Research Sync"
     workflow: research-and-summarize
-    every: "24h"
+    every: "7d"
     input: "Summarize the latest developments in self-coordinating multi-agent AI systems."
     enabled: true
 
 # ─────────────────────────── SKILLS ───────────────────────────
-# Axocoatl's differentiator. Skills are lattice-aware units of capability:
-# they declare what events they emit and react to, so the lattice routes
-# work without manual wiring. Multiple agents can hold the same Skill;
-# each reacts to the events it declares.
+# Firing a Skill publishes the events it declares in `emits`. `reacts_to`,
+# `agents`, and `prompt` are capability metadata in the current daemon; use an
+# OnSkill or OnEvent Automation for a reachable event-driven reaction.
 
 skills:
   - id: code-review-checklist
@@ -239,10 +244,10 @@ sandbox:
   # (e.g. rootless podman on WSL2).
   require_resource_limits: false
 
-# ─────────────────────────── PROACTIVE AGENTS ──────────────────
-# Agents that act on their own — no prompt needed. The Always-On Service
-# (axocoatl service install) keeps the daemon process alive; these make the
-# agents act autonomously while it runs.
+# ───────────────────── LEGACY PROACTIVE SEEDS ──────────────────
+# These become Automations on first boot. The Always-On Service
+# (`axocoatl service install`) keeps the daemon alive so enabled interval and
+# event triggers can dispatch while the app is not open.
 
 proactive:
   - id: hourly-briefing

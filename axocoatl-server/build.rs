@@ -1,9 +1,8 @@
-// Tells cargo to rebuild whenever the dashboard HTML changes.
-// `routes.rs` embeds `static/index.html` via `include_str!`, but cargo
-// does not always notice changes inside `include_str!` targets — so an
-// edit to the dashboard could go un-recompiled. This makes the dependency
-// explicit.
+// The app shell and its native modules are embedded in the server binary.
+// Keep both the include_str! entrypoint and rust-embed's UI directory in
+// Cargo's dependency graph so a browser-app edit cannot leave a stale binary.
 fn main() {
     println!("cargo:rerun-if-changed=static/index.html");
+    println!("cargo:rerun-if-changed=static/ui");
     println!("cargo:rerun-if-changed=build.rs");
 }

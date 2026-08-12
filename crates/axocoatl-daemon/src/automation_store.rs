@@ -13,11 +13,11 @@
 //! save. The save uses temp-write + rename, so a crash mid-write leaves
 //! the previous good file in place.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 
-use axocoatl_config::{Automation, AutomationFolder, AxocoatlConfig};
+use axocoatl_config::{Automation, AutomationFolder, AutomationNodeKind, AxocoatlConfig};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -35,6 +35,8 @@ pub enum StoreError {
     FolderConflict(String),
     #[error("invalid folder path: {0}")]
     InvalidFolderPath(String),
+    #[error("invalid automation: {0}")]
+    InvalidAutomation(String),
 }
 
 /// In-memory store of automations + the organizational folders they sit in.
@@ -44,6 +46,10 @@ pub enum StoreError {
 pub struct AutomationStore {
     path: PathBuf,
     folders_path: PathBuf,
+    /// Whether `automations.json` has ever been successfully established.
+    /// An existing `[]` is intentional user state, not an invitation to seed
+    /// legacy YAML again.
+    initialized: bool,
     by_id: HashMap<String, Automation>,
     folders_by_path: HashMap<String, AutomationFolder>,
 }
@@ -77,11 +83,132 @@ fn validate_folder_path(path: &str) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Reject records the executor cannot run truthfully. Validation lives at the
+/// canonical store boundary so HTTP, CLI, IPC, and internal callers all get
+/// the same mutation contract.
+fn validate_automation(automation: &Automation) -> Result<(), StoreError> {
+    if let axocoatl_config::AutomationTrigger::Schedule { every, .. } = &automation.trigger {
+        let interval = crate::scheduler::parse_interval(every).map_err(|error| {
+            StoreError::InvalidAutomation(format!("schedule cadence '{every}' is invalid: {error}"))
+        })?;
+        if interval == 0 {
+            return Err(StoreError::InvalidAutomation(
+                "schedule cadence must be greater than zero".to_string(),
+            ));
+        }
+    }
+
+    let mut node_ids = HashSet::with_capacity(automation.nodes.len());
+    for node in &automation.nodes {
+        if !node_ids.insert(node.id.as_str()) {
+            return Err(StoreError::InvalidAutomation(format!(
+                "duplicate node id '{}'",
+                node.id
+            )));
+        }
+    }
+
+    for node in &automation.nodes {
+        match &node.kind {
+            AutomationNodeKind::Map { body_node, .. } => {
+                if body_node.trim().is_empty() {
+                    return Err(StoreError::InvalidAutomation(format!(
+                        "Map node '{}' must name a body node",
+                        node.id
+                    )));
+                }
+                let body = automation
+                    .nodes
+                    .iter()
+                    .find(|candidate| candidate.id == *body_node)
+                    .ok_or_else(|| {
+                        StoreError::InvalidAutomation(format!(
+                            "Map node '{}' references missing body node '{}'",
+                            node.id, body_node
+                        ))
+                    })?;
+                if !matches!(
+                    &body.kind,
+                    AutomationNodeKind::Agent { .. }
+                        | AutomationNodeKind::Tool { .. }
+                        | AutomationNodeKind::Subgraph { .. }
+                ) {
+                    return Err(StoreError::InvalidAutomation(format!(
+                        "Map node '{}' body '{}' must be an Agent, Tool, or Subgraph",
+                        node.id, body_node
+                    )));
+                }
+            }
+            AutomationNodeKind::Subgraph { automation_id, .. }
+                if automation_id.trim().is_empty() =>
+            {
+                return Err(StoreError::InvalidAutomation(format!(
+                    "Subgraph node '{}' must name an Automation",
+                    node.id
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    let mut indegree: HashMap<&str, usize> = automation
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), 0))
+        .collect();
+    let mut outgoing: HashMap<&str, Vec<&str>> = HashMap::new();
+    for edge in &automation.edges {
+        if !node_ids.contains(edge.from.as_str()) {
+            return Err(StoreError::InvalidAutomation(format!(
+                "edge references missing source node '{}'",
+                edge.from
+            )));
+        }
+        if !node_ids.contains(edge.to.as_str()) {
+            return Err(StoreError::InvalidAutomation(format!(
+                "edge references missing target node '{}'",
+                edge.to
+            )));
+        }
+        *indegree
+            .get_mut(edge.to.as_str())
+            .expect("target was checked") += 1;
+        outgoing
+            .entry(edge.from.as_str())
+            .or_default()
+            .push(edge.to.as_str());
+    }
+
+    let mut ready: VecDeque<&str> = indegree
+        .iter()
+        .filter_map(|(node, degree)| (*degree == 0).then_some(*node))
+        .collect();
+    let mut visited = 0usize;
+    while let Some(node) = ready.pop_front() {
+        visited += 1;
+        for target in outgoing.get(node).into_iter().flatten() {
+            let degree = indegree.get_mut(target).expect("target was checked");
+            *degree -= 1;
+            if *degree == 0 {
+                ready.push_back(target);
+            }
+        }
+    }
+    if visited != automation.nodes.len() {
+        return Err(StoreError::InvalidAutomation(
+            "graph contains a directed cycle".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 impl AutomationStore {
     /// Open the store. Loads existing automations from disk if the file
     /// is present. Empty starting state otherwise.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
+        let initialized = path.exists();
         // Sibling file in the same directory. We pick a sibling so the user's
         // single-file backup story stays intact (copy automations.json, get
         // its folders alongside).
@@ -89,6 +216,7 @@ impl AutomationStore {
         let mut store = Self {
             path,
             folders_path,
+            initialized,
             by_id: HashMap::new(),
             folders_by_path: HashMap::new(),
         };
@@ -113,11 +241,11 @@ impl AutomationStore {
         Ok(store)
     }
 
-    /// One-time seed from the legacy YAML sections. Idempotent — if any
-    /// automation already exists in the store we leave the store alone
-    /// (the user has been editing in the UI; YAML is no longer truth).
+    /// One-time seed from the legacy YAML sections. The existence of the
+    /// canonical file is the migration marker, including when its persisted
+    /// value is an empty list because the user deleted every Automation.
     pub fn seed_from_legacy_if_empty(&mut self, cfg: &AxocoatlConfig) -> Result<bool, StoreError> {
-        if !self.by_id.is_empty() {
+        if self.initialized {
             return Ok(false);
         }
         let deps = |aid: &str| -> Vec<String> {
@@ -137,7 +265,7 @@ impl AutomationStore {
     }
 
     /// Atomic-write the store's JSON to disk.
-    fn persist(&self) -> Result<(), StoreError> {
+    fn persist(&mut self) -> Result<(), StoreError> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -151,6 +279,7 @@ impl AutomationStore {
             f.sync_all()?;
         }
         std::fs::rename(&tmp, &self.path)?;
+        self.initialized = true;
         Ok(())
     }
 
@@ -339,6 +468,7 @@ impl AutomationStore {
     }
 
     pub fn upsert(&mut self, a: Automation) -> Result<Automation, StoreError> {
+        validate_automation(&a)?;
         let id = a.id.clone();
         self.by_id.insert(id.clone(), a.clone());
         self.persist()?;
@@ -371,7 +501,9 @@ impl AutomationStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axocoatl_config::{AutomationNode, AutomationNodeKind, AutomationTrigger, NodeInput};
+    use axocoatl_config::{
+        AutomationEdge, AutomationNode, AutomationNodeKind, AutomationTrigger, NodeInput,
+    };
     use std::path::PathBuf;
 
     fn auto(id: &str) -> Automation {
@@ -446,6 +578,170 @@ mod tests {
     }
 
     #[test]
+    fn mutations_reject_cycles_without_replacing_the_canonical_record() {
+        let dir = tmpdir();
+        let p = dir.join("automations.json");
+        let mut store = AutomationStore::open(&p).unwrap();
+        let original = auto("cycle");
+        store.create(original.clone()).unwrap();
+
+        let mut cyclic = original;
+        cyclic.name = "must not persist".into();
+        cyclic.nodes.push(AutomationNode {
+            id: "n2".into(),
+            kind: AutomationNodeKind::Agent {
+                agent_id: "reviewer".into(),
+                input: NodeInput::FromTrigger,
+            },
+            position: None,
+        });
+        cyclic.edges = vec![
+            AutomationEdge {
+                from: "n1".into(),
+                to: "n2".into(),
+                label: None,
+            },
+            AutomationEdge {
+                from: "n2".into(),
+                to: "n1".into(),
+                label: None,
+            },
+        ];
+
+        let error = store.upsert(cyclic).unwrap_err();
+        assert!(matches!(error, StoreError::InvalidAutomation(_)));
+        assert!(error.to_string().contains("cycle"));
+        assert_eq!(store.get("cycle").unwrap().name, "cycle");
+        assert_eq!(
+            AutomationStore::open(&p)
+                .unwrap()
+                .get("cycle")
+                .unwrap()
+                .name,
+            "cycle"
+        );
+    }
+
+    #[test]
+    fn mutations_reject_invalid_or_zero_schedule_cadences() {
+        let dir = tmpdir();
+        let p = dir.join("automations.json");
+        let mut store = AutomationStore::open(&p).unwrap();
+        let mut scheduled = auto("scheduled");
+        scheduled.trigger = AutomationTrigger::Schedule {
+            every: "5m".into(),
+            input: Some("review".into()),
+        };
+        store.create(scheduled.clone()).unwrap();
+
+        for invalid in ["soon", "0s"] {
+            let mut update = scheduled.clone();
+            update.trigger = AutomationTrigger::Schedule {
+                every: invalid.into(),
+                input: None,
+            };
+            let error = store.upsert(update).unwrap_err();
+            assert!(matches!(error, StoreError::InvalidAutomation(_)));
+            assert!(error.to_string().contains("schedule cadence"));
+            assert!(matches!(
+                store.get("scheduled").unwrap().trigger,
+                AutomationTrigger::Schedule { ref every, .. } if every == "5m"
+            ));
+        }
+    }
+
+    #[test]
+    fn mutations_validate_map_body_and_subgraph_references() {
+        let dir = tmpdir();
+        let p = dir.join("automations.json");
+        let mut store = AutomationStore::open(&p).unwrap();
+
+        let mut missing_body = auto("missing-body");
+        missing_body.nodes.push(AutomationNode {
+            id: "map".into(),
+            kind: AutomationNodeKind::Map {
+                input: NodeInput::FromTrigger,
+                body_node: "does-not-exist".into(),
+            },
+            position: None,
+        });
+        let error = store.create(missing_body).unwrap_err();
+        assert!(error.to_string().contains("missing body node"));
+
+        let mut empty_body = auto("empty-body");
+        empty_body.nodes.push(AutomationNode {
+            id: "map".into(),
+            kind: AutomationNodeKind::Map {
+                input: NodeInput::FromTrigger,
+                body_node: " ".into(),
+            },
+            position: None,
+        });
+        let error = store.create(empty_body).unwrap_err();
+        assert!(error.to_string().contains("must name a body node"));
+
+        let mut unsupported_body = auto("unsupported-body");
+        unsupported_body.nodes.extend([
+            AutomationNode {
+                id: "input".into(),
+                kind: AutomationNodeKind::TextInput {
+                    label: "Input".into(),
+                    default_value: None,
+                    placeholder: None,
+                    multiline: false,
+                },
+                position: None,
+            },
+            AutomationNode {
+                id: "map".into(),
+                kind: AutomationNodeKind::Map {
+                    input: NodeInput::FromTrigger,
+                    body_node: "input".into(),
+                },
+                position: None,
+            },
+        ]);
+        let error = store.create(unsupported_body).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("must be an Agent, Tool, or Subgraph"));
+
+        let mut empty_subgraph = auto("empty-subgraph");
+        empty_subgraph.nodes.push(AutomationNode {
+            id: "nested".into(),
+            kind: AutomationNodeKind::Subgraph {
+                automation_id: "  ".into(),
+                input: NodeInput::FromTrigger,
+            },
+            position: None,
+        });
+        let error = store.create(empty_subgraph).unwrap_err();
+        assert!(error.to_string().contains("must name an Automation"));
+
+        let mut valid = auto("valid-map");
+        valid.nodes.extend([
+            AutomationNode {
+                id: "body".into(),
+                kind: AutomationNodeKind::Tool {
+                    tool_id: "echo".into(),
+                    input: NodeInput::FromMapItem,
+                },
+                position: None,
+            },
+            AutomationNode {
+                id: "map".into(),
+                kind: AutomationNodeKind::Map {
+                    input: NodeInput::FromTrigger,
+                    body_node: "body".into(),
+                },
+                position: None,
+            },
+        ]);
+        store.create(valid).unwrap();
+        assert!(store.get("valid-map").is_some());
+    }
+
+    #[test]
     fn delete_actually_persists() {
         let dir = tmpdir();
         let p = dir.join("automations.json");
@@ -457,6 +753,66 @@ mod tests {
         assert_eq!(s2.len(), 1);
         assert!(s2.get("a").is_none());
         assert!(s2.get("b").is_some());
+    }
+
+    #[test]
+    fn legacy_yaml_only_seeds_an_empty_store_once() {
+        let dir = tmpdir();
+        let p = dir.join("automations.json");
+        let mut store = AutomationStore::open(&p).unwrap();
+        let mut first = AxocoatlConfig::default();
+        first.workflows.push(axocoatl_config::WorkflowConfigYaml {
+            id: "review".into(),
+            name: "Review from YAML".into(),
+            agents: vec!["coder".into()],
+            entry_point: Some("coder".into()),
+            htn_methods_file: None,
+        });
+        assert!(store.seed_from_legacy_if_empty(&first).unwrap());
+
+        let mut edited = store.get("review").unwrap();
+        edited.name = "Edited in Settings".into();
+        store.upsert(edited).unwrap();
+
+        let mut changed_yaml = first.clone();
+        changed_yaml.workflows[0].name = "Changed YAML".into();
+        changed_yaml
+            .workflows
+            .push(axocoatl_config::WorkflowConfigYaml {
+                id: "late".into(),
+                name: "Should not appear".into(),
+                agents: vec!["coder".into()],
+                entry_point: None,
+                htn_methods_file: None,
+            });
+        assert!(!store.seed_from_legacy_if_empty(&changed_yaml).unwrap());
+        assert_eq!(store.get("review").unwrap().name, "Edited in Settings");
+        assert!(store.get("late").is_none());
+    }
+
+    #[test]
+    fn deleting_every_automation_does_not_reseed_legacy_yaml_after_reopen() {
+        let dir = tmpdir();
+        let p = dir.join("automations.json");
+        let mut config = AxocoatlConfig::default();
+        config.workflows.push(axocoatl_config::WorkflowConfigYaml {
+            id: "review".into(),
+            name: "Review from YAML".into(),
+            agents: vec!["coder".into()],
+            entry_point: Some("coder".into()),
+            htn_methods_file: None,
+        });
+
+        let mut first_boot = AutomationStore::open(&p).unwrap();
+        assert!(first_boot.seed_from_legacy_if_empty(&config).unwrap());
+        assert!(first_boot.get("review").is_some());
+        first_boot.delete("review").unwrap();
+        assert!(first_boot.is_empty());
+
+        let mut reopened = AutomationStore::open(&p).unwrap();
+        assert!(reopened.is_empty());
+        assert!(!reopened.seed_from_legacy_if_empty(&config).unwrap());
+        assert!(reopened.is_empty());
     }
 
     #[test]

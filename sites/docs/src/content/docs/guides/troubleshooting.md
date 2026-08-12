@@ -62,13 +62,15 @@ logs (`axocoatl dev` prints them) and `axocoatl agents status`.
 ## Daemon / IPC
 
 **A command says "requires a running daemon"**
-Only `agents restart` strictly needs one. Start `axocoatl dev` (IPC + HTTP) or
-`axocoatl serve` (HTTP only) in another terminal. Other commands fall back to
-an in-process daemon automatically.
+Session subcommands and `agents restart` need the persistent daemon. Start
+`axocoatl dev` or `axocoatl serve`; both expose IPC and HTTP. One-shot commands
+such as `chat` and workflow execution can fall back to an in-process daemon.
 
 **`axocoatl chat` connects in-process instead of via IPC**
-No daemon is running, or the socket is stale. Start `axocoatl dev`; it removes
-stale sockets on startup.
+No daemon is running at the stable per-user socket, or the configured
+`AXOCOATL_SOCKET_PATH` differs between processes. Start `axocoatl dev` or
+`axocoatl serve`; startup removes only a stale socket and refuses to replace a
+live daemon or a non-socket path.
 
 ## MCP
 

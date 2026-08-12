@@ -1,17 +1,18 @@
 ---
-title: HTTP API
-description: Every HTTP endpoint exposed by the Axocoatl daemon.
+title: HTTP API overview
+description: Selected app and integration endpoints exposed by the Axocoatl daemon.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-The daemon exposes a small REST + WebSocket surface on port 8080 by
-default. All endpoints assume the daemon is running locally; CORS is
-permissive on `localhost` and locked down elsewhere.
+The daemon exposes the browser app, REST endpoints, and a WebSocket on port
+8080 by default. The tables below cover the main integration surfaces; they
+are not an exhaustive generated route reference.
 
 <Aside type="caution">
-This page is currently hand-written. A future build step will auto-generate
-it from `axocoatl-server/src/routes.rs` so it never drifts.
+This page is hand-written. The router in `axocoatl-server/src/lib.rs` and the
+request/response types in the current source are authoritative for every
+route and field.
 </Aside>
 
 ## Health
@@ -21,7 +22,7 @@ it from `axocoatl-server/src/routes.rs` so it never drifts.
 | GET | `/health` | `{ status, agents }` — overall daemon health + agent count. |
 | GET | `/health/ready` | 200 if at least one agent is spawned; else 503. |
 | GET | `/health/live` | Always 200 — used by load balancers. |
-| GET | `/api/llm-health` | `{ ollama: { reachable, base_url, missing_models } }` — checked by the dashboard's first-run toast. |
+| GET | `/api/llm-health` | `{ ollama: { reachable, base_url, missing_models } }` — checked by the app's first-run toast. |
 
 ## Agents
 
@@ -37,10 +38,23 @@ it from `axocoatl-server/src/routes.rs` so it never drifts.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/workflows` | List configured workflows. |
-| POST | `/api/workflows/{id}/execute` | Fire a workflow; body `{ input }`. |
-| GET | `/api/automations` | List automations (workflows + schedules + proactive, unified). |
+| GET | `/api/workflows` | Compatibility view of manual records in the canonical Automation store. |
+| POST | `/api/workflows/{id}/execute` | Run a canonical manual Automation; body `{ input }`. |
+| GET | `/api/automations` | List records in the canonical automation store, which also drives live schedule, event, and Skill triggers. Legacy YAML is a first-boot seed only. |
+| POST | `/api/automations` | Create a canonical Automation. Automatic triggers become live without a restart. |
+| PUT/PATCH | `/api/automations/{id}` | Replace a canonical Automation; trigger edits affect subsequent dispatch. |
+| DELETE | `/api/automations/{id}` | Delete a canonical Automation and remove it from subsequent trigger matching. |
 | POST | `/api/automations/{id}/run` | Fire an automation by id. |
+| GET | `/api/schedules` | Compatibility projection of scheduled canonical automations, including next/last run and error state. |
+| PATCH | `/api/schedules/{id}` | Update enabled state, cadence, or input on the canonical automation record. |
+| POST | `/api/schedules/{id}/run` | Run the canonical scheduled automation immediately. |
+| GET | `/api/proactive` | Compatibility projection of canonical event-, Skill-, and legacy proactive-schedule automations. |
+
+Settings can create, inspect, edit, enable, disable, and run Automation records.
+Its **+ Automation** flow collects the record and trigger basics, then sends a
+valid Input → Agent starter DAG to `POST /api/automations`. The endpoint remains
+available for programmatic creation. Legacy YAML is a one-time seed only when no
+canonical store file exists.
 
 ## Skills
 
@@ -58,6 +72,47 @@ it from `axocoatl-server/src/routes.rs` so it never drifts.
 | GET | `/api/sessions/{id}/tree` | Get the session's file tree. |
 | POST | `/api/sessions/{id}/execute` | Send the session a user message. |
 
+## Attempts
+
+One session can have one unresolved attempt set. The daemon rejects another set or a
+normal session turn until the current set is kept or discarded. Set-scoped attempt
+endpoints return `409` for lifecycle conflicts. Status, diff, Routes, Checks, Judge,
+cost, Keep, and Discard carry `attempt_set_id`; a stale id returns `409` instead of
+touching the current set. `results` intentionally reads whichever set is current.
+
+Attempt execution currently requires a single-agent session and
+`sandbox.backend: podman`. Start rejects multi-agent and E2B sessions. Each attempt
+runs in an independent no-origin Git clone mounted alone in a dedicated Podman
+container; it does not share the primary repository's Git directory or the session
+container.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/sessions/{id}/variants` | Start several local-Podman attempts. Body `{ task?, input, n?, lanes? }`; `input` is the effective instruction and `task` preserves the original request. Returns the durable attempt set. |
+| GET | `/api/sessions/{id}/variants/results` | Read the durable current set, resolved attempt identities, lifecycle states, natural-language outputs, Checks verdicts, usage/cost records, and Judgment. This read does not start a closed session's sandbox. |
+| GET | `/api/sessions/{id}/variants/status?attempt_set_id=…` | Read each attempt's changed files. |
+| GET | `/api/sessions/{id}/variants/trajectories?attempt_set_id=…&baseline=0` | Align the attempts' recorded Routes. |
+| GET | `/api/sessions/{id}/variants/diff?attempt_set_id=…&index=0&path=…` | Read one file's before/after content for one attempt. |
+| POST | `/api/sessions/{id}/variants/verify` | Run Checks after every attempt is terminal. Body `{ attempt_set_id, check }`; an empty `check` uses the session's configured check command. |
+| POST | `/api/sessions/{id}/variants/judge` | Rank the passing, non-empty survivors. Body `{ attempt_set_id, provider, model? }`. |
+| POST | `/api/sessions/{id}/variants/adopt` | Keep one completed attempt whose Check passed with a non-empty change. Body `{ attempt_set_id, index }`; applies its delta without committing and resumes the same Keep transaction after a partial failure. |
+| POST | `/api/sessions/{id}/variants/discard` | Cancel/join and remove the set. Body `{ attempt_set_id }`. Rejected after Keep enters its apply phase; retry Keep instead. |
+| POST | `/api/sessions/{id}/variants/plan` | Produce a reviewable execution plan. Body `{ task, provider, model? }`. |
+| GET | `/api/variants/probe?provider=…&models=…` | Check whether selected models return structured tool calls. |
+| GET | `/api/sessions/{id}/variants/cost?attempt_set_id=…&baseline=…&baseline_provider=…` | Price recorded usage and an explicitly selected counterfactual. Pass `baseline_provider` to disambiguate local from remote models. |
+
+`total_usd` is complete only when `actual_cost_known` is true; otherwise it is the
+subtotal for attempts with known prices. `baseline_usd` has the independent
+`baseline_cost_known` flag. Ollama attempts are known-zero, while a remote model with
+no configured price remains unknown. `all_local` is true only after every attempt has
+usage and every persisted attempt provider is Ollama. These totals cover attempt
+execution; optional Plan first and Judge provider calls are not included.
+
+Keep persists `applying`, `applied`, and `transcript_recorded` phases. Retrying the
+same `{ attempt_set_id, index }` resumes the unfinished phase and cleanup. A different
+index conflicts once Keep begins. The chosen task and answer are appended exactly once
+to the single-agent session's checkpoint transcript.
+
 ## MCP
 
 | Method | Path | Purpose |
@@ -73,27 +128,27 @@ it from `axocoatl-server/src/routes.rs` so it never drifts.
 
 ## Live WebSocket
 
-`/ws` — bidirectional. Frames are JSON, all with a `kind` discriminator.
-Streams the dashboard consumes:
+`/ws` is bidirectional. Frames are JSON with a `kind` discriminator. The one
+app uses `snapshot`, `event`, `token`, `reasoning`, `tool-call`,
+`session-start`, `session-done`, `session-error`, and the
+`mcp-approval-required` / `mcp-approval-resolved` pair to restore and observe
+session work. An `event` frame is a typed runtime notification used for scoped
+run and Agent-graph state; the retired Studio event timeline is not a current
+browser surface.
 
-- `event` — a lattice coordination event (agent activated, task
-  completed, agent failed, …)
-- `token` / `reasoning` — streamed LLM tokens for an active workflow or
-  session.
-- `tool-call` — agent invoked a tool; arrives in two phases.
-- `workflow-done` / `workflow-error` — terminal frames for a workflow
-  run.
-- `session-start` / `session-done` / `session-error` — terminal frames
-  for a session run.
-- `chat-start` / `chat-token` / `chat-tool-start` / `chat-tool-result` /
-  `chat-done` / `chat-stopped` / `chat-error` — chat streaming frames.
-- `mcp-approval-required` / `mcp-approval-resolved` — MCP permission gate.
-
-Client-to-server frames include `run-workflow`, `mcp-approve`, `chat-stop`.
+The server also retains `workflow-done` / `workflow-error` and the
+`chat-start` / `chat-token` / `chat-tool-start` / `chat-tool-result` /
+`chat-done` / `chat-stopped` / `chat-error` frame family for compatibility
+clients. Likewise, client-to-server commands include the active `session`,
+`mcp-approve`, and `ping` commands plus retained `run-workflow`, `chat-turn`,
+and `chat-stop` compatibility commands. Those retained protocol paths do not
+make Studio, lightweight Chat, or cross-chat Files browser destinations in the
+one app.
 
 ## Static assets
 
-- `/` — the dashboard HTML.
+- `/` — the one-app HTML.
+- `/ui/{*file}` — embedded native UI modules and shared styles.
 - `/brand/{file}` — canonical brand assets (`mark.png`, `wordmark.png`, `favicon.png`, `colors.json`).
 - `/lattice/{file}` — the `@axocoatl/lattice` Web Component source.
 - `/vendor/{*file}` — vendored libs (Monaco, highlight.js, xterm, codicons).

@@ -26,9 +26,11 @@
 //! per-1K-token price to each so the cost contrast is concrete: the two local
 //! steps together cost a fraction of the single frontier step.
 //!
-//! The order the agents run in is **not scripted** — it emerges from the
-//! `EventLattice`, exactly like the `stigmergic-workflow` example. The new thing
-//! here is the *provider per agent*, not the coordination.
+//! The standalone binary drives its queue from `EventLattice`, exactly like the
+//! `stigmergic-workflow` example. That is a coordination-library demonstration;
+//! the live daemon runs the YAML's agents through its Lattice-session path in
+//! dependency order. The product capability demonstrated in both modes is the
+//! *provider per agent*.
 //!
 //! ## Mock mode (this binary) vs live mode (the YAML)
 //!
@@ -269,7 +271,7 @@ fn dag() -> Vec<AgentSpec> {
                             sub-questions a researcher should answer. Be terse.",
             reply: "CLASSIFICATION: technical / comparison request.\n  \
                     Sub-questions:\n  \
-                    1. What does Axocoatl coordinate, and how?\n  \
+                    1. What coordination pattern does this example show?\n  \
                     2. How does it differ from a central orchestrator?\n  \
                     Route: send to drafter for a first pass.",
         },
@@ -281,9 +283,9 @@ fn dag() -> Vec<AgentSpec> {
             system_prompt: "You are a drafter. Using the triage notes, write a quick, rough \
                             first-pass answer. Don't polish it — the synthesizer will.",
             reply: "DRAFT (rough):\n  \
-                    - Axocoatl coordinates agents via a shared EventLattice, not a controller.\n  \
-                    - Agents self-activate when accumulated signal crosses a threshold.\n  \
-                    - Unlike a central orchestrator, no component holds the run order.\n  \
+                    - This standalone run drives agents via a shared EventLattice.\n  \
+                    - The example queues ids when accumulated signal crosses a threshold.\n  \
+                    - The queue and completed guard remain explicit example code.\n  \
                     (notes terse, needs tightening + a clear contrast paragraph)",
         },
         // synthesizer: read triage + draft, produce the final answer. This is
@@ -297,22 +299,21 @@ fn dag() -> Vec<AgentSpec> {
                             the rough draft, then write the final, polished answer with a \
                             crisp contrast paragraph.",
             reply: "FINAL ANSWER:\n  \
-                    Axocoatl coordinates agents through a shared coordination space — the \
-                    EventLattice — rather than a central controller. Each agent registers an \
-                    activation threshold; when completion events deposit enough signal to \
-                    cross it, the agent self-activates. The running order is therefore an \
-                    emergent property of the signals, not a script.\n\n  \
-                    Contrast: a central orchestrator owns a plan and dispatches steps in a \
-                    fixed sequence; if it stalls, the whole run stalls. In Axocoatl no single \
-                    component holds the order, so the same DAG keeps making progress as long \
-                    as upstream signals keep landing. Verdict: ready to ship.",
+                    In this standalone run, agents register activation thresholds in an \
+                    EventLattice. Completion events deposit signal; the example queues an \
+                    agent when the lattice reports that its threshold crossed. The running \
+                    order therefore follows the signals while queue ownership remains explicit.\n\n  \
+                    Contrast: a central orchestrator can own a richer plan and dispatch policy. \
+                    This example deliberately demonstrates the smaller pheromone primitive, \
+                    while Axocoatl's product runtime executes configured Lattice sessions in \
+                    dependency order. Verdict: the example proves its library-level behavior.",
         },
     ]
 }
 
-/// `threshold = 0.5 × N` for downstream agents; entry agents get `1.0`. This is
-/// the exact rule the daemon uses (`lattice_params` in `axocoatl-daemon`), and
-/// it is the same rule the `stigmergic-workflow` example documents.
+/// `threshold = 0.5 × N` for downstream agents; entry agents get `1.0`. This
+/// matches the daemon's registered coordination metadata and the rule the
+/// `stigmergic-workflow` example documents.
 fn threshold_for(depends_on: &[&str]) -> f32 {
     if depends_on.is_empty() {
         1.0
@@ -360,8 +361,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Axocoatl: Multi-Provider Routing (local + frontier in one DAG) ===\n");
 
     let specs = dag();
-    let goal =
-        "Explain how Axocoatl coordinates agents and how that differs from a central orchestrator.";
+    let goal = "Explain the EventLattice pattern in this standalone example and contrast it with a central orchestrator.";
 
     // -----------------------------------------------------------------------
     // 1. Build the lattice and register each agent with its activation params,
@@ -378,7 +378,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let threshold = threshold_for(spec.depends_on);
         // decay_rate 0.0 — signals don't fade, so a join is exact: 0.5 + 0.5 is
         // exactly 1.0. Same deterministic setup the stigmergic-workflow example
-        // uses; the daemon defaults downstream agents to a small 0.01 decay.
+        // uses; daemon coordination metadata defaults downstream agents to a
+        // small 0.01 decay.
         lattice.register_agent(id.clone(), threshold, 0.0);
         deps_of.insert(
             id.clone(),
@@ -464,7 +465,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // -----------------------------------------------------------------------
-    // 4. Drive the cascade off the lattice — the same activation loop as the
+    // 4. Drive the standalone cascade off the lattice, as in the
     //    stigmergic-workflow example. Entry agents are kicked off directly;
     //    each completion publishes a TaskCompleted event; the lattice returns
     //    whoever just crossed their threshold; a `completed` guard stops re-runs.
@@ -482,7 +483,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(agent_id) = queue.pop_front() {
         if completed.contains_key(&agent_id) {
-            continue; // already ran — the completed guard, like the daemon's
+            continue; // already ran — the example's completed guard
         }
 
         // Build this agent's input from its upstream outputs (or the goal, if
@@ -576,7 +577,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    almost entirely on the one agent that needed the frontier model.
     // -----------------------------------------------------------------------
     println!("\n{}", "─".repeat(72));
-    println!("\nActivation order (emergent, not scripted):");
+    println!("\nActivation order reported by EventLattice:");
     for (i, id) in activation_order.iter().enumerate() {
         println!("  {}. {id}", i + 1);
     }

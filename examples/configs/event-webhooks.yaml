@@ -1,14 +1,15 @@
-# event-webhooks — outbound lattice event egress (signed webhooks)
+# event-webhooks — opt-in signed delivery of events from the lattice feed
 #
 # Prerequisites: ollama serve && ollama pull llama3.2
 #                export WEBHOOK_SECRET=any-value   # enables HMAC-SHA256 signing
 # Run:           axocoatl validate examples/configs/event-webhooks.yaml
 #                axocoatl dev -c examples/configs/event-webhooks.yaml
-# Expected:      validates; `axocoatl doctor` lists the webhook host so you can
-#                see exactly what leaves the box. When the workflow runs (fire it
-#                from the dashboard), each TaskCompleted / AgentFailed sends a
+# Expected:      validates; `axocoatl doctor` lists the configured webhook host.
+#                When the workflow runs (fire it
+#                from Settings), each TaskCompleted / AgentFailed sends a
 #                signed JSON POST to the URL. Remove the `webhooks:` section and
-#                the daemon makes zero outbound requests.
+#                the webhook dispatcher sends no requests; providers, model
+#                downloads, MCP, and sandbox tools are separate egress paths.
 
 agents:
   - id: researcher
@@ -26,7 +27,7 @@ agents:
     depends_on: [researcher]
 
 # Lattice event egress: the outbound counterpart to inbound A2A. Opt-in — with no
-# `webhooks:` section the daemon never makes an outbound request.
+# `webhooks:` section the webhook dispatcher sends no requests.
 webhooks:
   - name: deploy-alerts
     url: https://hooks.example.com/axocoatl

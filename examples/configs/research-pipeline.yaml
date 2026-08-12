@@ -3,8 +3,8 @@
 # Prerequisites: ollama serve && ollama pull llama3.2  (no API key needed)
 # Run:           axocoatl validate examples/configs/research-pipeline.yaml
 #                axocoatl dev -c examples/configs/research-pipeline.yaml
-# Expected:      summarizer activates automatically once researcher emits
-#                TaskCompleted on the lattice — no orchestrator, no manual wiring.
+# Expected:      on first boot, this legacy workflow seeds a manual Automation;
+#                its explicit DAG runs researcher before summarizer.
 
 agents:
   - id: researcher

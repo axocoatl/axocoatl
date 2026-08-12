@@ -1,9 +1,9 @@
 //! Lightweight chat conversations — the directoryless cousin of `Session`.
 //!
 //! A `Chat` is "agent + history" — no working directory, no sandbox, no
-//! dev-container. It's the surface for the Chat tab (talk-only with an
-//! agent) while [`crate::session::SessionMemory`] backs Sessions (build
-//! in a sandboxed directory).
+//! dev-container. It backs the retained lightweight-chat API while
+//! [`crate::session::SessionMemory`] backs workspace Sessions. The one app no
+//! longer exposes lightweight chats as a peer product destination.
 //!
 //! Why a separate store? `Session` carries `working_dir`, `mode`, `image`,
 //! `exposed_ports`, `post_create_commands` — all wrong-shape for casual
@@ -11,11 +11,18 @@
 //! every callsite. The persistence pattern (atomic temp+rename JSON write)
 //! is copied from `crates/axocoatl-session/src/lib.rs`.
 //!
-//! Branching: chats fork from any message index. The new chat copies the
-//! prefix and the user's edited message, then resumes from there. The
-//! parent stays intact. Checkpoints in [`crate::checkpoint`] are keyed by
-//! agent_id (one timeline per agent), and we deliberately do *not* touch
-//! that — chat history lives in the chat file.
+//! Transcript ownership: `ChatStore` is authoritative for a lightweight chat's
+//! Tier-1 history. Execution supplies that transcript in `SuppliedHistory` mode,
+//! which keeps normal streaming and tool execution but does not read, mutate, or
+//! checkpoint the configured actor's Tier-1 session. The configured agent's core
+//! and semantic memory remain shared across its chats by design, so this is
+//! verbatim-transcript isolation rather than a strict privacy boundary.
+//!
+//! Branching: chats fork from any message index. The new chat copies the prefix
+//! and the user's edited message, then resumes from there. The parent stays
+//! intact, and each side owns its subsequent writes. Checkpoints in
+//! [`crate::checkpoint`] are keyed by agent_id (one timeline per agent), and
+//! lightweight chats deliberately do *not* use that timeline as history.
 
 use crate::session::StoredMessage;
 use serde::{Deserialize, Serialize};
@@ -496,6 +503,39 @@ mod tests {
         assert_eq!(child.forked_at_message, Some(2));
         // Parent untouched.
         assert_eq!(store.get(&parent.id).unwrap().messages.len(), 4);
+
+        // Subsequent writes remain isolated in both directions. A fork owns a
+        // copied transcript, not a shared message buffer with its parent.
+        store
+            .append_message(&parent.id, msg(MessageRole::User, "parent-only"))
+            .unwrap();
+        let child_after_parent_write = store.get(&child.id).unwrap();
+        assert_eq!(child_after_parent_write.messages.len(), 3);
+        assert!(!child_after_parent_write
+            .messages
+            .iter()
+            .any(|m| m.content == "parent-only"));
+
+        store
+            .append_message(&child.id, msg(MessageRole::Assistant, "child-only"))
+            .unwrap();
+        let parent_after_child_write = store.get(&parent.id).unwrap();
+        assert_eq!(parent_after_child_write.messages.len(), 5);
+        assert_eq!(
+            parent_after_child_write.messages.last().unwrap().content,
+            "parent-only"
+        );
+        assert!(!parent_after_child_write
+            .messages
+            .iter()
+            .any(|m| m.content == "child-only"));
+
+        let child_after_own_write = store.get(&child.id).unwrap();
+        assert_eq!(child_after_own_write.messages.len(), 4);
+        assert_eq!(
+            child_after_own_write.messages.last().unwrap().content,
+            "child-only"
+        );
     }
 
     #[test]

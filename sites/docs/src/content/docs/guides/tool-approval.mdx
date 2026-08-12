@@ -1,6 +1,6 @@
 ---
 title: Tool approval
-description: "Human-in-the-loop approval for MCP tool calls: the approve/deny flow, persisted decisions, the 5-minute deny-on-timeout, and where it surfaces in the dashboard."
+description: "Human-in-the-loop approval for MCP tool calls: the approve/deny flow, persisted decisions, the 5-minute deny-on-timeout, and where it surfaces in the app."
 ---
 
 # Tool approval
@@ -15,7 +15,7 @@ through it unless a saved permission already says allow or deny.
 1. A tool dispatch checks the permission store for a recorded decision.
 2. If none exists, the approval gate parks the call, mints an `approval_id`, and
    fires a notifier — in the running server that's an `mcp-approval-required`
-   WebSocket frame, so the dashboard pops a modal.
+   WebSocket frame, so the app pops a modal.
 3. The tool call **blocks**, waiting on the human.
 4. The human clicks Allow or Deny in the modal. That resolves the approval over
    the WebSocket, and the tool dispatch resumes (running the tool, or returning a
@@ -47,8 +47,8 @@ resolves the same way — deny.
 
 ## Where it surfaces
 
-The prompt arrives as an `mcp-approval-required` frame on the dashboard's
-WebSocket connection, which renders the approval modal. The dashboard also
+The prompt arrives as an `mcp-approval-required` frame on the app's
+WebSocket connection, which renders the approval modal. The app also
 exposes a count of pending approvals for a "waiting" badge. The human's
 allow/deny (with its persistence scope) is sent back over the same WebSocket to
 resolve the specific `approval_id`.

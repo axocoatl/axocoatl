@@ -1,14 +1,14 @@
 # Axocoatl Architecture
 
-A practical overview of how Axocoatl runs and coordinates agents.
+A practical overview of how Axocoatl's one workbench runs and coordinates agents.
 
 ## The big picture
 
 ```
             ┌─────────────────────────── axocoatl daemon ───────────────────────────┐
- CLI / HTTP │  ProviderRegistry   AgentRegistry   EventLattice   McpToolRegistry     │
-   clients ─┼─▶ (per-agent LLMs)  (ractor actors)  (pheromones)   (MCP tools)         │
-   (IPC)    │        │                 │                │                            │
+ App / CLI  │  ProviderRegistry   AgentRegistry   EventLattice   McpToolRegistry     │
+ HTTP / WS ─┼─▶ (per-agent LLMs)  (ractor actors) (skills/events)  (MCP tools)         │
+    / IPC   │        │                 │                │                            │
             │        └──────── DefaultAgentBehavior ─────┘                            │
             │            session mem → budget → LLM → tools → checkpoint              │
             └────────────────────────────────────────────────────────────────────────┘
@@ -16,12 +16,154 @@ A practical overview of how Axocoatl runs and coordinates agents.
 
 The **daemon** (`axocoatl-daemon`) bootstraps everything: providers, agents
 (spawned as `ractor` actors), the event lattice, MCP connections, and the
-activation loop. `axocoatl dev` adds a Unix-socket IPC server; `axocoatl serve`
-exposes the HTTP API.
+canonical Automation trigger runtime. Both `axocoatl dev` and `axocoatl serve`
+expose the Unix-socket IPC server and HTTP/browser app from the same daemon
+state; `serve` is also what the installed background service runs.
+
+## Product surface
+
+The browser app at `/` is the operational face of the runtime and the only supported
+interactive browser route. A workspace is an authorized project directory; a session is
+persistent work and chat anchored to that directory. The session chat stays in the main
+area while files, editor, browser, activity, attempt comparison, git, terminal, and agent
+graph open around it. Agents, Skills, MCP servers, and Automations are configured through
+Settings.
+
+A request can execute as one session turn or as several isolated attempts with different
+agents and models. Attempts are checked and compared, one result is kept, and the resulting
+changes return to the session checkout for git review. See [PRODUCT.md](PRODUCT.md) for the
+interaction and terminology contract.
+
+The current runtime still contains separately evolved chat, directory-session,
+Automation, and attempt execution paths. A visually unified route does not make
+those state models identical. Changes at this seam must verify run identity,
+transcript ownership, reconnect, cancellation, persistence, and cleanup end to
+end.
+
+`AutomationStore` is the canonical persisted configuration for manual, scheduled, lattice-
+event, and Skill-triggered automations. Legacy workflow/schedule/proactive YAML seeds the store
+only when its canonical file does not exist; it is not a parallel live registry. One dispatcher
+reconciles store changes and lattice notifications for both `dev` and `serve`, prevents
+overlapping automatic runs of the same automation, and records last outcome/count/error in
+compatibility views. It clones an owned
+execution context before provider/tool work, so neither the store nor the daemon state lock is
+held across a run.
+
+## Attempt ownership and lifecycle
+
+A session may own one unresolved `AttemptSet` at a time. The set records its UUID,
+original task, effective instruction, snapshot commit/tree, resolved agent/provider/model for
+every lane, and creation time. Starting another set or sending another session turn conflicts
+until the current set is kept or discarded. This keeps one decision loop attached to one turn
+in the chat spine.
+
+Parallel attempts currently require a single-agent session on the local Podman backend. E2B
+and multi-agent modes remain available for normal session turns, but the daemon rejects an
+attempt-set start there until it can give every attempt the same filesystem, transcript, and
+cleanup guarantees.
+
+The base is a hidden commit built with an alternate Git index. It captures tracked changes and
+non-ignored untracked files—including the current staged and unstaged content—without changing
+the real index, branch, or working tree. A repository before its first commit is seeded from an
+empty tree. A hidden ref protects the snapshot for the set's lifetime.
+
+Each attempt receives an independent `--no-hardlinks` Git clone of that snapshot, checked out
+on a set-scoped branch. The setup-only branch and `origin` remote are removed from each clone,
+so it neither shares the primary repository's Git directory nor retains a route back to it.
+Set and session digests namespace the clone, branch, artifacts, actor, and container.
+
+Each clone is the sole workspace mount in a fresh rootless Podman container. The attempt actor
+therefore cannot reach the primary workspace, sibling attempts, or the metadata beside the
+clones through its repository tools. Every lane receives the same snapshot of the canonical
+single-agent session transcript through `SuppliedHistory`. The normal streamed tool loop
+remains available, but the request-local Tier-1 transcript is never checkpointed back into the
+canonical actor. It receives no writable shared core-memory blocks; any core and daily-log
+state belongs to the set-scoped actor rather than the canonical session actor. Skills, MCP
+tools, and configured web search are also withheld because those external effects do not yet
+have set-scoped rollback semantics; repository file, shell, and terminal tools remain
+available inside the attempt container.
+
+The set manifest, per-lane lifecycle, output, usage, and Route records are written to disk.
+Checks verdicts and Judgment are persisted with the same set. Queued or running lanes found
+without a live process after restart are reported as `interrupted`; completed, failed,
+cancelled, and interrupted are terminal. Checks require every lane to be terminal and run
+against each clone. Judge requires prior Checks, derives its candidates from passing,
+non-empty changes, and validates the returned ranks and winner against those survivors.
+
+**Keep** requires a completed attempt with a passing Check and a non-empty change. It first
+stops every attempt container and joins every lane task, then persists a resumable transaction:
+`applying` records the selected lane, `applied` means its binary delta is present in the primary
+working tree, and `transcript_recorded` means the transcript phase is complete and cleanup may
+finish. That phase durably appends the original task and chosen answer exactly once to the
+canonical single-agent transcript. A retry must select the same attempt. Keep does not merge or
+commit, so the changes remain available for normal git review.
+
+Cleanup removes only identities derived from the validated session, set, and attempt index.
+If transcript recording or cleanup fails after apply, the set remains unresolved and retrying
+the same Keep resumes from its durable phase. Discard is available before Keep begins: it stops
+the actors and containers, joins tasks, removes the set's clones and protected refs, and clears
+its artifacts and current pointer. Once Keep reaches `applying`, Discard is rejected so it
+cannot erase the evidence needed to finish or diagnose the transaction.
+
+Per-attempt usage records carry the model, provider, token counts, duration, price, and whether
+that price is known. Ollama is explicitly known-zero. An unconfigured remote price contributes
+only to a known subtotal and leaves `actual_cost_known` false; it is not presented as free.
+Counterfactual cost has a separate `baseline_cost_known` flag, and `all_local` is derived from
+the persisted provider identities rather than a zero-dollar total. These figures cover attempt
+execution; optional Plan first and Judge provider calls are reported as outside that total.
+
+## Automations
+
+`AutomationStore` (`{data_dir}/automations.json`) is the single runtime source for
+manual, scheduled, lattice-event, and Skill-triggered DAGs. When that canonical file
+does not exist, legacy `workflows:`, `schedules:`, and `proactive:` YAML seeds it once.
+An existing file remains authoritative even when the user has deleted every record;
+later YAML changes do not replace or resurrect Automations.
+
+One trigger runtime is started by both `axocoatl dev` and `axocoatl serve`. A single
+timer reconciles every `Schedule` record against the live store; one lattice
+subscriber matches `OnEvent` by canonical event type and `OnSkill` by exact
+`produced_by = skill:<id>`. It checks the current record again immediately before
+execution. Create, update, enable, cadence/event/Skill changes, and delete therefore
+affect subsequent dispatch without per-Automation tasks or stale runners.
+
+Event-triggered runs are single-flight. A cooldown begins at dispatch and is extended
+at completion, bounding a loop even when an Automation fires a Skill that publishes
+the event it consumes. Failures are recorded without terminating the shared dispatcher.
+Compatibility schedule/proactive tables are rebuildable observation caches for last
+run, count, outcome, and error; they never drive execution.
+
+Provider and tool calls use an owned `AutomationExecutionContext`. The daemon,
+Automation store, and observation locks are released before execution; only internally
+synchronized run dependencies are cloned into the context. Manual API, compatibility
+API, WebSocket, IPC, and CLI execution use the same boundary.
+
+Run history persists node checkpoints, including the diagnostic text for a failed node.
+On bootstrap, a persisted `running` record with no executor in the new process is changed
+durably to `failed` with an explicit restart reason; Axocoatl does not leave it looking
+active or imply that arbitrary in-flight work resumed. A completed run's `final_content`
+is the output of every executed runtime sink—an executed node with no activated edge to
+another executed node—joined in Automation declaration order. This is deterministic for
+disconnected or branched DAGs and includes terminal Tool, Map, and Subgraph results rather
+than selecting only the last Agent.
+
+A top-level `Interrupt` parks through one atomic run-store transition: the persisted
+status becomes `interrupted` in the same file replacement that appends the
+`interrupt_parked` checkpoint. Bootstrap scans those checkpoints and reconstructs the
+pending operator prompts. Resume restores saved outputs and active edges, completes the
+Interrupt, and continues without replaying completed nodes. New runs retain an immutable
+Automation snapshot and submitted TextInput values; older run files can use the current
+Automation after validating that the parked node is still an Interrupt.
+
+This recovery boundary is the operator pause, not arbitrary in-flight Automation work.
+A crash during a later provider or tool node does not reconstruct that call, and an
+Interrupt inside a nested Subgraph remains process-local because nested execution does
+not yet own an independent durable parent-continuation record.
 
 ## Agents
 
-Each agent is a `ractor` actor running `DefaultAgentBehavior`. On every turn:
+Each agent is a `ractor` actor running `DefaultAgentBehavior`. On an actor-owned
+conversation turn:
 
 1. Append input to **session memory** (Tier 1).
 2. **Compact context** automatically when the session approaches the model's
@@ -32,7 +174,8 @@ Each agent is a `ractor` actor running `DefaultAgentBehavior`. On every turn:
 4. **Token budget** pre-flight check (`abort` / `warn`) — the spend cap.
 5. Call the agent's **provider** (Ollama, OpenAI, Anthropic, …).
 6. Run any **tool calls** (built-in or MCP) with hooks, up to 10 iterations.
-7. **Checkpoint** the session to disk (Tier 2) for crash recovery.
+7. **Checkpoint** the session to disk for crash recovery. Checkpointing is separate
+   from the four memory tiers.
 
 The agent curates its core-memory blocks (Tier 3) during the conversation; the
 lossless raw is always preserved in Tiers 2 and 4.
@@ -50,36 +193,35 @@ costs tokens. The `overflow_policy` is purely the **spend cap** — context
 compaction toward the model window is automatic and independent of it.
 (`summarize` is accepted as a deprecated alias for `warn`.)
 
-## Stigmergic coordination
+## Multi-agent sessions and event lattice
 
-The differentiator. Agents declare `depends_on`; the daemon registers each in
-an `EventLattice` with a pheromone threshold:
+A session in `Lattice` mode uses the selected legacy `workflows:` record as an
+agent-membership definition. The daemon spawns session-scoped actors in the
+session's one sandbox and runs them in dependency order. The first agent receives
+the instruction; later agents receive that instruction plus the outputs already
+produced in the turn. `AgentActivated` and `TaskCompleted` frames are streamed
+under the session id so the app can follow the run. This is a bounded session
+execution path, not a background config-owned workflow runner.
 
-- **Entry agents** (`depends_on: []`) — activated directly by
-  `execute_workflow` with the user input.
-- **Downstream agents** — threshold = `N × 0.5` where N = number of
-  dependencies. Each upstream `TaskCompleted` event emits a signal of strength
-  `0.5`; when accumulated signal crosses the threshold, the agent activates and
-  receives its upstream outputs as context.
+`EventLattice` remains the typed event substrate. Skills publish into it; the
+canonical Automation dispatcher matches `OnEvent` and `OnSkill`; configured
+webhooks, the recent-events API, and WebSocket compatibility frames observe the
+same feed. Agent pheromone
+metadata and the reusable lattice primitives remain available to coordination
+code and runnable examples, but the daemon does not consume activated agent ids
+through a second workflow execution loop.
 
-There is **no scheduler**. Coordination emerges from events:
-
-```
-execute_workflow → activate entry agent
-   → agent completes → publish TaskCompleted
-       → lattice raises downstream pheromone signals
-           → threshold crossed → downstream agent activates
-               → … → all expected agents done → workflow returns
-```
-
-A cycle guard (`max_activations = agents × 3`) and acyclic-DAG validation make
-runaway activation impossible.
+The remaining reads of legacy `workflows:` are intentional: Lattice-session
+membership, coordinator worker/HTN selection, validation, and first-boot
+Automation migration. Legacy `schedules:` and `proactive:` records are validation
+and first-boot migration inputs only. None of these sections forms a parallel
+manual, scheduled, or event-triggered runtime after `AutomationStore` exists.
 
 ## Coordinator role
 
-Alongside emergent lattice coordination, an agent can take the **coordinator**
-role (`role: coordinator`) for explicit hierarchical decomposition. Each
-coordination pass (`CoordinatorBehavior`):
+Separately, an agent can take the **coordinator** role (`role: coordinator`)
+for explicit hierarchical decomposition. Each coordination pass
+(`CoordinatorBehavior`):
 
 1. **Decompose** the goal into subtasks. With HTN methods configured, planning
    is symbolic — an `HtnPlanner` expands compound tasks via its methods and an
@@ -103,17 +245,27 @@ The pass is **resumable**: the plan and each completed subtask are checkpointed
 re-doing finished work. Workers are always torn down after a pass — on success
 and on every error path — so no actor or task leaks, and a fully failed worker
 set surfaces an error rather than a hollow result. The underlying primitives
-(`axocoatl-coordination`: lattice, HTN, auction) run in sub-microsecond time and
-are independently tested.
+(`axocoatl-coordination`: lattice, HTN, auction) are independently tested.
 
 ## Memory tiers
 
 | Tier | What | Persistence |
 |---|---|---|
 | 1 — Session | conversation transcript | in-memory |
-| 2 — Checkpoint | agent state snapshots | disk (pruned to 3) |
+| 2 — Daily log | append-only activity by date | disk (JSONL) |
 | 3 — Core memory | agent-edited curated blocks | disk (JSON; per-agent + shared) |
 | 4 — Semantic | neural vector recall | disk (embeddings) |
+
+Checkpoint snapshots are stored separately and pruned to the latest three.
+
+**Transcript ownership.** The actor's session memory owns Tier-1 history for a
+normal agent conversation. Lightweight chats instead treat `ChatStore` as the
+authority for Tier-1 history and execute each turn in `SuppliedHistory` mode from
+that chat's stored transcript. This mode retains the full streaming and tool loop,
+but it does not read, write, or checkpoint the configured actor's Tier-1 session.
+The configured agent's core and semantic memory remain shared across its chats by
+design, so this separation protects verbatim transcripts; it is not a strict
+privacy boundary.
 
 Tier 4 runs a pure-Rust neural embedding model (`all-MiniLM-L6-v2`, 384-dim) on
 Candle — the ~90 MB model is downloaded once, with a feature-hash fallback when
@@ -164,9 +316,10 @@ over stdio, expose agents as an MCP server) and [`a2a-server`](../examples/a2a-s
 
 ## Security model
 
-A session runs the agent's tools inside a **rootless, daemonless Podman
-container**, not on the host. The threat model is deliberately narrow, and
-stated plainly so you know what it does and doesn't cover.
+On the default Podman backend, a session runs the agent's tools inside a
+**rootless, daemonless Podman container**, not directly on the host. The threat
+model is deliberately narrow, and stated plainly so you know what it does and
+doesn't cover.
 
 **What the sandbox contains — the blast radius of a mistaken or misbehaving
 agent:**
@@ -179,8 +332,10 @@ agent:**
   drops the escape/recon capabilities (`SYS_ADMIN`, `SYS_PTRACE`, `NET_ADMIN`,
   `NET_RAW`, `DAC_READ_SEARCH`, …), so a setuid binary can't escalate and the
   classic namespace/mount escape levers are gone.
-- **Network.** Untrusted runs start with `--network none` — no outbound
-  connections at all. Bridged networking is opt-in, per policy.
+- **Network.** The default is bridged networking so installs and development
+  servers work. Set `sandbox.network: none` for an untrusted workspace that must
+  have no outbound connection; this also disables network-dependent setup and
+  tools in that session.
 - **Resources.** Memory, CPU, and PID caps (2 GB / 2 CPUs / 512 pids) bound a
   runaway loop or fork bomb, where the host's cgroup delegation allows it.
 
@@ -200,15 +355,18 @@ agent:**
 
 ### Isolation backends (local-first by default; you choose the sandbox)
 
-The sandbox is pluggable behind one trait, chosen per session with
+The sandbox is pluggable behind one trait, selected for this daemon configuration with
 `sandbox.backend`. The tools never know which backend they run on.
 
-- **`podman` (default).** The local, rootless container described above. Nothing
-  leaves your machine.
+- **`podman` (default).** The local, rootless container described above. Tool
+  execution stays on the machine, but its default bridged network permits
+  outbound traffic; use `sandbox.network: none` when that traffic must be blocked.
 - **`e2b`.** A remote, E2B-compatible microVM — E2B cloud **or a self-hosted
-  CubeSandbox on your own cluster**. Use it when you want tool execution to run
-  off-box (throwaway compute, a clean remote environment, many parallel lanes).
-  It's opt-in and per-session; the default stays local.
+  CubeSandbox on your own cluster**. Use it when you want a normal session's tool
+  execution to run off-box in throwaway, clean compute. It is opt-in; the default stays
+  local. Parallel attempts currently reject this configured backend and require a
+  single-agent session on local Podman so every attempt can receive an independent clone,
+  container, and canonical transcript snapshot.
 
   A **git-repo** session is reproduced *git-natively*: the microVM `git clone`s
   the repo from a clean, committed branch over https. The git token

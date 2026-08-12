@@ -1,5 +1,5 @@
 /* Axocoatl docs theme — kept in lockstep with the marketing site's
-   tokens.css and the dashboard's brand-derived palette.  Dark mode is
+   tokens.css and the workbench's brand-derived palette.  Dark mode is
    the Apple-style pure-neutral scale (#000 → #1C1C1E → #2C2C2E);
    light mode is warm parchment cream.  No off-brand blue or brown
    tints — the only color in the page is the brand jade accent.        */
@@ -33,7 +33,7 @@
   /* Apple-style pure-neutral gray scale.  gray-1 is highest contrast
      against the background (used for primary text), gray-6 is the
      darkest (used for page bg).  In between scales card / raised /
-     border surfaces, identical to the dashboard's --bg / --bg-2 /
+     border surfaces, identical to the workbench's --bg / --bg-2 /
      --bg-3 / --panel / --panel-2 / --border tokens.                  */
   --sl-color-white:   #FFFFFF;
   --sl-color-gray-1:  #ECECEC;

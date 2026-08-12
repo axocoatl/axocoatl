@@ -16,11 +16,14 @@ Closes #...
 
 ## How this was tested
 
-- [ ] `cargo fmt --check`
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings`
+- [ ] `cargo fmt --all -- --check`
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - [ ] `cargo test --workspace`
-- [ ] If the dashboard changed: rebuilt, restarted daemon, walked through
-  every visible tab, watched the browser console.
+- [ ] `cargo test --doc --workspace`
+- [ ] `cargo build -p axocoatl-cli`
+- [ ] If the browser app changed: rebuilt the CLI, restarted the daemon,
+  exercised the affected journey in the one app, and checked the browser
+  console plus relevant light, dark, narrow, and reduced-motion states.
 - [ ] If a new agent/skill/tool was added: ran an end-to-end demo against
   it locally.
 
@@ -35,3 +38,4 @@ describe the impact and the migration path here. Otherwise: "None."
 - [ ] New code has tests where it makes sense.
 - [ ] `CHANGELOG.md` updated under `[Unreleased]` for any user-visible change.
 - [ ] Docs updated if behavior or setup changed.
+- [ ] Any consolidated capability remains discoverable and usable end to end.

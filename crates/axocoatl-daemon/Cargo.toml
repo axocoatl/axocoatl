@@ -30,7 +30,6 @@ axocoatl-coordination = { version = "0.1.0", path = "../axocoatl-coordination" }
 axocoatl-mcp = { version = "0.1.0", path = "../axocoatl-mcp" }
 axocoatl-session = { version = "0.1.0", path = "../axocoatl-session" }
 axocoatl-isolation = { version = "0.1.0", path = "../axocoatl-isolation" }
-dashmap = { workspace = true }
 uuid = { workspace = true }
 ractor = { workspace = true }
 tokio = { workspace = true }
@@ -48,3 +47,4 @@ hex = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 wiremock = { workspace = true }
+tempfile = "3.27"

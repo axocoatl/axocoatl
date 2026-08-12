@@ -48,7 +48,7 @@ impl AgentRegistry {
     /// the daemon's supervision loop uses to trigger a restart-from-checkpoint.
     pub async fn is_alive(&self, id: &AgentId) -> bool {
         match self.get(id).await {
-            Some(actor) => !matches!(actor.get_status(), ractor::ActorStatus::Stopped),
+            Some(actor) => actor.get_status() < ractor::ActorStatus::Stopping,
             None => false,
         }
     }

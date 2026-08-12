@@ -1,13 +1,13 @@
-# Proactive Agents — scheduled runs and event-triggered automation
+# Automatic Automations — legacy seed and event guards
 
-Most of Axocoatl runs **reactively**: something hands an agent input, the agent
-runs, it stops. **Proactive agents** are the autonomous half — nobody prompts
-them. They sit on the `EventLattice` and act on their own when a **trigger**
-fires:
+Axocoatl persists one canonical `AutomationStore`. Its graphs can run manually,
+on a fixed interval, when a lattice event type matches, or when a specific Skill
+publishes. `axocoatl dev` and `axocoatl serve` use the same live dispatcher.
 
-- `trigger.type: schedule` — wake on a fixed interval (`every: 30s`, `1h`, …).
-- `trigger.type: on_event` — wake whenever a named lattice event occurs
-  (e.g. `AgentFailed`).
+The old `workflows:`, `schedules:`, and `proactive:` YAML shapes remain as
+first-boot migration input. When `automations.json` does not exist, the daemon projects
+them into canonical records once. From then on, Settings and `/api/automations` own live
+edits; config reload is not another trigger registry.
 
 This is the *agent-acts-on-its-own* half of **Always-On**. The other half is the
 Always-On **Service** (`axocoatl service install`), which keeps the daemon
@@ -18,8 +18,8 @@ agents make the agents *act* while that process runs.
 
 | File | What it is |
 |------|------------|
-| `main.rs` | A self-contained mock demo: a simulated `AgentFailed` event activates an ops agent, with the same gating the daemon applies. |
-| `axocoatl.proactive.example.yaml` | A real config (parses against the live schema) with **both** a `schedules:` block and a `proactive:` block. |
+| `main.rs` | An offline mock: parses legacy YAML, projects canonical Automations, then illustrates event-name, enabled, and cooldown guards on a real lattice and actor. It is not the production dispatcher. |
+| `axocoatl.proactive.example.yaml` | Valid first-boot migration input containing legacy workflow, schedule, and proactive records. |
 
 ## Run the demo
 
@@ -32,29 +32,34 @@ No API keys — it uses a mock LLM. The demo:
 1. Loads `axocoatl.proactive.example.yaml` through the **real**
    `axocoatl_config::parse_config` (the same parser the daemon uses), so the
    YAML is validated against the live schema.
-2. Reads the two real `proactive:` entries it parsed.
-3. Spawns the `ops` agent as a real `ractor` actor and wires an event-triggered
-   runner onto a real `EventLattice`. The runner mirrors
-   `crates/axocoatl-daemon/src/proactive.rs`: event-name match → `enabled` gate →
-   cooldown → fire.
-4. Publishes events and shows what the watcher does with each.
+2. Projects those sections through `Automation::from_legacy`, the conversion used
+   to seed `AutomationStore`.
+3. Spawns the projected `ops` Agent node as a real `ractor` actor.
+4. Publishes on a real `EventLattice` and illustrates event-name match → canonical
+   `enabled` gate → demo cooldown → actor activation.
+
+Production adds the pieces an offline helper cannot prove: one store-watching
+schedule/event/Skill dispatcher, a live pre-execution record check, single-flight
+ownership, and cooldown at both dispatch and completion.
 
 ### Expected output
 
 ```
-=== Axocoatl: Proactive Agents (schedule + on_event triggers) ===
+=== Axocoatl: legacy triggers → canonical Automations ===
 
 Loaded .../axocoatl.proactive.example.yaml (parsed by axocoatl_config::parse_config — the same parser the daemon uses).
   2 agent(s), 1 workflow(s), 1 schedule(s), 2 proactive agent(s).
 
-Proactive agents on this config:
-  • hourly-briefing [enabled ] agent=secretary  trigger=schedule  · every 30s
-  • failure-watch  [enabled ] agent=ops        trigger=on_event  · AgentFailed
+First-boot AutomationStore projection:
+  - daily-briefing         [enabled ] nodes=1  trigger=manual
+  - pro:failure-watch      [enabled ] nodes=1  trigger=on_event · AgentFailed
+  - pro:hourly-briefing    [enabled ] nodes=1  trigger=schedule · every 30s
+  - sched:briefing-run     [enabled ] nodes=1  trigger=schedule · every 30s
 
 ...
 
 [1] Publishing a lattice event: AgentFailed (coder timed out)
-    ⚡ 'failure-watch' ACTIVATED — `AgentFailed` matched its on_event trigger.
+    'pro:failure-watch' ACTIVATED — `AgentFailed` matched its OnEvent trigger.
     The ops agent ran with its diagnostic prompt:
 
       DIAGNOSIS
@@ -76,64 +81,58 @@ Proactive agents on this config:
     SKIPPED (cooldown) — the cooldown stops a failure storm from re-firing ...
 
 [4] Setting enabled=false on the watcher, then publishing AgentFailed again
-    SKIPPED (disabled) — toggling `enabled` takes effect live ...
+    SKIPPED (disabled) — the canonical `enabled` gate prevents the run ...
 
 4 events published; the watcher fired 1 time(s). ...
 ```
 
-The headline is event `[1]`: a simulated `AgentFailed` causes the ops agent to
-**activate on its own** with a diagnostic prompt — no user, no orchestrator, the
-lattice did it. Events `[2]`–`[4]` show the three guardrails the daemon applies:
-wrong-type events are ignored, a second failure inside the cooldown window is
-suppressed (this is what stops a self-loop if the diagnosis itself emits
-`AgentFailed`), and a disabled watcher ignores its trigger.
+Event `[1]` shows the data path: a simulated `AgentFailed` activates the projected
+Agent node with its diagnostic prompt. Events `[2]`–`[4]` illustrate the matching,
+cooldown, and enabled principles. The production guarantees come from
+`automation_runtime`, not this example-only delivery helper.
 
-## proactive vs the `schedules:` section
+## What the legacy sections become
 
-`axocoatl.yaml` has **two** background-automation blocks. They are not the same:
+The seed conversion preserves the old intent while producing one runtime shape:
 
-| | `schedules:` | `proactive:` |
-|---|---|---|
-| Fires a… | whole **workflow** (a multi-agent DAG) | single **agent** |
-| Trigger types | time only (`every:`) | time **or** event (`schedule` / `on_event`) |
-| Targets | a `workflows:` entry by id | one `agent:` directly |
+| Legacy input | Canonical record |
+|---|---|
+| `workflows:` | Manual Automation with Agent nodes and dependency edges. |
+| `schedules:` | `sched:<id>` Schedule Automation containing the referenced workflow graph. |
+| `proactive:` | `pro:<id>` Schedule or OnEvent Automation with one Agent node. |
 
-A **schedule** is "re-run this pipeline on a clock." A **proactive agent** is
-"let this one agent watch the world and act when something happens." Use a
-schedule for a recurring multi-step job (nightly release checks); use a
-proactive agent for an autonomous watcher (diagnose every failure) or a single
-recurring touch (hourly status briefing).
-
-For scheduled multi-agent DAGs and the lattice mechanics behind them, see the
-`stigmergic-workflow` example.
+After import, any record can be edited into a richer graph or changed to Manual,
+Schedule, OnEvent, or OnSkill in Settings. The YAML sections are not consulted
+again unless a later daemon starts with a fresh data directory that has no
+`automations.json` file.
 
 ## Run it in a real daemon
 
-The same config runs under the daemon (this needs a provider — Ollama by
-default, or edit `providers:` for a hosted key):
+Use a fresh data directory to demonstrate first-boot import. This needs Ollama by
+default, or a configured hosted provider:
 
 ```bash
 # Validate the config against the real schema first.
 axocoatl validate examples/proactive-agents/axocoatl.proactive.example.yaml
 
-# Run it in development mode (verbose logs, foreground).
-axocoatl dev -c examples/proactive-agents/axocoatl.proactive.example.yaml
+# Import once, start the canonical runtime, and open the app.
+AXOCOATL_DATA_DIR=/tmp/axocoatl-proactive-example \
+  axocoatl dev -c examples/proactive-agents/axocoatl.proactive.example.yaml
 ```
 
-With the daemon running you'll see (via `tracing`):
+With the daemon running:
 
-- `proactive agent firing` log lines each time a trigger fires — the
-  `hourly-briefing` schedule wakes every `30s` (set to `1h` in production), and
-  `failure-watch` fires whenever an `AgentFailed` event lands on the lattice.
-- Live per-agent state (the `ProactiveState` table — `config`,
-  `last_fired_unix`, `last_outcome`, `run_count`), which the daemon exposes at
-  `/api/proactive`.
+- **Settings → Automations** shows the four projected records.
+- `/api/schedules` and `/api/proactive` project compatibility views with last
+  run, outcome, error, and count observations.
+- The `pro:hourly-briefing` and `sched:briefing-run` records fire every `30s`.
 
 ### Enabling / disabling
 
-Each proactive entry has an `enabled` flag. The daemon reads it **live** on every
-fire, so toggling it (via the dashboard or by editing the config and reloading)
-takes effect without a restart — exactly what event `[4]` in the demo shows.
+Toggle the canonical record in **Settings → Automations** or update it through
+`/api/automations/{id}`. The shared dispatcher sees the persisted change without
+a daemon restart. Editing the YAML or reloading config does not update an existing
+Automation store.
 
 ### Install as an Always-On Service
 
@@ -149,8 +148,8 @@ axocoatl service stop
 axocoatl service uninstall
 ```
 
-The **Service** keeps the *process* alive; the **proactive agents** make the
-agents *act* while it's alive. You need both for true always-on autonomy.
+The **Service** keeps the process alive. The same canonical Automation runtime
+used by `dev` and `serve` decides what fires while that process is alive.
 
 ## Tuning for local testing
 

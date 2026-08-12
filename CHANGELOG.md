@@ -8,21 +8,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Per-agent sampling config.** Agents accept `temperature`, `top_p`,
-  `max_tokens`, and `response_format` in YAML, forwarded to the provider.
+- **One browser workbench at `/`.** A persistent workspace/session rail and chat
+  spine now host Files, Activity, Attempts, Terminal, Browser, Agent graph, git,
+  and Settings as modules instead of peer product destinations.
+- **Heterogeneous attempts in a session.** A turn can select a different agent and
+  model for each attempt, show live state across sessions, compare Outcome and
+  Route, run a stored repository check command, and keep a result in the session
+  checkout. Parallel attempts currently require a single-agent session on local
+  Podman; E2B and multi-agent modes remain available for normal session execution.
+- **Native embedded UI modules.** The browser app now uses buildless custom elements
+  under `axocoatl-server/static/ui/`, served from `/ui/*` as native ES modules.
+- **Pluggable session isolation.** Rootless Podman remains the local default; an
+  E2B-compatible remote sandbox is an opt-in configured backend for normal sessions.
+- **Opt-in provider rate-limit fallback.** A configured `provider:model` backup is
+  tried once when the primary rate-limits before streaming any tokens.
+- **Per-agent sampling config.** Default-agent executions accept `temperature`,
+  `top_p`, `max_tokens`, and `response_format` in YAML. Provider support varies,
+  and the coordinator path does not currently carry these settings.
 - **Per-request overrides on agent execute.** `POST /api/agents/{id}/execute`
   accepts optional `system_override` and `model_override` for a single call.
 - **Stateless per-request execution.** An isolated one-shot mode that runs a
   request without persisting to the agent's session, memory, or checkpoints —
   useful for evaluation.
-- **Outbound event webhooks.** The lattice can POST signed (HMAC-SHA256) events
-  to configured endpoints, with bounded retries and secret redaction. Opt-in —
-  a default install makes no outbound webhook requests.
+- **Outbound event webhooks.** An opt-in dispatcher can POST signed
+  (HMAC-SHA256) events from the lattice feed to configured endpoints, with
+  bounded retries and secret redaction. A default install makes no outbound
+  webhook requests.
+- **One live automation runtime.** `AutomationStore` now drives manual,
+  interval, lattice-event, and Skill triggers in both `dev` and `serve`. CRUD,
+  enable/disable, cadence, and trigger edits reconcile without a restart;
+  legacy workflow/schedule/proactive YAML seeds a missing store file once instead of
+  registering a second set of runners.
+- **Automation creation in Settings.** The Automation explorer can create a
+  canonical manual, interval, event, or Skill-triggered record with a valid
+  Input → Agent starter DAG, then open it directly in the graph editor.
 
 ### Fixed
+- **Automation editor validity and dialog access.** Map nodes now require an
+  Agent, Tool, or Subgraph body; Subgraph nodes require a known Automation.
+  Invalid references block save and run with inline guidance. Settings dialogs
+  have accessible names, contain keyboard focus, and restore prior focus when
+  they close.
+- **Durable, deterministic Automation outcomes.** Bootstrap marks orphaned
+  persisted `running` records as `failed` with a retained restart reason, and
+  failed-node checkpoint diagnostics survive reload. Completed output now joins
+  all executed runtime sinks in declaration order, including terminal Tool,
+  Map, and Subgraph results.
+- **Restart-safe Automation approvals.** Top-level runs parked at an Interrupt
+  are rebuilt from their durable checkpoint after daemon restart, reappear in
+  the rail, and continue after operator input without replaying completed nodes.
+  New runs persist an immutable Automation/input snapshot, while run status and
+  Interrupt checkpoints transition through one atomic file replacement. The
+  Runs drawer now bypasses stale browser cache and polls open history in place.
+- **Deterministic attempt judging.** Judge prompts now require every surviving
+  attempt exactly once with unique ranks `1..N`, using the lower attempt index
+  as the deterministic tie-break when outcomes are otherwise equivalent.
+- **One live Automation runtime.** The persisted Automation store now drives manual,
+  scheduled, lattice-event, and Skill-triggered execution in both `dev` and `serve`.
+  Store edits take effect without restart, legacy YAML is first-boot seed data only,
+  compatibility workflow/schedule/proactive endpoints project canonical records, and
+  provider execution no longer holds the daemon or store lock. Automatic runs are
+  single-flight, cool down at dispatch and completion, and retain last-run/count/error
+  observations without letting one failure stop trigger dispatch.
+- **Attempt-set ownership, isolation, and cleanup.** Parallel attempts now create a
+  hidden snapshot of tracked changes and non-ignored untracked files, then give every
+  attempt an independent no-origin Git clone in a dedicated Podman container. Durable
+  set identity namespaces actors, clones, containers, and artifacts; persisted lane
+  state, natural-language outputs, and review evidence survive reloads; stale actions
+  conflict; and cleanup stops containers and joins actors before removing exact derived
+  paths. Attempt actors receive one request-local snapshot of the canonical session
+  history, cannot write shared core memory, and do not receive Skills, MCP tools, or
+  configured web search while those effects lack set-scoped rollback.
+- **Resumable Keep and honest attempt cost.** Keep now requires a completed,
+  non-empty attempt with a passing Check, records `applying`, `applied`, and
+  `transcript_recorded` phases, and resumes the same selected attempt after an apply,
+  transcript, or cleanup failure. It leaves the delta uncommitted for git review.
+  Ollama is known-zero; incomplete usage and unconfigured remote prices remain
+  explicitly unknown instead of appearing as a complete `$0.00` total.
+- **Lightweight chat transcript isolation.** Separate chats and forks now run from
+  their own stored history instead of the configured agent's live or
+  checkpoint-restored Tier-1 transcript.
+- **One persistent daemon surface.** `serve` now starts the same IPC service as
+  `dev`, so the installed background service supports session-oriented CLI
+  commands as well as the browser/API. The default socket is stable per user,
+  protected by owner-only permissions, and startup will not unlink a live daemon
+  or a non-socket path. Service definitions run from the config directory so
+  relative runtime data stays attached to that project.
+- **Source-build instructions** now target `axocoatl-cli`, the package that produces
+  the binary and embeds the browser app. A root-only build compiles the placeholder
+  workspace package and can otherwise leave stale UI bytes.
 - **Coordinator decomposition parsing** now tolerates the surrounding prose that
   reasoning models emit around the JSON subtask list.
 - **macOS workspace build** for `axocoatl-isolation`.
+
+### Removed
+- The standalone `/app` and page-level `/variants` product shells. Their workflows
+  now live in the session-centered app at `/`, the only interactive browser route.
+- The Studio destination, directoryless lightweight Chat destination, and
+  cross-chat Files browser destination from the one-app navigation. Their
+  underlying lattice, chat, FileStore, REST, and WebSocket compatibility
+  surfaces remain available to integrations; they are not hidden product pages.
 
 ## [0.1.4] — 2026-06-13
 
