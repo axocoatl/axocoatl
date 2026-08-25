@@ -1,0 +1,4 @@
+DOMPurify 3.4.13
+Copyright (c) Cure53 and other contributors.
+Released under the Apache License 2.0 or Mozilla Public License 2.0.
+Source: https://github.com/cure53/DOMPurify/tree/3.4.13

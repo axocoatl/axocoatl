@@ -6,7 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
@@ -14,12 +13,12 @@ readme.workspace = true
 description = "Actor-based agent runtime for Axocoatl, built on ractor"
 
 [dependencies]
-axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
-axocoatl-llm = { version = "0.1.0", path = "../axocoatl-llm" }
-axocoatl-token = { version = "0.1.0", path = "../axocoatl-token" }
-axocoatl-memory = { version = "0.1.0", path = "../axocoatl-memory" }
-axocoatl-tools = { version = "0.1.0", path = "../axocoatl-tools" }
-axocoatl-coordination = { version = "0.1.0", path = "../axocoatl-coordination" }
+axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
+axocoatl-llm = { version = "1.0.0", path = "../axocoatl-llm" }
+axocoatl-token = { version = "1.0.0", path = "../axocoatl-token" }
+axocoatl-memory = { version = "1.0.0", path = "../axocoatl-memory" }
+axocoatl-tools = { version = "1.0.0", path = "../axocoatl-tools" }
+axocoatl-coordination = { version = "1.0.0", path = "../axocoatl-coordination" }
 ractor = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
@@ -32,7 +31,8 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 
 [dev-dependencies]
+async-stream = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros"] }
 tokio-stream = { workspace = true }
-axocoatl-config = { version = "0.1.0", path = "../axocoatl-config" }
+axocoatl-config = { version = "1.0.0", path = "../axocoatl-config" }
 tempfile = "3.27"

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "film": "workspace-sessions-turns",
+  "input_fps": 8,
+  "shots": [
+    {
+      "beat": "workspace",
+      "source": "shot-workspace.jpg",
+      "hold_frames": 56
+    },
+    {
+      "beat": "two-sessions",
+      "source": "shot-two-sessions.jpg",
+      "hold_frames": 64
+    },
+    {
+      "beat": "accepted-turn",
+      "source": "shot-accepted-turn.jpg",
+      "hold_frames": 64
+    },
+    {
+      "beat": "restored-turn",
+      "source": "shot-restored-turn.jpg",
+      "hold_frames": 72
+    }
+  ]
+}

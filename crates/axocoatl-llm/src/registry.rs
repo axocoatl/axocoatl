@@ -55,7 +55,8 @@ mod tests {
     }
 
     impl MockProvider {
-        fn new(id: &str) -> Arc<dyn LlmProvider> {
+        /// Returns the mock already boxed as a provider (not `Self`).
+        fn arc(id: &str) -> Arc<dyn LlmProvider> {
             Arc::new(Self { id: id.to_string() })
         }
     }
@@ -88,7 +89,7 @@ mod tests {
     #[test]
     fn register_and_get_provider() {
         let mut registry = ProviderRegistry::new();
-        registry.register(MockProvider::new("openai"));
+        registry.register(MockProvider::arc("openai"));
         assert!(registry.get("openai").is_some());
         assert!(registry.get("anthropic").is_none());
     }
@@ -96,8 +97,8 @@ mod tests {
     #[test]
     fn list_provider_ids() {
         let mut registry = ProviderRegistry::new();
-        registry.register(MockProvider::new("openai"));
-        registry.register(MockProvider::new("anthropic"));
+        registry.register(MockProvider::arc("openai"));
+        registry.register(MockProvider::arc("anthropic"));
         let mut ids = registry.provider_ids();
         ids.sort();
         assert_eq!(ids, vec!["anthropic", "openai"]);

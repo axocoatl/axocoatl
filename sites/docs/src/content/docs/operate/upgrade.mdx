@@ -1,0 +1,101 @@
+---
+title: Upgrade
+description: Upgrade the binary with a cold backup and explicit validation; understand the narrow checkpoint compatibility path and absence of general migration or rollback commands.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Axocoatl has no general `upgrade`, schema-migration, or rollback command. Treat
+a binary replacement as an operator-controlled change with a cold backup. The
+automatic 0.1 compatibility surface is deliberately narrow:
+
+- A pre-1.0 single-agent checkpoint transcript can be imported into canonical
+  Session History. The 0.1.x Bincode format takes precedence if markerless bytes
+  are also valid temporary unframed Postcard; unframed Postcard is selected only
+  when that exact legacy reader does not match.
+- Current checkpoints, Agent memory, and Automation run history use portable,
+  versioned namespaces. On supported Unix hosts, a store may read its one bounded
+  exact-name legacy location after validating the record identity or format as
+  applicable. Writes go only to the current namespace and leave the legacy source
+  intact.
+- Before mutable Session state is read, bootstrap holds both current and 0.1-compatible
+  data-root leases plus the directory-inode lock. It removes by immutable id only
+  non-current reserved-name Podman containers whose inspected bind mounts expose the
+  data or lease root, then verifies the retained directory identities before continuing.
+
+These paths do not replace a complete backup or establish general forward/backward
+schema compatibility.
+
+## Upgrade procedure
+
+<Steps>
+
+1. Record the current version and service status:
+
+   ```sh
+   axocoatl --version
+   axocoatl service status
+   ```
+
+2. Finish active work, stop the daemon, and make a
+   [complete cold backup](/operate/data-backup/).
+3. Replace the binary using the same installation path you chose originally.
+4. Validate configuration and run doctor before starting automatic work.
+5. Reinstall the service definition if the executable path changed.
+6. Start the daemon and inspect Sessions, Automation run history, Agent status,
+   and logs before resuming automatic triggers.
+
+</Steps>
+
+<Tabs>
+  <TabItem label="Release installer">
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/axocoatl/axocoatl/main/scripts/install.sh | sh
+```
+
+The script resolves the latest release for supported OS/architecture targets:
+macOS 11 or newer, or GNU/Linux with glibc 2.35 or newer, on x86_64 and
+aarch64. It rejects an older host before download, requires the matching
+release checksum, and verifies the tarball before extraction. A missing,
+malformed, or mismatched checksum stops installation.
+
+  </TabItem>
+  <TabItem label="Cargo">
+
+```sh
+cargo install axocoatl-cli --force
+```
+
+  </TabItem>
+  <TabItem label="Source checkout">
+
+```sh
+cargo build -p axocoatl-cli --release
+```
+
+Install or point the service at the resulting `target/release/axocoatl` binary.
+
+  </TabItem>
+</Tabs>
+
+Then verify:
+
+```sh
+axocoatl --version
+axocoatl validate /absolute/path/to/axocoatl.yaml
+axocoatl doctor --config /absolute/path/to/axocoatl.yaml
+```
+
+<Aside type="caution" title="Rollback is a backup restore">
+There is no compatibility promise that an older binary can read state written
+by a newer one. Keep the pre-upgrade binary and cold backup together. If you
+must return, stop the new daemon and restore the matching binary, data root,
+config, environment, and Workspace copies as one set.
+</Aside>
+
+Future-version Session ledger or attachment schemas are rejected rather than
+silently interpreted. That protects against accidental corruption, but it is
+not an automatic migration path.
+
+Next: [Security →](/operate/security/)

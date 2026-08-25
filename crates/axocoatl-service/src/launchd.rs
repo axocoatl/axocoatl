@@ -71,14 +71,17 @@ impl LaunchdManager {
     }
 }
 
-impl ServiceManager for LaunchdManager {
-    fn backend(&self) -> &'static str {
-        "launchd"
-    }
+fn xml_text(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
 
-    fn install(&self, exe: &Path, config: &Path) -> Result<(), ServiceError> {
-        let plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
+fn render_plist(exe: &Path, config: &Path) -> String {
+    let working_dir = config.parent().unwrap_or_else(|| Path::new("."));
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -91,6 +94,8 @@ impl ServiceManager for LaunchdManager {
     <string>--config</string>
     <string>{config}</string>
   </array>
+  <key>WorkingDirectory</key>
+  <string>{working_dir}</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -98,9 +103,19 @@ impl ServiceManager for LaunchdManager {
 </dict>
 </plist>
 "#,
-            exe = exe.display(),
-            config = config.display(),
-        );
+        exe = xml_text(exe),
+        config = xml_text(config),
+        working_dir = xml_text(working_dir),
+    )
+}
+
+impl ServiceManager for LaunchdManager {
+    fn backend(&self) -> &'static str {
+        "launchd"
+    }
+
+    fn install(&self, exe: &Path, config: &Path) -> Result<(), ServiceError> {
+        let plist = render_plist(exe, config);
         if let Some(dir) = self.plist_path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -153,5 +168,23 @@ impl ServiceManager for LaunchdManager {
             enabled: printed.is_some(),
             detail,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plist_uses_config_directory_and_escapes_paths() {
+        let plist = render_plist(
+            Path::new("/Applications/Axo & tools/axocoatl"),
+            Path::new("/Users/test/My <project>/axocoatl.yaml"),
+        );
+        assert!(plist.contains(
+            "<key>WorkingDirectory</key>\n  <string>/Users/test/My &lt;project&gt;</string>"
+        ));
+        assert!(plist.contains("/Applications/Axo &amp; tools/axocoatl"));
+        assert!(plist.contains("/Users/test/My &lt;project&gt;/axocoatl.yaml"));
     }
 }

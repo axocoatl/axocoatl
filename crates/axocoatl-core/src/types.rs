@@ -2,8 +2,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::token::TokenUsageStats;
 
-/// One attached file the user dropped onto a chat. The runtime reads the
-/// bytes and routes them by MIME: images get base64-inlined to the vision
+/// Which transcript owns an agent execution.
+///
+/// This is intentionally separate from the legacy [`AgentInput::stateless`]
+/// boolean so callers can distinguish a fully stateless inference from a turn
+/// whose complete, authoritative transcript is supplied with the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationMode {
+    /// Read and update the long-lived agent actor's session transcript.
+    #[default]
+    ActorSession,
+    /// Treat [`AgentInput::history`] as the complete transcript for this turn.
+    ///
+    /// The runtime must not read from, write to, or checkpoint the actor's
+    /// session while executing this request. Unlike [`Self::Stateless`], this
+    /// mode may still use the normal multi-step execution path, including tools.
+    SuppliedHistory,
+    /// Build a pure, single-shot request from the supplied input without using
+    /// or mutating the actor session.
+    Stateless,
+}
+
+/// One attached file the user dropped onto a chat. The retained FileStore
+/// capability resolves the bytes before this value leaves the control-plane
+/// storage boundary. The runtime then routes them by MIME: images get base64-inlined to the vision
 /// model, text-bearing files (PDF/CSV/XLSX/plain) get their *extracted text*
 /// inlined as a `<attachment>` block so the model sees the content directly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,8 +34,11 @@ pub struct AgentAttachment {
     pub id: String,
     pub name: String,
     pub mime: String,
-    /// Absolute path the executor reads raw bytes from (used for images).
-    pub path: String,
+    /// Exact raw bytes read through the retained FileStore directory handle.
+    /// Never replace this with an ambient control-plane path: the configured
+    /// data-root spelling can be renamed or replaced after bootstrap.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bytes: Vec<u8>,
     pub size: u64,
     /// Pre-extracted text from the FileStore (PDF/CSV/XLSX → text; image
     /// OCR for images that have it). When `Some`, the executor inlines this
@@ -33,7 +59,8 @@ pub struct AgentInput {
     pub history: Vec<ChatMessage>,
     /// Per-call system prompt override. When `Some`, replaces the agent's
     /// configured system prompt for this single turn (memory context still
-    /// merges as usual). Used by the Chat tab's "per-chat instructions" field.
+    /// merges as usual). Used by the retained lightweight-chat API's
+    /// per-chat instructions and by other stateless override callers.
     #[serde(default)]
     pub system_override: Option<String>,
     /// Per-call model override (e.g. `"llama3.2:1b"`). When `Some`, the request
@@ -41,16 +68,41 @@ pub struct AgentInput {
     /// configured one. Same agent, same memory, different model for one turn.
     #[serde(default)]
     pub model_override: Option<String>,
+    /// Per-call output-format override for stateless execution. When set, this
+    /// takes precedence over the Agent's configured sampling format for that
+    /// inference only. This lets schema-bearing control operations reuse an
+    /// Agent without changing its ordinary Session, Skill, or Automation turns.
+    #[serde(default)]
+    pub response_format_override: Option<crate::ResponseFormat>,
+    /// Disable model reasoning for this stateless control-plane request where
+    /// the selected provider supports it. Ordinary Agent turns leave this
+    /// false and retain the provider's default reasoning behavior.
+    #[serde(default)]
+    pub reasoning_disabled: bool,
     /// Files attached to this turn (images, text docs). The executor reads
     /// each one's bytes and routes them into the LLM call appropriately
     /// for the provider in use.
     #[serde(default)]
     pub attachments: Vec<AgentAttachment>,
+    /// Transcript ownership for this execution. Missing fields deserialize as
+    /// [`ConversationMode::ActorSession`] so older wire payloads keep their
+    /// original behavior.
+    ///
+    /// The legacy [`Self::stateless`] flag remains part of the wire format. A
+    /// value of `true` always takes precedence and means
+    /// [`ConversationMode::Stateless`]; otherwise this field is authoritative.
+    /// Use [`Self::effective_conversation_mode`] when dispatching an input.
+    #[serde(default)]
+    pub conversation_mode: ConversationMode,
     /// Run this call statelessly — build the request from this input alone
     /// (system override or configured prompt + history + content), without
     /// reading or writing the agent's persistent session or checkpoint. A pure
     /// function of the input; the right mode for per-request prompt/model
     /// variants and for scoring an agent over independent inputs.
+    ///
+    /// Retained for backward-compatible deserialization. New execution code
+    /// should resolve this flag together with [`Self::conversation_mode`] via
+    /// [`Self::effective_conversation_mode`].
     #[serde(default)]
     pub stateless: bool,
 }
@@ -63,7 +115,10 @@ impl AgentInput {
             history: Vec::new(),
             system_override: None,
             model_override: None,
+            response_format_override: None,
+            reasoning_disabled: false,
             attachments: Vec::new(),
+            conversation_mode: ConversationMode::ActorSession,
             stateless: false,
         }
     }
@@ -83,6 +138,19 @@ impl AgentInput {
         self
     }
 
+    /// Supply the complete authoritative transcript for this turn.
+    ///
+    /// This is distinct from [`Self::with_history`], which preserves the
+    /// caller's existing conversation mode for backward compatibility. Builder
+    /// calls are last-write-wins: this method clears the legacy stateless flag,
+    /// while a later `with_stateless(true)` switches to stateless execution.
+    pub fn with_supplied_history(mut self, history: Vec<ChatMessage>) -> Self {
+        self.history = history;
+        self.conversation_mode = ConversationMode::SuppliedHistory;
+        self.stateless = false;
+        self
+    }
+
     pub fn with_system_override(mut self, system: Option<String>) -> Self {
         self.system_override = system;
         self
@@ -93,9 +161,38 @@ impl AgentInput {
         self
     }
 
+    pub fn with_response_format_override(
+        mut self,
+        response_format: Option<crate::ResponseFormat>,
+    ) -> Self {
+        self.response_format_override = response_format;
+        self
+    }
+
+    pub fn with_reasoning_disabled(mut self, disabled: bool) -> Self {
+        self.reasoning_disabled = disabled;
+        self
+    }
+
     pub fn with_stateless(mut self, stateless: bool) -> Self {
         self.stateless = stateless;
+        self.conversation_mode = if stateless {
+            ConversationMode::Stateless
+        } else {
+            ConversationMode::ActorSession
+        };
         self
+    }
+
+    /// Resolve transcript ownership across the new mode field and the legacy
+    /// `stateless` wire flag. Legacy `stateless: true` wins even when a payload
+    /// also carries a different `conversation_mode`.
+    pub fn effective_conversation_mode(&self) -> ConversationMode {
+        if self.stateless {
+            ConversationMode::Stateless
+        } else {
+            self.conversation_mode
+        }
     }
 }
 
@@ -141,7 +238,16 @@ pub struct ToolCall {
     pub name: String,
     /// Parsed arguments (already deserialized from the LLM's JSON string).
     pub arguments: serde_json::Value,
+    /// Opaque provider protocol fields required to replay this call exactly.
+    /// Executors never receive these values as tool arguments. String values
+    /// preserve signatures byte-for-byte, and the map is extensible without
+    /// adding provider-specific fields to the universal call shape.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub provider_metadata: ProviderMetadata,
 }
+
+/// Opaque provider protocol metadata attached to one tool call.
+pub type ProviderMetadata = std::collections::BTreeMap<String, String>;
 
 /// A chat message in the universal format across all providers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,7 +353,7 @@ impl ChatMessage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MessageRole {
     System,
     User,
@@ -284,12 +390,103 @@ mod tests {
         assert_eq!(input.content, "hello");
         assert!(input.context.is_none());
         assert!(input.history.is_empty());
+        assert_eq!(
+            input.effective_conversation_mode(),
+            ConversationMode::ActorSession
+        );
     }
 
     #[test]
     fn agent_input_with_context() {
         let input = AgentInput::text("hello").with_context(serde_json::json!({"key": "value"}));
         assert!(input.context.is_some());
+    }
+
+    #[test]
+    fn supplied_history_builder_sets_authoritative_mode() {
+        let history = vec![
+            ChatMessage::user("first question"),
+            ChatMessage::assistant("first answer"),
+        ];
+        let input = AgentInput::text("follow up").with_supplied_history(history.clone());
+
+        assert_eq!(input.history.len(), history.len());
+        assert_eq!(
+            input.effective_conversation_mode(),
+            ConversationMode::SuppliedHistory
+        );
+        assert!(!input.stateless);
+
+        // The older builder still only assigns history; it must not silently
+        // change execution semantics for existing callers.
+        let legacy = AgentInput::text("follow up").with_history(history);
+        assert_eq!(
+            legacy.effective_conversation_mode(),
+            ConversationMode::ActorSession
+        );
+    }
+
+    #[test]
+    fn stateless_builder_keeps_legacy_flag_and_mode_in_sync() {
+        let input = AgentInput::text("classify")
+            .with_supplied_history(vec![ChatMessage::user("seed")])
+            .with_stateless(true);
+        assert!(input.stateless);
+        assert_eq!(input.conversation_mode, ConversationMode::Stateless);
+        assert_eq!(
+            input.effective_conversation_mode(),
+            ConversationMode::Stateless
+        );
+
+        let stateful = input.with_stateless(false);
+        assert!(!stateful.stateless);
+        assert_eq!(stateful.conversation_mode, ConversationMode::ActorSession);
+        assert_eq!(
+            stateful.effective_conversation_mode(),
+            ConversationMode::ActorSession
+        );
+    }
+
+    #[test]
+    fn response_format_override_is_explicit_and_backwards_compatible() {
+        let input = AgentInput::text("return a schema")
+            .with_response_format_override(Some(crate::ResponseFormat::Json))
+            .with_reasoning_disabled(true);
+        assert_eq!(
+            input.response_format_override,
+            Some(crate::ResponseFormat::Json)
+        );
+        assert!(input.reasoning_disabled);
+
+        let legacy: AgentInput = serde_json::from_str(
+            r#"{"content":"hi","context":null,"history":[],"stateless":true}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.response_format_override, None);
+        assert!(!legacy.reasoning_disabled);
+    }
+
+    #[test]
+    fn conversation_mode_serde_defaults_and_honors_legacy_stateless() {
+        let legacy: AgentInput = serde_json::from_str(
+            r#"{"content":"hi","context":null,"history":[],"stateless":true}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.conversation_mode, ConversationMode::ActorSession);
+        assert_eq!(
+            legacy.effective_conversation_mode(),
+            ConversationMode::Stateless
+        );
+
+        let supplied =
+            AgentInput::text("next").with_supplied_history(vec![ChatMessage::user("seed")]);
+        let json = serde_json::to_string(&supplied).unwrap();
+        assert!(json.contains(r#""conversation_mode":"supplied_history""#));
+        let roundtrip: AgentInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            roundtrip.effective_conversation_mode(),
+            ConversationMode::SuppliedHistory
+        );
     }
 
     #[test]
@@ -351,6 +548,7 @@ mod tests {
             id: "call_1".to_string(),
             name: "get_weather".to_string(),
             arguments: serde_json::json!({ "location": "NYC" }),
+            provider_metadata: ProviderMetadata::new(),
         };
         let msg = ChatMessage::assistant_with_tool_calls("", vec![call.clone()]);
         assert_eq!(msg.role, MessageRole::Assistant);

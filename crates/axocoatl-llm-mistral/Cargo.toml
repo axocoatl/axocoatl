@@ -6,7 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
@@ -14,8 +13,8 @@ readme.workspace = true
 description = "Mistral AI provider for Axocoatl (OpenAI-compatible API)"
 
 [dependencies]
-axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
-axocoatl-llm = { version = "0.1.0", path = "../axocoatl-llm" }
+axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
+axocoatl-llm = { version = "1.0.0", path = "../axocoatl-llm" }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
@@ -24,7 +23,6 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
-reqwest-eventsource = { workspace = true }
 async-stream = { workspace = true }
 
 [features]

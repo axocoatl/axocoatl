@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "film": "several-ways",
+  "timeline": "demo/one-app/films/source/several-ways/timeline.json",
+  "timeline_sha256": "4771ba9aad75502ae2eb11e4c8a7c1fd48d497859ee3773c598ae1cf2a6548d9",
+  "input_fps": 8,
+  "frame_count": 480,
+  "duration_seconds": 60,
+  "sequence_sha256": "7ffbdc506cdea13d7e38222e33ce0745f0c19f062d7e718845379e88dbd82436",
+  "shots": [
+    {
+      "beat": "configuration",
+      "source": "shot-configuration.jpg",
+      "source_sha256": "a32f2970ab537e1eadf887cd39056ba9e39abdd724eca0b963b4aeb5e6b5bed7",
+      "hold_frames": 80,
+      "first_frame": 1,
+      "last_frame": 80
+    },
+    {
+      "beat": "independent-routes",
+      "source": "shot-independent-routes.jpg",
+      "source_sha256": "774905103d1cd6557679531f77ccf889775aaa399384080125e82a1c29b6375d",
+      "hold_frames": 80,
+      "first_frame": 81,
+      "last_frame": 160
+    },
+    {
+      "beat": "checks",
+      "source": "shot-checks.jpg",
+      "source_sha256": "312eafab1410b2ce1bd56041ca4560b062c98bba90c72fd733b6b74c7fe82e68",
+      "hold_frames": 80,
+      "first_frame": 161,
+      "last_frame": 240
+    },
+    {
+      "beat": "comparison",
+      "source": "shot-comparison.jpg",
+      "source_sha256": "71b88c043850500c44f594479ce0be78c4da8cfcdfafdf6dd5e5b8b5f4b92474",
+      "hold_frames": 80,
+      "first_frame": 241,
+      "last_frame": 320
+    },
+    {
+      "beat": "judge",
+      "source": "shot-judge.jpg",
+      "source_sha256": "1aecd072f4d5c1c223c08511496201dff82cc48cc1b5af7484d97dc0e658fe72",
+      "hold_frames": 80,
+      "first_frame": 321,
+      "last_frame": 400
+    },
+    {
+      "beat": "keep",
+      "source": "shot-keep.jpg",
+      "source_sha256": "1e47148b1669dcf8b43821ac257debb0864fbaffa7765d0785748d1fd1c86326",
+      "hold_frames": 80,
+      "first_frame": 401,
+      "last_frame": 480
+    }
+  ],
+  "poster_beat": "comparison",
+  "poster_frame": 280
+}

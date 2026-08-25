@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "film": "mcp-approval",
+  "timeline": "demo/one-app/films/source/mcp-approval/timeline.json",
+  "timeline_sha256": "fad8958524bf850436ec0195d9cef1d28cbda46fc9d9aeedcbbeda8454be2a56",
+  "input_fps": 8,
+  "frame_count": 240,
+  "duration_seconds": 30,
+  "sequence_sha256": "eb1cdaf43ee167248af493ed902bae944ee15109653dac4957dcd91a01376e29",
+  "shots": [
+    {
+      "beat": "request",
+      "source": "shot-request.jpg",
+      "source_sha256": "82ab2f083d93d9b8548303e85e85599bd0490641405ed53a434ee0ce82e9771a",
+      "hold_frames": 48,
+      "first_frame": 1,
+      "last_frame": 48
+    },
+    {
+      "beat": "pending-approval",
+      "source": "shot-pending-approval.jpg",
+      "source_sha256": "463fcd19904884151aceeced298fd031ee183a67acfbdaa5488cebbb98b257ca",
+      "hold_frames": 48,
+      "first_frame": 49,
+      "last_frame": 96
+    },
+    {
+      "beat": "deny",
+      "source": "shot-deny.jpg",
+      "source_sha256": "c5c9f910af3233047acf035e95df61be326a92af551cffed28d069f2c682d008",
+      "hold_frames": 48,
+      "first_frame": 97,
+      "last_frame": 144
+    },
+    {
+      "beat": "allow",
+      "source": "shot-allow.jpg",
+      "source_sha256": "4faef366c9a8a57cf702f0bfa246ee6311cde6c0587718dc0da1b10fda5f210e",
+      "hold_frames": 48,
+      "first_frame": 145,
+      "last_frame": 192
+    },
+    {
+      "beat": "durable-result",
+      "source": "shot-durable-result.jpg",
+      "source_sha256": "c426788dc40709416d45d9d93f55314bc56e21b2be64c295e631c0c04e6190fd",
+      "hold_frames": 48,
+      "first_frame": 193,
+      "last_frame": 240
+    }
+  ],
+  "poster_beat": "pending-approval",
+  "poster_frame": 72
+}

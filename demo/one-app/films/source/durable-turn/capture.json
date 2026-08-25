@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "film": "durable-turn",
+  "captured_at": "2026-08-25T07:25:45.249Z",
+  "url": "http://localhost:18084/",
+  "browser": "Codex in-app browser",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1
+  },
+  "theme": "dark",
+  "reduced_motion": "no-preference",
+  "timeline": "demo/one-app/films/source/durable-turn/timeline.json",
+  "timeline_sha256": "852200d0784a2417aa9196f54108da07690b19dc76e0283d8d63479ba16a2502",
+  "keyframes": [
+    {
+      "beat": "context",
+      "path": "demo/one-app/films/source/durable-turn/shot-context.jpg",
+      "sha256": "ce627ce589a6d11d84fb932d68f162d1cd68a23878c6b4240f54fd048b037993"
+    },
+    {
+      "beat": "reload",
+      "path": "demo/one-app/films/source/durable-turn/shot-reload.jpg",
+      "sha256": "bb5562d361d18dcb9dfb5c35797ce43ff7e7534fa7aaad4b3ede46129c6aeef1"
+    },
+    {
+      "beat": "cancelled-history",
+      "path": "demo/one-app/films/source/durable-turn/shot-cancelled-history.jpg",
+      "sha256": "228a683692bd6e849104b4bc5ff990b23a8968629eb21b3440c72a94a148b239"
+    },
+    {
+      "beat": "clean-next-turn",
+      "path": "demo/one-app/films/source/durable-turn/shot-clean-next-turn.jpg",
+      "sha256": "d70af63c60b10d6199b3357d29615b232b93d1bff58756ec72904c208aebd3a7"
+    }
+  ]
+}

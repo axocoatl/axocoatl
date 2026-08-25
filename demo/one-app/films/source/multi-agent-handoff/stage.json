@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "film": "multi-agent-handoff",
+  "timeline": "demo/one-app/films/source/multi-agent-handoff/timeline.json",
+  "timeline_sha256": "7b9582bff7bc25fa97f734e35115dfd9634591eb31cb7c7035308e45418ac446",
+  "input_fps": 8,
+  "frame_count": 240,
+  "duration_seconds": 30,
+  "sequence_sha256": "590933a84d43e554a9c57ce1a9b4d1e9b35b3729c42e47ea65bb03a6acba2bbb",
+  "shots": [
+    {
+      "beat": "dependency-edge",
+      "source": "shot-dependency-edge.jpg",
+      "source_sha256": "37ed3ca1e569631aac0c6866fbca86816397eb6a28559bfa382280aff1ee0384",
+      "hold_frames": 56,
+      "first_frame": 1,
+      "last_frame": 56
+    },
+    {
+      "beat": "architect",
+      "source": "shot-architect.jpg",
+      "source_sha256": "12243f7cccabfefd6713371c3e3e311355887311ee4b034eb26361afbac4f738",
+      "hold_frames": 64,
+      "first_frame": 57,
+      "last_frame": 120
+    },
+    {
+      "beat": "reviewer",
+      "source": "shot-reviewer.jpg",
+      "source_sha256": "1f1bbd091c6089130debb297a90f07458d1975d3a8894ea5b8641d34bdf06147",
+      "hold_frames": 64,
+      "first_frame": 121,
+      "last_frame": 184
+    },
+    {
+      "beat": "durable-outputs",
+      "source": "shot-durable-outputs.jpg",
+      "source_sha256": "78e29764575636bd44cdeabcb9224543c58f45c0e68b317e76f0d5fd75b3c2a1",
+      "hold_frames": 56,
+      "first_frame": 185,
+      "last_frame": 240
+    }
+  ],
+  "poster_beat": "dependency-edge",
+  "poster_frame": 28
+}

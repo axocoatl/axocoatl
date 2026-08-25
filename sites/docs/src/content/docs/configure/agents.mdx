@@ -1,0 +1,155 @@
+---
+title: Agents and budgets
+description: Define Agent identity, provider/model selection, instructions, dependencies, sampling, memory, and local token guards.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+An Agent entry is a configured template for a provider, model, prompt, role,
+and optional token budget. Autonomous Agents and Coordinators can own durable actors;
+Workers are created only by their Coordinator. Sessions and Automations refer to templates by
+stable `id`.
+
+## Define an Agent
+
+```yaml
+agents:
+  - id: coder
+    name: Coder
+    provider: ollama
+    model: qwen2.5-coder:14b
+    system_prompt: |
+      Work inside the authorized repository. Make small verified changes and
+      report the commands used to check them.
+    depends_on: [planner]
+    role: autonomous
+    token_budget:
+      per_execution: 20000
+      per_call: 8192
+      overflow_policy: abort
+    sampling:
+      temperature: 0
+      max_tokens: 4096
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Stable identifier used by Sessions, Automations, APIs, and dependencies |
+| `name` | User-facing label |
+| `provider`, `model` | Model target for this Agent |
+| `system_prompt` | Persistent operating instructions |
+| `tools` | Empty inherits the execution path's baseline tools; non-empty is an exact advertisement and dispatch allowlist |
+| `depends_on` | Dependency metadata for legacy workflow projection and multi-agent ordering |
+| `role` | `autonomous`, `coordinator`, or `worker` |
+| `activation_threshold`, `activation_decay` | Optional lattice activation tuning |
+| `sampling` | Optional request-generation controls for autonomous Agents, Coordinators, and declared Workers |
+| `memory` | Tier 1–4 tuning for autonomous Agents and declared Workers; a Coordinator itself uses Tier 1 plus orchestration checkpointing |
+
+A Coordinator must be the `entry_point` of exactly one workflow. Giving the same Coordinator
+multiple workflow definitions is rejected because worker membership and HTN selection would be
+ambiguous. A Worker must belong to that coordinator-led workflow and cannot run directly.
+
+## Set token budgets
+
+Budgets are local preflight controls. Before each model call, Axocoatl reserves
+the estimated input plus the explicit or resolved bounded completion and
+compares that reservation with both limits:
+
+- `per_call` caps one call's local reservation;
+- `per_execution` caps cumulative recorded usage plus the next reservation for
+  one activation.
+
+`per_call` must not exceed `per_execution`; `axocoatl validate` rejects that
+configuration.
+
+<Tabs>
+  <TabItem label="abort">
+    Enforce the local guard. A call is not sent when its reservation cannot fit
+    either limit. A provider-reported overrun stops the current turn after the
+    response. This is the YAML default.
+  </TabItem>
+  <TabItem label="warn">
+    Log the overflow and continue. Use this only when observability is more
+    important than stopping locally over-budget work.
+  </TabItem>
+  <TabItem label="summarize">
+    A deprecated compatibility spelling that behaves as `warn`. It does not
+    summarize spent tokens.
+  </TabItem>
+</Tabs>
+
+The estimate includes injected memory and tool schemas, not only the visible
+request. A provider can tokenize differently, report usage only after the call,
+or ignore a requested output limit, so the guard is not an absolute billing cap.
+Budgets are independent of automatic conversation compaction, which keeps
+context within a model window but cannot undo token usage.
+
+## Use sampling controls carefully
+
+`sampling` accepts optional `temperature`, `top_p`, `max_tokens`, and
+`response_format` (`text` or `json`). The configured values reach autonomous Agents,
+Coordinator provider calls, and each declared Worker's own provider calls. Adapter support is
+not uniform. Temperature zero can reduce
+variation but does not make a generative model deterministic. Omit a field to
+use the provider default.
+
+## Tune memory
+
+```yaml
+memory:
+  max_session_messages: 100
+  recall:
+    passive_inject: true
+    top_k: 5
+    min_score: 0.15
+  core:
+    blocks:
+      - { label: persona, limit: 2000 }
+      - { label: project, limit: 2000 }
+      - { label: team, limit: 1000, shared: true }
+```
+
+An omitted or empty core block list creates the default `persona`, `human`, and
+`project` blocks. A non-empty list replaces that default set. See
+[State and memory](/understand/state/) before changing retention behavior.
+
+This memory block config applies to an autonomous Agent or a declared Worker. In a normal
+Session those stores are scoped under the Session runtime identity and survive actor restart;
+only labels explicitly marked `shared: true` cross scopes. A Coordinator's provider loop does
+not expose core/daily/semantic memory tools in 1.0. Its declared Workers apply their own
+`memory` configuration beneath `{session}:{coordinator}:worker:{worker}`, while ad-hoc Workers
+are ephemeral.
+
+## Apply changes
+
+For durable changes, edit YAML, validate it, then restart the whole daemon:
+
+```sh
+axocoatl validate ./axocoatl.yaml
+# stop the running foreground process, then:
+axocoatl dev --config ./axocoatl.yaml
+```
+
+Settings can edit an Agent and restart it immediately, but that patch is only
+in memory for the current daemon process. YAML remains unchanged. The CLI
+`axocoatl agents restart coder --config ...` sends a restart request to the
+already-running daemon; its config flag does not reload that YAML file.
+
+A `role: worker` Agent cannot be started or restarted directly. Edit its YAML and restart its
+Coordinator. Settings disables the standalone Worker actions for the same reason.
+
+The background supervision loop checks Agent liveness every five seconds and
+attempts to restart an unexpectedly stopped Agent from its latest checkpoint.
+After five consecutive failures it leaves the Agent down until configuration
+is corrected and it is restarted deliberately.
+
+<Aside type="caution" title="Checkpoint recovery has a boundary">
+Restart restores checkpointed conversation and the latest cumulative provider-usage subtotal
+within its supported owner. The completeness flag is sticky: if a dispatched call ended without
+terminal usage, Settings keeps showing a lower bound after restart. Checkpoints do not resume an
+in-flight provider call or tool, or arbitrary terminal Session work. Coordinator private
+orchestration state is cleared after a Completed, Cancelled, Failed, or Interrupted Session turn;
+the next turn decomposes fresh.
+</Aside>
+
+Next: [Configure sandboxes →](/configure/sandboxes/)

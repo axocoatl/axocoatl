@@ -2,8 +2,16 @@
 
 ## Supported versions
 
-The `main` branch and the latest `0.x.y` release receive security fixes.
+The `main` branch and the latest stable release receive security fixes.
 Older versions do not.
+
+## Dependency policy
+
+CI audits `Cargo.lock` against the current RustSec database on dependency
+changes and every day. It fails on known vulnerabilities, unsound advisories,
+newly unmaintained dependencies, or yanked versions. Narrow informational
+exceptions live in `.cargo/audit.toml` with an in-repository rationale and must
+not be used for a known vulnerability.
 
 ## Reporting a vulnerability
 
@@ -26,8 +34,8 @@ fixes may roll into the next regular release.
 In scope:
 
 - Axocoatl daemon, CLI, server, and library crates in this repository.
-- The dashboard served by `axocoatl-server` (XSS, CSRF, privilege escalation,
-  data exfiltration).
+- The browser workbench served at `/` by `axocoatl-server` (XSS, CSRF,
+  privilege escalation, data exfiltration).
 - The MCP approval/permission gate.
 - The session sandbox (container escape, host filesystem leakage).
 

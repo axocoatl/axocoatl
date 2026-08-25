@@ -1,0 +1,99 @@
+---
+title: Coordination and events
+description: Choose among explicit Automations, multi-Agent Sessions, typed events, and dynamic coordinator auctions.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Axocoatl has four related coordination mechanisms. Each answers a different
+question and owns a different recovery boundary.
+
+| Mechanism | Use when | Ordering/choice |
+| --- | --- | --- |
+| Automation | The graph can be declared ahead of time | Explicit DAG nodes and edges |
+| Multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
+| Event lattice | Producers and consumers should be decoupled | Typed publish/subscribe notification |
+| Coordinator Agent | Task shape and worker choice emerge at runtime | Decomposition plus capability/budget auction |
+
+## Automations
+
+The canonical Automation store supplies manual, fixed-interval, event, and
+Skill-triggered graphs. The DAG executor schedules ready nodes and records run
+and node outcomes. See [Automations](/configure/automations/) for the operator
+workflow.
+
+Legacy workflows are compatibility seed/input. They do not constitute a
+second live scheduler after the canonical store exists.
+
+## Multi-Agent Sessions
+
+A lattice-mode Session uses configured legacy workflow membership to determine
+which Agents participate. Session-scoped actors run in dependency order inside
+one sandbox and stream lifecycle frames under the Session ID. This is bounded
+foreground work with a shared Session transcript, not an Automation trigger.
+When a workflow enters a Coordinator, the Session executes that entry once and the
+Coordinator owns its declared Workers; the roster is not looped again. A Worker cannot be
+selected or targeted directly.
+
+Explore several ways is a separate comparison mechanism and currently requires
+a single autonomous-Agent Session. Coordinator and worker roles remain on the normal Session
+path rather than becoming nested workers inside a comparison Way.
+
+## Typed event lattice
+
+Skills and runtime components publish events with a type, payload, producer,
+and timestamp. Current consumers include:
+
+- enabled **On event** Automations matching the type exactly;
+- enabled **On Skill** Automations matching `skill:<skill-id>` exactly;
+- configured webhook filters;
+- recent-event API and WebSocket observers.
+
+A YAML Skill's `reacts_to` and holder fields are metadata in the current daemon;
+they do not cause Agents to execute. The reusable coordination crate contains
+pheromone/signal threshold primitives, but the product daemon does not run the
+returned activation IDs as another workflow engine.
+
+## Coordinator Agents
+
+An Agent with `role: coordinator` handles one execution hierarchically:
+
+1. decompose the goal into subtasks;
+2. score worker bids from required tools and available budget;
+3. spawn selected worker Agents and run independent work in parallel;
+4. join their outcomes and synthesize one result.
+
+If the configured workflow supplies `htn_methods_file`, a symbolic HTN planner
+handles covered decomposition and leaves unresolved frontiers to the model.
+Without that file, decomposition is model-driven. HTN is opt-in; the auction
+and worker path are the coordinator behavior.
+
+Declared Workers resolve their own provider/model/fallback route, budget, sampling, exact tool
+policy, hooks, and Session-scoped Tier 1–4 memory/checkpoints beneath the Coordinator identity.
+Shared core blocks remain limited to labels that Worker explicitly declares. Ad-hoc Workers
+can be created when the pool lacks a fitting target; they are run-scoped and ephemeral.
+The Coordinator itself owns Tier-1 Session conversation plus private checkpointed plan/outcome
+state, not Tier 2–4 recall tools. That private state is separate from Session History and
+Automation run records. Once the Session turn is Completed, Cancelled, Failed, or Interrupted,
+canonical projection clears it and the next turn decomposes fresh rather than auto-resuming
+finished subtasks.
+
+Decomposition, unresolved HTN frontiers, and synthesis are checked against the exact
+configured model window before dispatch. If older context must be reduced, Axocoatl omits only
+completed User/plain-Assistant text at User boundaries. System messages, the current request
+suffix, attachments, and canonical Session History remain intact. This is bounded request-local
+projection, not the summarization pipeline used by a stateful autonomous Agent.
+
+<Aside type="note" title="Events do not choose workers">
+The lattice carries notifications. Worker arbitration happens inside a
+coordinator execution; Automation ordering happens in the DAG executor.
+</Aside>
+
+## Observe coordination
+
+Conversation shows Session messages and ordered tool events. Open the focused
+**Agent graph** from **More** to inspect configured relationships for the
+Session. Integrations can read `GET /api/events/recent` and `event` WebSocket
+frames; there is no separate global event-feed browser destination.
+
+Next: [Protocols →](/understand/protocols/)

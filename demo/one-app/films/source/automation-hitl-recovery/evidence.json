@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "film": "automation-hitl-recovery",
+  "checks": [
+    {
+      "id": "run",
+      "status": "passed",
+      "detail": "The real Automations UI started run acf26a8c-d2d1-406b-9703-0ba46d21178d for the seven-node spec-review-demo graph with the exact plaintext/no-rate-limiting scenario retained in identities."
+    },
+    {
+      "id": "interrupt",
+      "status": "passed",
+      "detail": "The durable run completed spec-prompt, architect, all three review-each perspectives, and approval-gate once, then parked at the top-level approve Interrupt with non-empty reviews of 2450, 3150, and 2852 characters."
+    },
+    {
+      "id": "restart",
+      "status": "passed",
+      "detail": "After a real daemon stop and restart against the same data root, startup reported recovered_interrupts=1 and the UI restored the same acf26a8c run at approve with its four completed upstream checkpoints intact."
+    },
+    {
+      "id": "resume",
+      "status": "passed",
+      "detail": "The operator resumed the same saved approve node with the exact encryption, isolation, rate-limiting, abuse-monitoring, retention, and threat-model guidance retained in identities; no upstream checkpoint replayed."
+    },
+    {
+      "id": "result",
+      "status": "passed",
+      "detail": "The same run completed planner with seven durable checkpoints, and reloaded history exposes the 2094-character stored action-plan Result whose SHA-256 is retained in identities."
+    }
+  ],
+  "identities": {
+    "fixture": "signal-desk",
+    "release_version": "1.0.0",
+    "binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+    "capture_config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+    "capture_data_root": "/private/tmp/axocoatl-one-app-showcase-signal-hitl-launch/data",
+    "workspace_id": "wsp-3d7736a6-0ae2-43ff-be5f-5953c17d73f4",
+    "workspace_path": "/private/tmp/axocoatl-one-app-showcase-signal-hitl-launch/workspace",
+    "session_id": "ses-109b3600-4b36-4b1b-ae17-dea6b9eb5186",
+    "session_name": "HITL proof",
+    "automation_id": "spec-review-demo",
+    "run_id": "acf26a8c-d2d1-406b-9703-0ba46d21178d",
+    "run_file_sha256": "6105d3fc42ad2694492531cdae23f7bee6ade78146ca4daa28cda8db7d97b40a",
+    "scenario": "A real-time chat app that stores every message in plaintext and has no rate limiting.",
+    "started_at_unix": "1787639841",
+    "interrupt_parked_at_unix": "1787640157",
+    "interrupt_resumed_at_unix": "1787640575",
+    "finished_at_unix": "1787640613",
+    "review_lengths": [
+      "2450",
+      "3150",
+      "2852"
+    ],
+    "review_output_sha256": "b78f59cb4c6eff31ba005d0e55ef3fe005ae1f9973b10be4441cf91cda70e11d",
+    "restart_recovery": "2026-08-25T06:48:00.382475Z ... rehydrated pending Automation Interrupts from checkpoints recovered_interrupts=1",
+    "operator_guidance": "Reject the plaintext design. Require encryption at rest, tenant isolation, per-user and per-IP rate limiting, abuse monitoring, retention controls, and a threat model before implementation.",
+    "checkpoint_sequence": [
+      "spec-prompt:node_completed",
+      "architect:node_completed",
+      "review-each:node_completed",
+      "approval-gate:node_completed",
+      "approve:interrupt_parked",
+      "approve:interrupt_resumed",
+      "planner:node_completed"
+    ],
+    "final_content_length": "2094",
+    "final_content_sha256": "8829dd83d44e889f091d822e50d141ea21f32ab978f6c135ab0a0a22528af928"
+  }
+}

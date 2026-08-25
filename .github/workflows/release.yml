@@ -3,110 +3,497 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+
+concurrency:
+  # Crates.io publication is irreversible and GitHub's `latest` release is
+  # repository-global. Serialize every version so an older, slower tag cannot
+  # finish after a newer one and move the installer backward.
+  group: axocoatl-production-release
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   test-gate:
-    name: Test gate
-    runs-on: ubuntu-latest
+    name: Product test gate
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Require the tagged commit to belong to main history
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$DEFAULT_BRANCH" = "main" || {
+            echo "The release workflow requires main to be the default branch; got '$DEFAULT_BRANCH'." >&2
+            exit 1
+          }
+          git fetch --no-tags --prune origin \
+            "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          tag_commit="$(git rev-parse "$GITHUB_SHA^{commit}")"
+          main_commit="$(git rev-parse "refs/remotes/origin/$DEFAULT_BRANCH^{commit}")"
+          git merge-base --is-ancestor "$tag_commit" "$main_commit" || {
+            echo "Tag commit $tag_commit does not belong to $DEFAULT_BRANCH history at $main_commit." >&2
+            exit 1
+          }
+      - name: Require the tag to match the workspace version exactly
+        run: |
+          set -euo pipefail
+          version="$(awk '
+            $0 == "[workspace.package]" { workspace_package = 1; next }
+            workspace_package && /^\[/ { exit }
+            workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' Cargo.toml)"
+          test -n "$version" || {
+            echo "Could not read workspace.package.version from Cargo.toml." >&2
+            exit 1
+          }
+          expected_tag="v$version"
+          test "$GITHUB_REF_NAME" = "$expected_tag" || {
+            echo "Release tag $GITHUB_REF_NAME does not match workspace version $expected_tag." >&2
+            exit 1
+          }
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
+        with:
+          toolchain: 1.88.0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
+        with:
+          toolchain: 1.95.0
+          components: clippy, rustfmt
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: licenses/vendor-web/package-lock.json
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install the pinned audit tool
+        run: cargo install cargo-audit --locked --version 0.22.2
+      - name: Install the pinned license notice generator
+        run: cargo install cargo-about --locked --version '=0.9.1' --features cli
+      - name: Deny vulnerabilities, unsoundness, new maintenance warnings, and yanked crates
+        run: cargo audit -D warnings
+      - name: Fetch the locked native release dependency graph
+        run: cargo fetch --locked --manifest-path axocoatl-cli/Cargo.toml
+      - name: Verify package-local embedded assets
+        run: ./scripts/sync-server-embedded-assets.sh --check
+      - name: Verify embedded assets and generated third-party notices
+        run: ./scripts/check-third-party-licenses.sh
+      - name: Minimum supported Rust version
+        run: cargo +1.88.0 check --locked --workspace --all-targets --all-features
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Lints
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Workspace tests
+        run: cargo test --locked --workspace
+      - name: Documentation tests
+        run: cargo test --locked --doc --workspace
+      - name: CLI build
+        run: cargo build --locked -p axocoatl-cli
+      - name: Prove the packaged server compiles in isolation
+        run: ./scripts/test-server-package.sh
+
+  marketing-site:
+    name: Release gate — marketing site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Exercise installer OS, libc, and checksum failures
+        run: ./scripts/test-install.sh
+      - name: Exercise native license packaging and the four-target release set
+        run: ./scripts/test-release-artifact.sh
+      - name: Install film inspection dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Verify the complete recorded film portfolio
+        run: node demo/one-app/films/verify-film-set.mjs --source-bound
+      - name: Sync required brand and component assets
+        run: |
+          chmod +x sites/marketing/scripts/sync-assets.sh
+          sites/marketing/scripts/sync-assets.sh
+      - name: Validate static pages, links, assets, and copy
+        run: node sites/marketing/scripts/validate.mjs --strict-films
+      - name: Build and validate the deployment payload
+        run: |
+          node sites/marketing/scripts/build.mjs /tmp/axocoatl-marketing
+          cp scripts/install.sh /tmp/axocoatl-marketing/install.sh
+          sh -n /tmp/axocoatl-marketing/install.sh
+          cmp -s scripts/install.sh /tmp/axocoatl-marketing/install.sh
+          node sites/marketing/scripts/validate.mjs /tmp/axocoatl-marketing --strict-films
+
+  docs-site:
+    name: Release gate — docs site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: sites/docs
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: sites/docs/package-lock.json
+      - name: Install the pinned docs dependencies
+        run: npm ci
+      - name: Audit locked dependencies
+        run: npm audit --audit-level=high
+      - name: Validate content coverage
+        run: npm run check:content
+      - name: Build the deployment payload
+        run: npm run build
+      - name: Validate built links and assets
+        run: npm run check:links
+
+  product-browser:
+    name: Release gate — embedded product browser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: axocoatl-server/browser-tests
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify the product browser gate is checked in
+        working-directory: ${{ github.workspace }}
+        run: |
+          git ls-files --error-unmatch \
+            axocoatl-server/browser-tests/package-lock.json \
+            axocoatl-server/browser-tests/support/run-tests.mjs \
+            axocoatl-server/browser-tests/tests/workbench.test.mjs >/dev/null
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: release-product-browser
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: axocoatl-server/browser-tests/package-lock.json
+      - name: Install the pinned browser harness
+        run: npm ci
+      - name: Audit locked browser dependencies
+        run: npm audit --audit-level=high
+      - name: Install Chromium and Linux runtime dependencies
+        run: npx --no-install playwright install --with-deps chromium
+      - name: Build the embedded product
+        working-directory: ${{ github.workspace }}
+        run: cargo build --locked -p axocoatl-cli
+      - name: Exercise the visible product surface
+        env:
+          AXOCOATL_E2E_BINARY: ${{ github.workspace }}/target/debug/axocoatl
+        run: npm run test:no-build
 
   build:
-    name: Build ${{ matrix.target }}
-    needs: test-gate
+    name: Build and prove ${{ matrix.target }}
+    needs: [test-gate, marketing-site, docs-site, product-browser]
     strategy:
       fail-fast: false
-      # Linux (x86_64 + aarch64) and macOS (x86_64 + aarch64).  aarch64-linux
-      # cross-compiles now that the workspace uses rustls, not openssl (root
-      # Cargo.toml).  Windows still needs Unix-socket replacement work
-      # (axocoatl-daemon::ipc uses tokio::net::UnixListener) — a post-launch
-      # follow-up.
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            runner: ubuntu-22.04
+            glibc_max: '2.35'
+            macos_min: ''
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            runner: ubuntu-22.04-arm
+            glibc_max: '2.35'
+            macos_min: ''
           - target: x86_64-apple-darwin
-            os: macos-latest
+            runner: macos-15-intel
+            glibc_max: ''
+            macos_min: '11.0'
           - target: aarch64-apple-darwin
-            os: macos-latest
-    runs-on: ${{ matrix.os }}
+            runner: macos-15
+            glibc_max: ''
+            macos_min: '11.0'
+    runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
         with:
+          toolchain: 1.95.0
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cross linker (aarch64 linux)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build release binary
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_min }}
+        run: cargo build --locked --release -p axocoatl-cli --target ${{ matrix.target }}
+      - name: Prove the declared Linux glibc floor
+        if: matrix.glibc_max != ''
+        env:
+          BINARY: target/${{ matrix.target }}/release/axocoatl
+          GLIBC_MAX: ${{ matrix.glibc_max }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          mkdir -p .cargo
-          printf '[target.aarch64-unknown-linux-gnu]\nlinker = "aarch64-linux-gnu-gcc"\n' >> .cargo/config.toml
-      - name: Build
-        run: cargo build --release -p axocoatl-cli --target ${{ matrix.target }}
-      - name: Package (unix)
-        if: matrix.os != 'windows-latest'
-        shell: bash
+          set -euo pipefail
+          max_required="$(
+            readelf --version-info "$BINARY" |
+              sed -n 's/.*Name: GLIBC_\([0-9][0-9.]*\).*/\1/p' |
+              sort -Vu |
+              tail -n 1
+          )"
+          test -n "$max_required" || {
+            echo "Could not determine the glibc requirement for $BINARY." >&2
+            exit 1
+          }
+          highest="$(printf '%s\n%s\n' "$max_required" "$GLIBC_MAX" | sort -V | tail -n 1)"
+          test "$highest" = "$GLIBC_MAX" || {
+            echo "$BINARY requires glibc $max_required, above the declared $GLIBC_MAX floor." >&2
+            exit 1
+          }
+          echo "$BINARY requires at most glibc $max_required (declared floor: $GLIBC_MAX)."
+      - name: Prove the declared macOS floor
+        if: matrix.macos_min != ''
+        env:
+          BINARY: target/${{ matrix.target }}/release/axocoatl
+          MACOS_MIN: ${{ matrix.macos_min }}
         run: |
-          tag="${GITHUB_REF_NAME}"
-          name="axocoatl-${tag}-${{ matrix.target }}"
-          tar -czf "${name}.tar.gz" -C "target/${{ matrix.target }}/release" axocoatl
-          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
-      - name: Package (windows)
-        if: matrix.os == 'windows-latest'
-        shell: bash
-        run: |
-          tag="${GITHUB_REF_NAME}"
-          name="axocoatl-${tag}-${{ matrix.target }}"
-          7z a "${name}.zip" "./target/${{ matrix.target }}/release/axocoatl.exe"
-          certutil -hashfile "${name}.zip" SHA256 > "${name}.zip.sha256"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: |
-            axocoatl-*.tar.gz*
-            axocoatl-*.zip*
+          set -euo pipefail
 
-  release:
-    name: Publish GitHub Release
+          min_os_values=""
+          if command -v vtool >/dev/null 2>&1; then
+            min_os_values="$(
+              { vtool -show-build "$BINARY" 2>/dev/null || true; } |
+                awk '$1 == "minos" { print $2 }'
+            )"
+          fi
+          if [ -z "$min_os_values" ]; then
+            command -v otool >/dev/null 2>&1 || {
+              echo "Neither vtool nor otool is available to inspect $BINARY." >&2
+              exit 1
+            }
+            min_os_values="$(
+              otool -l "$BINARY" |
+                awk '
+                  $1 == "cmd" {
+                    legacy = ($2 == "LC_VERSION_MIN_MACOSX")
+                    next
+                  }
+                  $1 == "minos" { print $2; next }
+                  legacy && $1 == "version" { print $2 }
+                '
+            )"
+          fi
+          test -n "$min_os_values" || {
+            echo "Could not determine the minimum macOS version for $BINARY." >&2
+            exit 1
+          }
+
+          normalized_versions="$(
+            printf '%s\n' "$min_os_values" |
+              awk -F. '
+                NF == 0 { next }
+                NF > 3 { invalid = 1; next }
+                {
+                  for (i = 1; i <= NF; i++) {
+                    if ($i !~ /^[0-9]+$/) invalid = 1
+                  }
+                  if (!invalid) {
+                    printf "%d.%d.%d\n", $1, (NF >= 2 ? $2 : 0), (NF >= 3 ? $3 : 0)
+                  }
+                }
+                END { if (invalid) exit 1 }
+              ' |
+              sort -u
+          )" || {
+            echo "Could not parse the reported minimum macOS version: $min_os_values" >&2
+            exit 1
+          }
+          version_count="$(printf '%s\n' "$normalized_versions" | awk 'NF { count++ } END { print count + 0 }')"
+          test "$version_count" -eq 1 || {
+            echo "$BINARY reports inconsistent minimum macOS versions: $min_os_values" >&2
+            exit 1
+          }
+          normalized_expected="$(
+            printf '%s\n' "$MACOS_MIN" |
+              awk -F. '
+                NF < 1 || NF > 3 { exit 1 }
+                {
+                  for (i = 1; i <= NF; i++) if ($i !~ /^[0-9]+$/) exit 1
+                  printf "%d.%d.%d\n", $1, (NF >= 2 ? $2 : 0), (NF >= 3 ? $3 : 0)
+                }
+              '
+          )"
+          test "$normalized_versions" = "$normalized_expected" || {
+            echo "$BINARY declares macOS $normalized_versions, expected exactly $normalized_expected." >&2
+            exit 1
+          }
+          echo "$BINARY declares macOS $normalized_versions (release floor: $normalized_expected)."
+      - name: Package and verify archive
+        run: >-
+          ./scripts/release-artifact.sh package
+          "$GITHUB_REF_NAME"
+          "${{ matrix.target }}"
+          "target/${{ matrix.target }}/release/axocoatl"
+          dist
+      - name: Upload proved platform artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ github.run_id }}-${{ matrix.target }}
+          path: |
+            dist/axocoatl-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+            dist/axocoatl-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
+  prove-artifacts:
+    name: Prove complete uploaded artifact set
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-${{ github.run_id }}-*
+          path: dist
+          merge-multiple: true
+      - name: Verify checksums, contents, and completeness
+        run: >-
+          ./scripts/release-artifact.sh verify-set
+          "$GITHUB_REF_NAME"
+          dist
+          x86_64-unknown-linux-gnu
+          aarch64-unknown-linux-gnu
+          x86_64-apple-darwin
+          aarch64-apple-darwin
+      - name: Upload verified release set
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-release-${{ github.run_id }}-${{ github.ref_name }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
+
+  prepare-release:
+    name: Create and verify GitHub draft
+    needs: prove-artifacts
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          name: verified-release-${{ github.run_id }}-${{ github.ref_name }}
           path: dist
-          merge-multiple: true
-      - name: Create release
-        uses: softprops/action-gh-release@v2
+      - name: Reverify downloaded release set
+        run: >-
+          ./scripts/release-artifact.sh verify-set
+          "$GITHUB_REF_NAME"
+          dist
+          x86_64-unknown-linux-gnu
+          aarch64-unknown-linux-gnu
+          x86_64-apple-darwin
+          aarch64-apple-darwin
+      - name: Refuse to modify an existing published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_state="$(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+              jq --raw-output --arg tag "$GITHUB_REF_NAME" \
+                '.[] | select(.tag_name == $tag) | .draft'
+          )"
+          case "$release_state" in
+            ""|true) ;;
+            false)
+              echo "Release $GITHUB_REF_NAME is already published; refusing to modify it." >&2
+              exit 1
+              ;;
+            *)
+              echo "Could not determine a unique release state for $GITHUB_REF_NAME." >&2
+              exit 1
+              ;;
+          esac
+      - name: Extract matching changelog section
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v heading="## [$version]" '
+            /^## \[/ {
+              if (found) exit
+              if ($0 == heading || index($0, heading " ") == 1) found = 1
+            }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+      - name: Require the remote tag to still identify this release commit
+        run: |
+          set -euo pipefail
+          remote_ref=refs/axocoatl-release/remote-tag
+          git fetch --no-tags --force origin \
+            "+refs/tags/$GITHUB_REF_NAME:$remote_ref"
+          expected_commit="$(git rev-parse "$GITHUB_SHA^{commit}")"
+          remote_commit="$(git rev-parse "$remote_ref^{commit}")"
+          test "$remote_commit" = "$expected_commit" || {
+            echo "Remote tag $GITHUB_REF_NAME moved from $expected_commit to $remote_commit; refusing to mutate the release." >&2
+            exit 1
+          }
+      - name: Upload assets to an unpublished draft
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: dist/*
-          generate_release_notes: true
-          body_path: CHANGELOG.md
+          draft: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          body_path: release-notes.md
+      - name: Download and verify uploaded draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = "true"
+          mkdir uploaded
+          gh release download "$GITHUB_REF_NAME" --dir uploaded
+          ./scripts/release-artifact.sh verify-set \
+            "$GITHUB_REF_NAME" \
+            uploaded \
+            x86_64-unknown-linux-gnu \
+            aarch64-unknown-linux-gnu \
+            x86_64-apple-darwin \
+            aarch64-apple-darwin
 
   publish-crates:
-    name: Publish to crates.io
-    needs: release
-    runs-on: ubuntu-latest
+    name: Publish and prove crates.io packages
+    needs: prepare-release
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
+        with:
+          toolchain: 1.95.0
       - name: Publish in dependency order
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: |
-          set -u
-          # Dependency-ordered. Each may already exist for this version — tolerate that.
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
           crates="
             axocoatl-core
             axocoatl-token
@@ -123,18 +510,219 @@ jobs:
             axocoatl-llm-gemini
             axocoatl-mcp
             axocoatl-tools
-            axocoatl-actor
             axocoatl-coordination
+            axocoatl-actor
             axocoatl-session
             axocoatl-service
             axocoatl-daemon
             axocoatl-server
             axocoatl-cli
           "
+          test -n "${CARGO_REGISTRY_TOKEN:-}" || {
+            echo "The CRATES_IO_TOKEN Actions secret is required." >&2
+            exit 1
+          }
+          registry_token=$CARGO_REGISTRY_TOKEN
+          unset CARGO_REGISTRY_TOKEN
+          readonly registry_token
+          metadata="$(cargo metadata --locked --no-deps --format-version 1)"
+          declared_crates="$(printf '%s\n' $crates | LC_ALL=C sort)"
+          publishable_crates="$(jq --raw-output \
+            '[.packages[] | select(.source == null and .publish == null) | .name] | sort | .[]' \
+            <<<"$metadata")"
+          test "$declared_crates" = "$publishable_crates" || {
+            echo "The dependency-ordered publish list is not the exact publishable workspace package set." >&2
+            diff -u \
+              <(printf '%s\n' "$publishable_crates") \
+              <(printf '%s\n' "$declared_crates") >&2 || true
+            exit 1
+          }
+          for c in $crates; do
+            package_version="$(jq --raw-output --arg name "$c" \
+              '[.packages[] | select(.name == $name) | .version] | if length == 1 then .[0] else "" end' \
+              <<<"$metadata")"
+            test "$package_version" = "$version" || {
+              echo "$c has version '$package_version', but the release tag requires '$version'" >&2
+              exit 1
+            }
+          done
+          package_args=()
+          for c in $crates; do
+            package_args+=(-p "$c")
+          done
+          # Stable Cargo verifies the complete interdependent package set
+          # against its temporary registry before any irreversible upload.
+          cargo package --locked "${package_args[@]}"
+          for c in $crates; do
+            archive="target/package/${c}-${version}.crate"
+            test -f "$archive" || {
+              echo "Package preflight did not create $archive." >&2
+              exit 1
+            }
+          done
+          server_archive="target/package/axocoatl-server-${version}.crate"
+          server_prefix="axocoatl-server-${version}"
+          server_archive_bytes="$(wc -c < "$server_archive" | tr -d '[:space:]')"
+          server_archive_ceiling=9500000
+          test "$server_archive_bytes" -le "$server_archive_ceiling" || {
+            echo "The axocoatl-server crate is $server_archive_bytes bytes, above the reviewed $server_archive_ceiling-byte release ceiling." >&2
+            exit 1
+          }
+          test "$(tar -tzf "$server_archive" | grep -Fxc "$server_prefix/LICENSE")" = 1
+          test "$(tar -tzf "$server_archive" | grep -Fxc "$server_prefix/THIRD_PARTY_LICENSES.txt")" = 1
+          tar -xOf "$server_archive" "$server_prefix/LICENSE" | cmp -s LICENSE -
+          tar -xOf "$server_archive" "$server_prefix/THIRD_PARTY_LICENSES.txt" |
+            cmp -s axocoatl-server/THIRD_PARTY_LICENSES.txt -
+          remote_ref=refs/axocoatl-release/remote-tag
+          git fetch --no-tags --force origin \
+            "+refs/tags/$GITHUB_REF_NAME:$remote_ref"
+          expected_commit="$(git rev-parse "$GITHUB_SHA^{commit}")"
+          remote_commit="$(git rev-parse "$remote_ref^{commit}")"
+          test "$remote_commit" = "$expected_commit" || {
+            echo "Remote tag $GITHUB_REF_NAME moved from $expected_commit to $remote_commit; refusing to publish crates." >&2
+            exit 1
+          }
           for c in $crates; do
             echo "::group::publish $c"
-            cargo publish -p "$c" --no-verify --allow-dirty || \
-              echo "skip $c (already published or transient) — continuing"
-            sleep 15
+            archive="target/package/${c}-${version}.crate"
+            local_checksum="$(sha256sum "$archive" | awk '{print $1}')"
+            url="https://crates.io/api/v1/crates/${c}/${version}"
+            response="$(mktemp)"
+            status="$(curl --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              --user-agent "axocoatl-release-workflow ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY)" \
+              --silent --show-error --output "$response" --write-out '%{http_code}' "$url")"
+            case "$status" in
+              200)
+                echo "$c $version is already published"
+                ;;
+              404)
+                # The exact 22-crate set was already packaged and verified as
+                # one graph above. Avoid discovering a deterministic package
+                # build failure only after earlier versions were published.
+                CARGO_REGISTRY_TOKEN="$registry_token" \
+                  cargo publish --locked --no-verify -p "$c"
+                visible=false
+                for attempt in {1..18}; do
+                  status="$(curl --retry 2 --retry-all-errors --connect-timeout 10 --max-time 30 \
+                    --user-agent "axocoatl-release-workflow ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY)" \
+                    --silent --show-error --output "$response" --write-out '%{http_code}' "$url")"
+                  case "$status" in
+                    200)
+                      visible=true
+                      break
+                      ;;
+                    404)
+                      sleep 10
+                      ;;
+                    *)
+                      echo "Unexpected crates.io status $status while proving $c $version" >&2
+                      exit 1
+                      ;;
+                  esac
+                done
+                test "$visible" = "true" || {
+                  echo "$c $version was not visible on crates.io after publishing" >&2
+                  exit 1
+                }
+                sleep 10
+                ;;
+              *)
+                echo "Unexpected crates.io status $status while checking $c $version" >&2
+                exit 1
+                ;;
+            esac
+            published_checksum="$(jq --raw-output '.version.checksum // ""' "$response")"
+            published_yanked="$(jq --raw-output '.version.yanked // ""' "$response")"
+            rm -f "$response"
+            test "$published_checksum" = "$local_checksum" || {
+              echo "$c $version checksum mismatch: packaged $local_checksum, crates.io $published_checksum" >&2
+              exit 1
+            }
+            test "$published_yanked" = "false" || {
+              echo "$c $version is yanked on crates.io; refusing to publish a divergent release." >&2
+              exit 1
+            }
             echo "::endgroup::"
           done
+
+  release:
+    name: Reverify and publish GitHub Release
+    needs: [prepare-release, publish-crates]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Inspect release state, download, and reverify assets
+        id: release-state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh release view "$GITHUB_REF_NAME" --json isDraft,isPrerelease,tagName)"
+          test "$(jq --raw-output .tagName <<<"$release_json")" = "$GITHUB_REF_NAME"
+          test "$(jq --raw-output .isPrerelease <<<"$release_json")" = "false"
+          draft="$(jq --raw-output .isDraft <<<"$release_json")"
+          case "$draft" in true|false) ;; *) exit 1 ;; esac
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+          mkdir uploaded
+          gh release download "$GITHUB_REF_NAME" --dir uploaded
+          ./scripts/release-artifact.sh verify-set \
+            "$GITHUB_REF_NAME" \
+            uploaded \
+            x86_64-unknown-linux-gnu \
+            aarch64-unknown-linux-gnu \
+            x86_64-apple-darwin \
+            aarch64-apple-darwin
+      - name: Require the remote tag to still identify this release commit
+        run: |
+          set -euo pipefail
+          remote_ref=refs/axocoatl-release/remote-tag
+          git fetch --no-tags --force origin \
+            "+refs/tags/$GITHUB_REF_NAME:$remote_ref"
+          expected_commit="$(git rev-parse "$GITHUB_SHA^{commit}")"
+          remote_commit="$(git rev-parse "$remote_ref^{commit}")"
+          test "$remote_commit" = "$expected_commit" || {
+            echo "Remote tag $GITHUB_REF_NAME moved from $expected_commit to $remote_commit; refusing to publish the GitHub Release." >&2
+            exit 1
+          }
+      - name: Publish verified release
+        if: steps.release-state.outputs.draft == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+      - name: Prove the release is public and not a prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh release view "$GITHUB_REF_NAME" --json isDraft,isPrerelease,tagName)"
+          test "$(jq --raw-output .tagName <<<"$release_json")" = "$GITHUB_REF_NAME"
+          test "$(jq --raw-output .isDraft <<<"$release_json")" = "false"
+          test "$(jq --raw-output .isPrerelease <<<"$release_json")" = "false"
+
+  deploy-marketing:
+    name: Deploy marketing after the product release is public
+    needs: release
+    permissions:
+      contents: read
+      deployments: write
+    uses: ./.github/workflows/marketing-deploy.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy-docs:
+    name: Deploy docs after the product release is public
+    needs: release
+    permissions:
+      contents: read
+      deployments: write
+    uses: ./.github/workflows/docs-deploy.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

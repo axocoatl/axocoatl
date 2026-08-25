@@ -1,0 +1,45 @@
+{
+  "id": "weather-brief-demo",
+  "name": "Weather brief · MCP approval",
+  "description": "A top-level Agent calls a real local MCP server behind the approval gate, then parks the returned conditions for inspection.",
+  "trigger": { "kind": "manual" },
+  "enabled": true,
+  "nodes": [
+    {
+      "id": "city",
+      "kind": {
+        "type": "text_input",
+        "label": "City",
+        "default_value": "London",
+        "placeholder": "City to look up…",
+        "multiline": false
+      },
+      "position": { "x": -260, "y": 0 }
+    },
+    {
+      "id": "weather-agent",
+      "kind": {
+        "type": "agent",
+        "agent_id": "weather",
+        "input": {
+          "kind": "template",
+          "template": "What is the current weather in {{node:city}}? You must call mcp__weather__get_weather before answering."
+        }
+      },
+      "position": { "x": 20, "y": 0 }
+    },
+    {
+      "id": "inspect-result",
+      "kind": {
+        "type": "interrupt",
+        "input": { "kind": "from_upstream", "nodes": ["weather-agent"] },
+        "resume_strategy": "replace"
+      },
+      "position": { "x": 320, "y": 0 }
+    }
+  ],
+  "edges": [
+    { "from": "city", "to": "weather-agent", "label": null },
+    { "from": "weather-agent", "to": "inspect-result", "label": null }
+  ]
+}

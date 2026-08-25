@@ -6,6 +6,18 @@ use axocoatl_core::{TokenBudget, TokenUsageStats};
 use crate::counter::TokenCounter;
 use crate::error::BudgetError;
 
+fn saturating_fetch_add(value: &AtomicUsize, amount: usize) -> bool {
+    let mut current = value.load(Ordering::Relaxed);
+    loop {
+        let (next, overflowed) = current.overflowing_add(amount);
+        let next = if overflowed { usize::MAX } else { next };
+        match value.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return overflowed,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
 /// Thread-safe token budget tracker for a single agent execution.
 #[derive(Clone)]
 pub struct TokenTracker {
@@ -31,12 +43,18 @@ impl TokenTracker {
         input_tokens: usize,
         output_tokens: usize,
     ) -> Result<(), BudgetError> {
-        let new_input = self.used_input.fetch_add(input_tokens, Ordering::Relaxed) + input_tokens;
-        let new_output =
-            self.used_output.fetch_add(output_tokens, Ordering::Relaxed) + output_tokens;
-        let total = new_input + new_output;
+        let input_overflowed = saturating_fetch_add(&self.used_input, input_tokens);
+        let output_overflowed = saturating_fetch_add(&self.used_output, output_tokens);
+        let used_input = self.used_input.load(Ordering::Relaxed);
+        let used_output = self.used_output.load(Ordering::Relaxed);
+        let combined_overflowed = used_input.checked_add(used_output).is_none();
+        let total = used_input.saturating_add(used_output);
 
-        if total > self.budget.per_execution {
+        if input_overflowed
+            || output_overflowed
+            || combined_overflowed
+            || total > self.budget.per_execution
+        {
             return Err(BudgetError::ExecutionBudgetExceeded {
                 used: total,
                 budget: self.budget.per_execution,
@@ -48,22 +66,24 @@ impl TokenTracker {
     /// Check if a proposed call would exceed budget BEFORE making it. Enforces
     /// both caps: the single-call cap (`per_call`) and the cumulative
     /// per-execution cap. The caller applies the overflow policy (abort/warn).
-    pub fn check_headroom(&self, estimated_input: usize) -> Result<(), BudgetError> {
-        // Per-call cap: a single call's estimated input must fit `per_call`.
-        if estimated_input > self.budget.per_call {
+    pub fn check_headroom(&self, estimated_request_tokens: usize) -> Result<(), BudgetError> {
+        // Per-call cap: the caller's reservation for one request must fit
+        // `per_call`. Provider paths reserve estimated input plus bounded output.
+        if estimated_request_tokens > self.budget.per_call {
             return Err(BudgetError::WouldExceedBudget {
                 current: 0,
-                requested: estimated_input,
+                requested: estimated_request_tokens,
                 budget: self.budget.per_call,
             });
         }
         // Per-execution cap: cumulative usage plus this call must fit.
-        let current =
-            self.used_input.load(Ordering::Relaxed) + self.used_output.load(Ordering::Relaxed);
-        if current + estimated_input > self.budget.per_execution {
+        let current = self.total_used();
+        if current > self.budget.per_execution
+            || estimated_request_tokens > self.budget.per_execution.saturating_sub(current)
+        {
             return Err(BudgetError::WouldExceedBudget {
                 current,
-                requested: estimated_input,
+                requested: estimated_request_tokens,
                 budget: self.budget.per_execution,
             });
         }
@@ -72,7 +92,9 @@ impl TokenTracker {
 
     /// Total tokens used so far (input + output).
     pub fn total_used(&self) -> usize {
-        self.used_input.load(Ordering::Relaxed) + self.used_output.load(Ordering::Relaxed)
+        self.used_input
+            .load(Ordering::Relaxed)
+            .saturating_add(self.used_output.load(Ordering::Relaxed))
     }
 
     /// Get input tokens used.
@@ -145,6 +167,32 @@ mod tests {
     fn record_over_budget_fails() {
         let tracker = TokenTracker::new(test_budget(100), Arc::new(SimpleCounter));
         assert!(tracker.record_usage(60, 50).is_err());
+    }
+
+    #[test]
+    fn hostile_usage_saturates_without_wrapping_budget_state() {
+        let tracker = TokenTracker::new(test_budget(100), Arc::new(SimpleCounter));
+        assert!(matches!(
+            tracker.record_usage(usize::MAX, 1),
+            Err(BudgetError::ExecutionBudgetExceeded {
+                used: usize::MAX,
+                budget: 100
+            })
+        ));
+        assert_eq!(tracker.input_used(), usize::MAX);
+        assert_eq!(tracker.output_used(), 1);
+        assert_eq!(tracker.total_used(), usize::MAX);
+        assert!(tracker.record_usage(1, usize::MAX).is_err());
+        assert_eq!(tracker.input_used(), usize::MAX);
+        assert_eq!(tracker.output_used(), usize::MAX);
+        assert_eq!(tracker.total_used(), usize::MAX);
+        assert!(tracker.check_headroom(1).is_err());
+
+        let max_budget_tracker =
+            TokenTracker::new(test_budget(usize::MAX), Arc::new(SimpleCounter));
+        assert!(max_budget_tracker.record_usage(usize::MAX, 0).is_ok());
+        assert!(max_budget_tracker.record_usage(0, 1).is_err());
+        assert!(max_budget_tracker.check_headroom(1).is_err());
     }
 
     #[test]

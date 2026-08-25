@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "film": "sandbox-terminal-preview",
+  "input_fps": 8,
+  "shots": [
+    { "beat": "session", "source": "shot-session.jpg", "hold_frames": 56 },
+    { "beat": "sandbox", "source": "shot-sandbox.jpg", "hold_frames": 64 },
+    { "beat": "check", "source": "shot-check.jpg", "hold_frames": 64 },
+    { "beat": "preview", "source": "shot-preview.jpg", "hold_frames": 64 }
+  ]
+}

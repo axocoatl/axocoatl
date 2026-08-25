@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "film": "multi-agent-handoff",
+  "input_fps": 8,
+  "shots": [
+    { "beat": "dependency-edge", "source": "shot-dependency-edge.jpg", "hold_frames": 56 },
+    { "beat": "architect", "source": "shot-architect.jpg", "hold_frames": 64 },
+    { "beat": "reviewer", "source": "shot-reviewer.jpg", "hold_frames": 64 },
+    { "beat": "durable-outputs", "source": "shot-durable-outputs.jpg", "hold_frames": 56 }
+  ]
+}

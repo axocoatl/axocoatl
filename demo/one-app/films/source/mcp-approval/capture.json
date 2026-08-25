@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "film": "mcp-approval",
+  "captured_at": "2026-08-25T06:18:25.945Z",
+  "url": "http://localhost:18088/",
+  "browser": "Codex in-app browser",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1
+  },
+  "theme": "dark",
+  "reduced_motion": "no-preference",
+  "timeline": "demo/one-app/films/source/mcp-approval/timeline.json",
+  "timeline_sha256": "fad8958524bf850436ec0195d9cef1d28cbda46fc9d9aeedcbbeda8454be2a56",
+  "keyframes": [
+    {
+      "beat": "request",
+      "path": "demo/one-app/films/source/mcp-approval/shot-request.jpg",
+      "sha256": "82ab2f083d93d9b8548303e85e85599bd0490641405ed53a434ee0ce82e9771a"
+    },
+    {
+      "beat": "pending-approval",
+      "path": "demo/one-app/films/source/mcp-approval/shot-pending-approval.jpg",
+      "sha256": "463fcd19904884151aceeced298fd031ee183a67acfbdaa5488cebbb98b257ca"
+    },
+    {
+      "beat": "deny",
+      "path": "demo/one-app/films/source/mcp-approval/shot-deny.jpg",
+      "sha256": "c5c9f910af3233047acf035e95df61be326a92af551cffed28d069f2c682d008"
+    },
+    {
+      "beat": "allow",
+      "path": "demo/one-app/films/source/mcp-approval/shot-allow.jpg",
+      "sha256": "4faef366c9a8a57cf702f0bfa246ee6311cde6c0587718dc0da1b10fda5f210e"
+    },
+    {
+      "beat": "durable-result",
+      "path": "demo/one-app/films/source/mcp-approval/shot-durable-result.jpg",
+      "sha256": "c426788dc40709416d45d9d93f55314bc56e21b2be64c295e631c0c04e6190fd"
+    }
+  ]
+}

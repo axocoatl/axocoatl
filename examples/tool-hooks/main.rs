@@ -77,6 +77,10 @@ struct WriteFileTool {
 
 #[async_trait::async_trait]
 impl BuiltinTool for WriteFileTool {
+    fn concurrency_policy(&self) -> axocoatl_llm::ConcurrencyPolicy {
+        axocoatl_llm::ConcurrencyPolicy::Exclusive
+    }
+
     fn description(&self) -> &str {
         "Write text content to a file at the given path"
     }

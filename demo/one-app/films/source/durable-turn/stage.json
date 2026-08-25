@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "film": "durable-turn",
+  "timeline": "demo/one-app/films/source/durable-turn/timeline.json",
+  "timeline_sha256": "852200d0784a2417aa9196f54108da07690b19dc76e0283d8d63479ba16a2502",
+  "input_fps": 8,
+  "frame_count": 384,
+  "duration_seconds": 48,
+  "sequence_sha256": "a91051efa7b56dd89de442d5b28315761b6133a6fe4ca4f7a7fd762e97b02352",
+  "shots": [
+    {
+      "beat": "context",
+      "source": "shot-context.jpg",
+      "source_sha256": "ce627ce589a6d11d84fb932d68f162d1cd68a23878c6b4240f54fd048b037993",
+      "hold_frames": 88,
+      "first_frame": 1,
+      "last_frame": 88
+    },
+    {
+      "beat": "reload",
+      "source": "shot-reload.jpg",
+      "source_sha256": "bb5562d361d18dcb9dfb5c35797ce43ff7e7534fa7aaad4b3ede46129c6aeef1",
+      "hold_frames": 96,
+      "first_frame": 89,
+      "last_frame": 184
+    },
+    {
+      "beat": "cancelled-history",
+      "source": "shot-cancelled-history.jpg",
+      "source_sha256": "228a683692bd6e849104b4bc5ff990b23a8968629eb21b3440c72a94a148b239",
+      "hold_frames": 104,
+      "first_frame": 185,
+      "last_frame": 288
+    },
+    {
+      "beat": "clean-next-turn",
+      "source": "shot-clean-next-turn.jpg",
+      "source_sha256": "d70af63c60b10d6199b3357d29615b232b93d1bff58756ec72904c208aebd3a7",
+      "hold_frames": 96,
+      "first_frame": 289,
+      "last_frame": 384
+    }
+  ],
+  "poster_beat": "cancelled-history",
+  "poster_frame": 236
+}

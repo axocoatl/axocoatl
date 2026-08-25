@@ -1,0 +1,112 @@
+---
+title: Context, History, and Stop
+description: Attach immutable context, search and export durable turns, stop exact work, and rewind conversation state safely.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Conversation is durable Session state. Context, Stop, Retry, export, and rewind
+all operate against that recorded history, but they have different boundaries.
+
+## Attach files as context
+
+Use the attachment control above the composer for material that is not already
+available in the Workspace. Uploaded files become immutable references with one
+of two scopes:
+
+- **Once** — selected for the next accepted turn, then consumed after that turn
+  begins durably;
+- **Session** — remains selected for future turns until you remove it.
+
+Images may be up to 10 MiB. Other supported documents may be up to 25 MiB.
+Extracted text or OCR stored for a reference is capped at 256 KiB.
+
+Removing a reference from the composer does not rewrite a historical turn that
+already used it. History keeps an immutable relationship so the past response
+can still be audited and the attachment can still be previewed or downloaded.
+
+<Aside type="note" title="Attempts do not receive attachments">
+Turn off Explore several ways before sending a context-bearing request.
+Attachments are supported by normal Session turns, not isolated Attempts.
+</Aside>
+
+## Search and export History
+
+Choose **History** from an open Session. Search matches literal text without
+case sensitivity across requests, responses, errors, and context metadata.
+Choose the current Session or all Sessions as the scope.
+
+Export produces either:
+
+<Tabs>
+  <TabItem label="Markdown">
+    A readable transcript for review or handoff.
+  </TabItem>
+  <TabItem label="JSON">
+    Structured Session and turn records for tooling or archival use.
+  </TabItem>
+</Tabs>
+
+Export is a copy, not a backup of the complete runtime. It does not include the
+working tree, every data store, or enough information to restore Axocoatl. See
+[Data and backup](/operate/data-backup/).
+
+## Stop the exact active turn
+
+Use **Stop** in the Session header or composer while a turn is running.
+Axocoatl identifies the active turn by its durable ID so a delayed command
+cannot cancel a different, newer turn.
+
+Stop is cooperative:
+
+1. visible streaming is interrupted;
+2. a tool already executing may continue to a safe boundary;
+3. the turn is recorded as stopped or interrupted;
+4. completed file, network, or external-service effects are not rolled back.
+
+If the connection dropped, the workbench hydrates the active-turn endpoint
+before it re-enables Stop. A rejection means the target turn changed or was no
+longer active; refresh History before acting again.
+
+## Retry a turn
+
+Retry re-sends the request that produced a prior response. It is disabled when
+that turn used immutable attached context because silently substituting the
+current attachment selection would change the request. Attach the files again
+and send a new turn instead.
+
+Retry can repeat tool effects. Review the original route and current Workspace
+state before using it on a mutating request.
+
+## Rewind conversation state
+
+Rewind is available from History for an autonomous single-Agent Session when no turn is
+active and no attempt set is unresolved. It moves the durable conversation
+head to the selected point and prefills the earlier request for revision.
+
+Rewind does **not**:
+
+- erase the old ledger entries;
+- delete attachments or memory already persisted;
+- restore files or Git state;
+- reverse network calls or other external effects;
+- reattach context from the old turn.
+
+<Steps>
+
+1. Stop or wait for the active turn.
+2. Finish any unresolved attempt set.
+3. Inspect Git and external state.
+4. Open History, choose the target turn, and confirm rewind.
+5. Review the prefilled request, reattach required context, and send only when
+   repeating its effects is safe.
+
+</Steps>
+
+<Aside type="caution" title="History retention is not secure deletion">
+Rewind changes the active conversational branch. It is not a data-erasure
+operation. Use filesystem and backup policy appropriate to the sensitivity of
+the Workspace and runtime data.
+</Aside>
+
+Continue with [Settings →](/configure/settings/)

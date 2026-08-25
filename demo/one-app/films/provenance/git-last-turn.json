@@ -1,0 +1,186 @@
+{
+  "schema_version": 2,
+  "film": "git-last-turn",
+  "recorded_at": "2026-08-25T08:14:40.879Z",
+  "source": {
+    "branch": "codex/session-capabilities",
+    "head": "7b375732cf941bcf6092b7c95c257c623f4d7543",
+    "dirty": true,
+    "patch_sha256": "af250b2505dfc91721e86deba9bc4b39e3ffd6f0070dcb91560b086dcda0163c",
+    "patch_excludes": [
+      "demo/one-app/films/source/",
+      "demo/one-app/films/staged/",
+      "demo/one-app/films/provenance/",
+      "sites/marketing/assets/films/"
+    ],
+    "content_sha256": "1562093374d422f33ef7e9825f71016c9541198b99d33a05747a7d57f547e0f5"
+  },
+  "binary": {
+    "path": "target/release/axocoatl",
+    "version": "axocoatl 1.0.0",
+    "sha256": "afcb51e75c5c64a6e1d1da36fa07110b5f9ba6031e3a2f3ce660de9879b045d1"
+  },
+  "capture": {
+    "record": "demo/one-app/films/source/git-last-turn/capture.json",
+    "record_sha256": "8f5c5929e10f68c12943e402f029f77a3d4e99689bcb2fdfbe7a9a7ca2cf225b",
+    "url": "http://localhost:18080/",
+    "browser": "Codex in-app browser",
+    "viewport": {
+      "width": 1280,
+      "height": 720,
+      "device_scale_factor": 1
+    },
+    "theme": "dark",
+    "reduced_motion": "no-preference",
+    "keyframes": [
+      {
+        "beat": "kept-decision",
+        "path": "demo/one-app/films/source/git-last-turn/shot-kept-decision.jpg",
+        "sha256": "6af84966151d381ddb67edf0c047e68144b797249a5c2756b4eea5a468cde0cd"
+      },
+      {
+        "beat": "uncommitted",
+        "path": "demo/one-app/films/source/git-last-turn/shot-uncommitted.jpg",
+        "sha256": "06470df3a17efc74e0b90d24d62961f0cc976cf1704bc7b073a8dfc15a046518"
+      },
+      {
+        "beat": "last-turn",
+        "path": "demo/one-app/films/source/git-last-turn/shot-last-turn.jpg",
+        "sha256": "44226f19db93063ee5577b4505d912d9a494376d6ba690b158117a9e515eee3d"
+      },
+      {
+        "beat": "restart",
+        "path": "demo/one-app/films/source/git-last-turn/shot-restart.jpg",
+        "sha256": "d72622fb80e874c24447fd840968537413a10953115a83853098c248f22c5034"
+      },
+      {
+        "beat": "ownership",
+        "path": "demo/one-app/films/source/git-last-turn/shot-ownership.jpg",
+        "sha256": "e2e8bacc11f0ff9fe1e24ac14bc20b3d84321b26dd388971a23246f589df4274"
+      }
+    ]
+  },
+  "edit": {
+    "timeline": "demo/one-app/films/source/git-last-turn/timeline.json",
+    "timeline_sha256": "37526e3106c9ded062e86fbb6ef377625d6cb803e8efadaab23847621a55b035",
+    "stage_record": "demo/one-app/films/source/git-last-turn/stage.json",
+    "stage_record_sha256": "36c058078f8635a81920ff55586d6904ec691242aa57d191da41ec05d809e495",
+    "poster_frame": 100,
+    "poster_beat": "last-turn",
+    "poster_source_sha256": "44226f19db93063ee5577b4505d912d9a494376d6ba690b158117a9e515eee3d",
+    "frame_count": 200,
+    "sequence_sha256": "2f924940ebe9f2d0e1e8625b587926d71178ccff51adb3343eb5733127daa2f5"
+  },
+  "media": {
+    "mp4": {
+      "path": "sites/marketing/assets/films/git-last-turn.mp4",
+      "sha256": "8da354c20242c2530379b39ed098fdf522a0599ca18bc0468428dc436957756e",
+      "duration_seconds": 25,
+      "codec": "h264",
+      "width": 1280,
+      "height": 720,
+      "pixel_format": "yuv420p",
+      "fps": "24/1",
+      "audio_streams": 0,
+      "fast_start": true
+    },
+    "poster": {
+      "path": "sites/marketing/assets/films/git-last-turn.jpg",
+      "sha256": "44226f19db93063ee5577b4505d912d9a494376d6ba690b158117a9e515eee3d",
+      "codec": "mjpeg",
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "evidence": {
+    "record": "demo/one-app/films/source/git-last-turn/evidence.json",
+    "record_sha256": "d85c4ee754e9412b54e37eed445d1178bdf8b56ef25566d779e9d6f57f2298e0",
+    "checks": [
+      {
+        "id": "kept-decision",
+        "status": "passed",
+        "detail": "Session History showed completed canonical Turn turn-attempt-148160a1-926b-4c6f-84e4-921f912dcb62-1 with the exact implementation request and non-empty Root cause / Change / Proof result. The matching Keep receipt records attempt set 148160a1-926b-4c6f-84e4-921f912dcb62, selected index 1, and only lib/orders.js."
+      },
+      {
+        "id": "uncommitted",
+        "status": "passed",
+        "detail": "Source Control opened on Last turn immediately after Keep and showed exactly one unstaged modified path, lib/orders.js, with +1/-1 while the empty commit control remained Commit 0 staged."
+      },
+      {
+        "id": "last-turn",
+        "status": "passed",
+        "detail": "The readable inline Last turn diff showed the exact one-line production hunk, changing return roundCents(subtotal - off) to return Math.max(0, roundCents(subtotal - off)); lib/orders.test.js remained byte-identical to demo-seed."
+      },
+      {
+        "id": "restart",
+        "status": "passed",
+        "detail": "Foreground daemon session 9840 stopped by Ctrl-C and exited 0, then the exact axocoatl 1.0.0 binary restarted as session 57299 with the same config and unchanged capture root; first readiness was logged at 2026-08-25T08:11:22.938451Z on port 18080. Reopening the same Session restored Last turn 1 with lib/orders.js +1/-1 and the identical Math.max hunk, while the turns API returned the same diagnosis and canonical kept Turn ids."
+      },
+      {
+        "id": "ownership",
+        "status": "passed",
+        "detail": "After restart, the primary Terminal check passed all 6 tests and All changes still showed only the unstaged lib/orders.js patch. HEAD and demo-seed remained b2bc8c7d04485b30fb58d0ceb60e2d137b1e03a9, staging stayed optional, Commit remained at 0 staged, and no commit was created."
+      }
+    ],
+    "identities": {
+      "fixture": "northstar-storefront",
+      "release_binary": "target/release/axocoatl (axocoatl 1.0.0)",
+      "release_binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+      "capture_config": "demo/one-app/axocoatl.demo.yaml",
+      "capture_config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+      "capture_data_root": "/private/tmp/axocoatl-one-app-showcase-northstar-git-launch-capture/data",
+      "workspace_id": "wsp-fcdbe4be-165b-4b28-8d66-cdbc70719971",
+      "workspace_path": "/private/tmp/axocoatl-one-app-showcase-northstar-git-launch-capture/workspace",
+      "workspace_record_sha256": "69112837827a897f469e7d29954d326c4eb99ee2e4566c5f208063d92cf0fd87",
+      "session_id": "ses-10e86702-7a93-470d-8f35-979d51f455e4",
+      "session_name": "Northstar Ways launch",
+      "session_runtime": "podman generation=1 state=ready runtime_id=ses-10e86702-7a93-470d-8f35-979d51f455e4 prepared_at=1787645492",
+      "session_record_sha256_after_capture_cleanup": "33963f5c849da61cb51e47106d1b2ba2c65ed68cc70ab4bb49e975f5ea8578d7",
+      "diagnosis_turn_id": "turn-369b8e04-0177-44b0-ba90-9c1aab097a1a",
+      "diagnosis_turn_output_sha256": "07410138aec60f60b10be339587550c576c492945c818ea592683a7c47886d5a",
+      "canonical_kept_turn_id": "turn-attempt-148160a1-926b-4c6f-84e4-921f912dcb62-1",
+      "canonical_kept_turn_output_sha256": "49f1a9130edc0f4aea08bc0eff8fdb86af4280ee366c8ed99722f2ea4c51a95c",
+      "turn_ledger_sha256": "84cab15dae88e5ad34b3df1d7c239483d60b31c4bef05bd2799ce4326ba6f536",
+      "attempt_set_id": "148160a1-926b-4c6f-84e4-921f912dcb62",
+      "kept_attempt_index": "1",
+      "keep_receipt": "workspace/.axo-variants/6de6cc3eabc21420/receipts/keep-55d8ad93a7cb05120ba08076.json",
+      "keep_receipt_sha256": "227869d8ca7c88938e6b340521d5a490aa558ebdd4aa7ac37966ffa52017e1d5",
+      "keep_receipt_status": "main; lib/orders.js modified +1/-1; staged=false; unstaged=true; last_turn=true; clean=false",
+      "kept_path": "lib/orders.js",
+      "kept_hunk": "return Math.max(0, roundCents(subtotal - off));",
+      "kept_patch_sha256": "78b9b9a4ed48e926485ea065594fa8b4dbcd21433a7f9b11c996984679c4d2a0",
+      "kept_file_sha256": "7db3bf33d39dba4f43c67e40f39f6837c8259ac4be1608871d6d6b8dc44f75db",
+      "test_file_sha256": "2bbe98746d19c850b8fad7ae7bab12c1f7ac73b1b80f1630562fec4f6c1514b4",
+      "test_file_demo_seed_sha256": "2bbe98746d19c850b8fad7ae7bab12c1f7ac73b1b80f1630562fec4f6c1514b4",
+      "git_status": " M lib/orders.js",
+      "git_diff_stat": "lib/orders.js | 2 +-, 1 file changed, 1 insertion(+), 1 deletion(-)",
+      "staged_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "head": "b2bc8c7d04485b30fb58d0ceb60e2d137b1e03a9",
+      "head_tree": "e87d1ce9b03c65ad10978692eba2f52d8d1237b0",
+      "demo_seed": "b2bc8c7d04485b30fb58d0ceb60e2d137b1e03a9",
+      "demo_seed_tree": "e87d1ce9b03c65ad10978692eba2f52d8d1237b0",
+      "primary_check": "npm run check: tests 6, pass 6, fail 0",
+      "daemon_stop_proof": "foreground exec session 9840; Ctrl-C; exit 0",
+      "daemon_restart_command": "env AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-northstar-git-launch-capture AXOCOATL_DEMO_BIN=target/release/axocoatl ./demo/one-app/start.sh",
+      "daemon_restart_proof": "foreground exec session 57299; same data root, config, release binary, IPC root, and server port 18080; first ready log 2026-08-25T08:11:22.938451Z",
+      "postrestart_turn_ids": [
+        "turn-369b8e04-0177-44b0-ba90-9c1aab097a1a",
+        "turn-attempt-148160a1-926b-4c6f-84e4-921f912dcb62-1"
+      ],
+      "postrestart_runtime_capture": "container 7e24a2d919cb; axo-ses-ses-10e86702-7a93-470d-8f35-979d51f455e4; Up 4 minutes; 127.0.0.1:34441->8765/tcp",
+      "postrestart_ui_proof": "same Session; Last turn 1; lib/orders.js +1/-1; exact Math.max(0, roundCents(subtotal - off)) hunk",
+      "capture_url": "http://localhost:18080/",
+      "capture_browser": "Codex in-app browser local capture",
+      "capture_viewport": "1280x720",
+      "capture_timeline_sha256": "37526e3106c9ded062e86fbb6ef377625d6cb803e8efadaab23847621a55b035",
+      "screenshot_sha256": [
+        "shot-kept-decision.jpg=6af84966151d381ddb67edf0c047e68144b797249a5c2756b4eea5a468cde0cd",
+        "shot-uncommitted.jpg=06470df3a17efc74e0b90d24d62961f0cc976cf1704bc7b073a8dfc15a046518",
+        "shot-last-turn.jpg=44226f19db93063ee5577b4505d912d9a494376d6ba690b158117a9e515eee3d",
+        "shot-restart.jpg=d72622fb80e874c24447fd840968537413a10953115a83853098c248f22c5034",
+        "shot-ownership.jpg=e2e8bacc11f0ff9fe1e24ac14bc20b3d84321b26dd388971a23246f589df4274"
+      ],
+      "cleanup": "Session closed after capture with runtime cleanup_confirmed=true; HEAD remained demo-seed and the kept patch remained uncommitted"
+    }
+  }
+}

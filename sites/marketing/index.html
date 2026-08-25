@@ -3,484 +3,153 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Axocoatl — open-source agentic runtime in Rust</title>
-  <meta name="description" content="An open-source Rust runtime for agents that self-coordinate, remember across runs, survive crashes, and run entirely on your own hardware.">
-  <meta name="author" content="Axocoatl Contributors">
+  <title>Axocoatl — the local-first workbench for coding agents</title>
+  <meta name="description" content="Run coding agents through context, files, Terminal, Preview, tools, History, and deliberate Git control inside one durable Session workbench.">
   <meta name="theme-color" content="#3E7C5C">
   <link rel="canonical" href="https://axocoatl.ai/">
-  <!-- Open Graph -->
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Axocoatl">
-  <meta property="og:locale" content="en_US">
   <meta property="og:url" content="https://axocoatl.ai/">
-  <meta property="og:title" content="Axocoatl — open-source agentic runtime in Rust">
-  <meta property="og:description" content="An open-source Rust runtime for agents that self-coordinate, remember across runs, survive crashes, and run entirely on your own hardware.">
+  <meta property="og:title" content="Axocoatl — the local-first workbench for coding agents">
+  <meta property="og:description" content="One durable Session for agent conversations, context, files, terminal, preview, tools, history, and Git.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Axocoatl — open-source agentic runtime in Rust">
-  <!-- Twitter / X -->
+  <meta property="og:image:alt" content="Axocoatl: the local-first workbench for coding agents">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:site" content="@axocoatl">
-  <meta name="twitter:title" content="Axocoatl — open-source agentic runtime in Rust">
-  <meta name="twitter:description" content="An open-source Rust runtime for agents that self-coordinate, remember across runs, survive crashes, and run entirely on your own hardware.">
+  <meta name="twitter:title" content="Axocoatl — the local-first workbench for coding agents">
+  <meta name="twitter:description" content="One durable Session for agent conversations, context, files, terminal, preview, tools, history, and Git.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="Axocoatl — open-source agentic runtime in Rust">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles/tokens.css">
-  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/base.css?v=20260818-narrative">
   <link rel="stylesheet" href="/styles/finder.css">
-  <link rel="stylesheet" href="/styles/product-mocks.css">
-  <script type="module" src="/components/ax-site-nav.js"></script>
-  <script type="module" src="/components/ax-pillar.js"></script>
-  <script type="module" src="/components/ax-cli-snippet.js"></script>
-  <script type="module" src="/components/ax-scripted-lattice.js"></script>
-  <script type="module" src="/components/ax-automation-card.js"></script>
-  <script type="module" src="/components/ax-install-bar.js"></script>
-  <script type="module" src="/components/ax-footer.js"></script>
+  <script type="module" src="/components/ax-site-nav.js?v=20260818-narrative"></script>
+  <script type="module" src="/components/ax-footer.js?v=20260818-narrative"></script>
   <script type="module" src="/components/ax-theme-toggle.js"></script>
-  <!-- JSON-LD: Organization + WebSite + SoftwareApplication.  Same
-       positioning the brand uses ("agentic runtime for teams that
-       ship"), Apache-2.0, Rust, open source. -->
+  <script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script>
   <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@graph": [
-      {
-        "@type": "Organization",
-        "@id": "https://axocoatl.ai/#organization",
-        "name": "Axocoatl",
-        "alternateName": "Axocoatl Contributors",
-        "url": "https://axocoatl.ai/",
-        "logo": {
-          "@type": "ImageObject",
-          "url": "https://axocoatl.ai/assets/mark.png",
-          "width": 512,
-          "height": 512
-        },
-        "description": "Open-source Rust runtime for self-coordinating multi-agent systems. Real workflows. Local-first.",
-        "sameAs": [
-          "https://github.com/axocoatl/axocoatl",
-          "https://docs.axocoatl.ai/",
-          "https://crates.io/crates/axocoatl-cli",
-          "https://www.npmjs.com/org/axocoatl"
-        ]
-      },
-      {
-        "@type": "WebSite",
-        "@id": "https://axocoatl.ai/#website",
-        "url": "https://axocoatl.ai/",
-        "name": "Axocoatl",
-        "description": "An open-source Rust runtime for agents that self-coordinate, remember across runs, survive crashes, and run entirely on your own hardware.",
-        "publisher": { "@id": "https://axocoatl.ai/#organization" },
-        "inLanguage": "en-US"
-      },
-      {
-        "@type": "SoftwareApplication",
-        "@id": "https://axocoatl.ai/#software",
-        "name": "Axocoatl",
-        "url": "https://axocoatl.ai/",
-        "downloadUrl": "https://axocoatl.ai/install",
-        "softwareVersion": "0.1.4",
-        "applicationCategory": "DeveloperApplication",
-        "applicationSubCategory": "AI agent runtime",
-        "operatingSystem": "Linux, macOS",
-        "fileSize": "26 MB",
-        "programmingLanguage": "Rust",
-        "license": "https://www.apache.org/licenses/LICENSE-2.0",
-        "softwareRequirements": "Rust 1.82+ (build-from-source path) or a supported binary release",
-        "image": "https://axocoatl.ai/assets/og-home.png",
-        "screenshot": "https://axocoatl.ai/assets/og-home.png",
-        "description": "Open-source agentic runtime: persistent multi-agent systems coordinated through a stigmergic event lattice. Local-first. Provider-agnostic (Ollama, OpenAI, Anthropic, Mistral, Gemini, OpenRouter).",
-        "offers": {
-          "@type": "Offer",
-          "price": "0",
-          "priceCurrency": "USD",
-          "availability": "https://schema.org/InStock"
-        },
-        "publisher": { "@id": "https://axocoatl.ai/#organization" },
-        "creator": { "@id": "https://axocoatl.ai/#organization" },
-        "isAccessibleForFree": true
-      }
-    ]
-  }
+  {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Axocoatl","url":"https://axocoatl.ai/","applicationCategory":"DeveloperApplication","operatingSystem":"GNU/Linux with glibc 2.35 or newer; macOS 11 or newer; Windows through WSL2","programmingLanguage":"Rust","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Open-source, local-first workbench for running coding agents inside durable Sessions."}
   </script>
 </head>
 <body>
-
   <ax-site-nav></ax-site-nav>
 
-  <main>
-
-    <!-- ─────────────── Hero ─────────────── -->
+  <main id="main-content">
     <section class="container hero">
-      <span class="hero-tagline">
-        <span class="hero-tagline-dot"></span>
-        v0.1.4 · Rust · Apache-2.0
-      </span>
-      <h1>Real workflows.<br>No theater.</h1>
-      <p class="lede">
-        Agents that coordinate without an orchestrator, remember across
-        runs, and never leave your machine. An open-source Rust runtime:
-        one 26 MB binary, your hardware, your model, your data.
-      </p>
+      <span class="hero-note">Open source · local-first · Apache-2.0</span>
+      <h1>The local-first workbench<br>for coding agents.</h1>
+      <p class="lede">Open a repository and give an Agent—or a configured team—a durable Session. Each accepted Turn keeps its request, context snapshot, Agent output, final lifecycle state, and bounded tool Route in History. Resulting changes remain ordinary Git decisions.</p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="/install">Install →</a>
-        <a class="btn btn-ghost" href="/why">Why Axocoatl</a>
+        <a class="btn btn-ghost" href="https://docs.axocoatl.ai/start/install/">Get started</a>
       </div>
 
-      <div style="margin-top: var(--s-6);">
-        <video src="/assets/lattice.mp4" autoplay loop muted playsinline preload="metadata"
-          style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
-          aria-label="The Axocoatl lattice: agents coordinating as a live graph"></video>
-      </div>
+      <ax-product-film
+        class="product-film-hero"
+        film="session-workbench"
+        src="/assets/films/session-workbench.mp4"
+        poster="/assets/films/session-workbench.jpg"
+        label="An Axocoatl Session with conversation and repository tools"
+        caption="Conversation stays central while Files, Source Control, Preview, and Terminal open around the same Session."
+        preload="metadata"
+        autoplay
+      ></ax-product-film>
 
-      <div class="trust-row" style="margin-top: var(--s-6);">
-        <span>400+ tests</span>
-        <span>26 MB binary</span>
-        <span>Zero telemetry</span>
-        <span>Ollama · OpenAI · Anthropic · Mistral · Gemini</span>
-        <span>Apache-2.0</span>
+      <div class="trust-row" aria-label="Product facts">
+        <span>Durable Sessions</span><span>Local sandbox by default</span><span>Your providers and tools</span><span>Normal Git review</span>
       </div>
     </section>
 
-    <!-- ─────────────── Three pillars ─────────────── -->
-    <section class="container section">
+    <section class="container section section-rule">
       <div class="section-head">
-        <span class="eyebrow">What's different</span>
-        <h2>A runtime, not a framework.</h2>
-        <p class="muted">
-          Most agent tooling optimizes for the aesthetic of AI work. We
-          optimize for the unglamorous reality: the work that ships.
-        </p>
+        <span class="eyebrow">One durable work surface</span>
+        <h2>The Session keeps the record with the work.</h2>
+        <p>Agent work crosses context, files, commands, previews, tools, restarts, and review. Axocoatl gives it one folder-anchored Session record, with conversation as the spine and current repository state visible beside it.</p>
       </div>
-      <div class="pillars">
-        <ax-pillar glyph="⌬">
-          <h3>Coordinates itself</h3>
-          <p>
-            Agents self-activate on a stigmergic event lattice. A finished
-            agent's signal pushes the next one past its threshold. No central
-            orchestrator handing out tasks.
-          </p>
-        </ax-pillar>
-        <ax-pillar glyph="◈">
-          <h3>Actually remembers</h3>
-          <p>
-            Four memory tiers and agent-editable core memory, with on-device
-            recall. Checkpointed, so a crash resumes from the last step instead
-            of starting over.
-          </p>
-        </ax-pillar>
-        <ax-pillar glyph="◇">
-          <h3>Yours by default</h3>
-          <p>
-            Your hardware, your model, your data. Zero telemetry, air-gappable,
-            one binary. The only network call is the one you wired.
-          </p>
-        </ax-pillar>
+      <div class="grid-3">
+        <article class="card"><span class="card-kicker">Session</span><h3>Accept the work before execution</h3><p>Each turn records its request and context before the Agent starts. Output, bounded tool evidence, failure, cancellation, and interruption remain attached to the Session.</p></article>
+        <article class="card"><span class="card-kicker">Workbench</span><h3>Open tools around the conversation</h3><p>Read and edit repository files, run commands in Terminal, inspect the app in Preview, and open Source Control without changing work items.</p></article>
+        <article class="card"><span class="card-kicker">Control</span><h3>Keep execution inspectable</h3><p>Sandbox boundaries, MCP approvals, visible tool activity, History, and deliberate Git review leave the repository and the decision with you.</p></article>
+      </div>
+      <ax-product-film
+        film="durable-turn"
+        src="/assets/films/durable-turn.mp4"
+        poster="/assets/films/durable-turn.jpg"
+        label="An active Axocoatl Session turn reconnecting after reload and ending in History"
+        caption="Reloading reconnects to the exact active turn. Stop preserves an honest cancelled state in History."
+      ></ax-product-film>
+    </section>
+
+    <section class="container section section-rule">
+      <div class="section-head">
+        <span class="eyebrow">The repository stays in charge</span>
+        <h2>Review what the agent actually did.</h2>
+        <p>The final response is one part of the result. Durable History keeps the accepted request, context, Agent output, bounded tool Route, and final lifecycle state. Source Control shows the repository as it exists now.</p>
+      </div>
+      <div class="grid-3">
+        <article class="card"><span class="card-kicker">Route</span><h3>See the execution</h3><p>Canonical tool calls, bounded results, and failure states remain in History. Source Control separately shows current repository changes.</p></article>
+        <article class="card"><span class="card-kicker">Checks</span><h3>Use repository evidence</h3><p>Run the repository’s real command in Terminal. In Ways, run the same configured Check against every completed attempt. A polished answer does not outrank a failing test, type check, lint, or build.</p></article>
+        <article class="card"><span class="card-kicker">Git</span><h3>Review before commit</h3><p>Inspect the current diff or filter it to paths attributed to the latest durable Turn. Stage, discard, switch branches, and commit deliberately.</p></article>
       </div>
     </section>
 
-    <!-- ─────────────── The lattice does the routing ─────────────── -->
-    <section class="container section">
+    <section class="container section section-rule">
       <div class="split">
-        <div>
-          <span class="eyebrow">Concept · 30 seconds</span>
-          <h2>The lattice does the routing.</h2>
-          <p>
-            Every other framework has a scheduler at its center deciding
-            "next, run agent B." Axocoatl doesn't. Agents declare
-            <code>depends_on</code> and an event lattice accumulates
-            pheromone-style signals; when an agent's threshold is
-            crossed, it activates itself.
-          </p>
-          <p>
-            There's no orchestrator. The order is whatever the
-            dependency graph implies. New agent that depends on
-            two others? Just declare it. Nothing gets rewired.
-          </p>
-          <a class="btn btn-ghost" href="/concepts" style="margin-top: var(--s-4);">
-            How it works →
-          </a>
+        <div class="stack">
+          <span class="eyebrow">When one answer is not enough</span>
+          <h2>Explore several real Ways.</h2>
+          <p>One Agent or a configured team remains the direct path. When the implementation is genuinely uncertain, the same Session can run several isolated Ways from one task and repository snapshot, with provider-safe prior Session context.</p>
+          <p>While the decision is open, compare each candidate's Outcome, Route, available diff, Checks, cost, and optional Judge. Before Checks, changed paths and diffs depend on the live attempt runtime; completed Check evidence survives reload. Keep one for Git review or finish without keeping. Either choice cleans up the attempt set. If you Keep one, History retains its task, output, and turn attribution.</p>
+          <a href="/showcase">See when several Ways help →</a>
         </div>
         <div class="code-pane">
-          <div class="code-pane-head">
-            <span class="finder-lights">
-              <span class="finder-light red"></span>
-              <span class="finder-light amber"></span>
-              <span class="finder-light green"></span>
-            </span>
-            <span>axocoatl.yaml</span>
-          </div>
-<pre><code><span class="code-key">agents:</span>
-  - <span class="code-key">id:</span> <span class="code-string">researcher</span>
-    <span class="code-key">provider:</span> <span class="code-string">ollama</span>
-    <span class="code-key">model:</span> <span class="code-string">llama3.2</span>
-    <span class="code-key">depends_on:</span> []
-  - <span class="code-key">id:</span> <span class="code-string">summarizer</span>
-    <span class="code-key">provider:</span> <span class="code-string">ollama</span>
-    <span class="code-key">model:</span> <span class="code-string">llama3.2</span>
-    <span class="code-key">depends_on:</span> [<span class="code-string">researcher</span>]   <span class="code-comment"># activates when researcher completes</span>
+          <div class="code-pane-head">optional decision mode</div>
+          <pre><code><span class="code-comment">same task + safe context + snapshot</span>
+       │
+       ├── <span class="code-key">way 1</span> · agent A · model X
+       ├── <span class="code-key">way 2</span> · agent B · model Y
+       └── <span class="code-key">way 3</span> · agent C · model Z
 
-<span class="code-key">workflows:</span>
-  - <span class="code-key">id:</span> <span class="code-string">research-and-summarize</span>
-    <span class="code-key">agents:</span> [<span class="code-string">researcher</span>, <span class="code-string">summarizer</span>]
-    <span class="code-key">entry_point:</span> <span class="code-string">researcher</span></code></pre>
+<span class="code-comment">Checks → compare → Keep one</span></code></pre>
         </div>
       </div>
     </section>
 
-    <!-- ─────────────── Memory · agents that remember ─────────────── -->
-    <section class="container section">
-      <div class="split">
-        <div>
-          <span class="eyebrow">Concept · 30 seconds</span>
-          <h2>Agents that actually remember.</h2>
-          <p>
-            Most agents are stateless. Axocoatl gives each one real memory:
-            a live session, a daily log it can read back by date, and a
-            neural recall tier with on-device embeddings, so nothing it
-            learns ever calls out to an API.
-          </p>
-          <p>
-            The part that matters most is core memory: small, agent-editable
-            blocks the agent curates as it works, rendered into its context
-            every turn. While it sits idle, a background
-            pass promotes durable facts up into those blocks. Understanding
-            compounds instead of resetting every run.
-          </p>
-          <a class="btn btn-ghost" href="/concepts" style="margin-top: var(--s-4);">
-            How it works →
-          </a>
-        </div>
+    <section class="container section section-rule">
+      <div class="split reverse">
         <div class="code-pane">
-          <div class="code-pane-head">
-            <span class="finder-lights">
-              <span class="finder-light red"></span>
-              <span class="finder-light amber"></span>
-              <span class="finder-light green"></span>
-            </span>
-            <span>core-memory · agent-curated</span>
-          </div>
-<pre><code><span class="code-comment"># in the prompt every turn, edited by the agent</span>
-<span class="code-key">[persona]</span>  How I work, the standards I hold to.
-<span class="code-key">[human]</span>    What I know about who I'm working with.
-<span class="code-key">[project]</span>  Durable decisions, conventions, context.</code></pre>
+          <div class="code-pane-head">one local control plane</div>
+          <pre><code><span class="code-key">daemon</span>
+├── supervised agent actors
+├── durable Session ledger
+├── checkpoints + memory
+├── provider adapters
+├── MCP tools + Skills
+└── rootless sandboxes
+
+<span class="code-comment">one workbench, not a dashboard kit</span></code></pre>
+        </div>
+        <div class="stack">
+          <span class="eyebrow">Backed by a runtime</span>
+          <h2>Close the laptop. Come back.</h2>
+          <p>The browser is the product surface. A Rust daemon supervises agent actors, persists the canonical Session ledger, checkpoints execution state, and owns sandbox lifecycle.</p>
+          <p>Local-first is the default, not a claim that nothing can leave the machine. Podman runs locally, but its default bridge permits container egress. Providers, MCP servers, web search, webhooks, the optional remote sandbox, Podman image or package downloads, and the one-time Hugging Face embedding download can use the network. <code>sandbox.network: none</code> blocks only code and commands inside the local Podman sandbox; daemon-side integrations remain separate paths.</p>
         </div>
       </div>
     </section>
 
-    <!-- ─────────────── Sessions · the builder ─────────────── -->
-    <section class="container section">
-      <div class="section-head">
-        <span class="eyebrow">Sessions</span>
-        <h2>Build with your agents.</h2>
-        <p class="muted">
-          The Sessions cockpit is where the work happens. Pick a
-          directory, pick an agent (or a whole lattice) and watch
-          them operate inside a sandboxed copy of your folder. Reading,
-          writing, running commands, with every action streaming into
-          the dashboard. Real products get built here: SaaS,
-          internal apps, libraries, games. The lattice routes; the
-          cockpit executes.
-        </p>
-      </div>
-
-      <video src="/assets/session.mp4" autoplay loop muted playsinline preload="metadata"
-        style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
-        aria-label="The Axocoatl Sessions cockpit: an agent building in a sandboxed folder"></video>
-
-      <div class="pillars" style="margin-top: var(--s-7);">
-        <ax-pillar glyph="▣">
-          <h3>Sandboxed by default</h3>
-          <p>
-            Every session runs inside a podman container bind-mounted
-            to your folder. The agent sees your code, you see every
-            file it touches. Close the laptop, open it tomorrow. The
-            session resumes from the last checkpoint.
-          </p>
-        </ax-pillar>
-        <ax-pillar glyph="⌬">
-          <h3>One agent or a whole lattice</h3>
-          <p>
-            Single-agent for focused work, lattice mode when the
-            workflow needs more than one. Same cockpit. The
-            coordination model from Studio extends into the
-            workspace.
-          </p>
-        </ax-pillar>
-        <ax-pillar glyph="◫">
-          <h3>Real tools, real outputs</h3>
-          <p>
-            Read, write, edit, glob, grep. Run commands. Spawn
-            background processes. Open PTY terminals. Every tool
-            call shows up as a chip in the Activity pane with the
-            output collapsible inline.
-          </p>
-        </ax-pillar>
-      </div>
-    </section>
-
-    <!-- ─────────────── See it work · the four clips ─────────────── -->
-    <section class="container section">
-      <div class="section-head">
-        <span class="eyebrow">See it work</span>
-        <h2>Four capabilities, no slides.</h2>
-        <p class="muted">
-          Short clips from the running product: the coordinator building a
-          team to fit a goal, memory that survives a brand-new conversation,
-          a crash that resumes from its checkpoint, and the network trace
-          that shows nothing leaves your machine.
-        </p>
-      </div>
-
-      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap:var(--s-6); margin-top:var(--s-6);">
-
-        <figure style="margin:0;">
-          <video src="/assets/demos/coordinator.mp4" autoplay loop muted playsinline preload="metadata"
-            style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
-            aria-label="A coordinator decomposes a goal into subtasks, auctions each to the best-suited worker, runs them in parallel, and synthesizes the result"></video>
-          <figcaption class="muted small" style="margin-top:var(--s-3); line-height:1.6;">
-            <strong>Give it a goal.</strong> One agent plans it, builds a team
-            to fit, and runs them in parallel. No orchestration code.
-          </figcaption>
-        </figure>
-
-        <figure style="margin:0;">
-          <video src="/assets/demos/memory.mp4" autoplay loop muted playsinline preload="metadata"
-            style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
-            aria-label="An agent stores a preference to its core memory, then recalls it in a separate conversation"></video>
-          <figcaption class="muted small" style="margin-top:var(--s-3); line-height:1.6;">
-            <strong>Tell it once.</strong> Store a preference, open a new
-            conversation, and it still knows. Memory that persists across runs.
-          </figcaption>
-        </figure>
-
-        <figure style="margin:0;">
-          <video src="/assets/demos/crash-restart.mp4" autoplay loop muted playsinline preload="metadata"
-            style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
-            aria-label="The daemon is killed mid-run; on restart it resumes from its checkpoint and skips the subtask it had already finished"></video>
-          <figcaption class="muted small" style="margin-top:var(--s-3); line-height:1.6;">
-            <strong>Crash it mid-run.</strong> On restart it resumes from its
-            last checkpoint and never repeats finished work.
-          </figcaption>
-        </figure>
-
-        <figure style="margin:0;">
-          <video src="/assets/demos/no-phone-home.mp4" autoplay loop muted playsinline preload="metadata"
-            style="width:100%; height:auto; display:block; border-radius:var(--radius-lg); border:1px solid var(--border); box-shadow:var(--shadow-2);"
-            aria-label="A live lsof of the running daemon in steady state shows every socket is 127.0.0.1"></video>
-          <figcaption class="muted small" style="margin-top:var(--s-3); line-height:1.6;">
-            <strong>Nothing phones home.</strong> Zero telemetry, no analytics,
-            no Axocoatl servers — nothing about you is ever collected. The only
-            outbound calls are yours: your model provider, and a one-time
-            embedding-model download on first run.
-          </figcaption>
-        </figure>
-
-      </div>
-    </section>
-
-    <!-- ─────────────── Install ─────────────── -->
-    <section class="container section">
-      <div class="section-head">
-        <span class="eyebrow">Install</span>
-        <h2>One binary. Sixty seconds.</h2>
-        <p class="muted">
-          Prebuilt binaries for macOS (Apple Silicon and Intel) and Linux
-          (x86_64 and aarch64). The script verifies a SHA-256 checksum before
-          installing anywhere on your PATH.
-        </p>
-      </div>
-      <ax-cli-snippet>curl -fsSL https://axocoatl.ai/install.sh | sh</ax-cli-snippet>
-      <p class="muted small" style="margin-top: var(--s-4);">
-        Prefer Cargo? <code>cargo install axocoatl-cli</code>. See the
-        <a href="/install">install page</a> for Docker and
-        from-source paths.
-      </p>
-    </section>
-
-    <!-- ─────────────── Automations · what users actually run ─────────────── -->
-    <section class="container section">
-      <div class="section-head">
-        <span class="eyebrow">Automations</span>
-        <h2>Real workflows. Not demos.</h2>
-        <p class="muted">
-          These are real workflows running on the platform today,
-          rendered as they look inside the dashboard's Automations
-          tab. The recurring work that adds up to a margin, not the
-          work that makes a video.
-        </p>
-      </div>
-      <div class="automations-grid">
-        <ax-automation-card
-          trigger="schedule"
-          trigger-detail="every Monday 9am"
-          name="Release pulse"
-          agents="activity-collector → issue-summarizer → release-writer → reviewer"
-          status="enabled">
-          <p>
-            Reads the past week of git activity, opens issues for the
-            next 72 hours, drafts release notes, and posts the draft
-            to a team channel for review.
-          </p>
-        </ax-automation-card>
-
-        <ax-automation-card
-          trigger="event"
-          trigger-detail="on NewSupportEmail"
-          name="Support triage"
-          agents="classifier → history-retriever → responder"
-          status="enabled">
-          <p>
-            For each incoming support email: classifies the request,
-            attaches the customer's previous ticket history, and
-            routes the thread with a one-line summary on top.
-          </p>
-        </ax-automation-card>
-
-        <ax-automation-card
-          trigger="schedule"
-          trigger-detail="weekdays 8am"
-          name="Daily briefing"
-          agents="calendar-reader → activity-summarizer → briefing-writer"
-          status="enabled">
-          <p>
-            Reads the team's calendar and the last 24 hours of lattice
-            events. Produces a five-bullet briefing that lands in
-            your inbox at 8am sharp.
-          </p>
-        </ax-automation-card>
-      </div>
-      <p style="margin-top: var(--s-7);">
-        <a class="btn btn-ghost" href="/showcase">See more workflows →</a>
-      </p>
-    </section>
-
-    <!-- ─────────────── CTA strip ─────────────── -->
-    <section class="container section cta-tail">
+    <section class="container section section-rule">
       <div class="cta-strip">
-        <div class="cta-strip-text">
-          <h2>Ship work, not screenshots.</h2>
-          <p class="muted">
-            Install once. Walk through the demo session. Wire your first
-            workflow. The fastest path is the one in the docs.
-          </p>
-        </div>
-        <div class="cta-strip-actions">
-          <a class="btn btn-primary" href="/install">Install →</a>
-          <a class="btn btn-ghost" href="https://docs.axocoatl.ai" target="_blank" rel="noopener">Read the docs</a>
-        </div>
+        <div><h2>Give agent work a real workspace.</h2><p>Install Axocoatl, open a repository, and keep the conversation, tools, execution, and review in one durable Session.</p></div>
+        <div class="cta-actions"><a class="btn btn-primary" href="/install">Install →</a><a class="btn btn-ghost" href="https://docs.axocoatl.ai/start/first-session/">Read the quickstart</a></div>
       </div>
     </section>
-
   </main>
 
   <ax-footer></ax-footer>
-  <ax-install-bar></ax-install-bar>
-
 </body>
 </html>

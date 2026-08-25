@@ -59,10 +59,10 @@ agents:
     token_budget: { per_execution: 6000, per_call: 4000, overflow_policy: abort }
 
 # ─── Workflow ───────────────────────────────────────────────────────
-# triage activates first; drafter activates when triage emits TaskCompleted;
-# synthesizer activates only once BOTH triage and drafter have completed
-# (threshold 1.0 = 0.5 × 2 dependencies). No orchestrator picks the order —
-# the event lattice does, exactly as in the mock binary.
+# A product Lattice session runs these session-scoped agents in dependency
+# order: triage, then drafter, then synthesizer after both prior outputs are
+# available. The companion mock binary demonstrates the lower-level
+# EventLattice pheromone primitive separately.
 workflows:
   - id: route-and-synthesize
     name: "Route and synthesize"

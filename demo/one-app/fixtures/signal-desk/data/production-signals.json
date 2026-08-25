@@ -1,0 +1,26 @@
+[
+  {
+    "id": "sig-410",
+    "service": "checkout",
+    "deployment": "deploy-2026-08-17.4",
+    "kind": "error-rate",
+    "severity": "page",
+    "observed_at": "2026-08-17T17:00:00Z"
+  },
+  {
+    "id": "sig-411",
+    "service": "checkout",
+    "deployment": "deploy-2026-08-17.4",
+    "kind": "latency",
+    "severity": "ticket",
+    "observed_at": "2026-08-17T17:03:00Z"
+  },
+  {
+    "id": "sig-412",
+    "service": "checkout",
+    "deployment": "deploy-2026-08-17.4",
+    "kind": "payment-timeout",
+    "severity": "page",
+    "observed_at": "2026-08-17T17:05:00Z"
+  }
+]

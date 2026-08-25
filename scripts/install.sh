@@ -9,6 +9,47 @@ BIN="axocoatl"
 err() { echo "axocoatl-install: $*" >&2; exit 1; }
 info() { echo "axocoatl-install: $*"; }
 
+require_supported_glibc() {
+  [ "$os" = "Linux" ] || return 0
+  command -v getconf >/dev/null 2>&1 \
+    || err "prebuilt Linux releases require GNU libc 2.35 or newer; this system cannot report its libc version. Alpine/musl needs a source build"
+
+  libc_version="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+  case "$libc_version" in
+    glibc\ *) version="${libc_version#glibc }" ;;
+    *) err "prebuilt Linux releases require GNU libc 2.35 or newer; this system reported '$libc_version'. Alpine/musl needs a source build" ;;
+  esac
+
+  major="${version%%.*}"
+  remainder="${version#*.}"
+  [ "$remainder" != "$version" ] || err "could not parse GNU libc version '$version'"
+  minor="${remainder%%.*}"
+  case "$major" in ''|*[!0-9]*) err "could not parse GNU libc version '$version'" ;; esac
+  case "$minor" in ''|*[!0-9]*) err "could not parse GNU libc version '$version'" ;; esac
+
+  if [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 35 ]; }; then
+    err "prebuilt Linux releases require GNU libc 2.35 or newer; detected $libc_version. Upgrade the distribution or build from source"
+  fi
+}
+
+require_supported_macos() {
+  [ "$os" = "Darwin" ] || return 0
+  command -v sw_vers >/dev/null 2>&1 \
+    || err "prebuilt macOS releases require macOS 11 or newer; this system cannot report its macOS version"
+
+  macos_version="$(SYSTEM_VERSION_COMPAT=0 sw_vers -productVersion 2>/dev/null || true)"
+  [ -n "$macos_version" ] \
+    || err "prebuilt macOS releases require macOS 11 or newer; this system cannot report its macOS version"
+  macos_major="${macos_version%%.*}"
+  case "$macos_major" in
+    ''|*[!0-9]*) err "could not parse macOS version '$macos_version'" ;;
+  esac
+
+  if [ "$macos_major" -lt 11 ]; then
+    err "prebuilt macOS releases require macOS 11 or newer; detected macOS $macos_version. Upgrade macOS before installing this release"
+  fi
+}
+
 # --- Detect OS / arch -> release target triple ---
 os="$(uname -s)"
 arch="$(uname -m)"
@@ -24,7 +65,7 @@ case "$os" in
       curl -fsSL https://axocoatl.ai/install.sh | sh
 
   No WSL2 yet? In an admin PowerShell:  wsl --install  (then reboot).
-  Full guide: https://docs.axocoatl.ai/getting-started/#windows-wsl2" ;;
+  Full guide: https://docs.axocoatl.ai/start/install/#windows-through-wsl2" ;;
   *) err "unsupported OS '$os' — use 'cargo install axocoatl-cli' or build from source" ;;
 esac
 
@@ -34,6 +75,8 @@ case "$arch" in
   *) err "unsupported architecture '$arch'" ;;
 esac
 
+require_supported_glibc
+require_supported_macos
 target="${arch_part}-${os_part}"
 
 # --- Resolve latest release tag ---
@@ -52,17 +95,33 @@ trap 'rm -rf "$tmp"' EXIT
 info "downloading ${tarball} (${tag})..."
 curl -fsSL "$url" -o "${tmp}/${tarball}" || err "download failed: $url"
 
-# --- Verify checksum if available ---
-if curl -fsSL "$sha_url" -o "${tmp}/sha" 2>/dev/null; then
-  expected="$(cut -d' ' -f1 < "${tmp}/sha")"
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual="$(sha256sum "${tmp}/${tarball}" | cut -d' ' -f1)"
-  else
-    actual="$(shasum -a 256 "${tmp}/${tarball}" | cut -d' ' -f1)"
-  fi
-  [ "$expected" = "$actual" ] || err "checksum mismatch (expected $expected, got $actual)"
-  info "checksum verified"
+# --- Require and verify the release checksum ---
+curl -fsSL "$sha_url" -o "${tmp}/sha" \
+  || err "checksum download failed: $sha_url"
+
+if ! awk -v expected_name="$tarball" '
+  NR != 1 { exit 1 }
+  NF != 2 { exit 1 }
+  length($1) != 64 { exit 1 }
+  $1 !~ /^[0-9A-Fa-f]+$/ { exit 1 }
+  $2 != expected_name { exit 1 }
+  END { if (NR != 1) exit 1 }
+' "${tmp}/sha"; then
+  err "malformed checksum file for $tarball"
 fi
+
+expected="$(awk '{print $1}' "${tmp}/sha" | tr 'A-F' 'a-f')"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum "${tmp}/${tarball}" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  actual="$(shasum -a 256 "${tmp}/${tarball}" | awk '{print $1}')"
+else
+  err "neither sha256sum nor shasum is available"
+fi
+actual="$(printf '%s' "$actual" | tr 'A-F' 'a-f')"
+[ "$expected" = "$actual" ] \
+  || err "checksum mismatch (expected $expected, got $actual)"
+info "checksum verified"
 
 tar -xzf "${tmp}/${tarball}" -C "$tmp"
 

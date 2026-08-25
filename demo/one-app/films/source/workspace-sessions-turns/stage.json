@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "film": "workspace-sessions-turns",
+  "timeline": "demo/one-app/films/source/workspace-sessions-turns/timeline.json",
+  "timeline_sha256": "1e92430b2d8e1800e73a84303507b5ab4e7207c3ab7f5807ed47f89abe349e39",
+  "input_fps": 8,
+  "frame_count": 256,
+  "duration_seconds": 32,
+  "sequence_sha256": "f8abed2854ac29598eb896c1a094c5c89b29baf1a7f5c937a2d9c6fed7fe3b41",
+  "shots": [
+    {
+      "beat": "workspace",
+      "source": "shot-workspace.jpg",
+      "source_sha256": "7cff92d5e64b54f87ce4dfb6f32de8fb0695292e9ae11adef2ddfdc9c3e546f2",
+      "hold_frames": 56,
+      "first_frame": 1,
+      "last_frame": 56
+    },
+    {
+      "beat": "two-sessions",
+      "source": "shot-two-sessions.jpg",
+      "source_sha256": "f5f33c3705ef80e9ea4f443eadd51982697c4ff81e9a44aa351ba72b7eac061a",
+      "hold_frames": 64,
+      "first_frame": 57,
+      "last_frame": 120
+    },
+    {
+      "beat": "accepted-turn",
+      "source": "shot-accepted-turn.jpg",
+      "source_sha256": "d67a8e546b7eb748c69d4775061897aa44fa830e1a61507d6bcdb7f4b3f1177a",
+      "hold_frames": 64,
+      "first_frame": 121,
+      "last_frame": 184
+    },
+    {
+      "beat": "restored-turn",
+      "source": "shot-restored-turn.jpg",
+      "source_sha256": "52f44b4bb31987ad97c9f2cd76a6d24424b62cd1a4dd193d11d505438afe3c87",
+      "hold_frames": 72,
+      "first_frame": 185,
+      "last_frame": 256
+    }
+  ],
+  "poster_beat": "restored-turn",
+  "poster_frame": 220
+}

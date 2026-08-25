@@ -1,0 +1,146 @@
+{
+  "schema_version": 2,
+  "film": "sandbox-terminal-preview",
+  "recorded_at": "2026-08-25T06:09:15.266Z",
+  "source": {
+    "branch": "codex/session-capabilities",
+    "head": "7b375732cf941bcf6092b7c95c257c623f4d7543",
+    "dirty": true,
+    "patch_sha256": "af250b2505dfc91721e86deba9bc4b39e3ffd6f0070dcb91560b086dcda0163c",
+    "patch_excludes": [
+      "demo/one-app/films/source/",
+      "demo/one-app/films/staged/",
+      "demo/one-app/films/provenance/",
+      "sites/marketing/assets/films/"
+    ],
+    "content_sha256": "1562093374d422f33ef7e9825f71016c9541198b99d33a05747a7d57f547e0f5"
+  },
+  "binary": {
+    "path": "target/release/axocoatl",
+    "version": "axocoatl 1.0.0",
+    "sha256": "afcb51e75c5c64a6e1d1da36fa07110b5f9ba6031e3a2f3ce660de9879b045d1"
+  },
+  "capture": {
+    "record": "demo/one-app/films/source/sandbox-terminal-preview/capture.json",
+    "record_sha256": "a159fe19ea96329b6c2f960d00cde06afd5158cfd15583b21763c9dc5aad126c",
+    "url": "http://localhost:18087/",
+    "browser": "Codex in-app browser",
+    "viewport": {
+      "width": 1280,
+      "height": 720,
+      "device_scale_factor": 1
+    },
+    "theme": "dark",
+    "reduced_motion": "no-preference",
+    "keyframes": [
+      {
+        "beat": "session",
+        "path": "demo/one-app/films/source/sandbox-terminal-preview/shot-session.jpg",
+        "sha256": "526f5904b1d6d635373b7ab7817cbd1c2d53269a977e14ed127dc0134a1b6e43"
+      },
+      {
+        "beat": "sandbox",
+        "path": "demo/one-app/films/source/sandbox-terminal-preview/shot-sandbox.jpg",
+        "sha256": "79fe1d16a1a0d43abe6835ffe3760f55c4ea60c620c4c657ffb47de0238690a1"
+      },
+      {
+        "beat": "check",
+        "path": "demo/one-app/films/source/sandbox-terminal-preview/shot-check.jpg",
+        "sha256": "98b8c66a9f1abf46f1abbefad02ebf8cf3d9b15171a10c75082705f2ba09c0ff"
+      },
+      {
+        "beat": "preview",
+        "path": "demo/one-app/films/source/sandbox-terminal-preview/shot-preview.jpg",
+        "sha256": "88814b20b40dce1363666a4daf375b16be30317b0407e0cfe94421fd0289ff99"
+      }
+    ]
+  },
+  "edit": {
+    "timeline": "demo/one-app/films/source/sandbox-terminal-preview/timeline.json",
+    "timeline_sha256": "8de2766074b9ed69faf5118ba9e9333818ed7d4df2c103b5773832482e4d570f",
+    "stage_record": "demo/one-app/films/source/sandbox-terminal-preview/stage.json",
+    "stage_record_sha256": "d59e9065062783f09c692aaaa529f5d454ed23a4093376be58790febec8dff14",
+    "poster_frame": 216,
+    "poster_beat": "preview",
+    "poster_source_sha256": "88814b20b40dce1363666a4daf375b16be30317b0407e0cfe94421fd0289ff99",
+    "frame_count": 248,
+    "sequence_sha256": "c03c7f8d72b4ee372f4b384e6882bc2ac7b3346ea39de12a5862da45bea52253"
+  },
+  "media": {
+    "mp4": {
+      "path": "sites/marketing/assets/films/sandbox-terminal-preview.mp4",
+      "sha256": "264c604827c048b09d35aa3c936f7199d02ec8283c4ec3e8cd04067993fb0ac6",
+      "duration_seconds": 31,
+      "codec": "h264",
+      "width": 1280,
+      "height": 720,
+      "pixel_format": "yuv420p",
+      "fps": "24/1",
+      "audio_streams": 0,
+      "fast_start": true
+    },
+    "poster": {
+      "path": "sites/marketing/assets/films/sandbox-terminal-preview.jpg",
+      "sha256": "88814b20b40dce1363666a4daf375b16be30317b0407e0cfe94421fd0289ff99",
+      "codec": "mjpeg",
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "evidence": {
+    "record": "demo/one-app/films/source/sandbox-terminal-preview/evidence.json",
+    "record_sha256": "55ece0247519f00f200db9fb7ec5d2387cecb360ecee7b997cf447b19be8bb28",
+    "checks": [
+      {
+        "id": "session",
+        "status": "passed",
+        "detail": "The accepted capture starts in the repaired Northstar Session inside its named Northstar Storefront Workspace before the runtime probe opens."
+      },
+      {
+        "id": "sandbox",
+        "status": "passed",
+        "detail": "The Session Terminal visibly reports container hostname bce571128182, the exact authorized Workspace path, Node v22.23.2, Alpine Linux 3.24.1, and the existing modified lib/orders.js checkout state."
+      },
+      {
+        "id": "check",
+        "status": "passed",
+        "detail": "npm run check executes in that same Session Terminal and reports 6 tests passed, 0 failed."
+      },
+      {
+        "id": "preview",
+        "status": "passed",
+        "detail": "The same Session opens its explicitly published logical port 8765 and renders the repaired Northstar application with the Conference cable pack at $0.00 / Ready."
+      }
+    ],
+    "identities": {
+      "fixture": "northstar-storefront (repaired checkout)",
+      "workspace_id": "wsp-8df537b9-6b42-4111-9c13-b5097b10ccb6",
+      "session_id": "ses-3d045b8e-b2c9-4683-af38-b1380122b962",
+      "runtime_id": "ses-3d045b8e-b2c9-4683-af38-b1380122b962",
+      "runtime_backend": "podman",
+      "container_name": "axo-ses-ses-3d045b8e-b2c9-4683-af38-b1380122b962",
+      "container_hostname": "bce571128182",
+      "container_image": "localhost/axocoatl-one-app-demo:latest",
+      "working_directory": "/private/tmp/axocoatl-one-app-showcase-northstar-launch-capture/workspace",
+      "node_version": "v22.23.2",
+      "image_os": "Alpine Linux 3.24.1",
+      "logical_preview_port": "8765",
+      "preview_url": "http://ses-3d045b8e-b2c9-4683-af38-b1380122b962-p8765.localhost:18186/",
+      "source_head": "19ca67cd4be1f5c2fe72478887f4d21fa0d3d773",
+      "source_tree": "e87d1ce9b03c65ad10978692eba2f52d8d1237b0",
+      "git_status": "lib/orders.js modified, unstaged, +1/-1; no other paths",
+      "check_result": "6 tests; 6 passed; 0 failed; exit 0",
+      "release_binary": "target/release/axocoatl 1.0.0",
+      "release_binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+      "capture_config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+      "workspace_record_sha256": "8b269091f50dd68e9f5456d1229e3855904161f4746d244cd31d2aaa6348de55",
+      "session_record_sha256": "1fe27f1e1529d832b709322b740ced09b9965affb1efa08a53054d292b7fc1c9",
+      "keyframe_sha256": [
+        "526f5904b1d6d635373b7ab7817cbd1c2d53269a977e14ed127dc0134a1b6e43",
+        "79fe1d16a1a0d43abe6835ffe3760f55c4ea60c620c4c657ffb47de0238690a1",
+        "98b8c66a9f1abf46f1abbefad02ebf8cf3d9b15171a10c75082705f2ba09c0ff",
+        "88814b20b40dce1363666a4daf375b16be30317b0407e0cfe94421fd0289ff99"
+      ]
+    }
+  }
+}

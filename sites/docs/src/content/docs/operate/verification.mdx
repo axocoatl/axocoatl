@@ -1,0 +1,104 @@
+---
+title: Local verification
+description: Verify a source checkout, an Ollama-backed runtime, the embedded workbench, and the repository gates.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Use this procedure to prove the local runtime and browser app are connected to
+the build you intend to evaluate.
+
+## Verify the installed path
+
+```sh
+which axocoatl
+axocoatl --version
+axocoatl --help
+```
+
+When working from source, build the explicit CLI package and use that binary:
+
+```sh
+cargo build -p axocoatl-cli
+./target/debug/axocoatl --version
+```
+
+The root package is a benchmark placeholder; a generic root build is not the
+same proof as building `axocoatl-cli`.
+
+## Verify Ollama
+
+<Steps>
+
+1. Start Ollama in another terminal:
+
+   ```sh
+   ollama serve
+   ```
+
+2. Pull the exact model configured for the Agent:
+
+   ```sh
+   ollama pull llama3.2
+   ollama list
+   ```
+
+3. Validate and run doctor:
+
+   ```sh
+   ./target/debug/axocoatl validate axocoatl.example.yaml
+   ./target/debug/axocoatl doctor --config axocoatl.example.yaml
+   ```
+
+</Steps>
+
+Doctor live-probes Ollama and requires every configured Ollama Agent model to
+be present. Hosted provider checks are not equivalent: they inspect credential
+presence—including OpenRouter when configured—but do not make a live model
+request. Doctor reports Podman ready only after the client and applicable
+machine state pass and a bounded `podman info --format json` probe returns a
+JSON object successfully.
+
+## Start the embedded app
+
+```sh
+AXOCOATL_DATA_DIR=/absolute/path/to/test-data \
+  ./target/debug/axocoatl dev --config axocoatl.example.yaml
+```
+
+Open `http://127.0.0.1:8080/`. This `/` page is the product workbench. Confirm:
+
+1. the left rail and Session home load without a console error;
+2. a folder Session can be created with a configured Agent;
+3. the exact image and setup proposal remain visible and unchecked unless you
+   approve them; before Ready, Send and repository tools stay gated;
+4. after an explicit setup decision, the environment reaches Ready and a
+   read-only prompt becomes durable in History;
+5. Files, Source Control, Terminal, and Preview are reachable through that
+   Session sandbox rather than a host fallback;
+6. Settings opens Agents, Skills, MCP servers, and Automations;
+7. light, dark, narrow, and reduced-motion states remain usable for the changed
+   workflow.
+
+## Run repository gates
+
+From the source checkout:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+cargo test --doc --workspace
+cargo build -p axocoatl-cli
+```
+
+Some ignored sandbox tests need Podman. Webhook tests bind a local port and may
+need to run outside a restricted test sandbox. A route/unit test does not
+replace verifying the actual embedded page.
+
+<Aside type="note" title="Use an isolated test Workspace">
+Session and Agent tools can change files and execute commands. Use a disposable
+or clean Git repository and a dedicated data root for verification.
+</Aside>
+
+Continue with [Product model →](/understand/product-model/)

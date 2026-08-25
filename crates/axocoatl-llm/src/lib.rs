@@ -4,6 +4,8 @@ pub mod fallback;
 pub mod provider;
 pub mod registry;
 pub mod tools;
+#[doc(hidden)]
+pub mod transport;
 
 pub use error::*;
 pub use extensions::*;

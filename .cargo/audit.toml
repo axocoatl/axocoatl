@@ -1,0 +1,18 @@
+[advisories]
+# `paste` is a compile-time-only transitive of Candle/GEMM and Tokenizers.
+# Their current maintained releases still depend on it; no runtime code ships
+# from this procedural macro.
+# `ttf-parser` is a non-optional transitive of the patched pdf-extract 0.12 /
+# lopdf 0.42 parser line and has no known vulnerability. Lopdf 0.44 makes it
+# optional, but its open text-extraction regression (J-F-Liu/lopdf#535) can
+# silently return empty text for valid PDFs. Review this exception when that
+# regression is fixed and the corrected lopdf line passes extraction tests.
+# `bincode` 2.0.1 is pinned only in axocoatl-memory's private, size-limited,
+# decode-only reader for irreplaceable 0.1.x checkpoint history. Current state
+# is never encoded with it. Remove this exception together with that one-time
+# compatibility reader when 0.1.x checkpoint migration is no longer supported.
+ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2025-0141", "RUSTSEC-2026-0192"]
+
+[yanked]
+enabled = true
+update_index = true

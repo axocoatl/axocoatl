@@ -23,7 +23,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_RESTARTS: u32 = 5;
 
 /// Spawn the supervision loop. Returns immediately; the loop runs until the
-/// process exits. Mirrors `start_scheduler` / `start_proactive_runners`.
+/// process exits. Mirrors the canonical Automation trigger runtime.
 pub fn start_supervision(daemon: Arc<RwLock<AxocoatlDaemon>>) {
     tokio::spawn(async move {
         // agent_id -> consecutive restart attempts

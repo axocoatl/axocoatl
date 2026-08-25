@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "film": "event-lattice-automation",
+  "timeline": "demo/one-app/films/source/event-lattice-automation/timeline.json",
+  "timeline_sha256": "85217e9d2a9732bcf2f212b0ba45f260d8b0ac05377e9a152d4c59fc5eeefd66",
+  "input_fps": 8,
+  "frame_count": 296,
+  "duration_seconds": 37,
+  "sequence_sha256": "8776ba2d130fcab784d30d7cb568f4054052dedc3a61732924cc2f9c97014f02",
+  "shots": [
+    {
+      "beat": "skill",
+      "source": "shot-skill.jpg",
+      "source_sha256": "22e29e5aaff763ede5b98ddf07d9acbc29ebeba98458f7d62279f0a42230e9a4",
+      "hold_frames": 64,
+      "first_frame": 1,
+      "last_frame": 64
+    },
+    {
+      "beat": "event",
+      "source": "shot-event.jpg",
+      "source_sha256": "28b6020d258542af45c9c75ac30e9f633a912d05e61c21d61bc1689639cc54a1",
+      "hold_frames": 72,
+      "first_frame": 65,
+      "last_frame": 136
+    },
+    {
+      "beat": "trigger",
+      "source": "shot-trigger.jpg",
+      "source_sha256": "9bb52b4ccce65459cd53bf151752a7896f05a2b1d997710963c11800ba2ea69e",
+      "hold_frames": 80,
+      "first_frame": 137,
+      "last_frame": 216
+    },
+    {
+      "beat": "result",
+      "source": "shot-result.jpg",
+      "source_sha256": "8195851404c3ca95ccd91351ce4f7178a7ca964ea4f69a5f44ef593a0108732e",
+      "hold_frames": 80,
+      "first_frame": 217,
+      "last_frame": 296
+    }
+  ],
+  "poster_beat": "result",
+  "poster_frame": 256
+}

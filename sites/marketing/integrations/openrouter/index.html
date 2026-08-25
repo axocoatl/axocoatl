@@ -1,203 +1,46 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenRouter integration — Axocoatl</title>
-  <meta name="description" content="Use any LLM through one API key. Axocoatl ships OpenRouter as a first-class provider so you can route per-agent to Claude, GPT-4o, Llama, and 100+ others.">
-  <meta name="author" content="Axocoatl Contributors">
-  <meta name="theme-color" content="#3E7C5C">
-  <link rel="canonical" href="https://axocoatl.ai/integrations/openrouter">
-  <meta property="og:type" content="website">
-  <meta property="og:site_name" content="Axocoatl">
-  <meta property="og:locale" content="en_US">
-  <meta property="og:url" content="https://axocoatl.ai/integrations/openrouter">
-  <meta property="og:title" content="OpenRouter integration — Axocoatl">
-  <meta property="og:description" content="Use any LLM through one API key. Axocoatl ships OpenRouter as a first-class provider so you can route per-agent to Claude, GPT-4o, Llama, and 100+ others.">
-  <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="OpenRouter integration — Axocoatl">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:site" content="@axocoatl">
-  <meta name="twitter:title" content="OpenRouter integration — Axocoatl">
-  <meta name="twitter:description" content="Use any LLM through one API key. Axocoatl ships OpenRouter as a first-class provider so you can route per-agent to Claude, GPT-4o, Llama, and 100+ others.">
-  <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="OpenRouter integration — Axocoatl">
-  <link rel="icon" type="image/png" href="/assets/favicon.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles/tokens.css">
-  <link rel="stylesheet" href="/styles/base.css">
-  <link rel="stylesheet" href="/styles/finder.css">
-  <script type="module" src="/components/ax-site-nav.js"></script>
-  <script type="module" src="/components/ax-cli-snippet.js"></script>
-  <script type="module" src="/components/ax-pillar.js"></script>
-  <script type="module" src="/components/ax-install-bar.js"></script>
-  <script type="module" src="/components/ax-footer.js"></script>
-  <script type="module" src="/components/ax-theme-toggle.js"></script>
-  <script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@graph": [
-    {
-      "@type": "WebPage",
-      "@id": "https://axocoatl.ai/integrations/openrouter#webpage",
-      "url": "https://axocoatl.ai/integrations/openrouter",
-      "name": "OpenRouter integration — Axocoatl",
-      "description": "Use any LLM through one API key. Axocoatl ships OpenRouter as a first-class provider so you can route per-agent to Claude, GPT-4o, Llama, and 100+ others.",
-      "inLanguage": "en-US",
-      "isPartOf": { "@id": "https://axocoatl.ai/#website" },
-      "publisher": { "@type": "Organization", "@id": "https://axocoatl.ai/#organization" }
-    },
-    {"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://axocoatl.ai/"},{"@type":"ListItem","position":2,"name":"Integrations","item":"https://axocoatl.ai/integrations"},{"@type":"ListItem","position":3,"name":"OpenRouter integration — Axocoatl","item":"https://axocoatl.ai/integrations/openrouter"}]}
-  ]
-}
-  </script>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Use OpenRouter with Axocoatl</title><meta name="description" content="Configure OpenRouter as an Axocoatl model provider and assign its models to the agents in your local workbench."><meta name="theme-color" content="#3E7C5C"><link rel="canonical" href="https://axocoatl.ai/integrations/openrouter">
+  <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/integrations/openrouter"><meta property="og:title" content="Use OpenRouter with Axocoatl"><meta property="og:description" content="Use OpenRouter models with configured agents in the Axocoatl workbench."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Use OpenRouter with Axocoatl"><meta name="twitter:description" content="Use OpenRouter models with configured agents in the Axocoatl workbench."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20260818-narrative"><link rel="stylesheet" href="/styles/finder.css">
+  <script type="module" src="/components/ax-site-nav.js?v=20260818-narrative"></script><script type="module" src="/components/ax-cli-snippet.js"></script><script type="module" src="/components/ax-footer.js?v=20260818-narrative"></script><script type="module" src="/components/ax-theme-toggle.js"></script>
 </head>
 <body>
   <ax-site-nav></ax-site-nav>
+  <main id="main-content">
+    <header class="container hero"><span class="eyebrow">Provider integration</span><h1>Use OpenRouter with your agents.</h1><p class="lede">Add one provider credential, then assign any model identifier available to your OpenRouter account to the configured agents that work inside your Sessions.</p><div class="hero-actions"><a class="btn btn-primary" href="https://openrouter.ai/keys">Create an API key →</a><a class="btn btn-ghost" href="/install">Install Axocoatl</a></div></header>
 
-  <main>
-
-    <section class="container hero" style="padding-bottom: var(--s-7);">
-      <span class="eyebrow">Integration</span>
-      <h1>Axocoatl × OpenRouter.</h1>
-      <p class="lede">
-        Every model on OpenRouter, available to every agent in Axocoatl.
-        One API key, one config block. Per-agent model pinning, fallback
-        chains, and the rest of the runtime, unchanged.
-      </p>
-    </section>
-
-    <section class="container section">
-      <div class="container-narrow" style="padding: 0;">
-
-        <h2>Why pair them.</h2>
-        <p>
-          OpenRouter routes your request to the right LLM provider:
-          OpenAI, Anthropic, Mistral, DeepSeek, Llama hosts, dozens
-          more. One API key, one URL, every model. You pay per token,
-          you switch models without touching billing, and you can A/B
-          two models on the same workflow without two integrations.
-        </p>
-        <p>
-          Axocoatl handles the orchestration. OpenRouter handles the
-          inference. Pair them and you get a self-supervising runtime
-          on your hardware that can ask any frontier model when it
-          needs to, and a local model when it doesn't.
-        </p>
-
-        <h2 style="margin-top: var(--s-8);">Set it up in 30 seconds.</h2>
-        <p>
-          Add an <code>openrouter</code> block to your <code>axocoatl.yaml</code>:
-        </p>
-
-<pre><code><span class="code-key">providers:</span>
+    <section class="container section section-rule">
+      <div class="split">
+        <div class="stack"><span class="eyebrow">Configure</span><h2>One credential block.</h2><p>Export <code>OPENROUTER_API_KEY</code> and <code>OPENROUTER_MODEL</code> in the process environment that starts Axocoatl, then reference them from <code>axocoatl.yaml</code>. Axocoatl does not load dotenv files automatically; if you keep assignments in a local <code>.env</code>, explicitly source it before starting the workbench.</p><p>Set <code>provider: openrouter</code> on the agents that should use it. Model availability, pricing, routing, and account access are controlled by OpenRouter, so use a model identifier currently available to your account.</p></div>
+        <div class="code-pane"><div class="code-pane-head">axocoatl.yaml</div><pre><code><span class="code-key">providers:</span>
   <span class="code-key">openrouter:</span>
     <span class="code-key">api_key:</span> <span class="code-string">"${OPENROUTER_API_KEY}"</span>
 
 <span class="code-key">agents:</span>
-  - <span class="code-key">id:</span> <span class="code-string">researcher</span>
+  - <span class="code-key">id:</span> <span class="code-string">builder</span>
     <span class="code-key">provider:</span> <span class="code-string">openrouter</span>
-    <span class="code-key">model:</span> <span class="code-string">"anthropic/claude-3.5-sonnet"</span>
-  - <span class="code-key">id:</span> <span class="code-string">summarizer</span>
-    <span class="code-key">provider:</span> <span class="code-string">openrouter</span>
-    <span class="code-key">model:</span> <span class="code-string">"openai/gpt-4o-mini"</span>      <span class="code-comment"># Mixed-model workflow, one config.</span></code></pre>
-
-        <p style="margin-top: var(--s-5);">
-          Put <code>OPENROUTER_API_KEY=…</code> in your <code>.env</code>.
-          Restart the daemon. That's the whole integration.
-        </p>
-
-        <h2 style="margin-top: var(--s-8);">Or do it through onboard.</h2>
-        <p>
-          The interactive setup wizard picks OpenRouter for you when
-          you select <em>"cloud, model of my choice"</em>:
-        </p>
-
-        <ax-cli-snippet>axocoatl onboard</ax-cli-snippet>
-
+    <span class="code-key">model:</span> <span class="code-string">"${OPENROUTER_MODEL}"</span></code></pre></div>
       </div>
     </section>
 
-    <section class="container section">
-      <div class="section-head">
-        <span class="eyebrow">Patterns</span>
-        <h2>Three setups we recommend.</h2>
-      </div>
-      <div class="pillars">
-        <ax-pillar glyph="·">
-          <h3>Cost-tier routing</h3>
-          <p>
-            Use <code>openai/gpt-4o-mini</code> on every agent by
-            default. Promote individual agents to
-            <code>anthropic/claude-3.5-sonnet</code> when they need
-            heavy reasoning. The lattice picks the right one per task.
-          </p>
-        </ax-pillar>
-        <ax-pillar glyph="·">
-          <h3>Local + cloud hybrid</h3>
-          <p>
-            Ollama for cheap, repetitive agents (summarization,
-            classification). OpenRouter for the one agent that needs
-            frontier intelligence. Same workflow, two providers.
-          </p>
-        </ax-pillar>
-        <ax-pillar glyph="·">
-          <h3>Failover chain</h3>
-          <p>
-            Primary provider = OpenRouter. Fallback = direct Anthropic
-            credentials. If OpenRouter degrades, the daemon switches
-            without dropping the run.
-          </p>
-        </ax-pillar>
-      </div>
+    <section class="container section section-rule">
+      <div class="section-head"><span class="eyebrow">Use it in the workbench</span><h2>Choose the model for the job.</h2><p>Agents are configuration records. Assign OpenRouter, a direct hosted provider, or Ollama to each role, then select the right Agent from the Session.</p></div>
+      <div class="grid-3"><article class="card"><span class="card-kicker">Roles</span><h3>Different agents, different models</h3><p>Use a focused model for a narrow builder and a larger model for a coordinator or difficult repository task.</p></article><article class="card"><span class="card-kicker">Hybrid</span><h3>Local and hosted together</h3><p>Keep one Agent on Ollama and another on OpenRouter. Optional Ways can compare configured agents when the decision merits it.</p></article><article class="card"><span class="card-kicker">Cost</span><h3>Configure prices honestly</h3><p>Within Ways, when remote pricing is not configured, Axocoatl marks the known subtotal as incomplete instead of treating the call as free.</p></article></div>
     </section>
 
-    <section class="container section">
-      <div class="container-narrow" style="padding: 0;">
-
-        <h2>About OpenRouter's leaderboard.</h2>
-        <p>
-          OpenRouter publishes an
-          <a href="https://openrouter.ai/apps" target="_blank" rel="noopener">app directory</a>
-          ranking the tools that route the most traffic through it.
-          Axocoatl is listed there. If you set up your daemon with
-          OpenRouter, your usage shows up under the Axocoatl entry.
-          You don't have to do anything special.
-        </p>
-        <p>
-          We're not optimizing for that leaderboard at the expense of
-          the local-first commitment. Ollama remains the default
-          recommendation in <code>axocoatl onboard</code>. OpenRouter
-          is the cloud option for teams who don't want to manage their
-          own LLM keys per provider.
-        </p>
-
-      </div>
+    <section class="container-narrow section section-rule">
+      <div class="stack"><span class="eyebrow">Onboard</span><h2>Let the wizard write the starting config.</h2><p>Select OpenRouter when <code>axocoatl onboard</code> asks for a provider. It writes the provider and Agent structure and can place a supplied key in <code>.env.example</code>. Move that populated file out of its template name, restrict it, and explicitly source it before starting Axocoatl; renaming the file alone does not load it.</p><ax-cli-snippet>axocoatl onboard</ax-cli-snippet></div>
     </section>
 
-    <section class="container section" style="padding-bottom: var(--s-10);">
-      <div style="display: grid; grid-template-columns: 1fr auto; gap: var(--s-5); align-items: center; padding: var(--s-7); background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);">
-        <div>
-          <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Get an API key. Set the config. Done.</h2>
-          <p class="muted" style="margin: 0;">
-            OpenRouter's signup is free. The Axocoatl daemon is one
-            curl-pipe-sh away.
-          </p>
-        </div>
-        <div style="display: flex; gap: var(--s-3);">
-          <a class="btn btn-primary" href="https://openrouter.ai/keys" target="_blank" rel="noopener">OpenRouter key →</a>
-          <a class="btn btn-ghost" href="/install">Install Axocoatl</a>
-        </div>
-      </div>
+    <section class="container-narrow section section-rule">
+      <div class="stack"><span class="eyebrow">Attribution</span><h2>The client identifies Axocoatl.</h2><p>Calls to the OpenRouter endpoint include <code>HTTP-Referer: https://axocoatl.ai</code> and <code>X-Title: Axocoatl</code>. These headers identify the calling application. They do not imply a directory listing, rank, partnership, or endorsement.</p></div>
     </section>
 
+    <section class="container section section-rule"><div class="cta-strip"><div><h2>Configure a model, then test it.</h2><p>Run <code>axocoatl doctor</code> after setup and start the local workbench with <code>axocoatl dev</code>.</p></div><div class="cta-actions"><a class="btn btn-primary" href="https://openrouter.ai/keys">OpenRouter key →</a><a class="btn btn-ghost" href="https://docs.axocoatl.ai/configure/providers/">Provider docs</a></div></div></section>
   </main>
-
   <ax-footer></ax-footer>
-  <ax-install-bar></ax-install-bar>
 </body>
 </html>

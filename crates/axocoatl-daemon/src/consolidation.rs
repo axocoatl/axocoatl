@@ -5,7 +5,7 @@
 //! *agent* decides whether it has been idle long enough — the LLM pass only runs
 //! past `idle_threshold_secs` — so this loop merely polls and asks. It never
 //! touches per-agent memory directly (it can't; that state is actor-private).
-//! Mirrors `start_supervision` / `start_scheduler`.
+//! Mirrors agent supervision and the canonical Automation trigger runtime.
 
 use std::collections::HashMap;
 use std::sync::Arc;

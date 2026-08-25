@@ -43,6 +43,12 @@ impl SkillTool {
 
 #[async_trait::async_trait]
 impl BuiltinTool for SkillTool {
+    fn concurrency_policy(&self) -> axocoatl_llm::ConcurrencyPolicy {
+        // A skill is an orchestration surface and may invoke arbitrary tools or
+        // mutate repository state; it cannot honestly be classified read-only.
+        axocoatl_llm::ConcurrencyPolicy::Exclusive
+    }
+
     fn description(&self) -> &str {
         &self.description
     }

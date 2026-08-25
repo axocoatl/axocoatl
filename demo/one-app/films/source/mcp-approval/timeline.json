@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "film": "mcp-approval",
+  "input_fps": 8,
+  "shots": [
+    {
+      "beat": "request",
+      "source": "shot-request.jpg",
+      "hold_frames": 48
+    },
+    {
+      "beat": "pending-approval",
+      "source": "shot-pending-approval.jpg",
+      "hold_frames": 48
+    },
+    {
+      "beat": "deny",
+      "source": "shot-deny.jpg",
+      "hold_frames": 48
+    },
+    {
+      "beat": "allow",
+      "source": "shot-allow.jpg",
+      "hold_frames": 48
+    },
+    {
+      "beat": "durable-result",
+      "source": "shot-durable-result.jpg",
+      "hold_frames": 48
+    }
+  ]
+}

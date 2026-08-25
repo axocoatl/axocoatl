@@ -1,0 +1,33 @@
+{
+  "id": "release-gate-review",
+  "name": "Release gate review · event-driven",
+  "description": "A Skill publishes a typed release event; this durable Automation reviews the gate and parks the evidence for an operator.",
+  "trigger": { "kind": "on_skill", "skill_id": "release-candidate-ready" },
+  "enabled": true,
+  "nodes": [
+    {
+      "id": "gate-review",
+      "kind": {
+        "type": "agent",
+        "agent_id": "judge",
+        "input": {
+          "kind": "literal",
+          "value": "A release candidate event was published. Return exactly three concise gate checks covering repository proof, unresolved risk, and operator ownership."
+        }
+      },
+      "position": { "x": 0, "y": 0 }
+    },
+    {
+      "id": "operator-review",
+      "kind": {
+        "type": "interrupt",
+        "input": { "kind": "from_upstream", "nodes": ["gate-review"] },
+        "resume_strategy": "replace"
+      },
+      "position": { "x": 300, "y": 0 }
+    }
+  ],
+  "edges": [
+    { "from": "gate-review", "to": "operator-review", "label": null }
+  ]
+}

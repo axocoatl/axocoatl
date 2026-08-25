@@ -8,7 +8,7 @@ labels: enhancement
 ## The problem
 
 What are you trying to do today? What gets in your way? Be concrete — name
-the workflow, the command, the tab.
+the workspace/session journey, command, or workbench module.
 
 ## Proposed solution
 
@@ -23,7 +23,7 @@ What else did you think of, and why is the proposal above better?
 
 - [ ] One-line config change
 - [ ] New API endpoint / CLI subcommand
-- [ ] New dashboard tab or pane
+- [ ] Browser-app module or session journey
 - [ ] New crate or major refactor
 - [ ] Other (explain)
 

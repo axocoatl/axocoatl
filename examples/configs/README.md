@@ -9,12 +9,13 @@ prerequisites, run command, and expected output.
 
 | File | Agents | Demonstrates |
 | --- | --- | --- |
-| [research-pipeline.yaml](research-pipeline.yaml) | 2 | `depends_on` workflow — summarizer waits on researcher |
-| [feature-dev.yaml](feature-dev.yaml) | 5 | linear DAG (architect → planner → coder → reviewer → docs) |
-| [incident-response.yaml](incident-response.yaml) | 3 | Skills (`emits` / `reacts_to`) + an ops agent |
-| [local-only.yaml](local-only.yaml) | 2 | Ollama, no API keys — data never leaves the box |
+| [research-pipeline.yaml](research-pipeline.yaml) | 2 | legacy workflow seed → manual Automation DAG |
+| [feature-dev.yaml](feature-dev.yaml) | 5 | legacy linear DAG seed (architect → planner → coder → reviewer → docs) |
+| [incident-response.yaml](incident-response.yaml) | 3 | Skill event declarations; add an Automation for a reachable reaction |
+| [local-only.yaml](local-only.yaml) | 2 | Ollama, no API keys, and `sandbox.network: none` for session tools |
 | [mcp-tools.yaml](mcp-tools.yaml) | 1 | a single MCP server (stdio transport) |
 | [event-webhooks.yaml](event-webhooks.yaml) | 2 | outbound event egress — signed webhooks on `TaskCompleted` / `AgentFailed` |
+| [e2b-backend.yaml](e2b-backend.yaml) | 1 | daemon-global E2B Cloud backend and template for ordinary Sessions |
 
 ## Running an example
 
@@ -30,3 +31,10 @@ Most examples need a local Ollama (`ollama serve && ollama pull llama3.2`) — n
 cloud API key required. The `mcp-tools` example additionally needs `npx` on your
 PATH for the filesystem MCP server. The `event-webhooks` example reads
 `WEBHOOK_SECRET` from the environment to sign its deliveries.
+
+The `local-only` recipe disables Session container networking. That blocks
+in-container readiness provisioning and setup downloads: select an image that
+already contains Axocoatl's required repository commands. Podman image pulls
+are a separate host operation, not Session egress. The E2B recipe selects one
+backend and template for the whole daemon; Sessions cannot override it with an
+OCI image, and Explore several Ways still requires local Podman.

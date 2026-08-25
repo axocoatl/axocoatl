@@ -15,8 +15,11 @@
 //! recognised but ignored. We log a hint when we see them so users know
 //! we're not silently honoring richer config.
 
+use axocoatl_core::SecureDir;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+const MAX_DEVCONTAINER_BYTES: usize = 1024 * 1024;
 
 /// Subset of the devcontainer.json spec that Axocoatl honors today.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -75,20 +78,42 @@ impl DevContainer {
     /// in projects without a devcontainer). Returns `Err` only when a file
     /// exists but can't be parsed — the user wants to know about *that*.
     pub fn load(working_dir: &Path) -> Result<Option<(PathBuf, Self)>, DevContainerError> {
+        let working_dir = SecureDir::open(working_dir).map_err(DevContainerError::Io)?;
+        Self::load_in(&working_dir)
+    }
+
+    /// Load through one retained Workspace directory capability. Candidate
+    /// discovery, type validation, size admission, and bytes all remain
+    /// anchored to that handle.
+    pub fn load_in(working_dir: &SecureDir) -> Result<Option<(PathBuf, Self)>, DevContainerError> {
+        let mut candidates = Vec::new();
         for rel in [".devcontainer/devcontainer.json", ".devcontainer.json"] {
-            let path = working_dir.join(rel);
-            if !path.exists() {
-                continue;
+            if working_dir.is_file(rel).map_err(DevContainerError::Io)? {
+                candidates.push(rel);
             }
-            let text = std::fs::read_to_string(&path).map_err(DevContainerError::Io)?;
-            // devcontainer.json is JSONC in the spec; strip line/block comments
-            // and trailing commas before handing to serde_json.
-            let stripped = strip_jsonc(&text);
-            let parsed: DevContainer = serde_json::from_str(&stripped)
-                .map_err(|e| DevContainerError::Parse(path.display().to_string(), e.to_string()))?;
-            return Ok(Some((path, parsed)));
         }
-        Ok(None)
+        let Some(relative) = candidates.first().copied() else {
+            return Ok(None);
+        };
+        if candidates.len() != 1 {
+            return Err(DevContainerError::Ambiguous(
+                candidates.into_iter().map(str::to_string).collect(),
+            ));
+        }
+        let path = working_dir.path().join(relative);
+        let bytes = working_dir
+            .read_limited(relative, MAX_DEVCONTAINER_BYTES)
+            .map_err(DevContainerError::Io)?;
+        let text = String::from_utf8(bytes).map_err(|error| {
+            DevContainerError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+        })?;
+        // devcontainer.json is JSONC in the spec; strip line/block comments
+        // and trailing commas before handing to serde_json.
+        let stripped = strip_jsonc(&text);
+        let parsed: DevContainer = serde_json::from_str(&stripped).map_err(|error| {
+            DevContainerError::Parse(path.display().to_string(), error.to_string())
+        })?;
+        Ok(Some((path, parsed)))
     }
 
     /// Names of devcontainer fields we recognise but don't honor in v0.1 —
@@ -237,6 +262,8 @@ pub enum DevContainerError {
     Io(#[from] std::io::Error),
     #[error("parsing {0}: {1}")]
     Parse(String, String),
+    #[error("multiple devcontainer files are present: {0:?}; keep exactly one")]
+    Ambiguous(Vec<String>),
 }
 
 #[cfg(test)]
@@ -284,5 +311,49 @@ mod tests {
         let ignored = dc.ignored_fields();
         assert!(ignored.contains(&"features"));
         assert!(ignored.contains(&"mounts"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_devcontainer_candidate_fails_without_following_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(outside.path(), r#"{"image":"attacker"}"#).unwrap();
+        symlink(outside.path(), workspace.path().join(".devcontainer.json")).unwrap();
+
+        let error = DevContainer::load(workspace.path()).unwrap_err();
+        assert!(error.to_string().contains("not a regular file"));
+    }
+
+    #[test]
+    fn oversized_devcontainer_is_rejected_before_json_allocation() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workspace.path().join(".devcontainer.json"),
+            vec![b' '; MAX_DEVCONTAINER_BYTES + 1],
+        )
+        .unwrap();
+
+        let error = DevContainer::load(workspace.path()).unwrap_err();
+        assert!(error.to_string().contains("exceeds"));
+    }
+
+    #[test]
+    fn two_conventional_devcontainer_files_are_actionably_ambiguous() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::create_dir(workspace.path().join(".devcontainer")).unwrap();
+        std::fs::write(
+            workspace.path().join(".devcontainer/devcontainer.json"),
+            "{}",
+        )
+        .unwrap();
+        std::fs::write(workspace.path().join(".devcontainer.json"), "{}").unwrap();
+
+        assert!(matches!(
+            DevContainer::load(workspace.path()),
+            Err(DevContainerError::Ambiguous(candidates)) if candidates.len() == 2
+        ));
     }
 }

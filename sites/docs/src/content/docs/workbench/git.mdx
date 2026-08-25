@@ -1,0 +1,86 @@
+---
+title: Review Git and Last turn
+description: Isolate the latest Agent changes, inspect diffs, stage deliberately, and commit from the workbench.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Source Control is the evidence boundary between an Agent's account of the work
+and the repository state you will keep. Open **Files**, then choose **Source
+Control** in the explorer column.
+
+## Choose a review scope
+
+| View | What it shows |
+| --- | --- |
+| **All** | Every changed path in the Session working tree |
+| **Last turn** | Current changed paths matching those attributed to the most recent durable Session turn |
+| **Staged** | Changes currently in the Git index |
+| **Not staged** | Working-tree changes not in the index |
+
+Last turn filters the repository's current Git status and diff by the path names
+attributed to the latest durable turn. It is useful for narrowing review, but it
+is not a frozen per-turn diff. A later edit to an attributed path can appear in
+the view, and a reverted change no longer appears. If several actors edit the
+same path, Last turn cannot separate their hunks by author.
+
+Git also cannot represent every external side effect. A tool may have changed a
+path outside the authorized repository or touched a remote system.
+
+## Inspect and stage
+
+<Steps>
+
+1. Select **Last turn** and open each changed file.
+2. Read the diff in the editor, including deletions and generated files.
+3. Stage a whole file with **+**, or expand its hunks and stage only the
+   accepted changes.
+4. Switch to **Staged** and review the exact commit candidate.
+5. Enter a commit message and commit the staged changes. Use **Stage all +
+   commit** only when every working-tree change belongs in the commit.
+
+</Steps>
+
+The same controls can unstage a file or hunk without changing its working-tree
+content. Branch checkout is available from Source Control; inspect status first
+and do not switch across unresolved work you do not intend to carry.
+
+## Discard carefully
+
+Source Control can discard one unstaged hunk, one file, or all unstaged files.
+The all-files action includes untracked files and keeps staged work intact.
+These are destructive Git operations and the workbench asks for confirmation.
+
+<Aside type="danger" title="Discard is not an undo service">
+Discarded unstaged content may be unrecoverable. Inspect the diff, copy any
+needed material elsewhere, and confirm the exact scope before proceeding.
+</Aside>
+
+## After keeping an Attempt
+
+**Keep this one** applies an uncommitted delta to the main Session working tree.
+Use this sequence before committing it:
+
+```sh
+git status --short
+git diff --check
+```
+
+Then run the check used during comparison from the main Session, review **All**
+and **Last turn**, and stage only the intended result. The Last turn view is the
+current diff filtered to attributed paths, not an archived copy of the candidate
+diff. Keep does not merge an Attempt branch into your project history and does
+not commit automatically.
+
+## When Last turn is empty
+
+An empty Last turn can be correct when the last turn made no file changes. If
+you expected edits:
+
+- confirm the turn reached a durable terminal state;
+- switch to **All** to check for older or unattributed working changes;
+- inspect `git status --short` in Terminal;
+- review the turn's tool calls for work outside the repository or an error
+  before write completion.
+
+Continue with [Context, History, and Stop →](/workbench/history/)

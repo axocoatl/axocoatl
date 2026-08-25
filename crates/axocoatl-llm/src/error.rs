@@ -1,5 +1,8 @@
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
+    #[error("Invalid request for {provider}: {message}")]
+    InvalidRequest { provider: String, message: String },
+
     #[error("Rate limited by {provider}. Retry after {retry_after_secs:?}s")]
     RateLimited {
         provider: String,

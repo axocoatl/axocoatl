@@ -6,16 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
-description = "Ollama/LM Studio provider for Axocoatl (OpenAI-compatible API)"
+description = "Ollama provider for Axocoatl (OpenAI-compatible API)"
 
 [dependencies]
-axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
-axocoatl-llm = { version = "0.1.0", path = "../axocoatl-llm" }
+axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
+axocoatl-llm = { version = "1.0.0", path = "../axocoatl-llm" }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

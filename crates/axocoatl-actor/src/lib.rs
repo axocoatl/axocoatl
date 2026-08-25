@@ -5,8 +5,10 @@ pub mod core_memory_tools;
 pub mod default_behavior;
 pub mod error;
 pub mod frontier_resolver;
+mod provider_budget;
 pub mod recall;
 pub mod registry;
+pub mod run_control;
 pub mod summarizer;
 
 pub use actor_impl::*;
@@ -18,4 +20,5 @@ pub use error::*;
 pub use frontier_resolver::*;
 pub use recall::*;
 pub use registry::*;
+pub use run_control::*;
 pub use summarizer::*;

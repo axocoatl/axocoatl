@@ -61,12 +61,40 @@ impl TokenCounter for TiktokenCounter {
         let mut total = 3usize; // reply priming
         for msg in messages {
             total += 4; // per-message overhead
-            if let Some(text) = msg.text_content() {
-                total += self.count_text(text);
+            match &msg.content {
+                axocoatl_core::MessageContent::Text(text) => total += self.count_text(text),
+                // Image bytes are transport encoding, not language-model tokens.
+                // Count text exactly and reserve a conservative visual-token
+                // allowance per image; serializing a 10 MiB data URL would
+                // falsely reject an otherwise normal vision request.
+                axocoatl_core::MessageContent::Parts(parts) => {
+                    for part in parts {
+                        match part {
+                            axocoatl_core::ContentPart::Text(text) => {
+                                total += self.count_text(text);
+                            }
+                            axocoatl_core::ContentPart::Image { .. } => {
+                                // Covers common high-detail tiling costs with
+                                // headroom without depending on encoded bytes.
+                                total += 1_024;
+                            }
+                        }
+                    }
+                }
             }
             if let Some(name) = &msg.name {
                 total += self.count_text(name);
                 total -= 1; // name replaces role
+            }
+            if !msg.tool_calls.is_empty() {
+                // Arguments and opaque provider replay metadata (for example a
+                // Gemini thought signature) consume context even when the
+                // assistant turn has no textual content.
+                let serialized = serde_json::to_string(&msg.tool_calls).unwrap_or_default();
+                total += self.count_text(&serialized);
+            }
+            if let Some(tool_call_id) = &msg.tool_call_id {
+                total += self.count_text(tool_call_id);
             }
         }
         total
@@ -142,6 +170,68 @@ mod tests {
         let counter = TiktokenCounter::o200k_base().unwrap();
         let count = counter.count_messages(&[]);
         assert_eq!(count, 3); // just reply priming
+    }
+
+    #[test]
+    fn count_messages_includes_tool_arguments_ids_and_provider_metadata() {
+        let counter = TiktokenCounter::o200k_base().unwrap();
+        let plain = ChatMessage::assistant("");
+        let mut metadata = axocoatl_core::ProviderMetadata::new();
+        metadata.insert(
+            "gemini.thought_signature".to_string(),
+            "opaque-signature-with-real-token-cost".repeat(8),
+        );
+        let with_tool_call = ChatMessage::assistant_with_tool_calls(
+            "",
+            vec![axocoatl_core::ToolCall {
+                id: "provider-call-id".to_string(),
+                name: "repo_read".to_string(),
+                arguments: serde_json::json!({
+                    "path": "/a/long/provider-visible/path",
+                    "line": 42
+                }),
+                provider_metadata: metadata,
+            }],
+        );
+
+        assert!(counter.count_messages(&[with_tool_call]) > counter.count_messages(&[plain]) + 20);
+
+        let tool_result = ChatMessage::tool_result("ok", "repo_read", "provider-call-id");
+        assert!(
+            counter.count_messages(&[tool_result])
+                > counter.count_messages(&[ChatMessage::tool("ok")])
+        );
+    }
+
+    #[test]
+    fn multimodal_count_ignores_base64_transport_size_but_counts_extracted_text() {
+        let counter = TiktokenCounter::o200k_base().unwrap();
+        let image = ChatMessage {
+            role: axocoatl_core::MessageRole::User,
+            content: axocoatl_core::MessageContent::Parts(vec![
+                axocoatl_core::ContentPart::Text("inspect this image".to_string()),
+                axocoatl_core::ContentPart::Image {
+                    url: format!("data:image/png;base64,{}", "A".repeat(8 * 1024 * 1024)),
+                    detail: axocoatl_core::ImageDetail::Auto,
+                },
+            ]),
+            name: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        };
+        let image_tokens = counter.count_messages(&[image]);
+        assert!(image_tokens > 1_000 && image_tokens < 2_000);
+
+        let extracted_text = ChatMessage {
+            role: axocoatl_core::MessageRole::User,
+            content: axocoatl_core::MessageContent::Parts(vec![axocoatl_core::ContentPart::Text(
+                "word ".repeat(300_000),
+            )]),
+            name: None,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        };
+        assert!(counter.count_messages(&[extracted_text]) > 200_000);
     }
 
     #[test]

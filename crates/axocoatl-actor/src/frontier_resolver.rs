@@ -11,16 +11,87 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axocoatl_coordination::{FrontierResolver, HtnTask, HtnTaskType};
+use axocoatl_core::{AgentAttachment, ChatMessage, SamplingConfig, TokenUsageStats};
 use axocoatl_llm::{ChatRequest, LlmProvider};
+use axocoatl_token::{TokenCounter, TokenTracker};
+
+use crate::behavior::ExecutionUsageState;
+use crate::default_behavior::attach_to_last_user_message;
+use crate::error::AgentError;
+use crate::provider_budget::{self, ControlledChat};
+use crate::run_control::AgentRunControl;
 
 /// Resolves HTN frontier tasks by asking the LLM to decompose one task.
 pub struct LlmFrontierResolver {
     provider: Arc<dyn LlmProvider>,
+    counter: Arc<dyn TokenCounter>,
+    tracker: Option<TokenTracker>,
+    control: Option<AgentRunControl>,
+    model: Option<String>,
+    history: Vec<ChatMessage>,
+    system_context: Option<String>,
+    attachments: Vec<AgentAttachment>,
+    sampling: SamplingConfig,
+    failure: Arc<std::sync::Mutex<Option<AgentError>>>,
+    usage: ExecutionUsageState,
 }
 
 impl LlmFrontierResolver {
-    pub fn new(provider: Arc<dyn LlmProvider>) -> Self {
-        Self { provider }
+    pub fn new(provider: Arc<dyn LlmProvider>, counter: Arc<dyn TokenCounter>) -> Self {
+        Self {
+            provider,
+            counter,
+            tracker: None,
+            control: None,
+            model: None,
+            history: Vec::new(),
+            system_context: None,
+            attachments: Vec::new(),
+            sampling: SamplingConfig::default(),
+            failure: Arc::new(std::sync::Mutex::new(None)),
+            usage: ExecutionUsageState::default(),
+        }
+    }
+
+    pub fn with_tracker(mut self, tracker: Option<TokenTracker>) -> Self {
+        self.tracker = tracker;
+        self
+    }
+
+    pub fn with_control(mut self, control: Option<AgentRunControl>) -> Self {
+        self.control = control;
+        self
+    }
+
+    pub fn with_model(mut self, model: Option<String>) -> Self {
+        self.model = model;
+        self
+    }
+
+    pub fn with_request_context(
+        mut self,
+        history: Vec<ChatMessage>,
+        system_context: Option<String>,
+        attachments: Vec<AgentAttachment>,
+        sampling: SamplingConfig,
+    ) -> Self {
+        self.history = history;
+        self.system_context = system_context;
+        self.attachments = attachments;
+        self.sampling = sampling;
+        self
+    }
+
+    pub fn take_failure(&self) -> Option<AgentError> {
+        self.failure.lock().unwrap().take()
+    }
+
+    pub fn usage(&self) -> TokenUsageStats {
+        self.usage.usage_snapshot()
+    }
+
+    pub fn usage_known(&self) -> bool {
+        self.usage.snapshot().is_some()
     }
 }
 
@@ -41,17 +112,58 @@ impl FrontierResolver for LlmFrontierResolver {
              Task: {}",
             task.name
         );
-        let request = ChatRequest::with_system(
-            "You decompose one task into primitive subtasks. Return only valid JSON.",
-            prompt,
+        let internal_system =
+            "You decompose one task into primitive subtasks. Return only valid JSON.";
+        let system = self.system_context.as_deref().map_or_else(
+            || internal_system.to_string(),
+            |context| format!("{context}\n\n{internal_system}"),
         );
+        let mut messages = vec![ChatMessage::system(system)];
+        let history_start = messages.len();
+        messages.extend(self.history.iter().cloned());
+        let final_prompt_index = messages.len();
+        let protected_suffix_start = self
+            .history
+            .iter()
+            .rposition(|message| message.role == axocoatl_core::MessageRole::User)
+            .map_or(final_prompt_index, |index| {
+                history_start.saturating_add(index)
+            });
+        messages.push(ChatMessage::user(prompt));
+        let mut request = ChatRequest {
+            messages,
+            tools: Vec::new(),
+            max_tokens: self.sampling.max_tokens,
+            temperature: self.sampling.temperature,
+            top_p: self.sampling.top_p,
+            response_format: self.sampling.response_format,
+            stop_sequences: Vec::new(),
+            provider_options: None,
+            model_override: self.model.clone(),
+        };
+        attach_to_last_user_message(&mut request, &self.attachments);
 
-        let response = self
-            .provider
-            .chat(request)
-            .await
-            .map_err(|e| format!("frontier resolver LLM call failed: {e}"))?;
-
+        let response = match provider_budget::chat(
+            self.provider.as_ref(),
+            self.counter.as_ref(),
+            self.tracker.as_ref(),
+            Some(&self.usage),
+            request,
+            protected_suffix_start,
+            self.control.as_ref(),
+        )
+        .await
+        {
+            Ok(ControlledChat::Response(response)) => response,
+            Ok(ControlledChat::Cancelled) => {
+                return Err("frontier resolver cancelled".to_string());
+            }
+            Err(error) => {
+                let message = format!("frontier resolver LLM call failed: {error}");
+                *self.failure.lock().unwrap() = Some(error);
+                return Err(message);
+            }
+        };
         let parsed: Vec<serde_json::Value> = serde_json::from_str(response.content.trim())
             .map_err(|e| format!("frontier resolver returned invalid JSON: {e}"))?;
         if parsed.is_empty() {

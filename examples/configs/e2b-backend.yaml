@@ -1,12 +1,13 @@
 # e2b-backend — run tool execution in a remote E2B microVM (opt-in isolation)
 #
-# The agent's file / shell / git tools run inside a remote E2B-compatible microVM
-# instead of a local Podman container. Point `sandbox.e2b.api_url` at E2B cloud
-# or a self-hosted CubeSandbox — same config either way. The LLM still runs
-# wherever the daemon does (here, local Ollama); only tool execution goes remote.
+# The agent's file / shell / git tools run inside an E2B Cloud microVM instead of
+# a local Podman container. E2B Cloud is the remote backend validated for Axocoatl
+# 1.0; third-party E2B API implementations are outside the 1.0 support claim. The
+# LLM still runs wherever the daemon does (here, local Ollama); only tool execution
+# goes remote.
 #
 # Prerequisites:
-#   - E2B_API_KEY in your environment (or a CubeSandbox placeholder key)
+#   - E2B_API_KEY in your environment
 #   - For a private git-repo session: GITHUB_TOKEN with clone/push rights
 #   - ollama serve && ollama pull llama3.2   (or swap in any provider)
 # Run:
@@ -15,21 +16,24 @@
 #   axocoatl dev -c examples/configs/e2b-backend.yaml
 # Expected:
 #   the session's tools (read/write/bash/git) execute inside the microVM; a
-#   git-repo session clones the repo into the VM and the agent can commit + push.
+#   git-repo session clones the repo into the VM. Changes remain ordinary working-
+#   tree state until you deliberately review, commit, and push with repository tools.
+#   This backend and its template apply to every Session in this daemon. A
+#   per-Session or devcontainer OCI image is rejected rather than substituted.
+#   The template must already contain sh, git, and Axocoatl's required POSIX
+#   repository commands; E2B readiness verifies them but does not apt/apk
+#   provision the remote template.
 #   Local-first stays the default — remove this `sandbox:` block (or set
 #   `backend: podman`) to run everything on-box again.
 
 # ─── Isolation backend ──────────────────────────────────────────────
 sandbox:
-  # podman (local container, default) | e2b (remote microVM: E2B or CubeSandbox)
+  # podman (local container, default) | e2b (remote E2B Cloud microVM)
   backend: e2b
   e2b:
-    # E2B cloud. For a self-hosted CubeSandbox, use its endpoint instead, e.g.
-    #   api_url: "http://127.0.0.1:3000"
-    #   domain:  "your-cube-domain"      # envd host: https://49983-{id}.{domain}
     api_url: "https://api.e2b.dev"
     api_key: "${E2B_API_KEY}"       # sourced from the environment, never committed
-    template: "base"                # E2B template / CubeSandbox template id
+    template: "base"                # daemon-global E2B template id
     # Only for a private git-repo session; public repos clone without it. Read by
     # an in-VM credential helper at fill-time — never written into the repo config.
     git_token: "${GITHUB_TOKEN}"

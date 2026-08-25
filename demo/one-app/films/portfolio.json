@@ -1,0 +1,384 @@
+{
+  "schema_version": 1,
+  "media_contract": {
+    "width": 1280,
+    "height": 720,
+    "input_fps": 8,
+    "output_fps": 24,
+    "video_codec": "h264",
+    "pixel_format": "yuv420p",
+    "audio": false,
+    "fast_start": true,
+    "poster_codec": "mjpeg",
+    "poster_width": 1280,
+    "poster_height": 720
+  },
+  "films": [
+    {
+      "slug": "session-workbench",
+      "title": "Single-agent workbench",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/single-agent.md",
+      "fixture": "northstar-storefront",
+      "placements": [
+        { "page": "sites/marketing/index.html", "order": 1 },
+        { "page": "sites/marketing/showcase/index.html", "order": 1 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/session-workbench.mp4",
+        "poster": "sites/marketing/assets/films/session-workbench.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#session-workbench",
+      "provenance": "demo/one-app/films/provenance/session-workbench.json",
+      "duration_seconds": { "min": 35, "max": 50 },
+      "poster_beat": "verified-result",
+      "beats": [
+        { "id": "visible-defect", "label": "Establish the red check and negative Preview total", "evidence": ["Preview shows -$20.00 and Invariant broken", "npm run check has exactly one intended failure"] },
+        { "id": "agent-route", "label": "Show one Agent reading, editing, and checking the repository", "evidence": ["Repository tool activity is visible", "Only lib/orders.js changes"] },
+        { "id": "verified-result", "label": "Show the completed result beside repository proof", "evidence": ["All six checks pass", "Preview shows $0.00 and Ready"] },
+        { "id": "git-ownership", "label": "Inspect the uncommitted production change", "evidence": ["Source Control shows only lib/orders.js", "The meaningful hunk is readable", "No commit or staging occurs"] }
+      ],
+      "evidence": [
+        "The canonical Turn is completed with non-empty output and bounded tool evidence.",
+        "HEAD remains demo-seed and the working tree changes only lib/orders.js.",
+        "The primary checkout passes npm run check after the edit."
+      ]
+    },
+    {
+      "slug": "workspace-sessions-turns",
+      "title": "Workspace, Sessions, and Turns",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/workspace-sessions.md",
+      "fixture": "harbor-catalog + deterministic harbor-ways-fixture provider",
+      "placements": [
+        { "page": "sites/marketing/concepts/index.html", "order": 1 },
+        { "page": "sites/marketing/why/index.html", "order": 1 },
+        { "page": "sites/marketing/showcase/index.html", "order": 2 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/workspace-sessions-turns.mp4",
+        "poster": "sites/marketing/assets/films/workspace-sessions-turns.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#workspace-sessions-turns",
+      "provenance": "demo/one-app/films/provenance/workspace-sessions-turns.json",
+      "duration_seconds": { "min": 25, "max": 35 },
+      "poster_beat": "restored-turn",
+      "beats": [
+        { "id": "workspace", "label": "Establish one named Workspace", "evidence": ["The authorized path and Workspace name are visible"] },
+        { "id": "two-sessions", "label": "Show two differently named Sessions", "evidence": ["Both Sessions belong to the same Workspace"] },
+        { "id": "accepted-turn", "label": "Complete one read-only Turn", "evidence": ["The request, tool evidence, and answer are visible"] },
+        { "id": "restored-turn", "label": "Switch away, return, and reload", "evidence": ["The exact completed Turn remains present after both transitions"] }
+      ],
+      "evidence": [
+        "The Workspace record owns both Session records.",
+        "The canonical Turn ledger retains the restored request and output.",
+        "No transient toast or open menu is used as the poster."
+      ]
+    },
+    {
+      "slug": "durable-turn",
+      "title": "Durable context and exact Stop",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/durable-context-turns.md",
+      "fixture": "harbor-catalog",
+      "placements": [
+        { "page": "sites/marketing/index.html", "order": 2 },
+        { "page": "sites/marketing/concepts/index.html", "order": 2 },
+        { "page": "sites/marketing/showcase/index.html", "order": 3 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/durable-turn.mp4",
+        "poster": "sites/marketing/assets/films/durable-turn.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#durable-turn",
+      "provenance": "demo/one-app/films/provenance/durable-turn.json",
+      "duration_seconds": { "min": 40, "max": 55 },
+      "poster_beat": "cancelled-history",
+      "beats": [
+        { "id": "context", "label": "Attach Once and Session context", "evidence": ["The accepted Turn retains its immutable context relation"] },
+        { "id": "reload", "label": "Reload during live output", "evidence": ["Partial output and the exact active Turn reconnect"] },
+        { "id": "cancelled-history", "label": "Stop and inspect History", "evidence": ["The Turn settles as Stopped by you with partial evidence"] },
+        { "id": "clean-next-turn", "label": "Start a clean next Turn", "evidence": ["The response follows only the new request and performs no stale tool action"] }
+      ],
+      "evidence": [
+        "Stop targets the exact Session and Turn and does not claim rollback.",
+        "The cancelled state survives reload.",
+        "The cancelled actor is removed before the next Turn starts."
+      ]
+    },
+    {
+      "slug": "sandbox-terminal-preview",
+      "title": "Sandbox, Terminal, and Preview",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/sandbox-preview.md",
+      "fixture": "northstar-storefront",
+      "placements": [
+        { "page": "sites/marketing/concepts/index.html", "order": 3 },
+        { "page": "sites/marketing/showcase/index.html", "order": 4 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/sandbox-terminal-preview.mp4",
+        "poster": "sites/marketing/assets/films/sandbox-terminal-preview.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#sandbox-terminal-preview",
+      "provenance": "demo/one-app/films/provenance/sandbox-terminal-preview.json",
+      "duration_seconds": { "min": 25, "max": 35 },
+      "poster_beat": "preview",
+      "beats": [
+        { "id": "session", "label": "Establish the Ready Session", "evidence": ["The Session and authorized Workspace are visible"] },
+        { "id": "sandbox", "label": "Identify the Session sandbox", "evidence": ["Terminal shows the container hostname, workspace path, runtime version, and image OS"] },
+        { "id": "check", "label": "Run the repository contract", "evidence": ["npm run check reaches its honest result in the Session Terminal"] },
+        { "id": "preview", "label": "Serve and open the current checkout", "evidence": ["Preview renders the application through the explicitly published port"] }
+      ],
+      "evidence": [
+        "The terminal process and Preview belong to the same Session checkout.",
+        "The container carries the current data-root runtime-authority label.",
+        "No host shell or static marketing mock substitutes for the Session runtime."
+      ]
+    },
+    {
+      "slug": "settings-runtime",
+      "title": "Runtime configuration in Settings",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/settings-runtime.md",
+      "fixture": "signal-desk",
+      "placements": [
+        { "page": "sites/marketing/concepts/index.html", "order": 4 },
+        { "page": "sites/marketing/showcase/index.html", "order": 8 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/settings-runtime.mp4",
+        "poster": "sites/marketing/assets/films/settings-runtime.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#settings-runtime",
+      "provenance": "demo/one-app/films/provenance/settings-runtime.json",
+      "duration_seconds": { "min": 20, "max": 30 },
+      "poster_beat": "agents",
+      "beats": [
+        { "id": "session", "label": "Begin in a normal Session", "evidence": ["Conversation remains the work surface behind Settings"] },
+        { "id": "agents", "label": "Inspect Agent identity", "evidence": ["Provider, model, and role configuration are reachable"] },
+        { "id": "agent-dependency", "label": "Inspect Agent dependencies", "evidence": ["The reviewer dependency on architect is checked in the same Agent drawer"] },
+        { "id": "skills", "label": "Inspect configured Skills", "evidence": ["Release candidate ready declares ReleaseCandidateReady"] },
+        { "id": "mcp", "label": "Inspect MCP servers", "evidence": ["weather uses stdio and exposes mcp__weather__get_weather"] },
+        { "id": "automations", "label": "Inspect Automations and run history", "evidence": ["A completed run exposes its recorded Result"] }
+      ],
+      "evidence": [
+        "Agents, Skills, MCP servers, and Automations are Settings sections, not peer app routes.",
+        "The same Session remains visibly selected behind Settings throughout the tour.",
+        "The completed Automation run exposes its recorded Result."
+      ]
+    },
+    {
+      "slug": "event-lattice-automation",
+      "title": "Skill event to Automation result",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/event-lattice.md",
+      "fixture": "signal-desk",
+      "placements": [
+        { "page": "sites/marketing/concepts/index.html", "order": 5 },
+        { "page": "sites/marketing/showcase/index.html", "order": 9 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/event-lattice-automation.mp4",
+        "poster": "sites/marketing/assets/films/event-lattice-automation.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#event-lattice-automation",
+      "provenance": "demo/one-app/films/provenance/event-lattice-automation.json",
+      "duration_seconds": { "min": 30, "max": 45 },
+      "poster_beat": "result",
+      "beats": [
+        { "id": "skill", "label": "Fire the configured Skill", "evidence": ["Release candidate ready declares ReleaseCandidateReady"] },
+        { "id": "event", "label": "Confirm the typed Skill dispatch", "evidence": ["The Skills list retains the declared event type while the downstream waiting state appears"] },
+        { "id": "trigger", "label": "Open the matching Automation run", "evidence": ["The run identifies the Skill trigger and reaches a terminal state"] },
+        { "id": "result", "label": "Inspect the durable result", "evidence": ["Run history displays the exact recorded Result after reload"] }
+      ],
+      "evidence": [
+        "One Skill event creates exactly one matching Automation run.",
+        "The run and final content survive reload.",
+        "The film does not present the event lattice as the Agent graph or Automation graph."
+      ]
+    },
+    {
+      "slug": "mcp-approval",
+      "title": "Session MCP approval",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/mcp-approval.md",
+      "fixture": "northstar-storefront + deterministic mcp-bridge",
+      "placements": [
+        { "page": "sites/marketing/concepts/index.html", "order": 6 },
+        { "page": "sites/marketing/showcase/index.html", "order": 10 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/mcp-approval.mp4",
+        "poster": "sites/marketing/assets/films/mcp-approval.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#mcp-approval",
+      "provenance": "demo/one-app/films/provenance/mcp-approval.json",
+      "duration_seconds": { "min": 25, "max": 35 },
+      "poster_beat": "pending-approval",
+      "beats": [
+        { "id": "request", "label": "Request weather in a normal Session", "evidence": ["The Agent discovers the qualified MCP tool"] },
+        { "id": "pending-approval", "label": "Reload while approval is pending", "evidence": ["The authoritative approval remains actionable beyond the old hook timeout"] },
+        { "id": "deny", "label": "Deny once without dispatch", "evidence": ["No MCP call occurs and the Turn records the visible error"] },
+        { "id": "allow", "label": "Allow one fresh request", "evidence": ["Exactly one MCP dispatch returns the deterministic weather value"] },
+        { "id": "durable-result", "label": "Reload the completed Turn", "evidence": ["Tool start, result, and final answer remain visible"] }
+      ],
+      "evidence": [
+        "Session-scoped agents receive the MCP hook registry.",
+        "Pre-hook timeout or error denies execution rather than allowing it.",
+        "Deny produces zero dispatches; Allow once produces one dispatch."
+      ]
+    },
+    {
+      "slug": "shared-core-memory",
+      "title": "Shared core memory across Sessions",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/shared-core-memory.md",
+      "fixture": "signal-desk",
+      "placements": [
+        { "page": "sites/marketing/concepts/index.html", "order": 7 },
+        { "page": "sites/marketing/showcase/index.html", "order": 11 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/shared-core-memory.mp4",
+        "poster": "sites/marketing/assets/films/shared-core-memory.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#shared-core-memory",
+      "provenance": "demo/one-app/films/provenance/shared-core-memory.json",
+      "duration_seconds": { "min": 35, "max": 50 },
+      "poster_beat": "recall",
+      "beats": [
+        { "id": "write", "label": "Write the shared team block explicitly", "evidence": ["core_memory_set succeeds with the exact nonce"] },
+        { "id": "restart", "label": "Restart against the same data root", "evidence": ["No preparation or reset occurs between the states"] },
+        { "id": "separate-sessions", "label": "Show writer and reader Sessions", "evidence": ["The Sessions and configured Agent identities are distinct"] },
+        { "id": "recall", "label": "Recall from the other Agent", "evidence": ["The exact nonce appears without a file, History search, or tool call"] }
+      ],
+      "evidence": [
+        "The persisted team block contains the exact nonce before and after restart.",
+        "The two canonical Session transcripts remain separate.",
+        "The claim is shared core memory, not semantic recall or universal memory sharing."
+      ]
+    },
+    {
+      "slug": "multi-agent-handoff",
+      "title": "Multi-agent dependency handoff",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/multi-agent.md",
+      "fixture": "harbor-catalog (design-only prompt)",
+      "placements": [
+        { "page": "sites/marketing/showcase/index.html", "order": 5 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/multi-agent-handoff.mp4",
+        "poster": "sites/marketing/assets/films/multi-agent-handoff.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#multi-agent-handoff",
+      "provenance": "demo/one-app/films/provenance/multi-agent-handoff.json",
+      "duration_seconds": { "min": 25, "max": 35 },
+      "poster_beat": "dependency-edge",
+      "beats": [
+        { "id": "dependency-edge", "label": "Show architect to reviewer before execution", "evidence": ["The graph contains exactly one dependency edge"] },
+        { "id": "architect", "label": "Show the architect active first", "evidence": ["The architect returns one non-empty sentence"] },
+        { "id": "reviewer", "label": "Show the reviewer active second", "evidence": ["The reviewer receives the architect output and returns one non-empty decision"] },
+        { "id": "durable-outputs", "label": "Reload the completed Turn", "evidence": ["Both outputs remain separate and labeled"] }
+      ],
+      "evidence": [
+        "The reviewer dependency is present even when agents load after the Session record.",
+        "A blank scheduled Agent output fails the Turn instead of producing false success.",
+        "The film makes no repository-edit or parallel-Ways claim."
+      ]
+    },
+    {
+      "slug": "several-ways",
+      "title": "Several checked Ways",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/several-ways.md",
+      "fixture": "harbor-catalog + deterministic harbor-ways-fixture provider",
+      "placements": [
+        { "page": "sites/marketing/showcase/index.html", "order": 6 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/several-ways.mp4",
+        "poster": "sites/marketing/assets/films/several-ways.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#several-ways",
+      "provenance": "demo/one-app/films/provenance/several-ways.json",
+      "duration_seconds": { "min": 55, "max": 75 },
+      "poster_beat": "comparison",
+      "beats": [
+        { "id": "configuration", "label": "Configure two Ways from one task", "evidence": ["Both Agents and the common repository snapshot are identified"] },
+        { "id": "independent-routes", "label": "Watch independent tool routes", "evidence": ["Each Way has its own output, tools, clone, and container identity"] },
+        { "id": "checks", "label": "Run the same repository Check", "evidence": ["Both non-empty Ways pass all six checks"] },
+        { "id": "comparison", "label": "Compare Outcome and Route", "evidence": ["Changed paths, diff, usage, known cost, and route evidence are visible"] },
+        { "id": "judge", "label": "Rank both survivors", "evidence": ["Judge returns unique ranks and keeps both candidates intact"] },
+        { "id": "keep", "label": "Keep one result deliberately", "evidence": ["The operator chooses Keep and temporary attempt resources are cleaned"] }
+      ],
+      "evidence": [
+        "Checks read the protected candidate snapshot rather than a mutated live clone.",
+        "Keep applies the checked delta without merging or committing.",
+        "The primary checkout contains only the kept uncommitted change."
+      ]
+    },
+    {
+      "slug": "git-last-turn",
+      "title": "Git ownership and Last turn",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/git-last-turn.md",
+      "fixture": "northstar-storefront",
+      "placements": [
+        { "page": "sites/marketing/showcase/index.html", "order": 7 },
+        { "page": "sites/marketing/why/index.html", "order": 2 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/git-last-turn.mp4",
+        "poster": "sites/marketing/assets/films/git-last-turn.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#git-last-turn",
+      "provenance": "demo/one-app/films/provenance/git-last-turn.json",
+      "duration_seconds": { "min": 20, "max": 30 },
+      "poster_beat": "last-turn",
+      "beats": [
+        { "id": "kept-decision", "label": "Reopen the canonical kept Turn", "evidence": ["History and the Keep receipt identify the selected checked result"] },
+        { "id": "uncommitted", "label": "Open Source Control immediately", "evidence": ["The kept change is present and unstaged"] },
+        { "id": "last-turn", "label": "Inspect Last turn", "evidence": ["The exact kept path and meaningful hunk are visible"] },
+        { "id": "restart", "label": "Reload or restart and reopen Last turn", "evidence": ["The same path scope rehydrates from durable evidence"] },
+        { "id": "ownership", "label": "Leave the Git decision with the operator", "evidence": ["Staging remains optional and no commit is created"] }
+      ],
+      "evidence": [
+        "HEAD remains demo-seed after Keep.",
+        "Last turn matches the kept receipt and canonical Turn path list.",
+        "The poster is captured before optional staging."
+      ]
+    },
+    {
+      "slug": "automation-hitl-recovery",
+      "title": "Human-in-the-loop Automation recovery",
+      "status": "ready",
+      "scenario": "demo/one-app/scenarios/automation-hitl.md",
+      "fixture": "signal-desk + seeded spec-review Automation",
+      "placements": [
+        { "page": "sites/marketing/showcase/index.html", "order": 12 }
+      ],
+      "media": {
+        "mp4": "sites/marketing/assets/films/automation-hitl-recovery.mp4",
+        "poster": "sites/marketing/assets/films/automation-hitl-recovery.jpg"
+      },
+      "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#automation-hitl-recovery",
+      "provenance": "demo/one-app/films/provenance/automation-hitl-recovery.json",
+      "duration_seconds": { "min": 45, "max": 65 },
+      "poster_beat": "interrupt",
+      "beats": [
+        { "id": "run", "label": "Start the seeded Automation", "evidence": ["Upstream nodes complete in the visible graph"] },
+        { "id": "interrupt", "label": "Park at the top-level Interrupt", "evidence": ["The blocking prompt and completed upstream state are visible"] },
+        { "id": "restart", "label": "Restart against the same data root", "evidence": ["The pending Interrupt is rediscovered without replay"] },
+        { "id": "resume", "label": "Provide operator guidance", "evidence": ["The saved run continues from the Interrupt"] },
+        { "id": "result", "label": "Inspect completed run history", "evidence": ["The terminal status and recorded Result survive reload"] }
+      ],
+      "evidence": [
+        "Recovery covers a top-level parked Interrupt, not arbitrary in-flight work.",
+        "Completed upstream nodes do not replay after restart.",
+        "Run history records completed status and final content."
+      ]
+    }
+  ]
+}

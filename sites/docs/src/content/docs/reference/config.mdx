@@ -1,0 +1,380 @@
+---
+title: Configuration reference
+description: Current axocoatl.yaml root keys, nested fields, defaults, persistence boundaries, and validation limits.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`axocoatl.yaml` is loaded when a daemon bootstraps. Use an explicit path and
+validate it before restart:
+
+```sh
+axocoatl validate /absolute/path/to/axocoatl.yaml
+axocoatl dev --config /absolute/path/to/axocoatl.yaml
+```
+
+## Environment interpolation
+
+`${NAME}` expressions are replaced from the process environment before YAML is
+parsed. An unset variable becomes an empty string. Axocoatl does not load a
+`.env` file automatically.
+
+Secret fields use redacting wrappers in debug output, but YAML, shell history,
+service definitions, external servers, and backups still need normal secret
+handling.
+
+## Process data root
+
+The control-plane data root is process configuration, not a YAML key.
+`AXOCOATL_DATA_DIR` selects it; otherwise Axocoatl resolves `./data` from the
+daemon working directory. Use one explicit absolute path outside every Workspace
+for the clearest ownership and backup boundary.
+
+On supported Unix hosts, bootstrap retains an opened handle to that root and
+acquires an external current lease, the 0.1-compatible in-root lease, and a
+directory-inode lock before runtime reconciliation or mutable state reads. If the
+resolved root is below a local Podman Workspace, it is masked inside the container.
+A Workspace equal to or below that root is rejected. These controls are automatic
+and have no YAML override. See [Data and backup](/operate/data-backup/) and
+[Security](/operate/security/).
+
+## Root keys
+
+| Key | Shape | Runtime role |
+| --- | --- | --- |
+| `agents` | list | Agent identities, providers/models, prompts, tools, budgets, memory, coordination |
+| `workflows` | list | Legacy manual graph seed and coordinator/multi-Agent membership metadata |
+| `mcp_servers` | list | MCP connections established at bootstrap |
+| `providers` | object | Provider credentials, endpoints, and fallback targets |
+| `server` | object | HTTP bind, auth, CORS, and rate limiting |
+| `sandbox` | object | Daemon-global Session backend and trust/network policy |
+| `hooks` | list | Experimental parsed configuration; not executed |
+| `skills` | list | Event-producing configured Skills |
+| `schedules` | list | Legacy fixed-interval Automation seed |
+| `proactive` | list | Legacy interval/event Automation seed |
+| `web_search` | object/null | Optional Session web-search provider |
+| `consolidation` | object | Idle memory-promotion loop |
+| `webhooks` | list | Outbound typed-event delivery |
+| `pricing` | map | Per-model input/output rates for Attempt cost reporting; reasoning uses the output rate |
+
+Omitted collections default empty. The live daemon does not watch this file;
+restart it to load durable changes.
+
+## Agents
+
+```yaml
+agents:
+  - id: coder
+    name: Coder
+    provider: ollama
+    model: qwen2.5-coder:14b
+    system_prompt: Work in the selected repository and verify changes.
+    tools: []
+    depends_on: []
+    role: autonomous
+    activation_threshold: null
+    activation_decay: null
+    token_budget:
+      per_execution: 20000
+      per_call: 8192
+      overflow_policy: abort
+    sampling:
+      temperature: 0
+      top_p: null
+      max_tokens: 4096
+      response_format: text
+    memory:
+      max_session_messages: 100
+      recall:
+        passive_inject: true
+        top_k: 5
+        min_score: 0.15
+      core:
+        blocks: []
+```
+
+Required Agent fields are `id`, `name`, `provider`, and `model`.
+`system_prompt` and `token_budget` are optional. `role` defaults to
+`autonomous`; other values are `coordinator` and `worker`.
+
+A Coordinator must be the `entry_point` of exactly one workflow. A Worker must belong to that
+coordinator-led workflow and cannot execute or restart as a standalone Agent.
+
+`token_budget.per_call` defaults to 8192 when the budget block exists and
+`overflow_policy` defaults to `abort`. `summarize` is a deprecated alias for
+`warn`. An empty core block list creates the standard blocks; a non-empty list
+contains `{label, value?, limit?, shared?, description?}` with a default limit
+of 2000 characters.
+
+Sampling fields are optional and adapter support varies. `response_format` is
+`text` or `json`.
+
+## Providers
+
+```yaml
+providers:
+  ollama:
+    base_url: "http://127.0.0.1:11434"
+    model: llama3.2
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    base_url: null
+    fallback: "anthropic:claude-sonnet-4-6"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+  gemini:
+    api_key: "${GEMINI_API_KEY}"
+  mistral:
+    api_key: "${MISTRAL_API_KEY}"
+  openrouter:
+    api_key: "${OPENROUTER_API_KEY}"
+```
+
+Hosted credential blocks accept `api_key`, optional `base_url`, and optional
+one-target `fallback`. The OpenAI adapter uses `base_url` for compatible
+servers. OpenRouter's runtime endpoint is fixed. Empty hosted keys prevent that
+provider from registering. For ordinary Session and global Agent execution,
+fallback is attempted once only for a pre-stream rate limit. Ways use their selected
+primary provider directly until effective-route cost evidence can name and price a fallback
+honestly. Any retained tool transaction pins the exact selected
+slot/provider/model across later turns and restart until the complete transaction
+leaves model history. Missing, conflicting, or stale route markers fail closed.
+A known smaller fallback rejects an already oversized request locally, while
+unknown custom-model constraints remain endpoint-validated.
+
+## Server
+
+```yaml
+server:
+  host: "127.0.0.1"
+  port: 8080
+  auth:
+    api_keys: []
+    bearer_tokens: []
+    allow_unauthenticated: false
+  cors_origins: []
+  rate_limit:
+    enabled: false
+    max_requests: 100
+    window_secs: 60
+```
+
+An empty CORS list means same-origin only. Non-loopback binding without an API
+key/bearer token fails unless `allow_unauthenticated` is explicitly true. The
+rate-limit values apply per client IP only when enabled.
+
+## Sandbox
+
+```yaml
+sandbox:
+  backend: podman
+  network: bridge
+  allow_post_create_command: false
+  allow_untrusted_images: false
+  require_resource_limits: false
+```
+
+`allow_post_create_command` defaults the exact devcontainer post-create
+command to approved only for an unreviewed Session. The browser shows that
+default; an explicit per-Session checkbox decision overrides it. It never
+preapproves lockfile-detected `npm ci` or an edited command.
+
+Local Podman accepts these exact curated references without
+`allow_untrusted_images`:
+
+- `docker.io/library/alpine:3.20`
+- `docker.io/library/debian:bookworm-slim`
+- `docker.io/library/ubuntu:24.04`
+- `docker.io/library/python:3.12-slim`
+- `docker.io/library/node:20-slim`
+- `docker.io/library/rust:bookworm`
+
+Common Docker Hub aliases canonicalize to those references. Curated means
+allowlisted, not audited or guaranteed to contain a project's dependencies.
+Before a Session becomes Ready, local Podman verifies the repository commands
+Axocoatl itself needs, attempts distro-aware provisioning inside the container,
+and removes the container if the probe still fails. Session startup never
+installs Podman with a host package manager or creates a Podman VM; it may start
+an existing stopped VM.
+
+A root Node project receives a Session-owned Podman volume over root
+`node_modules`, masking host-native dependencies while the Workspace remains a
+read-write bind mount. Nested package directories are not separately masked.
+
+With `network: none`, use an image that already contains Axocoatl's required
+repository commands and do not approve setup that needs downloads. The network
+policy prevents in-container provisioning; a Podman image pull is a separate
+host operation.
+
+`backend` is `podman` or `e2b`; `network` is `bridge` or `none` for Podman.
+Axocoatl rejects `network: none` with E2B because the remote backend cannot
+prove that policy. For E2B:
+
+```yaml
+sandbox:
+  backend: e2b
+  e2b:
+    api_url: "https://api.e2b.dev"
+    api_key: "${E2B_API_KEY}"
+    template: base
+    domain: e2b.app
+    git_token: "${GITHUB_TOKEN}"
+```
+
+The E2B defaults shown are applied when their fields are omitted. The backend
+and template are daemon-global, not selected independently in the Session
+create API. E2B does not honor a per-Session OCI image; such a request is
+rejected before a remote VM is created. The selected template must already
+contain Axocoatl's required repository commands: readiness verifies them, but
+does not package-provision the remote template. E2B also does not provide the
+local Preview/exposed-port transport. `git_token` configures GitHub-compatible
+token authentication for an origin-scoped helper; other hosts may require a
+different credential flow. Ready E2B Sessions retain their exact runtime ID and
+remote root: Close pauses, Reopen reconnects, and Delete Session or Change/Rebuild
+runtime performs checked deletion.
+
+## MCP servers
+
+```yaml
+mcp_servers:
+  - name: local-tools
+    transport: stdio
+    command: npx
+    args: ["-y", "@example/mcp-server"]
+    env:
+      EXAMPLE_API_KEY: "${EXAMPLE_API_KEY}"
+  - name: remote-tools
+    transport: streamable_http
+    url: "https://mcp.example.internal"
+    headers:
+      Authorization: "Bearer ${MCP_TOKEN}"
+```
+
+Persistent transports are `stdio` and `streamable_http`/`http`. Stdio requires
+`command`; HTTP requires `url`. Bootstrap logs connection failure and continues.
+Settings catalog connect/remove changes only the live registry and does not
+rewrite this list.
+
+## Skills and inactive hooks
+
+```yaml
+skills:
+  - id: review-ready
+    name: Review ready
+    description: Publish review readiness.
+    emits: [ReviewReady]
+    reacts_to: []
+    agents: [reviewer]
+    prompt: Review the change.
+
+hooks: []
+```
+
+Firing a configured Skill publishes `emits`. The other fields are capability
+metadata in the current daemon. A non-empty `hooks` block is parsed and logs a
+warning, but it does not execute. Hook entries contain `name`, `type`, optional
+`phase`, `tools`, `timeout_secs` (default 30), `url`, and `agent_id`.
+
+## Legacy Automation seed
+
+```yaml
+workflows:
+  - id: review
+    name: Review
+    agents: [reviewer, writer]
+    entry_point: reviewer
+    htn_methods_file: null
+
+schedules:
+  - id: review-interval
+    name: Review interval
+    workflow: review
+    every: 2h
+    input: Review outstanding work.
+    enabled: true
+
+proactive:
+  - id: failure-response
+    name: Failure response
+    agent: reviewer
+    trigger:
+      type: on_event
+      event: AgentFailed
+    input: Investigate the failure.
+    enabled: true
+```
+
+Proactive trigger types are `schedule` with `every`, or `on_event` with
+`event`. These three sections seed the canonical Automation store only when its
+file does not exist. Once created, Settings/API records are authoritative.
+
+## Web search and consolidation
+
+```yaml
+web_search:
+  provider: tavily
+  api_key: "${TAVILY_API_KEY}"
+
+consolidation:
+  enabled: true
+  idle_threshold_secs: 120
+  interval_secs: 1800
+```
+
+The currently implemented web-search provider ID is `tavily`. When configured,
+normal Session Agents receive the tool; Attempts do not.
+
+## Webhooks
+
+```yaml
+webhooks:
+  - name: internal-events
+    url: "https://hooks.example.internal/axocoatl"
+    events: [TaskCompleted, AgentFailed]
+    secret: "${WEBHOOK_SECRET}"
+    headers:
+      Authorization: "${INTERNAL_TOKEN}"
+    enabled: true
+```
+
+`events: []` selects all coordination events except unnamed pure telemetry.
+`secret` enables HMAC-SHA256 signing. Delivery is live-process best effort, not
+a durable queue.
+
+## Attempt pricing
+
+Pricing is keyed by the exact model string:
+
+```yaml
+pricing:
+  gpt-5:
+    input_per_mtok: 1.25
+    output_per_mtok: 10.0
+```
+
+Values are dollars per million tokens. Provider-reported `reasoning_tokens` are charged at
+the model's `output_per_mtok` rate. Missing remote model prices remain
+unknown. Ollama Ways have a known-zero model API charge only when
+`providers.ollama.base_url` uses `localhost`, a `.localhost` host, or a loopback
+IP address. A non-loopback Ollama endpoint uses its configured model price or
+remains unknown.
+
+## Validation boundary
+
+`axocoatl validate` checks structural invariants such as duplicate IDs,
+non-empty Agent provider/model strings, dependency and role constraints,
+token-budget relationships, MCP transport shape, and webhook URL shape. It
+does not prove that:
+
+- a provider ID has a registered adapter or credentials;
+- a hosted model is reachable or entitled;
+- sandbox backend/network strings are operational on this host;
+- an MCP process/URL connects;
+- an Automation in the separate canonical store is valid.
+
+<Aside type="caution" title="Settings has mixed persistence">
+Agent patches and MCP catalog connections are live-process state. Automation
+records and MCP decisions have durable JSON stores. YAML remains the durable
+source for providers, Agents after restart, sandbox policy, configured Skills,
+and MCP definitions.
+</Aside>

@@ -28,15 +28,14 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.4"
+version = "1.0.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/axocoatl/axocoatl"
-homepage = "https://github.com/axocoatl/axocoatl"
-documentation = "https://docs.rs/axocoatl"
+homepage = "https://axocoatl.ai"
 authors = ["Axocoatl Contributors"]
-keywords = ["ai", "agents", "actor-model", "orchestration", "lattice"]
+keywords = ["ai", "coding-agents", "developer-tools", "local-first", "automation"]
 categories = ["development-tools", "asynchronous"]
 readme = "README.md"
 
@@ -53,7 +52,10 @@ ractor-supervisor = "0.1"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-bincode = "=2.0.1"
+postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
+# Decode-only compatibility for checkpoint files written by Axocoatl 0.1.x.
+# Do not use this for current persistence; new checkpoints use enveloped Postcard.
+bincode = { version = "=2.0.1", default-features = false, features = ["alloc", "derive"] }
 serde-wasm-bindgen = "0.6"
 base64 = "0.22"
 # File-extraction toolchain. All pure-Rust:
@@ -61,16 +63,18 @@ base64 = "0.22"
 #   pdf-extract — text extraction from PDFs (no external binary)
 #   calamine    — xlsx/xls/ods/csv → cells
 sha2 = "0.10"
+sha1 = "0.10"
+unicode-normalization = "0.1"
 hmac = "0.12"          # HMAC-SHA256 signing for outbound event webhooks
 hex = "0.4"            # hex-encode webhook signatures
-pdf-extract = "0.7"
-calamine = "0.26"
+pdf-extract = "0.12.0"
+calamine = "0.36.1"
 
 # Graph
 petgraph = { version = "0.8", features = ["serde-1"] }
 
 # LLM clients
-async-openai = { version = "0.33", features = ["chat-completion"] }
+async-openai = { version = "0.41.3", features = ["chat-completion"] }
 
 # Token counting
 tiktoken-rs = "0.9"
@@ -85,11 +89,7 @@ reqwest-eventsource = "0.6"
 axum = { version = "0.8", features = ["json", "ws", "multipart"] }
 
 # MCP protocol
-rmcp = { version = "1.2", features = ["server", "client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
-
-# Isolation
-wasmtime = { version = "43", features = ["component-model", "async"] }
-wasmtime-wasi = "43"
+rmcp = { version = "1.8.0", features = ["server", "client", "transport-child-process", "transport-streamable-http-client-reqwest", "macros"] }
 
 # Error handling
 thiserror = "2.0"
@@ -136,18 +136,19 @@ debug = true
 # Workspace-level benchmarks (Criterion)
 # ---------------------------------------------------------------------------
 
+[dependencies]
+serde_json = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
-axocoatl-core = { version = "0.1.0", path = "crates/axocoatl-core" }
-axocoatl-token = { version = "0.1.0", path = "crates/axocoatl-token" }
-axocoatl-coordination = { version = "0.1.0", path = "crates/axocoatl-coordination" }
-axocoatl-isolation = { version = "0.1.0", path = "crates/axocoatl-isolation", features = ["wasmtime-sandbox"] }
-axocoatl-actor = { version = "0.1.0", path = "crates/axocoatl-actor" }
-serde_json = { workspace = true }
+axocoatl-core = { version = "1.0.0", path = "crates/axocoatl-core" }
+axocoatl-token = { version = "1.0.0", path = "crates/axocoatl-token" }
+axocoatl-coordination = { version = "1.0.0", path = "crates/axocoatl-coordination" }
+axocoatl-isolation = { version = "1.0.0", path = "crates/axocoatl-isolation" }
+axocoatl-actor = { version = "1.0.0", path = "crates/axocoatl-actor" }
 tokio = { workspace = true }
 ractor = { workspace = true }
 async-trait = { workspace = true }
-wat = "1.245"
 
 [[bench]]
 name = "token_efficiency"
@@ -158,9 +159,9 @@ name = "routing_latency"
 harness = false
 
 [[bench]]
-name = "isolation_startup"
+name = "actor_throughput"
 harness = false
 
 [[bench]]
-name = "actor_throughput"
+name = "resource_footprint"
 harness = false

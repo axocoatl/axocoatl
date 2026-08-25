@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "film": "durable-turn",
+  "input_fps": 8,
+  "shots": [
+    { "beat": "context", "source": "shot-context.jpg", "hold_frames": 88 },
+    { "beat": "reload", "source": "shot-reload.jpg", "hold_frames": 96 },
+    { "beat": "cancelled-history", "source": "shot-cancelled-history.jpg", "hold_frames": 104 },
+    { "beat": "clean-next-turn", "source": "shot-clean-next-turn.jpg", "hold_frames": 96 }
+  ]
+}

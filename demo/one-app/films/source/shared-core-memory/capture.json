@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "film": "shared-core-memory",
+  "captured_at": "2026-08-25T05:46:34.976Z",
+  "url": "http://localhost:18094/",
+  "browser": "Codex in-app browser",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1
+  },
+  "theme": "dark",
+  "reduced_motion": "no-preference",
+  "timeline": "demo/one-app/films/source/shared-core-memory/timeline.json",
+  "timeline_sha256": "fafc69b3f188da61d39476840eea23fa61727277c5ea78d5c66165487a6985a6",
+  "keyframes": [
+    {
+      "beat": "write",
+      "path": "demo/one-app/films/source/shared-core-memory/shot-write.jpg",
+      "sha256": "dc954afd5570de57a4fbf6b2fabba08ad4e37e4761dd3093dcd6497987de1283"
+    },
+    {
+      "beat": "restart",
+      "path": "demo/one-app/films/source/shared-core-memory/shot-restart.jpg",
+      "sha256": "f1efe8b78e24b8f908dbbafa51a47e13349fba1ec6b75194377159ba02c43c57"
+    },
+    {
+      "beat": "separate-sessions",
+      "path": "demo/one-app/films/source/shared-core-memory/shot-separate-sessions.jpg",
+      "sha256": "458859f054df18137979036b99bbf491a64c09f7efab5564bcfd0e09a7612466"
+    },
+    {
+      "beat": "recall",
+      "path": "demo/one-app/films/source/shared-core-memory/shot-recall.jpg",
+      "sha256": "ec9b9bf89e466eed49f91ce8ed955d6d607abedafa08c808be2151a1711da636"
+    }
+  ]
+}

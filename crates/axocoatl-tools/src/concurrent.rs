@@ -20,6 +20,35 @@ pub struct ToolResult {
 pub struct ConcurrentToolDispatcher;
 
 impl ConcurrentToolDispatcher {
+    async fn execute_owned(
+        executor: &Arc<ToolExecutor>,
+        seq: usize,
+        tool_call: ToolCall,
+    ) -> ToolResult {
+        let exec = executor.clone();
+        let name = tool_call.name.clone();
+        let args = tool_call.arguments.clone();
+        let handle = tokio::spawn(async move { exec.execute(&name, args).await });
+        match handle.await {
+            Ok(result) => ToolResult {
+                seq,
+                tool_call,
+                result,
+            },
+            Err(error) => {
+                tracing::error!(tool = %tool_call.name, %error, "Tool execution task panicked");
+                ToolResult {
+                    seq,
+                    result: Err(crate::error::ToolError::ExecutionFailed {
+                        tool: tool_call.name.clone(),
+                        reason: format!("Tool task panicked: {error}"),
+                    }),
+                    tool_call,
+                }
+            }
+        }
+    }
+
     /// Execute tool calls with concurrency control.
     ///
     /// - If ANY `Exclusive` tool is present, ALL tools run sequentially in submission order
@@ -37,15 +66,11 @@ impl ConcurrentToolDispatcher {
             return Vec::new();
         }
 
-        // If only one tool call, skip concurrency overhead
+        // A single call still runs in an owned task: an in-process builtin can
+        // panic, and the dispatcher contract is to preserve its identity as an
+        // error result rather than unwind the agent actor.
         if tool_calls.len() == 1 {
-            let tc = &tool_calls[0];
-            let result = executor.execute(&tc.name, tc.arguments.clone()).await;
-            return vec![ToolResult {
-                seq: 0,
-                tool_call: tc.clone(),
-                result,
-            }];
+            return vec![Self::execute_owned(executor, 0, tool_calls[0].clone()).await];
         }
 
         // Check if any Exclusive tool is present — if so, serialize everything
@@ -57,12 +82,7 @@ impl ConcurrentToolDispatcher {
             // All tools run sequentially in submission order
             let mut results = Vec::with_capacity(tool_calls.len());
             for (seq, tc) in tool_calls.iter().enumerate() {
-                let result = executor.execute(&tc.name, tc.arguments.clone()).await;
-                results.push(ToolResult {
-                    seq,
-                    tool_call: tc.clone(),
-                    result,
-                });
+                results.push(Self::execute_owned(executor, seq, tc.clone()).await);
             }
             return results;
         }
@@ -84,41 +104,40 @@ impl ConcurrentToolDispatcher {
         // Execute Safe tools in parallel via JoinSet
         if !safe_calls.is_empty() {
             let mut join_set = tokio::task::JoinSet::new();
+            let mut identities = std::collections::HashMap::new();
 
             for (seq, tc) in safe_calls {
                 let exec = executor.clone();
                 let name = tc.name.clone();
                 let args = tc.arguments.clone();
-                let tc_clone = tc.clone();
-                join_set.spawn(async move {
-                    let result = exec.execute(&name, args).await;
-                    (seq, tc_clone, result)
-                });
+                let task = join_set.spawn(async move { exec.execute(&name, args).await });
+                identities.insert(task.id(), (seq, tc));
             }
 
-            while let Some(join_result) = join_set.join_next().await {
+            while let Some(join_result) = join_set.join_next_with_id().await {
                 match join_result {
-                    Ok((seq, tc, result)) => {
+                    Ok((task_id, result)) => {
+                        let (seq, tc) = identities
+                            .remove(&task_id)
+                            .expect("every joined tool task retains its identity");
                         all_results.push(ToolResult {
                             seq,
                             tool_call: tc,
                             result,
                         });
                     }
-                    Err(e) => {
-                        // Panicked task — produce an error result so the LLM still gets a response
-                        tracing::error!(error = %e, "Tool execution task panicked");
+                    Err(error) => {
+                        let (seq, tc) = identities
+                            .remove(&error.id())
+                            .expect("every failed tool task retains its identity");
+                        tracing::error!(tool = %tc.name, %error, "Tool execution task panicked");
                         all_results.push(ToolResult {
-                            seq: usize::MAX, // will be at end; caller uses tool_call.id for matching
-                            tool_call: ToolCall {
-                                id: "panicked".to_string(),
-                                name: "unknown".to_string(),
-                                arguments: serde_json::Value::Null,
-                            },
+                            seq,
                             result: Err(crate::error::ToolError::ExecutionFailed {
-                                tool: "unknown".to_string(),
-                                reason: format!("Tool task panicked: {e}"),
+                                tool: tc.name.clone(),
+                                reason: format!("Tool task panicked: {error}"),
                             }),
+                            tool_call: tc,
                         });
                     }
                 }
@@ -127,12 +146,7 @@ impl ConcurrentToolDispatcher {
 
         // Execute Ordered tools sequentially
         for (seq, tc) in ordered_calls {
-            let result = executor.execute(&tc.name, tc.arguments.clone()).await;
-            all_results.push(ToolResult {
-                seq,
-                tool_call: tc,
-                result,
-            });
+            all_results.push(Self::execute_owned(executor, seq, tc).await);
         }
 
         // Sort by submission order
@@ -144,7 +158,27 @@ impl ConcurrentToolDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builtin::EchoTool;
+    use crate::builtin::{BuiltinTool, EchoTool};
+
+    struct PanickingTool;
+
+    #[async_trait::async_trait]
+    impl BuiltinTool for PanickingTool {
+        fn description(&self) -> &str {
+            "panic for dispatcher identity testing"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(
+            &self,
+            _arguments: serde_json::Value,
+        ) -> Result<serde_json::Value, crate::error::ToolError> {
+            panic!("intentional tool panic")
+        }
+    }
 
     #[tokio::test]
     async fn dispatch_empty() {
@@ -164,6 +198,7 @@ mod tests {
             id: "1".to_string(),
             name: "echo".to_string(),
             arguments: serde_json::json!({"text": "hello"}),
+            provider_metadata: Default::default(),
         }];
 
         let results =
@@ -185,6 +220,7 @@ mod tests {
                 id: format!("call_{i}"),
                 name: "echo".to_string(),
                 arguments: serde_json::json!({"text": format!("msg_{i}")}),
+                provider_metadata: Default::default(),
             })
             .collect();
 
@@ -201,6 +237,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parallel_panic_preserves_original_sequence_and_call_identity() {
+        let mut exec = ToolExecutor::new();
+        exec.register_builtin("panic_tool", Arc::new(PanickingTool));
+        exec.register_builtin("echo", Arc::new(EchoTool));
+        let executor = Arc::new(exec);
+        let calls = vec![
+            ToolCall {
+                id: "call-a".to_string(),
+                name: "panic_tool".to_string(),
+                arguments: serde_json::json!({}),
+                provider_metadata: Default::default(),
+            },
+            ToolCall {
+                id: "call-b".to_string(),
+                name: "echo".to_string(),
+                arguments: serde_json::json!({"text": "ok"}),
+                provider_metadata: Default::default(),
+            },
+        ];
+
+        let results =
+            ConcurrentToolDispatcher::dispatch(&executor, &calls, |_| ConcurrencyPolicy::Safe)
+                .await;
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].seq, 0);
+        assert_eq!(results[0].tool_call.id, "call-a");
+        assert_eq!(results[0].tool_call.name, "panic_tool");
+        assert!(matches!(
+            results[0].result,
+            Err(crate::error::ToolError::ExecutionFailed { ref tool, .. })
+                if tool == "panic_tool"
+        ));
+        assert_eq!(results[1].seq, 1);
+        assert_eq!(results[1].tool_call.id, "call-b");
+        assert_eq!(results[1].tool_call.name, "echo");
+        assert!(results[1].result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn single_panic_preserves_exact_call_identity() {
+        let mut exec = ToolExecutor::new();
+        exec.register_builtin("panic_tool", Arc::new(PanickingTool));
+        let executor = Arc::new(exec);
+        let call = ToolCall {
+            id: "single-a".to_string(),
+            name: "panic_tool".to_string(),
+            arguments: serde_json::json!({"sentinel": "single"}),
+            provider_metadata: Default::default(),
+        };
+
+        let results =
+            ConcurrentToolDispatcher::dispatch(&executor, std::slice::from_ref(&call), |_| {
+                ConcurrencyPolicy::Safe
+            })
+            .await;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].seq, 0);
+        assert_eq!(results[0].tool_call.id, "single-a");
+        assert_eq!(results[0].tool_call.arguments, call.arguments);
+        assert!(matches!(
+            results[0].result,
+            Err(crate::error::ToolError::ExecutionFailed { ref tool, .. })
+                if tool == "panic_tool"
+        ));
+    }
+
+    async fn assert_sequential_panic_policy(policy: ConcurrencyPolicy) {
+        let mut exec = ToolExecutor::new();
+        exec.register_builtin("panic_tool", Arc::new(PanickingTool));
+        exec.register_builtin("echo", Arc::new(EchoTool));
+        let executor = Arc::new(exec);
+        let calls = vec![
+            ToolCall {
+                id: "call-a".to_string(),
+                name: "panic_tool".to_string(),
+                arguments: serde_json::json!({}),
+                provider_metadata: Default::default(),
+            },
+            ToolCall {
+                id: "call-b".to_string(),
+                name: "echo".to_string(),
+                arguments: serde_json::json!({"text": "survived"}),
+                provider_metadata: Default::default(),
+            },
+        ];
+
+        let results = ConcurrentToolDispatcher::dispatch(&executor, &calls, |_| policy).await;
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].seq, 0);
+        assert_eq!(results[0].tool_call.id, "call-a");
+        assert!(results[0].result.is_err());
+        assert_eq!(results[1].seq, 1);
+        assert_eq!(results[1].tool_call.id, "call-b");
+        assert_eq!(
+            results[1].result.as_ref().unwrap(),
+            &serde_json::json!({"text": "survived"})
+        );
+    }
+
+    #[tokio::test]
+    async fn exclusive_panic_does_not_skip_later_call() {
+        assert_sequential_panic_policy(ConcurrencyPolicy::Exclusive).await;
+    }
+
+    #[tokio::test]
+    async fn ordered_panic_does_not_skip_later_call() {
+        assert_sequential_panic_policy(ConcurrencyPolicy::Ordered).await;
+    }
+
+    #[tokio::test]
     async fn dispatch_mixed_policies() {
         let mut exec = ToolExecutor::new();
         exec.register_builtin("echo", Arc::new(EchoTool));
@@ -211,16 +359,19 @@ mod tests {
                 id: "0".into(),
                 name: "echo".into(),
                 arguments: serde_json::json!({"text": "safe1"}),
+                provider_metadata: Default::default(),
             },
             ToolCall {
                 id: "1".into(),
                 name: "echo".into(),
                 arguments: serde_json::json!({"text": "exclusive"}),
+                provider_metadata: Default::default(),
             },
             ToolCall {
                 id: "2".into(),
                 name: "echo".into(),
                 arguments: serde_json::json!({"text": "safe2"}),
+                provider_metadata: Default::default(),
             },
         ];
 
@@ -248,6 +399,7 @@ mod tests {
                 id: format!("{i}"),
                 name: "echo".to_string(),
                 arguments: serde_json::json!({"text": format!("msg_{i}")}),
+                provider_metadata: Default::default(),
             })
             .collect();
 

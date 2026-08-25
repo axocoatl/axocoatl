@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "film": "several-ways",
+  "checks": [
+    {
+      "id": "configuration",
+      "status": "passed",
+      "detail": "The real UI showed the exact Harbor cache-coherency task, one reviewed Acceptance Planner plan, and successful structured-tool preflight for both Minimal Coder and Invariant Defender. Every agent used the deterministic local harbor-ways-fixture provider, so this take proves Axocoatl's execution lifecycle rather than model or provider diversity."
+    },
+    {
+      "id": "independent-routes",
+      "status": "passed",
+      "detail": "Route showed 5 of 7 steps diverged across two independent Podman-backed attempts: coder read lib/catalog.js, made two focused edits, then ran npm run check; defender searched the cache surface, read the contract and implementation, replaced lib/catalog.js, then ran the same check."
+    },
+    {
+      "id": "checks",
+      "status": "passed",
+      "detail": "Both non-empty production-only candidates passed the protected npm run check contract with 6 tests passed and 0 failed. Candidate 0 changed lib/catalog.js by +2/-2 and candidate 1 by +8/-7; the immutable checked commits, trees, and exact binary-diff hashes were retained while lib/catalog.test.js remained unchanged."
+    },
+    {
+      "id": "comparison",
+      "status": "passed",
+      "detail": "Outcome and the readable changed-path view compared the same verified evidence before Judge: candidate 0 cleared the cache after each mutation, while candidate 1 attached revisions to cached results. The UI exposed each outcome, diff, duration, token usage, known-zero local fixture cost, and Route."
+    },
+    {
+      "id": "judge",
+      "status": "passed",
+      "detail": "Evidence Judge assigned candidate 0 rank 1 and candidate 1 rank 2, with this recorded reasoning: Both candidates pass the same protected checks. The broad invalidation patch wins because it is the smallest complete coherence boundary; the revisioned strategy makes invalidation lazy but introduces extra cache-entry state."
+    },
+    {
+      "id": "keep",
+      "status": "passed",
+      "detail": "The operator deliberately kept candidate 0. The canonical completed Turn and Keep receipt identify the same attempt set and sole touched path; the primary checkout then contained only unstaged lib/catalog.js at +2/-2, npm run check passed all 6 tests, git diff --check was clean, and temporary attempt refs, worktrees, results, and containers were cleaned without creating a commit."
+    }
+  ],
+  "identities": {
+    "fixture": "harbor-catalog",
+    "provider": "deterministic local Ollama-compatible harbor-ways-fixture",
+    "claim_scope": "Axocoatl lifecycle evidence, not model capability or provider/model diversity",
+    "release_binary": "target/release/axocoatl (axocoatl 1.0.0)",
+    "release_binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+    "capture_config": "demo/one-app/films/fixtures/harbor-ways.capture.yaml",
+    "capture_config_sha256": "15b1a23451177017e89281c84f3ceb9f8382a6c947918b4618a751ba5ff58fa6",
+    "provider_fixture": "demo/one-app/films/fixtures/harbor-ways-provider.mjs",
+    "provider_fixture_sha256": "c278dde20186a4c2b1e047e1e09af2e9d38401d30358cae46be26eac55957881",
+    "capture_data_root": "/private/tmp/axocoatl-one-app-showcase-harbor-ways-final-launch/data",
+    "workspace_id": "wsp-16221dde-cdee-4b75-be5b-c446f66315d5",
+    "workspace_path": "/private/tmp/axocoatl-one-app-showcase-harbor-ways-final-launch/workspace",
+    "workspace_record_sha256": "2e0013012aa92a80befb69fe5e1e373c5f52c63e89b2cc2ef286eaaf2fa3f4f4",
+    "session_id": "ses-28576120-c62f-44d6-9f5e-4b8d1a4319e4",
+    "session_name": "Repair catalog coherence",
+    "session_record_sha256_after_capture_cleanup": "109389d5ead30e2fc053658f2499ed2c5ef5d1694232de7acab815db16c16016",
+    "session_runtime": "podman generation=1 state=ready runtime_id=ses-28576120-c62f-44d6-9f5e-4b8d1a4319e4 cleanup_confirmed=true",
+    "attempt_set_id": "2c87384d-dcce-4387-b38f-26e4f603bfa1",
+    "attempt_key": "9ddc814e8a4c75fc2dd73ffa",
+    "base_snapshot_commit": "47899e16434454b4857b382b807e667541628431",
+    "base_tree": "8c199747fb22965ebf57740cc6a42f775703df3c",
+    "primary_head_before_and_after_keep": "79d805168d617ae8649c434127bb29228a952a3f",
+    "primary_head_tree": "8c199747fb22965ebf57740cc6a42f775703df3c",
+    "demo_seed": "79d805168d617ae8649c434127bb29228a952a3f",
+    "candidate_0_route": [
+      "read_file lib/catalog.js",
+      "edit_file lib/catalog.js",
+      "edit_file lib/catalog.js",
+      "bash npm run check"
+    ],
+    "candidate_0_checked_commit": "44ee4633decebcb6f6600aea9500734bb3483dcf",
+    "candidate_0_checked_tree": "6cd2e2842141c7e1446afa5e3f620c86dfe024db",
+    "candidate_0_patch_sha256": "eae7f370a4450049d6f892e9d0de4f20173bff1c2f045632dc06c4c3f09ac9cf",
+    "candidate_0_diff_stat": "lib/catalog.js +2/-2",
+    "candidate_0_check": "npm run check: 6 passed, 0 failed",
+    "candidate_0_execution": "5556 ms; 1380 input + 212 output = 1592 tokens; known local fixture cost $0.00",
+    "candidate_1_route": [
+      "grep cache|upsert|remove in lib/catalog.js",
+      "read_file lib/catalog.test.js",
+      "read_file lib/catalog.js",
+      "write_file lib/catalog.js",
+      "bash npm run check"
+    ],
+    "candidate_1_checked_commit": "2fd2f76ef595af822245a9ba0a3c774db562c8a1",
+    "candidate_1_checked_tree": "5edb144d70e7321b7bfe95a4988439f375ae0e44",
+    "candidate_1_patch_sha256": "12ce3ef13bffa558d8720a830a5a9b04433b94f73f53bbc02e749b487703d816",
+    "candidate_1_diff_stat": "lib/catalog.js +8/-7",
+    "candidate_1_check": "npm run check: 6 passed, 0 failed",
+    "candidate_1_execution": "6403 ms; 1720 input + 230 output = 1950 tokens; known local fixture cost $0.00",
+    "judge_winner": "candidate 0",
+    "judge_ranks": "candidate 0 = 1; candidate 1 = 2",
+    "judge_reasoning": "Both candidates pass the same protected checks. The broad invalidation patch wins because it is the smallest complete coherence boundary; the revisioned strategy makes invalidation lazy but introduces extra cache-entry state.",
+    "canonical_kept_turn_id": "turn-attempt-2c87384d-dcce-4387-b38f-26e4f603bfa1-0",
+    "turn_ledger_sha256": "4034eee38938b33ed1cff1c4e3c628c3779df7c043d424d3604c87d4d0756589",
+    "keep_receipt": "workspace/.axo-variants/8b6a3e33dfaffab2/receipts/keep-9ddc814e8a4c75fc2dd73ffa.json",
+    "keep_receipt_sha256": "900e9f933a3b996bfb27e762c3b00b4a3d1d6f48f5f6e37223a5548afba5de75",
+    "keep_receipt_status": "main; lib/catalog.js modified +2/-2; staged=false; unstaged=true; last_turn=true; clean=false",
+    "kept_path": "lib/catalog.js",
+    "kept_patch_sha256": "eae7f370a4450049d6f892e9d0de4f20173bff1c2f045632dc06c4c3f09ac9cf",
+    "kept_file_sha256": "7a13b617810d52eda299bb85aa43559c9c594078f9f1f4194df93572e94ba449",
+    "test_file_sha256": "e45363385ff78669359835694d3e235592e275038bf69cdc908cb8526fb99638",
+    "test_file_demo_seed_sha256": "e45363385ff78669359835694d3e235592e275038bf69cdc908cb8526fb99638",
+    "primary_git_status": " M lib/catalog.js",
+    "primary_git_diff_stat": "lib/catalog.js | 4 ++--; 1 file changed, 2 insertions(+), 2 deletions(-)",
+    "staged_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "primary_refs_after_keep": "refs/heads/main and refs/tags/demo-seed only; both 79d805168d617ae8649c434127bb29228a952a3f",
+    "primary_worktrees_after_keep": "one primary worktree only",
+    "post_keep_attempt_results": "empty",
+    "primary_check": "npm run check: tests 6, pass 6, fail 0",
+    "primary_diff_check": "git diff --check: clean",
+    "capture_url": "http://localhost:18092/?session=ses-28576120-c62f-44d6-9f5e-4b8d1a4319e4",
+    "capture_browser": "Codex in-app browser local capture",
+    "capture_viewport": "1280x720; comparison captured at 1920x1080 and proportionally downscaled to 1280x720",
+    "capture_timeline_sha256": "4771ba9aad75502ae2eb11e4c8a7c1fd48d497859ee3773c598ae1cf2a6548d9",
+    "screenshot_sha256": [
+      "shot-configuration.jpg=a32f2970ab537e1eadf887cd39056ba9e39abdd724eca0b963b4aeb5e6b5bed7",
+      "shot-independent-routes.jpg=774905103d1cd6557679531f77ccf889775aaa399384080125e82a1c29b6375d",
+      "shot-checks.jpg=312eafab1410b2ce1bd56041ca4560b062c98bba90c72fd733b6b74c7fe82e68",
+      "shot-comparison.jpg=71b88c043850500c44f594479ce0be78c4da8cfcdfafdf6dd5e5b8b5f4b92474",
+      "shot-judge.jpg=1aecd072f4d5c1c223c08511496201dff82cc48cc1b5af7484d97dc0e658fe72",
+      "shot-keep.jpg=1e47148b1669dcf8b43821ac257debb0864fbaffa7765d0785748d1fd1c86326"
+    ],
+    "cleanup": "Session closed after capture with runtime cleanup_confirmed=true; variants/results was empty; only the primary worktree and main/demo-seed refs remained; podman ps was empty; the kept patch remained uncommitted"
+  }
+}

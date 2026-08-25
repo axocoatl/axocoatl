@@ -43,7 +43,7 @@ pub enum AgentRole {
 }
 
 /// Output format requested from the model. `Json` maps to each provider's
-/// native JSON mode where one exists (Ollama `format`, OpenAI/Mistral
+/// native JSON mode where one exists (Ollama/OpenAI/Mistral
 /// `response_format`, Gemini `responseMimeType`); for a provider without a
 /// native mode it is enforced via a system-prompt instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

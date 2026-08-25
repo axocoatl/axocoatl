@@ -1,4 +1,4 @@
-use axocoatl_core::{ChatMessage, MessageContent, MessageRole, ToolCall};
+use axocoatl_core::{ChatMessage, MessageContent, MessageRole, ProviderMetadata, ToolCall};
 use serde::{Deserialize, Serialize};
 
 /// In-memory session transcript — append-only.
@@ -8,15 +8,19 @@ pub struct SessionMemory {
     token_count: usize,
 }
 
-/// A tool call persisted alongside an assistant message. `bincode` has no
+/// A tool call persisted alongside an assistant message. The binary checkpoint has no
 /// representation for `serde_json::Value`, so the arguments are stored as their
 /// JSON text and parsed back when reconstructing a [`ToolCall`].
-#[derive(Debug, Clone, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredToolCall {
     pub id: String,
     pub name: String,
     /// Tool-call arguments as a JSON string.
     pub arguments_json: String,
+    /// Opaque provider fields needed for exact replay (for example Gemini
+    /// thought signatures). Trailing + default keeps older checkpoints valid.
+    #[serde(default)]
+    pub provider_metadata: ProviderMetadata,
 }
 
 impl StoredToolCall {
@@ -25,6 +29,7 @@ impl StoredToolCall {
             id: tc.id.clone(),
             name: tc.name.clone(),
             arguments_json: serde_json::to_string(&tc.arguments).unwrap_or_else(|_| "{}".into()),
+            provider_metadata: tc.provider_metadata.clone(),
         }
     }
 
@@ -34,11 +39,12 @@ impl StoredToolCall {
             name: self.name.clone(),
             arguments: serde_json::from_str(&self.arguments_json)
                 .unwrap_or(serde_json::Value::Null),
+            provider_metadata: self.provider_metadata.clone(),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredMessage {
     pub role: MessageRole,
     pub content: String,
@@ -321,6 +327,7 @@ mod tests {
             id: "call_1".to_string(),
             name: "get_weather".to_string(),
             arguments: serde_json::json!({ "location": "NYC" }),
+            provider_metadata: ProviderMetadata::new(),
         };
         session.append_assistant_tool_calls("", std::slice::from_ref(&call), 0);
         session.append_tool_result("get_weather", "call_1", "{\"temp\":72}", 4);
@@ -341,26 +348,36 @@ mod tests {
     }
 
     #[test]
-    fn tool_calls_survive_checkpoint_bincode_round_trip() {
+    fn tool_calls_survive_checkpoint_postcard_round_trip() {
         let mut session = SessionMemory::new();
         let call = ToolCall {
             id: "call_9".to_string(),
             name: "search".to_string(),
             arguments: serde_json::json!({ "q": "rust" }),
+            provider_metadata: ProviderMetadata::from([(
+                "gemini.thought_signature".to_string(),
+                "exact-signature".to_string(),
+            )]),
         };
         session.append_assistant_tool_calls("looking it up", std::slice::from_ref(&call), 2);
         session.append_tool_result("search", "call_9", "ok", 1);
 
         let stored = session.messages().to_vec();
-        let bytes = bincode::encode_to_vec(&stored, bincode::config::standard()).unwrap();
-        let (back, _): (Vec<StoredMessage>, _) =
-            bincode::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
+        let bytes = postcard::to_stdvec(&stored).unwrap();
+        let back: Vec<StoredMessage> = postcard::from_bytes(&bytes).unwrap();
 
         let mut restored = SessionMemory::new();
         restored.restore(back);
         let msgs = restored.as_chat_messages();
         assert_eq!(msgs[0].tool_calls[0].name, "search");
         assert_eq!(msgs[0].tool_calls[0].arguments["q"], "rust");
+        assert_eq!(
+            msgs[0].tool_calls[0]
+                .provider_metadata
+                .get("gemini.thought_signature")
+                .map(String::as_str),
+            Some("exact-signature")
+        );
         assert_eq!(msgs[1].tool_call_id.as_deref(), Some("call_9"));
     }
 
@@ -399,6 +416,7 @@ mod tests {
                 id: "c1".to_string(),
                 name: "search".to_string(),
                 arguments: serde_json::json!({ "q": "x" }),
+                provider_metadata: ProviderMetadata::new(),
             }],
             tool_call_id: None,
         };

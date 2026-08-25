@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "film": "sandbox-terminal-preview",
+  "timeline": "demo/one-app/films/source/sandbox-terminal-preview/timeline.json",
+  "timeline_sha256": "8de2766074b9ed69faf5118ba9e9333818ed7d4df2c103b5773832482e4d570f",
+  "input_fps": 8,
+  "frame_count": 248,
+  "duration_seconds": 31,
+  "sequence_sha256": "c03c7f8d72b4ee372f4b384e6882bc2ac7b3346ea39de12a5862da45bea52253",
+  "shots": [
+    {
+      "beat": "session",
+      "source": "shot-session.jpg",
+      "source_sha256": "526f5904b1d6d635373b7ab7817cbd1c2d53269a977e14ed127dc0134a1b6e43",
+      "hold_frames": 56,
+      "first_frame": 1,
+      "last_frame": 56
+    },
+    {
+      "beat": "sandbox",
+      "source": "shot-sandbox.jpg",
+      "source_sha256": "79fe1d16a1a0d43abe6835ffe3760f55c4ea60c620c4c657ffb47de0238690a1",
+      "hold_frames": 64,
+      "first_frame": 57,
+      "last_frame": 120
+    },
+    {
+      "beat": "check",
+      "source": "shot-check.jpg",
+      "source_sha256": "98b8c66a9f1abf46f1abbefad02ebf8cf3d9b15171a10c75082705f2ba09c0ff",
+      "hold_frames": 64,
+      "first_frame": 121,
+      "last_frame": 184
+    },
+    {
+      "beat": "preview",
+      "source": "shot-preview.jpg",
+      "source_sha256": "88814b20b40dce1363666a4daf375b16be30317b0407e0cfe94421fd0289ff99",
+      "hold_frames": 64,
+      "first_frame": 185,
+      "last_frame": 248
+    }
+  ],
+  "poster_beat": "preview",
+  "poster_frame": 216
+}

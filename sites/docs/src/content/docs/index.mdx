@@ -1,50 +1,72 @@
 ---
-title: Axocoatl
-description: The open-source Rust runtime for self-coordinating multi-agent systems.
+title: Axocoatl documentation
+description: Install Axocoatl, run the workbench, configure the runtime, and operate its local data safely.
 template: splash
 hero:
-  tagline: Real workflows. No theater.
+  tagline: One durable Session. The whole workspace around it.
   actions:
-    - text: Get started
-      link: /getting-started/
+    - text: Install Axocoatl
+      link: /start/install/
       icon: right-arrow
       variant: primary
-    - text: GitHub
-      link: https://github.com/axocoatl/axocoatl
-      icon: external
+    - text: Use the workbench
+      link: /workbench/session/
+      icon: right-arrow
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 
-Axocoatl is a Rust runtime for **self-coordinating multi-agent systems**.
-Agents persist their state, run as a system service, route work through a
-stigmergic event lattice, and finish what you start. One 26 MB binary.
-Your hardware. Your LLM. Your data.
+Axocoatl is a local-first coding workbench backed by a durable Rust agent
+runtime. A folder-anchored Session keeps conversation, context, files, terminal,
+Preview, tools, history, and Git review together. Start with the Agent
+or configured team that fits the work. Explore several Ways only when the task
+warrants comparison.
 
-## Quick links
+## The shortest path
+
+<Steps>
+
+1. [Install the binary](/start/install/).
+2. Run [`axocoatl onboard`](/start/onboard/) and [`axocoatl doctor`](/start/onboard/#run-doctor).
+3. Start `axocoatl dev`, open `http://localhost:8080`, and [create a Session](/start/first-session/).
+4. Ask for a bounded change, review what happened, run the repository checks, and inspect Git.
+
+</Steps>
+
+## Pick the task in front of you
 
 <CardGrid>
-  <Card title="Get started in 60 seconds" icon="rocket">
-    Install, run `axocoatl doctor`, open the dashboard. [Quickstart →](/getting-started/)
+  <Card title="Start" icon="rocket">
+    Install, scaffold a configuration, run doctor, and open your first Session.
+    [Begin →](/start/install/)
   </Card>
-  <Card title="How the lattice works" icon="puzzle">
-    The coordination model that makes Axocoatl different. [Concepts →](/concepts/lattice/)
+  <Card title="Use the workbench" icon="puzzle">
+    Work in Conversation, open Files, Terminal, Preview, History, and Git, and use several Ways when one answer is not enough.
+    [Open the guide →](/workbench/session/)
   </Card>
-  <Card title="Bring your own LLM" icon="setting">
-    Ollama for local, or any cloud provider. [Provider setup →](/guides/ollama-quickstart/)
+  <Card title="Configure" icon="setting">
+    Set providers, Agents, sandboxes, Skills, MCP servers, and Automations.
+    [Configure Axocoatl →](/configure/settings/)
   </Card>
-  <Card title="Troubleshooting" icon="warning">
-    What `axocoatl doctor` checks, and how to fix common failures. [Open →](/guides/troubleshooting/)
+  <Card title="Operate" icon="information">
+    Run the service, back up local state, upgrade deliberately, and diagnose failures.
+    [Operations guide →](/operate/service/)
+  </Card>
+  <Card title="Understand" icon="open-book">
+    Learn the ownership boundaries behind Sessions, attempts, memory, events, and protocols.
+    [Read the model →](/understand/product-model/)
+  </Card>
+  <Card title="Reference" icon="document">
+    Look up CLI commands, configuration fields, HTTP routes, WebSocket frames, and examples.
+    [Open reference →](/reference/cli/)
   </Card>
 </CardGrid>
 
-## What's the wedge?
+## What stays local—and what may not
 
-The agent-tooling industry has a theater problem. Mac mini farms, glowing
-terminals, demo videos. The optics have eaten the output. Axocoatl is for
-the opposite kind of team: the one with actual work to ship.
-
-We're a **runtime**, not a framework. A single binary that runs on your
-box, supervises a constellation of agents, persists their state through
-crashes and restarts, and lets you watch every step in the dashboard. The
-LLM is your choice. Nothing leaves the box unless you wire it to.
+The daemon and default Podman sandbox run on your machine, and Axocoatl adds no
+product telemetry. That does not mean every configured path is offline. Hosted
+model providers, remote MCP servers, web search, webhooks, bridged sandbox
+networking, embedding-model downloads, and an E2B Cloud remote sandbox can
+send data over the network. [Review the security boundary before using untrusted
+input →](/operate/security/)

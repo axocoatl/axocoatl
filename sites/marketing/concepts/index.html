@@ -1,217 +1,166 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Concepts — Axocoatl</title>
-  <meta name="description" content="How Axocoatl coordinates agents: stigmergic event lattice, persistent runtime, sessions, skills, memory.">
-  <meta name="author" content="Axocoatl Contributors">
-  <meta name="theme-color" content="#3E7C5C">
-  <link rel="canonical" href="https://axocoatl.ai/concepts">
-  <meta property="og:type" content="website">
-  <meta property="og:site_name" content="Axocoatl">
-  <meta property="og:locale" content="en_US">
-  <meta property="og:url" content="https://axocoatl.ai/concepts">
-  <meta property="og:title" content="Concepts — Axocoatl">
-  <meta property="og:description" content="How Axocoatl coordinates agents: stigmergic event lattice, persistent runtime, sessions, skills, memory.">
-  <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Concepts — Axocoatl">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:site" content="@axocoatl">
-  <meta name="twitter:title" content="Concepts — Axocoatl">
-  <meta name="twitter:description" content="How Axocoatl coordinates agents: stigmergic event lattice, persistent runtime, sessions, skills, memory.">
-  <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="Concepts — Axocoatl">
-  <link rel="icon" type="image/png" href="/assets/favicon.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles/tokens.css">
-  <link rel="stylesheet" href="/styles/base.css">
-  <link rel="stylesheet" href="/styles/finder.css">
-  <script type="module" src="/components/ax-site-nav.js"></script>
-  <script type="module" src="/components/ax-finder-window.js"></script>
-  <script type="module" src="/components/ax-scripted-lattice.js"></script>
-  <script type="module" src="/components/ax-install-bar.js"></script>
-  <script type="module" src="/components/ax-footer.js"></script>
-  <script type="module" src="/components/ax-theme-toggle.js"></script>
-  <script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@graph": [
-    {
-      "@type": "WebPage",
-      "@id": "https://axocoatl.ai/concepts#webpage",
-      "url": "https://axocoatl.ai/concepts",
-      "name": "Concepts — Axocoatl",
-      "description": "How Axocoatl coordinates agents: stigmergic event lattice, persistent runtime, sessions, skills, memory.",
-      "inLanguage": "en-US",
-      "isPartOf": { "@id": "https://axocoatl.ai/#website" },
-      "primaryImageOfPage": { "@type": "ImageObject", "url": "https://axocoatl.ai/assets/og-home.png" }
-    },
-    {
-      "@type": "TechArticle",
-      "headline": "Concepts — Axocoatl",
-      "description": "How Axocoatl coordinates agents: stigmergic event lattice, persistent runtime, sessions, skills, memory.",
-      "url": "https://axocoatl.ai/concepts",
-      "image": "https://axocoatl.ai/assets/og-home.png",
-      "author": { "@type": "Organization", "@id": "https://axocoatl.ai/#organization" },
-      "publisher": { "@type": "Organization", "@id": "https://axocoatl.ai/#organization" },
-      "mainEntityOfPage": "https://axocoatl.ai/concepts",
-      "inLanguage": "en-US"
-    },
-    {"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://axocoatl.ai/"},{"@type":"ListItem","position":2,"name":"Concepts — Axocoatl","item":"https://axocoatl.ai/concepts"}]}
-  ]
-}
-  </script>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How Axocoatl works — one durable coding workbench</title>
+  <meta name="description" content="How Axocoatl keeps conversation, context, files, Terminal, Preview, tools, history, and Git review around one durable Session.">
+  <meta name="theme-color" content="#3E7C5C"><link rel="canonical" href="https://axocoatl.ai/concepts">
+  <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/concepts"><meta property="og:title" content="How Axocoatl works"><meta property="og:description" content="One durable Session for conversation, context, repository tools, history, and Git review."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="How Axocoatl works"><meta name="twitter:description" content="One durable Session for conversation, context, repository tools, history, and Git review."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20260818-narrative"><link rel="stylesheet" href="/styles/finder.css">
+  <script type="module" src="/components/ax-site-nav.js?v=20260818-narrative"></script><script type="module" src="/components/ax-footer.js?v=20260818-narrative"></script><script type="module" src="/components/ax-theme-toggle.js"></script><script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script>
 </head>
 <body>
-  <ax-site-nav active="concepts"></ax-site-nav>
+  <ax-site-nav active="product"></ax-site-nav>
+  <main id="main-content">
+    <header class="container hero"><span class="eyebrow">How it works</span><h1>The Session is the spine.</h1><p class="lede">Conversation, context, files, Terminal, Preview, tools, History, and Git review belong to one folder-anchored unit of work. Runtime machinery stays underneath it.</p></header>
 
-  <main>
-
-    <section class="container hero" style="padding-bottom: var(--s-7);">
-      <span class="eyebrow">Mental model · 5 minutes</span>
-      <h1>The lattice does<br>the routing.</h1>
-      <p class="lede">
-        Every other agentic framework puts a scheduler at the center:
-        "now run agent B." Axocoatl puts a coordination fabric at the
-        center and lets the agents decide for themselves when they're
-        ready. Here's what that means.
-      </p>
-    </section>
-
-    <section class="container section">
+    <section class="container section section-rule" id="workspace-sessions-turns">
       <div class="split">
-        <div>
-          <span class="eyebrow">1 · The event lattice</span>
-          <h2>A bulletin board for events.</h2>
-          <p>
-            Agents publish events when they finish work, or fail, or
-            get interrupted. Every other agent watches for events it
-            cares about. When an agent's threshold is crossed (usually
-            one event from each dependency), it wakes up and runs.
-          </p>
-          <p>
-            There's no orchestrator deciding the order. The order is
-            whatever the dependency graph implies. The lattice is what
-            makes the ordering work.
-          </p>
-        </div>
-        <ax-finder-window title="research-and-summarize · running" no-sidebar>
-          <div class="lattice-stage" data-mount="lattice"></div>
-        </ax-finder-window>
+        <div class="stack"><span class="eyebrow">One work surface</span><h2>Start with the work.</h2><p>Authorize a project directory, create or resume a Session, attach context for the next turn or the whole Session, and ask normally. The request is accepted into a durable Session ledger before execution begins.</p><p>Conversation is the resting canvas. Files and Source Control, Preview, comparison, and the agent graph open as focused tools. Ways opens only when several attempts need configuration or review. Terminal stays in its bottom dock.</p></div>
+        <ol class="step-list"><li><div><h3>Workspace</h3><p>An authorized project directory that groups Sessions.</p></div></li><li><div><h3>Session</h3><p>Persistent work and conversation anchored to that directory.</p></div></li><li><div><h3>Turn</h3><p>A durable request, context snapshot, execution facts, output, and final lifecycle state.</p></div></li></ol>
       </div>
+      <ax-product-film
+        film="workspace-sessions-turns"
+        src="/assets/films/workspace-sessions-turns.mp4"
+        poster="/assets/films/workspace-sessions-turns.jpg"
+        label="An Axocoatl Workspace with two Sessions and a completed Turn restored after switching Sessions"
+        caption="One authorized Workspace groups durable Sessions. Switching away and back restores the selected Session and its accepted Turn."
+      ></ax-product-film>
     </section>
 
-    <section class="container section">
-      <div class="container-narrow" style="padding: 0;">
-        <span class="eyebrow">2 · Agents are actors</span>
-        <h2>Supervised, checkpointed, budgeted.</h2>
-        <p>
-          Each agent is a <a href="https://github.com/slawlor/ractor" target="_blank" rel="noopener">ractor</a>
-          actor: an isolated unit of computation with its own mailbox,
-          memory tier, token budget, and supervised lifecycle. Crashes
-          get restarted from the last checkpoint. State survives the
-          process.
-        </p>
-        <p>
-          Agents talk to LLMs through a provider trait. Ollama, OpenAI,
-          Anthropic, Mistral, Gemini, OpenRouter: all swappable per
-          agent. Local model for one agent, frontier model for another,
-          same workflow.
-        </p>
+    <section class="container section section-rule" id="durable-turn">
+      <div class="split reverse">
+        <div class="code-pane"><div class="code-pane-head">Session turn · durable lifecycle</div><pre><code><span class="code-key">accepted</span>
+  request + context snapshot recorded
+       ↓
+<span class="code-key">running</span>
+  agent output + bounded tool evidence
+       ↓
+<span class="code-key">final state</span>
+  complete · failed · cancelled · interrupted
+       ↓
+<span class="code-key">History + Git review</span></code></pre></div>
+        <div class="stack"><span class="eyebrow">A normal turn</span><h2>Accept first. Execute second.</h2><p>Attach a file for <strong>Once</strong> or keep it selected for the <strong>Session</strong>. Axocoatl records the request and immutable context snapshot before the agent begins, so the visible conversation does not depend on a streaming connection staying open.</p><p><strong>Stop</strong> addresses the exact active turn. Completed, failed, cancelled, and interrupted work remains reachable in History. Review the result against the repository and inspect Last turn through Git.</p></div>
       </div>
+      <ax-product-film
+        film="durable-turn"
+        src="/assets/films/durable-turn.mp4"
+        poster="/assets/films/durable-turn.jpg"
+        label="An active Axocoatl Session turn reconnecting after reload and ending in History"
+        caption="Reloading reconnects to the exact active turn. Stop preserves an honest cancelled state in History."
+      ></ax-product-film>
     </section>
 
-    <section class="container section">
-      <div class="container-narrow" style="padding: 0;">
-        <span class="eyebrow">3 · Skills are lattice-aware</span>
-        <h2>Capabilities that route themselves.</h2>
-        <p>
-          A Skill declares the events it <strong>emits</strong> and the
-          events it <strong>reacts to</strong>. The lattice broadcasts
-          each event to every agent: every agent that holds a Skill
-          reacting to it activates. The matching event fans out — there's
-          no central picker choosing one agent over another.
-        </p>
-        <p>
-          You don't wire Skills to agents. You declare what each Skill
-          listens for, and the lattice fans every event out to all the
-          holders that react.
-        </p>
+    <section class="container section section-rule" id="sandbox-terminal-preview">
+      <div class="section-head"><span class="eyebrow">The surrounding workbench</span><h2>Open tools around the conversation.</h2><p>The Session remains the resting canvas. Supporting surfaces take focus when the job needs them and return you to the same conversation.</p></div>
+      <div class="grid-3">
+        <article class="card"><span class="card-kicker">Repository</span><h3>Files and Source Control</h3><p>Inspect the working tree, open files in the editor, and review the current turn through normal Git changes.</p></article>
+        <article class="card"><span class="card-kicker">Execution</span><h3>Terminal and Preview</h3><p>Use the docked Terminal for commands and bring the running application into Preview without leaving the Session.</p></article>
+        <article class="card"><span class="card-kicker">Continuity</span><h3>Context and History</h3><p>Attach bounded context to one turn or the Session, then search or export the durable conversation. An autonomous single-Agent Session can also rewind at a turn boundary.</p></article>
       </div>
+      <ax-product-film
+        film="sandbox-terminal-preview"
+        src="/assets/films/sandbox-terminal-preview.mp4"
+        poster="/assets/films/sandbox-terminal-preview.jpg"
+        label="An Axocoatl Session Terminal identifying its container and workspace before opening the running application in Preview"
+        caption="The Terminal runs the repository check inside the Session's local Podman sandbox. Preview opens the application served from that checkout through its explicitly published port."
+      ></ax-product-film>
     </section>
 
-    <section class="container section">
-      <div class="container-narrow" style="padding: 0;">
-        <span class="eyebrow">4 · Sessions are directories</span>
-        <h2>Build with your agents.</h2>
-        <p>
-          A Session is an agent (or a lattice of agents) running in a
-          single directory. The session sandbox is a container (podman)
-          bind-mounted to your folder. The agent reads, writes, and
-          runs commands inside. You see every action stream into the
-          dashboard.
-        </p>
-        <p>
-          Close the laptop. Open it tomorrow. The session is still
-          there. Hot-restart from the last checkpoint. The agent picks
-          up where it left off.
-        </p>
+    <section class="container section section-rule" id="execution-shapes">
+      <div class="section-head"><span class="eyebrow">Execution shapes</span><h2>Use the structure the work needs.</h2><p>Axocoatl starts with one Agent in one Session. A configured team and several Ways are explicit alternatives for different kinds of work.</p></div>
+      <div class="grid-3">
+        <article class="card"><span class="card-kicker">Default</span><h3>One Agent</h3><p>One configured Agent works through the repository and conversation. Repository file and shell execution runs inside the Session sandbox; integrations retain their explicitly configured boundaries. <a href="/showcase/#single-agent">Watch ordinary repository work →</a></p></article>
+        <article class="card"><span class="card-kicker">Configured team</span><h3>Agent graph</h3><p>Several roles share one Session. Dependency edges determine which Agent runs first and which outputs reach downstream Agents. <a href="/showcase/#multi-agent">Watch the handoff →</a></p></article>
+        <article class="card"><span class="card-kicker">Decision mode</span><h3>Ways</h3><p>Independent attempts start from the same task and repository state, then run in separate working copies and sandboxes. <a href="/showcase/#ways">Watch the comparison →</a></p></article>
       </div>
+      <div class="callout"><p><strong>The structures are different.</strong> The Agent graph orders roles inside one Session. Ways isolate competing implementations. The event lattice carries typed notifications. An Automation graph executes a durable workflow outside the canonical Session transcript.</p></div>
     </section>
 
-    <section class="container section">
-      <div class="container-narrow" style="padding: 0;">
-        <span class="eyebrow">5 · Memory has tiers</span>
-        <h2>Hot to cold, local to neural.</h2>
-        <p>
-          Four tiers, plus checkpointing. Session is the live window. A
-          daily log records every exchange, readable back by date. Core
-          memory is a set of small, agent-editable blocks the agent
-          curates as it learns and renders into its context every turn.
-          And semantic recall is a neural tier: an
-          embedded BERT model through Candle (pure Rust, no ONNX, no C++
-          runtime), so retrieval never hits an API.
-        </p>
-        <p>
-          Checkpointing snapshots state for crash recovery, and while the
-          agent is idle a background pass consolidates durable facts up
-          into the core blocks. All of it local-first. Nothing calls out
-          unless you tell it to.
-        </p>
-      </div>
+    <section class="container section section-rule" id="ways-model">
+      <div class="section-head"><span class="eyebrow">Optional decision mode</span><h2>Explore several ways when needed.</h2><p>The normal path uses the Agent or configured team that fits the work. When implementation choices deserve independent evidence, the Session can own several isolated attempts without turning them into separate chats.</p></div>
+      <ol class="step-list">
+        <li><div><h3>Start from the same state</h3><p>Every way receives the same task and repository snapshot, plus the same provider-safe projection of prior Session context. Native provider tool transactions stay in canonical History rather than being replayed into a different model. Choose a different configured agent, provider, or model for each one.</p></div></li>
+        <li><div><h3>Run in isolated working copies</h3><p>Each way gets an independent no-hardlinks clone mounted as the sole workspace in a fresh rootless Podman container.</p></div></li>
+        <li><div><h3>Check and compare</h3><p>Keep every attempt's completion state visible, run the repository Check command, then compare Outcome, Route, changed files, usage, known cost, and optional Judge ranking.</p></div></li>
+        <li><div><h3>Keep one, then review Git</h3><p>A passing, non-empty result can return to the Session checkout. Keep does not merge or commit; Last turn remains available for deliberate review.</p></div></li>
+      </ol>
+      <div class="callout"><p><strong>Current boundary:</strong> Explore several ways requires a single autonomous-Agent Session using the local Podman backend; coordinator and worker roles stay on the normal Session path. Each way uses its configured primary provider/model directly so retained identity and cost stay accurate. Session attachments are not yet passed to attempts. MCP tools, Skills, and web search are withheld until their external effects have set-scoped rollback semantics.</p></div>
     </section>
 
-    <section class="container section" style="padding-bottom: var(--s-10);">
-      <div style="display: grid; grid-template-columns: 1fr auto; gap: var(--s-5); align-items: center; padding: var(--s-7); background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);">
-        <div>
-          <h2 style="font-size: var(--t-32); margin: 0 0 var(--s-2);">Read the full docs.</h2>
-          <p class="muted" style="margin: 0;">
-            Every concept above has a full reference in the docs, with
-            embedded code and a live lattice demo on the page.
-          </p>
-        </div>
-        <div style="display: flex; gap: var(--s-3);">
-          <a class="btn btn-primary" href="https://docs.axocoatl.ai" target="_blank" rel="noopener">Open the docs →</a>
-          <a class="btn btn-ghost" href="/showcase">See workflows</a>
-        </div>
+    <section class="container section section-rule" id="settings-runtime">
+      <div class="section-head"><span class="eyebrow">Agents and tools</span><h2>Configuration stays in Settings.</h2><p>Runtime capabilities extend Session work. They do not become a second app or a row of peer destinations.</p></div>
+      <div class="grid-3">
+        <article class="card"><span class="card-kicker">Agents</span><h3>Choose the execution shape</h3><p>Run one configured Agent or a multi-agent Session, with local or remote model providers assigned to the roles that handle the work.</p></article>
+        <article class="card"><span class="card-kicker">Extensions</span><h3>Add Skills and MCP servers</h3><p>Connect MCP tools for normal Session work. Publish typed Skills as events that can reach configured observers or trigger Automations.</p></article>
+        <article class="card"><span class="card-kicker">Automation</span><h3>Configure repeatable work</h3><p>Create, run, and review durable Automation graphs and their run history in Settings, separate from the canonical Session transcript.</p></article>
       </div>
+      <ax-product-film
+        film="settings-runtime"
+        src="/assets/films/settings-runtime.mp4"
+        poster="/assets/films/settings-runtime.jpg"
+        label="Axocoatl Settings for Agents, Skills, MCP servers, and Automations"
+        caption="Runtime configuration stays in Settings instead of becoming another work surface."
+      ></ax-product-film>
     </section>
 
+    <section class="container section section-rule" id="event-lattice-automation">
+      <div class="split">
+        <div class="stack"><span class="eyebrow">Typed events</span><h2>The event lattice carries typed events.</h2><p>A Skill publishes the event types declared in its configuration. The event lattice delivers each notification to configured observers and a bounded recent-events view, while the Automation dispatcher evaluates triggers against the same typed feed.</p><p>The event lattice is transport, not an Agent graph, a set of Ways, or an Automation graph. The matching Automation remains an explicit durable workflow with its own run history.</p></div>
+        <ol class="step-list"><li><div><h3>Fire the Skill</h3><p>The configured Skill publishes its declared event with producer and payload.</p></div></li><li><div><h3>Match the trigger</h3><p>An On Skill or On Event trigger selects the Automation that should react.</p></div></li><li><div><h3>Inspect the run</h3><p>The resulting Automation and node state remain reachable in run history.</p></div></li></ol>
+      </div>
+      <ax-product-film
+        film="event-lattice-automation"
+        src="/assets/films/event-lattice-automation.mp4"
+        poster="/assets/films/event-lattice-automation.jpg"
+        label="An Axocoatl Skill publishing a typed event that starts a durable Automation"
+        caption="Firing Release candidate ready publishes ReleaseCandidateReady; the matching On Skill trigger starts release-gate review."
+      ></ax-product-film>
+    </section>
+
+    <section class="container section section-rule" id="mcp-approval">
+      <div class="split reverse">
+        <div class="code-pane"><div class="code-pane-head">Session Agent · MCP call</div><pre><code><span class="code-key">discover</span> configured MCP tool
+       ↓
+<span class="code-key">request approval</span>
+  allow once · deny
+       ↓
+<span class="code-key">execute</span> approved call
+       ↓
+<span class="code-key">record</span> result on the Turn</code></pre></div>
+        <div class="stack"><span class="eyebrow">External tools</span><h2>New MCP permissions wait for approval.</h2><p>A Session Agent can discover a configured MCP tool, but discovery is not permission. A call with no matching saved decision pauses the exact Session Turn before dispatch; a saved allow or deny decision is applied without prompting again.</p><p>After an allowed call, the returned value, bounded tool evidence, and final answer remain together on the durable Turn. This film uses a deterministic local MCP server, so it demonstrates the approval path without relying on a third-party service.</p></div>
+      </div>
+      <ax-product-film
+        film="mcp-approval"
+        src="/assets/films/mcp-approval.mp4"
+        poster="/assets/films/mcp-approval.jpg"
+        label="An Axocoatl Session Agent requesting approval before calling a local MCP tool"
+        caption="The Session Turn pauses before get_weather, then retains the returned value and final answer in History."
+      ></ax-product-film>
+    </section>
+
+    <section class="container section section-rule" id="shared-core-memory">
+      <div class="section-head"><span class="eyebrow">Runtime underneath</span><h2>Durable where durability matters.</h2></div>
+      <div class="grid-3">
+        <article class="card"><span class="card-kicker">Actors</span><h3>Supervised execution</h3><p>Configured agents run as actors inside one Rust daemon. The daemon owns providers, tools, events, and sandbox lifecycle.</p></article>
+        <article class="card"><span class="card-kicker">History</span><h3>Canonical Session ledger</h3><p>Accepted turns, bounded tool evidence, output, failure, cancellation, and interruption remain in canonical History across reconnects. After a daemon restart, a Turn that was still running is retained as Interrupted rather than resumed.</p></article>
+        <article class="card"><span class="card-kicker">Isolation</span><h3>Your sandbox choice</h3><p>Rootless Podman is local by default. E2B Cloud is an explicit remote option for normal Session work.</p></article>
+      </div>
+      <div class="split" style="margin-top:var(--s-6)">
+        <div class="stack"><span class="eyebrow">Shared core memory</span><h2>Share one block explicitly.</h2><p>Configured Agents can opt into the same small shared core-memory block. One Agent can update it through a visible tool call; another configured Agent can receive the saved block in a different Session.</p><p>The shared block is durable, but the Session transcripts remain separate. This is explicit shared core memory, not semantic search or a claim that every Agent shares every memory.</p></div>
+        <ol class="step-list"><li><div><h3>Write visibly</h3><p>The first Agent updates the named shared block through <code>core_memory_set</code>.</p></div></li><li><div><h3>Keep Sessions separate</h3><p>The writer and reader remain distinct named Sessions with separate transcripts.</p></div></li><li><div><h3>Recall separately</h3><p>A different configured Agent receives the exact saved value without reading files, searching History, or calling a tool.</p></div></li></ol>
+      </div>
+      <ax-product-film
+        film="shared-core-memory"
+        src="/assets/films/shared-core-memory.mp4"
+        poster="/assets/films/shared-core-memory.jpg"
+        label="One Axocoatl Agent writing a shared core-memory block and another Agent receiving it in a separate Session"
+        caption="One Agent writes an explicit shared block; a different Agent in another Session receives the exact value while the transcripts remain separate."
+      ></ax-product-film>
+    </section>
+
+    <section class="container section section-rule"><div class="cta-strip"><div><h2>Open a repository. Keep the context.</h2><p>Start with one durable Session. Explore several Ways only when the decision needs them.</p></div><div class="cta-actions"><a class="btn btn-primary" href="/install">Install →</a><a class="btn btn-ghost" href="https://docs.axocoatl.ai/start/first-session/">Read the docs</a></div></div></section>
   </main>
-
   <ax-footer></ax-footer>
-  <ax-install-bar></ax-install-bar>
-
-  <script type="module">
-    customElements.whenDefined('ax-finder-window').then(() => {
-      const mount = document.querySelector('[data-mount="lattice"]');
-      if (mount) mount.innerHTML = '<ax-scripted-lattice></ax-scripted-lattice>';
-    });
-  </script>
 </body>
 </html>

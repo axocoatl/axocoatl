@@ -1,0 +1,115 @@
+---
+title: Skills and MCP
+description: Publish named capabilities, connect external tool servers, and control human approval for MCP calls.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Skills and MCP serve different roles:
+
+- a **Skill** is a named, lattice-aware capability configured in Axocoatl;
+- an **MCP server** supplies external tools over a standard protocol.
+
+Both live in Settings, but only MCP calls pass through the built-in interactive
+tool-approval gate.
+
+## Configure and fire a Skill
+
+```yaml
+skills:
+  - id: review-requested
+    name: Review requested
+    description: Publish an event when review should begin.
+    emits: [ReviewRequested]
+    reacts_to: []
+    agents: [reviewer]
+    prompt: "Review the current change."
+```
+
+Choose **Settings → Skills**, select the record, and choose **Fire this Skill**,
+or use the daemon API:
+
+```sh
+curl -X POST http://127.0.0.1:8080/api/skills/review-requested/fire
+```
+
+The CLI commands named `axocoatl skills list` and `axocoatl skills run` belong
+to a separate registry of built-in prompt templates. `run` renders a template
+for piping into chat; it does not list or fire the YAML Skill records shown in
+Settings.
+
+Firing publishes the event types in `emits`. It does not automatically select
+and execute an Agent from `agents`, and the current daemon does not activate
+holders from `reacts_to` or execute `prompt` as an Agent request. To make a
+published event start work, create an Automation with an **On Skill** or **On
+event** trigger.
+
+## Connect an MCP server
+
+MCP configuration supports stdio and HTTP-style transports through these
+fields: `name`, `transport`, optional `command` and `args`, optional `env`,
+optional `url`, and optional `headers`.
+
+```yaml
+mcp_servers:
+  - name: local-tools
+    transport: stdio
+    command: npx
+    args: ["-y", "@example/mcp-server"]
+    env:
+      EXAMPLE_API_KEY: "${EXAMPLE_API_KEY}"
+```
+
+Settings can also connect supported catalog entries to the live registry,
+show discovered tools, reconnect a server, remove it, and inspect saved
+permissions. The CLI provides read-oriented inspection and an MCP stdio server
+mode:
+
+```sh
+axocoatl mcp servers --config ./axocoatl.yaml
+axocoatl mcp tools --server local-tools --config ./axocoatl.yaml
+axocoatl mcp serve --config ./axocoatl.yaml
+```
+
+## Approve a tool call
+
+When an Agent requests an MCP tool with no matching saved decision:
+
+<Steps>
+
+1. Axocoatl pauses the call and shows the Agent, server, tool, and a truncated
+   argument preview.
+2. Choose **Allow** or **Deny**.
+3. Choose whether the decision applies once, to this Agent and tool, to this
+   Agent and server, or to any Agent on this server.
+4. The blocked call resumes or returns a denial.
+
+</Steps>
+
+A pending approval waits up to five minutes. Timeout or connection closure
+defaults to a non-persisted deny and removes the pending entry. Saved allow and
+deny decisions appear under **Settings → MCP servers → Permissions**, where
+they can be revoked.
+
+<Aside type="caution" title="Approval scope is consequential">
+“Any Agent, this server” trusts every currently configured Agent—and future
+ones in the same daemon—to call any matching tool without another prompt.
+Prefer the narrowest scope that makes the intended workflow usable.
+</Aside>
+
+## Current limitations
+
+- Attempts do not expose Skills or MCP tools.
+- Catalog connect/remove is process-local and does not rewrite configuration.
+  Already-built Agent executors are not refreshed by a later connection; add the
+  server to YAML and restart the daemon for durable Agent use.
+- User-defined `hooks:` entries are parsed and validated but do not execute.
+  The daemon logs a warning for a non-empty block.
+- The built-in MCP approval gate is the active tool-interception mechanism;
+  custom hooks cannot replace it.
+- An MCP server is code or a remote service with its own security boundary.
+  Review its package, command, credentials, availability behavior, and data
+  handling before connecting. The current MCP transport library decodes one
+  complete protocol message before Axocoatl's retained-output bounds apply.
+
+Next: [Configure Automations →](/configure/automations/)

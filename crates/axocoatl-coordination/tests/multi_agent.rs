@@ -178,8 +178,7 @@ async fn two_agent_coordination_through_lattice() {
     // Researcher should activate (threshold 1.0, signal strength 1.0 for UserInput)
     assert!(
         activated.contains(&AgentId::new("researcher")),
-        "Researcher should activate on UserInput, got: {:?}",
-        activated
+        "Researcher should activate on UserInput, got: {activated:?}"
     );
 
     // Step 2: Execute the researcher
@@ -204,8 +203,7 @@ async fn two_agent_coordination_through_lattice() {
     // Summarizer should activate (threshold 0.5, signal strength 0.5 for TaskCompleted)
     assert!(
         activated.contains(&AgentId::new("summarizer")),
-        "Summarizer should activate on TaskCompleted, got: {:?}",
-        activated
+        "Summarizer should activate on TaskCompleted, got: {activated:?}"
     );
 
     // Step 4: Execute the summarizer with the research output

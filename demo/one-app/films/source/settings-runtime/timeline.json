@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "film": "settings-runtime",
+  "input_fps": 8,
+  "shots": [
+    {
+      "beat": "session",
+      "source": "shot-session.jpg",
+      "hold_frames": 48
+    },
+    {
+      "beat": "agents",
+      "source": "shot-agents.jpg",
+      "hold_frames": 40
+    },
+    {
+      "beat": "agent-dependency",
+      "source": "shot-agent-dependency.jpg",
+      "hold_frames": 32
+    },
+    {
+      "beat": "skills",
+      "source": "shot-skills.jpg",
+      "hold_frames": 32
+    },
+    {
+      "beat": "mcp",
+      "source": "shot-mcp.jpg",
+      "hold_frames": 32
+    },
+    {
+      "beat": "automations",
+      "source": "shot-automations.jpg",
+      "hold_frames": 48
+    }
+  ]
+}

@@ -1,8 +1,9 @@
-//! Stigmergic workflow — `EventLattice` + `depends_on` DAG.
+//! Stigmergic coordination primitive — `EventLattice` + `depends_on` DAG.
 //!
-//! Axocoatl's headline claim is **no central orchestrator**. Nothing tells the
-//! agents what order to run in. They activate themselves when the shared
-//! coordination space — the `EventLattice` — accumulates enough signal.
+//! This standalone example owns its queue and completed guard, while
+//! `EventLattice` decides which registered agent crosses its threshold next.
+//! It demonstrates the reusable coordination primitive; it does not claim the
+//! daemon's session or Automation runtime uses this execution loop.
 //!
 //! This example wires three agents into a small DAG and lets the lattice decide
 //! the running order:
@@ -15,8 +16,8 @@
 //!
 //! ## The pheromone math
 //!
-//! This mirrors exactly what the daemon does (`lattice_params` in
-//! `axocoatl-daemon`):
+//! This example uses the same threshold defaults that `lattice_params`
+//! registers as coordination metadata in `axocoatl-daemon`:
 //!
 //! - An **entry** agent (empty `depends_on`) gets threshold `1.0` and is
 //!   activated directly with the user's input.
@@ -186,8 +187,8 @@ fn dag() -> Vec<AgentSpec> {
     ]
 }
 
-// `threshold = 0.5 × N` for downstream agents; entry agents get 1.0. This is
-// the exact rule the daemon uses (axocoatl-daemon `lattice_params`).
+// `threshold = 0.5 × N` for downstream agents; entry agents get 1.0. This
+// matches the metadata defaults in axocoatl-daemon's `lattice_params`.
 fn threshold_for(depends_on: &[&str]) -> f32 {
     if depends_on.is_empty() {
         1.0
@@ -224,10 +225,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let id = AgentId::new(spec.id);
         let threshold = threshold_for(spec.depends_on);
         // decay_rate 0.0 — signals don't fade, so a join is exact: 0.5 + 0.5 is
-        // exactly 1.0. The daemon defaults downstream agents to a small 0.01
-        // decay so stale signals expire on long-running graphs; here we want the
-        // threshold math to be deterministic, which is also what the lattice's
-        // own unit tests use.
+        // exactly 1.0. The daemon's registered downstream metadata defaults to
+        // a small 0.01 decay; here we want deterministic threshold math, which
+        // is also what the lattice's own unit tests use.
         let decay = 0.0;
         lattice.register_agent(id.clone(), threshold, decay);
         deps_of.insert(
@@ -243,7 +243,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // -----------------------------------------------------------------------
-    // 2. Spawn each agent as a ractor actor (same path the daemon uses).
+    // 2. Spawn each agent as a ractor actor using the public actor runtime.
     // -----------------------------------------------------------------------
     let mut refs: HashMap<AgentId, ractor::ActorRef<axocoatl_actor::AgentMessage>> = HashMap::new();
     let mut handles = Vec::new();
@@ -275,16 +275,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // -----------------------------------------------------------------------
-    // 3. Drive the cascade. This is the same shape as the daemon's activation
-    //    loop: entry agents are activated directly; every completion publishes
-    //    a TaskCompleted event; the lattice returns whoever just crossed their
-    //    threshold; we run those next. A `completed` guard stops re-runs.
+    // 3. Drive the standalone cascade: entry agents are queued directly; every
+    //    completion publishes a TaskCompleted event; the lattice returns whoever
+    //    crossed a threshold; this example queues those ids next.
     // -----------------------------------------------------------------------
     let mut completed: HashMap<AgentId, String> = HashMap::new();
     let mut activation_order: Vec<String> = Vec::new();
 
-    // Entry agents (no deps) are sent straight in — UserInput is informational,
-    // it does not drive activation (again, exactly what the daemon does).
+    // Entry agents (no deps) are queued directly. UserInput remains an
+    // informational event in this example rather than driving activation.
     let mut queue: VecDeque<AgentId> = specs
         .iter()
         .filter(|s| s.depends_on.is_empty())
@@ -295,7 +294,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(agent_id) = queue.pop_front() {
         if completed.contains_key(&agent_id) {
-            continue; // already ran — the completed guard, like the daemon's
+            continue; // already ran — the example's completed guard
         }
 
         // Build this agent's input from its upstream outputs (or the goal, if
@@ -361,12 +360,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Report. The order was never written down — the lattice produced it.
     // -----------------------------------------------------------------------
     println!("\n{}", "─".repeat(64));
-    println!("\nActivation order (emergent, not scripted):");
+    println!("\nActivation order reported by EventLattice:");
     for (i, id) in activation_order.iter().enumerate() {
         println!("  {}. {id}", i + 1);
     }
     println!(
-        "\n{} agents ran, {} events on the lattice. No orchestrator decided the order.",
+        "\nThe example queue ran {} agents from {} lattice events.",
         completed.len(),
         lattice.event_count()
     );

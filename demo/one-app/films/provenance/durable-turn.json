@@ -1,0 +1,165 @@
+{
+  "schema_version": 2,
+  "film": "durable-turn",
+  "recorded_at": "2026-08-25T07:25:45.249Z",
+  "source": {
+    "branch": "codex/session-capabilities",
+    "head": "7b375732cf941bcf6092b7c95c257c623f4d7543",
+    "dirty": true,
+    "patch_sha256": "af250b2505dfc91721e86deba9bc4b39e3ffd6f0070dcb91560b086dcda0163c",
+    "patch_excludes": [
+      "demo/one-app/films/source/",
+      "demo/one-app/films/staged/",
+      "demo/one-app/films/provenance/",
+      "sites/marketing/assets/films/"
+    ],
+    "content_sha256": "1562093374d422f33ef7e9825f71016c9541198b99d33a05747a7d57f547e0f5"
+  },
+  "binary": {
+    "path": "target/release/axocoatl",
+    "version": "axocoatl 1.0.0",
+    "sha256": "afcb51e75c5c64a6e1d1da36fa07110b5f9ba6031e3a2f3ce660de9879b045d1"
+  },
+  "capture": {
+    "record": "demo/one-app/films/source/durable-turn/capture.json",
+    "record_sha256": "ae535780eb8c84dcd5a5cabe4eba8711f114254c2ecaa4b2db1b73ae2c191191",
+    "url": "http://localhost:18084/",
+    "browser": "Codex in-app browser",
+    "viewport": {
+      "width": 1280,
+      "height": 720,
+      "device_scale_factor": 1
+    },
+    "theme": "dark",
+    "reduced_motion": "no-preference",
+    "keyframes": [
+      {
+        "beat": "context",
+        "path": "demo/one-app/films/source/durable-turn/shot-context.jpg",
+        "sha256": "ce627ce589a6d11d84fb932d68f162d1cd68a23878c6b4240f54fd048b037993"
+      },
+      {
+        "beat": "reload",
+        "path": "demo/one-app/films/source/durable-turn/shot-reload.jpg",
+        "sha256": "bb5562d361d18dcb9dfb5c35797ce43ff7e7534fa7aaad4b3ede46129c6aeef1"
+      },
+      {
+        "beat": "cancelled-history",
+        "path": "demo/one-app/films/source/durable-turn/shot-cancelled-history.jpg",
+        "sha256": "228a683692bd6e849104b4bc5ff990b23a8968629eb21b3440c72a94a148b239"
+      },
+      {
+        "beat": "clean-next-turn",
+        "path": "demo/one-app/films/source/durable-turn/shot-clean-next-turn.jpg",
+        "sha256": "d70af63c60b10d6199b3357d29615b232b93d1bff58756ec72904c208aebd3a7"
+      }
+    ]
+  },
+  "edit": {
+    "timeline": "demo/one-app/films/source/durable-turn/timeline.json",
+    "timeline_sha256": "852200d0784a2417aa9196f54108da07690b19dc76e0283d8d63479ba16a2502",
+    "stage_record": "demo/one-app/films/source/durable-turn/stage.json",
+    "stage_record_sha256": "96c3918840adf0a23f7e383c541855b1100bf76a91250ea08adc08a6181a3020",
+    "poster_frame": 236,
+    "poster_beat": "cancelled-history",
+    "poster_source_sha256": "228a683692bd6e849104b4bc5ff990b23a8968629eb21b3440c72a94a148b239",
+    "frame_count": 384,
+    "sequence_sha256": "a91051efa7b56dd89de442d5b28315761b6133a6fe4ca4f7a7fd762e97b02352"
+  },
+  "media": {
+    "mp4": {
+      "path": "sites/marketing/assets/films/durable-turn.mp4",
+      "sha256": "caf9f59b222cf16d782349815a3e511f8a5441dcf681d1d2434be029500b0dc8",
+      "duration_seconds": 48,
+      "codec": "h264",
+      "width": 1280,
+      "height": 720,
+      "pixel_format": "yuv420p",
+      "fps": "24/1",
+      "audio_streams": 0,
+      "fast_start": true
+    },
+    "poster": {
+      "path": "sites/marketing/assets/films/durable-turn.jpg",
+      "sha256": "228a683692bd6e849104b4bc5ff990b23a8968629eb21b3440c72a94a148b239",
+      "codec": "mjpeg",
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "evidence": {
+    "record": "demo/one-app/films/source/durable-turn/evidence.json",
+    "record_sha256": "a7cb340703ca17c3d6bb09690786cf69b703e0ec95eddb2c157a985fae85a92f",
+    "checks": [
+      {
+        "id": "context",
+        "status": "passed",
+        "detail": "Completed Turn turn-94af9ce3-939a-45de-a877-7e213ddd8f7b retains both README.md Once and AXOCOATL.md Session references and replies exactly CONTEXT ACCEPTED.; afterward README.md is consumed while AXOCOATL.md remains active."
+      },
+      {
+        "id": "reload",
+        "status": "passed",
+        "detail": "A full browser reload during Turn turn-e8744a64-f514-4a29-a3ef-9287b3ad46de visibly reports Reconnected / Re-attached to 1 live run, restores its partial checklist output, and restores the exact Stop control."
+      },
+      {
+        "id": "cancelled-history",
+        "status": "passed",
+        "detail": "Stop settles that exact Turn as Cancelled with the honest partial prefix retained, and Session History restores both the cancelled record with AXOCOATL.md and the earlier completed context Turn with both references."
+      },
+      {
+        "id": "clean-next-turn",
+        "status": "passed",
+        "detail": "Distinct Turn turn-9ce81fd1-ab5e-48ce-af17-df8863f9e421 completes with exactly CLEAN NEXT TURN.; the accepted Session's three Turns contain zero tool events and the checkout remains clean."
+      }
+    ],
+    "identities": {
+      "fixture": "harbor-catalog",
+      "workspace_id": "wsp-f31e24a3-d80a-449a-a611-4f63672d1ba4",
+      "session_id": "ses-f418a713-e78f-49c4-bf2f-f1670baa5ff5",
+      "context_turn_id": "turn-94af9ce3-939a-45de-a877-7e213ddd8f7b",
+      "cancelled_turn_id": "turn-e8744a64-f514-4a29-a3ef-9287b3ad46de",
+      "clean_turn_id": "turn-9ce81fd1-ab5e-48ce-af17-df8863f9e421",
+      "once_reference_id": "ctx-d09545ca-16e6-485d-a47b-7679b8662517",
+      "session_reference_id": "ctx-424fed5c-ccb8-4de0-99ae-ebe0ce3c4d5c",
+      "terminal_statuses": [
+        "completed",
+        "cancelled",
+        "completed"
+      ],
+      "terminal_outputs": [
+        "CONTEXT ACCEPTED.",
+        "1. **Run `npm run check`** before merging to ensure all linters and tests pas",
+        "CLEAN NEXT TURN."
+      ],
+      "session_reference_historical_turn_ids": [
+        "turn-94af9ce3-939a-45de-a877-7e213ddd8f7b",
+        "turn-e8744a64-f514-4a29-a3ef-9287b3ad46de",
+        "turn-9ce81fd1-ab5e-48ce-af17-df8863f9e421"
+      ],
+      "once_context_sha256": "d98c413ea2ead7a12e16a483698c7ccc0d2ce0ac2690f6eb622dc89ba0c02167",
+      "session_context_sha256": "1eaeb7332c860aa288c23cf3110a29f0cc37b2913071d4c6e54702eaa6367bdd",
+      "accepted_session_turn_count": "3",
+      "accepted_session_tool_event_count": "0",
+      "active_reference": "AXOCOATL.md; Session scope",
+      "consumed_reference": "README.md; Once scope; consumed by turn-94af9ce3-939a-45de-a877-7e213ddd8f7b",
+      "source_head": "d6e7d4ce99de0cc89fc2862e1be2406ebceac4a0",
+      "source_tree": "8c199747fb22965ebf57740cc6a42f775703df3c",
+      "git_status": "clean",
+      "turn_ledger_sha256": "c5d4c3ece1e7de287076e9f1782ec2116b53be516664f9cd1bae39f826227749",
+      "accepted_session_turn_records_sha256": "a1ecf5c575adf9cf137554e317f222e8867e69d6b0d2fb48a8f80e81ba2b7cba",
+      "attachment_store_sha256": "22c38abe6345037470c4255c99c88298f5b7e01a2cbfd63c3097dc4f39b44d23",
+      "accepted_session_attachment_records_sha256": "ca261db17b3867f037de013015d219ce6eea8a265795844afe443856abf68ede",
+      "workspace_record_sha256": "5fc4f8bfc9ef3a9c2c25c5c67073c57fe208736dc925450a31513f053cd4c34b",
+      "session_record_sha256": "ab20507c65b1b325522471aa2131bfb4dad975e8d988cbe3223c9429e5c78392",
+      "release_binary": "target/release/axocoatl 1.0.0",
+      "release_binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+      "capture_config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+      "keyframe_sha256": [
+        "ce627ce589a6d11d84fb932d68f162d1cd68a23878c6b4240f54fd048b037993",
+        "bb5562d361d18dcb9dfb5c35797ce43ff7e7534fa7aaad4b3ede46129c6aeef1",
+        "228a683692bd6e849104b4bc5ff990b23a8968629eb21b3440c72a94a148b239",
+        "d70af63c60b10d6199b3357d29615b232b93d1bff58756ec72904c208aebd3a7"
+      ]
+    }
+  }
+}

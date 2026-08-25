@@ -6,27 +6,36 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
 description = "Axum HTTP/WebSocket API server for Axocoatl"
+include = [
+    "/Cargo.toml",
+    "/LICENSE",
+    "/THIRD_PARTY_LICENSES.txt",
+    "/build.rs",
+    "/src/**",
+    "/static/**",
+]
 
 [dependencies]
-axocoatl-core = { version = "0.1.0", path = "../crates/axocoatl-core" }
-axocoatl-config = { version = "0.1.0", path = "../crates/axocoatl-config" }
-axocoatl-daemon = { version = "0.1.0", path = "../crates/axocoatl-daemon" }
-axocoatl-actor = { version = "0.1.0", path = "../crates/axocoatl-actor" }
-axocoatl-coordination = { version = "0.1.0", path = "../crates/axocoatl-coordination" }
-axocoatl-llm = { version = "0.1.0", path = "../crates/axocoatl-llm" }
-axocoatl-session = { version = "0.1.0", path = "../crates/axocoatl-session" }
-axocoatl-memory = { version = "0.1.0", path = "../crates/axocoatl-memory", default-features = false }
-axocoatl-mcp = { version = "0.1.0", path = "../crates/axocoatl-mcp" }
-axocoatl-a2a = { version = "0.1.0", path = "../crates/axocoatl-a2a" }
+axocoatl-core = { version = "1.0.0", path = "../crates/axocoatl-core" }
+axocoatl-config = { version = "1.0.0", path = "../crates/axocoatl-config" }
+axocoatl-daemon = { version = "1.0.0", path = "../crates/axocoatl-daemon" }
+axocoatl-actor = { version = "1.0.0", path = "../crates/axocoatl-actor" }
+axocoatl-coordination = { version = "1.0.0", path = "../crates/axocoatl-coordination" }
+axocoatl-llm = { version = "1.0.0", path = "../crates/axocoatl-llm" }
+axocoatl-session = { version = "1.0.0", path = "../crates/axocoatl-session" }
+axocoatl-memory = { version = "1.0.0", path = "../crates/axocoatl-memory", default-features = false }
+axocoatl-mcp = { version = "1.0.0", path = "../crates/axocoatl-mcp" }
+axocoatl-a2a = { version = "1.0.0", path = "../crates/axocoatl-a2a" }
+axocoatl-isolation = { version = "1.0.0", path = "../crates/axocoatl-isolation" }
 axum = { workspace = true }
 tokio-stream = { workspace = true }
 tokio = { workspace = true }
+tokio-tungstenite = "0.28"
 tower = { workspace = true }
 tower-http = { version = "0.6", features = ["cors"] }
 dashmap = { workspace = true }
@@ -37,6 +46,7 @@ tracing-subscriber = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 uuid = { workspace = true }
 bytes = "1"
+futures-util = "0.3"
 rust-embed = "8"
 mime_guess = "2"
 

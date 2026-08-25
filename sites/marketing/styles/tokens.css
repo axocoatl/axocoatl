@@ -15,7 +15,7 @@
   --axo-blue:      #3FA9C8;
   --axo-blue-rgb:  63, 169, 200;
 
-  /* Authoritative brand neutrals — match the dashboard's Apple-style palette
+  /* Authoritative brand neutrals — match the shared app/site palette
      so the marketing site and product are visually one. Pure neutrals on
      dark, warm cream on light. */
   --ink:        #000000;
@@ -50,7 +50,7 @@
   --s-9:   96px;
   --s-10: 128px;
 
-  /* Semantic — dark theme by default. Matches the dashboard's Apple-style
+  /* Semantic — dark theme by default. Matches the shared app/site
      pure-neutral scale exactly. */
   --bg:           #000000;
   --bg-2:         #0A0A0A;

@@ -1,14 +1,14 @@
-# Skills — event-driven lattice activation.
+# Skills — declarations used by the standalone lattice fan-out example.
 #
-# This is the declarative form of what `main.rs` builds in code: the same two
-# skills, three holder agents, and the CodeReady → ReviewComplete → DeployApproved
-# routing. In a running daemon you would drop this in and fire the skill with:
+# This uses the real Skill schema. `main.rs` adds an example-owned `reacts_to`
+# index and activation queue for the CodeReady → ReviewComplete → DeployApproved
+# demonstration. A running daemon can publish the Skill with:
 #
 #   curl -X POST http://localhost:8080/api/skills/code-review-checklist/fire
 #
-# The lattice activates every agent that holds a skill reacting to the event —
-# no graph, no scheduler. `main.rs` reproduces that mechanism standalone with a
-# mock LLM so it runs with no daemon and no API keys.
+# The product daemon publishes the configured events but does not execute holders
+# from `reacts_to`. Use OnSkill or OnEvent Automations for reachable reactions.
+# The standalone mock runs its own holder routing with no daemon or API keys.
 
 agents:
   - id: reviewer
@@ -32,8 +32,7 @@ agents:
     system_prompt: "You are the release gate. You only ship green reviews."
 
 skills:
-  # Held by TWO agents. When `CodeReady` lands, both reviewer AND coder
-  # activate — one event, fan-out to every holder.
+  # Held by TWO agents. The standalone example fans `CodeReady` out to both.
   - id: code-review-checklist
     name: "Code Review Checklist"
     description: "Structured 12-point review."
@@ -47,8 +46,7 @@ skills:
       error handling, performance, security, naming, tests. Return JSON with
       `issues` and `severity`.
 
-  # Reacts to an event EMITTED by the skill above — so the routing chains
-  # through the lattice with nothing wiring the two skills together.
+  # The standalone example chains this from the event emitted above.
   - id: deploy-gate
     name: "Deploy Gate"
     description: "Decide whether a reviewed change may ship."

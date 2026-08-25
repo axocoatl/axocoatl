@@ -19,8 +19,34 @@ use crate::bootstrap::AxocoatlDaemon;
 
 /// Default socket path for the daemon IPC.
 pub fn default_socket_path() -> PathBuf {
-    let data_dir = std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
-    PathBuf::from(data_dir).join("axocoatl.sock")
+    resolve_socket_path(
+        std::env::var_os("AXOCOATL_SOCKET_PATH"),
+        std::env::var_os("XDG_RUNTIME_DIR"),
+        std::env::var_os("HOME"),
+    )
+}
+
+fn resolve_socket_path(
+    explicit: Option<std::ffi::OsString>,
+    runtime_dir: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> PathBuf {
+    if let Some(path) = explicit.filter(|value| !value.is_empty()) {
+        return PathBuf::from(path);
+    }
+    if let Some(dir) = runtime_dir.filter(|value| !value.is_empty()) {
+        return PathBuf::from(dir).join("axocoatl").join("axocoatl.sock");
+    }
+    if let Some(dir) = home.filter(|value| !value.is_empty()) {
+        return PathBuf::from(dir)
+            .join(".axocoatl")
+            .join("run")
+            .join("axocoatl.sock");
+    }
+    // Last-resort compatibility for an environment without a user home or an
+    // XDG runtime directory. Normal desktop/service installs never take this
+    // branch; retaining it keeps constrained containers usable.
+    PathBuf::from("./data/axocoatl.sock")
 }
 
 // ── IPC Message Types ────────────────────────────────────────────
@@ -40,7 +66,7 @@ pub enum IpcRequest {
     Ping,
     /// Execute a multi-agent workflow.
     ExecuteWorkflow { workflow_id: String, input: String },
-    /// List configured workflows.
+    /// List canonical manual Automations through the workflow compatibility API.
     ListWorkflows,
     /// Per-agent token usage report (all agents if agent_id is None).
     GetTokenUsage { agent_id: Option<String> },
@@ -77,13 +103,32 @@ pub enum IpcResponse {
         tool_calls: Vec<IpcToolCall>,
         input_tokens: usize,
         output_tokens: usize,
+        #[serde(default)]
+        reasoning_tokens: usize,
+        /// False means the numeric usage is only the best known subtotal.
+        /// Missing older fields decode conservatively as incomplete.
+        #[serde(default)]
+        token_usage_known: bool,
     },
     /// List of agent IDs.
     Agents { ids: Vec<String> },
     /// Pong — health check reply.
     Pong,
     /// Error.
-    Error { message: String },
+    Error {
+        message: String,
+        /// Execution errors carry the paid subtotal observed before failure.
+        /// Generic and pre-dispatch errors omit all four accounting fields so
+        /// older error payloads keep their original wire shape.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_tokens: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_tokens: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_tokens: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_usage_known: Option<bool>,
+    },
     /// Workflow execution result.
     WorkflowResponse {
         workflow_id: String,
@@ -91,6 +136,12 @@ pub enum IpcResponse {
         agent_outputs: Vec<IpcAgentOutput>,
         total_input_tokens: usize,
         total_output_tokens: usize,
+        #[serde(default)]
+        total_reasoning_tokens: usize,
+        /// False means the totals are a known subtotal. Missing older fields
+        /// decode conservatively as incomplete.
+        #[serde(default)]
+        token_usage_known: bool,
         completed_agents: Vec<String>,
         failed_agents: Vec<(String, String)>,
     },
@@ -101,6 +152,13 @@ pub enum IpcResponse {
         per_agent: Vec<IpcTokenUsage>,
         total_input: usize,
         total_output: usize,
+        /// Reasoning tokens are billed output on providers that report them.
+        /// `default` keeps a new CLI able to read a response from an older
+        /// daemon during a rolling local upgrade.
+        #[serde(default)]
+        total_reasoning: usize,
+        #[serde(default)]
+        token_usage_known: bool,
     },
     /// Per-agent status.
     AgentStatuses { statuses: Vec<IpcAgentStatus> },
@@ -120,6 +178,12 @@ pub enum IpcResponse {
         content: String,
         input_tokens: usize,
         output_tokens: usize,
+        #[serde(default)]
+        reasoning_tokens: usize,
+        /// False means the numeric usage is only the best known subtotal.
+        /// Missing older fields decode conservatively as incomplete.
+        #[serde(default)]
+        token_usage_known: bool,
     },
     /// Session closed.
     SessionClosed { session_id: String },
@@ -132,9 +196,21 @@ pub enum IpcResponse {
 pub struct IpcSessionInfo {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub workspace_id: String,
     pub working_dir: String,
     pub mode: String,
     pub status: String,
+    /// Durable environment readiness. Defaults empty when an older daemon or
+    /// cached IPC payload predates readiness reporting.
+    #[serde(default)]
+    pub environment_state: String,
+    /// Exact proposed/approved project setup, never an instruction to execute
+    /// unless `environment_state` is Ready.
+    #[serde(default)]
+    pub setup_command: Option<String>,
+    #[serde(default)]
+    pub environment_error: Option<String>,
 }
 
 /// Build an [`IpcSessionInfo`] from a session.
@@ -148,12 +224,23 @@ fn ipc_session_info(s: &axocoatl_session::Session) -> IpcSessionInfo {
             format!("custom ({} agents)", agents.len())
         }
     };
+    let environment_state = match s.environment.state {
+        axocoatl_session::SessionEnvironmentState::Unprepared => "unprepared",
+        axocoatl_session::SessionEnvironmentState::AwaitingApproval => "awaiting_approval",
+        axocoatl_session::SessionEnvironmentState::Preparing => "preparing",
+        axocoatl_session::SessionEnvironmentState::Ready => "ready",
+        axocoatl_session::SessionEnvironmentState::Failed => "failed",
+    };
     IpcSessionInfo {
         id: s.id.clone(),
         name: s.name.clone(),
+        workspace_id: s.workspace_id.clone(),
         working_dir: s.working_dir.display().to_string(),
         mode,
         status: format!("{:?}", s.status).to_lowercase(),
+        environment_state: environment_state.to_string(),
+        setup_command: s.environment.setup_command.clone(),
+        environment_error: s.environment.error.clone(),
     }
 }
 
@@ -163,6 +250,16 @@ pub struct IpcTokenUsage {
     pub input_tokens: usize,
     pub output_tokens: usize,
     pub reasoning_tokens: Option<usize>,
+    #[serde(default)]
+    pub token_usage_known: bool,
+}
+
+impl IpcTokenUsage {
+    pub fn total(&self) -> usize {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.reasoning_tokens.unwrap_or(0))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -191,6 +288,8 @@ pub struct IpcAgentOutput {
     pub content: String,
     pub input_tokens: usize,
     pub output_tokens: usize,
+    #[serde(default)]
+    pub reasoning_tokens: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -206,6 +305,75 @@ pub struct IpcToolCall {
     pub tool_name: String,
     pub arguments: serde_json::Value,
     pub result: Option<serde_json::Value>,
+}
+
+fn error_response(message: impl ToString) -> IpcResponse {
+    IpcResponse::Error {
+        message: message.to_string(),
+        input_tokens: None,
+        output_tokens: None,
+        reasoning_tokens: None,
+        token_usage_known: None,
+    }
+}
+
+fn measured_error_response(
+    message: impl ToString,
+    usage: &axocoatl_core::TokenUsageStats,
+    token_usage_known: bool,
+) -> IpcResponse {
+    IpcResponse::Error {
+        message: message.to_string(),
+        input_tokens: Some(usage.input_tokens),
+        output_tokens: Some(usage.output_tokens),
+        reasoning_tokens: Some(usage.reasoning_tokens.unwrap_or(0)),
+        token_usage_known: Some(token_usage_known),
+    }
+}
+
+fn measured_daemon_failure_response(
+    failure: crate::bootstrap::MeasuredDaemonFailure,
+) -> IpcResponse {
+    measured_error_response(
+        failure.error,
+        &failure.token_usage,
+        failure.token_usage_known,
+    )
+}
+
+fn workflow_error_response(error: crate::DaemonError) -> IpcResponse {
+    match error.workflow_token_usage() {
+        Some((usage, known)) => measured_error_response(error.to_string(), usage, known),
+        None => measured_error_response(error, &axocoatl_core::TokenUsageStats::default(), true),
+    }
+}
+
+fn workflow_response(output: crate::workflow::WorkflowOutput) -> IpcResponse {
+    if let Some(error) = output.terminal_error() {
+        return workflow_error_response(error);
+    }
+
+    IpcResponse::WorkflowResponse {
+        workflow_id: output.workflow_id,
+        content: output.final_content,
+        agent_outputs: output
+            .agent_outputs
+            .into_iter()
+            .map(|(id, output)| IpcAgentOutput {
+                agent_id: id,
+                content: output.content,
+                input_tokens: output.token_usage.input_tokens,
+                output_tokens: output.token_usage.output_tokens,
+                reasoning_tokens: output.token_usage.reasoning_tokens.unwrap_or(0),
+            })
+            .collect(),
+        total_input_tokens: output.total_token_usage.input_tokens,
+        total_output_tokens: output.total_token_usage.output_tokens,
+        total_reasoning_tokens: output.total_token_usage.reasoning_tokens.unwrap_or(0),
+        token_usage_known: output.token_usage_known,
+        completed_agents: output.completed_agents,
+        failed_agents: output.failed_agents,
+    }
 }
 
 // ── Wire Protocol ────────────────────────────────────────────────
@@ -239,44 +407,141 @@ pub async fn read_message<T: serde::de::DeserializeOwned>(
 
 // ── IPC Server ───────────────────────────────────────────────────
 
-/// Start the IPC server on a Unix domain socket.
-/// Returns a JoinHandle that runs until the daemon shuts down.
+/// Reserve the daemon's singleton Unix socket without needing runtime state.
+///
+/// CLI entrypoints call this immediately after config load, before bootstrap
+/// can spawn actors or mutate persisted state. Holding the returned listener
+/// holds the singleton reservation until it is attached with
+/// [`serve_ipc_listener`].
+pub async fn bind_ipc_listener(socket_path: &Path) -> std::io::Result<UnixListener> {
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+
+    // A second daemon must not unlink the live daemon's address. Only a socket
+    // that no process accepts is stale; a regular file or symlink is never an
+    // IPC cleanup target.
+    match tokio::fs::symlink_metadata(socket_path).await {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_socket() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "refusing to replace non-socket IPC path {}",
+                        socket_path.display()
+                    ),
+                ));
+            }
+            if UnixStream::connect(socket_path).await.is_ok() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AddrInUse,
+                    format!(
+                        "an Axocoatl daemon is already listening at {}",
+                        socket_path.display()
+                    ),
+                ));
+            }
+            tokio::fs::remove_file(socket_path).await?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+
+    // Ensure the socket's immediate parent exists. Only chmod a directory we
+    // created ourselves: an explicit path such as `/tmp/axocoatl.sock` must
+    // never make daemon startup change permissions on `/tmp` (or any other
+    // pre-existing user directory).
+    if let Some(parent) = socket_path.parent() {
+        match tokio::fs::symlink_metadata(parent).await {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "refusing to use non-directory IPC parent {}",
+                        parent.display()
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tokio::fs::create_dir_all(parent).await?;
+                tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    let listener = UnixListener::bind(socket_path)?;
+    if let Err(error) =
+        tokio::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600)).await
+    {
+        drop(listener);
+        let _ = tokio::fs::remove_file(socket_path).await;
+        return Err(error);
+    }
+    tracing::info!(path = %socket_path.display(), "IPC server listening");
+    Ok(listener)
+}
+
+/// Attach initialized daemon state to an already-reserved IPC listener.
+pub fn serve_ipc_listener(
+    listener: UnixListener,
+    daemon: Arc<RwLock<AxocoatlDaemon>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut shutdown = daemon.read().await.shutdown_subscriber();
+        let mut clients = tokio::task::JoinSet::new();
+        loop {
+            if *shutdown.borrow() {
+                break;
+            }
+            tokio::select! {
+                biased;
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+                accepted = listener.accept() => match accepted {
+                    Ok((stream, _addr)) => {
+                        let daemon = daemon.clone();
+                        clients.spawn(async move {
+                            if let Err(e) = handle_client(stream, daemon).await {
+                                tracing::debug!(error = %e, "IPC client disconnected");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "IPC accept error");
+                    }
+                },
+                joined = clients.join_next(), if !clients.is_empty() => {
+                    if let Some(Err(error)) = joined {
+                        if !error.is_cancelled() {
+                            tracing::debug!(error = %error, "IPC client task failed");
+                        }
+                    }
+                }
+            }
+        }
+        clients.abort_all();
+        while let Some(joined) = clients.join_next().await {
+            if let Err(error) = joined {
+                if !error.is_cancelled() {
+                    tracing::debug!(error = %error, "IPC client task failed during shutdown");
+                }
+            }
+        }
+    })
+}
+
+/// Compatibility helper that reserves and starts the IPC server in one call.
+/// New daemon entrypoints should reserve with [`bind_ipc_listener`] before
+/// bootstrap, then attach state through [`serve_ipc_listener`].
 pub async fn start_ipc_server(
     daemon: Arc<RwLock<AxocoatlDaemon>>,
     socket_path: &Path,
 ) -> std::io::Result<tokio::task::JoinHandle<()>> {
-    // Remove stale socket file
-    if socket_path.exists() {
-        tokio::fs::remove_file(socket_path).await?;
-    }
-
-    // Ensure parent directory exists
-    if let Some(parent) = socket_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    let listener = UnixListener::bind(socket_path)?;
-    tracing::info!(path = %socket_path.display(), "IPC server listening");
-
-    let handle = tokio::spawn(async move {
-        loop {
-            match listener.accept().await {
-                Ok((stream, _addr)) => {
-                    let daemon = daemon.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, daemon).await {
-                            tracing::debug!(error = %e, "IPC client disconnected");
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "IPC accept error");
-                }
-            }
-        }
-    });
-
-    Ok(handle)
+    let listener = bind_ipc_listener(socket_path).await?;
+    Ok(serve_ipc_listener(listener, daemon))
 }
 
 /// Handle a single IPC client connection.
@@ -298,10 +563,12 @@ async fn handle_client(
                 session_id: _,
             } => {
                 let daemon = daemon.read().await;
-                match daemon.execute_agent(&agent_id, &input).await {
-                    Ok(output) => IpcResponse::Response {
-                        content: output.content,
-                        tool_calls: output
+                match daemon.execute_agent_measured(&agent_id, &input).await {
+                    Ok(measured) => IpcResponse::Response {
+                        token_usage_known: measured.token_usage_known,
+                        content: measured.output.content,
+                        tool_calls: measured
+                            .output
                             .tool_calls
                             .into_iter()
                             .map(|tc| IpcToolCall {
@@ -310,12 +577,11 @@ async fn handle_client(
                                 result: tc.result,
                             })
                             .collect(),
-                        input_tokens: output.token_usage.input_tokens,
-                        output_tokens: output.token_usage.output_tokens,
+                        input_tokens: measured.output.token_usage.input_tokens,
+                        output_tokens: measured.output.token_usage.output_tokens,
+                        reasoning_tokens: measured.output.token_usage.reasoning_tokens.unwrap_or(0),
                     },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                    Err(failure) => measured_daemon_failure_response(failure),
                 }
             }
             IpcRequest::ListAgents => {
@@ -330,42 +596,72 @@ async fn handle_client(
                 IpcResponse::Agents { ids }
             }
             IpcRequest::ExecuteWorkflow { workflow_id, input } => {
-                let daemon = daemon.read().await;
-                match daemon.execute_workflow(&workflow_id, &input).await {
-                    Ok(output) => IpcResponse::WorkflowResponse {
-                        workflow_id: output.workflow_id,
-                        content: output.final_content,
-                        agent_outputs: output
-                            .agent_outputs
-                            .into_iter()
-                            .map(|(id, o)| IpcAgentOutput {
-                                agent_id: id,
-                                content: o.content,
-                                input_tokens: o.token_usage.input_tokens,
-                                output_tokens: o.token_usage.output_tokens,
-                            })
-                            .collect(),
-                        total_input_tokens: output.total_token_usage.input_tokens,
-                        total_output_tokens: output.total_token_usage.output_tokens,
-                        completed_agents: output.completed_agents,
-                        failed_agents: output.failed_agents,
-                    },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                let context = {
+                    let daemon = daemon.read().await;
+                    crate::automation_executor::AutomationExecutionContext::from_daemon(&daemon)
+                };
+                let result = match context.get_automation(&workflow_id).await {
+                    Some(automation)
+                        if matches!(
+                            &automation.trigger,
+                            axocoatl_config::AutomationTrigger::Manual
+                        ) =>
+                    {
+                        let result = crate::automation_executor::execute_automation_in_context(
+                            &context,
+                            &automation,
+                            &input,
+                        )
+                        .await;
+                        crate::automation_runtime::record_automation_outcome(
+                            &context,
+                            &automation,
+                            &result,
+                        );
+                        result
+                    }
+                    _ => Err(crate::DaemonError::WorkflowNotFound(workflow_id.clone())),
+                };
+                match result {
+                    Ok(output) => workflow_response(output),
+                    Err(error) => workflow_error_response(error),
                 }
             }
             IpcRequest::ListWorkflows => {
-                let daemon = daemon.read().await;
-                let workflows = daemon
-                    .config
-                    .workflows
-                    .iter()
-                    .map(|w| IpcWorkflowInfo {
-                        id: w.id.clone(),
-                        name: w.name.clone(),
-                        agents: w.agents.clone(),
-                        entry_point: w.entry_point.clone(),
+                use axocoatl_config::{AutomationNodeKind, AutomationTrigger};
+
+                let store = { daemon.read().await.automation_store.clone() };
+                let automations = store.read().await.list();
+                let workflows = automations
+                    .into_iter()
+                    .filter(|automation| matches!(&automation.trigger, AutomationTrigger::Manual))
+                    .map(|automation| {
+                        let agents = automation
+                            .nodes
+                            .iter()
+                            .filter_map(|node| match &node.kind {
+                                AutomationNodeKind::Agent { agent_id, .. } => {
+                                    Some(agent_id.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let entry_point = automation.nodes.iter().find_map(|node| {
+                            let has_incoming =
+                                automation.edges.iter().any(|edge| edge.to == node.id);
+                            match (&node.kind, has_incoming) {
+                                (AutomationNodeKind::Agent { agent_id, .. }, false) => {
+                                    Some(agent_id.clone())
+                                }
+                                _ => None,
+                            }
+                        });
+                        IpcWorkflowInfo {
+                            id: automation.id,
+                            name: automation.name,
+                            agents,
+                            entry_point,
+                        }
                     })
                     .collect();
                 IpcResponse::Workflows { workflows }
@@ -377,18 +673,27 @@ async fn handle_client(
                     None => daemon.agent_registry.list_ids().await,
                 };
                 let mut per_agent = Vec::new();
-                let mut total_input = 0;
-                let mut total_output = 0;
+                let mut total_input: usize = 0;
+                let mut total_output: usize = 0;
+                let mut total_reasoning: usize = 0;
+                let mut token_usage_known = true;
                 for id in ids {
                     if let Some(actor) = daemon.agent_registry.get(&id).await {
-                        if let Ok(usage) = axocoatl_actor::get_agent_token_usage(&actor).await {
-                            total_input += usage.input_tokens;
-                            total_output += usage.output_tokens;
+                        if let Ok(measured) =
+                            axocoatl_actor::get_agent_measured_token_usage(&actor).await
+                        {
+                            let usage = measured.usage;
+                            token_usage_known &= measured.complete;
+                            total_input = total_input.saturating_add(usage.input_tokens);
+                            total_output = total_output.saturating_add(usage.output_tokens);
+                            total_reasoning =
+                                total_reasoning.saturating_add(usage.reasoning_tokens.unwrap_or(0));
                             per_agent.push(IpcTokenUsage {
                                 agent_id: id.to_string(),
                                 input_tokens: usage.input_tokens,
                                 output_tokens: usage.output_tokens,
                                 reasoning_tokens: usage.reasoning_tokens,
+                                token_usage_known: measured.complete,
                             });
                         }
                     }
@@ -397,6 +702,8 @@ async fn handle_client(
                     per_agent,
                     total_input,
                     total_output,
+                    total_reasoning,
+                    token_usage_known,
                 }
             }
             IpcRequest::GetAgentStatus { agent_id } => {
@@ -424,9 +731,7 @@ async fn handle_client(
                 let daemon = daemon.read().await;
                 match daemon.restart_agent(&agent_id).await {
                     Ok(()) => IpcResponse::RestartAck { agent_id },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                    Err(error) => error_response(error),
                 }
             }
             IpcRequest::ListMcpServers => {
@@ -478,9 +783,7 @@ async fn handle_client(
                     Ok(s) => IpcResponse::Session {
                         session: ipc_session_info(&s),
                     },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                    Err(error) => error_response(error),
                 }
             }
             IpcRequest::ListSessions => {
@@ -495,31 +798,29 @@ async fn handle_client(
             }
             IpcRequest::ExecuteSession { session_id, input } => {
                 let daemon = daemon.read().await;
-                match daemon.execute_session(&session_id, &input).await {
-                    Ok(output) => IpcResponse::SessionResponse {
+                match daemon.execute_session_measured(&session_id, &input).await {
+                    Ok(measured) => IpcResponse::SessionResponse {
                         session_id,
-                        content: output.content,
-                        input_tokens: output.token_usage.input_tokens,
-                        output_tokens: output.token_usage.output_tokens,
+                        content: measured.output.content,
+                        input_tokens: measured.output.token_usage.input_tokens,
+                        output_tokens: measured.output.token_usage.output_tokens,
+                        reasoning_tokens: measured.output.token_usage.reasoning_tokens.unwrap_or(0),
+                        token_usage_known: measured.token_usage_known,
                     },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                    Err(failure) => measured_daemon_failure_response(failure),
                 }
             }
             IpcRequest::CloseSession { session_id } => {
                 let daemon = daemon.read().await;
                 match daemon.close_session(&session_id).await {
                     Ok(()) => IpcResponse::SessionClosed { session_id },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                    Err(error) => error_response(error),
                 }
             }
             IpcRequest::Ping => IpcResponse::Pong,
             IpcRequest::Shutdown => {
                 write_message(&mut stream, &IpcResponse::ShutdownAck).await?;
-                // Signal shutdown will be handled by the caller
+                daemon.read().await.request_shutdown();
                 return Ok(());
             }
         };
@@ -557,6 +858,243 @@ impl IpcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_usage_wire_defaults_reasoning_and_totals_reported_reasoning() {
+        let legacy: IpcResponse = serde_json::from_str(
+            r#"{"type":"token_usage","per_agent":[],"total_input":10,"total_output":5}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy,
+            IpcResponse::TokenUsage {
+                total_reasoning: 0,
+                token_usage_known: false,
+                ..
+            }
+        ));
+
+        let usage = IpcTokenUsage {
+            agent_id: "reasoner".to_string(),
+            input_tokens: 10,
+            output_tokens: 5,
+            reasoning_tokens: Some(7),
+            token_usage_known: true,
+        };
+        assert_eq!(usage.total(), 22);
+
+        let legacy_response: IpcResponse = serde_json::from_str(
+            r#"{"type":"response","content":"ok","tool_calls":[],"input_tokens":1,"output_tokens":2}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy_response,
+            IpcResponse::Response {
+                reasoning_tokens: 0,
+                token_usage_known: false,
+                ..
+            }
+        ));
+
+        let legacy_session: IpcResponse = serde_json::from_str(
+            r#"{"type":"session_response","session_id":"s","content":"ok","input_tokens":3,"output_tokens":4}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy_session,
+            IpcResponse::SessionResponse {
+                reasoning_tokens: 0,
+                token_usage_known: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn error_wire_omits_unmeasured_usage_and_retains_measured_subtotals() {
+        let legacy: IpcResponse =
+            serde_json::from_str(r#"{"type":"error","message":"before dispatch"}"#).unwrap();
+        assert!(matches!(
+            legacy,
+            IpcResponse::Error {
+                input_tokens: None,
+                output_tokens: None,
+                reasoning_tokens: None,
+                token_usage_known: None,
+                ..
+            }
+        ));
+
+        let generic = error_response("before dispatch");
+        assert_eq!(
+            serde_json::to_value(generic).unwrap(),
+            serde_json::json!({"type": "error", "message": "before dispatch"})
+        );
+
+        let measured = measured_error_response(
+            "provider stream failed",
+            &axocoatl_core::TokenUsageStats::new(13, 8).with_reasoning(3),
+            false,
+        );
+        assert_eq!(
+            serde_json::to_value(measured).unwrap(),
+            serde_json::json!({
+                "type": "error",
+                "message": "provider stream failed",
+                "input_tokens": 13,
+                "output_tokens": 8,
+                "reasoning_tokens": 3,
+                "token_usage_known": false,
+            })
+        );
+    }
+
+    #[test]
+    fn measured_fatal_and_handled_workflow_failures_project_usage() {
+        let failure = crate::bootstrap::MeasuredDaemonFailure {
+            error: crate::DaemonError::AgentSpawn("provider stream failed".into()),
+            token_usage: axocoatl_core::TokenUsageStats::new(21, 5),
+            token_usage_known: false,
+        };
+        assert!(matches!(
+            measured_daemon_failure_response(failure),
+            IpcResponse::Error {
+                input_tokens: Some(21),
+                output_tokens: Some(5),
+                reasoning_tokens: Some(0),
+                token_usage_known: Some(false),
+                ..
+            }
+        ));
+
+        let output = crate::workflow::WorkflowOutput {
+            workflow_id: "review".into(),
+            agent_outputs: Vec::new(),
+            agent_activations: Vec::new(),
+            final_content: "partial".into(),
+            total_token_usage: axocoatl_core::TokenUsageStats::new(34, 13).with_reasoning(2),
+            token_usage_known: false,
+            completed_agents: vec!["reader".into()],
+            failed_agents: vec![("writer".into(), "provider timeout".into())],
+        };
+        match workflow_response(output) {
+            IpcResponse::Error {
+                message,
+                input_tokens: Some(34),
+                output_tokens: Some(13),
+                reasoning_tokens: Some(2),
+                token_usage_known: Some(false),
+            } => {
+                assert!(message.contains("writer: provider timeout"));
+            }
+            other => panic!("expected measured workflow error, got {other:?}"),
+        }
+
+        let fatal = crate::DaemonError::workflow_execution_measured(
+            "automation graph failed",
+            axocoatl_core::TokenUsageStats::new(55, 8),
+            true,
+        );
+        assert!(matches!(
+            workflow_error_response(fatal),
+            IpcResponse::Error {
+                input_tokens: Some(55),
+                output_tokens: Some(8),
+                reasoning_tokens: Some(0),
+                token_usage_known: Some(true),
+                ..
+            }
+        ));
+
+        assert!(matches!(
+            workflow_error_response(crate::DaemonError::WorkflowNotFound("missing".into())),
+            IpcResponse::Error {
+                input_tokens: Some(0),
+                output_tokens: Some(0),
+                reasoning_tokens: Some(0),
+                token_usage_known: Some(true),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn socket_path_is_stable_across_working_directories() {
+        assert_eq!(
+            resolve_socket_path(
+                None,
+                Some("/run/user/501".into()),
+                Some("/Users/axo".into())
+            ),
+            PathBuf::from("/run/user/501/axocoatl/axocoatl.sock")
+        );
+        assert_eq!(
+            resolve_socket_path(None, None, Some("/Users/axo".into())),
+            PathBuf::from("/Users/axo/.axocoatl/run/axocoatl.sock")
+        );
+        assert_eq!(
+            resolve_socket_path(
+                Some("/tmp/custom-axo.sock".into()),
+                Some("/run/user/501".into()),
+                Some("/Users/axo".into()),
+            ),
+            PathBuf::from("/tmp/custom-axo.sock")
+        );
+    }
+
+    #[test]
+    fn session_info_reports_setup_gate_and_reads_legacy_payloads() {
+        let data = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("package-lock.json"), "{}").unwrap();
+        let mut store = axocoatl_session::SessionStore::new(data.path()).unwrap();
+        let session = store
+            .create(
+                "Node project",
+                "wsp-node",
+                work.path(),
+                axocoatl_session::SessionMode::SingleAgent {
+                    agent_id: "coder".into(),
+                },
+                Vec::new(),
+                Vec::new(),
+                None,
+            )
+            .unwrap();
+        let info = ipc_session_info(&session);
+        assert_eq!(info.environment_state, "awaiting_approval");
+        assert_eq!(info.setup_command.as_deref(), Some("npm ci"));
+
+        let legacy: IpcSessionInfo = serde_json::from_str(
+            r#"{"id":"s","name":"Old","workspace_id":"w","working_dir":"/tmp","mode":"single-agent","status":"active"}"#,
+        )
+        .unwrap();
+        assert!(legacy.environment_state.is_empty());
+        assert!(legacy.setup_command.is_none());
+        assert!(legacy.environment_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn socket_reservation_rejects_a_second_daemon_before_state_exists() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let nonce = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "axo-ipc-reservation-test-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket_path = dir.join("axocoatl.sock");
+
+        let listener = bind_ipc_listener(&socket_path).await.unwrap();
+        let error = bind_ipc_listener(&socket_path).await.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+
+        drop(listener);
+        std::fs::remove_file(&socket_path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+    }
 
     #[tokio::test]
     async fn ipc_message_round_trip() {

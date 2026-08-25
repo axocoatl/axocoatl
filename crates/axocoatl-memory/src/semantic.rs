@@ -18,12 +18,15 @@
 //! The active backend's id is recorded in the store file; if it changes, every
 //! memory is re-embedded on load (the original text is always kept).
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use axocoatl_core::secure_fs::SecureDir;
 use serde::{Deserialize, Serialize};
 
 use crate::error::MemoryError;
+use crate::storage::{legacy_storage_component, storage_key};
 
 /// Dimensionality of the hashed fallback embedding.
 pub const EMBED_DIM: usize = 512;
@@ -113,10 +116,24 @@ fn pick_embedder() -> Embedder {
     Embedder::Hashed
 }
 
+fn pick_embedder_in(data_root: &SecureDir) -> Embedder {
+    #[cfg(feature = "neural-embeddings")]
+    {
+        match crate::neural::NeuralEmbedder::shared_in(data_root) {
+            Ok(n) => return Embedder::Neural(n),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "neural embedder unavailable — using the lexical fallback"
+            ),
+        }
+    }
+    Embedder::Hashed
+}
+
 /// Tier 4 semantic memory for one agent (or one `{session}:{agent}`).
 pub struct SemanticMemory {
-    /// JSON file backing the store.
-    path: PathBuf,
+    secure_dir: SecureDir,
+    file_name: OsString,
     embedder: Embedder,
     records: Mutex<Vec<MemoryRecord>>,
 }
@@ -135,17 +152,64 @@ impl SemanticMemory {
         Self::with_embedder(agent_id, dir, Embedder::Hashed)
     }
 
+    /// Open a semantic store relative to the control-plane data root.
+    pub fn new_in(
+        agent_id: &str,
+        data_root: impl AsRef<Path>,
+        relative: impl AsRef<Path>,
+    ) -> Result<Self, MemoryError> {
+        let data_root = SecureDir::open(data_root)?;
+        Self::new_in_secure(agent_id, &data_root, relative)
+    }
+
+    pub fn new_in_secure(
+        agent_id: &str,
+        data_root: &SecureDir,
+        relative: impl AsRef<Path>,
+    ) -> Result<Self, MemoryError> {
+        let dir = data_root.child(relative)?;
+        Self::with_embedder_in(agent_id, dir, pick_embedder_in(data_root))
+    }
+
     fn with_embedder(
         agent_id: &str,
         dir: impl Into<PathBuf>,
         embedder: Embedder,
     ) -> Result<Self, MemoryError> {
         let dir = dir.into();
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join(format!("agent_{agent_id}_semantic.json"));
+        let secure_dir = SecureDir::open_or_create_all(&dir)?;
+        Self::with_embedder_in(agent_id, secure_dir, embedder)
+    }
 
-        let records = if path.exists() {
-            let bytes = std::fs::read(&path)?;
+    fn with_embedder_in(
+        agent_id: &str,
+        secure_legacy_dir: SecureDir,
+        embedder: Embedder,
+    ) -> Result<Self, MemoryError> {
+        let secure_dir = secure_legacy_dir.child("v1")?;
+        let file_name = OsString::from(format!("agent_{}_semantic.json", storage_key(agent_id)));
+        let legacy_path = legacy_storage_component(agent_id)
+            .map(|component| OsString::from(format!("agent_{component}_semantic.json")));
+        let current_exists = secure_dir.is_file(&file_name)?;
+        let legacy_exists = match legacy_path.as_ref() {
+            Some(legacy) => secure_legacy_dir.has_exact_file(legacy)?,
+            None => false,
+        };
+        let reading_legacy = !current_exists && legacy_exists;
+        let read_name = if current_exists {
+            Some(&file_name)
+        } else if legacy_exists {
+            legacy_path.as_ref()
+        } else {
+            None
+        };
+
+        let records = if let Some(read_name) = read_name {
+            let bytes = if current_exists {
+                secure_dir.read(read_name)?
+            } else {
+                secure_legacy_dir.read(read_name)?
+            };
             match serde_json::from_slice::<StoredState>(&bytes) {
                 Ok(mut state) => {
                     // The embedder changed since this store was written —
@@ -163,7 +227,10 @@ impl SemanticMemory {
                     }
                     state.records
                 }
-                // Unreadable / legacy format — start fresh rather than fail.
+                // Do not let a failed compatibility read create an empty
+                // current file that permanently hides the only legacy source.
+                Err(error) if reading_legacy => return Err(error.into()),
+                // Unreadable current format — start fresh rather than fail.
                 Err(e) => {
                     tracing::warn!(error = %e, "semantic store unreadable — starting fresh");
                     Vec::new()
@@ -174,7 +241,8 @@ impl SemanticMemory {
         };
 
         let mem = Self {
-            path,
+            secure_dir,
+            file_name,
             embedder,
             records: Mutex::new(records),
         };
@@ -280,9 +348,7 @@ impl SemanticMemory {
             records,
         };
         let bytes = serde_json::to_vec(&state).map_err(|e| MemoryError::VectorDb(e.to_string()))?;
-        let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, &bytes)?;
-        std::fs::rename(&tmp, &self.path)?;
+        self.secure_dir.atomic_write(&self.file_name, &bytes)?;
         Ok(())
     }
 }
@@ -412,5 +478,93 @@ mod tests {
         let mem = SemanticMemory::new_hashed("a1", dir.path()).unwrap();
         assert_eq!(mem.len(), 2);
         assert_eq!(mem.search("nothing", 0).unwrap().len(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_semantic_store_promotes_safe_legacy_file() {
+        let dir = tempdir().unwrap();
+        let id = "ses-123:coder";
+        let mem = SemanticMemory::new_hashed(id, dir.path()).unwrap();
+        mem.store("legacy semantic fact", serde_json::json!({}))
+            .unwrap();
+        drop(mem);
+        let current = dir
+            .path()
+            .join("v1")
+            .join(format!("agent_{}_semantic.json", storage_key(id)));
+        let legacy = dir.path().join(format!("agent_{id}_semantic.json"));
+        std::fs::rename(&current, &legacy).unwrap();
+
+        let reopened = SemanticMemory::new_hashed(id, dir.path()).unwrap();
+        assert_eq!(reopened.len(), 1);
+        assert!(current.is_file());
+        assert!(legacy.is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_legacy_semantic_does_not_create_a_hiding_current_file() {
+        let dir = tempdir().unwrap();
+        let id = "ses-123:coder";
+        let legacy = dir.path().join(format!("agent_{id}_semantic.json"));
+        std::fs::write(&legacy, b"not json").unwrap();
+        let current = dir
+            .path()
+            .join("v1")
+            .join(format!("agent_{}_semantic.json", storage_key(id)));
+
+        assert!(SemanticMemory::new_hashed(id, dir.path()).is_err());
+        assert!(!current.exists());
+        assert!(legacy.is_file());
+    }
+
+    #[test]
+    fn traversal_id_cannot_escape_semantic_directory() {
+        let parent = tempdir().unwrap();
+        let dir = parent.path().join("semantic");
+        let outside = parent.path().join("outside_semantic.json");
+        std::fs::write(&outside, b"sentinel").unwrap();
+
+        let mem = SemanticMemory::new_hashed("../outside", &dir).unwrap();
+        mem.store("contained", serde_json::json!({})).unwrap();
+        let current = dir
+            .join("v1")
+            .join(format!("agent_{}_semantic.json", storage_key("../outside")));
+        assert!(current.is_file());
+        assert_eq!(std::fs::read(outside).unwrap(), b"sentinel");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lowercase_semantic_store_does_not_adopt_uppercase_legacy_file() {
+        let dir = tempdir().unwrap();
+        let uppercase = SemanticMemory::new_hashed("Coder", dir.path()).unwrap();
+        uppercase
+            .store("uppercase legacy fact", serde_json::json!({}))
+            .unwrap();
+        drop(uppercase);
+        let uppercase_current = dir
+            .path()
+            .join("v1")
+            .join(format!("agent_{}_semantic.json", storage_key("Coder")));
+        let uppercase_legacy = dir.path().join("agent_Coder_semantic.json");
+        std::fs::rename(&uppercase_current, &uppercase_legacy).unwrap();
+
+        let lowercase = SemanticMemory::new_hashed("coder", dir.path()).unwrap();
+        assert!(lowercase.is_empty());
+        lowercase
+            .store("lowercase current fact", serde_json::json!({}))
+            .unwrap();
+        assert_eq!(lowercase.len(), 1);
+
+        let reopened_uppercase = SemanticMemory::new_hashed("Coder", dir.path()).unwrap();
+        assert_eq!(reopened_uppercase.len(), 1);
+        assert_eq!(
+            reopened_uppercase.recent(1).unwrap(),
+            vec!["uppercase legacy fact"]
+        );
+        assert!(dir.path().join("v1/agent_coder_semantic.json").is_file());
+        assert!(uppercase_legacy.is_file());
     }
 }

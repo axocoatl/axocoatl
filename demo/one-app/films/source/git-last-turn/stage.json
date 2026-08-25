@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "film": "git-last-turn",
+  "timeline": "demo/one-app/films/source/git-last-turn/timeline.json",
+  "timeline_sha256": "37526e3106c9ded062e86fbb6ef377625d6cb803e8efadaab23847621a55b035",
+  "input_fps": 8,
+  "frame_count": 200,
+  "duration_seconds": 25,
+  "sequence_sha256": "2f924940ebe9f2d0e1e8625b587926d71178ccff51adb3343eb5733127daa2f5",
+  "shots": [
+    {
+      "beat": "kept-decision",
+      "source": "shot-kept-decision.jpg",
+      "source_sha256": "6af84966151d381ddb67edf0c047e68144b797249a5c2756b4eea5a468cde0cd",
+      "hold_frames": 40,
+      "first_frame": 1,
+      "last_frame": 40
+    },
+    {
+      "beat": "uncommitted",
+      "source": "shot-uncommitted.jpg",
+      "source_sha256": "06470df3a17efc74e0b90d24d62961f0cc976cf1704bc7b073a8dfc15a046518",
+      "hold_frames": 40,
+      "first_frame": 41,
+      "last_frame": 80
+    },
+    {
+      "beat": "last-turn",
+      "source": "shot-last-turn.jpg",
+      "source_sha256": "44226f19db93063ee5577b4505d912d9a494376d6ba690b158117a9e515eee3d",
+      "hold_frames": 40,
+      "first_frame": 81,
+      "last_frame": 120
+    },
+    {
+      "beat": "restart",
+      "source": "shot-restart.jpg",
+      "source_sha256": "d72622fb80e874c24447fd840968537413a10953115a83853098c248f22c5034",
+      "hold_frames": 40,
+      "first_frame": 121,
+      "last_frame": 160
+    },
+    {
+      "beat": "ownership",
+      "source": "shot-ownership.jpg",
+      "source_sha256": "e2e8bacc11f0ff9fe1e24ac14bc20b3d84321b26dd388971a23246f589df4274",
+      "hold_frames": 40,
+      "first_frame": 161,
+      "last_frame": 200
+    }
+  ],
+  "poster_beat": "last-turn",
+  "poster_frame": 100
+}

@@ -1,0 +1,4 @@
+# Preserve upstream license texts and generated browser bundles byte-for-byte.
+axocoatl-server/THIRD_PARTY_LICENSES.txt -whitespace
+axocoatl-server/static/vendor/** -whitespace
+licenses/vendor/** -whitespace

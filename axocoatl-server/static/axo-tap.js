@@ -1,11 +1,25 @@
 // Axocoatl element picker — injected into proxied pages.
-// Same-origin with the parent dashboard (via the proxy), so postMessage
-// works unrestricted. The picker is "sticky": one click captures the
-// element + its ancestor chain; the user keeps picking via the parent
-// dashboard's hierarchy panel (hover/select level commands).
+// Runs on a dedicated Preview origin. The picker exchanges only bounded
+// messages with its exact parent window and exact workbench origin. The picker
+// is "sticky": one click captures the element + its ancestor chain; the user
+// keeps picking via the parent dashboard's hierarchy panel.
 (function () {
   if (window.__axoTapLoaded) return;
   window.__axoTapLoaded = true;
+
+  const parentOrigin = (() => {
+    try {
+      const ancestor = window.location.ancestorOrigins?.[0];
+      if (ancestor) return ancestor;
+      if (document.referrer) return new URL(document.referrer).origin;
+    } catch {}
+    return null;
+  })();
+
+  function postToWorkbench(message) {
+    if (!parentOrigin || parent === window) return;
+    try { parent.postMessage(message, parentOrigin); } catch {}
+  }
 
   const STYLE = `
     .axo-tap-hover  { outline: 2px solid #7c5cff !important; outline-offset: 1px !important;
@@ -158,23 +172,21 @@
     if (lockedEl && lockedEl.classList) lockedEl.classList.add('axo-tap-locked');
     showBanner('Element captured — pick a level in the panel');
     mode = 'locked';
-    try {
-      parent.postMessage({
+    postToWorkbench({
         kind: 'axo-tap:picked',
         url: location.href,
         chain: serializeChain(chain),
         selectedIndex,
         selector: selectorFor(chain[selectedIndex]),
         html: snippetFor(chain[selectedIndex]),
-      }, '*');
-    } catch {}
+    });
   }
 
   function onKey(e) {
     if (mode === 'idle') return;
     if (e.key === 'Escape') {
       stop();
-      try { parent.postMessage({ kind: 'axo-tap:cancelled' }, '*'); } catch {}
+      postToWorkbench({ kind: 'axo-tap:cancelled' });
     }
   }
 
@@ -190,6 +202,7 @@
   }
 
   window.addEventListener('message', (e) => {
+    if (!parentOrigin || e.source !== parent || e.origin !== parentOrigin) return;
     const d = e.data || {};
     if (d.kind === 'axo-tap:start') {
       stop();
@@ -199,14 +212,12 @@
     } else if (d.kind === 'axo-tap:select-level' && typeof d.level === 'number') {
       setLockedLevel(d.level, { scroll: true });
       // Reply with the new level's html so the parent panel can show it.
-      try {
-        parent.postMessage({
+      postToWorkbench({
           kind: 'axo-tap:level',
           level: d.level,
           selector: selectorFor(chain[d.level]),
           html: snippetFor(chain[d.level]),
-        }, '*');
-      } catch {}
+      });
     } else if (d.kind === 'axo-tap:hover-level' && typeof d.level === 'number') {
       // Temporary outline; doesn't change the locked selection. Implemented
       // by toggling the hover class on chain[level] briefly.
@@ -223,5 +234,5 @@
     }
   });
 
-  try { parent.postMessage({ kind: 'axo-tap:ready' }, '*'); } catch {}
+  postToWorkbench({ kind: 'axo-tap:ready' });
 })();

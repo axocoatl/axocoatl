@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "film": "shared-core-memory",
+  "input_fps": 8,
+  "total_frames": 336,
+  "duration_seconds": 42,
+  "shots": [
+    {
+      "beat": "write",
+      "source": "shot-write.jpg",
+      "hold_frames": 80
+    },
+    {
+      "beat": "restart",
+      "source": "shot-restart.jpg",
+      "hold_frames": 72
+    },
+    {
+      "beat": "separate-sessions",
+      "source": "shot-separate-sessions.jpg",
+      "hold_frames": 80
+    },
+    {
+      "beat": "recall",
+      "source": "shot-recall.jpg",
+      "hold_frames": 104
+    }
+  ]
+}

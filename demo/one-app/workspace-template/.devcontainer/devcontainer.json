@@ -1,0 +1,10 @@
+{
+  "name": "Axocoatl one-app demo",
+  "image": "localhost/axocoatl-one-app-demo:latest",
+  "forwardPorts": [8765],
+  "portsAttributes": {
+    "8765": {
+      "label": "Storefront preview"
+    }
+  }
+}

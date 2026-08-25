@@ -1,56 +1,24 @@
-//! Proactive agents — `trigger.type: schedule` vs `trigger.type: on_event`.
+//! Legacy proactive YAML projected into canonical Automations.
 //!
-//! Most of Axocoatl runs *reactively*: a user (or a workflow) hands an agent
-//! input, the agent runs, it stops. **Proactive agents** are the autonomous
-//! half. Nobody prompts them. They sit on the `EventLattice` and act on their
-//! own when a **trigger** fires:
+//! Axocoatl's production trigger runtime reads one persisted `AutomationStore`.
+//! The legacy `workflows:`, `schedules:`, and `proactive:` YAML sections are
+//! migration input: when the canonical store file is missing, the daemon projects them
+//! into canonical [`Automation`] records. Settings/API edits are live after
+//! that; config reload is not a second trigger registry.
 //!
-//! - `trigger.type: schedule` — wake on a fixed interval (`every: 30s`).
-//! - `trigger.type: on_event` — wake whenever a named lattice event occurs
-//!   (here: `AgentFailed`).
+//! This offline example demonstrates that projection, then illustrates the
+//! matching and guard principles for an `OnEvent` Automation with a mock LLM:
 //!
-//! This is the *agent-acts-on-its-own* half of "Always-On". The other half is
-//! the Always-On **Service** (`axocoatl service install`), which keeps the
-//! daemon *process* alive 24/7 so the triggers have something to fire inside.
-//! See the README for the service side; this demo is the trigger side.
+//! 1. Parse the real legacy schema.
+//! 2. Project it through `Automation::from_legacy`, the seed conversion used by
+//!    `AutomationStore`.
+//! 3. Match `AgentFailed`, gate on the canonical `enabled` field, and suppress
+//!    a repeat inside a demo cooldown.
+//! 4. Activate a real `ractor` agent and show the event payload in its input.
 //!
-//! ## What this example proves
-//!
-//! It runs the **real** pieces, not a sketch of them:
-//!
-//! 1. Loads the companion `axocoatl.proactive.example.yaml` through the real
-//!    `axocoatl_config::parse_config` — the same parser the daemon uses. If the
-//!    YAML didn't match the real schema, this would error out.
-//! 2. Reads the two real `proactive:` entries it parsed (`hourly-briefing`, a
-//!    `schedule`; `failure-watch`, an `on_event` watcher for `AgentFailed`).
-//! 3. Spawns the `ops` agent as a real `ractor` actor (same path the daemon
-//!    uses) and wires an **event-triggered runner** onto a real `EventLattice`.
-//!    The runner mirrors `axocoatl-daemon/src/proactive.rs` exactly: it matches
-//!    the event name against the trigger, honours the live `enabled` flag, and
-//!    enforces the same `EVENT_COOLDOWN_SECS` self-loop guard.
-//! 4. Publishes a real `EventType::AgentFailed` event to the lattice and lets
-//!    the watcher activate the `ops` agent with its diagnostic prompt + the
-//!    failing agent's error — the event-trigger wiring, end to end.
-//!
-//! It then demonstrates the two guardrails that make on_event safe in the
-//! daemon: the **cooldown** (a second failure inside the window is ignored) and
-//! the **enabled flag** (a disabled watcher ignores a matching event).
-//!
-//! ## proactive vs the `schedules:` section
-//!
-//! `axocoatl.yaml` has *both* a `schedules:` block and a `proactive:` block.
-//! They are not the same thing:
-//!
-//! | `schedules:`                              | `proactive:`                          |
-//! |-------------------------------------------|---------------------------------------|
-//! | fires a whole **workflow** (a DAG)        | fires a **single agent**              |
-//! | only time-triggered (`every:`)            | time- **or** event-triggered          |
-//! | references a `workflows:` entry by id     | names one `agent:` directly           |
-//!
-//! A schedule is "re-run this multi-agent pipeline on a clock." A proactive
-//! agent is "let this one agent watch the world and act when something happens."
-//! This example is about the proactive side; for scheduled multi-agent DAGs see
-//! the `stigmergic-workflow` example plus the `schedules:` block in the YAML.
+//! The small `deliver` helper is deliberately not presented as the production
+//! dispatcher. Production uses one store-watching schedule/event/Skill runtime,
+//! single-flight ownership, and cooldown at dispatch and completion.
 //!
 //! Run: `cargo run -p proactive-agents` (no API keys — mock LLM).
 
@@ -64,7 +32,7 @@ use tokio::sync::Mutex;
 use tokio_stream::Stream;
 
 use axocoatl_actor::{execute_agent, AgentActor, AgentBehavior, AgentError};
-use axocoatl_config::{parse_config, ProactiveConfigYaml, ProactiveTrigger};
+use axocoatl_config::{parse_config, Automation, AutomationNodeKind, AutomationTrigger};
 use axocoatl_coordination::{EventId, EventLattice, EventNotification, EventType, LatticeEvent};
 use axocoatl_core::{AgentConfig, AgentId, AgentInput, AgentOutput, TokenUsageStats};
 use axocoatl_llm::{
@@ -72,30 +40,8 @@ use axocoatl_llm::{
     StreamEvent,
 };
 
-/// Minimum gap between two fires of an event-triggered proactive agent — copied
-/// verbatim from `axocoatl-daemon/src/proactive.rs`. Guards against a self-loop
-/// where the agent emits the very event it reacts to.
-const EVENT_COOLDOWN_SECS: u64 = 30;
-
-// ---------------------------------------------------------------------------
-// The canonical name of a lattice event, for matching against an
-// `OnEvent { event }` trigger. This is the exact function the daemon uses
-// (`axocoatl-daemon/src/proactive.rs::event_name`) — reproduced here so the
-// example's matching is identical to production, not an approximation.
-// ---------------------------------------------------------------------------
-
-fn event_name(et: &EventType) -> String {
-    match et {
-        EventType::TaskAvailable { .. } => "TaskAvailable".to_string(),
-        EventType::TaskCompleted { .. } => "TaskCompleted".to_string(),
-        EventType::AgentActivated { .. } => "AgentActivated".to_string(),
-        EventType::AgentFailed { .. } => "AgentFailed".to_string(),
-        EventType::ToolResult { .. } => "ToolResult".to_string(),
-        EventType::UserInput => "UserInput".to_string(),
-        EventType::WorkflowCompleted => "WorkflowCompleted".to_string(),
-        EventType::Custom(s) => s.clone(),
-    }
-}
+/// Demo-local window used to make the cooldown guard visible in one run.
+const DEMO_COOLDOWN_SECS: u64 = 30;
 
 fn now_unix() -> u64 {
     SystemTime::now()
@@ -138,7 +84,7 @@ impl LlmProvider for OpsDiagnosticLlm {
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
         // Pull the user turn (the diagnostic instruction + failure context the
-        // runner built) so the canned reply demonstrably reacts to it.
+        // demo helper built) so the canned reply demonstrably reacts to it.
         let context = request
             .messages
             .iter()
@@ -155,8 +101,8 @@ impl LlmProvider for OpsDiagnosticLlm {
              mid-execution (timeout or rate limit), so its turn never produced \
              output.\n\
              Suggested fix:\n\
-             1. Re-run the failed agent with an OverflowPolicy::Warn budget so a \
-                spend cap can't abort it silently.\n\
+             1. Re-run the failed agent with an OverflowPolicy::Warn budget so \
+                the local token guard can't abort it silently.\n\
              2. Add a retry-with-backoff around the provider call.\n\
              3. If it recurs, fail the workflow loudly instead of leaving a \
                 half-finished DAG."
@@ -185,7 +131,7 @@ impl LlmProvider for OpsDiagnosticLlm {
 
 // ---------------------------------------------------------------------------
 // The ops agent's behavior — calls its provider with its system prompt. This is
-// the agent the `failure-watch` proactive entry names; the runner activates it.
+// the Agent node in the projected `pro:failure-watch` Automation.
 // ---------------------------------------------------------------------------
 
 struct OpsBehavior {
@@ -219,13 +165,13 @@ impl AgentBehavior for OpsBehavior {
 }
 
 // ---------------------------------------------------------------------------
-// Live state of one proactive agent — the slice of
-// `axocoatl-daemon::proactive::ProactiveState` the runner reads each fire, so
-// toggling `enabled` or observing `last_fired_unix` takes effect live.
+// Demo observation state around one canonical Automation. The production
+// dispatcher reads the persisted AutomationStore again before every run; this
+// local Mutex only makes the enabled/cooldown gates easy to demonstrate.
 // ---------------------------------------------------------------------------
 
-struct ProactiveState {
-    config: ProactiveConfigYaml,
+struct DemoTriggerState {
+    automation: Automation,
     last_fired_unix: Option<u64>,
     run_count: u64,
 }
@@ -248,37 +194,35 @@ fn describe(o: &FireOutcome) -> &'static str {
     }
 }
 
-/// Deliver one lattice notification to one event-triggered proactive agent,
-/// applying the daemon's exact gate order: name match → `enabled` →
-/// cooldown → fire. Mirrors `spawn_event_runner` in the daemon, but fires the
-/// agent actor directly instead of routing through `execute_automation` (which
-/// would need a full daemon + automation graph).
+/// Illustrate event match → enabled → cooldown → agent activation. This is an
+/// offline teaching helper, not a replacement for the production Automation
+/// dispatcher (which also owns single-flight and completion cooldown state).
 async fn deliver(
     notif: &EventNotification,
-    state: &Mutex<ProactiveState>,
+    state: &Mutex<DemoTriggerState>,
     ops_ref: &ractor::ActorRef<axocoatl_actor::AgentMessage>,
 ) -> FireOutcome {
     let mut st = state.lock().await;
 
     // 1. Does this event match the trigger's target event?
-    let target = match &st.config.trigger {
-        ProactiveTrigger::OnEvent { event } => event.clone(),
-        // A schedule-triggered entry never reacts to events — only its ticker
-        // fires it. The daemon routes those to a separate interval runner.
-        ProactiveTrigger::Schedule { .. } => return FireOutcome::NotMatched,
+    let (target, fallback_input) = match &st.automation.trigger {
+        AutomationTrigger::OnEvent { event, input } => {
+            (event.clone(), input.clone().unwrap_or_default())
+        }
+        _ => return FireOutcome::NotMatched,
     };
-    if event_name(&notif.event_type) != target {
+    if notif.event_type.name() != target {
         return FireOutcome::NotMatched;
     }
 
-    // 2. Live enabled gate.
-    if !st.config.enabled {
+    // 2. Canonical enabled gate.
+    if !st.automation.enabled {
         return FireOutcome::SkippedDisabled;
     }
 
-    // 3. Cooldown — never react faster than once per window.
+    // 3. Demo cooldown — never react faster than once per window.
     if let Some(last) = st.last_fired_unix {
-        if now_unix().saturating_sub(last) < EVENT_COOLDOWN_SECS {
+        if now_unix().saturating_sub(last) < DEMO_COOLDOWN_SECS {
             return FireOutcome::SkippedCooldown;
         }
     }
@@ -289,7 +233,7 @@ async fn deliver(
     //    `execute_automation`; here we hand it straight to the actor.
     let input_text = format!(
         "{}\n\nFailing event payload:\n{}",
-        st.config.input,
+        fallback_input,
         serde_json::to_string_pretty(&notif.payload).unwrap_or_default()
     );
 
@@ -306,12 +250,11 @@ async fn deliver(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== Axocoatl: Proactive Agents (schedule + on_event triggers) ===\n");
+    println!("=== Axocoatl: legacy triggers → canonical Automations ===\n");
 
     // -----------------------------------------------------------------------
     // 1. Load the companion YAML through the REAL config parser. This both
-    //    validates the file against the real schema and gives us the real
-    //    parsed `proactive:` entries to drive the demo with.
+    //    validates the migration input against the real schema.
     // -----------------------------------------------------------------------
     let yaml_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("axocoatl.proactive.example.yaml");
     let raw = std::fs::read_to_string(&yaml_path)?;
@@ -329,56 +272,84 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.proactive.len(),
     );
 
+    let dependencies = |agent_id: &str| {
+        config
+            .agents
+            .iter()
+            .find(|agent| agent.id == agent_id)
+            .map(|agent| agent.depends_on.clone())
+            .unwrap_or_default()
+    };
+    let mut automations = Automation::from_legacy(
+        &config.workflows,
+        &config.schedules,
+        &config.proactive,
+        &dependencies,
+    );
+    automations.sort_by(|a, b| a.id.cmp(&b.id));
+
     // -----------------------------------------------------------------------
-    // 2. Show the proactive table and how each entry's trigger reads. This is
-    //    exactly what `GET /api/proactive` surfaces in a running daemon.
+    // 2. Show the canonical records the first-boot seed would persist.
     // -----------------------------------------------------------------------
-    println!("Proactive agents on this config:");
-    for p in &config.proactive {
-        let trigger = match &p.trigger {
-            ProactiveTrigger::Schedule { every } => format!("schedule  · every {every}"),
-            ProactiveTrigger::OnEvent { event } => format!("on_event  · {event}"),
+    println!("First-boot AutomationStore projection:");
+    for automation in &automations {
+        let trigger = match &automation.trigger {
+            AutomationTrigger::Manual => "manual".to_string(),
+            AutomationTrigger::Schedule { every, .. } => format!("schedule · every {every}"),
+            AutomationTrigger::OnEvent { event, .. } => format!("on_event · {event}"),
+            AutomationTrigger::OnSkill { skill_id } => format!("on_skill · {skill_id}"),
         };
-        let state = if p.enabled { "enabled " } else { "DISABLED" };
+        let state = if automation.enabled {
+            "enabled "
+        } else {
+            "DISABLED"
+        };
         println!(
-            "  • {:<14} [{state}] agent={:<10} trigger={trigger}",
-            p.id, p.agent
+            "  - {:<22} [{state}] nodes={:<2} trigger={trigger}",
+            automation.id,
+            automation.nodes.len(),
         );
     }
     println!();
-    println!("proactive vs schedules: a `schedules:` entry re-runs a whole *workflow* on a");
-    println!("clock; a `proactive:` entry watches for *one agent* to act, on a clock OR an");
-    println!("event. This demo drives the on_event side end to end.\n");
+    println!("These YAML sections are seed input, not parallel runtime registries.");
+    println!("Settings and /api/automations own live edits after this projection.\n");
     println!("{}", "─".repeat(70));
 
     // -----------------------------------------------------------------------
-    // 3. Find the event-triggered watcher (`failure-watch`) in the parsed
-    //    config and spawn the agent it names (`ops`) as a real ractor actor.
+    // 3. Find the projected event Automation and spawn its agent as a real
+    //    ractor actor. Production would execute the full Automation graph.
     // -----------------------------------------------------------------------
-    let watcher = config
-        .proactive
+    let watcher = automations
         .iter()
-        .find(|p| matches!(p.trigger, ProactiveTrigger::OnEvent { .. }))
+        .find(|automation| matches!(&automation.trigger, AutomationTrigger::OnEvent { .. }))
         .cloned()
-        .expect("companion YAML defines an on_event proactive agent");
+        .expect("companion YAML projects an OnEvent Automation");
 
     let target_event = match &watcher.trigger {
-        ProactiveTrigger::OnEvent { event } => event.clone(),
-        ProactiveTrigger::Schedule { .. } => unreachable!("filtered to OnEvent above"),
+        AutomationTrigger::OnEvent { event, .. } => event.clone(),
+        _ => unreachable!("filtered to OnEvent above"),
     };
+    let watcher_agent = watcher
+        .nodes
+        .iter()
+        .find_map(|node| match &node.kind {
+            AutomationNodeKind::Agent { agent_id, .. } => Some(agent_id.clone()),
+            _ => None,
+        })
+        .expect("projected proactive Automation has an Agent node");
 
-    // The system prompt comes from the agent the proactive entry names.
+    // The system prompt comes from the projected Automation's Agent node.
     let ops_agent_cfg = config
         .agents
         .iter()
-        .find(|a| a.id == watcher.agent)
-        .expect("the proactive entry's agent must exist in agents:");
+        .find(|agent| agent.id == watcher_agent)
+        .expect("the projected Agent must exist in agents:");
     let ops_system_prompt = ops_agent_cfg
         .system_prompt
         .clone()
         .unwrap_or_else(|| "You are an operations agent.".to_string());
 
-    let ops_id = AgentId::new(&watcher.agent);
+    let ops_id = AgentId::new(&watcher_agent);
     let ops_config = AgentConfig {
         id: ops_id,
         name: ops_agent_cfg.name.clone(),
@@ -392,30 +363,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         provider: Arc::new(OpsDiagnosticLlm),
     };
     let (ops_ref, ops_handle) = AgentActor::spawn(
-        Some(watcher.agent.clone()),
+        Some(watcher_agent.clone()),
         AgentActor,
         (ops_config, Box::new(ops_behavior) as Box<dyn AgentBehavior>),
     )
     .await?;
 
-    // The live state the runner reads each delivery (enabled flag, last-fired).
-    let state = Mutex::new(ProactiveState {
-        config: watcher.clone(),
+    let state = Mutex::new(DemoTriggerState {
+        automation: watcher.clone(),
         last_fired_unix: None,
         run_count: 0,
     });
 
     // -----------------------------------------------------------------------
-    // 4. Build a real EventLattice. The watcher subscribes to it exactly as the
-    //    daemon's event runner does. We don't even need a background task for
-    //    this demo: we publish, take the broadcast notification, and deliver it.
+    // 4. Build a real EventLattice. The demo publishes, reads the broadcast
+    //    notification, and hands it to the small illustrative guard helper.
     // -----------------------------------------------------------------------
     let lattice = EventLattice::new(64);
     let mut events = lattice.subscribe();
 
     println!(
         "\n'{}' is watching the lattice for `{target_event}` events (agent: {}).",
-        watcher.id, watcher.agent
+        watcher.id, watcher_agent
     );
 
     // --- Event 1: a genuine AgentFailed → the watcher should activate. -------
@@ -439,14 +408,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match deliver(&notif, &state, &ops_ref).await {
         FireOutcome::Fired { output } => {
             println!(
-                "    ⚡ '{}' ACTIVATED — `{}` matched its on_event trigger.",
+                "    '{}' ACTIVATED — `{}` matched its OnEvent trigger.",
                 watcher.id,
-                event_name(&notif.event_type)
+                notif.event_type.name()
             );
-            println!(
-                "    The {} agent ran with its diagnostic prompt:\n",
-                watcher.agent
-            );
+            println!("    The {watcher_agent} agent ran with its diagnostic prompt:\n");
             for line in output.lines() {
                 println!("      {line}");
             }
@@ -471,13 +437,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "    {} — `{}` is not the watcher's target event, so the watcher stayed asleep.",
         describe(&outcome),
-        event_name(&notif.event_type),
+        notif.event_type.name(),
     );
 
     // --- Event 3: a second AgentFailed inside the cooldown → suppressed. ------
     println!("\n{}", "─".repeat(70));
     println!(
-        "\n[3] Publishing a SECOND AgentFailed immediately (within the {EVENT_COOLDOWN_SECS}s cooldown)"
+        "\n[3] Publishing a SECOND AgentFailed immediately (within the {DEMO_COOLDOWN_SECS}s demo cooldown)"
     );
     lattice.publish(LatticeEvent {
         id: EventId::random(),
@@ -502,7 +468,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n[4] Setting enabled=false on the watcher, then publishing AgentFailed again");
     {
         let mut st = state.lock().await;
-        st.config.enabled = false;
+        st.automation.enabled = false;
         // Clear last-fired so the cooldown isn't what's blocking it — we want to
         // prove the *enabled* gate, in isolation.
         st.last_fired_unix = None;
@@ -520,10 +486,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notif = events.recv().await?;
     let outcome = deliver(&notif, &state, &ops_ref).await;
     println!(
-        "    {} — toggling `enabled` takes effect live; a disabled proactive agent ignores",
+        "    {} — the canonical `enabled` gate prevents this Automation from running",
         describe(&outcome)
     );
-    println!("    its trigger without a daemon restart.");
+    println!("    (in production, Settings/API updates this persisted record live).");
 
     // -----------------------------------------------------------------------
     // 5. Report.
@@ -536,7 +502,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         runs,
     );
     println!("AgentFailed — every other event was correctly gated out (wrong type, cooldown,");
-    println!("disabled). No user prompted the ops agent: the lattice did.");
+    println!("disabled). This offline helper illustrates the guards; the daemon's shared");
+    println!("Automation runtime owns production dispatch and completion cooldown.");
 
     // 6. Shut the actor down.
     ops_ref.stop(None);

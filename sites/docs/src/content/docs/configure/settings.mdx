@@ -1,0 +1,71 @@
+---
+title: Settings
+description: Know what can be changed live in the app and what still belongs in axocoatl.yaml.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Settings contains product configuration that you visit occasionally, not the
+tools used to complete a Session task. Open it from the left rail or the command
+center (`Ctrl+K` on Windows/Linux, `⌘K` on macOS).
+
+## Available sections
+
+| Section | Current controls |
+| --- | --- |
+| **Agents** | Status, token usage, prompt/model/budget/dependencies, restart |
+| **Skills** | Configured Skill metadata and manual event publication |
+| **MCP servers** | Catalog connections, discovered tools, saved permissions |
+| **Automations** | Create, edit, trigger, run, organize, inspect, and resume DAGs |
+
+Providers, sandbox policy, server binding, memory tuning, webhooks, and pricing
+are configured in `axocoatl.yaml`; they are not hidden Settings sections. Run
+`axocoatl validate` after changing the file and restart the daemon when the
+running process must pick up those changes.
+
+## Agent edits are live, not durable
+
+In **Settings → Agents**, selecting an Agent opens its live detail drawer. You
+can change its name, model, system prompt, token budget, and dependencies, then
+choose **Save & restart**. **Restart only** reloads the current in-memory Agent
+configuration from its checkpoint.
+
+These edits apply only to the current daemon process. They do not rewrite
+`axocoatl.yaml`, and a full daemon restart restores the YAML values. Copy an
+accepted change into YAML when it should survive restart, then validate it.
+
+<Aside type="caution" title="A restart does not resume in-flight work">
+Agent restart restores the latest checkpointed conversation and cumulative usage subtotal,
+including whether that subtotal is complete. It does not resume a provider/tool call that was
+in flight. Inspect Session History, Route evidence, repository state, and any external system
+before repeating work after a failure.
+</Aside>
+
+## MCP changes are runtime-backed
+
+The MCP section can connect a catalog entry to the live registry, reconnect
+or remove a server, list its discovered tools, and revoke saved permission
+decisions. Connection may ask for required values or secrets. An
+MCP tool with no matching saved decision still pauses for a human approval when
+called.
+
+Catalog connect and remove are process-local: they do not rewrite
+YAML and are not retained across daemon restart. Existing Agent executors are
+also built before a later catalog connection, so configure the durable server in
+YAML and restart the daemon before relying on its tools in Agent work.
+
+## Automation changes are durable
+
+Automations use the canonical data store rather than rewriting legacy YAML.
+Create, edit, enable, pause, move, run, and delete records in Settings. Once the
+canonical store exists, legacy `workflows:`, `schedules:`, and `proactive:` YAML
+are migration input only; they do not repopulate records you delete later.
+
+## Keyboard and focus behavior
+
+- `Escape` closes the open drawer or dialog before it closes Settings.
+- `Tab` stays within modal dialogs.
+- The command center can open a Settings section by name.
+- Closing Settings returns focus to the control that opened it when possible.
+
+Next: [Configure providers →](/configure/providers/)

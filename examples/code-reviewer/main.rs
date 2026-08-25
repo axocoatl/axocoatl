@@ -285,8 +285,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_string(),
             tools: vec!["read_file".to_string(), "list_directory".to_string()],
             model: "mock-worker-v1".to_string(),
-            token_budget: 50_000,
-            recall: axocoatl_core::RecallConfig::default(),
+            provider: None,
+            token_budget: Some(TokenBudget {
+                per_call: 8_192,
+                per_execution: 50_000,
+                overflow_policy: OverflowPolicy::Warn,
+            }),
+            sampling: Default::default(),
+            memory: Default::default(),
+            session_context: None,
+            project_instructions_root: None,
         })
         .add_worker_config(WorkerConfig {
             id: AgentId::new("analyzer-worker"),
@@ -296,8 +304,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_string(),
             tools: vec!["ast_parse".to_string(), "complexity_check".to_string()],
             model: "mock-worker-v1".to_string(),
-            token_budget: 50_000,
-            recall: axocoatl_core::RecallConfig::default(),
+            provider: None,
+            token_budget: Some(TokenBudget {
+                per_call: 8_192,
+                per_execution: 50_000,
+                overflow_policy: OverflowPolicy::Warn,
+            }),
+            sampling: Default::default(),
+            memory: Default::default(),
+            session_context: None,
+            project_instructions_root: None,
         })
         .add_worker_config(WorkerConfig {
             id: AgentId::new("reporter-worker"),
@@ -307,8 +323,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_string(),
             tools: vec!["lint_check".to_string()],
             model: "mock-worker-v1".to_string(),
-            token_budget: 50_000,
-            recall: axocoatl_core::RecallConfig::default(),
+            provider: None,
+            token_budget: Some(TokenBudget {
+                per_call: 8_192,
+                per_execution: 50_000,
+                overflow_policy: OverflowPolicy::Warn,
+            }),
+            sampling: Default::default(),
+            memory: Default::default(),
+            session_context: None,
+            project_instructions_root: None,
         });
 
     // -----------------------------------------------------------------------
@@ -438,10 +462,11 @@ pub fn batch_parse(inputs: &[&str]) -> Vec<ParseResult> {
     println!("\n{}", "─".repeat(60));
     println!("\nToken Usage Summary:");
     println!(
-        "  Total: {} tokens ({} input + {} output)",
+        "  Total: {} tokens ({} input + {} output + {} reasoning)",
         result.token_usage.total(),
         result.token_usage.input_tokens,
-        result.token_usage.output_tokens
+        result.token_usage.output_tokens,
+        result.token_usage.reasoning_tokens.unwrap_or(0)
     );
 
     // -----------------------------------------------------------------------

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "film": "sandbox-terminal-preview",
+  "captured_at": "2026-08-25T06:09:15.266Z",
+  "url": "http://localhost:18087/",
+  "browser": "Codex in-app browser",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1
+  },
+  "theme": "dark",
+  "reduced_motion": "no-preference",
+  "timeline": "demo/one-app/films/source/sandbox-terminal-preview/timeline.json",
+  "timeline_sha256": "8de2766074b9ed69faf5118ba9e9333818ed7d4df2c103b5773832482e4d570f",
+  "keyframes": [
+    {
+      "beat": "session",
+      "path": "demo/one-app/films/source/sandbox-terminal-preview/shot-session.jpg",
+      "sha256": "526f5904b1d6d635373b7ab7817cbd1c2d53269a977e14ed127dc0134a1b6e43"
+    },
+    {
+      "beat": "sandbox",
+      "path": "demo/one-app/films/source/sandbox-terminal-preview/shot-sandbox.jpg",
+      "sha256": "79fe1d16a1a0d43abe6835ffe3760f55c4ea60c620c4c657ffb47de0238690a1"
+    },
+    {
+      "beat": "check",
+      "path": "demo/one-app/films/source/sandbox-terminal-preview/shot-check.jpg",
+      "sha256": "98b8c66a9f1abf46f1abbefad02ebf8cf3d9b15171a10c75082705f2ba09c0ff"
+    },
+    {
+      "beat": "preview",
+      "path": "demo/one-app/films/source/sandbox-terminal-preview/shot-preview.jpg",
+      "sha256": "88814b20b40dce1363666a4daf375b16be30317b0407e0cfe94421fd0289ff99"
+    }
+  ]
+}

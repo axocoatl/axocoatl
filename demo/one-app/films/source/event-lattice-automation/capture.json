@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "film": "event-lattice-automation",
+  "captured_at": "2026-08-25T06:29:19.508Z",
+  "url": "http://localhost:18090/",
+  "browser": "Codex in-app browser",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1
+  },
+  "theme": "dark",
+  "reduced_motion": "no-preference",
+  "timeline": "demo/one-app/films/source/event-lattice-automation/timeline.json",
+  "timeline_sha256": "85217e9d2a9732bcf2f212b0ba45f260d8b0ac05377e9a152d4c59fc5eeefd66",
+  "keyframes": [
+    {
+      "beat": "skill",
+      "path": "demo/one-app/films/source/event-lattice-automation/shot-skill.jpg",
+      "sha256": "22e29e5aaff763ede5b98ddf07d9acbc29ebeba98458f7d62279f0a42230e9a4"
+    },
+    {
+      "beat": "event",
+      "path": "demo/one-app/films/source/event-lattice-automation/shot-event.jpg",
+      "sha256": "28b6020d258542af45c9c75ac30e9f633a912d05e61c21d61bc1689639cc54a1"
+    },
+    {
+      "beat": "trigger",
+      "path": "demo/one-app/films/source/event-lattice-automation/shot-trigger.jpg",
+      "sha256": "9bb52b4ccce65459cd53bf151752a7896f05a2b1d997710963c11800ba2ea69e"
+    },
+    {
+      "beat": "result",
+      "path": "demo/one-app/films/source/event-lattice-automation/shot-result.jpg",
+      "sha256": "8195851404c3ca95ccd91351ce4f7178a7ca964ea4f69a5f44ef593a0108732e"
+    }
+  ]
+}

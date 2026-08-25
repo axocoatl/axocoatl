@@ -6,12 +6,42 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
-    extract::{ConnectInfo, Request},
+    extract::{ConnectInfo, Request, State},
     http::{header, Method, StatusCode},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use dashmap::DashMap;
+
+use crate::AppState;
+
+/// Cancel every in-flight HTTP handler when daemon shutdown begins.
+///
+/// Axum owns connection tasks independently of the top-level `serve` future,
+/// so aborting only that future does not necessarily drop a handler holding a
+/// Session runtime-admission lease. This outermost layer gives each request an
+/// exact shutdown subscriber and drops `next.run` at the boundary.
+pub async fn cancel_on_shutdown(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let mut shutdown = state.read().await.shutdown_subscriber();
+    if *shutdown.borrow() {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    tokio::select! {
+        biased;
+        _ = async {
+            loop {
+                if *shutdown.borrow() || shutdown.changed().await.is_err() {
+                    break;
+                }
+            }
+        } => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        response = next.run(request) => response,
+    }
+}
 
 /// Rate limiter configuration.
 #[derive(Debug, Clone)]
@@ -127,7 +157,14 @@ pub async fn request_logging(request: Request, next: Next) -> Response {
 /// attacks). Origins that fail to parse are skipped with a warning.
 pub fn cors_layer(origins: &[String]) -> tower_http::cors::CorsLayer {
     let layer = tower_http::cors::CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers([
             header::CONTENT_TYPE,
             header::AUTHORIZATION,
@@ -155,6 +192,8 @@ pub fn cors_layer(origins: &[String]) -> tower_http::cors::CorsLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{body::Body, http::Request, routing::patch, Router};
+    use tower::ServiceExt;
 
     #[test]
     fn rate_limiter_allows_under_limit() {
@@ -202,5 +241,37 @@ mod tests {
         assert!(limiter.check("1.1.1.1"));
         assert!(!limiter.check("1.1.1.1")); // blocked
         assert!(limiter.check("2.2.2.2")); // different IP, allowed
+    }
+
+    #[tokio::test]
+    async fn explicit_origin_can_preflight_patch() {
+        let app = Router::new()
+            .route("/resource", patch(|| async { "ok" }))
+            .layer(cors_layer(&["https://operator.example".to_string()]));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/resource")
+                    .header(header::ORIGIN, "https://operator.example")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PATCH")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .and_then(|value| value.to_str().ok()),
+            Some("https://operator.example")
+        );
+        assert!(response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.split(',').any(|method| method.trim() == "PATCH")));
     }
 }

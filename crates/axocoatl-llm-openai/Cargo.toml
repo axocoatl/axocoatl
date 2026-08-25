@@ -6,7 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
@@ -14,9 +13,10 @@ readme.workspace = true
 description = "OpenAI provider implementation for Axocoatl LLM abstraction"
 
 [dependencies]
-axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
-axocoatl-llm = { version = "0.1.0", path = "../axocoatl-llm" }
+axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
+axocoatl-llm = { version = "1.0.0", path = "../axocoatl-llm" }
 async-openai = { workspace = true }
+reqwest = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 serde = { workspace = true }
@@ -29,8 +29,8 @@ async-stream = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 wiremock = { workspace = true }
-axocoatl-config = { version = "0.1.0", path = "../axocoatl-config" }
-axocoatl-token = { version = "0.1.0", path = "../axocoatl-token" }
+axocoatl-config = { version = "1.0.0", path = "../axocoatl-config" }
+axocoatl-token = { version = "1.0.0", path = "../axocoatl-token" }
 
 [features]
 default = []

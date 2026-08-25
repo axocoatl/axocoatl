@@ -1,0 +1,254 @@
+---
+title: WebSocket reference
+description: Commands, reconnect snapshots, live Session and Attempt frames, MCP approvals, compatibility streams, and Terminal PTYs.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The unified live endpoint is `GET /ws`. It carries JSON text frames with a
+`kind` discriminator from server to client and a `cmd` discriminator from
+client to server. Authentication applies to the HTTP upgrade request.
+
+On connect, the server sends `ready`, then an authoritative `snapshot` of live
+runs, every pending MCP approval, and any Session or Workspace Ways transition
+that currently owns primary-runtime teardown. A client that falls behind the broadcast
+buffer is disconnected so its normal reconnect can hydrate from a fresh
+snapshot rather than continuing with silently missing frames.
+
+## Client commands
+
+### Ping
+
+```json
+{ "cmd": "ping" }
+```
+
+Returns `{ "kind": "pong" }`.
+
+### Start or reattach a Session turn
+
+```json
+{
+  "cmd": "session",
+  "id": "session-id",
+  "input": "Implement the requested change.",
+  "display_input": "Implement the requested change.",
+  "context_references": [],
+  "turn_id": "browser-stable-turn-id",
+  "idempotency_key": "browser-stable-send-id",
+  "reference_ids": [],
+  "model_override": null,
+  "target_agent": null
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Session ID |
+| `input` | Effective execution input, including any structured inline context rendering |
+| `display_input` | Optional user-visible composer text stored separately from execution expansion |
+| `context_references` | Immutable inline editor/Preview reference snapshots |
+| `turn_id` | Stable client identity for durable accept, reconnect, and exact Stop; generated if absent |
+| `idempotency_key` | Stable send-attempt identity; defaults to `turn_id` |
+| `reference_ids` | Session-owned uploaded attachment relations |
+| `model_override` | Optional one-turn model within the Agent provider |
+| `target_agent` | Optional one-Agent target in a multi-Agent Session |
+
+If the same accepted identity is already running, the runtime reattaches rather
+than starting duplicate work. The normal sequence is `session-accepted`,
+`session-start`, streaming frames, then exactly one terminal Session frame.
+
+### Stop the exact Session turn
+
+```json
+{
+  "cmd": "session-stop",
+  "id": "session-id",
+  "turn_id": "browser-stable-turn-id"
+}
+```
+
+A stale or already-finished ID produces `session-stop-rejected`. Stop is
+cooperative; a started tool may reach a safe boundary before terminal state.
+
+### Resolve MCP approval
+
+```json
+{
+  "cmd": "mcp-approve",
+  "approval_id": "approval-id",
+  "decision": "allow",
+  "persist": "once"
+}
+```
+
+`decision` is `allow` or `deny`. `persist` is one of:
+
+- `once`;
+- `agent_tool`;
+- `agent_server`;
+- `any_agent_server`.
+
+An unknown/already-resolved ID returns `mcp-approval-unknown`.
+
+### Compatibility commands
+
+| Command | Fields | Purpose |
+| --- | --- | --- |
+| `run-workflow` | `id`, `input` | Run a manual Automation through the legacy workflow stream |
+| `chat-turn` | `chat_id`, `content` | Run one lightweight compatibility Chat turn |
+| `chat-stop` | `chat_id` | Stop the active compatibility Chat stream |
+
+These retained commands do not create separate browser destinations.
+
+## Connection and snapshot frames
+
+| `kind` | Important fields | Meaning |
+| --- | --- | --- |
+| `ready` | — | Upgrade handling is ready |
+| `snapshot` | `runs`, `approvals`, `environment_transitions?`, `attempt_ownerships?` | Complete live-run, pending-approval, and active primary-runtime ownership state at connection time |
+| `pong` | — | JSON ping response |
+| `error` | `message` | Malformed/unsupported command error |
+
+Each snapshot run includes `workflow` (the run key), optional `turn_id`,
+optional `attempt_set_id`, `kind` (`workflow`, `session`, or `attempt`), Agent
+buffers/status, optional awaiting-human state, and coordinator plan fields when
+present. A lane run key alone can be reused by a later set, so clients must
+also compare `attempt_set_id`.
+
+Each `environment_transitions` entry carries `session` and the durable
+environment `generation` that teardown invalidated. An omitted or empty array
+means no environment transition owns teardown at that snapshot cursor. Clients
+should still re-read the canonical Session record after reconnect because a
+complete transition may have happened while the socket was offline.
+
+Each `attempt_ownerships` entry carries `workspace`, the owning `session`, and
+the durable `attempt_set_id`. Every Session anchored to that Workspace must
+suspend primary Files, Source Control, Preview, and Terminal access until the
+exact set settles. The array is hydrated from durable current-set pointers, so
+an unresolved Ways decision remains authoritative after a daemon restart.
+
+## Session and Agent stream frames
+
+| `kind` | Important fields | Meaning |
+| --- | --- | --- |
+| `session-accepted` | `session`, `turn_id` | Durable begin exists |
+| `session-start` | `session`, `turn_id?` | Execution started |
+| `token` | `workflow`, `agent`, `turn_id?`, `delta` | Text delta |
+| `reasoning` | `workflow`, `agent`, `turn_id?`, `delta` | Reasoning-channel delta when supplied |
+| `tool-call` | `workflow`, `agent`, `turn_id?`, `call_id`, `occurrence`, `name`, `phase`, `arguments?`, `result?`, `is_error` | Tool start/result pair |
+| `session-done` | `session`, `turn_id?`, input/output/reasoning tokens, `token_usage_known` | Successful terminal state; a false known flag marks the counts as a subtotal |
+| `session-cancelled` | `session`, `turn_id`, input/output/reasoning tokens, `token_usage_known` | Cooperative Stop terminal state; a false known flag marks the counts as a subtotal |
+| `session-error` | `session`, `turn_id?`, `error`, input/output/reasoning tokens, `token_usage_known` | Failed terminal state; paid work completed before the failure remains visible as a complete tracked total or known subtotal |
+| `session-stop-rejected` | `session`, `turn_id`, `error` | Stop control response; not a terminal transition |
+| `session-environment-changing` | `session`, `generation` | The Session runtime is unavailable while an explicit change, Close/Delete, or cold reconstruction owns its lifecycle boundary |
+| `session-environment-settled` | `session` | The announced lifecycle owner exited on success, failure, or cancellation; re-read the canonical Session before exposing runtime-backed tools |
+| `workspace-attempt-changing` | `workspace`, `session`, `attempt_set_id` | The exact Ways set is taking exclusive Workspace ownership; suspend primary runtime surfaces for every Session in that Workspace |
+| `workspace-attempt-settled` | `workspace`, `attempt_set_id` | The exact set's durable current pointer is gone; re-read and reconstruct the primary runtime before exposing it |
+
+`occurrence` distinguishes repeated provider-local call IDs. Correlate tool
+start/result with the run, Agent, turn, call ID, and occurrence rather than
+assuming `call_id` is globally unique. For coordinator work, `agent` is the
+logical declared Worker that executed the tool; `workflow` and `turn_id` retain
+the outer Session/turn ownership.
+
+Environment lifecycle frames are broadcast to every connected client, not only
+the tab that issued an HTTP request. Suspend Files, Source Control, Preview, and
+Terminal work on `session-environment-changing`. The settled frame is not a
+success claim: the canonical Session may now be Ready, Failed, Closed, or
+deleted.
+
+Workspace attempt frames are also broadcast before primary runtime teardown.
+Settlement is exact-set guarded, so a delayed frame from an older exploration
+cannot release a newer set's suspension. A reconnecting client must replace its
+local ownership map from `attempt_ownerships`; an empty array can mean a whole
+start-to-Keep/Discard lifecycle completed while it was offline, so any runtime
+surface bound before the outage must still be revalidated. For the owning Session,
+an exact settlement also re-reads durable Results, canonical History, and current
+Git state before restoring the primary runtime; this clears a completed comparison
+and hydrates the kept Turn without trusting the event as the result itself.
+
+## Attempt and coordinator frames
+
+| `kind` | Important fields | Meaning |
+| --- | --- | --- |
+| `lane-started` | `run`, `attempt_set_id`, `session`, `index`, `model?`, `agent` | Durable identity for one Way's live stream |
+| `lane-verified` | `attempt_set_id`, `session`, `index`, `passed`, `changed_files`, `touched_tests` | One Check result arrived |
+| `coordinator-plan` | `workflow`, `coordinator`, `goal`, `subtasks` | Coordinator decomposition and auction outcome |
+
+Other Agent stream frames for an Attempt use the lane `run` key. Reject frames
+whose set ID belongs to a previous exploration.
+
+## Events and Automation compatibility frames
+
+| `kind` | Important fields | Meaning |
+| --- | --- | --- |
+| `event` | `type`, `agent?`, `task?`, `name?`, `output?`, `tokens?`, `workflow?` | Typed lattice/runtime notification |
+| `workflow-done` | `workflow`, `output`, `completed`, `tokens`, `token_usage_known` | Legacy manual workflow terminal success; a false known flag marks `tokens` as a subtotal |
+| `workflow-error` | `workflow`, `error`, input/output/reasoning tokens, `token_usage_known` | Legacy manual workflow terminal failure; paid Agent work before the structural error remains visible |
+
+Canonical Automation run and node history should also be read through the HTTP
+run endpoints. The event frame is an integration feed, not a separate
+workbench timeline.
+
+Coordinator Worker lifecycle events use `AgentActivated`, `TaskCompleted`,
+`AgentFailed`, `AgentCancelled`, and `AgentPanicked`. Their `agent` is the stable
+logical Worker id, not its Session-scoped actor/checkpoint id.
+
+## MCP approval frames
+
+| `kind` | Important fields | Meaning |
+| --- | --- | --- |
+| `mcp-approval-required` | `approval_id`, `run?`, `agent_id`, `server`, `tool`, `tool_display`, `arguments_preview`, `requested_at` | A call is parked for a decision |
+| `mcp-approval-resolved` | `approval_id`, `decision` | Close the prompt in every connected client |
+| `mcp-approval-unknown` | `approval_id` | This client tried to resolve a non-pending ID |
+
+Pending approvals are included in `snapshot`, including approvals that cannot
+be associated with a scoped run.
+
+## Lightweight Chat compatibility frames
+
+| `kind` | Important fields |
+| --- | --- |
+| `chat-start` | `chat_id`, `turn_id`, `agent` |
+| `chat-token` | `chat_id`, `turn_id`, `delta` |
+| `chat-reasoning` | `chat_id`, `turn_id`, `delta` |
+| `chat-tool-start` | `chat_id`, `turn_id`, `agent`, `call_id`, `name`, `arguments` |
+| `chat-tool-result` | `chat_id`, `turn_id`, `agent`, `call_id`, `name`, `result`, `is_error` |
+| `chat-done` | `chat_id`, `turn_id`, input/output/reasoning/total tokens, `token_usage_known` |
+| `chat-stopped` | `chat_id`, `turn_id`, input/output/reasoning/total tokens, `token_usage_known` |
+| `chat-error` | `chat_id`, `turn_id`, `error`, input/output/reasoning/total tokens, `token_usage_known` |
+
+These are sent directly to the connection that issued the Chat command; common
+token/session projections can also appear on the shared bus. `chat-stop` requests
+cooperative cancellation of the current `turn_id`; the terminal frame is sent only
+after that run reaches a safe boundary and its queued deltas have drained. A false
+known flag marks the numeric fields as a known subtotal.
+
+## Terminal WebSocket
+
+Interactive PTYs use a distinct endpoint:
+
+```text
+GET /api/sessions/{id}/terminals/{tid}/ws
+```
+
+The server first sends retained scrollback, then raw terminal output as binary
+frames. Send keystrokes as binary or text. Send resize as JSON text:
+
+```json
+{ "kind": "resize", "rows": 40, "cols": 120 }
+```
+
+An unknown terminal is rejected before upgrade with HTTP `404` JSON. If a
+connected client falls behind the bounded output broadcast, the server closes
+that socket with code `4001` and reason `terminal-resync-required`; clear the
+stale terminal view and reconnect for a fresh retained-scrollback snapshot
+instead of appending across the gap.
+
+<Aside type="caution" title="Reconnect from canonical HTTP state too">
+The live snapshot covers in-flight buffers, approvals, and active environment
+transitions. Use Session records, Session turns, active-turn, Attempt results,
+and Automation run history for durable state.
+WebSocket delivery alone is not an audit log.
+</Aside>

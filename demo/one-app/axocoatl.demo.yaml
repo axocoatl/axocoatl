@@ -1,0 +1,190 @@
+# Axocoatl one-app presenter configuration.
+#
+# This config deliberately uses one already-installed local model. The variety
+# in the Attempts comparison comes from different agent instructions, without
+# paying the model-load penalty during a live presentation.
+
+agents:
+  - id: coder
+    name: "Minimal Coder"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      You are a concise senior JavaScript engineer. Inspect the repository,
+      make the smallest correct production change, use repository tools, run
+      the configured checks, and report Root cause / Change / Proof. Do not
+      alter tests to make a failure disappear. /no_think
+    depends_on: []
+    memory:
+      core:
+        blocks:
+          - label: team
+            limit: 1000
+            shared: true
+            description: "Durable facts intentionally shared by the demo team."
+    token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
+
+  - id: defender
+    name: "Invariant Defender"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      You are a defensive JavaScript engineer. Treat tests as a contract, look
+      for boundary and invariant failures, keep the patch focused, run the
+      configured checks, and report Root cause / Change / Proof. Do not commit.
+      /no_think
+    depends_on: []
+    memory:
+      core:
+        blocks:
+          - label: team
+            limit: 1000
+            shared: true
+            description: "Durable facts intentionally shared by the demo team."
+    token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
+
+  - id: planner
+    name: "Acceptance Planner"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      Turn a coding task into concise acceptance criteria, constraints, and a
+      verification plan. Preserve the user's scope. /no_think
+    depends_on: []
+    sampling: { temperature: 0.0, max_tokens: 2000 }
+    token_budget: { per_execution: 4000, per_call: 2500, overflow_policy: warn }
+
+  - id: judge
+    name: "Evidence Judge"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      Rank candidate changes only from repository checks, diff quality, and
+      route evidence. Prefer the smallest complete change and state tradeoffs.
+      /no_think
+    depends_on: []
+    sampling: { temperature: 0.0, max_tokens: 2000 }
+    token_budget: { per_execution: 4000, per_call: 2500, overflow_policy: warn }
+
+  - id: architect
+    name: "Systems Architect"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      Turn a product proposal into a concrete technical design with explicit
+      assumptions, risks, and acceptance criteria. /no_think
+    depends_on: []
+    sampling: { temperature: 0.0, max_tokens: 2000 }
+    token_budget: { per_execution: 5000, per_call: 3000, overflow_policy: warn }
+
+  - id: reviewer
+    name: "Critical Reviewer"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      Review designs for correctness, security, performance, and operability.
+      Mark ship-blocking issues with the literal word BLOCKING. /no_think
+    depends_on: [architect]
+    sampling: { temperature: 0.0, max_tokens: 2000 }
+    token_budget: { per_execution: 5000, per_call: 3000, overflow_policy: warn }
+
+  - id: investigator
+    name: "Incident Investigator"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      You are the first responder in a production incident handoff. Inspect the
+      production sample, lib/correlate.js, tests, and runbook. Do not edit files
+      and do not use memory tools. Use no more than five repository tool calls.
+      Then stop and report Evidence / Root cause / Constraints / Handoff for the
+      implementer. /no_think
+    depends_on: []
+    sampling: { temperature: 0.0, max_tokens: 800 }
+    token_budget: { per_execution: 9000, per_call: 3000, overflow_policy: abort }
+
+  - id: implementer
+    name: "Incident Implementer"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      You receive an investigator's evidence before the user's request. Do not
+      use memory tools. Read only the relevant runbook, implementation, and
+      tests; apply the smallest production correction once; run npm run check
+      once. If it passes, do not edit or search again: immediately report the
+      exact Change / Proof / Tradeoff. Do not commit. /no_think
+    depends_on: [investigator]
+    sampling: { temperature: 0.0, max_tokens: 800 }
+    token_budget: { per_execution: 10000, per_call: 3000, overflow_policy: abort }
+
+  - id: verifier
+    name: "Release Verifier"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      You receive the investigator and implementer handoffs. Inspect the actual
+      diff and run npm run check exactly once. This is a read-only verification:
+      never edit files and never use memory tools. Return SHIP or BLOCK with the
+      exact diff meaning, check result, and one Remaining risk, then stop.
+      /no_think
+    depends_on: [implementer]
+    sampling: { temperature: 0.0, max_tokens: 700 }
+    token_budget: { per_execution: 9000, per_call: 3000, overflow_policy: abort }
+
+  - id: weather
+    name: "Weather MCP Agent"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      For every weather request, call mcp__weather__get_weather with the city
+      before answering. Never invent conditions and never answer from memory.
+      Return the tool result in one concise sentence. /no_think
+    tools: [mcp__weather__get_weather]
+    depends_on: []
+    token_budget: { per_execution: 2500, per_call: 1500, overflow_policy: warn }
+
+# On a fresh demo data directory this becomes a Manual Automation in Settings.
+workflows:
+  - id: incident-response
+    name: "Incident response"
+    description: "Investigate, repair, then verify one production incident."
+    agents: [investigator, implementer, verifier]
+    entry_point: investigator
+
+  - id: release-review
+    name: "Release review"
+    description: "Architect a change, then review its risks."
+    agents: [architect, reviewer]
+    entry_point: architect
+
+skills:
+  - id: release-candidate-ready
+    name: "Release candidate ready"
+    description: "Publish a typed release event for the automated gate review."
+    emits: ["ReleaseCandidateReady"]
+    reacts_to: []
+    agents: [judge]
+    prompt: "Publish the release candidate evidence for an automated gate review."
+
+mcp_servers:
+  - name: weather
+    transport: stdio
+    command: target/debug/mcp-bridge
+    args: ["--mcp-server"]
+
+providers:
+  ollama:
+    base_url: "http://127.0.0.1:11434"
+
+server:
+  host: "127.0.0.1"
+  port: 18080
+
+sandbox:
+  backend: podman
+  allow_untrusted_images: true
+  allow_post_create_command: false
+  network: bridge
+  require_resource_limits: false
+
+consolidation:
+  enabled: false

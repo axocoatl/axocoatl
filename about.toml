@@ -1,0 +1,28 @@
+# License choices for the four native release targets. The order is deliberate:
+# when a dependency offers a choice, prefer the same Apache-2.0 license used by
+# Axocoatl, then the other permissive option.
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+# Test-only crates are not linked into the distributed binary. Build
+# dependencies remain included because their generated output can affect it.
+ignore-dev-dependencies = true
+
+workarounds = [
+    "ring",
+    "rustls",
+]

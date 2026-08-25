@@ -3,9 +3,8 @@
 # Prerequisites: ollama serve && ollama pull llama3.2  (no API key needed)
 # Run:           axocoatl validate examples/configs/feature-dev.yaml
 #                axocoatl dev -c examples/configs/feature-dev.yaml
-# Expected:      each depends_on edge gates the next agent — architect fires
-#                first, then planner, coder, reviewer, and docs cascade in order
-#                as each upstream agent emits TaskCompleted on the lattice.
+# Expected:      on first boot, this legacy workflow seeds a manual Automation;
+#                each explicit dependency edge gates the next Agent node.
 
 agents:
   - id: architect

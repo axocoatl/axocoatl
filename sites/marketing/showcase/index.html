@@ -1,204 +1,222 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Showcase — real workflows · Axocoatl</title>
-  <meta name="description" content="Real workflows running on Axocoatl. Release pulse, support triage, daily briefings, bug bisection: the recurring work that adds up to a margin.">
-  <meta name="author" content="Axocoatl Contributors">
-  <meta name="theme-color" content="#3E7C5C">
-  <link rel="canonical" href="https://axocoatl.ai/showcase">
-  <meta property="og:type" content="website">
-  <meta property="og:site_name" content="Axocoatl">
-  <meta property="og:locale" content="en_US">
-  <meta property="og:url" content="https://axocoatl.ai/showcase">
-  <meta property="og:title" content="Showcase — real workflows · Axocoatl">
-  <meta property="og:description" content="Real workflows running on Axocoatl. Release pulse, support triage, daily briefings, bug bisection: the recurring work that adds up to a margin.">
-  <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Showcase — real workflows · Axocoatl">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:site" content="@axocoatl">
-  <meta name="twitter:title" content="Showcase — real workflows · Axocoatl">
-  <meta name="twitter:description" content="Real workflows running on Axocoatl. Release pulse, support triage, daily briefings, bug bisection: the recurring work that adds up to a margin.">
-  <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="Showcase — real workflows · Axocoatl">
-  <link rel="icon" type="image/png" href="/assets/favicon.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles/tokens.css">
-  <link rel="stylesheet" href="/styles/base.css">
-  <link rel="stylesheet" href="/styles/finder.css">
-  <style>
-    /* Showcase-specific: workflow card list. Linear-tight. */
-    .workflow {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: var(--s-4);
-      padding: var(--s-7);
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      transition: border-color .15s;
-    }
-    .workflow + .workflow { margin-top: var(--s-5); }
-    .workflow:hover { border-color: var(--border-strong); }
-    .workflow-trigger {
-      font-family: var(--font-mono);
-      font-size: var(--t-13);
-      color: var(--accent);
-      letter-spacing: -.005em;
-    }
-    .workflow h3 { font-size: var(--t-24); margin: 0; }
-    .workflow .meta {
-      display: flex;
-      gap: var(--s-4);
-      font-family: var(--font-mono);
-      font-size: var(--t-13);
-      color: var(--muted);
-      flex-wrap: wrap;
-    }
-    .workflow .meta span::before { content: '·'; margin-right: var(--s-4); color: var(--border-strong); }
-    .workflow .meta span:first-child::before { content: none; margin: 0; }
-  </style>
-  <script type="module" src="/components/ax-site-nav.js"></script>
-  <script type="module" src="/components/ax-install-bar.js"></script>
-  <script type="module" src="/components/ax-footer.js"></script>
-  <script type="module" src="/components/ax-theme-toggle.js"></script>
-  <script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@graph": [
-    {
-      "@type": "CollectionPage",
-      "@id": "https://axocoatl.ai/showcase#webpage",
-      "url": "https://axocoatl.ai/showcase",
-      "name": "Showcase — real workflows · Axocoatl",
-      "description": "Real workflows running on Axocoatl. Release pulse, support triage, daily briefings, bug bisection: the recurring work that adds up to a margin.",
-      "inLanguage": "en-US",
-      "isPartOf": { "@id": "https://axocoatl.ai/#website" },
-      "publisher": { "@type": "Organization", "@id": "https://axocoatl.ai/#organization" }
-    },
-    {"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://axocoatl.ai/"},{"@type":"ListItem","position":2,"name":"Showcase — real workflows · Axocoatl","item":"https://axocoatl.ai/showcase"}]}
-  ]
-}
-  </script>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Axocoatl demos — work that outlives one prompt</title>
+  <meta name="description" content="Watch twelve Axocoatl product demos covering durable Sessions, repository work, execution choices, approvals, Automations, and deliberate Git review.">
+  <meta name="theme-color" content="#3E7C5C"><link rel="canonical" href="https://axocoatl.ai/showcase">
+  <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/showcase"><meta property="og:title" content="Axocoatl demos"><meta property="og:description" content="Twelve product demos: the durable Session loop first, execution choices second, and runtime proof underneath."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Axocoatl demos"><meta name="twitter:description" content="Twelve product demos: the durable Session loop first, execution choices second, and runtime proof underneath."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20260818-narrative"><link rel="stylesheet" href="/styles/finder.css">
+  <script type="module" src="/components/ax-site-nav.js?v=20260818-narrative"></script><script type="module" src="/components/ax-footer.js?v=20260818-narrative"></script><script type="module" src="/components/ax-theme-toggle.js"></script><script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script>
 </head>
 <body>
-  <ax-site-nav active="showcase"></ax-site-nav>
+  <ax-site-nav active="examples"></ax-site-nav>
+  <main id="main-content">
+    <header class="container hero">
+      <span class="eyebrow">Product demos</span>
+      <h1>Work that outlives one prompt.</h1>
+      <p class="lede">Start with ordinary repository work inside a durable Session. Then inspect the execution choices and runtime capabilities that support harder decisions. Ways is optional; the workbench is the product.</p>
+    </header>
 
-  <main>
-
-    <section class="container hero" style="padding-bottom: var(--s-7);">
-      <span class="eyebrow">Showcase</span>
-      <h1>Real workflows. Not demos.</h1>
-      <p class="lede">
-        These are the recurring workflows our users run every day. None
-        of them make for a viral video. All of them save someone two
-        hours. The compound interest of automating the boring parts is
-        the whole product thesis.
-      </p>
-    </section>
-
-    <section class="container section">
-
-      <div class="workflow">
-        <span class="workflow-trigger">▶ Trigger: schedule, every Monday 9am</span>
-        <h3>Release pulse</h3>
-        <p>
-          A coordinator agent pulls the past week of git activity,
-          opens issues for the next 72 hours, and produces a paragraph
-          of release notes. It posts the draft to a team channel for
-          review. If no one objects within four hours, the draft is
-          committed to <code>CHANGELOG.md</code> automatically.
-        </p>
-        <div class="meta">
-          <span>activity-collector → issue-summarizer → release-writer → reviewer</span>
-        </div>
+    <section class="container section section-rule" id="demo-directory">
+      <div class="section-head">
+        <span class="eyebrow">Complete directory</span>
+        <h2>Twelve concepts. Three layers.</h2>
+        <p>Each film is an edited sequence of reachable product states. Its scenario contract defines the visible and durable evidence the sequence must retain.</p>
       </div>
-
-      <div class="workflow">
-        <span class="workflow-trigger">⊛ Trigger: lattice event NewSupportEmail</span>
-        <h3>Support triage</h3>
-        <p>
-          A proactive agent listens for incoming support email. For
-          each new message it classifies the request, attaches the
-          relevant history from the customer's previous tickets, and
-          routes the thread to the right teammate with a one-line
-          summary at the top. It also drafts an acknowledgement reply.
-        </p>
-        <div class="meta">
-          <span>classifier → history-retriever → responder</span>
+      <div class="stack">
+        <h3>Work in a Session</h3>
+        <div class="grid-3">
+          <article class="card"><span class="card-kicker">Ordinary path</span><h3>Use one Agent</h3><p>One Agent works through the repository, Terminal, Preview, and Source Control inside the Session. <a href="#single-agent">Watch the repair →</a></p></article>
+          <article class="card"><span class="card-kicker">Workspace · Session · Turn</span><h3>Return to accepted work</h3><p>One Workspace groups named Sessions, and switching away does not erase an accepted Turn. <a href="#film-workspace-sessions-turns">Watch the return →</a></p></article>
+          <article class="card"><span class="card-kicker">Continuity</span><h3>Keep honest final states</h3><p>Partial output, exact Stop ownership, and a cancelled Turn remain reachable after reload. <a href="#film-durable-turn">Watch the recovery →</a></p></article>
+          <article class="card"><span class="card-kicker">Execution boundary</span><h3>Use the Session sandbox</h3><p>Terminal identifies local Podman, runs the repository contract, and serves the checkout into Preview. <a href="#film-sandbox-terminal-preview">Watch the sandbox →</a></p></article>
         </div>
-      </div>
 
-      <div class="workflow">
-        <span class="workflow-trigger">▶ Trigger: schedule, every weekday 8am</span>
-        <h3>Daily briefing</h3>
-        <p>
-          A planner agent reads the team's calendar, the last 24 hours
-          of activity, and any unresolved interrupts in the lattice. It
-          produces a five-bullet morning briefing that lands in your
-          inbox at 8am: what shipped, what's blocked, what needs you
-          today.
-        </p>
-        <div class="meta">
-          <span>calendar-reader → activity-summarizer → briefing-writer</span>
+        <h3>Choose the execution shape</h3>
+        <div class="grid-3">
+          <article class="card"><span class="card-kicker">Configured team</span><h3>Hand work downstream</h3><p>An architect and reviewer run in dependency order with separate durable outputs in one Custom Session. <a href="#multi-agent">Watch the handoff →</a></p></article>
+          <article class="card"><span class="card-kicker">Decision mode</span><h3>Explore several Ways</h3><p>Independent attempts run common Checks and remain separate while the decision is unresolved. Judge is optional; Keep selects one result, then completed cleanup ends the candidate record. <a href="#ways">Watch the comparison →</a></p></article>
+          <article class="card"><span class="card-kicker">Repository ownership</span><h3>Review Last turn</h3><p>A kept result returns as uncommitted Git changes. Last turn filters the current diff to attributed paths for ordinary review. <a href="#git-review">Watch the Git handoff →</a></p></article>
         </div>
-      </div>
 
-      <div class="workflow">
-        <span class="workflow-trigger">▣ Trigger: session-mode, on demand</span>
-        <h3>Bug bisection</h3>
-        <p>
-          When a test starts failing, you open a directory session and
-          tell the agent which test is broken. It runs
-          <code>git bisect</code> inside the sandbox, identifies the
-          offending commit, opens the diff in the dashboard, and
-          proposes a fix. You review and merge.
-        </p>
-        <div class="meta">
-          <span>bisector (single-agent session)</span>
+        <h3>Inspect the runtime underneath</h3>
+        <div class="grid-3">
+          <article class="card"><span class="card-kicker">Settings</span><h3>Configure one product</h3><p>Agents and their provider/model assignments, Skills, MCP servers, and Automations remain configuration rather than peer work surfaces. <a href="#film-settings-runtime">Watch Settings →</a></p></article>
+          <article class="card"><span class="card-kicker">Typed events</span><h3>Trigger an Automation</h3><p>A Skill publishes its declared event and the matching trigger starts a durable Automation run. <a href="#film-event-lattice-automation">Watch the event →</a></p></article>
+          <article class="card"><span class="card-kicker">MCP approval</span><h3>Approve the exact call</h3><p>A Session Turn pauses before a deterministic local MCP tool executes, then retains the result in History. <a href="#film-mcp-approval">Watch the approval →</a></p></article>
+          <article class="card"><span class="card-kicker">Shared core memory</span><h3>Share one block explicitly</h3><p>One Agent writes a shared block and another receives it in a separate Session after restart. <a href="#film-shared-core-memory">Watch the recall →</a></p></article>
+          <article class="card"><span class="card-kicker">Operator judgment</span><h3>Pause and resume an Automation</h3><p>A top-level Interrupt retains upstream node state until an operator supplies the next value. <a href="#automation">Watch the Interrupt →</a></p></article>
         </div>
-      </div>
-
-      <div class="workflow">
-        <span class="workflow-trigger">◇ Trigger: Skill fires on ContractUploaded</span>
-        <h3>Contract review</h3>
-        <p>
-          A reviewer agent watches a folder for new contracts. When one
-          lands, it parses the document, flags non-standard clauses,
-          summarizes payment terms, and posts the findings to a review
-          channel. Legal reads the summary, not the contract.
-        </p>
-        <div class="meta">
-          <span>parser → clause-reviewer → summary-writer</span>
-        </div>
-      </div>
-
-    </section>
-
-    <section class="container section" style="padding-bottom: var(--s-10);">
-      <div class="container-narrow" style="padding: 0;">
-        <h2>Build your own.</h2>
-        <p>
-          Every workflow above is a few dozen lines of YAML and a
-          couple of Skill declarations. The dashboard ships an editor
-          that lets you wire agents visually, then commits the result
-          back to disk.
-        </p>
-        <p style="margin-top: var(--s-5);">
-          <a class="btn btn-primary" href="/install">Install →</a>
-          <a class="btn btn-ghost" href="https://docs.axocoatl.ai/getting-started/" target="_blank" rel="noopener" style="margin-left: var(--s-3);">Quickstart guide</a>
-        </p>
       </div>
     </section>
 
+    <section class="container section section-rule" id="work-in-a-session">
+      <div class="section-head">
+        <span class="eyebrow">Work in a Session</span>
+        <h2>The durable loop comes first.</h2>
+        <p>Conversation is the Session spine. Files, Terminal, Preview, context, History, tools, and Git open around the same folder-anchored Session.</p>
+      </div>
+
+      <div class="stack">
+      <article class="stack" id="single-agent">
+        <div><span class="card-kicker">01 · Ordinary path</span><h3>One Agent, one repository job</h3><p>Start with a concrete behavior and repository Check. The Agent diagnoses the defect, edits the implementation, runs the command, and leaves the result for review without committing.</p></div>
+        <ax-product-film
+          film="session-workbench"
+          src="/assets/films/session-workbench.mp4"
+          poster="/assets/films/session-workbench.jpg"
+          label="An Axocoatl Session with conversation and repository tools"
+          caption="Conversation stays central while Files, Source Control, Preview, and Terminal open around the same Session."
+        ></ax-product-film>
+      </article>
+
+      <article class="stack" id="film-workspace-sessions-turns">
+        <div><span class="card-kicker">02 · Work units</span><h3>Workspace, Session, Turn</h3><p>An authorized Workspace groups named Sessions. Returning to one restores its accepted Turn instead of creating another disposable conversation.</p></div>
+        <ax-product-film
+          film="workspace-sessions-turns"
+          src="/assets/films/workspace-sessions-turns.mp4"
+          poster="/assets/films/workspace-sessions-turns.jpg"
+          label="An Axocoatl Workspace with two Sessions and a completed Turn restored after switching Sessions"
+          caption="One authorized Workspace groups durable Sessions. Switching away and back restores the selected Session and its accepted Turn."
+        ></ax-product-film>
+      </article>
+
+      <article class="stack" id="film-durable-turn">
+        <div><span class="card-kicker">03 · Continuity</span><h3>Reconnect to the exact Turn</h3><p>Accepted work does not depend on one browser connection. Reload reconnects to the active Turn, and Stop leaves an honest cancelled state in History.</p></div>
+        <ax-product-film
+          film="durable-turn"
+          src="/assets/films/durable-turn.mp4"
+          poster="/assets/films/durable-turn.jpg"
+          label="An active Axocoatl Session Turn reconnecting after reload and ending in History"
+          caption="Reload reconnects to the exact active Turn. Stop preserves an honest cancelled state in History."
+        ></ax-product-film>
+      </article>
+
+      <article class="stack" id="film-sandbox-terminal-preview">
+        <div><span class="card-kicker">04 · Execution boundary</span><h3>Terminal and Preview share the checkout</h3><p>The Terminal identifies the Session's local Podman sandbox, runs the repository contract, and serves the application opened in Preview through an explicitly published port.</p></div>
+        <ax-product-film
+          film="sandbox-terminal-preview"
+          src="/assets/films/sandbox-terminal-preview.mp4"
+          poster="/assets/films/sandbox-terminal-preview.jpg"
+          label="An Axocoatl Session Terminal identifying its container and Workspace before opening the running application in Preview"
+          caption="Terminal runs the repository Check inside the Session's local Podman sandbox. Preview opens the application served from that checkout."
+        ></ax-product-film>
+      </article>
+      </div>
+    </section>
+
+    <section class="container section section-rule" id="execution-choices">
+      <div class="section-head">
+        <span class="eyebrow">Choose the execution shape</span>
+        <h2>Use more structure only when the work needs it.</h2>
+        <p>A configured team collaborates on one result. Ways produces independent candidate implementations. Git remains the final repository handoff.</p>
+      </div>
+
+      <div class="stack">
+      <article class="stack" id="multi-agent">
+        <div><span class="card-kicker">05 · Configured team</span><h3>Architect → reviewer in one Custom Session</h3><p>The Systems Architect runs first. The Critical Reviewer receives that output and returns a separate decision. This is a dependency-ordered Session, not several Ways.</p></div>
+        <ax-product-film
+          film="multi-agent-handoff"
+          src="/assets/films/multi-agent-handoff.mp4"
+          poster="/assets/films/multi-agent-handoff.jpg"
+          label="An Axocoatl Systems Architect handing a design decision to a Critical Reviewer in one Custom Session"
+          caption="Architect → Reviewer runs in dependency order inside one Custom Session, with two separate durable outputs."
+        ></ax-product-film>
+      </article>
+
+      <article class="stack" id="ways">
+        <div><span class="card-kicker">06 · Optional decision mode</span><h3>Compare independent Ways</h3><p>Every Way receives the same task and Check command. While the decision is unresolved, Axocoatl keeps completion states, Outcome, Route, changed files, and Check evidence separate. Judge is optional; Keep selects one result and cleanup ends the candidate record.</p></div>
+        <ax-product-film
+          film="several-ways"
+          src="/assets/films/several-ways.mp4"
+          poster="/assets/films/several-ways.jpg"
+          label="Several isolated Ways compared inside one Axocoatl Session"
+          caption="Independent Ways keep Outcome, Route, diffs, Checks, and optional Judge separate while the decision is unresolved. Keep selects one result; completed cleanup ends that candidate record."
+        ></ax-product-film>
+      </article>
+
+      <article class="stack" id="git-review">
+        <div><span class="card-kicker">07 · Repository ownership</span><h3>Keep is not commit</h3><p>Keep returns one checked result to the primary Session checkout. Source Control → Last turn filters the current Git diff to paths attributed to the kept Turn before any optional staging or commit; it is not a frozen per-turn diff.</p></div>
+        <ax-product-film
+          film="git-last-turn"
+          src="/assets/films/git-last-turn.mp4"
+          poster="/assets/films/git-last-turn.jpg"
+          label="A kept Axocoatl Way shown as uncommitted paths and hunks in Source Control Last turn"
+          caption="Keep returns one checked result without committing it. Last turn filters the current Git diff to paths attributed to that Turn before optional staging."
+        ></ax-product-film>
+      </article>
+      </div>
+    </section>
+
+    <section class="container section section-rule" id="runtime-proof">
+      <div class="section-head">
+        <span class="eyebrow">Inspect the runtime underneath</span>
+        <h2>Configuration and durable machinery support the workbench.</h2>
+        <p>Agents, Skills, MCP servers, and Automations live in Settings. Typed events, approval gates, shared memory, and operator Interrupts remain explicit instead of turning into hidden magic.</p>
+      </div>
+
+      <div class="stack">
+      <article class="stack" id="film-settings-runtime">
+        <div><span class="card-kicker">08 · Settings</span><h3>Configure one product</h3><p>Agents and their provider/model assignments, Skills, MCP servers, and Automations stay in Settings rather than becoming peer destinations beside the Session. Provider endpoints and credentials remain explicit in <code>axocoatl.yaml</code>.</p></div>
+        <ax-product-film
+          film="settings-runtime"
+          src="/assets/films/settings-runtime.mp4"
+          poster="/assets/films/settings-runtime.jpg"
+          label="Axocoatl Settings for Agents and their provider/model assignments, Skills, MCP servers, and Automations"
+          caption="Runtime configuration stays in Settings instead of becoming another work surface."
+        ></ax-product-film>
+      </article>
+
+      <article class="stack" id="film-event-lattice-automation">
+        <div><span class="card-kicker">09 · Typed events</span><h3>A Skill can trigger an Automation</h3><p>The Skill publishes its declared event. The event lattice carries it to configured observers, and the matching Automation trigger starts an inspectable durable run.</p></div>
+        <ax-product-film
+          film="event-lattice-automation"
+          src="/assets/films/event-lattice-automation.mp4"
+          poster="/assets/films/event-lattice-automation.jpg"
+          label="An Axocoatl Skill publishing a typed event that starts a durable Automation"
+          caption="Release candidate ready publishes ReleaseCandidateReady; the matching On Skill trigger starts release-gate review."
+        ></ax-product-film>
+      </article>
+
+      <article class="stack" id="film-mcp-approval">
+        <div><span class="card-kicker">10 · MCP approval</span><h3>A new permission pauses the call</h3><p>With no matching saved decision, a normal Session Turn pauses before a deterministic local MCP tool executes. Deny prevents dispatch; Allow once returns bounded tool evidence and the final answer to History.</p></div>
+        <ax-product-film
+          film="mcp-approval"
+          src="/assets/films/mcp-approval.mp4"
+          poster="/assets/films/mcp-approval.jpg"
+          label="An Axocoatl Session Agent requesting approval before calling a local MCP tool"
+          caption="The Session Turn pauses before get_weather, then retains the returned value and final answer in History."
+        ></ax-product-film>
+      </article>
+
+      <article class="stack" id="film-shared-core-memory">
+        <div><span class="card-kicker">11 · Shared core memory</span><h3>Share one block explicitly</h3><p>One configured Agent writes a named shared block through a visible tool call. After daemon restart, another Agent receives the exact value in a separate Session whose transcript remains distinct.</p></div>
+        <ax-product-film
+          film="shared-core-memory"
+          src="/assets/films/shared-core-memory.mp4"
+          poster="/assets/films/shared-core-memory.jpg"
+          label="One Axocoatl Agent writing a shared core-memory block and another Agent receiving it in a separate Session"
+          caption="One Agent writes an explicit shared block; a different Agent in another Session receives the exact value while the transcripts remain separate."
+        ></ax-product-film>
+      </article>
+
+      <article class="stack" id="automation">
+        <div><span class="card-kicker">12 · Operator judgment</span><h3>Pause and resume an Automation</h3><p>A top-level Interrupt parks the run with upstream node state intact. Operator guidance resumes from that checkpoint and the completed Result remains in run history.</p></div>
+        <ax-product-film
+          film="automation-hitl-recovery"
+          src="/assets/films/automation-hitl-recovery.mp4"
+          poster="/assets/films/automation-hitl-recovery.jpg"
+          label="A durable Axocoatl Automation pausing at an Interrupt and resuming with operator guidance"
+          caption="The Automation reaches a top-level Interrupt with its node state intact. Operator guidance resumes it into durable run history."
+        ></ax-product-film>
+      </article>
+      </div>
+    </section>
+
+    <section class="container section section-rule">
+      <div class="cta-strip"><div><h2>Bring the repository. Keep the context.</h2><p>Start one durable Session and let the work surface grow around the job.</p></div><div class="cta-actions"><a class="btn btn-primary" href="/install">Install →</a><a class="btn btn-ghost" href="https://docs.axocoatl.ai/start/first-session/">Configure a Session</a></div></div>
+    </section>
   </main>
-
   <ax-footer></ax-footer>
-  <ax-install-bar></ax-install-bar>
 </body>
 </html>

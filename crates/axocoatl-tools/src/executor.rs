@@ -1,10 +1,14 @@
-//! Unified tool executor — routes calls to built-in tools, MCP servers, or WASM sandboxes.
+//! Unified tool executor — routes calls to built-in tools or MCP servers.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::builtin::BuiltinTool;
 use crate::error::ToolError;
+use crate::limits::{
+    bound_tool_error, bound_tool_output, ensure_json_input, TOOL_ARGUMENT_MAX_BYTES,
+    TOOL_NAME_MAX_BYTES,
+};
 
 /// A registered tool with its execution backend.
 #[derive(Clone)]
@@ -17,8 +21,6 @@ pub enum ToolBackend {
         server_name: String,
         definition: axocoatl_llm::ToolDefinition,
     },
-    /// WASM tool in sandbox.
-    Wasm { module_name: String },
 }
 
 /// Routes tool calls to the appropriate backend.
@@ -67,38 +69,40 @@ impl ToolExecutor {
         );
     }
 
-    /// Register a WASM tool.
-    pub fn register_wasm(&mut self, name: impl Into<String>, module_name: impl Into<String>) {
-        self.tools.insert(
-            name.into(),
-            ToolBackend::Wasm {
-                module_name: module_name.into(),
-            },
-        );
-    }
-
     /// Execute a tool by name.
     pub async fn execute(
         &self,
         tool_name: &str,
         arguments: serde_json::Value,
     ) -> Result<serde_json::Value, ToolError> {
+        if tool_name.len() > TOOL_NAME_MAX_BYTES {
+            return Err(ToolError::InvalidArgs {
+                tool: "tool_executor".to_string(),
+                reason: format!(
+                    "tool name is {} bytes; the limit is {TOOL_NAME_MAX_BYTES} bytes",
+                    tool_name.len()
+                ),
+            });
+        }
         let backend = self
             .tools
             .get(tool_name)
-            .ok_or_else(|| ToolError::NotFound(tool_name.to_string()))?;
+            .ok_or_else(|| bound_tool_error(ToolError::NotFound(tool_name.to_string())))?;
 
-        match backend {
+        ensure_json_input(&arguments, tool_name, TOOL_ARGUMENT_MAX_BYTES)
+            .map_err(bound_tool_error)?;
+
+        let result = match backend {
             ToolBackend::Builtin(tool) => tool.execute(arguments).await,
             ToolBackend::Mcp { server_name, .. } => {
                 // Route to the live client the registry keeps alive after
                 // discovery. The LLM calls the qualified `mcp__server__tool`
                 // name; the server expects the bare name it registered.
                 let Some(registry) = &self.mcp_registry else {
-                    return Err(ToolError::ExecutionFailed {
+                    return Err(bound_tool_error(ToolError::ExecutionFailed {
                         tool: tool_name.to_string(),
                         reason: "MCP registry not configured on this executor".to_string(),
-                    });
+                    }));
                 };
                 let reg = registry.read().await;
                 let bare = reg
@@ -112,19 +116,10 @@ impl ToolExecutor {
                         reason: e.to_string(),
                     })
             }
-            ToolBackend::Wasm { module_name } => {
-                // WASM tool execution is an experimental, opt-in isolation tier
-                // (`--features wasmtime-sandbox`); it is not part of the default
-                // tool path, where the Podman session sandbox is the boundary.
-                Err(ToolError::ExecutionFailed {
-                    tool: tool_name.to_string(),
-                    reason: format!(
-                        "WASM module '{module_name}' is not runnable on the default tool \
-                         path; WASM isolation is an experimental opt-in tier"
-                    ),
-                })
-            }
-        }
+        };
+
+        let value = result.map_err(bound_tool_error)?;
+        bound_tool_output(value).map_err(bound_tool_error)
     }
 
     /// List all registered tool names.
@@ -138,9 +133,8 @@ impl ToolExecutor {
         tool_name: &str,
     ) -> Option<axocoatl_llm::ConcurrencyPolicy> {
         match self.tools.get(tool_name) {
-            Some(ToolBackend::Builtin(_)) => Some(axocoatl_llm::ConcurrencyPolicy::Safe),
-            Some(ToolBackend::Mcp { .. }) => Some(axocoatl_llm::ConcurrencyPolicy::Safe),
-            Some(ToolBackend::Wasm { .. }) => Some(axocoatl_llm::ConcurrencyPolicy::Safe),
+            Some(ToolBackend::Builtin(tool)) => Some(tool.concurrency_policy()),
+            Some(ToolBackend::Mcp { definition, .. }) => Some(definition.concurrency),
             None => None,
         }
     }
@@ -149,15 +143,14 @@ impl ToolExecutor {
     pub fn as_llm_tools(&self) -> Vec<axocoatl_llm::ToolDefinition> {
         self.tools
             .iter()
-            .filter_map(|(name, backend)| match backend {
-                ToolBackend::Builtin(tool) => Some(axocoatl_llm::ToolDefinition {
+            .map(|(name, backend)| match backend {
+                ToolBackend::Builtin(tool) => axocoatl_llm::ToolDefinition {
                     name: name.clone(),
                     description: tool.description().to_string(),
                     parameters: tool.parameters_schema(),
-                    concurrency: axocoatl_llm::ConcurrencyPolicy::Safe,
-                }),
-                ToolBackend::Mcp { definition, .. } => Some(definition.clone()),
-                ToolBackend::Wasm { .. } => None, // WASM execution not wired (tracked separately)
+                    concurrency: tool.concurrency_policy(),
+                },
+                ToolBackend::Mcp { definition, .. } => definition.clone(),
             })
             .collect()
     }
@@ -185,6 +178,50 @@ impl ToolExecutor {
 mod tests {
     use super::*;
     use crate::builtin::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct HugeResultTool;
+
+    #[async_trait::async_trait]
+    impl BuiltinTool for HugeResultTool {
+        fn description(&self) -> &str {
+            "test-only oversized result"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(
+            &self,
+            _arguments: serde_json::Value,
+        ) -> Result<serde_json::Value, ToolError> {
+            Ok(serde_json::json!({
+                "payload": "🦀".repeat(crate::limits::TOOL_OUTPUT_MAX_BYTES)
+            }))
+        }
+    }
+
+    struct CountingTool(Arc<AtomicUsize>);
+
+    #[async_trait::async_trait]
+    impl BuiltinTool for CountingTool {
+        fn description(&self) -> &str {
+            "test-only counter"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(
+            &self,
+            _arguments: serde_json::Value,
+        ) -> Result<serde_json::Value, ToolError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::json!({"ok": true}))
+        }
+    }
 
     #[tokio::test]
     async fn register_and_execute_builtin() {
@@ -204,6 +241,25 @@ mod tests {
         let executor = ToolExecutor::new();
         let result = executor.execute("nonexistent", serde_json::json!({})).await;
         assert!(matches!(result, Err(ToolError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn oversized_tool_name_is_rejected_without_reflection() {
+        let executor = ToolExecutor::new();
+        let result = executor
+            .execute(
+                &"x".repeat(crate::limits::TOOL_NAME_MAX_BYTES + 1),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap_err();
+        match result {
+            ToolError::InvalidArgs { tool, reason } => {
+                assert_eq!(tool, "tool_executor");
+                assert!(!reason.contains(&"x".repeat(128)));
+            }
+            other => panic!("expected InvalidArgs, got {other:?}"),
+        }
     }
 
     #[test]
@@ -254,5 +310,41 @@ mod tests {
             }
             other => panic!("expected ExecutionFailed, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn executor_replaces_oversized_backend_results_with_bounded_preview() {
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("huge", Arc::new(HugeResultTool));
+        let result = executor
+            .execute("huge", serde_json::json!({}))
+            .await
+            .unwrap();
+
+        assert_eq!(result["tool_result_truncated"], true);
+        assert!(result["message"]
+            .as_str()
+            .unwrap()
+            .contains("model-transport limit"));
+        assert!(serde_json::to_vec(&result).unwrap().len() < crate::limits::TOOL_OUTPUT_MAX_BYTES);
+    }
+
+    #[tokio::test]
+    async fn executor_rejects_oversized_arguments_before_backend_work() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("count", Arc::new(CountingTool(calls.clone())));
+        let error = executor
+            .execute(
+                "count",
+                serde_json::json!({
+                    "payload": "x".repeat(crate::limits::TOOL_ARGUMENT_MAX_BYTES + 1)
+                }),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ToolError::InvalidArgs { .. }));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }

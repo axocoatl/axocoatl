@@ -1,0 +1,129 @@
+---
+title: Run as a service
+description: Install, start, inspect, and remove Axocoatl as a per-user systemd or launchd service.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Service mode keeps the same daemon, HTTP app, Automations dispatcher,
+supervision loop, and memory consolidation running after the foreground shell
+closes. It does not itself make Agents act; automatic work still needs an
+enabled Automation trigger.
+
+The built-in manager supports a systemd user unit on Linux and a launchd user
+agent on macOS.
+
+## Install and start
+
+<Steps>
+
+1. Use an absolute, validated configuration and set an absolute data root when
+   you do not want state location to depend on the working directory.
+
+   ```sh
+   axocoatl validate /absolute/path/to/axocoatl.yaml
+   ```
+
+2. Install the service definition:
+
+   ```sh
+   axocoatl service install --config /absolute/path/to/axocoatl.yaml
+   ```
+
+3. Configure provider secrets in the service manager environment if hosted
+   Agents need them. The generated definition does not load `.env`.
+4. Start it and enable it at login:
+
+   ```sh
+   axocoatl service start
+   axocoatl service status
+   ```
+
+</Steps>
+
+Install resolves both the current `axocoatl` executable and the config file to
+absolute paths. The service working directory is the config file's parent, so
+the default relative data root becomes `<config-directory>/data`.
+
+<Aside type="caution" title="Install does not start the service">
+`axocoatl service install` writes/registers the definition. Run `service start`
+separately. Likewise, `onboard --install-daemon` writes a template into the
+new project but does not install or start the real service manager entry.
+</Aside>
+
+## Supply environment variables
+
+Axocoatl interpolates process environment variables in YAML and does not load
+dotenv files. The generated service unit/plist does not inject provider keys.
+
+<Tabs>
+  <TabItem label="Linux systemd">
+    Create a root-readable-by-you-only environment file, then add it through a
+    user-unit override:
+
+    ```ini
+    [Service]
+    EnvironmentFile=/absolute/path/to/axocoatl.env
+    Environment=AXOCOATL_DATA_DIR=/absolute/path/to/axocoatl-data
+    ```
+
+    Open the override with `systemctl --user edit axocoatl`, then apply it:
+
+    ```sh
+    systemctl --user daemon-reload
+    systemctl --user restart axocoatl
+    ```
+
+  </TabItem>
+  <TabItem label="macOS launchd">
+    The generated LaunchAgent has no `EnvironmentVariables` block. Add required
+    variables through your approved launchd/secret-management workflow before
+    starting the agent, then inspect the loaded definition. Avoid placing a
+    long-lived API key in a world-readable plist.
+  </TabItem>
+</Tabs>
+
+On Linux, run the hint printed by install when the daemon must survive logout:
+
+```sh
+loginctl enable-linger "$USER"
+```
+
+## Operate the service
+
+```sh
+axocoatl service status
+axocoatl service stop
+axocoatl service start
+axocoatl service uninstall
+```
+
+`stop` leaves the definition installed. `uninstall` stops and removes it.
+
+For platform logs:
+
+<Tabs>
+  <TabItem label="Linux">
+
+```sh
+journalctl --user -u axocoatl --since today
+```
+
+  </TabItem>
+  <TabItem label="macOS">
+
+```sh
+launchctl print gui/$(id -u)/ai.axocoatl.daemon
+```
+
+  </TabItem>
+</Tabs>
+
+For an interactive diagnostic run, stop the service first so it releases the
+per-user IPC socket, then run:
+
+```sh
+RUST_LOG=debug axocoatl dev --config /absolute/path/to/axocoatl.yaml
+```
+
+Next: [Data and backup →](/operate/data-backup/)

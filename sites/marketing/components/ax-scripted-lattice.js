@@ -1,19 +1,14 @@
 /**
  * <ax-scripted-lattice></ax-scripted-lattice>
  *
- * The brand-asset demo: a realistic three-agent bug-fix workflow,
- * running as a passive loop. Used identically in the homepage hero
- * (inside <ax-studio-mock>) and on /concepts.
+ * A scripted event-flow illustration, not a product capture or workflow
+ * executor. It shows a Skill publishing one typed lattice event and the
+ * notification reaching two consumers. An Automation that receives the
+ * event still executes its own explicit DAG; the lattice does not activate
+ * agent nodes in sequence.
  *
- * Story: a small game called Serpent Run has a bug — the snake's
- * jump arc is too short to clear the wider boulders on level 4 and
- * the sprite visibly clips through them. The bug enters the lattice,
- * a QA agent reproduces it, an engineer patches the code, a reviewer
- * approves. Three agents, real outputs, real diff.
- *
- * Every phase fires a `phase` CustomEvent with the full inspector
- * payload so the surrounding chrome (sidebar, inspector pane, pearls)
- * stays in lockstep without re-implementing the timing.
+ * Every phase fires a `phase` CustomEvent so an embedding can add its own
+ * explanatory chrome without duplicating the timing.
  */
 const SCRIPT_SRC = '/vendor/lattice/index.js';
 
@@ -24,45 +19,39 @@ if (!window.__axoLatticeLoaded) {
 }
 
 // The 12-second loop. `at` is the millisecond offset within the cycle;
-// `node` names the lattice node to activate at that moment.
+// `nodes` names the event-flow nodes to highlight at that moment.
 const PHASES = [
   {
     at: 0,
-    name: 'qa-active',
-    node: 'qa',
-    agent: 'qa-verifier',
-    status: 'reproducing',
-    action: 'Reproducing #273',
-    detail: 'Level 4 · wide boulder · sprite clips through at frame 14',
+    name: 'skill-publishes',
+    nodes: ['publisher'],
+    status: 'publishing',
+    action: 'Skill completed',
+    detail: 'Publishes ReviewReady with a typed payload',
     code: null,
   },
   {
-    at: 3500,
-    name: 'engineer-active',
-    node: 'engineer',
-    agent: 'engineer',
-    status: 'patching',
-    action: 'Writing patch',
-    detail: 'serpent-run/jump.ts:42',
-    code:
-      '- const JUMP_HEIGHT = 64;\n' +
-      '+ const JUMP_HEIGHT = (b) => Math.max(64, b.width * 1.2);',
-  },
-  {
-    at: 7500,
-    name: 'reviewer-active',
-    node: 'reviewer',
-    agent: 'reviewer',
-    status: 'approving',
-    action: 'Reviewing diff',
-    detail: '12 LOC · 4 tests pass · approved',
+    at: 3000,
+    name: 'event-published',
+    nodes: ['event'],
+    status: 'published',
+    action: 'ReviewReady',
+    detail: 'The event feed records producer, payload, and timestamp',
     code: null,
   },
   {
-    at: 11000,
+    at: 6000,
+    name: 'subscribers-notified',
+    nodes: ['automation', 'webhook'],
+    status: 'notified',
+    action: 'Subscribers receive the event',
+    detail: 'Automation trigger · optional webhook',
+    code: null,
+  },
+  {
+    at: 10000,
     name: 'idle',
-    node: null,
-    agent: null,
+    nodes: [],
     status: null,
     action: null,
     detail: null,
@@ -111,9 +100,10 @@ class AxScriptedLattice extends HTMLElement {
       return n;
     };
 
-    const qa       = mk('qa',       -220, 0, 'qa-verifier', 'reproduces bugs');
-    const engineer = mk('engineer',    0, 0, 'engineer',    'fixes the code');
-    const reviewer = mk('reviewer',  220, 0, 'reviewer',    'approves diffs');
+    const publisher  = mk('publisher', -260,    0, 'Skill completed', 'publishes ReviewReady');
+    const event      = mk('event',        0,    0, 'ReviewReady', 'typed lattice event');
+    const automation = mk('automation', 260,  -70, 'Automation', 'starts an explicit DAG');
+    const webhook    = mk('webhook',    260,   70, 'Webhook', 'optional delivery');
 
     const mkEdge = (from, to) => {
       const e = document.createElement('ax-edge');
@@ -121,9 +111,10 @@ class AxScriptedLattice extends HTMLElement {
       e.setAttribute('to',   `${to}:in`);
       return e;
     };
-    lat.append(qa, engineer, reviewer,
-               mkEdge('qa', 'engineer'),
-               mkEdge('engineer', 'reviewer'));
+    lat.append(publisher, event, automation, webhook,
+               mkEdge('publisher', 'event'),
+               mkEdge('event', 'automation'),
+               mkEdge('event', 'webhook'));
 
     // Wait two frames so the lattice has a real bounding box before
     // we ask it to fit the viewport. Then nudge the viewport downward
@@ -140,7 +131,7 @@ class AxScriptedLattice extends HTMLElement {
       }
     }));
 
-    const nodes = { qa, engineer, reviewer };
+    const nodes = { publisher, event, automation, webhook };
 
     // Drive the loop entirely from PHASES so timing is declarative.
     const cycle = () => {
@@ -150,19 +141,22 @@ class AxScriptedLattice extends HTMLElement {
 
       PHASES.forEach((phase, idx) => {
         setTimeout(() => {
-          // Mark previous node completed
-          if (idx > 0 && PHASES[idx - 1].node) {
-            const prev = nodes[PHASES[idx - 1].node];
-            prev.classList.remove('axo-active');
-            prev.classList.add('axo-completed');
+          // Mark every node from the previous phase completed.
+          if (idx > 0) {
+            PHASES[idx - 1].nodes.forEach((id) => {
+              const prev = nodes[id];
+              prev.classList.remove('axo-active');
+              prev.classList.add('axo-completed');
+            });
           }
-          // Activate current node (if any)
-          if (phase.node) {
-            const cur = nodes[phase.node];
+          // A published event fans out to its subscribers; these highlights
+          // are notifications, not sequential agent activation.
+          phase.nodes.forEach((id) => {
+            const cur = nodes[id];
             cur.classList.remove('axo-pulse');
             void cur.offsetWidth;
             cur.classList.add('axo-pulse', 'axo-active');
-          }
+          });
           // Clear all completed on idle so the cycle visual resets
           if (phase.name === 'idle') {
             Object.values(nodes).forEach(n => n.classList.remove('axo-completed'));

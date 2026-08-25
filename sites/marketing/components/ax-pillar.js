@@ -5,7 +5,7 @@
  * </ax-pillar>
  *
  * Light-DOM pillar block. The `glyph` attribute renders as a small
- * monospace mark above the title, matching the dashboard's typographic
+ * monospace mark above the title, matching the site's typographic
  * inline-glyph language.
  */
 class AxPillar extends HTMLElement {

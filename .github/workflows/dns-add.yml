@@ -7,6 +7,9 @@ name: dns-add
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   add:
     runs-on: ubuntu-latest

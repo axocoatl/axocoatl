@@ -1,0 +1,131 @@
+---
+title: Data and backup
+description: Locate Axocoatl state, understand what each store contains, and make a coordinated cold backup.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Axocoatl has no backup or restore command. A reliable backup is a coordinated
+filesystem copy made while the daemon is stopped.
+
+## Locate the data root
+
+Axocoatl uses `AXOCOATL_DATA_DIR` when set; otherwise it uses `./data` relative
+to the daemon's working directory. A service definition uses the directory
+containing its config as the working directory. A foreground process uses the
+directory from which it was started.
+
+Set an absolute path in the daemon environment to make this unambiguous:
+
+```sh
+export AXOCOATL_DATA_DIR=/absolute/path/to/axocoatl-data
+axocoatl dev --config /absolute/path/to/axocoatl.yaml
+```
+
+Starting from another directory without that variable can create a different
+`./data` tree and make prior Sessions appear missing.
+
+An absolute data root outside every Workspace is easiest to reason about and back
+up. A descendant `./data` remains supported: local Podman masks it inside the
+Workspace container. A Workspace that is the data root, or lies below it, is rejected.
+
+## What is stored
+
+The data root can contain:
+
+| Current path | State |
+| --- | --- |
+| `workspaces/*.json` | Durable Workspace ids, names, canonical paths, and activity timestamps |
+| `sessions/*.json` | Workspace-owned, folder-anchored Session records |
+| `session-history/turns.v1.jsonl` | Canonical Session turn ledger |
+| `session-history/session-attachments.v1.json` | Session attachment relations and pins |
+| `checkpoints/v1/<agent-key>/<version>.ckpt` | Current Agent conversation checkpoint caches |
+| `memory/daily_log/v1/<agent-key>/YYYY-MM-DD.jsonl` | Current dated activity records |
+| `memory/core/v1/agent_<agent-key>.json` | Current per-Agent core-memory blocks |
+| `memory/core/shared/v1/<block-key>.json` | Current shared core-memory blocks |
+| `memory/semantic/v1/agent_<agent-key>_semantic.json` | Current semantic records and vectors |
+| `models/` | Downloaded local embedding-model cache |
+| `automation/runs-v1/<automation-key>/<run-key>.json` | Current Automation run and node checkpoint records |
+| `automations.json` | Canonical Automation definitions |
+| `automation-folders.json` | Settings folder organization |
+| `mcp-permissions.json` | Persisted MCP allow/deny decisions |
+| `files/` | Immutable attachment bytes, extracted content, and compatibility file metadata |
+| `chats/` | Compatibility Chat API data |
+
+Exact filenames may grow as stores are added. Back up the entire resolved root,
+not a hand-picked subset.
+
+A 1.0 root may also retain exact pre-1.0 compatibility sources such as `runs/`,
+unversioned agent directories below `checkpoints/` and `memory/daily_log/`, or
+unversioned core/semantic files. On supported Unix hosts, those locations are
+consulted only through bounded exact-name recovery. New writes use the current
+portable namespace, and recovery does not delete the legacy source. Include both
+current and retained legacy files by copying the entire root.
+
+`.axocoatl-daemon.lock` is a compatibility ownership file, not application state.
+The per-root external lease lives in an owner-only operating-system temporary
+directory and is likewise not backup data. A cold restore creates or opens the
+needed lease state when Axocoatl starts.
+
+Attempts also create clones and manifests under `.axo-variants/` inside the
+Workspace repository. The repository itself, its uncommitted working tree, and
+those temporary paths are outside the data root.
+
+## Make a cold backup
+
+<Steps>
+
+1. Finish or deliberately clean up active Attempts. Record any unresolved
+   recovery state.
+2. Stop Axocoatl using the method that matches how it is running. Press
+   **Ctrl-C** in a foreground `axocoatl dev` or `axocoatl serve` terminal. For
+   an installed service, run:
+
+   ```sh
+   axocoatl service stop
+   ```
+
+3. Confirm no Axocoatl process owns the runtime and do not edit the Workspace
+   while copying.
+4. Copy the complete resolved data root, `axocoatl.yaml`, the secret-management
+   metadata needed to recreate its process environment, and each Workspace
+   repository to a versioned backup location.
+5. Preserve permissions and verify the copy can be listed and checksummed.
+6. Restart Axocoatl the same way it was started before the backup, then check
+   status.
+
+</Steps>
+
+For example, after substituting explicit paths:
+
+```sh
+cp -a /absolute/path/to/axocoatl-data /backup/2026-08-17/axocoatl-data
+cp -a /absolute/path/to/axocoatl.yaml /backup/2026-08-17/axocoatl.yaml
+cp -a /absolute/path/to/workspace /backup/2026-08-17/workspace
+```
+
+<Aside type="caution" title="Transcript export is not a backup">
+Markdown or JSON History export copies conversation records for review. It
+does not include the working tree, Agent checkpoints, Automations, permissions,
+or every attachment/store required for restoration.
+</Aside>
+
+## Restore
+
+There is no schema-aware restore command. Use a compatible Axocoatl build,
+stop the daemon, place the copied directories back at explicit paths with the
+original ownership and permissions, restore the config/environment, then run:
+
+```sh
+axocoatl validate /absolute/path/to/axocoatl.yaml
+axocoatl doctor --config /absolute/path/to/axocoatl.yaml
+```
+
+Start the daemon and inspect Sessions, Automations, MCP permissions, and the
+Workspace Git state before resuming automatic triggers.
+
+Deletion does not currently promise immediate garbage collection of every
+content-addressed attachment blob. Do not use Session deletion or rewind as a
+secure-erasure procedure.
+
+Next: [Upgrade →](/operate/upgrade/)

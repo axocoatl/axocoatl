@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "film": "event-lattice-automation",
+  "checks": [
+    {
+      "id": "skill",
+      "status": "passed",
+      "detail": "The real Settings UI shows Release candidate ready (release-candidate-ready) declaring the typed ReleaseCandidateReady event before it is fired once."
+    },
+    {
+      "id": "event",
+      "status": "passed",
+      "detail": "The captured recent-events observation records event dcf2a818-080a-4dc2-84db-d11a60b6e69c at 1787639193, produced by skill:release-candidate-ready with type ReleaseCandidateReady and the exact payload retained in identities."
+    },
+    {
+      "id": "trigger",
+      "status": "passed",
+      "detail": "That Skill dispatch created durable release-gate-review run bf52db2e-14b7-4e3e-ae9e-7f565133dc44 with the same trigger timestamp and payload; gate-review completed before operator-review parked."
+    },
+    {
+      "id": "result",
+      "status": "passed",
+      "detail": "The operator resumed the same durable run, and reloaded completed history exposes its stored Result: Evidence received. Keep the release gated until repository checks and remaining risks are reviewed by an operator."
+    }
+  ],
+  "identities": {
+    "fixture": "signal-desk",
+    "release_version": "1.0.0",
+    "binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+    "capture_config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+    "capture_data_root": "/private/tmp/axocoatl-one-app-showcase-signal-event-launch/data",
+    "workspace_id": "wsp-28d4ba63-39b4-44ac-b43b-a5ce69da28a8",
+    "workspace_path": "/private/tmp/axocoatl-one-app-showcase-signal-event-launch/workspace",
+    "session_id": "ses-8ec1494c-ecff-4452-9794-fe57ab6d4707",
+    "session_name": "V1 proof",
+    "skill_id": "release-candidate-ready",
+    "event_id": "dcf2a818-080a-4dc2-84db-d11a60b6e69c",
+    "event_type": "ReleaseCandidateReady",
+    "event_producer": "skill:release-candidate-ready",
+    "event_timestamp": "1787639193",
+    "event_payload": "{\"agents_holding\":[\"judge\"],\"fired_by_skill\":\"release-candidate-ready\"}",
+    "automation_id": "release-gate-review",
+    "automation_run_id": "bf52db2e-14b7-4e3e-ae9e-7f565133dc44",
+    "automation_run_started_at_unix": "1787639193",
+    "automation_run_finished_at_unix": "1787639332",
+    "automation_run_file_sha256": "f49591fd5d90e21d4cf7d9b96adf34a1c15488c44c69d3d08de32bd3d8a7f9c1",
+    "checkpoint_sequence": [
+      "gate-review:node_completed",
+      "operator-review:interrupt_parked",
+      "operator-review:interrupt_resumed"
+    ],
+    "operator_result": "Evidence received. Keep the release gated until repository checks and remaining risks are reviewed by an operator."
+  }
+}

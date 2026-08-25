@@ -1,13 +1,14 @@
 /**
  * <ax-studio-mock></ax-studio-mock>
  *
- * A faithful mini-Studio screenshot built in HTML. The chrome
- * (strip, sidebar, toolbar) is identical to the dashboard's so a
- * visitor recognizes the product before the demo even starts.
+ * Historical Studio illustration built in HTML. Studio is no longer a product
+ * destination; the lattice is exposed through Activity and Agent graph modules
+ * around the session chat. Do not present this mock as current UI parity.
  *
- * The scripted lattice inside is the canonical brand demo: a
- * three-agent bug-fix workflow. As the lattice emits `phase` events
- * we mirror them across:
+ * This dormant historical shell predates the current event-flow illustration
+ * used on /concepts. If the shell is ever restored, its old three-agent side
+ * chrome must be redesigned around the session-centered workbench first. Its
+ * phase listener currently mirrors the archived Studio story across:
  *   - the "Active runs" pill in the sidebar,
  *   - the per-agent rows in "All agents",
  *   - a floating inspector pane in the canvas with full detail.

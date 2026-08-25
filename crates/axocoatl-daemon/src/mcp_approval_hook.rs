@@ -14,15 +14,31 @@ use axocoatl_mcp::approval::{
 use axocoatl_mcp::permissions::{McpPermissionStore, PermissionDecision, PermissionRecord};
 use axocoatl_mcp::registry::McpToolRegistry;
 use axocoatl_tools::hooks::{HookAction, HookContext, HookPhase, ToolHook};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::RwLock;
 
-use crate::stream::StreamFrame;
+use crate::stream::{StreamBus, StreamFrame};
+
+const ARGUMENT_PREVIEW_CAP: usize = 2_048;
+
+fn bounded_arguments_preview(value: &serde_json::Value) -> String {
+    let mut preview = serde_json::to_string(value).unwrap_or_default();
+    if preview.len() <= ARGUMENT_PREVIEW_CAP {
+        return preview;
+    }
+    let mut boundary = ARGUMENT_PREVIEW_CAP;
+    while !preview.is_char_boundary(boundary) {
+        boundary = boundary.saturating_sub(1);
+    }
+    preview.truncate(boundary);
+    preview.push_str("…(truncated)");
+    preview
+}
 
 pub struct McpApprovalHook {
     registry: Arc<RwLock<McpToolRegistry>>,
     permissions: Arc<RwLock<McpPermissionStore>>,
     gate: SharedApprovalGate,
-    stream_bus: broadcast::Sender<StreamFrame>,
+    stream_bus: StreamBus,
 }
 
 impl McpApprovalHook {
@@ -30,7 +46,7 @@ impl McpApprovalHook {
         registry: Arc<RwLock<McpToolRegistry>>,
         permissions: Arc<RwLock<McpPermissionStore>>,
         gate: SharedApprovalGate,
-        stream_bus: broadcast::Sender<StreamFrame>,
+        stream_bus: StreamBus,
     ) -> Self {
         Self {
             registry,
@@ -88,12 +104,7 @@ impl ToolHook for McpApprovalHook {
                 .unwrap_or(qualified)
                 .to_string()
         };
-        let mut args_preview = serde_json::to_string(&ctx.value).unwrap_or_default();
-        const PREVIEW_CAP: usize = 2048;
-        if args_preview.len() > PREVIEW_CAP {
-            args_preview.truncate(PREVIEW_CAP);
-            args_preview.push_str("…(truncated)");
-        }
+        let args_preview = bounded_arguments_preview(&ctx.value);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -118,6 +129,8 @@ impl ToolHook for McpApprovalHook {
             .request(approval_ctx.clone(), |c| {
                 let _ = bus.send(StreamFrame::McpApprovalRequired {
                     approval_id: c.approval_id.clone(),
+                    // Which run is blocked — derived once, here.
+                    run: crate::stream::run_of_scoped_agent(&c.agent_id),
                     agent_id: c.agent_id.clone(),
                     server: c.server.clone(),
                     tool: c.tool.clone(),
@@ -182,5 +195,20 @@ impl McpApprovalHook {
         if let Err(e) = perms.record(rec) {
             tracing::warn!(error = %e, "failed to persist MCP permission decision");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unicode_argument_preview_cuts_only_at_utf8_boundary() {
+        let value = serde_json::json!({"payload": "€".repeat(2_048)});
+        let preview = bounded_arguments_preview(&value);
+
+        assert!(preview.ends_with("…(truncated)"));
+        assert!(preview.is_char_boundary(preview.len()));
+        assert!(preview.len() <= ARGUMENT_PREVIEW_CAP + "…(truncated)".len());
     }
 }

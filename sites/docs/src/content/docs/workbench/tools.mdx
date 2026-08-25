@@ -1,0 +1,151 @@
+---
+title: Files, Preview, and Terminal
+description: Inspect and edit a Workspace, run commands in Session PTYs, and open an exposed local application in Preview.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+The workbench tools share one Session and one sandboxed working tree. Use them
+to verify the Agent's work without leaving the task context.
+
+## Inspect and edit files
+
+Choose **Files** to open the file tree and editor.
+
+Files does not bypass isolation. Tree, read, and save operations resolve and
+execute through the same durably Ready sandbox handle as Terminal, Git, and
+Agent tools. Under local Podman the Workspace is a read-write host bind mount;
+under E2B, Files reads and writes the remote clone. A non-Ready Session returns
+a lifecycle conflict instead of falling back to host filesystem I/O.
+
+Local Podman also protects Axocoatl's own control-plane directories. If the data
+root or external daemon-lease root sits below the canonical Workspace, that exact
+directory is hidden behind a nested `tmpfs` for Files, Terminal, Git, and Agent
+tools. A Workspace equal to or below a protected root cannot become Ready. This
+does not hide other sensitive files intentionally stored in the Workspace.
+
+For a root Node project on local Podman, a Session-owned Linux volume is mounted
+over the checkout's `node_modules`. Root dependency reads and writes therefore
+do not consume or mutate the host-native tree. The rest of the Workspace is
+still read-write, and nested package dependency directories are not masked by
+additional volumes.
+
+- Search filters the visible tree.
+- Selecting a file opens it in an editor tab.
+- **Editor** shows source; **Preview** renders supported file types.
+- **Save** writes the buffer. **Revert** discards unsaved editor changes.
+- **Source Control** in the explorer column shows repository changes and opens
+  diffs in the editor area.
+
+The editor's Revert action only concerns its unsaved buffer. Git discard
+actions affect the working tree and require separate confirmation. See
+[Review Git and Last turn](/workbench/git/).
+
+## Run commands in Terminal
+
+Choose **Terminal** or open the bottom rail, then choose **+** for a new PTY.
+Each terminal starts in the Session environment and continues running when the
+dock is collapsed. Keep long-running development servers in their own terminal
+so check output remains readable elsewhere.
+
+Useful first commands are:
+
+```sh
+pwd
+git status --short
+```
+
+Then run the repository's own check command. Terminal output is not added to a
+Conversation turn automatically; paste or summarize material output when the
+Agent needs it.
+
+## Open a local app in Preview
+
+Preview reaches ports that were explicitly exposed when the Session was
+created. On local Podman, Axocoatl maps each logical container port to a unique
+loopback transport for that Session; `localhost:3000` can remain the app's
+address in several sibling Sessions without a host-port collision.
+
+The embedded app loads on a distinct per-Session, per-port `.localhost`
+origin. Normal browser behavior remains available inside that boundary: module
+and root-relative assets, fetch/XHR, forms, storage, streamed responses, and
+development-server WebSockets. Modern browsers can block ordinary app cookies
+in the embedded cross-site frame. **Open full preview** opens the exact isolated
+virtual URL top-level, where its host-only cookies work; it never opens the
+logical sandbox `localhost` address. Requests sent through the Preview virtual
+Host cannot fall through to the workbench control API; an absolute cross-origin
+control request still follows the operator's configured CORS and authentication
+policy. Picker messages pin both the exact frame window and origin.
+
+A typical flow is:
+
+<Steps>
+
+1. Include the app port under **Exposed ports** when creating the Session.
+2. Start the development server in Terminal. Bind it to `0.0.0.0` inside the
+   sandbox when the framework otherwise listens only on loopback.
+3. Choose **Preview** and open the exposed address suggested by the workbench.
+4. Use reload and navigation controls to exercise the running app.
+
+</Steps>
+
+<Tabs>
+  <TabItem label="Vite">
+
+```sh
+npm run dev -- --host 0.0.0.0
+```
+
+  </TabItem>
+  <TabItem label="Python">
+
+```sh
+python -m http.server 3000 --bind 0.0.0.0
+```
+
+  </TabItem>
+  <TabItem label="Rust">
+
+Bind the application to `0.0.0.0:<port>` using its own configuration or
+command-line flag.
+
+  </TabItem>
+</Tabs>
+
+Preview and exposed-port mapping are local Podman capabilities. An E2B-backed
+Session can still use Files and Terminal against its remote working tree, but
+Axocoatl does not present remote services through the local Preview proxy.
+
+When the runtime reports a reachable server, Axocoatl can also add a **Preview
+ready** card to Conversation. Opening that card focuses the same Preview tool;
+it is not a separate app or history.
+
+## Reference code or a page element
+
+The workbench can add selected code or a picked DOM element to the composer as
+structured inline context. In Preview, choose **Pick**, select an element,
+review its hierarchy and snippet, then choose **Add to chat**. The reference is
+sent with the next turn.
+
+This lightweight reference is distinct from an uploaded Session attachment.
+Use an attachment when the Agent needs an immutable copy of an external file.
+
+## Common failures
+
+| Symptom | Check |
+| --- | --- |
+| Preview cannot connect | The port was exposed at Session creation and the process is still running |
+| Preview shows a loopback error | The server is bound to `0.0.0.0`, not only `127.0.0.1` inside the sandbox |
+| Preview says a port is not configured | Create a Session with that logical port under **Exposed ports** |
+| Preview transport cannot start | Check Podman health; Axocoatl fails the sandbox honestly if it cannot preserve every configured mapping |
+| Terminal exits immediately | Read the command's exit status and start a new PTY |
+| File changes do not appear | Refresh Source Control and inspect the Session working tree with `git status --short` |
+| Files, Terminal, or Preview reports a lifecycle conflict | Review or rebuild the Session environment and wait for Ready; the tool will not fall back to the host |
+
+<Aside type="note" title="Network policy still applies">
+Exposing a port publishes a service from the Session sandbox. A sandbox with
+`network_mode: none` cannot publish ports, and no Preview setting bypasses that
+boundary.
+</Aside>
+
+Continue with [Explore several Ways →](/workbench/ways/)

@@ -1,0 +1,146 @@
+---
+title: Explore several Ways
+description: Run heterogeneous isolated attempts, check their outcomes, compare their routes, and keep one verified result.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Explore several ways runs the same bounded task through multiple Agent and
+model combinations. Each Attempt works from its own independent Git clone in a
+dedicated local Podman container. You review both the **Outcome** and the
+**Route**, run one repository check against every completed result, and
+deliberately **Keep this one** or finish without keeping.
+
+## Preconditions
+
+Attempts currently require all of the following:
+
+- a single autonomous-Agent Session (coordinators and workers are not selectable);
+- a Git repository;
+- the local Podman sandbox backend;
+- at least two configured, usable ways;
+- a task that does not depend on uploaded attachments, Skills, MCP tools, or
+  web search.
+
+Only one unresolved attempt set can exist for a Session. Finish or recover it
+before starting another.
+
+Each Way uses its configured primary provider and model directly. A primary rate limit fails
+that Way; provider fallback is intentionally disabled here until retained Way identity and
+cost can record the effective fallback route instead of mislabeling it as the primary.
+
+## Prepare the task
+
+<Steps>
+
+1. Write a task in Conversation, then choose **Explore ways**.
+2. Select heterogeneous Agents or model overrides. Diversity is useful only
+   when the Ways can plausibly take different routes.
+3. Open **Ways** to review the draft.
+4. Optionally choose **Plan first**. One autonomous Agent proposes a shared plan; edit the
+   resulting instruction before applying it to every way.
+5. Choose **Check models** to preflight the selected provider/model targets.
+6. Start the attempts only after the task and every target are correct.
+
+</Steps>
+
+A strong task gives every Attempt the same observable finish line:
+
+```text
+Reduce duplicate parsing in the import path without changing its public API.
+Add focused regression coverage, keep the patch within the parser module, and
+leave the repository uncommitted. The result must pass: cargo test -p importer
+```
+
+Plan first and model preflight can fail independently of the run. Fix the
+specific configuration or edit the instruction; do not treat a generated plan
+as authoritative.
+
+## Follow the Attempts
+
+Ways is a contextual inspector for preparation and live state. Each Attempt
+reports its current phase, Agent/model target, token usage when available, and
+failure or blocked detail. You can close Ways and continue reading Conversation;
+while the decision remains unresolved, the attempt state is durable and rehydrates
+when reopened.
+
+Before Checks, changed paths and diffs are live-runtime evidence. After a daemon restart they
+remain explicitly unavailable until a successful Checks run protects the candidate identity.
+Completed Check evidence and its comparison then survive reload while the decision remains
+unresolved.
+
+After every way reaches a terminal state, open the focused **Attempts** tool
+from **More**. Review:
+
+- **Outcome** — the result, changed files, and verification evidence;
+- **Route** — the actions and tool path used to reach it;
+- the per-Attempt diff and any failure or blocked state;
+- token and price information, including explicitly unavailable pricing.
+
+## Run Checks
+
+Enter one non-interactive check command and choose **Run checks**. Axocoatl runs
+that command against each completed Attempt. A check is not inferred from the
+Agent's prose, and a successful Agent turn is not the same as a passing check.
+
+An Attempt is keepable only when it completed, changed at least one file, and
+passed Checks. If Checks are interrupted, partial results remain visible while
+the set is unresolved and you can retry them. You can also stop Checks and finish
+without keeping.
+
+<Aside type="caution" title="Use a bounded check command">
+Do not use a watcher or interactive development server as the check. The same
+command runs separately for every candidate and must terminate on its own.
+</Aside>
+
+## Judge or choose directly
+
+**Judge** asks a selected autonomous Agent to rank at least two passing, non-empty
+survivors. It is available only after Checks. Treat the recommendation and its
+reasoning as another review aid, not as proof.
+
+You may instead inspect the candidates and choose **Keep this one** directly.
+Keeping:
+
+1. applies the selected Attempt's uncommitted delta to the Session working tree;
+2. records the selected task, output, and turn attribution in the durable Session
+   transcript;
+3. removes the remaining Attempt clones and containers during cleanup.
+
+It does not create a commit. Review the applied diff in Source Control and run
+the check again in the main Session when the repository or environment makes
+that prudent.
+
+<Aside type="caution" title="Keep ends the candidate record">
+Routes, candidate diffs, Checks, Judge ranking, and cost evidence remain available
+while the Ways decision is unresolved. After Keep and cleanup, durable History keeps
+the selected task, output, and turn attribution; it does not keep the losing Ways or
+the candidate comparison record. Review the current Git diff before committing.
+</Aside>
+
+## Recover an interrupted decision
+
+Keep is resumable. If the connection or process stops after apply begins,
+reopen the same attempt set and choose **Finish Keep** for the selected Attempt.
+Finishing without keeping is disabled once apply has begun because Axocoatl
+must finish recording and cleanup for the already-selected result.
+
+If cleanup was interrupted before keeping, choose **Finish cleanup**. Failed
+and blocked Attempt states remain visible while the set is unresolved instead of
+being presented as empty successes.
+
+## Finish without keeping
+
+Choose **Finish without keeping** to remove every Attempt and leave the Session
+working tree unchanged. During running Checks, the control becomes **Stop
+checks & finish without keeping**. Candidate review evidence is removed with the
+set and no selected result is added to Session History.
+
+Attempt pricing covers the Ways where tracked usage is complete and configured prices are
+known. **Plan first**, **Check models**, and **Judge** calls are shown separately and excluded
+from each Way's execution total. A successful Judge record remains with the unresolved Attempt
+set. Plan and model-check details are request-local; the selected planning Agent's cumulative
+usage also remains visible in Settings. A failed call that returns no terminal usage is labeled
+as an incomplete lower bound, and remote usage without price data is unknown rather than zero.
+
+Continue with [Review Git and Last turn →](/workbench/git/)

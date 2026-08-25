@@ -58,6 +58,7 @@ mod tests {
             id: "call_123".to_string(),
             name: "get_weather".to_string(),
             arguments: serde_json::json!({"location": "NYC"}),
+            provider_metadata: Default::default(),
         };
         let json = serde_json::to_string(&call).unwrap();
         let back: ToolCall = serde_json::from_str(&json).unwrap();
