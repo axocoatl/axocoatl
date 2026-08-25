@@ -980,9 +980,15 @@ test('Ways suspension cancels delayed primary reads and preserves dirty editor d
       const pathname = new URL(failure.url).pathname;
       return pathname !== `/api/sessions/${session.id}/tree`
         && pathname !== `/api/sessions/${session.id}/file`
-        && pathname !== `/api/sessions/${session.id}/git/status`;
+        && pathname !== `/api/sessions/${session.id}/git/status`
+        && (pathname !== `/api/sessions/${session.id}/turns`
+          || failure.error !== 'net::ERR_ABORTED');
     });
-    assert.deepEqual(unexpectedFailures, [], 'only deliberately aborted primary reads may fail');
+    assert.deepEqual(
+      unexpectedFailures,
+      [],
+      'only deliberately aborted primary or superseded transcript reads may fail',
+    );
     assert.deepEqual(consoleMessages, []);
     assertNoBrowserErrors();
   } finally {

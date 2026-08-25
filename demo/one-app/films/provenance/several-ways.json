@@ -4,16 +4,16 @@
   "recorded_at": "2026-08-25T08:35:48.805Z",
   "source": {
     "branch": "codex/session-capabilities",
-    "head": "897df7be05dab1e7b6747ca7075ade8a4f782ac6",
+    "head": "3edbf175da979f04b58a302afc70611337e9bcd9",
     "dirty": true,
-    "patch_sha256": "5240edf4c745b56f13c7154dbac8a9d4bd8aa705b6faa0fb14de27b244d4a3a4",
+    "patch_sha256": "c6e5ff0c5c46e3d9c82928fd96dc9d29dbc71bdc6610678cf32e97ec24dfb228",
     "patch_excludes": [
       "demo/one-app/films/source/",
       "demo/one-app/films/staged/",
       "demo/one-app/films/provenance/",
       "sites/marketing/assets/films/"
     ],
-    "content_sha256": "cdade5ea322bbe5146f01b9331a0ae78452953fc411b2e42133552424eb258e7"
+    "content_sha256": "a4b5ae7b76d75835f237455cf1c0b6d4508ffa47117100ca19a7bab7f58cd4c2"
   },
   "binary": {
     "path": "target/release/axocoatl",
