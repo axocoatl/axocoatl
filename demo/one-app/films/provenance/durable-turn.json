@@ -3,17 +3,17 @@
   "film": "durable-turn",
   "recorded_at": "2026-08-25T07:25:45.249Z",
   "source": {
-    "branch": "codex/session-capabilities",
-    "head": "7b375732cf941bcf6092b7c95c257c623f4d7543",
+    "branch": "codex/v1-release-fixture",
+    "head": "2cebc6640bf971bcb29c90f04efa4d3d784f69fd",
     "dirty": true,
-    "patch_sha256": "af250b2505dfc91721e86deba9bc4b39e3ffd6f0070dcb91560b086dcda0163c",
+    "patch_sha256": "926d3ca0e8da2ebba5c143062559507c80b093c247c2ca139f5416a3f4f830df",
     "patch_excludes": [
       "demo/one-app/films/source/",
       "demo/one-app/films/staged/",
       "demo/one-app/films/provenance/",
       "sites/marketing/assets/films/"
     ],
-    "content_sha256": "1562093374d422f33ef7e9825f71016c9541198b99d33a05747a7d57f547e0f5"
+    "content_sha256": "9f32b4264f2aed19df6e5c079fc15267f873f0c6513b9837ad05ba57ebf9a9c0"
   },
   "binary": {
     "path": "target/release/axocoatl",
