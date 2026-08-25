@@ -3,17 +3,17 @@
   "film": "mcp-approval",
   "recorded_at": "2026-08-25T06:18:25.945Z",
   "source": {
-    "branch": "codex/session-capabilities",
-    "head": "7b375732cf941bcf6092b7c95c257c623f4d7543",
+    "branch": "codex/v1-release-fixture",
+    "head": "d906e1923b83bf828a668359aeff3fd7fb9caa86",
     "dirty": true,
-    "patch_sha256": "af250b2505dfc91721e86deba9bc4b39e3ffd6f0070dcb91560b086dcda0163c",
+    "patch_sha256": "3ca3c0aa3898c1495f6fc509042a2cdfe2ebed64f37fdfff3b4a3fb502683df2",
     "patch_excludes": [
       "demo/one-app/films/source/",
       "demo/one-app/films/staged/",
       "demo/one-app/films/provenance/",
       "sites/marketing/assets/films/"
     ],
-    "content_sha256": "1562093374d422f33ef7e9825f71016c9541198b99d33a05747a7d57f547e0f5"
+    "content_sha256": "da11e865ae9f06be806054605ca25549be43df15cce4d67a4a62fed5683f9e56"
   },
   "binary": {
     "path": "target/release/axocoatl",

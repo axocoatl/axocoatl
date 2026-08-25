@@ -2174,7 +2174,8 @@ test('Preview app code cannot cross from its dedicated origin into the workbench
     await page.evaluate(() => sessionHome().refresh());
     await page.waitForFunction((sessionId) =>
       sessionHome().session(sessionId)?.environment?.state === 'ready', session.id);
-    await page.waitForFunction(() => S.session.attemptRestorePending === false);
+    await page.waitForFunction(() => S.session.attemptRestorePending === false
+      && S.session.runtimeActivationInFlight === false);
     const previewSandbox = await page.evaluate(async (value) => {
       clearInterval(S.session.taskTimer);
       S.session.taskTimer = null;
@@ -2570,7 +2571,8 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     await page.evaluate(() => sessionHome().refresh());
     await page.waitForFunction((sessionId) =>
       sessionHome().session(sessionId)?.environment?.state === 'ready', session.id);
-    await page.waitForFunction(() => S.session.attemptRestorePending === false);
+    await page.waitForFunction(() => S.session.attemptRestorePending === false
+      && S.session.runtimeActivationInFlight === false);
     const previewSandbox = await page.evaluate(async (value) => {
       clearInterval(S.session.taskTimer);
       S.session.taskTimer = null;

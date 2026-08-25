@@ -21626,7 +21626,9 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let workspace = tempfile::tempdir().unwrap();
-        init_test_git_repository(workspace.path(), false);
+        // This test owns only the exclude-file contract. Keep its fixture free
+        // of incidental object directories that Git may prune asynchronously.
+        std::fs::create_dir_all(workspace.path().join(".git/info")).unwrap();
         let exclude = workspace.path().join(".git/info/exclude");
         std::fs::write(&exclude, ".axo-variants/\n").unwrap();
         std::fs::set_permissions(&exclude, std::fs::Permissions::from_mode(0o600)).unwrap();
