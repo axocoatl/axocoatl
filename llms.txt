@@ -1,129 +1,111 @@
-# Axocoatl — Rust-Native Agentic AI Runtime
-> Coordination-first, actor-based, always-on agents in Rust
+# Axocoatl — the local-first workbench for coding agents
+> Open source, local first, and centered on one durable Session
 
-Axocoatl is an open-source agentic runtime for building self-coordinating
-multi-agent systems. Top-level agents activate via stigmergic pheromone signals —
-no central orchestrator. Built on ractor actors with per-agent token budgets,
-four-tier memory, and checkpointing for crash recovery. Local-first: your
-hardware, your model, your data, zero telemetry.
+Axocoatl is an Apache-2.0 coding-agent workbench. Open a repository and give one
+configured Agent—or a configured team—a durable, folder-anchored Session. The
+browser app keeps conversation at the center while Files, Source Control,
+Preview, Terminal, History, Agent activity, and Settings open around it.
 
-## Quick Start
+Each accepted Turn records its request and context before execution, then keeps
+the Agent output, final lifecycle state, and bounded tool Route in durable
+History. Source Control separately shows the repository as it exists now;
+Axocoatl does not make a commit or push unless the user deliberately asks for
+that Git action.
 
-### YAML Configuration (recommended)
-```yaml
-agents:
-  - id: researcher
-    provider: ollama
-    model: llama3.2
-    system_prompt: "You are a research assistant. Provide detailed factual answers."
-    depends_on: []
+## Start
 
-  - id: summarizer
-    provider: ollama
-    model: llama3.2
-    system_prompt: "Summarize the input in 1-2 sentences."
-    depends_on: [researcher]
-
-workflows:
-  - id: research-and-summarize
-    name: "Research and Summarize"
-    agents: [researcher, summarizer]
-    entry_point: researcher
-
-providers:
-  ollama:
-    base_url: "http://localhost:11434"
-```
-
-### CLI
 ```bash
-axocoatl onboard                   # Interactive setup wizard
-axocoatl doctor                    # Environment / dependency health check
-axocoatl init my-project           # Scaffold a project non-interactively
-axocoatl validate                  # Check config
-axocoatl dev                       # Development mode (IPC + HTTP)
-axocoatl serve                     # Production HTTP server
-axocoatl chat --agent assistant    # Interactive chat
-axocoatl workflow list             # List configured workflows
-axocoatl workflow run <id> -i "…"  # Execute a workflow
+# Install a checksum-verified native release on supported macOS or glibc Linux.
+curl -fsSL https://axocoatl.ai/install.sh | sh
+
+# Configure a provider and starter project, check host prerequisites, and run.
+axocoatl onboard
+axocoatl doctor
+axocoatl dev
 ```
 
-## Core Concepts
+Open http://localhost:8080. The default listener is loopback-only.
 
-### Agents
-Persistent ractor actors that process tasks. Each agent has: a provider (LLM), tools
-(built-in and MCP-discovered), four-tier memory, and a token budget. A supervision
-loop restarts a crashed agent from its last checkpoint.
+Install from Cargo instead with `cargo install axocoatl-cli` and Rust 1.88 or
+newer. Native Windows is not a release target; Windows users run Axocoatl through
+WSL2.
 
-### Providers
-Ollama, OpenAI, OpenRouter, Anthropic, Gemini, Mistral — six providers,
-provider-agnostic, no vendor lock-in. The OpenAI provider targets any
-OpenAI-compatible endpoint via `base_url` (LM Studio, MLX, vLLM), sending each
-agent's configured model per request.
+## Product model
 
-### Workflows
-Multi-agent pipelines defined in YAML. Agents declare `depends_on` to form a DAG.
-Execution is driven by the EventLattice — no polling, no central scheduler.
+- **Workspace**: a durable, named identity for one authorized project directory.
+- **Session**: one durable work item and conversation inside a Workspace.
+- **Turn**: one accepted request, immutable context references, output, bounded
+  tool evidence, and final lifecycle state in canonical Session History.
+- **Attempt**: one candidate solution. When uncertainty warrants it, a Session
+  can explore several isolated Ways and compare their Outcome, Route, available
+  diff, Checks, known usage and cost, and optional Judge evidence.
+- **Keep this one**: return one passing, non-empty Way to the primary Session
+  checkout as an ordinary uncommitted Git change for review.
 
-### Coordination
-Stigmergic EventLattice: top-level agents self-activate via pheromone signals with
-exponential decay. When an agent completes, it publishes a TaskCompleted event;
-downstream agents accumulate signal until their threshold is crossed, then activate
-with upstream outputs as context. No central orchestrator.
+The ordinary path is one Agent or configured team in one Session. Exploring
+several Ways is optional decision support, not the default interaction model.
+The 1.0 Ways boundary requires an autonomous single-Agent Session and local Podman; Session
+attachments, MCP tools, Skills, and web search are withheld from attempts.
 
-For work that needs runtime decomposition, an agent with `role: coordinator` breaks a
-goal into subtasks and assigns each to a spawned worker via a capability + budget
-auction, runs them in parallel, and synthesizes the results. Decomposition uses a
-symbolic HTN planner when an `htn_methods_file` is configured, otherwise the LLM. The
-coordinator is itself one lattice node, so the "no orchestrator" property holds
-between top-level agents. The pass is resumable via checkpointing.
+## Runtime underneath
 
-### Token budgets
-Per-agent pre-flight token budgets. When a call would exceed the budget the policy is
-`abort` (default) or `warn`. Under context-window pressure the session is compacted
-automatically (summarized toward the model window); nothing is lost — the raw
-conversation stays in the daily log and semantic memory.
+A Rust daemon supervises configured Agent actors and owns the canonical Session
+ledger, checkpoint recovery, memory, provider adapters, tool execution, typed
+events, Automations, and sandbox lifecycle.
 
-### Protocols
-- MCP: connect to external stdio and streamable-HTTP MCP servers, discover their
-  tools, and call them over a persistent client. Axocoatl is also an MCP server
-  (`axocoatl mcp serve` exposes each agent as a tool).
-- A2A: inbound A2A server (`/.well-known/agent.json` + `/a2a/tasks`) that accepts
-  tasks from other agents. No outbound A2A client.
-- Webhooks: opt-in outbound event egress — the lattice POSTs signed events to
-  configured endpoints (the outbound counterpart to inbound A2A). A default install
-  makes no outbound webhook requests.
+- Providers: Ollama, OpenAI, OpenRouter, Anthropic, Gemini, Mistral, and
+  OpenAI-compatible endpoints.
+- Tools: bounded built-ins plus approved tools discovered from configured stdio
+  or streamable-HTTP MCP servers. Axocoatl can also expose Agents through its MCP
+  server command.
+- Memory: live Session context, append-only daily logs, editable core-memory
+  blocks, and on-device semantic recall. Checkpoints are execution-recovery
+  caches; canonical History is the product record.
+- Automations: explicit durable graphs configured and reviewed in Settings,
+  with manual, interval, event, or Skill triggers and separate run history.
+- Coordination: a configured coordinator Agent can decompose a goal, assign
+  work to configured workers, run them in parallel, and synthesize the result.
+  The typed event lattice carries notifications; it is not the Session, Agent
+  graph, Ways model, or Automation graph.
 
-### Memory
-Four tiers plus checkpointing:
-- Session — the live conversation.
-- Daily log — append-only JSONL by date; lossless raw archive, readable by date range.
-- Core memory — named, agent-editable blocks (persona / human / project) rendered into
-  the prompt each turn; shareable across agents.
-- Semantic — on-device vector recall (all-MiniLM-L6-v2 via Candle); passive top-k
-  injection plus an agent-driven recall tool.
+## Isolation and network boundary
 
-A background "sleep-time" pass consolidates idle agents' memory (promotes durable facts
-into core blocks). Checkpointing snapshots the session to disk for crash recovery.
+Rootless Podman is the local sandbox default. E2B Cloud is an explicit remote
+option for normal Session work. A local Workspace remains a read-write host bind
+inside its sandbox, so the boundary limits repository tools; it is not a defense
+against an authorized tool making an unwanted change within that Workspace.
 
-### Isolation
-Each directory session runs its file/shell/terminal tools inside a rootless, hardened
-Podman container: only the session directory is bind-mounted, dangerous capabilities
-are dropped, `no-new-privileges` is set, and the network can be isolated. It bounds a
-misbehaving agent's blast radius; it is not a defense against prompt injection acting
-within the workspace.
+Axocoatl adds no product telemetry, hosted control plane, or Axocoatl account.
+Local-first does not mean every configured path is offline. Hosted model
+providers, MCP servers, web search, webhooks, the optional E2B Cloud sandbox,
+Podman image and package downloads, repository traffic, and the one-time Hugging
+Face embedding-model download can use the network. `sandbox.network: none`
+blocks only code and commands inside the local Podman sandbox; daemon-side
+integrations remain separate paths.
 
-## HTTP API
+## Selected interfaces
 
-```
-GET  /health                              # Health check
-GET  /api/agents                          # List agents
-POST /api/agents/{id}/execute             # Execute single agent
-GET  /api/agents/{id}/status              # Agent status
-GET  /api/workflows                       # List workflows
-POST /api/workflows/{id}/execute          # Execute workflow
-GET  /ws                                  # WebSocket streaming
+```text
+axocoatl onboard                 Interactive setup
+axocoatl doctor                  Environment and dependency checks
+axocoatl validate <config>       Validate configuration
+axocoatl dev | serve             Run the daemon and browser product
+axocoatl chat -a <agent>         Compatibility terminal chat
+axocoatl workflow list | run     Compatibility view/run for Automations
+axocoatl agents list|status|restart
+axocoatl tokens report
+axocoatl mcp servers|tools
 ```
 
-## API Reference
-See: https://github.com/axocoatl/axocoatl
+The browser product has one interactive route at `/`. The HTTP and WebSocket APIs
+remain available for integrations; the authoritative route reference is in the
+documentation.
+
+## Authoritative references
+
+- Product model: https://github.com/axocoatl/axocoatl/blob/main/docs/PRODUCT.md
+- Architecture: https://github.com/axocoatl/axocoatl/blob/main/docs/ARCHITECTURE.md
+- Documentation: https://docs.axocoatl.ai/
+- Install guide: https://docs.axocoatl.ai/start/install/
+- Security boundary: https://docs.axocoatl.ai/operate/security/
+- Source and changelog: https://github.com/axocoatl/axocoatl

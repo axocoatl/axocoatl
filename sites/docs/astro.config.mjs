@@ -1,20 +1,41 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
-import remarkGfm from 'remark-gfm';
 
 // https://astro.build/config
 export default defineConfig({
   site: 'https://docs.axocoatl.ai',
-  // Starlight's current Astro 6 integration replaces Astro's default remark
-  // pipeline. Restore GFM explicitly so reference tables render as tables
-  // instead of shipping their pipe syntax as paragraphs.
-  markdown: { remarkPlugins: [remarkGfm] },
+  redirects: {
+    '/getting-started': '/start/install/',
+    '/guides/ollama-quickstart': '/operate/verification/',
+    '/guides/architecture': '/understand/architecture/',
+    '/guides/providers': '/configure/providers/',
+    '/guides/token-budgets': '/configure/agents/',
+    '/guides/tool-approval': '/configure/skills-mcp/',
+    '/guides/troubleshooting': '/operate/troubleshooting/',
+    '/guides/examples-gallery': '/reference/examples/',
+    '/concepts/sessions': '/understand/product-model/',
+    '/concepts/agents': '/configure/agents/',
+    '/concepts/coordinator': '/understand/coordination/',
+    '/concepts/skills': '/configure/skills-mcp/',
+    '/concepts/memory': '/understand/state/',
+    '/concepts/checkpointing': '/understand/state/',
+    '/concepts/automations': '/configure/automations/',
+    '/concepts/lattice': '/understand/coordination/',
+    '/concepts/protocols': '/understand/protocols/',
+    '/api/cli': '/reference/cli/',
+    '/api/http': '/reference/http-api/',
+  },
+  // Astro 7 requires Markdown extensions to be configured on a processor.
+  // Keep GFM explicit so reference tables render as tables.
+  markdown: { processor: unified({ gfm: true }) },
   integrations: [
     starlight({
       title: 'Axocoatl',
       description: 'A local-first coding workbench backed by a durable Rust agent runtime.',
-      favicon: '/favicon.svg',
+      disable404Route: true,
+      favicon: '/favicon.png',
       customCss: ['./src/styles/tokens.css', './src/styles/overrides.css'],
       head: [
         {
@@ -49,43 +70,65 @@ export default defineConfig({
       ],
       sidebar: [
         {
-          label: 'Start here',
+          label: 'Start',
           items: [
-            { label: 'Introduction', slug: 'index' },
-            { label: 'Getting started', slug: 'getting-started' },
+            { label: 'Overview', slug: 'index' },
+            { label: 'Install', slug: 'start/install' },
+            { label: 'Onboard and doctor', slug: 'start/onboard' },
+            { label: 'Your first Session', slug: 'start/first-session' },
           ],
         },
         {
-          label: 'Concepts',
+          label: 'Use the workbench',
           items: [
-            { label: 'Sessions and attempts', slug: 'concepts/sessions' },
-            { label: 'Agents', slug: 'concepts/agents' },
-            { label: 'Coordinator', slug: 'concepts/coordinator' },
-            { label: 'Skills', slug: 'concepts/skills' },
-            { label: 'Memory', slug: 'concepts/memory' },
-            { label: 'Checkpointing', slug: 'concepts/checkpointing' },
-            { label: 'Automations', slug: 'concepts/automations' },
-            { label: 'The event lattice', slug: 'concepts/lattice' },
-            { label: 'Protocols (MCP & A2A)', slug: 'concepts/protocols' },
+            { label: 'Work in a Session', slug: 'workbench/session' },
+            { label: 'Files, Preview, and Terminal', slug: 'workbench/tools' },
+            { label: 'Explore several Ways', slug: 'workbench/ways' },
+            { label: 'Review Git and Last turn', slug: 'workbench/git' },
+            { label: 'Context, History, and Stop', slug: 'workbench/history' },
           ],
         },
         {
-          label: 'Guides',
+          label: 'Configure',
           items: [
-            { label: 'Ollama quickstart', slug: 'guides/ollama-quickstart' },
-            { label: 'Architecture', slug: 'guides/architecture' },
-            { label: 'Providers', slug: 'guides/providers' },
-            { label: 'Token budgets', slug: 'guides/token-budgets' },
-            { label: 'Tool approval', slug: 'guides/tool-approval' },
-            { label: 'Troubleshooting', slug: 'guides/troubleshooting' },
-            { label: 'Examples gallery', slug: 'guides/examples-gallery' },
+            { label: 'Settings', slug: 'configure/settings' },
+            { label: 'Providers', slug: 'configure/providers' },
+            { label: 'Agents and budgets', slug: 'configure/agents' },
+            { label: 'Sandboxes', slug: 'configure/sandboxes' },
+            { label: 'Skills and MCP', slug: 'configure/skills-mcp' },
+            { label: 'Automations', slug: 'configure/automations' },
+          ],
+        },
+        {
+          label: 'Operate',
+          items: [
+            { label: 'Run as a service', slug: 'operate/service' },
+            { label: 'Data and backup', slug: 'operate/data-backup' },
+            { label: 'Upgrade', slug: 'operate/upgrade' },
+            { label: 'Security', slug: 'operate/security' },
+            { label: 'Resource sizing', slug: 'operate/resources' },
+            { label: 'Troubleshooting', slug: 'operate/troubleshooting' },
+            { label: 'Local verification', slug: 'operate/verification' },
+          ],
+        },
+        {
+          label: 'Understand',
+          items: [
+            { label: 'Product model', slug: 'understand/product-model' },
+            { label: 'Architecture', slug: 'understand/architecture' },
+            { label: 'State and memory', slug: 'understand/state' },
+            { label: 'Coordination and events', slug: 'understand/coordination' },
+            { label: 'Protocols', slug: 'understand/protocols' },
           ],
         },
         {
           label: 'Reference',
           items: [
-            { label: 'HTTP API', slug: 'api/http' },
-            { label: 'CLI', slug: 'api/cli' },
+            { label: 'CLI', slug: 'reference/cli' },
+            { label: 'Configuration', slug: 'reference/config' },
+            { label: 'HTTP API', slug: 'reference/http-api' },
+            { label: 'WebSocket', slug: 'reference/websocket' },
+            { label: 'Examples', slug: 'reference/examples' },
           ],
         },
       ],

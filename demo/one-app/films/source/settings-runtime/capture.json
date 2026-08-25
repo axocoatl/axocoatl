@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "film": "settings-runtime",
+  "captured_at": "2026-08-25T07:59:57.030Z",
+  "url": "http://localhost:18180/",
+  "browser": "Codex in-app browser",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1
+  },
+  "theme": "dark",
+  "reduced_motion": "no-preference",
+  "timeline": "demo/one-app/films/source/settings-runtime/timeline.json",
+  "timeline_sha256": "7857f4d6148252fe8efb3314b4521f6b5c2c693c4e4e86c4440a527282912268",
+  "keyframes": [
+    {
+      "beat": "session",
+      "path": "demo/one-app/films/source/settings-runtime/shot-session.jpg",
+      "sha256": "ff1aafbd978137a207616f085279b708d8446dfc046660b947621a6930e4467c"
+    },
+    {
+      "beat": "agents",
+      "path": "demo/one-app/films/source/settings-runtime/shot-agents.jpg",
+      "sha256": "1be77feaafe5223208cb7dd41ee2dc70a6961d2cf043d3e155d330024eea4a34"
+    },
+    {
+      "beat": "agent-dependency",
+      "path": "demo/one-app/films/source/settings-runtime/shot-agent-dependency.jpg",
+      "sha256": "ad111cd195aef8b1dc93137330c940c37c4a4d6a607fe22c5aa312abb227c528"
+    },
+    {
+      "beat": "skills",
+      "path": "demo/one-app/films/source/settings-runtime/shot-skills.jpg",
+      "sha256": "22e29e5aaff763ede5b98ddf07d9acbc29ebeba98458f7d62279f0a42230e9a4"
+    },
+    {
+      "beat": "mcp",
+      "path": "demo/one-app/films/source/settings-runtime/shot-mcp.jpg",
+      "sha256": "c0915d9ec59ea031544e444c59d2fff4bf2cc2d23956ff0ab56970e08164e7c8"
+    },
+    {
+      "beat": "automations",
+      "path": "demo/one-app/films/source/settings-runtime/shot-automations.jpg",
+      "sha256": "8195851404c3ca95ccd91351ce4f7178a7ca964ea4f69a5f44ef593a0108732e"
+    }
+  ]
+}

@@ -22,21 +22,48 @@ Use this page at the podium. The full recovery detail is in
   - [ ] keep image `localhost/axocoatl-one-app-demo:latest`;
   - [ ] keep exposed port `8765`.
 - [ ] Start `npm run demo` in the session Terminal.
-- [ ] Browser at `http://localhost:8765` shows `-$20.00 · Invariant broken`.
-- [ ] Collapse the Terminal dock so it cannot cover the Activity composer.
+- [ ] Preview at `http://localhost:8765` shows `-$20.00 · Invariant broken`.
+- [ ] Collapse the Terminal dock so the conversation and composer stay prominent.
+
+## 1.0 recording gate
+
+Use this gate for every product film; the podium path above may still use the
+debug binary for rehearsal.
+
+- [ ] Build once with `cargo build --release --locked -p axocoatl-cli`.
+- [ ] Start with absolute
+  `AXOCOATL_DEMO_BIN=$PWD/target/release/axocoatl`; record the printed binary
+  path, version, and SHA-256.
+- [ ] Run `node demo/one-app/films/verify-film-set.mjs --manifest-only` before
+  capturing; it must report all 12 scenarios and shot contracts.
+- [ ] Capture each manifest beat from the same release binary at 1280×720,
+  zoom 100%, device scale factor 1, with stable theme and Session identity.
+- [ ] Save exact durable Session/Turn, attempt-set, run, checkout, or MCP
+  evidence identities before resetting a scenario root.
+- [ ] Ingest `shot-<beat>.jpg` and `timeline.json`, stage holds, encode, and
+  write provenance using [`films/SHOT-MANIFEST.md`](films/SHOT-MANIFEST.md).
+- [ ] Inspect the encoded MP4, poster, light/dark use as applicable, narrow-page
+  placement, and reduced-motion fallback on the built marketing site.
+- [ ] Mark a portfolio entry `ready` only after its scenario, media, duration,
+  poster beat, evidence, and provenance all pass.
+- [ ] Run `node demo/one-app/films/verify-film-set.mjs --source-bound`; all 12
+  source digests must match the checkout used by CI and deployment.
+- [ ] Before launch, run unflagged
+  `node demo/one-app/films/verify-film-set.mjs`; all 12 must pass release-strict.
 
 ## Core 20-minute path
 
 ### 1. One workbench — 2 minutes
 
 - [ ] Show the workspace and session in the rail.
-- [ ] Point out Activity, right-side Attempts, bottom Terminal, Files, Browser, and Git.
+- [ ] Point out the Conversation canvas, focused Files and Preview tools, **More**,
+  the contextual Ways inspector, bottom Terminal, and Source Control.
 - [ ] Open **All sessions** briefly, then return to this session.
 
 ### 2. Diagnose — 3 minutes
 
 - [ ] Send prompt 1 exactly.
-- [ ] Show `npm run check` red and the matching negative total in Browser.
+- [ ] Show `npm run check` red and the matching negative total in Preview.
 - [ ] Show Git still clean.
 - [ ] Collapse Terminal again.
 
@@ -63,14 +90,14 @@ Use this page at the podium. The full recovery detail is in
 
 - [ ] Send prompt 3 exactly.
 - [ ] Primary `npm run check` reports all six green.
-- [ ] Browser now shows `$0.00 · Ready`.
+- [ ] Preview now shows `$0.00 · Ready`.
 - [ ] Git → **Last turn** shows only the uncommitted `lib/orders.js` change.
 - [ ] Do not commit unless committing is explicitly part of this showing.
 
 ### 6. Recovery — 1 minute
 
 - [ ] Reload `/`; confirm the same session and attempt decision record.
-- [ ] If Compare says “Reading the attempts…”, press **Review outcomes** once.
+- [ ] If Attempts review says “Reading the attempts…”, press **Review outcomes** once.
 
 ## Automation segment gate
 
@@ -86,6 +113,27 @@ These checks are green on the rebuilt embedded page. Restart recovery is limited
 top-level parked Interrupt; do not claim recovery for a nested Subgraph Interrupt or an
 arbitrary provider/tool call stopped in flight.
 
+## Session capability verification record
+
+The checked facts passed on the rebuilt app on 13 August 2026. Recheck them on the exact build
+being shown; unchecked items remain presentation gates:
+
+- [x] An `AXOCOATL.md` **Once** attachment is accepted, appears on the durable turn, and
+  disappears from the composer only after acceptance.
+- [x] The answer uses the attachment content and the historical context chip remains clickable.
+- [ ] A **Session** attachment remains selected for a second normal turn; Remove stops future
+  inclusion while the attachment link on the historical turn still opens.
+- [x] Reload during generation reattaches with partial output and restores **Stop**; pressing it
+  persists `Stopped by you` in History.
+- [ ] An already-started side-effecting tool reaches its safe boundary before Stop settles.
+- [x] **History** renders four durable turns and the Session query returns exactly one result.
+- [ ] The same query works in all-Session scope.
+- [ ] Markdown and JSON exports download.
+- [ ] Rewind hides the later harmless turn without claiming tool or Git rollback.
+
+Do not attach context while **Explore several ways** is enabled; Attempts do not currently
+receive composer attachments. Run the rewind proof only in a single-agent Session.
+
 ## Fast fallbacks
 
 - One passing way: skip Judge and keep the checked survivor.
@@ -93,7 +141,7 @@ arbitrary provider/tool call stopped in flight.
   retry once, then decide from Checks/diff/Outcome/Route.
 - No passing ways: show the failure and choose **Finish without keeping**.
 - Explore control cannot be clicked: collapse the Terminal dock.
-- Blank preview after daemon restart: rerun `npm run demo`, then refresh Browser.
+- Blank Preview after daemon restart: rerun `npm run demo`, then refresh Preview.
 - Missing model: stop; verify `ollama list`; do not silently change models.
 
 ## Shutdown

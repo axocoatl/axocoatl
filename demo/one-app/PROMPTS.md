@@ -11,7 +11,7 @@ verification ledger in [README.md](README.md) before including prompts 4 or 5 on
 
 ## 1. Diagnose with one agent
 
-Use normal single-agent chat first.
+Use the normal single-agent Conversation first.
 
 ```text
 Inspect this storefront repository and run its documented check command. Identify the single failing customer-visible behavior in no more than three bullets. Do not change any files yet.
@@ -19,18 +19,17 @@ Inspect this storefront repository and run its documented check command. Identif
 
 Expected proof:
 
-- Files and shell tools stream into Activity.
+- Files and shell tools stream into the Conversation.
 - `npm run check` exposes the fixed-discount regression.
 - Git remains clean.
 
-Presenter action: collapse the Terminal dock after showing the red output. An expanded
-bottom dock can cover the Activity composer and **Explore several ways** control even
-though the preview server continues running.
+Presenter action: collapse the Terminal dock after showing the red output so the
+Conversation and composer remain prominent while the preview server keeps running.
 
 ## 2. Explore several ways
 
 Collapse the Terminal dock, then turn on **Explore several ways** before pasting the task
-into the Activity composer. Configure:
+into the Conversation composer. Configure:
 
 - Way 1: `Minimal Coder` / `qwen3:8b`
 - Way 2: `Invariant Defender` / `qwen3:8b`
@@ -69,6 +68,55 @@ Expected proof:
 - `lib/orders.js` is the only changed path in the primary workspace.
 - all six checks pass in the primary session.
 - Git shows the kept change as uncommitted; Keep did not commit or push.
+
+## 3A. Optional Session attachment proof
+
+The 13 August rebuilt-app pass verified the **Once** flow below: the upload was accepted and
+consumed, the answer used its content, and the historical context chip remained clickable.
+
+Use only after attaching `$DEMO_ROOT/workspace/AXOCOATL.md` as **Once** context and
+turning **Explore several ways** off:
+
+```text
+Using the attached AXOCOATL.md as your source, state the repository check command and the required reporting format. Do not read other files, run commands, or change the workspace.
+```
+
+Expected proof:
+
+- the attachment name is recorded with the durable user turn;
+- the answer uses extracted attachment context;
+- the **Once** chip is consumed only after the turn is accepted;
+- Git remains unchanged.
+
+Attachments are not passed to isolated Attempts. Do not use this prompt through
+**Explore several ways**.
+
+The **Session**-scope continuation below remains a presentation gate. After attaching the file
+again as **Session**, use this follow-up to show that the same reference remains selected:
+
+```text
+Using the Session context already selected, state only the required reporting format.
+```
+
+Then remove the chip. It leaves future composer context, while the attachment link on the
+historical turn still opens the immutable bytes.
+
+## 3B. Optional exact Stop proof
+
+The 13 August rebuilt-app pass reloaded during generation, reattached with partial output and
+restored **Stop**, then persisted `Stopped by you` after Stop was pressed. It did not put an
+already-started side-effecting tool inside the live cancellation path.
+
+Use only after the core Keep proof, with **Explore several ways** off:
+
+```text
+Inspect this repository without changing files. Read package.json, lib/orders.js, and lib/orders.test.js, then produce a detailed thirty-point maintenance audit.
+```
+
+Press **Stop** after streaming begins or a read-only tool starts. The stop command targets
+the exact durable turn. It may wait for an already-started tool to reach a safe boundary;
+that wait is correct and does not mean the tool was rolled back. Confirm that History shows
+the turn as cancelled with any honest partial output retained.
 
 ## 4. Human-in-the-loop Automation
 
@@ -116,13 +164,13 @@ This was not exercised in the timed rehearsal and is not part of the demo's proo
 it only after the core demo is green and only when a separate memory check is useful:
 
 ```text
-Use your core-memory tool to remember this durable preference: When presenting work to Erick, summarize as Root cause / Change / Proof. Confirm only after saving it.
+Use your core-memory tool to remember this durable preference: When presenting work to the operator, summarize as Root cause / Change / Proof. Confirm only after saving it.
 ```
 
 In a later session using the same Agent:
 
 ```text
-What reporting format does Erick prefer? Answer in that format.
+What reporting format does the operator prefer? Answer in that format.
 ```
 
 Core and semantic memory are shared by Agent identity; do not describe this as private
@@ -150,8 +198,8 @@ If both non-empty attempts pass but Judge reports that ranks must be unique and 
 3. Select `Evidence Judge` again, especially after a page reload, and retry Judge once.
 4. If it fails again, skip Judge and choose from Checks, diff, Outcome, and Route.
 
-If a page reload leaves Compare at “Reading the attempts…”, press **Review outcomes**
-once. If the Browser preview is blank after a daemon restart, rerun `npm run demo` in the
+If a page reload leaves Attempts review at “Reading the attempts…”, press **Review outcomes**
+once. If Preview is blank after a daemon restart, rerun `npm run demo` in the
 restored primary Terminal and refresh `http://localhost:8765`.
 
 If no attempt passes, use **Finish without keeping**, explain what the failed evidence

@@ -1,0 +1,196 @@
+---
+title: Security
+description: Define the local trust boundary, authenticate non-loopback access, constrain egress, and handle secrets and untrusted repositories.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Local-first describes where Axocoatl can run and store its durable state. It
+does not mean every execution is offline or that an Agent, repository, package,
+provider, MCP server, webhook, or model response is trusted.
+
+## Keep the server local by default
+
+The default listener is `127.0.0.1:8080`. Same-origin CORS is the default and
+rate limiting is off.
+
+Binding to a non-loopback address fails closed unless API-key or bearer-token
+authentication is configured, or the operator explicitly opts out:
+
+```yaml
+server:
+  host: "0.0.0.0"
+  port: 8080
+  auth:
+    api_keys: ["${AXOCOATL_API_KEY}"]
+    bearer_tokens: []
+    allow_unauthenticated: false
+  cors_origins:
+    - "https://workbench.example.internal"
+  rate_limit:
+    enabled: true
+    max_requests: 100
+    window_secs: 60
+```
+
+Clients may send either `x-api-key` or `Authorization: Bearer <token>`. The
+health probes remain public. CORS controls browser origins, not network access
+or authentication. Allowlisted cross-origin browser clients may preflight HEAD,
+GET, POST, PUT, PATCH, and DELETE.
+
+<Aside type="danger" title="Do not expose an unauthenticated workbench">
+The API can execute Agents, read and change Session repositories, run terminal
+commands, operate Git, and manage Automations. `allow_unauthenticated: true` is
+an explicit operator escape hatch, not a safe internet-facing default.
+</Aside>
+
+## Preview uses a separate browser origin
+
+Each local Preview is served from a validated
+`<session>-p<port>.localhost:<listener-port>` origin. The Host boundary
+runs before the workbench router and can reach only that Session's configured
+Preview transport; a Preview request cannot fall through to the app shell,
+control API, or workbench WebSockets. Unknown workbench Hosts are rejected to
+prevent DNS rebinding when loopback authentication is disabled.
+
+If the workbench document is opened through a loopback IP literal, its exact
+root navigation redirects to `localhost` on the same listener. This gives the
+browser one canonical workbench origin without redirecting API, health, asset,
+or non-loopback operator requests.
+
+The Preview frame may use scripts, modules, same-origin fetch, forms, storage,
+streamed responses, and development-server WebSockets within its own virtual
+origin. Modern third-party-cookie policy can block ordinary cookies in the
+embedded frame. **Open full preview** opens that exact virtual URL top-level
+with `noopener`; it does not reveal the logical sandbox URL. Host-only cookies
+then work. The Chromium journey verifies that its current cookie policy rejects
+an attempted `Domain=localhost` parent cookie, so a sibling Session or port does
+not receive it; that rejection is enforced by the user agent rather than the
+Axocoatl proxy. Preview remains cross-origin from the parent workbench. DOM-pick
+messages are accepted only from the exact frame window and expected origin in
+both directions.
+
+## Understand Workspace authorization
+
+Creating a Session asks the daemon to canonicalize an existing directory. The
+current server has no configured folder allowlist. Anyone who can authenticate
+to the API may therefore attempt to select any daemon-readable directory.
+Restrict server access and run the daemon under a least-privileged OS account.
+
+## Protect the control plane
+
+On supported Unix hosts, the daemon opens the resolved data root once and keeps
+that directory handle as its state authority. Managed reads, writes, replacements,
+and cleanup stay relative to opened directories. Symlinked path components, final
+symlinks, and multiply linked managed files fail closed. Atomic replacement uses an
+unpredictable owner-only temporary file in the destination directory, then fsync and
+rename. This hardens path ownership; it does not encrypt state or erase it securely.
+
+One daemon or direct bootstrap owns a root through an external per-root lock, the
+retained 0.1-compatible `.axocoatl-daemon.lock`, and a lock on the opened directory
+inode. The locks are acquired before runtime reconciliation or mutable Session state
+is read. At bootstrap, Axocoatl inspects reserved-name Podman containers
+and removes by immutable id only non-current containers whose bind mounts prove they
+expose the data root or external lease root. It then verifies that both paths still
+resolve to the opened directories. Invalid Session records cannot supply a replacement
+cleanup id.
+
+Use an absolute `AXOCOATL_DATA_DIR` outside every Workspace when practical. The default
+`./data` remains supported: if a protected data or lease root is a descendant of the
+canonical Workspace, local Podman places an exact nested `tmpfs` over it. A Workspace
+equal to or below a protected root is rejected instead. This boundary prevents repository
+tools from reaching Axocoatl control-plane state; it does not protect secrets deliberately
+placed elsewhere in the read-write Workspace.
+
+## Constrain sandbox execution
+
+The local default is rootless Podman with `no-new-privileges`, dropped
+capabilities, fixed resource-limit requests, and trust gates for custom images
+and repository post-create commands. Keep these defaults for unknown projects:
+
+```yaml
+sandbox:
+  backend: podman
+  network: none
+  allow_post_create_command: false
+  allow_untrusted_images: false
+  require_resource_limits: true
+```
+
+`allow_post_create_command: true` is not a hidden execution hook. It defaults
+only the exact devcontainer command to checked for an unreviewed Session; the
+visible per-Session decision wins. It never approves a separately detected or
+edited command.
+
+The built-in Alpine, Debian slim, Ubuntu, Python slim, Node slim, and Rust
+bookworm references are a fixed allowlist, not an audit or a guarantee that an
+image contains safe dependencies. Local readiness verifies Axocoatl's own
+repository commands and may provision missing commands inside a supported
+container. If that cannot succeed, the environment fails and the incomplete
+container is removed. Session startup never invokes a host package manager or
+creates a Podman VM.
+
+The Workspace is still a read-write host bind. A root Node project additionally
+mounts a Podman-managed volume over root `node_modules` so Linux does not consume
+host-native packages; it is a separate writable sandbox resource, not a second
+host bind. Protected Axocoatl data and lease directories below that bind are
+automatically masked as described above. Keep all other secrets and unrelated data
+outside the Workspace.
+
+`network: none` blocks container egress and Preview ports, but does not block
+the host daemon itself from reaching model providers, MCP servers, web search,
+webhooks, a remote sandbox service, or a registry for a Podman image pull. It
+also prevents readiness/setup processes inside the container from downloading
+missing commands or dependencies, so use an image that already contains the
+required repository command surface.
+
+## Inventory egress
+
+Review every path by which content can leave the machine:
+
+- hosted model providers and an Ollama `base_url` that is not loopback;
+- E2B Cloud remote sandboxes, including repository transfer;
+- remote MCP servers and tools;
+- configured web search;
+- lattice webhooks and their headers;
+- package downloads or repository scripts inside a bridged container;
+- embedding-model downloads during first use.
+
+`axocoatl doctor` prints configured webhook destinations as an egress notice.
+It does not prove the safety of any destination.
+
+## Handle secrets
+
+- Keep credentials in the process environment or an approved OS secret
+  injection mechanism; Axocoatl does not load `.env` automatically.
+- The onboarding wizard may place a supplied key in `.env.example`; move it,
+  restrict it, and do not commit it.
+- Scope E2B Git tokens, MCP credentials, webhook headers, API keys, and bearer
+  tokens to the smallest usable authority.
+- Protect the data root, backups, config, service definition, and logs. Axocoatl
+  has no application-level at-rest encryption.
+
+The runtime attempts to set its data root to mode `0700`; selected memory and
+checkpoint files use `0600`. Do not assume every persisted file is encrypted or
+individually mode `0600`.
+
+## Treat model and tool input as untrusted
+
+Repository files, attachments, retrieved pages, MCP results, and model output
+can contain instructions designed to redirect an Agent. Human approval narrows
+first-use MCP calls but is not content validation. Inspect arguments, prefer
+one-call approval, review Git and external effects, and do not expose broad
+credentials to an Agent that does not need them.
+
+Model-facing file, search, command, web-search, and MCP results are retained
+through bounded outputs with explicit truncation metadata. Those availability
+limits reduce accidental or hostile output amplification; they do not make the
+returned content trustworthy.
+
+MCP limits apply after the current protocol client decodes one transport
+message. Its stdio and Streamable HTTP transports do not expose a per-message
+receive cap, so a malicious configured server can still exhaust daemon memory
+with one oversized line, response body, or SSE event. Treat every configured
+MCP server as trusted for availability as well as reviewing its data access.
+
+Next: [Resource sizing →](/operate/resources/)

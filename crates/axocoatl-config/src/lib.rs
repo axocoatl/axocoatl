@@ -11,6 +11,18 @@ pub use types::*;
 
 use std::path::Path;
 
+const MAX_PATH_IDENTIFIER_LEN: usize = 64;
+
+fn is_filesystem_safe_identifier(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    !value.is_empty()
+        && value.len() <= MAX_PATH_IDENTIFIER_LEN
+        && bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
 /// Load and validate config from a YAML file.
 pub async fn load_config(path: &Path) -> Result<AxocoatlConfig, ConfigError> {
     let raw = tokio::fs::read_to_string(path)
@@ -50,6 +62,7 @@ pub fn interpolate_env_vars(input: &str) -> String {
 /// Validate a parsed config, returning actionable errors.
 fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_shared_labels = std::collections::HashMap::<String, String>::new();
 
     for agent in &config.agents {
         if agent.id.is_empty() {
@@ -59,6 +72,56 @@ fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
                 reason: "Agent ID cannot be empty".to_string(),
                 suggestion: "Set a unique identifier like: id: my_agent".to_string(),
             });
+        }
+
+        if !is_filesystem_safe_identifier(&agent.id) {
+            return Err(ConfigError::InvalidField {
+                field: "agents[].id".to_string(),
+                value: format!("{:?}", agent.id),
+                reason: "Agent ID must be a filesystem-safe ASCII identifier".to_string(),
+                suggestion: format!(
+                    "Use 1-{MAX_PATH_IDENTIFIER_LEN} ASCII letters, numbers, hyphens, or underscores, starting with a letter or number (for example: id: review-agent_2)"
+                ),
+            });
+        }
+
+        for (block_index, block) in agent.memory.core.blocks.iter().enumerate() {
+            if block.shared && !is_filesystem_safe_identifier(&block.label) {
+                return Err(ConfigError::InvalidField {
+                    field: format!(
+                        "agents[{}].memory.core.blocks[{block_index}].label",
+                        agent.id
+                    ),
+                    value: format!("{:?}", block.label),
+                    reason: "Shared core-memory block label must be a filesystem-safe ASCII identifier"
+                        .to_string(),
+                    suggestion: format!(
+                        "Use 1-{MAX_PATH_IDENTIFIER_LEN} ASCII letters, numbers, hyphens, or underscores, starting with a letter or number (for example: label: team_notes)"
+                    ),
+                });
+            }
+            if block.shared {
+                let folded = block.label.to_ascii_lowercase();
+                if let Some(existing) = seen_shared_labels.get(&folded) {
+                    if existing != &block.label {
+                        return Err(ConfigError::InvalidField {
+                            field: format!(
+                                "agents[{}].memory.core.blocks[{block_index}].label",
+                                agent.id
+                            ),
+                            value: format!("{:?}", block.label),
+                            reason: format!(
+                                "Shared block labels '{existing}' and '{}' collide on case-insensitive filesystems",
+                                block.label
+                            ),
+                            suggestion: "Use one exact spelling for this shared block label"
+                                .to_string(),
+                        });
+                    }
+                } else {
+                    seen_shared_labels.insert(folded, block.label.clone());
+                }
+            }
         }
 
         if agent.provider.is_empty() {
@@ -88,7 +151,7 @@ fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
             }
         }
 
-        if !seen_ids.insert(&agent.id) {
+        if !seen_ids.insert(agent.id.to_ascii_lowercase()) {
             return Err(ConfigError::DuplicateId {
                 field: "agents[].id".to_string(),
                 id: agent.id.clone(),
@@ -151,6 +214,11 @@ fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
                 }
             }
             AgentRoleYaml::Coordinator => {
+                let workflow_count = config
+                    .workflows
+                    .iter()
+                    .filter(|workflow| workflow.entry_point.as_deref() == Some(agent.id.as_str()))
+                    .count();
                 if !workflow_entry_points.contains(agent.id.as_str()) {
                     return Err(ConfigError::InvalidField {
                         field: format!("agents[{}].role", agent.id),
@@ -160,6 +228,20 @@ fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
                             .to_string(),
                         suggestion: format!(
                             "Set a workflow's entry_point to '{}', or change its role.",
+                            agent.id
+                        ),
+                    });
+                }
+                if workflow_count > 1 {
+                    return Err(ConfigError::InvalidField {
+                        field: format!("agents[{}].role", agent.id),
+                        value: "coordinator".to_string(),
+                        reason: format!(
+                            "A coordinator may be the entry_point of exactly one workflow; '{}' is the entry_point of {workflow_count}",
+                            agent.id
+                        ),
+                        suggestion: format!(
+                            "Keep '{}' as entry_point of one workflow and give every other coordinator-led workflow its own coordinator.",
                             agent.id
                         ),
                     });
@@ -252,7 +334,7 @@ fn generate_parse_suggestion(error_msg: &str) -> String {
     if error_msg.contains("expected") && error_msg.contains("found") {
         "Check the YAML indentation and value types. YAML is indentation-sensitive.".to_string()
     } else if error_msg.contains("missing field") {
-        format!("A required field is missing. {}", error_msg)
+        format!("A required field is missing. {error_msg}")
     } else {
         "Check YAML syntax: proper indentation, colons after keys, quotes around special values."
             .to_string()
@@ -428,6 +510,33 @@ workflows:
     }
 
     #[test]
+    fn coordinator_cannot_own_multiple_workflows() {
+        let yaml = r#"
+agents:
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: llama3
+    role: coordinator
+workflows:
+  - id: first
+    name: "First"
+    agents: [lead]
+    entry_point: lead
+  - id: second
+    name: "Second"
+    agents: [lead]
+    entry_point: lead
+"#;
+        let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidField { ref reason, .. }
+                if reason.contains("entry_point of exactly one workflow")
+        ));
+    }
+
+    #[test]
     fn parse_empty_config() {
         let yaml = "";
         let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
@@ -445,6 +554,104 @@ agents:
 "#;
         let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
         assert!(err.to_string().contains("Agent ID cannot be empty"));
+    }
+
+    #[test]
+    fn validate_agent_id_storage_boundary() {
+        fn config_with_agent_id(id: &str) -> String {
+            format!(
+                "agents:\n  - id: {}\n    name: Test\n    provider: ollama\n    model: llama3\n",
+                serde_json::to_string(id).unwrap()
+            )
+        }
+
+        let sixty_four_chars = format!("a{}", "1".repeat(63));
+        for id in ["a", "Coder1", "review-agent_2", sixty_four_chars.as_str()] {
+            parse_config(&config_with_agent_id(id), &PathBuf::from("test.yaml"))
+                .unwrap_or_else(|error| panic!("valid agent id {id:?} was rejected: {error}"));
+        }
+
+        let sixty_five_chars = format!("a{}", "1".repeat(64));
+        for id in [
+            "../escape",
+            "agent/name",
+            r"agent\name",
+            ".",
+            "..",
+            "/tmp/escape",
+            "-leading-hyphen",
+            "_leading-underscore",
+            "trailing-space ",
+            "embedded space",
+            "agent.name",
+            "agent:name",
+            "agent#name",
+            "café",
+            "control\u{001f}",
+            sixty_five_chars.as_str(),
+        ] {
+            let error =
+                parse_config(&config_with_agent_id(id), &PathBuf::from("test.yaml")).unwrap_err();
+            assert!(
+                matches!(error, ConfigError::InvalidField { ref field, .. } if field == "agents[].id"),
+                "unsafe agent id {id:?} failed for the wrong reason: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_shared_core_block_label_storage_boundary() {
+        fn config_with_shared_label(label: &str) -> String {
+            format!(
+                "agents:\n  - id: coder\n    name: Test\n    provider: ollama\n    model: llama3\n    memory:\n      core:\n        blocks:\n          - label: {}\n            shared: true\n",
+                serde_json::to_string(label).unwrap()
+            )
+        }
+
+        let sixty_four_chars = format!("t{}", "1".repeat(63));
+        for label in [
+            "team",
+            "Project1",
+            "team-notes_2",
+            sixty_four_chars.as_str(),
+        ] {
+            parse_config(
+                &config_with_shared_label(label),
+                &PathBuf::from("test.yaml"),
+            )
+            .unwrap_or_else(|error| {
+                panic!("valid shared block label {label:?} was rejected: {error}")
+            });
+        }
+
+        let sixty_five_chars = format!("t{}", "1".repeat(64));
+        for label in [
+            "",
+            "../outside",
+            "team/notes",
+            r"team\notes",
+            ".",
+            "..",
+            "/tmp/outside",
+            "-team",
+            "team notes",
+            "team.notes",
+            "team:notes",
+            "team#notes",
+            "téam",
+            "control\u{001f}",
+            sixty_five_chars.as_str(),
+        ] {
+            let error = parse_config(
+                &config_with_shared_label(label),
+                &PathBuf::from("test.yaml"),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(error, ConfigError::InvalidField { ref field, .. } if field.contains("memory.core.blocks") && field.ends_with(".label")),
+                "unsafe shared block label {label:?} failed for the wrong reason: {error}"
+            );
+        }
     }
 
     #[test]
@@ -475,6 +682,52 @@ agents:
 "#;
         let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
         assert!(err.to_string().contains("Duplicate ID"));
+    }
+
+    #[test]
+    fn validate_rejects_casefolded_agent_id_collision() {
+        let yaml = r#"
+agents:
+  - id: Coder
+    name: "First"
+    provider: openai
+    model: gpt-4o
+  - id: coder
+    name: "Second"
+    provider: openai
+    model: gpt-4o
+"#;
+        let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
+        assert!(err.to_string().contains("Duplicate ID"));
+    }
+
+    #[test]
+    fn validate_rejects_casefolded_shared_label_collision() {
+        let yaml = r#"
+agents:
+  - id: first
+    name: "First"
+    provider: openai
+    model: gpt-4o
+    memory:
+      core:
+        blocks:
+          - label: Team
+            shared: true
+  - id: second
+    name: "Second"
+    provider: openai
+    model: gpt-4o
+    memory:
+      core:
+        blocks:
+          - label: team
+            shared: true
+"#;
+        let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("collide on case-insensitive filesystems"));
     }
 
     #[test]

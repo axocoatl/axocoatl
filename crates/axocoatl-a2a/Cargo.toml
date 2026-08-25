@@ -6,7 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
@@ -14,7 +13,7 @@ readme.workspace = true
 description = "Agent-to-Agent (A2A) protocol implementation for Axocoatl"
 
 [dependencies]
-axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
+axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
 reqwest = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }

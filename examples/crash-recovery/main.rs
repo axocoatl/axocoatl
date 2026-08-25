@@ -35,7 +35,7 @@
 //! State is persisted exactly the way the production coordinator persists a
 //! resumable run (`crates/axocoatl-actor/src/coordinator.rs`): the workflow
 //! state is serialized to JSON and stored in [`AgentCheckpoint::behavior_state`]
-//! via [`CheckpointStore`], which writes a bincode snapshot atomically (temp
+//! via [`CheckpointStore`], which writes a compact binary snapshot atomically (temp
 //! file + rename) and prunes to the last 3 versions. `load_latest` reads the
 //! highest version back. We use the same `behavior_state` JSON convention so the
 //! example exercises the genuine store, not a toy of its own.
@@ -335,12 +335,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         checkpoint_time: now_ts(),
         session_messages: Vec::new(),
         cumulative_token_usage: TokenUsageStats::default(),
+        cumulative_token_usage_known: true,
         behavior_state: Some(serde_json::to_string(&state)?),
     };
     store.save(&ckpt).await?;
     let ckpt_path = checkpoint_dir
         .join(&workflow_id.0)
-        .join(format!("{:016}.ckpt", checkpoint_version));
+        .join(format!("{checkpoint_version:016}.ckpt"));
     println!("✔  Checkpoint written: {}", ckpt_path.display());
     println!(
         "   (researcher output captured, completed_at={}, summarizer still pending)\n",
@@ -461,12 +462,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             checkpoint_time: now_ts(),
             session_messages: Vec::new(),
             cumulative_token_usage: TokenUsageStats::default(),
+            cumulative_token_usage_known: true,
             behavior_state: Some(serde_json::to_string(&state)?),
         };
         store.save(&ckpt).await?;
         let p = checkpoint_dir
             .join(&workflow_id.0)
-            .join(format!("{:016}.ckpt", next_version));
+            .join(format!("{next_version:016}.ckpt"));
         println!(
             "✔  Checkpoint updated: {} (workflow complete)\n",
             p.display()

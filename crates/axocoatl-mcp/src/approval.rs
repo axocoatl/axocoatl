@@ -24,6 +24,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{oneshot, Mutex};
 
+/// Maximum time a tool call may remain parked for a human decision.
+///
+/// Runtime hook deadlines that wrap [`McpApprovalGate::request`] must exceed
+/// this value. Otherwise the outer hook can cancel the request before the gate
+/// reaches its deny-on-timeout path.
+pub const MCP_APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
 /// Context the user needs to make an informed decision.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalContext {
@@ -112,7 +119,7 @@ impl McpApprovalGate {
             );
         }
         on_request(&ctx);
-        match tokio::time::timeout(Duration::from_secs(5 * 60), rx).await {
+        match tokio::time::timeout(MCP_APPROVAL_TIMEOUT, rx).await {
             Ok(Ok(res)) => res,
             Ok(Err(_)) | Err(_) => {
                 // Receiver dropped or timed out — treat as a soft deny.
@@ -140,6 +147,38 @@ impl McpApprovalGate {
         } else {
             false
         }
+    }
+
+    /// Deny and remove every pending approval whose scoped agent id starts
+    /// with `agent_prefix`.
+    ///
+    /// Session Stop uses this with `{session_id}:` so a tool that has not yet
+    /// been dispatched wakes immediately instead of waiting for the five-minute
+    /// human-approval timeout. The removed contexts are returned so the daemon
+    /// can broadcast authoritative resolution frames to every connected UI.
+    pub async fn deny_pending_for_agent_prefix(&self, agent_prefix: &str) -> Vec<ApprovalContext> {
+        if agent_prefix.is_empty() {
+            return Vec::new();
+        }
+        let mut pending = self.pending.lock().await;
+        let mut ids: Vec<_> = pending
+            .iter()
+            .filter(|(_, approval)| approval.context.agent_id.starts_with(agent_prefix))
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        let mut denied = Vec::with_capacity(ids.len());
+        for id in ids {
+            let Some(approval) = pending.remove(&id) else {
+                continue;
+            };
+            denied.push(approval.context);
+            let _ = approval.sender.send(ApprovalResolution {
+                decision: PermissionDecision::Deny,
+                persist_scope: PersistScope::Once,
+            });
+        }
+        denied
     }
 
     /// Snapshot of pending approvals — for the dashboard's "waiting" badge.
@@ -311,5 +350,61 @@ mod tests {
                 PermissionDecision::Allow
             );
         }
+    }
+
+    #[tokio::test]
+    async fn scoped_denial_wakes_only_matching_approval_waiters() {
+        fn context(id: &str, agent_id: &str) -> ApprovalContext {
+            ApprovalContext {
+                approval_id: id.into(),
+                agent_id: agent_id.into(),
+                server: "filesystem".into(),
+                tool: "mcp__filesystem__write".into(),
+                tool_display: "write".into(),
+                arguments_preview: "{}".into(),
+                requested_at: 0,
+            }
+        }
+
+        let gate = Arc::new(McpApprovalGate::new());
+        let session_gate = gate.clone();
+        let session_request = tokio::spawn(async move {
+            session_gate
+                .request(context("ap-session", "ses-a:coder"), |_| {})
+                .await
+        });
+        let other_gate = gate.clone();
+        let other_request = tokio::spawn(async move {
+            other_gate
+                .request(context("ap-other", "ses-b:coder"), |_| {})
+                .await
+        });
+        while gate.pending_ids().await.len() != 2 {
+            tokio::task::yield_now().await;
+        }
+
+        let denied = gate.deny_pending_for_agent_prefix("ses-a:").await;
+        assert_eq!(denied.len(), 1);
+        assert_eq!(denied[0].approval_id, "ap-session");
+        assert_eq!(
+            session_request.await.unwrap().decision,
+            PermissionDecision::Deny
+        );
+        assert_eq!(gate.pending_ids().await, vec!["ap-other".to_string()]);
+
+        assert!(
+            gate.resolve(
+                "ap-other",
+                ApprovalResolution {
+                    decision: PermissionDecision::Allow,
+                    persist_scope: PersistScope::Once,
+                }
+            )
+            .await
+        );
+        assert_eq!(
+            other_request.await.unwrap().decision,
+            PermissionDecision::Allow
+        );
     }
 }

@@ -219,6 +219,15 @@ export class AxSettingsAgents extends HTMLElement {
   async restartAgent(agentOrId) {
     const id = typeof agentOrId === 'object' ? agentOrId?.id : agentOrId;
     if (!id || this.#busy) return false;
+    const agent = this.#agents.find((candidate) => candidate.id === id);
+    if (agent?.role === 'worker') {
+      emit(this, 'notify', {
+        title: 'Worker is coordinator-owned',
+        body: `Restart ${agent.team || 'its coordinator'} instead. A Worker is never a standalone Agent actor.`,
+        kind: 'warn',
+      });
+      return false;
+    }
     this.#busy = `restart:${id}`;
     this.#setBusyButtons();
     try {
@@ -373,6 +382,33 @@ export class AxSettingsAgents extends HTMLElement {
     });
   }
 
+  #usageForAgent(agentId) {
+    const entries = (this.#tokens?.per_agent || []).filter((item) => (
+      item?.template_agent_id === agentId
+      || (item?.template_agent_id == null && item?.agent_id === agentId)
+    ));
+    return entries.reduce((total, item) => ({
+      input_tokens: total.input_tokens + Number(item?.input_tokens || 0),
+      output_tokens: total.output_tokens + Number(item?.output_tokens || 0),
+      reasoning_tokens: total.reasoning_tokens + Number(item?.reasoning_tokens || 0),
+      total_tokens: total.total_tokens + Number(
+        item?.total_tokens
+        ?? (Number(item?.input_tokens || 0)
+          + Number(item?.output_tokens || 0)
+          + Number(item?.reasoning_tokens || 0)),
+      ),
+      token_usage_known: total.token_usage_known && item?.token_usage_known === true,
+      instances: total.instances + 1,
+    }), {
+      input_tokens: 0,
+      output_tokens: 0,
+      reasoning_tokens: 0,
+      total_tokens: 0,
+      token_usage_known: true,
+      instances: 0,
+    });
+  }
+
   #renderTable() {
     const host = this.#root.querySelector('.table-host');
     host.replaceChildren();
@@ -385,7 +421,7 @@ export class AxSettingsAgents extends HTMLElement {
     const table = h('table', 'agent-table');
     const head = h('thead');
     const headRow = h('tr');
-    ['ID', 'Team', 'Provider', 'Model', 'Status', 'Input', 'Output', ''].forEach((label) => headRow.append(h('th', '', label)));
+    ['ID', 'Team', 'Provider', 'Model', 'Status', 'Input', 'Output', 'Reasoning', 'Total', ''].forEach((label) => headRow.append(h('th', '', label)));
     head.append(headRow);
     const body = h('tbody');
     visible.forEach((agent) => {
@@ -397,12 +433,19 @@ export class AxSettingsAgents extends HTMLElement {
       row.append(h('td', '', agent.provider || '—'), h('td', 'mono', agent.model || '—'));
       const status = this.#statuses[agent.id] || 'Unknown';
       const statusCell = h('td'); statusCell.append(h('span', `badge ${statusClass(status)}`, status)); row.append(statusCell);
-      const usage = this.#tokens?.per_agent?.find((item) => item.agent_id === agent.id);
-      row.append(h('td', 'mono', formatNumber(usage?.input_tokens)), h('td', 'mono', formatNumber(usage?.output_tokens)));
+      const usage = this.#usageForAgent(agent.id);
+      const lowerBound = usage.token_usage_known ? '' : '≥';
+      row.append(
+        h('td', 'mono', formatNumber(usage.input_tokens)),
+        h('td', 'mono', formatNumber(usage.output_tokens)),
+        h('td', 'mono', formatNumber(usage.reasoning_tokens)),
+        h('td', 'mono', `${lowerBound}${formatNumber(usage.total_tokens)}`),
+      );
       const actions = h('td');
       const restart = h('button', 'action inline-action', this.#busy === `restart:${agent.id}` ? '…' : 'Restart');
       restart.type = 'button';
-      restart.disabled = Boolean(this.#busy);
+      restart.disabled = Boolean(this.#busy) || agent.role === 'worker';
+      if (agent.role === 'worker') restart.title = 'Workers start and stop with their coordinator.';
       restart.addEventListener('click', (event) => { event.stopPropagation(); void this.restartAgent(agent.id); });
       actions.append(restart); row.append(actions);
       row.addEventListener('click', () => this.openAgent(agent.id));
@@ -436,6 +479,22 @@ export class AxSettingsAgents extends HTMLElement {
     teamRow.append(h('span', 'field-label', 'Team'));
     const teamValue = h('div'); teamValue.append(h('span', `badge team ${teamClass(agent.team)}`, agent.team || '—'));
     teamRow.append(teamValue); identity.append(teamRow);
+    const roleRow = h('div', 'field-row');
+    roleRow.append(h('span', 'field-label', 'Role'), h('span', 'mono', agent.role || 'autonomous'));
+    identity.append(roleRow);
+    if (agent.role === 'coordinator') {
+      identity.append(h(
+        'p',
+        'status-note',
+        'A Coordinator owns Session conversation and orchestration continuity. Tier 2–4 memory and recall belong to its declared Workers, scoped under each Session.',
+      ));
+    } else if (agent.role === 'worker') {
+      identity.append(h(
+        'p',
+        'status-note',
+        'This Worker is created only by its Coordinator. Its configured tools, provider, budget, sampling, and memory apply inside that Coordinator run; restart the Coordinator instead.',
+      ));
+    }
     body.append(identity);
 
     const prompt = this.#section('System prompt');
@@ -453,10 +512,10 @@ export class AxSettingsAgents extends HTMLElement {
     budgetEnabled.type = 'checkbox';
     budgetEnabled.dataset.field = 'agent-budget-enabled';
     budgetEnabled.checked = hasBudget;
-    budgetSwitch.append(budgetEnabled, h('span', '', 'Use a token spend cap'));
+    budgetSwitch.append(budgetEnabled, h('span', '', 'Use a local token guard'));
     budget.append(
       this.#field('Budget', budgetSwitch),
-      h('p', 'budget-note', hasBudget ? 'Turn this off to remove the configured spend cap.' : 'No spend cap is configured for this agent.'),
+      h('p', 'budget-note', hasBudget ? 'Checks local request estimates and provider-reported usage; not an absolute billing cap.' : 'No local token guard is configured for this agent.'),
       this.#field('Per call', this.#input('agent-per-call', agent.per_call_budget ?? 4096, { type: 'number', mono: true })),
       this.#field('Per execution', this.#input('agent-per-exec', agent.per_execution_budget ?? 16000, { type: 'number', mono: true })),
     );
@@ -473,8 +532,8 @@ export class AxSettingsAgents extends HTMLElement {
       body.querySelectorAll('[data-field="agent-per-call"], [data-field="agent-per-exec"], [data-field="agent-policy"]')
         .forEach((control) => { control.disabled = !enabled; });
       body.querySelector('.budget-note').textContent = enabled
-        ? 'Turn this off to remove the configured spend cap.'
-        : 'No spend cap is configured for this agent.';
+        ? 'Checks local request estimates and provider-reported usage; not an absolute billing cap.'
+        : 'No local token guard is configured for this agent.';
     };
     budgetEnabled.addEventListener('change', syncBudgetControls);
     syncBudgetControls();
@@ -493,14 +552,25 @@ export class AxSettingsAgents extends HTMLElement {
 
     const live = this.#section('Live');
     const grid = h('div', 'live-grid');
-    const usage = this.#tokens?.per_agent?.find((item) => item.agent_id === agent.id);
+    const usage = this.#usageForAgent(agent.id);
     const status = this.#statuses[agent.id] || 'Unknown';
     grid.append(h('span', '', 'Status'));
     const statusValue = h('span'); statusValue.append(h('span', `badge ${statusClass(status)}`, status)); grid.append(statusValue);
-    grid.append(h('span', '', 'Input tokens'), h('span', 'mono', formatNumber(usage?.input_tokens)));
-    grid.append(h('span', '', 'Output tokens'), h('span', 'mono', formatNumber(usage?.output_tokens)));
-    grid.append(h('span', '', 'Total'), h('span', 'mono', formatNumber((usage?.input_tokens || 0) + (usage?.output_tokens || 0))));
-    live.append(grid, h('p', 'status-note', 'Agent edits are live for this daemon process; YAML is unchanged.'));
+    grid.append(h('span', '', 'Input tokens'), h('span', 'mono', formatNumber(usage.input_tokens)));
+    grid.append(h('span', '', 'Output tokens'), h('span', 'mono', formatNumber(usage.output_tokens)));
+    grid.append(h('span', '', 'Reasoning tokens'), h('span', 'mono', formatNumber(usage.reasoning_tokens)));
+    grid.append(
+      h('span', '', usage.token_usage_known ? 'Total' : 'Known subtotal'),
+      h('span', 'mono', `${usage.token_usage_known ? '' : '≥'}${formatNumber(usage.total_tokens)}`),
+    );
+    live.append(
+      grid,
+      h(
+        'p',
+        'status-note',
+        `Current runtime usage across ${usage.instances} live global or Session instance${usage.instances === 1 ? '' : 's'}. ${usage.token_usage_known ? 'Complete tracked total; provider usage is used when reported and otherwise estimated locally.' : 'At least one dispatched call lacks terminal usage, so this is a lower bound.'} Agent edits are live for this daemon process; YAML is unchanged.`,
+      ),
+    );
     body.append(live);
 
     body.querySelectorAll('input, textarea, select').forEach((control) => {
@@ -564,10 +634,10 @@ export class AxSettingsAgents extends HTMLElement {
       const perCallBudget = parseBudget(perCall, 'Per-call budget');
       const perExecutionBudget = parseBudget(perExecution, 'Per-execution budget');
       const overflowPolicy = read('agent-policy');
-      if (perCallBudget === null) throw new Error('Per-call budget is required when the spend cap is enabled.');
-      if (perExecutionBudget === null) throw new Error('Per-execution budget is required when the spend cap is enabled.');
+      if (perCallBudget === null) throw new Error('Per-call budget is required when the token guard is enabled.');
+      if (perExecutionBudget === null) throw new Error('Per-execution budget is required when the token guard is enabled.');
       if (perCallBudget > perExecutionBudget) throw new Error('Per-call budget cannot exceed the per-execution budget.');
-      if (!overflowPolicy) throw new Error('Overflow policy is required when the spend cap is enabled.');
+      if (!overflowPolicy) throw new Error('Overflow policy is required when the token guard is enabled.');
       draft.per_call_budget = perCallBudget;
       draft.per_execution_budget = perExecutionBudget;
       draft.overflow_policy = overflowPolicy;
@@ -619,10 +689,15 @@ export class AxSettingsAgents extends HTMLElement {
     const restart = this.#root.querySelector('.drawer .restart');
     const save = this.#root.querySelector('.drawer .save');
     if (!restart || !save) return;
-    restart.disabled = Boolean(this.#busy);
-    save.disabled = Boolean(this.#busy);
-    restart.textContent = this.#busy.startsWith('restart:') ? 'Restarting…' : '↻ Restart only';
-    save.textContent = this.#busy.startsWith('save:') ? 'Saving…' : 'Save & restart';
+    const workerOwned = this.#agents.find((agent) => agent.id === this.#selected)?.role === 'worker';
+    restart.disabled = Boolean(this.#busy) || workerOwned;
+    save.disabled = Boolean(this.#busy) || workerOwned;
+    restart.textContent = workerOwned
+      ? 'Coordinator-owned Worker'
+      : this.#busy.startsWith('restart:') ? 'Restarting…' : '↻ Restart only';
+    save.textContent = workerOwned
+      ? 'Edit YAML, restart Coordinator'
+      : this.#busy.startsWith('save:') ? 'Saving…' : 'Save & restart';
   }
 }
 

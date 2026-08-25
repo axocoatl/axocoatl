@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "film": "multi-agent-handoff",
+  "captured_at": "2026-08-25T07:06:51.834Z",
+  "url": "http://localhost:18084/",
+  "browser": "Codex in-app browser",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1
+  },
+  "theme": "dark",
+  "reduced_motion": "no-preference",
+  "timeline": "demo/one-app/films/source/multi-agent-handoff/timeline.json",
+  "timeline_sha256": "7b9582bff7bc25fa97f734e35115dfd9634591eb31cb7c7035308e45418ac446",
+  "keyframes": [
+    {
+      "beat": "dependency-edge",
+      "path": "demo/one-app/films/source/multi-agent-handoff/shot-dependency-edge.jpg",
+      "sha256": "37ed3ca1e569631aac0c6866fbca86816397eb6a28559bfa382280aff1ee0384"
+    },
+    {
+      "beat": "architect",
+      "path": "demo/one-app/films/source/multi-agent-handoff/shot-architect.jpg",
+      "sha256": "12243f7cccabfefd6713371c3e3e311355887311ee4b034eb26361afbac4f738"
+    },
+    {
+      "beat": "reviewer",
+      "path": "demo/one-app/films/source/multi-agent-handoff/shot-reviewer.jpg",
+      "sha256": "1f1bbd091c6089130debb297a90f07458d1975d3a8894ea5b8641d34bdf06147"
+    },
+    {
+      "beat": "durable-outputs",
+      "path": "demo/one-app/films/source/multi-agent-handoff/shot-durable-outputs.jpg",
+      "sha256": "78e29764575636bd44cdeabcb9224543c58f45c0e68b317e76f0d5fd75b3c2a1"
+    }
+  ]
+}

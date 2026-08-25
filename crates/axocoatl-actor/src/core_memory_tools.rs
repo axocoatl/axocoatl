@@ -106,6 +106,10 @@ impl CoreMemoryAppendTool {
 
 #[async_trait]
 impl BuiltinTool for CoreMemoryAppendTool {
+    fn concurrency_policy(&self) -> axocoatl_llm::ConcurrencyPolicy {
+        axocoatl_llm::ConcurrencyPolicy::Exclusive
+    }
+
     fn description(&self) -> &str {
         "Append a line to one of your core-memory blocks (persona, human, project, …). Use this \
          to record a new durable fact about yourself, the user, or the project. Keep it concise — \
@@ -140,6 +144,10 @@ impl CoreMemoryReplaceTool {
 
 #[async_trait]
 impl BuiltinTool for CoreMemoryReplaceTool {
+    fn concurrency_policy(&self) -> axocoatl_llm::ConcurrencyPolicy {
+        axocoatl_llm::ConcurrencyPolicy::Exclusive
+    }
+
     fn description(&self) -> &str {
         "Replace the first occurrence of some text within a core-memory block. Use to correct or \
          update an existing fact, or to shorten a block that is near its limit. Errors if the old \
@@ -183,6 +191,10 @@ impl CoreMemorySetTool {
 
 #[async_trait]
 impl BuiltinTool for CoreMemorySetTool {
+    fn concurrency_policy(&self) -> axocoatl_llm::ConcurrencyPolicy {
+        axocoatl_llm::ConcurrencyPolicy::Exclusive
+    }
+
     fn description(&self) -> &str {
         "Overwrite a core-memory block's entire contents. Use sparingly — prefer \
          core_memory_append / core_memory_replace so existing facts are preserved."

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "film": "shared-core-memory",
+  "timeline": "demo/one-app/films/source/shared-core-memory/timeline.json",
+  "timeline_sha256": "fafc69b3f188da61d39476840eea23fa61727277c5ea78d5c66165487a6985a6",
+  "input_fps": 8,
+  "frame_count": 336,
+  "duration_seconds": 42,
+  "sequence_sha256": "0b4f0cd5302c1b5374390bd3c85b3e1b8d59aa963563e2862a08f5b398cb10e3",
+  "shots": [
+    {
+      "beat": "write",
+      "source": "shot-write.jpg",
+      "source_sha256": "dc954afd5570de57a4fbf6b2fabba08ad4e37e4761dd3093dcd6497987de1283",
+      "hold_frames": 80,
+      "first_frame": 1,
+      "last_frame": 80
+    },
+    {
+      "beat": "restart",
+      "source": "shot-restart.jpg",
+      "source_sha256": "f1efe8b78e24b8f908dbbafa51a47e13349fba1ec6b75194377159ba02c43c57",
+      "hold_frames": 72,
+      "first_frame": 81,
+      "last_frame": 152
+    },
+    {
+      "beat": "separate-sessions",
+      "source": "shot-separate-sessions.jpg",
+      "source_sha256": "458859f054df18137979036b99bbf491a64c09f7efab5564bcfd0e09a7612466",
+      "hold_frames": 80,
+      "first_frame": 153,
+      "last_frame": 232
+    },
+    {
+      "beat": "recall",
+      "source": "shot-recall.jpg",
+      "source_sha256": "ec9b9bf89e466eed49f91ce8ed955d6d607abedafa08c808be2151a1711da636",
+      "hold_frames": 104,
+      "first_frame": 233,
+      "last_frame": 336
+    }
+  ],
+  "poster_beat": "recall",
+  "poster_frame": 284
+}

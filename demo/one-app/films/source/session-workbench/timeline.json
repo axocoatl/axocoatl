@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "film": "session-workbench",
+  "input_fps": 8,
+  "shots": [
+    { "beat": "visible-defect", "source": "shot-visible-defect.jpg", "hold_frames": 88 },
+    { "beat": "agent-route", "source": "shot-agent-route.jpg", "hold_frames": 120 },
+    { "beat": "verified-result", "source": "shot-verified-result.jpg", "hold_frames": 88 },
+    { "beat": "git-ownership", "source": "shot-git-ownership.jpg", "hold_frames": 64 }
+  ]
+}

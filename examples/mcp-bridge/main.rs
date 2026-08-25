@@ -214,6 +214,7 @@ impl LlmProvider for MockWeatherLlm {
                 id: "call_weather_1".to_string(),
                 name: self.tool_name.clone(),
                 arguments: serde_json::json!({ "city": self.city }),
+                provider_metadata: Default::default(),
             }],
             finish_reason: FinishReason::ToolUse,
             usage: TokenUsageStats::new(40, 15),
@@ -484,9 +485,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     println!(
-        "\n    tokens: {} input + {} output = {} total",
+        "\n    tokens: {} input + {} output + {} reasoning = {} total",
         output.token_usage.input_tokens,
         output.token_usage.output_tokens,
+        output.token_usage.reasoning_tokens.unwrap_or(0),
         output.token_usage.total()
     );
 

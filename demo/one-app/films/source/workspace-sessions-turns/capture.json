@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "film": "workspace-sessions-turns",
+  "captured_at": "2026-08-25T07:30:55.427Z",
+  "url": "http://localhost:18092/",
+  "browser": "Codex in-app browser",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1
+  },
+  "theme": "dark",
+  "reduced_motion": "no-preference",
+  "timeline": "demo/one-app/films/source/workspace-sessions-turns/timeline.json",
+  "timeline_sha256": "1e92430b2d8e1800e73a84303507b5ab4e7207c3ab7f5807ed47f89abe349e39",
+  "keyframes": [
+    {
+      "beat": "workspace",
+      "path": "demo/one-app/films/source/workspace-sessions-turns/shot-workspace.jpg",
+      "sha256": "7cff92d5e64b54f87ce4dfb6f32de8fb0695292e9ae11adef2ddfdc9c3e546f2"
+    },
+    {
+      "beat": "two-sessions",
+      "path": "demo/one-app/films/source/workspace-sessions-turns/shot-two-sessions.jpg",
+      "sha256": "f5f33c3705ef80e9ea4f443eadd51982697c4ff81e9a44aa351ba72b7eac061a"
+    },
+    {
+      "beat": "accepted-turn",
+      "path": "demo/one-app/films/source/workspace-sessions-turns/shot-accepted-turn.jpg",
+      "sha256": "d67a8e546b7eb748c69d4775061897aa44fa830e1a61507d6bcdb7f4b3f1177a"
+    },
+    {
+      "beat": "restored-turn",
+      "path": "demo/one-app/films/source/workspace-sessions-turns/shot-restored-turn.jpg",
+      "sha256": "52f44b4bb31987ad97c9f2cd76a6d24424b62cd1a4dd193d11d505438afe3c87"
+    }
+  ]
+}

@@ -83,15 +83,31 @@ impl HookRegistry {
                 value: arguments.clone(),
             };
 
-            let action = match tokio::time::timeout(self.config.timeout, hook.execute(&ctx)).await {
-                Ok(action) => action,
+            // Hooks are user-configurable extension code. Run each one in an
+            // owned task so a panic cannot unwind the AgentActor or orphan the
+            // enclosing tool-call evidence group.
+            let hook_name = hook.name().to_string();
+            let mut task = tokio::spawn(async move { hook.execute(&ctx).await });
+            let action = match tokio::time::timeout(self.config.timeout, &mut task).await {
+                Ok(Ok(action)) => action,
+                Ok(Err(error)) => HookAction::Deny {
+                    reason: format!(
+                        "Pre-hook {hook_name} panicked before {tool_name} could execute: {error}"
+                    ),
+                },
                 Err(_) => {
+                    task.abort();
+                    let _ = task.await;
                     tracing::warn!(
-                        hook = %hook.name(),
+                        hook = %hook_name,
                         tool = %tool_name,
-                        "Hook timed out, allowing"
+                        "Pre-hook timed out, denying tool execution"
                     );
-                    HookAction::Allow
+                    HookAction::Deny {
+                        reason: format!(
+                            "Pre-hook {hook_name} timed out before {tool_name} could execute"
+                        ),
+                    }
                 }
             };
 
@@ -126,11 +142,26 @@ impl HookRegistry {
                 value: result.clone(),
             };
 
-            let action = match tokio::time::timeout(self.config.timeout, hook.execute(&ctx)).await {
-                Ok(action) => action,
+            let hook_name = hook.name().to_string();
+            let mut task = tokio::spawn(async move { hook.execute(&ctx).await });
+            let action = match tokio::time::timeout(self.config.timeout, &mut task).await {
+                Ok(Ok(action)) => action,
+                Ok(Err(error)) => {
+                    return serde_json::json!({
+                        "error": format!(
+                            "Post-hook {hook_name} panicked after {tool_name} executed: {error}"
+                        )
+                    });
+                }
                 Err(_) => {
-                    tracing::warn!(hook = %hook.name(), "Post-hook timed out");
-                    HookAction::Allow
+                    task.abort();
+                    let _ = task.await;
+                    tracing::warn!(hook = %hook_name, "Post-hook timed out");
+                    return serde_json::json!({
+                        "error": format!(
+                            "Post-hook {hook_name} timed out after {tool_name} executed"
+                        )
+                    });
                 }
             };
 
@@ -141,7 +172,7 @@ impl HookRegistry {
                 }
                 HookAction::Deny { .. } => {
                     // Post hooks can't deny — ignore
-                    tracing::warn!(hook = %hook.name(), "Post-hook returned Deny, ignoring");
+                    tracing::warn!(hook = %hook_name, "Post-hook returned Deny, ignoring");
                 }
             }
         }
@@ -192,6 +223,45 @@ mod tests {
     use super::*;
     use crate::hooks::{DenyListHook, LoggingHook};
 
+    struct SlowPreHook {
+        delay: Duration,
+    }
+
+    struct PanickingHook {
+        phase: HookPhase,
+    }
+
+    #[async_trait::async_trait]
+    impl ToolHook for PanickingHook {
+        fn name(&self) -> &str {
+            "panicking_hook"
+        }
+
+        fn phases(&self) -> Vec<HookPhase> {
+            vec![self.phase]
+        }
+
+        async fn execute(&self, _ctx: &HookContext) -> HookAction {
+            panic!("intentional hook panic")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ToolHook for SlowPreHook {
+        fn name(&self) -> &str {
+            "slow_pre_hook"
+        }
+
+        fn phases(&self) -> Vec<HookPhase> {
+            vec![HookPhase::Pre]
+        }
+
+        async fn execute(&self, _ctx: &HookContext) -> HookAction {
+            tokio::time::sleep(self.delay).await;
+            HookAction::Allow
+        }
+    }
+
     #[tokio::test]
     async fn empty_registry_allows() {
         let reg = HookRegistry::new();
@@ -199,6 +269,41 @@ mod tests {
             .run_pre_hooks("echo", "agent-1", serde_json::json!({}))
             .await;
         assert!(matches!(action, HookAction::Allow));
+    }
+
+    #[tokio::test]
+    async fn pre_hook_panic_is_contained_and_fails_closed() {
+        let mut registry = HookRegistry::new();
+        registry.register_global(Arc::new(PanickingHook {
+            phase: HookPhase::Pre,
+        }));
+
+        let (action, arguments) = registry
+            .run_pre_hooks("write_file", "agent-1", serde_json::json!({"path": "x"}))
+            .await;
+
+        assert_eq!(arguments, serde_json::json!({"path": "x"}));
+        assert!(matches!(
+            action,
+            HookAction::Deny { reason }
+                if reason.contains("panicked") && reason.contains("write_file")
+        ));
+    }
+
+    #[tokio::test]
+    async fn post_hook_panic_is_contained_as_failed_result() {
+        let mut registry = HookRegistry::new();
+        registry.register_global(Arc::new(PanickingHook {
+            phase: HookPhase::Post,
+        }));
+
+        let result = registry
+            .run_post_hooks("write_file", "agent-1", serde_json::json!({"ok": true}))
+            .await;
+
+        assert!(result["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("panicked") && error.contains("write_file")));
     }
 
     #[tokio::test]
@@ -225,6 +330,44 @@ mod tests {
         let (action, _) = reg
             .run_pre_hooks("echo", "agent-1", serde_json::json!({}))
             .await;
+        assert!(matches!(action, HookAction::Allow));
+    }
+
+    #[tokio::test]
+    async fn pre_hook_timeout_fails_closed() {
+        let mut reg = HookRegistry::with_config(HookConfig {
+            timeout: Duration::from_millis(1),
+            max_depth: 1,
+        });
+        reg.register_global(Arc::new(SlowPreHook {
+            delay: Duration::from_secs(60),
+        }));
+
+        let (action, _) = reg
+            .run_pre_hooks("external_side_effect", "agent-1", serde_json::json!({}))
+            .await;
+
+        let HookAction::Deny { reason } = action else {
+            panic!("a timed-out pre-hook must deny tool execution");
+        };
+        assert!(reason.contains("slow_pre_hook"));
+        assert!(reason.contains("external_side_effect"));
+    }
+
+    #[tokio::test]
+    async fn delayed_pre_hook_decision_is_honored_before_its_deadline() {
+        let mut reg = HookRegistry::with_config(HookConfig {
+            timeout: Duration::from_millis(100),
+            max_depth: 1,
+        });
+        reg.register_global(Arc::new(SlowPreHook {
+            delay: Duration::from_millis(10),
+        }));
+
+        let (action, _) = reg
+            .run_pre_hooks("external_side_effect", "agent-1", serde_json::json!({}))
+            .await;
+
         assert!(matches!(action, HookAction::Allow));
     }
 

@@ -249,6 +249,12 @@ ax-node[data-node-kind="text_input"] { border-left: 3px solid var(--accent-2, #8
 .run-reason, .run-step-detail { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
 .run-reason { margin-top: 4px; color: var(--err, #ff6b6b); font-size: 10px; }
 .run-step-detail { color: var(--err, #ff6b6b); }
+.run-result { display: grid; gap: 5px; padding: 7px; border: 1px solid var(--border, #293140);
+  border-radius: 5px; background: var(--bg-2, #0c1017); }
+.run-result-label { color: var(--muted, #8c94a6); font-size: 9px; letter-spacing: .07em; text-transform: uppercase; }
+.run-result-content { max-height: 220px; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--text, #e8ecf3); font: 10px/1.5 var(--font-mono, ui-monospace, monospace); }
+.run-result-unavailable { padding: 4px; color: var(--muted-2, #697286); font-size: 10px; }
 
 .popover { position: fixed; z-index: 80; width: min(420px, calc(100vw - 20px)); display: grid; gap: 7px; padding: 9px;
   background: var(--panel-2, #161b25); border: 1px solid var(--border-strong, #384153); border-radius: 10px; box-shadow: var(--shadow-lg); }
@@ -267,7 +273,32 @@ ax-node[data-node-kind="text_input"] { border-left: 3px solid var(--accent-2, #8
 .interrupts.full { width: 100%; }
 .interrupt-list { flex: 1; min-height: 0; overflow: auto; display: grid; align-content: start; gap: 9px; padding: 10px; }
 .interrupt { display: grid; gap: 8px; padding: 11px; background: var(--panel, #10131a); border: 1px solid var(--border, #293140); border-radius: 9px; }
-.interrupt-message { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-sm, 12px); line-height: 1.5; }
+.interrupt-message { display: grid; gap: 8px; overflow-wrap: anywhere; font-size: var(--fs-sm, 12px); line-height: 1.55; }
+.interrupt-message p, .interrupt-message h3, .interrupt-message h4,
+.interrupt-message ul, .interrupt-message ol, .interrupt-message pre { margin: 0; }
+.interrupt-message h3, .interrupt-message h4 { color: var(--text, #e8ecf3); line-height: 1.3; }
+.interrupt-message h3 { font-size: var(--fs-body, 13px); }
+.interrupt-message h4 { font-size: var(--fs-sm, 12px); }
+.interrupt-message ul, .interrupt-message ol { display: grid; gap: 4px; padding-left: 20px; }
+.interrupt-message code {
+  padding: 1px 4px; border-radius: 4px; background: var(--bg-3, #181e29);
+  color: var(--accent-2, #84f1d0); font-family: var(--font-mono, ui-monospace, monospace);
+}
+.interrupt-message pre {
+  max-height: 240px; overflow: auto; padding: 8px; border: 1px solid var(--border, #293140);
+  border-radius: 6px; background: var(--bg-2, #0c1017); white-space: pre-wrap;
+}
+.interrupt-message pre code { padding: 0; background: transparent; color: var(--text, #e8ecf3); }
+.interrupt-message a { color: var(--accent, #31d6a6); }
+.interrupt-message blockquote { margin: 0; padding-left: 9px; border-left: 2px solid var(--border-strong, #384153); color: var(--muted, #8c94a6); }
+.interrupt-reviews { display: grid; gap: 7px; padding-top: 8px; border-top: 1px solid var(--border, #293140); }
+.interrupt-reviews > h3 { font-size: var(--fs-xs, 11px); letter-spacing: .05em; text-transform: uppercase; }
+.interrupt-review-list { display: grid; gap: 8px; padding: 0; list-style: none; counter-reset: review; }
+.interrupt-review {
+  display: grid; gap: 6px; padding: 8px 9px; border: 1px solid var(--border, #293140);
+  border-radius: 7px; background: var(--bg-2, #0c1017); counter-increment: review;
+}
+.interrupt-review::before { color: var(--muted, #8c94a6); font-size: 10px; content: 'Review ' counter(review); }
 .interrupt-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: stretch; }
 .interrupt-actions textarea { min-height: 55px; }
 
@@ -325,7 +356,8 @@ const TEMPLATE = `
         <div class="main-head">
           <nav class="crumbs" aria-label="Automation folder"></nav><span class="grow"></span>
           <button class="btn new-automation" type="button">+ Automation</button>
-          <button class="btn ghost interrupt-toggle" type="button">No interrupts</button>
+          <button class="btn ghost interrupt-toggle" type="button" aria-controls="pending-interrupts"
+            aria-expanded="false">No interrupts</button>
           <div class="filter" role="group" aria-label="Filter Automations">
             <button class="active" type="button" data-filter="all">All</button>
             <button type="button" data-filter="manual">▶ Manual</button>
@@ -349,22 +381,26 @@ const TEMPLATE = `
         <button class="btn run" type="button">▶ Run</button>
       </div>
       <div class="canvas-wrap">
-        <ax-lattice id="automation-settings-lattice" background="dots" snap="20" min-zoom="0.2" max-zoom="3"></ax-lattice>
+        <ax-lattice id="automation-settings-lattice" background="dots" snap="20" min-zoom="0.2" max-zoom="3"
+          aria-label="Automation graph"></ax-lattice>
         <ax-controls class="controls"></ax-controls><ax-minimap class="minimap"></ax-minimap>
       </div>
       <div class="editor-foot">View mode · click Edit to change nodes, edges, inputs, or trigger.</div>
-      <aside class="drawer inspector hide"><div class="drawer-head"><strong>Node</strong><button class="icon-btn inspector-close" type="button">×</button></div><div class="drawer-body"></div></aside>
-      <aside class="drawer runs hide"><div class="drawer-head"><strong>Run history</strong><button class="icon-btn runs-close" type="button">×</button></div><div class="run-list"></div></aside>
+      <aside class="drawer inspector hide"><div class="drawer-head"><strong>Node</strong><button class="icon-btn inspector-close" type="button" title="Close node settings" aria-label="Close node settings">×</button></div><div class="drawer-body"></div></aside>
+      <aside class="drawer runs hide"><div class="drawer-head"><strong>Run history</strong><button class="icon-btn runs-close" type="button" title="Close run history" aria-label="Close run history">×</button></div><div class="run-list"></div></aside>
     </section>
 
-    <aside class="interrupts hide">
-      <div class="drawer-head"><strong>Pending interrupts</strong><button class="icon-btn interrupts-expand" type="button" title="Expand">⛶</button><button class="icon-btn interrupts-close" type="button">×</button></div>
+    <aside class="interrupts hide" id="pending-interrupts" aria-label="Pending Automation interrupts">
+      <div class="drawer-head"><strong>Pending interrupts</strong><button class="icon-btn interrupts-expand" type="button"
+        title="Expand pending interrupts" aria-label="Expand pending interrupts" aria-expanded="false">⛶</button><button class="icon-btn interrupts-close" type="button"
+        title="Close pending interrupts" aria-label="Close pending interrupts">×</button></div>
       <div class="interrupt-list"></div>
       <div class="small muted" style="padding:10px;border-top:1px solid var(--border)">Resume guidance becomes the interrupted node's output.</div>
     </aside>
 
     <div class="popover add-popover hide">
-      <div class="popover-head"><strong>Add a node</strong><span class="grow"></span><button class="icon-btn popover-close" type="button">×</button></div>
+      <div class="popover-head"><strong>Add a node</strong><span class="grow"></span><button class="icon-btn popover-close" type="button"
+        title="Close node picker" aria-label="Close node picker">×</button></div>
       <div class="popover-tabs"><button class="active" type="button" data-kind="agent">Agents</button><button type="button" data-kind="tool">Tools</button><button type="button" data-kind="conditional">Router</button><button type="button" data-kind="flow">Flow</button></div>
       <input class="input popover-search" type="search" placeholder="Search agents…" spellcheck="false">
       <div class="popover-list"></div><div class="small muted">Click an item to add it. Esc cancels.</div>
@@ -427,6 +463,11 @@ function createController(host, root) {
     latticeReady: false,
     latticeWired: false,
     viewportTimer: 0,
+    graphFrame: 0,
+    graphGeneration: 0,
+    graphObserver: null,
+    graphObservedSize: '',
+    graphLayoutPending: false,
     interrupts: [],
     interruptKeys: '',
     interruptGeneration: 0,
@@ -461,6 +502,7 @@ function createController(host, root) {
       const close = h('button', '', '×');
       close.type = 'button';
       close.title = 'Dismiss';
+      close.setAttribute('aria-label', 'Dismiss error');
       close.addEventListener('click', () => setError(key, ''));
       actions.append(close);
       row.append(actions);
@@ -553,6 +595,12 @@ function createController(host, root) {
     clearTimeout(state.editor.saveTimer);
     clearTimeout(state.viewportTimer);
     clearTimeout(state.frameTimer);
+    cancelAnimationFrame(state.graphFrame);
+    state.graphFrame = 0;
+    state.graphGeneration += 1;
+    state.graphObserver?.disconnect();
+    state.graphObserver = null;
+    state.graphObservedSize = '';
     hideContextMenu();
     closeAddPopover();
   }
@@ -573,17 +621,20 @@ function createController(host, root) {
       renderCards();
     }));
     $('.interrupt-toggle').addEventListener('click', () => {
-      $('.interrupts').classList.toggle('hide');
-      renderInterrupts();
+      setInterruptPanel($('.interrupts').classList.contains('hide'), { focus: true });
     });
     $('.interrupts-expand').addEventListener('click', () => {
       const panel = $('.interrupts');
       const expanded = !panel.classList.contains('full');
       panel.classList.toggle('full', expanded);
       $('.interrupts-expand').textContent = expanded ? '⤡' : '⛶';
-      $('.interrupts-expand').title = expanded ? 'Exit expanded view' : 'Expand';
+      $('.interrupts-expand').title = expanded ? 'Exit expanded pending interrupts' : 'Expand pending interrupts';
+      $('.interrupts-expand').setAttribute('aria-label', expanded
+        ? 'Exit expanded pending interrupts'
+        : 'Expand pending interrupts');
+      $('.interrupts-expand').setAttribute('aria-expanded', String(expanded));
     });
-    $('.interrupts-close').addEventListener('click', () => $('.interrupts').classList.add('hide'));
+    $('.interrupts-close').addEventListener('click', () => setInterruptPanel(false, { restoreFocus: true }));
     $('.back').addEventListener('click', () => void closeEditor());
     $('.run').addEventListener('click', () => {
       if (state.editor.automation) void prepareRun(state.editor.automation);
@@ -613,7 +664,7 @@ function createController(host, root) {
       let handled = true;
       if (!$('.add-popover').classList.contains('hide')) closeAddPopover();
       else if (!$('.context-menu').classList.contains('hide')) hideContextMenu();
-      else if (!$('.interrupts').classList.contains('hide')) $('.interrupts').classList.add('hide');
+      else if (!$('.interrupts').classList.contains('hide')) setInterruptPanel(false, { restoreFocus: true });
       else if (!$('.inspector').classList.contains('hide')) closeInspector();
       else if (!$('.runs').classList.contains('hide')) closeRuns();
       else handled = false;
@@ -832,9 +883,20 @@ function createController(host, root) {
   }
 
   function showInterrupts() {
-    $('.interrupts').classList.remove('hide');
-    renderInterrupts();
+    setInterruptPanel(true, { focus: true });
     void refreshInterrupts();
+  }
+
+  function setInterruptPanel(open, { focus = false, restoreFocus = false } = {}) {
+    const panel = $('.interrupts');
+    panel.classList.toggle('hide', !open);
+    $('.interrupt-toggle').setAttribute('aria-expanded', String(open));
+    if (open) {
+      renderInterrupts();
+      if (focus) queueMicrotask(() => $('.interrupts-close')?.focus());
+    } else if (restoreFocus) {
+      queueMicrotask(() => $('.interrupt-toggle')?.focus());
+    }
   }
 
   function selectFolder(path) {
@@ -1683,7 +1745,12 @@ function createController(host, root) {
     $('.run').disabled = !state.editor.canonical || Boolean(referenceIssue);
     $('.run').title = referenceIssue || '';
     if (!referenceIssue) setError('validation', '');
-    byId('automation-settings-lattice')?.querySelectorAll('ax-node').forEach((node) => node.setAttribute('draggable', String(state.editor.mode === 'edit')));
+    const lattice = byId('automation-settings-lattice');
+    lattice?.querySelectorAll('ax-node').forEach((node) => node.setAttribute('draggable', String(state.editor.mode === 'edit')));
+    syncGraphLabel(lattice, state.editor.automation);
+    if (lattice && state.editor.automation && previousMode !== state.editor.mode) {
+      scheduleGraphViewport(lattice, state.editor.automation, { restoreEdit: true });
+    }
     if (state.editor.selectedNode && previousMode !== state.editor.mode) openInspector(state.editor.selectedNode);
   }
 
@@ -2003,13 +2070,67 @@ function createController(host, root) {
   }
 
   async function ensureLattice() {
-    if (state.latticeReady) return;
-    await import('/lattice/index.js');
-    await customElements.whenDefined('ax-lattice');
-    state.latticeReady = true;
+    if (!state.latticeReady) {
+      await import('/lattice/index.js');
+      await customElements.whenDefined('ax-lattice');
+      state.latticeReady = true;
+    }
     const lattice = byId('automation-settings-lattice');
     $('.controls').target = lattice;
     $('.minimap').target = lattice;
+    if (!state.graphObserver && typeof ResizeObserver === 'function') {
+      state.graphObserver = new ResizeObserver((entries) => {
+        const { width = 0, height = 0 } = entries[0]?.contentRect || {};
+        if (width <= 0 || height <= 0 || !state.editor.automation
+          || state.editor.mode !== 'view' || $('.editor').classList.contains('hide')) return;
+        const size = `${Math.round(width)}x${Math.round(height)}`;
+        if (size === state.graphObservedSize) return;
+        state.graphObservedSize = size;
+        scheduleGraphViewport(lattice, state.editor.automation);
+      });
+      state.graphObserver.observe(lattice);
+    }
+  }
+
+  function syncGraphLabel(lattice, automation) {
+    if (!lattice) return;
+    const name = automation?.name || automation?.id || 'Automation';
+    const count = automation?.nodes?.length || 0;
+    const mode = state.editor.mode === 'edit' ? 'Edit mode' : 'View mode';
+    lattice.setAttribute('aria-label', `${name} graph. ${count} ${count === 1 ? 'node' : 'nodes'}. ${mode}.`);
+  }
+
+  function scheduleGraphViewport(lattice, automation, { autoLayout = false, restoreEdit = false } = {}) {
+    const generation = ++state.graphGeneration;
+    cancelAnimationFrame(state.graphFrame);
+    let attempts = 4;
+    const apply = () => {
+      if (generation !== state.graphGeneration || state.editor.automation?.id !== automation.id) return;
+      const rect = lattice.getBoundingClientRect();
+      if ((rect.width <= 0 || rect.height <= 0) && attempts > 0) {
+        attempts -= 1;
+        state.graphFrame = requestAnimationFrame(apply);
+        return;
+      }
+      if (rect.width <= 0 || rect.height <= 0) return;
+      try {
+        if (autoLayout || state.graphLayoutPending) {
+          lattice.autoLayout({ direction: 'LR' });
+          state.graphLayoutPending = false;
+        }
+        const viewport = state.editor.mode === 'edit' && restoreEdit
+          ? loadViewport(automation.id)
+          : null;
+        if (viewport && typeof viewport.k === 'number') {
+          lattice.setViewport({ x: viewport.x || 0, y: viewport.y || 0, k: viewport.k });
+        } else {
+          lattice.fitView({ padding: 64 });
+        }
+        lattice.clearHistory();
+      } catch {}
+      reconcilePausedNodes();
+    };
+    state.graphFrame = requestAnimationFrame(apply);
   }
 
   async function renderGraph() {
@@ -2022,6 +2143,8 @@ function createController(host, root) {
       return;
     }
     const lattice = byId('automation-settings-lattice');
+    syncGraphLabel(lattice, automation);
+    state.graphLayoutPending = false;
     if (!state.latticeWired) {
       state.latticeWired = true;
       lattice.addEventListener('selection-change', (event) => {
@@ -2061,7 +2184,7 @@ function createController(host, root) {
       });
       lattice.addEventListener('viewport-change', (event) => {
         const id = state.editor.automation?.id;
-        if (!id) return;
+        if (!id || state.editor.mode !== 'edit') return;
         clearTimeout(state.viewportTimer);
         state.viewportTimer = setTimeout(() => saveViewport(id, event.detail), 150);
       });
@@ -2094,15 +2217,15 @@ function createController(host, root) {
       if (model.label) edge.setAttribute('label', model.label);
       lattice.append(edge);
     });
-    requestAnimationFrame(() => {
-      try {
-        if (!(automation.nodes || []).some((node) => node.position)) lattice.autoLayout({ direction: 'LR' });
-        const viewport = loadViewport(automation.id);
-        if (viewport && typeof viewport.k === 'number') lattice.setViewport({ x: viewport.x || 0, y: viewport.y || 0, k: viewport.k });
-        else lattice.fitView();
-        lattice.clearHistory();
-      } catch {}
-      reconcilePausedNodes();
+    const graphNodes = automation.nodes || [];
+    state.graphLayoutPending = graphNodes.length > 0 && graphNodes.some((node) => (
+      !node.position
+      || !Number.isFinite(Number(node.position.x))
+      || !Number.isFinite(Number(node.position.y))
+    ));
+    scheduleGraphViewport(lattice, automation, {
+      autoLayout: state.graphLayoutPending,
+      restoreEdit: true,
     });
   }
 
@@ -2413,6 +2536,7 @@ function createController(host, root) {
           });
         }
         const remove = h('button', 'icon-btn', '×'); remove.type = 'button'; remove.title = 'Remove branch';
+        remove.setAttribute('aria-label', `Remove branch ${branch.name || index + 1}`);
         remove.addEventListener('click', () => {
           const [removed] = kind.branches.splice(index, 1);
           const removedName = removed?.name || '';
@@ -2609,6 +2733,14 @@ function createController(host, root) {
     const build = () => {
       if (steps.dataset.built) return;
       steps.dataset.built = 'true';
+      if (Object.hasOwn(run, 'final_content')) {
+        const result = h('section', 'run-result');
+        result.append(h('strong', 'run-result-label', 'Result'));
+        result.append(h('pre', 'run-result-content', run.final_content || '(empty result)'));
+        steps.append(result);
+      } else if (['completed', 'failed'].includes(run.status)) {
+        steps.append(h('div', 'run-result-unavailable', 'Result was not recorded for this earlier run.'));
+      }
       if (!run.checkpoints?.length) { steps.append(h('div', 'small muted', 'No checkpoints recorded.')); return; }
       run.checkpoints.forEach((checkpoint) => {
         const icon = checkpoint.event === 'node_completed' ? '✓' : checkpoint.event === 'node_failed' ? '✗'
@@ -2669,6 +2801,109 @@ function createController(host, root) {
     }
   }
 
+  function decodedInterruptText(value) {
+    let text = String(value ?? '');
+    const trimmed = text.trim();
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      try {
+        const decoded = JSON.parse(trimmed);
+        if (typeof decoded === 'string') text = decoded;
+      } catch {}
+    }
+    return text
+      .replaceAll('\\r\\n', '\n')
+      .replaceAll('\\n', '\n')
+      .replaceAll('\\r', '\n')
+      .replaceAll('\\t', '\t')
+      .replaceAll('\r\n', '\n');
+  }
+
+  function appendInterruptInline(parent, value) {
+    const text = String(value || '');
+    const token = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))/g;
+    let cursor = 0;
+    for (const match of text.matchAll(token)) {
+      if (match.index > cursor) parent.append(document.createTextNode(text.slice(cursor, match.index)));
+      const valueText = match[0];
+      if (valueText.startsWith('**')) {
+        parent.append(h('strong', '', valueText.slice(2, -2)));
+      } else if (valueText.startsWith('`')) {
+        parent.append(h('code', '', valueText.slice(1, -1)));
+      } else {
+        const parts = valueText.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
+        const link = h('a', '', parts?.[1] || valueText);
+        link.href = parts?.[2] || '#'; link.target = '_blank'; link.rel = 'noopener noreferrer';
+        parent.append(link);
+      }
+      cursor = match.index + valueText.length;
+    }
+    if (cursor < text.length) parent.append(document.createTextNode(text.slice(cursor)));
+  }
+
+  function appendInterruptRichText(parent, value) {
+    const text = decodedInterruptText(value);
+    const lines = text.split('\n');
+    let list = null;
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (line.trim().startsWith('```')) {
+        const codeLines = [];
+        index += 1;
+        while (index < lines.length && !lines[index].trim().startsWith('```')) {
+          codeLines.push(lines[index]); index += 1;
+        }
+        const pre = h('pre'); pre.append(h('code', '', codeLines.join('\n'))); parent.append(pre); list = null; continue;
+      }
+      if (!line.trim()) { list = null; continue; }
+      const heading = line.match(/^\s*(#{1,6})\s+(.+)$/);
+      if (heading) {
+        const level = heading[1].length <= 2 ? 'h3' : 'h4';
+        const node = h(level); appendInterruptInline(node, heading[2]); parent.append(node); list = null; continue;
+      }
+      const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+      const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+      if (bullet || ordered) {
+        const tag = ordered ? 'ol' : 'ul';
+        if (!list || list.localName !== tag) { list = h(tag); parent.append(list); }
+        const item = h('li'); appendInterruptInline(item, (bullet || ordered)[1]); list.append(item); continue;
+      }
+      const quote = line.match(/^\s*>\s?(.*)$/);
+      const node = h(quote ? 'blockquote' : 'p');
+      appendInterruptInline(node, quote ? quote[1] : line); parent.append(node); list = null;
+    }
+  }
+
+  function appendInterruptBody(parent, value) {
+    let source = String(value ?? '') || '(no message)';
+    const trimmed = source.trim();
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      try {
+        const decoded = JSON.parse(trimmed);
+        if (typeof decoded === 'string') source = decoded;
+      } catch {}
+    }
+    const marker = source.match(/(?:^|\r?\n|\\r?\\n)Reviews:\s*(?:(?:\r?\n)|(?:\\r?\\n))?/i);
+    if (!marker) { appendInterruptRichText(parent, source); return; }
+    const lead = source.slice(0, marker.index);
+    const encodedReviews = source.slice(marker.index + marker[0].length).trim();
+    let reviews = null;
+    try {
+      const parsed = JSON.parse(encodedReviews);
+      if (Array.isArray(parsed)) reviews = parsed;
+    } catch {}
+    if (!reviews) { appendInterruptRichText(parent, source); return; }
+    if (lead.trim()) appendInterruptRichText(parent, lead);
+    const section = h('section', 'interrupt-reviews');
+    section.append(h('h3', '', `Reviews (${reviews.length})`));
+    const list = h('ol', 'interrupt-review-list');
+    reviews.forEach((review) => {
+      const item = h('li', 'interrupt-review');
+      appendInterruptRichText(item, typeof review === 'string' ? review : JSON.stringify(review, null, 2));
+      list.append(item);
+    });
+    section.append(list); parent.append(section);
+  }
+
   function renderInterrupts() {
     const list = $('.interrupt-list');
     if (!list) return;
@@ -2683,14 +2918,19 @@ function createController(host, root) {
       const card = h('article', 'interrupt');
       card.dataset.key = key;
       card.append(h('div', 'meta mono', `${item.automation_id} · run ${String(item.run_id || '').slice(0, 8)} · node ${item.node_id}`));
-      card.append(h('div', 'interrupt-message', item.message || '(no message)'));
+      const message = h('div', 'interrupt-message');
+      appendInterruptBody(message, item.message || '(no message)');
+      card.append(message);
       const actions = h('div', 'interrupt-actions');
       const guidance = h('textarea', 'input');
       guidance.rows = 2;
       guidance.value = drafts.get(key) || '';
       guidance.placeholder = 'Your guidance — becomes the node output. Cmd/Ctrl+Enter submits.';
+      guidance.setAttribute('aria-label', `Resume guidance for ${item.automation_id}, node ${item.node_id}`);
       const resume = h('button', 'btn', '✓ Resume'); resume.type = 'button';
+      resume.setAttribute('aria-label', `Resume ${item.automation_id}, node ${item.node_id}`);
       const cancel = h('button', 'btn ghost', 'Skip'); cancel.type = 'button';
+      cancel.setAttribute('aria-label', `Skip ${item.automation_id}, node ${item.node_id}`);
       const submit = () => void resumeInterrupt(item, guidance.value || '', resume, cancel);
       guidance.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); }

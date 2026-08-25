@@ -5,9 +5,57 @@ use tokio_stream::Stream;
 
 use axocoatl_core::{MessageContent, MessageRole, TokenUsageStats};
 use axocoatl_llm::{
+    provider_tool_metadata,
+    transport::{
+        bounded_redacted, http_client, network_error, next_stream_item, read_error_text, read_json,
+        validated_endpoint, SseDecoder, RESPONSE_TIMEOUT, STREAM_IDLE_TIMEOUT,
+        STREAM_TOTAL_TIMEOUT,
+    },
+    validate_chat_response, validate_provider_request, validate_required_stream_tool_call_ids,
+    validate_required_tool_call_id, validate_response_tool_call, validate_stream_terminal,
     ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError,
     StreamEvent,
 };
+
+/// Mirrors the shared portable provider-response limit. Text recovery must
+/// enforce it while parsing so a bounded response cannot first materialize an
+/// unbounded number of actionable calls.
+const MAX_RECOVERED_TOOL_CALLS: usize = 128;
+/// Invalid/prose JSON objects are not actionable, but parsing an unlimited
+/// number of them would still amplify CPU. This bounds candidate decoding
+/// while leaving ample room for malformed prose before a legitimate call.
+const MAX_TEXT_TOOL_CANDIDATES: usize = 1_024;
+
+fn text_tool_recovery_error(message: &'static str) -> ProviderError {
+    ProviderError::ApiError {
+        provider: "ollama".to_string(),
+        status: 200,
+        message: message.to_string(),
+    }
+}
+
+fn note_text_tool_candidate(count: &mut usize) -> Result<(), ProviderError> {
+    if *count >= MAX_TEXT_TOOL_CANDIDATES {
+        return Err(text_tool_recovery_error(
+            "Ollama text tool recovery exceeded its bounded candidate scan limit",
+        ));
+    }
+    *count += 1;
+    Ok(())
+}
+
+fn push_recovered_tool_call(
+    calls: &mut Vec<axocoatl_llm::ToolCall>,
+    call: axocoatl_llm::ToolCall,
+) -> Result<(), ProviderError> {
+    if calls.len() >= MAX_RECOVERED_TOOL_CALLS {
+        return Err(text_tool_recovery_error(
+            "Ollama recovered more than 128 text tool calls",
+        ));
+    }
+    calls.push(call);
+    Ok(())
+}
 
 /// Split a `MessageContent` into Ollama's native shape: a `content` string
 /// plus an `images` array of base64-encoded blobs. Images arrive on the
@@ -142,8 +190,12 @@ fn strip_wrapping_newlines(v: &str) -> String {
 ///
 /// Only calls whose name was actually offered in `tool_names` are returned, so
 /// ordinary prose that happens to contain the markers is never misread as a call.
-fn parse_text_tool_calls(content: &str, tool_names: &[String]) -> Vec<axocoatl_llm::ToolCall> {
+fn parse_text_tool_calls(
+    content: &str,
+    tool_names: &[String],
+) -> Result<Vec<axocoatl_llm::ToolCall>, ProviderError> {
     let mut calls: Vec<axocoatl_llm::ToolCall> = Vec::new();
+    let mut candidate_count = 0usize;
     let known = |name: &str| tool_names.iter().any(|t| t == name);
 
     // Shape 1: <function=NAME> … <parameter=KEY>VALUE</parameter> … </function>
@@ -160,6 +212,7 @@ fn parse_text_tool_calls(content: &str, tool_names: &[String]) -> Vec<axocoatl_l
         let Some(close) = after[body_start..].find("</function>") else {
             break;
         };
+        note_text_tool_candidate(&mut candidate_count)?;
         let body = &after[body_start..body_start + close];
         let next = &after[body_start + close + "</function>".len()..];
         if known(&name) {
@@ -182,11 +235,13 @@ fn parse_text_tool_calls(content: &str, tool_names: &[String]) -> Vec<axocoatl_l
                 args.insert(key, serde_json::Value::String(strip_wrapping_newlines(val)));
                 pbody = pnext;
             }
-            calls.push(axocoatl_llm::ToolCall {
+            let call = axocoatl_llm::ToolCall {
                 id: format!("call_{}", calls.len()),
                 name,
                 arguments: serde_json::Value::Object(args),
-            });
+                provider_metadata: provider_tool_metadata("ollama"),
+            };
+            push_recovered_tool_call(&mut calls, call)?;
         }
         rest = next;
     }
@@ -198,19 +253,24 @@ fn parse_text_tool_calls(content: &str, tool_names: &[String]) -> Vec<axocoatl_l
         let Some(close) = after.find("</tool_call>") else {
             break;
         };
+        note_text_tool_candidate(&mut candidate_count)?;
         let inner = &after[..close];
         let next = &after[close + "</tool_call>".len()..];
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(inner.trim()) {
             if let Some(name) = v["name"].as_str() {
                 if known(name) {
-                    calls.push(axocoatl_llm::ToolCall {
+                    let Some(arguments) = v.get("arguments").filter(|value| value.is_object())
+                    else {
+                        rest = next;
+                        continue;
+                    };
+                    let call = axocoatl_llm::ToolCall {
                         id: format!("call_{}", calls.len()),
                         name: name.to_string(),
-                        arguments: v
-                            .get("arguments")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null),
-                    });
+                        arguments: arguments.clone(),
+                        provider_metadata: provider_tool_metadata("ollama"),
+                    };
+                    push_recovered_tool_call(&mut calls, call)?;
                 }
             }
         }
@@ -227,6 +287,7 @@ fn parse_text_tool_calls(content: &str, tool_names: &[String]) -> Vec<axocoatl_l
     // that was actually offered.
     if calls.is_empty() {
         for candidate in bare_json_objects(content) {
+            note_text_tool_candidate(&mut candidate_count)?;
             let Ok(v) = serde_json::from_str::<serde_json::Value>(candidate) else {
                 continue;
             };
@@ -240,57 +301,84 @@ fn parse_text_tool_calls(content: &str, tool_names: &[String]) -> Vec<axocoatl_l
             let args = v
                 .get("arguments")
                 .or_else(|| v.get("parameters"))
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            calls.push(axocoatl_llm::ToolCall {
+                .filter(|value| value.is_object());
+            let Some(args) = args else {
+                continue;
+            };
+            let call = axocoatl_llm::ToolCall {
                 id: format!("call_{}", calls.len()),
                 name: name.to_string(),
-                arguments: args,
-            });
+                arguments: args.clone(),
+                provider_metadata: provider_tool_metadata("ollama"),
+            };
+            push_recovered_tool_call(&mut calls, call)?;
         }
     }
 
-    calls
+    Ok(calls)
 }
 
-/// Every balanced top-level `{…}` span in `s`, so a JSON object embedded in
-/// prose (or several of them) can each be tried. Brace counting ignores braces
-/// inside string literals, which is what makes nested argument objects work.
-fn bare_json_objects(s: &str) -> Vec<&str> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::new();
-    let (mut depth, mut start) = (0usize, 0usize);
-    let (mut in_str, mut escaped) = (false, false);
-    for (i, &b) in bytes.iter().enumerate() {
-        if in_str {
-            match b {
-                _ if escaped => escaped = false,
-                b'\\' => escaped = true,
-                b'"' => in_str = false,
-                _ => {}
-            }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b'{' => {
-                if depth == 0 {
-                    start = i;
+/// Lazy balanced top-level `{…}` spans in `s`, so a JSON object embedded in
+/// prose (or several of them) can each be tried without first materializing a
+/// potentially huge vector of slices. Brace counting ignores braces inside
+/// string literals, which is what makes nested argument objects work.
+struct BareJsonObjects<'a> {
+    source: &'a str,
+    offset: usize,
+    depth: usize,
+    start: usize,
+    in_string: bool,
+    escaped: bool,
+}
+
+impl<'a> Iterator for BareJsonObjects<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let bytes = self.source.as_bytes();
+        while self.offset < bytes.len() {
+            let index = self.offset;
+            let byte = bytes[index];
+            self.offset += 1;
+            if self.in_string {
+                match byte {
+                    _ if self.escaped => self.escaped = false,
+                    b'\\' => self.escaped = true,
+                    b'"' => self.in_string = false,
+                    _ => {}
                 }
-                depth += 1;
+                continue;
             }
-            b'}' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 && i >= start {
-                    if let Some(slice) = s.get(start..=i) {
-                        out.push(slice);
+            match byte {
+                b'"' => self.in_string = true,
+                b'{' => {
+                    if self.depth == 0 {
+                        self.start = index;
+                    }
+                    self.depth = self.depth.saturating_add(1);
+                }
+                b'}' if self.depth > 0 => {
+                    self.depth -= 1;
+                    if self.depth == 0 {
+                        return self.source.get(self.start..=index);
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
+        None
     }
-    out
+}
+
+fn bare_json_objects(s: &str) -> BareJsonObjects<'_> {
+    BareJsonObjects {
+        source: s,
+        offset: 0,
+        depth: 0,
+        start: 0,
+        in_string: false,
+        escaped: false,
+    }
 }
 
 /// Largest char-boundary offset of `s` that still leaves `holdback` bytes
@@ -307,8 +395,143 @@ fn flush_boundary(s: &str, holdback: usize) -> usize {
     end
 }
 
-/// Ollama / LM Studio provider using the OpenAI-compatible chat completions endpoint.
-/// Works with any server that exposes `/v1/chat/completions`.
+fn usage_event(chunk: &serde_json::Value) -> Option<StreamEvent> {
+    chunk
+        .get("usage")
+        .filter(|usage| !usage.is_null())
+        .map(|usage| {
+            StreamEvent::Usage(TokenUsageStats {
+                input_tokens: usage["prompt_tokens"].as_u64().unwrap_or(0) as usize,
+                output_tokens: usage["completion_tokens"].as_u64().unwrap_or(0) as usize,
+                reasoning_tokens: None,
+            })
+        })
+}
+
+/// Return the first reasoning fragment used by Ollama or a compatible server.
+/// Reasoning is provider metadata, never assistant content: callers may expose
+/// it as a reasoning event or use its presence for terminal validation, but
+/// must not promote it into the answer that can drive product behavior.
+fn reasoning_text(value: &serde_json::Value) -> Result<Option<&str>, String> {
+    for field in ["reasoning", "reasoning_content", "thinking"] {
+        let Some(raw) = value.get(field) else {
+            continue;
+        };
+        if raw.is_null() {
+            continue;
+        }
+        let text = raw
+            .as_str()
+            .ok_or_else(|| format!("Ollama response field {field} was not a string"))?;
+        if !text.is_empty() {
+            return Ok(Some(text));
+        }
+    }
+    Ok(None)
+}
+
+fn reasoning_only_terminal_message(finish_reason: &FinishReason) -> &'static str {
+    match finish_reason {
+        FinishReason::MaxTokens => {
+            "Ollama exhausted the completion limit in reasoning without final content; increase the completion limit or choose a model that can finish within it"
+        }
+        FinishReason::ContentFilter => {
+            "Ollama filtered a reasoning-only response and returned no final content"
+        }
+        _ => "Ollama returned reasoning without final content",
+    }
+}
+
+fn normalize_ollama_nonstream_finish(
+    native_reason: Option<&str>,
+    structured_tool_calls: usize,
+    recovered_tool_calls: usize,
+) -> Result<FinishReason, ProviderError> {
+    let invalid = || ProviderError::ApiError {
+        provider: "ollama".to_string(),
+        status: 200,
+        message: "Ollama returned tool calls under an incompatible or missing finish reason"
+            .to_string(),
+    };
+    if structured_tool_calls > 0 {
+        return if native_reason == Some("tool_calls") {
+            Ok(FinishReason::ToolUse)
+        } else {
+            Err(invalid())
+        };
+    }
+    if recovered_tool_calls > 0 {
+        return if matches!(native_reason, Some("stop" | "tool_calls")) {
+            Ok(FinishReason::ToolUse)
+        } else {
+            Err(invalid())
+        };
+    }
+    match native_reason {
+        Some("stop") => Ok(FinishReason::Stop),
+        Some("length") => Ok(FinishReason::MaxTokens),
+        Some("content_filter") => Ok(FinishReason::ContentFilter),
+        Some(other) => Err(ProviderError::ApiError {
+            provider: "ollama".to_string(),
+            status: 200,
+            message: format!("Ollama returned unsupported finish reason {other}"),
+        }),
+        None => Err(ProviderError::ApiError {
+            provider: "ollama".to_string(),
+            status: 200,
+            message: "Ollama response omitted its finish reason".to_string(),
+        }),
+    }
+}
+
+fn parse_structured_tool_calls(
+    message: &serde_json::Value,
+    tools: &[axocoatl_llm::ToolDefinition],
+) -> Result<Vec<axocoatl_llm::ToolCall>, ProviderError> {
+    let Some(calls) = message["tool_calls"].as_array() else {
+        return Ok(Vec::new());
+    };
+    let calls: Vec<axocoatl_llm::ToolCall> = calls
+        .iter()
+        .map(|call| {
+            let id = call["id"].as_str().unwrap_or("").to_string();
+            let name = call["function"]["name"].as_str().unwrap_or("").to_string();
+            let args =
+                call["function"]["arguments"]
+                    .as_str()
+                    .ok_or_else(|| ProviderError::ApiError {
+                        provider: "ollama".to_string(),
+                        status: 200,
+                        message: "provider returned malformed tool-call arguments".to_string(),
+                    })?;
+            let arguments = serde_json::from_str(args).map_err(|_| ProviderError::ApiError {
+                provider: "ollama".to_string(),
+                status: 200,
+                message: "provider returned malformed tool-call arguments".to_string(),
+            })?;
+            validate_required_tool_call_id("ollama", &id)?;
+            validate_response_tool_call("ollama", &name, &arguments, tools)?;
+            Ok(axocoatl_llm::ToolCall {
+                id,
+                name,
+                arguments,
+                provider_metadata: provider_tool_metadata("ollama"),
+            })
+        })
+        .collect::<Result<Vec<_>, ProviderError>>()?;
+    let mut ids = std::collections::HashSet::with_capacity(calls.len());
+    if calls.iter().any(|call| !ids.insert(call.id.as_str())) {
+        return Err(ProviderError::ApiError {
+            provider: "ollama".to_string(),
+            status: 200,
+            message: "provider returned duplicate tool-call ids".to_string(),
+        });
+    }
+    Ok(calls)
+}
+
+/// Ollama provider using its OpenAI-compatible chat completions endpoint.
+/// Compatible implementations must honor the Ollama request/response contract.
 pub struct OllamaProvider {
     client: reqwest::Client,
     base_url: String,
@@ -321,17 +544,17 @@ impl OllamaProvider {
         Self::with_base_url("http://localhost:11434", model)
     }
 
-    /// Create with a custom base URL (for LM Studio, remote Ollama, etc.).
+    /// Create with a custom base URL (for remote Ollama or a compatible implementation).
     pub fn with_base_url(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: http_client(),
             base_url: base_url.into().trim_end_matches('/').to_string(),
             model: model.into(),
         }
     }
 
-    fn endpoint(&self) -> String {
-        format!("{}/v1/chat/completions", self.base_url)
+    fn endpoint(&self) -> Result<String, ProviderError> {
+        validated_endpoint(&self.base_url, "v1/chat/completions", self.provider_id())
     }
 
     /// Build the OpenAI-compatible request body shared by the buffered and
@@ -343,8 +566,22 @@ impl OllamaProvider {
             "messages": ollama_messages(&request.messages),
         });
 
+        // Short schema-bound control calls can explicitly suppress thinking.
+        // Ordinary Session, Automation, and tool turns omit this option and
+        // preserve the model's normal reasoning behavior.
+        if request
+            .provider_options
+            .as_ref()
+            .and_then(|options| options.get("reasoning_effort"))
+            .and_then(serde_json::Value::as_str)
+            == Some("none")
+        {
+            body["reasoning_effort"] = serde_json::json!("none");
+        }
+
         if stream {
             body["stream"] = serde_json::json!(true);
+            body["stream_options"] = serde_json::json!({ "include_usage": true });
         }
         if let Some(max) = request.max_tokens {
             body["max_tokens"] = serde_json::json!(max);
@@ -354,6 +591,9 @@ impl OllamaProvider {
         }
         if let Some(top_p) = request.top_p {
             body["top_p"] = serde_json::json!(top_p);
+        }
+        if !request.stop_sequences.is_empty() {
+            body["stop"] = serde_json::json!(&request.stop_sequences);
         }
         if request.response_format == Some(axocoatl_core::ResponseFormat::Json) {
             // This provider targets Ollama's OpenAI-compatible endpoint. Its
@@ -383,30 +623,60 @@ impl LlmProvider for OllamaProvider {
         ProviderCapabilities {
             streaming: true,
             tool_calling: true, // Sent on every request; honoured by tool-capable models
-            structured_output: false,
-            vision: false,
-            reasoning: false,
+            structured_output: true,
+            vision: true,
+            reasoning: true,
             embeddings: false,
-            max_context_tokens: 128_000, // Model-dependent
-            max_output_tokens: 4_096,
+            // Ollama model names and Modelfile limits are operator-defined.
+            max_context_tokens: 0,
+            max_output_tokens: 0,
         }
     }
 
+    fn model_constraints_known(&self, _request: &ChatRequest) -> bool {
+        false
+    }
+
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+        validate_provider_request(&request, self.provider_id())?;
         let body = self.build_request_body(&request, false);
+        let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
 
         let response = self
             .client
-            .post(self.endpoint())
+            .post(self.endpoint()?)
             .header(CONTENT_TYPE, "application/json")
             .json(&body)
+            .timeout(RESPONSE_TIMEOUT)
             .send()
             .await
-            .map_err(|e| ProviderError::Network(e.to_string()))?;
+            .map_err(|error| network_error(&error, &[]))?;
 
         let status = response.status();
+        if status == 429 {
+            let retry_after_secs = response
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse().ok());
+            return Err(ProviderError::RateLimited {
+                provider: "ollama".to_string(),
+                retry_after_secs,
+            });
+        }
+        if matches!(status.as_u16(), 401 | 403) {
+            return Err(ProviderError::AuthError {
+                provider: "ollama".to_string(),
+            });
+        }
+        if status.as_u16() == 404 {
+            return Err(ProviderError::ModelNotFound {
+                provider: "ollama".to_string(),
+                model: model_for_call.to_string(),
+            });
+        }
         if !status.is_success() {
-            let err_text = response.text().await.unwrap_or_default();
+            let err_text = read_error_text(response, &[]).await;
             return Err(ProviderError::ApiError {
                 provider: "ollama".to_string(),
                 status: status.as_u16(),
@@ -414,62 +684,63 @@ impl LlmProvider for OllamaProvider {
             });
         }
 
-        let resp_body: serde_json::Value =
-            response.json().await.map_err(|e| ProviderError::ApiError {
+        let resp_body: serde_json::Value = read_json(response, "ollama").await?;
+
+        let choices = resp_body["choices"]
+            .as_array()
+            .ok_or_else(|| ProviderError::ApiError {
                 provider: "ollama".to_string(),
                 status: 200,
-                message: e.to_string(),
+                message: "Ollama response omitted choices".to_string(),
             })?;
+        if choices.len() != 1 || choices[0]["index"].as_u64() != Some(0) {
+            return Err(ProviderError::ApiError {
+                provider: "ollama".to_string(),
+                status: 200,
+                message: "Ollama response must contain exactly choice index 0".to_string(),
+            });
+        }
+        let choice = &choices[0];
 
-        let content = resp_body["choices"][0]["message"]["content"]
+        let content = choice["message"]["content"]
             .as_str()
             .unwrap_or("")
             .to_string();
+        let saw_reasoning = reasoning_text(&choice["message"])
+            .map_err(|message| ProviderError::ApiError {
+                provider: "ollama".to_string(),
+                status: 200,
+                message,
+            })?
+            .is_some();
 
         // Extract tool calls from OpenAI-compatible response
-        let mut tool_calls = resp_body["choices"][0]["message"]["tool_calls"]
-            .as_array()
-            .map(|calls| {
-                calls
-                    .iter()
-                    .filter_map(|tc| {
-                        let id = tc["id"].as_str().unwrap_or("").to_string();
-                        let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-                        let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
-                        let arguments =
-                            serde_json::from_str(args_str).unwrap_or(serde_json::Value::Null);
-                        if name.is_empty() {
-                            None
-                        } else {
-                            Some(axocoatl_llm::ToolCall {
-                                id,
-                                name,
-                                arguments,
-                            })
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let mut tool_calls = parse_structured_tool_calls(&choice["message"], &request.tools)?;
+        let structured_tool_call_count = tool_calls.len();
 
         // Fallback: some local models emit tool calls as text in `content`
         // (`<function=NAME>…`) instead of the structured `tool_calls` field.
         // Recover them so the call still executes — guarded to offered tools.
         if tool_calls.is_empty() {
             let tool_names: Vec<String> = request.tools.iter().map(|t| t.name.clone()).collect();
-            tool_calls = parse_text_tool_calls(&content, &tool_names);
+            tool_calls = parse_text_tool_calls(&content, &tool_names)?;
         }
 
-        let finish_reason = if !tool_calls.is_empty() {
-            FinishReason::ToolUse
-        } else {
-            match resp_body["choices"][0]["finish_reason"].as_str() {
-                Some("length") => FinishReason::MaxTokens,
-                _ => FinishReason::Stop,
-            }
-        };
+        let recovered_tool_call_count = tool_calls.len().saturating_sub(structured_tool_call_count);
+        let finish_reason = normalize_ollama_nonstream_finish(
+            choice["finish_reason"].as_str(),
+            structured_tool_call_count,
+            recovered_tool_call_count,
+        )?;
+        if saw_reasoning && content.trim().is_empty() && tool_calls.is_empty() {
+            return Err(ProviderError::ApiError {
+                provider: "ollama".to_string(),
+                status: 200,
+                message: reasoning_only_terminal_message(&finish_reason).to_string(),
+            });
+        }
 
-        Ok(ChatResponse {
+        let normalized = ChatResponse {
             content,
             tool_calls,
             finish_reason,
@@ -482,10 +753,12 @@ impl LlmProvider for OllamaProvider {
             },
             model: resp_body["model"]
                 .as_str()
-                .unwrap_or(&self.model)
+                .unwrap_or(model_for_call)
                 .to_string(),
             provider: "ollama".to_string(),
-        })
+        };
+        validate_chat_response("ollama", &normalized)?;
+        Ok(normalized)
     }
 
     async fn chat_stream(
@@ -493,22 +766,47 @@ impl LlmProvider for OllamaProvider {
         request: ChatRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
     {
-        use tokio_stream::StreamExt;
-
+        validate_provider_request(&request, self.provider_id())?;
         let body = self.build_request_body(&request, true);
+        let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
 
-        let response = self
-            .client
-            .post(self.endpoint())
-            .header(CONTENT_TYPE, "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ProviderError::Network(e.to_string()))?;
+        let response = tokio::time::timeout(
+            RESPONSE_TIMEOUT,
+            self.client
+                .post(self.endpoint()?)
+                .header(CONTENT_TYPE, "application/json")
+                .json(&body)
+                .send(),
+        )
+        .await
+        .map_err(|_| ProviderError::Network("Ollama response headers timed out".to_string()))?
+        .map_err(|error| network_error(&error, &[]))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let err_text = response.text().await.unwrap_or_default();
+        let status = response.status();
+        if status == 429 {
+            let retry_after_secs = response
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse().ok());
+            return Err(ProviderError::RateLimited {
+                provider: "ollama".to_string(),
+                retry_after_secs,
+            });
+        }
+        if matches!(status.as_u16(), 401 | 403) {
+            return Err(ProviderError::AuthError {
+                provider: "ollama".to_string(),
+            });
+        }
+        if status.as_u16() == 404 {
+            return Err(ProviderError::ModelNotFound {
+                provider: "ollama".to_string(),
+                model: model_for_call.to_string(),
+            });
+        }
+        if !status.is_success() {
+            let err_text = read_error_text(response, &[]).await;
             return Err(ProviderError::ApiError {
                 provider: "ollama".to_string(),
                 status: status.as_u16(),
@@ -516,17 +814,14 @@ impl LlmProvider for OllamaProvider {
             });
         }
 
-        // OpenAI-compatible SSE: each line is "data: {json}\n\n" or "data: [DONE]"
-        let byte_stream = response.bytes_stream();
-        let mut lines_stream = tokio_stream::StreamExt::map(byte_stream, |chunk| {
-            chunk.map_err(|e| ProviderError::Stream(e.to_string()))
-        });
+        // OpenAI-compatible SSE: each event is `data: {json}` or `data: [DONE]`.
+        let mut byte_stream = response.bytes_stream();
 
         // Captured for the text-tool-call fallback in the finish branch below.
         let tool_names: Vec<String> = request.tools.iter().map(|t| t.name.clone()).collect();
 
         let stream = async_stream::try_stream! {
-            let mut buffer = String::new();
+            let mut decoder = SseDecoder::provider_default();
             // Accumulated assistant text plus how much we've already streamed out.
             // Lets the finish branch recover a tool call a model emits as text while
             // keeping its raw markup off-screen.
@@ -534,41 +829,79 @@ impl LlmProvider for OllamaProvider {
             let mut flushed = 0usize;
             let mut in_text_tool_call = false;
             let mut saw_struct_tool_call = false;
+            let mut saw_reasoning = false;
+            let mut pending_finish = None;
+            let mut saw_sentinel = false;
+            let mut structured_tool_call_ids = std::collections::BTreeMap::<usize, String>::new();
+            let mut recovered_tool_call_count = 0usize;
+            let total_deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
 
-            while let Some(chunk) = lines_stream.next().await {
-                let bytes = chunk?;
-                buffer.push_str(&String::from_utf8_lossy(&bytes));
+            'response: loop {
+                let next = next_stream_item(
+                    &mut byte_stream,
+                    total_deadline,
+                    STREAM_IDLE_TIMEOUT,
+                    "Ollama",
+                )
+                .await?;
+                let reached_eof = next.is_none();
+                let events = match next {
+                    Some(chunk) => {
+                        let chunk = chunk.map_err(|error| {
+                            ProviderError::Stream(bounded_redacted(&error.to_string(), 8 * 1024, &[]))
+                        })?;
+                        decoder.push(&chunk)?
+                    }
+                    None => decoder.finish()?,
+                };
 
-                // Process complete SSE lines from buffer
-                while let Some(line_end) = buffer.find('\n') {
-                    let line = buffer[..line_end].trim().to_string();
-                    buffer = buffer[line_end + 1..].to_string();
-
-                    if line.is_empty() {
-                        continue;
+                for event in events {
+                    if event.data.trim() == "[DONE]" {
+                        saw_sentinel = true;
+                        break 'response;
                     }
 
-                    let data = if let Some(stripped) = line.strip_prefix("data: ") {
-                        stripped
-                    } else {
-                        continue;
-                    };
+                    let parsed: serde_json::Value = serde_json::from_str(&event.data)
+                        .map_err(|error| ProviderError::Stream(format!("invalid Ollama SSE JSON: {error}")))?;
 
-                    if data == "[DONE]" {
-                        // Only emit Done if we haven't already from a finish_reason chunk
-                        break;
+                    // OpenAI-compatible servers emit exact usage in a final
+                    // empty-choice chunk when `stream_options.include_usage`
+                    // is requested. It must not depend on a choice-level
+                    // finish_reason being present in the same frame.
+                    if let Some(usage) = usage_event(&parsed) {
+                        yield usage;
                     }
 
-                    let parsed: serde_json::Value = match serde_json::from_str(data) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            tracing::debug!(error = %e, "Skipping unparseable SSE chunk");
-                            continue;
-                        }
-                    };
+                    let choices = parsed["choices"].as_array().ok_or_else(|| {
+                        ProviderError::Stream("Ollama stream frame omitted choices".to_string())
+                    })?;
+                    if choices.len() > 1
+                        || choices.first().is_some_and(|choice| choice["index"].as_u64() != Some(0))
+                    {
+                        Err(ProviderError::Stream(
+                            "Ollama stream returned multiple alternatives or a nonzero choice index"
+                                .to_string(),
+                        ))?;
+                    }
+                    if choices.is_empty()
+                        && parsed
+                            .get("usage")
+                            .is_none_or(serde_json::Value::is_null)
+                    {
+                        Err(ProviderError::Stream(
+                            "Ollama stream returned an empty non-usage frame".to_string(),
+                        ))?;
+                    }
+                    for choice in choices {
+                            if let Some(reasoning) = reasoning_text(&choice["delta"])
+                                .map_err(ProviderError::Stream)?
+                            {
+                                saw_reasoning = true;
+                                yield StreamEvent::ReasoningDelta {
+                                    delta: reasoning.to_string(),
+                                };
+                            }
 
-                    if let Some(choices) = parsed["choices"].as_array() {
-                        for choice in choices {
                             // Text content deltas. Accumulate everything so the finish
                             // branch can recover a tool call emitted as text. Until a
                             // `<function=`/`<tool_call>` marker appears we stream text
@@ -601,35 +934,60 @@ impl LlmProvider for OllamaProvider {
                                 saw_struct_tool_call = true;
                                 for tc in tool_calls {
                                     let index = tc["index"].as_u64().map(|i| i as usize);
+                                    let required_index = index.ok_or_else(|| {
+                                        ProviderError::Stream(
+                                            "Ollama streamed a structured tool call without an index".to_string(),
+                                        )
+                                    })?;
                                     let id = tc["id"].as_str().unwrap_or("").to_string();
+                                    let known_id = structured_tool_call_ids
+                                        .entry(required_index)
+                                        .or_default();
+                                    if !id.is_empty() {
+                                        if !known_id.is_empty() && known_id != &id {
+                                            Err(ProviderError::Stream(format!(
+                                                "Ollama changed a tool-call id for index {required_index}"
+                                            )))?;
+                                        }
+                                        *known_id = id.clone();
+                                    }
                                     let name = tc["function"]["name"].as_str().map(String::from);
                                     let args_delta = tc["function"]["arguments"]
                                         .as_str()
                                         .unwrap_or("")
                                         .to_string();
-                                    yield StreamEvent::ToolCallDelta { index, id, name, args_delta };
+                                    yield StreamEvent::ToolCallDelta {
+                                        index,
+                                        id: id.clone(),
+                                        name,
+                                        args_delta,
+                                    };
+                                    yield StreamEvent::ToolCallMetadata {
+                                        index,
+                                        id,
+                                        metadata: provider_tool_metadata("ollama"),
+                                    };
                                 }
                             }
 
                             // Finish reason
                             if let Some(reason) = choice["finish_reason"].as_str() {
-                                if let Some(usage) = parsed.get("usage") {
-                                    yield StreamEvent::Usage(TokenUsageStats {
-                                        input_tokens: usage["prompt_tokens"].as_u64().unwrap_or(0) as usize,
-                                        output_tokens: usage["completion_tokens"].as_u64().unwrap_or(0) as usize,
-                                        reasoning_tokens: None,
-                                    });
-                                }
-
                                 // Recover a tool call emitted as text when the model
                                 // never sent a structured one.
                                 let recovered = if saw_struct_tool_call {
                                     Vec::new()
                                 } else {
-                                    parse_text_tool_calls(&content_acc, &tool_names)
+                                    parse_text_tool_calls(&content_acc, &tool_names)?
                                 };
 
                                 if !recovered.is_empty() {
+                                    if !matches!(reason, "stop" | "tool_calls") {
+                                        Err(ProviderError::Stream(
+                                            "Ollama returned a recovered text tool call under an incompatible finish reason"
+                                                .to_string(),
+                                        ))?;
+                                    }
+                                    recovered_tool_call_count = recovered.len();
                                     for (i, call) in recovered.iter().enumerate() {
                                         yield StreamEvent::ToolCallDelta {
                                             index: Some(i),
@@ -638,8 +996,13 @@ impl LlmProvider for OllamaProvider {
                                             args_delta: serde_json::to_string(&call.arguments)
                                                 .unwrap_or_else(|_| "{}".to_string()),
                                         };
+                                        yield StreamEvent::ToolCallMetadata {
+                                            index: Some(i),
+                                            id: call.id.clone(),
+                                            metadata: call.provider_metadata.clone(),
+                                        };
                                     }
-                                    yield StreamEvent::Done { finish_reason: FinishReason::ToolUse };
+                                    pending_finish = Some(FinishReason::ToolUse);
                                 } else {
                                     // Not a tool call after all — flush any held text.
                                     if flushed < content_acc.len() {
@@ -651,15 +1014,49 @@ impl LlmProvider for OllamaProvider {
                                         "stop" => FinishReason::Stop,
                                         "tool_calls" => FinishReason::ToolUse,
                                         "length" => FinishReason::MaxTokens,
-                                        _ => FinishReason::Stop,
+                                        "content_filter" => FinishReason::ContentFilter,
+                                        other => Err(ProviderError::Stream(format!(
+                                            "Ollama returned unsupported finish reason {other}"
+                                        )))?,
                                     };
-                                    yield StreamEvent::Done { finish_reason: finish };
+                                    pending_finish = Some(finish);
                                 }
                             }
-                        }
                     }
                 }
+
+                if reached_eof {
+                    break;
+                }
             }
+
+            let finish_reason = pending_finish.ok_or_else(|| {
+                let terminal = if saw_sentinel { "terminal sentinel" } else { "connection close" };
+                ProviderError::Stream(format!("Ollama stream reached {terminal} without a finish reason"))
+            })?;
+            let tool_call_count = if saw_struct_tool_call {
+                validate_required_stream_tool_call_ids(
+                    "Ollama",
+                    &finish_reason,
+                    structured_tool_call_ids.values().map(String::as_str),
+                )?;
+                None
+            } else {
+                Some(recovered_tool_call_count)
+            };
+            if let Some(tool_call_count) = tool_call_count {
+                validate_stream_terminal("Ollama", &finish_reason, tool_call_count)?;
+            }
+            if saw_reasoning
+                && content_acc.trim().is_empty()
+                && !saw_struct_tool_call
+                && recovered_tool_call_count == 0
+            {
+                Err(ProviderError::Stream(
+                    reasoning_only_terminal_message(&finish_reason).to_string(),
+                ))?;
+            }
+            yield StreamEvent::Done { finish_reason };
         };
 
         Ok(Box::pin(stream))
@@ -680,7 +1077,8 @@ mod bare_json_tool_call_tests {
         let calls = parse_text_tool_calls(
             r#"{"name": "read_file", "arguments": {"path": "lib/orders.ts"}}"#,
             &names(),
-        );
+        )
+        .unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read_file");
         assert_eq!(calls[0].arguments["path"], "lib/orders.ts");
@@ -691,7 +1089,8 @@ mod bare_json_tool_call_tests {
         let calls = parse_text_tool_calls(
             "Sure, I'll read it.\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"a.ts\"}}\nDone.",
             &names(),
-        );
+        )
+        .unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].arguments["path"], "a.ts");
     }
@@ -701,7 +1100,8 @@ mod bare_json_tool_call_tests {
         let calls = parse_text_tool_calls(
             r#"{"name":"read_file","parameters":{"path":"b.ts"}}"#,
             &names(),
-        );
+        )
+        .unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].arguments["path"], "b.ts");
     }
@@ -711,7 +1111,8 @@ mod bare_json_tool_call_tests {
         let calls = parse_text_tool_calls(
             r#"{"name":"write_file","arguments":{"path":"x.rs","content":"fn main() { let s = \"}\"; }"}}"#,
             &names(),
-        );
+        )
+        .unwrap();
         assert_eq!(
             calls.len(),
             1,
@@ -727,9 +1128,14 @@ mod bare_json_tool_call_tests {
             r#"You could use {"name": "some_other_tool", "arguments": {}} here."#,
             &names(),
         )
+        .unwrap()
         .is_empty());
-        assert!(parse_text_tool_calls("{ just an object }", &names()).is_empty());
-        assert!(parse_text_tool_calls("no json at all", &names()).is_empty());
+        assert!(parse_text_tool_calls("{ just an object }", &names())
+            .unwrap()
+            .is_empty());
+        assert!(parse_text_tool_calls("no json at all", &names())
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -739,14 +1145,46 @@ mod bare_json_tool_call_tests {
         let calls = parse_text_tool_calls(
             r#"<tool_call>{"name":"read_file","arguments":{"path":"c.ts"}}</tool_call>"#,
             &names(),
-        );
+        )
+        .unwrap();
         assert_eq!(calls.len(), 1);
+    }
+
+    #[test]
+    fn text_recovery_never_makes_missing_null_or_scalar_arguments_actionable() {
+        for payload in [
+            r#"{"name":"read_file"}"#,
+            r#"{"name":"read_file","arguments":null}"#,
+            r#"{"name":"read_file","arguments":"/secret"}"#,
+            r#"<tool_call>{"name":"read_file"}</tool_call>"#,
+            r#"<tool_call>{"name":"read_file","arguments":7}</tool_call>"#,
+        ] {
+            assert!(
+                parse_text_tool_calls(payload, &names()).unwrap().is_empty(),
+                "invalid arguments unexpectedly became a call: {payload}"
+            );
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lookup_request() -> ChatRequest {
+        let mut request = ChatRequest::simple("lookup");
+        request.tools = vec![axocoatl_llm::ToolDefinition {
+            name: "lookup".to_string(),
+            description: String::new(),
+            parameters: serde_json::json!({"type": "object"}),
+            concurrency: Default::default(),
+        }];
+        request
+    }
+
+    fn recovered_tool_call_flood(count: usize) -> String {
+        r#"<tool_call>{"name":"lookup","arguments":{}}</tool_call>"#.repeat(count)
+    }
 
     fn assert_openai_json_mode(body: &serde_json::Value) {
         assert_eq!(
@@ -759,11 +1197,23 @@ mod tests {
         );
     }
 
+    fn assert_reasoning_disabled(body: &serde_json::Value) {
+        assert_eq!(
+            body.get("reasoning_effort"),
+            Some(&serde_json::json!("none")),
+            "an explicitly non-reasoning call must use the endpoint's hard thinking switch"
+        );
+    }
+
+    fn disable_reasoning(request: &mut ChatRequest) {
+        request.provider_options = Some(serde_json::json!({"reasoning_effort": "none"}));
+    }
+
     #[test]
     fn default_base_url() {
         let provider = OllamaProvider::new("llama3");
         assert_eq!(
-            provider.endpoint(),
+            provider.endpoint().unwrap(),
             "http://localhost:11434/v1/chat/completions"
         );
         assert_eq!(provider.model_id(), "llama3");
@@ -774,7 +1224,7 @@ mod tests {
     fn custom_base_url() {
         let provider = OllamaProvider::with_base_url("http://gpu-server:11434", "mistral");
         assert_eq!(
-            provider.endpoint(),
+            provider.endpoint().unwrap(),
             "http://gpu-server:11434/v1/chat/completions"
         );
     }
@@ -783,7 +1233,7 @@ mod tests {
     fn trailing_slash_stripped() {
         let provider = OllamaProvider::with_base_url("http://localhost:11434/", "llama3");
         assert_eq!(
-            provider.endpoint(),
+            provider.endpoint().unwrap(),
             "http://localhost:11434/v1/chat/completions"
         );
     }
@@ -792,9 +1242,11 @@ mod tests {
     fn capabilities_local_model() {
         let provider = OllamaProvider::new("llama3");
         let caps = provider.capabilities();
-        assert!(!caps.vision);
+        assert!(caps.vision);
         assert!(caps.tool_calling);
-        assert_eq!(caps.max_context_tokens, 128_000);
+        assert!(caps.reasoning);
+        assert_eq!(caps.max_context_tokens, 0);
+        assert!(!provider.model_constraints_known(&ChatRequest::simple("test")));
     }
 
     #[test]
@@ -802,10 +1254,12 @@ mod tests {
         let provider = OllamaProvider::new("llama3");
         let mut request = ChatRequest::simple("Return JSON");
         request.response_format = Some(axocoatl_core::ResponseFormat::Json);
+        disable_reasoning(&mut request);
 
         let body = provider.build_request_body(&request, false);
 
         assert_openai_json_mode(&body);
+        assert_reasoning_disabled(&body);
         assert!(body.get("stream").is_none());
     }
 
@@ -814,11 +1268,427 @@ mod tests {
         let provider = OllamaProvider::new("llama3");
         let mut request = ChatRequest::simple("Return JSON");
         request.response_format = Some(axocoatl_core::ResponseFormat::Json);
+        disable_reasoning(&mut request);
 
         let body = provider.build_request_body(&request, true);
 
         assert_openai_json_mode(&body);
+        assert_reasoning_disabled(&body);
         assert_eq!(body.get("stream"), Some(&serde_json::json!(true)));
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn ordinary_request_preserves_the_models_reasoning_default() {
+        let provider = OllamaProvider::new("qwen3:8b");
+        let body = provider.build_request_body(&ChatRequest::simple("solve this"), false);
+
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn empty_choice_usage_tail_is_not_discarded() {
+        let tail = serde_json::json!({
+            "choices": [],
+            "usage": { "prompt_tokens": 21, "completion_tokens": 8 }
+        });
+        assert!(matches!(
+            usage_event(&tail),
+            Some(StreamEvent::Usage(TokenUsageStats {
+                input_tokens: 21,
+                output_tokens: 8,
+                ..
+            }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn nonstream_reasoning_is_never_promoted_to_final_content() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let response = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "reasoning": "private chain of thought",
+                    "content": "FINAL"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 11},
+            "model": "qwen3:8b"
+        });
+        Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(response))
+            .mount(&server)
+            .await;
+
+        let provider = OllamaProvider::with_base_url(server.uri(), "qwen3:8b");
+        let response = provider.chat(ChatRequest::simple("plan")).await.unwrap();
+        assert_eq!(response.content, "FINAL");
+        assert_eq!(response.usage.input_tokens, 7);
+        assert_eq!(response.usage.output_tokens, 11);
+    }
+
+    #[tokio::test]
+    async fn nonstream_reasoning_only_response_fails_for_supported_aliases() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        for field in ["reasoning", "reasoning_content", "thinking"] {
+            let server = MockServer::start().await;
+            let mut message = serde_json::json!({"content": ""});
+            message[field] = serde_json::json!("private chain of thought");
+            let response = serde_json::json!({
+                "choices": [{
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": "length"
+                }],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 500},
+                "model": "qwen3:8b"
+            });
+            Mock::given(wiremock::matchers::method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                .mount(&server)
+                .await;
+
+            let provider = OllamaProvider::with_base_url(server.uri(), "qwen3:8b");
+            assert!(matches!(
+                provider.chat(ChatRequest::simple("plan")).await,
+                Err(ProviderError::ApiError { message, .. })
+                    if message.contains("reasoning without final content")
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_reasoning_aliases_remain_reasoning_and_final_content_remains_text() {
+        use tokio_stream::StreamExt;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let sse = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\"hidden-a\",\"content\":\"\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"hidden-b\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"thinking\":\"hidden-c\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"FINAL\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":11}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = OllamaProvider::with_base_url(server.uri(), "qwen3:8b");
+        let events = provider
+            .chat_stream(ChatRequest::simple("plan"))
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        let mut reasoning = String::new();
+        let mut content = String::new();
+        let mut saw_usage = false;
+        let mut saw_done = false;
+        for event in events {
+            match event.unwrap() {
+                StreamEvent::ReasoningDelta { delta } => reasoning.push_str(&delta),
+                StreamEvent::TextDelta { delta } => content.push_str(&delta),
+                StreamEvent::Usage(usage) => {
+                    saw_usage = usage.input_tokens == 7 && usage.output_tokens == 11;
+                }
+                StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                } => saw_done = true,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert_eq!(reasoning, "hidden-ahidden-bhidden-c");
+        assert_eq!(content, "FINAL");
+        assert!(saw_usage);
+        assert!(saw_done);
+    }
+
+    #[tokio::test]
+    async fn stream_reasoning_only_length_keeps_usage_but_never_completes_blank() {
+        use tokio_stream::StreamExt;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let sse = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\"hidden\",\"content\":\"\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":500}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = OllamaProvider::with_base_url(server.uri(), "qwen3:8b");
+        let events = provider
+            .chat_stream(ChatRequest::simple("plan"))
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Ok(StreamEvent::Usage(TokenUsageStats {
+                input_tokens: 7,
+                output_tokens: 500,
+                ..
+            }))
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Err(ProviderError::Stream(message))
+                if message.contains("reasoning without final content")
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            Ok(StreamEvent::TextDelta { .. } | StreamEvent::Done { .. })
+        )));
+    }
+
+    #[test]
+    fn nonstream_tool_calls_require_a_compatible_terminal() {
+        assert!(normalize_ollama_nonstream_finish(Some("stop"), 1, 0).is_err());
+        assert!(normalize_ollama_nonstream_finish(Some("length"), 0, 1).is_err());
+        assert_eq!(
+            normalize_ollama_nonstream_finish(Some("stop"), 0, 1).unwrap(),
+            FinishReason::ToolUse
+        );
+        assert_eq!(
+            normalize_ollama_nonstream_finish(Some("tool_calls"), 1, 0).unwrap(),
+            FinishReason::ToolUse
+        );
+    }
+
+    #[test]
+    fn text_tool_recovery_bounds_qualifying_calls_and_candidate_scans() {
+        let flood = recovered_tool_call_flood(MAX_RECOVERED_TOOL_CALLS + 1);
+        assert!(matches!(
+            parse_text_tool_calls(&flood, &["lookup".to_string()]),
+            Err(ProviderError::ApiError { message, .. })
+                if message.contains("more than 128")
+        ));
+
+        let candidate_flood = "{}".repeat(MAX_TEXT_TOOL_CANDIDATES + 1);
+        assert!(matches!(
+            parse_text_tool_calls(&candidate_flood, &["lookup".to_string()]),
+            Err(ProviderError::ApiError { message, .. })
+                if message.contains("bounded candidate scan limit")
+        ));
+    }
+
+    #[tokio::test]
+    async fn nonstream_recovered_tool_flood_fails_before_returning_actionable_calls() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let response = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "content": recovered_tool_call_flood(MAX_RECOVERED_TOOL_CALLS + 1)
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "model": "local-model"
+        });
+        Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(response))
+            .mount(&server)
+            .await;
+
+        let provider = OllamaProvider::with_base_url(server.uri(), "local-model");
+        assert!(matches!(
+            provider.chat(lookup_request()).await,
+            Err(ProviderError::ApiError { message, .. })
+                if message.contains("more than 128")
+        ));
+    }
+
+    #[tokio::test]
+    async fn stream_recovered_tool_flood_emits_zero_actionable_events() {
+        use tokio_stream::StreamExt;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let frame = serde_json::json!({
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": recovered_tool_call_flood(MAX_RECOVERED_TOOL_CALLS + 1)
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        let sse = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = OllamaProvider::with_base_url(server.uri(), "local-model");
+        let events = provider
+            .chat_stream(lookup_request())
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Err(ProviderError::ApiError { message, .. })
+                if message.contains("more than 128")
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            Ok(StreamEvent::ToolCallDelta { .. }
+                | StreamEvent::ToolCallMetadata { .. }
+                | StreamEvent::Done { .. })
+        )));
+    }
+
+    #[tokio::test]
+    async fn stream_multiple_choice_alternatives_never_merge_into_parallel_calls() {
+        use tokio_stream::StreamExt;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let sse = concat!(
+            "data: {\"choices\":[",
+            "{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{}\"}}]},\"finish_reason\":null},",
+            "{\"index\":1,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_b\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = OllamaProvider::with_base_url(server.uri(), "local-model");
+        let mut request = ChatRequest::simple("lookup");
+        request.tools = vec![axocoatl_llm::ToolDefinition {
+            name: "lookup".to_string(),
+            description: String::new(),
+            parameters: serde_json::json!({"type": "object"}),
+            concurrency: Default::default(),
+        }];
+        let events = provider
+            .chat_stream(request)
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Err(ProviderError::Stream(message)) if message.contains("multiple alternatives")
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            Ok(StreamEvent::ToolCallDelta { .. } | StreamEvent::Done { .. })
+        )));
+    }
+
+    #[tokio::test]
+    async fn stream_text_tool_call_under_content_filter_is_never_actionable() {
+        use tokio_stream::StreamExt;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let sse = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"<tool_call>{\\\"name\\\":\\\"lookup\\\",\\\"arguments\\\":{}}</tool_call>\"},\"finish_reason\":\"content_filter\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse),
+            )
+            .mount(&server)
+            .await;
+
+        let provider = OllamaProvider::with_base_url(server.uri(), "local-model");
+        let mut request = ChatRequest::simple("lookup");
+        request.tools = vec![axocoatl_llm::ToolDefinition {
+            name: "lookup".to_string(),
+            description: String::new(),
+            parameters: serde_json::json!({"type": "object"}),
+            concurrency: Default::default(),
+        }];
+        let events = provider
+            .chat_stream(request)
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Err(ProviderError::Stream(message))
+                if message.contains("incompatible finish reason")
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            Ok(StreamEvent::ToolCallDelta { .. } | StreamEvent::Done { .. })
+        )));
+    }
+
+    #[test]
+    fn nonstream_tool_calls_fail_closed_on_malformed_or_undeclared_arguments() {
+        let tools = vec![axocoatl_llm::ToolDefinition {
+            name: "lookup".to_string(),
+            description: String::new(),
+            parameters: serde_json::json!({ "type": "object" }),
+            concurrency: Default::default(),
+        }];
+        for (name, arguments) in [
+            ("lookup", "{"),
+            ("lookup", "[]"),
+            ("not_declared", "{}"),
+            ("", "{}"),
+        ] {
+            let message = serde_json::json!({
+                "tool_calls": [{
+                    "id": "call",
+                    "function": { "name": name, "arguments": arguments }
+                }]
+            });
+            assert!(parse_structured_tool_calls(&message, &tools).is_err());
+        }
+        let missing_id = serde_json::json!({
+            "tool_calls": [{
+                "id": "",
+                "function": { "name": "lookup", "arguments": "{}" }
+            }]
+        });
+        assert!(matches!(
+            parse_structured_tool_calls(&missing_id, &tools),
+            Err(ProviderError::ApiError { message, .. }) if message.contains("empty id")
+        ));
     }
 
     #[test]
@@ -833,6 +1703,7 @@ mod tests {
                     id: "call_1".to_string(),
                     name: "get_weather".to_string(),
                     arguments: serde_json::json!({ "location": "NYC" }),
+                    provider_metadata: Default::default(),
                 }],
             ),
             ChatMessage::tool_result("{\"temp\":72}", "get_weather", "call_1"),
@@ -870,7 +1741,7 @@ mod tests {
             "</function>\n</tool_call>",
         );
         let names = vec!["edit_file".to_string(), "write_file".to_string()];
-        let calls = parse_text_tool_calls(content, &names);
+        let calls = parse_text_tool_calls(content, &names).unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "edit_file");
         assert_eq!(calls[0].arguments["path"], "index.html");
@@ -889,7 +1760,7 @@ mod tests {
             {\"name\": \"write_file\", \"arguments\": {\"path\": \"a.txt\", \"content\": \"hi\"}}\n\
             </tool_call>";
         let names = vec!["write_file".to_string()];
-        let calls = parse_text_tool_calls(content, &names);
+        let calls = parse_text_tool_calls(content, &names).unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "write_file");
         assert_eq!(calls[0].arguments["path"], "a.txt");
@@ -900,7 +1771,7 @@ mod tests {
     fn ignores_function_names_not_offered() {
         let content = "<function=rm_rf>\n<parameter=path>/</parameter>\n</function>";
         let names = vec!["edit_file".to_string()];
-        assert!(parse_text_tool_calls(content, &names).is_empty());
+        assert!(parse_text_tool_calls(content, &names).unwrap().is_empty());
     }
 
     #[test]
@@ -908,14 +1779,14 @@ mod tests {
         // Offered tool name appears in prose, but with no complete block.
         let content = "Use <function=edit_file> when you need to change a file.";
         let names = vec!["edit_file".to_string()];
-        assert!(parse_text_tool_calls(content, &names).is_empty());
+        assert!(parse_text_tool_calls(content, &names).unwrap().is_empty());
     }
 
     #[test]
     fn no_markers_yields_no_calls() {
         let content = "Just a normal assistant reply with no tool calls at all.";
         let names = vec!["edit_file".to_string()];
-        assert!(parse_text_tool_calls(content, &names).is_empty());
+        assert!(parse_text_tool_calls(content, &names).unwrap().is_empty());
     }
 
     #[test]
@@ -936,5 +1807,16 @@ mod tests {
         assert!(s.is_char_boundary(b));
         // Short strings hold everything back.
         assert_eq!(flush_boundary("ab", 16), 0);
+    }
+
+    #[test]
+    fn request_body_forwards_max_tokens_and_stop_sequences() {
+        let provider = OllamaProvider::new("llama3");
+        let mut request = ChatRequest::simple("hello");
+        request.max_tokens = Some(321);
+        request.stop_sequences = vec!["END".to_string(), "STOP".to_string()];
+        let body = provider.build_request_body(&request, false);
+        assert_eq!(body["max_tokens"], 321);
+        assert_eq!(body["stop"], serde_json::json!(["END", "STOP"]));
     }
 }

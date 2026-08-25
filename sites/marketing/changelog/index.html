@@ -17,19 +17,19 @@
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
+  <meta property="og:image:alt" content="Axocoatl: the local-first workbench for coding agents">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:site" content="@axocoatl">
   <meta name="twitter:title" content="Changelog — Axocoatl">
   <meta name="twitter:description" content="What changed in each release of Axocoatl.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
+  <meta name="twitter:image:alt" content="Axocoatl: the local-first workbench for coding agents">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles/tokens.css">
-  <link rel="stylesheet" href="/styles/base.css">
+  <link rel="stylesheet" href="/styles/base.css?v=20260818-narrative">
   <link rel="stylesheet" href="/styles/finder.css">
   <style>
     .release {
@@ -76,9 +76,8 @@
       margin: 0;
     }
   </style>
-  <script type="module" src="/components/ax-site-nav.js"></script>
-  <script type="module" src="/components/ax-install-bar.js"></script>
-  <script type="module" src="/components/ax-footer.js"></script>
+  <script type="module" src="/components/ax-site-nav.js?v=20260818-narrative"></script>
+  <script type="module" src="/components/ax-footer.js?v=20260818-narrative"></script>
   <script type="module" src="/components/ax-theme-toggle.js"></script>
   <script type="application/ld+json">
 {
@@ -102,21 +101,66 @@
 <body>
   <ax-site-nav></ax-site-nav>
 
-  <main>
+  <main id="main-content">
 
     <section class="container hero" style="padding-bottom: var(--s-7);">
       <span class="eyebrow">Changelog</span>
-      <h1>What shipped.</h1>
+      <h1>Released versions.</h1>
       <p class="lede">
-        Every release of Axocoatl. Keep-a-Changelog format. Curated
-        release notes live as blog posts; this is the bullet record.
-        The canonical source is
-        <a href="https://github.com/axocoatl/axocoatl/blob/main/CHANGELOG.md" target="_blank" rel="noopener"><code>CHANGELOG.md</code></a>
-        in the repo.
+        Published Axocoatl releases appear here after their GitHub release exists.
+        The canonical source, including work not assigned to a release, is
+        <a href="https://github.com/axocoatl/axocoatl/blob/main/CHANGELOG.md"><code>CHANGELOG.md</code></a>.
       </p>
     </section>
 
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
+
+      <article class="release">
+        <span class="release-tag">v1.0.0</span>
+        <span class="release-date">2026-08-25</span>
+        <h2>The durable coding workbench.</h2>
+
+        <p>
+          Axocoatl 1.0 is one local-first workbench for coding agents. A
+          folder-anchored Session keeps the accepted request, context relation,
+          output, bounded Route evidence, and final lifecycle in durable History,
+          while current repository changes remain ordinary Git for you to review
+          and commit.
+        </p>
+
+        <h3>Added</h3>
+        <ul>
+          <li>One Session-centered product surface for conversation, Files,
+              Source Control, Preview, Terminal, Agent activity, and Settings.</li>
+          <li>Durable Session History with structured context, bounded tool
+              evidence, search, Markdown and JSON export, exact Stop, and
+              turn-boundary rewind for autonomous single-Agent Sessions.</li>
+          <li><strong>Explore several ways</strong>: independent local attempts,
+              Outcome and Route comparison, shared repository Checks, optional
+              Judge evidence, and <strong>Keep this one</strong> as an ordinary
+              uncommitted Git change for final review.</li>
+          <li>Reviewed Session environments. Repository setup is a visible
+              decision before execution; local Podman and a configured
+              E2B Cloud backend retain distinct, honest boundaries.</li>
+          <li>Settings for Agents, Skills, MCP servers and approvals, and
+              durable manual, interval, event, or Skill-triggered Automations.</li>
+          <li>Checksum-verified native release archives for macOS and Linux on
+              Intel and Arm, plus separately published Rust crates.</li>
+        </ul>
+
+        <h3>Changed</h3>
+        <ul>
+          <li>The browser app now has one interactive route at <code>/</code>.
+              Older dashboard, Chat, Studio, and Variants destinations are
+              consolidated into the Session workbench instead of competing
+              product shells.</li>
+          <li>Eligible 0.1.x single-Agent Session transcripts are recovered into
+              canonical History through a bounded, crash-safe compatibility
+              path. Current state storage uses symlink-resistant,
+              identity-checked writes and keeps control-plane data outside local
+              repository execution.</li>
+        </ul>
+      </article>
 
       <article class="release">
         <span class="release-tag">v0.1.4</span>
@@ -184,8 +228,9 @@
               decomposes a goal into subtasks, assigns each to a worker by a
               capability and budget auction, runs them in parallel, and
               synthesizes the result. Symbolic HTN planning when methods are
-              provided, otherwise LLM decomposition. Resumable from the last
-              checkpointed subtask.</li>
+              provided, otherwise LLM decomposition. Live orchestration state is
+              checkpointed internally; a terminal Completed, Cancelled, Failed,
+              or Interrupted Session turn is not auto-resumed.</li>
           <li>Agent-editable core memory: small blocks the
               agent curates as it works, rendered into its context every turn.
               Agent-driven recall (<code>recall_search</code>,
@@ -204,9 +249,9 @@
         <ul>
           <li>Tier 3 is now agent-editable core memory; the old shared
               long-term fact store is retired.</li>
-          <li><code>overflow_policy</code> is strictly a spend cap
+          <li><code>overflow_policy</code> controls the local token-budget guard
               (<code>abort</code> default, or <code>warn</code>); context
-              compaction is automatic and independent of the budget.</li>
+              compaction is automatic and independent of that guard.</li>
         </ul>
       </article>
 
@@ -233,7 +278,7 @@
 
       <article class="release">
         <span class="release-tag">v0.1.0</span>
-        <span class="release-date">2026-04-24 · first public release</span>
+        <span class="release-date">2026-06-03 · first public release</span>
         <h2>The runtime that runs.</h2>
 
         <h3>Added</h3>
@@ -244,20 +289,19 @@
           <li>Workflow execution: CLI, HTTP, and IPC paths. Entry
               agents activate directly; downstream agents cascade via
               <code>TaskCompleted</code> events.</li>
-          <li>Per-agent token budgets, four-tier persistent memory
-              with neural Tier 4, and checkpointed agent state.</li>
+          <li>Per-Agent token budgets, four-tier persistent memory with neural
+              Tier 4, and checkpointed Agent state.</li>
           <li>Directory sessions with podman-sandboxed bind-mounts,
-              full PTY terminal support, and resumable state.</li>
+              full PTY terminal support, and durable Session records.</li>
           <li>MCP integration: bundled server catalog, install flow,
               permission gate, and a Tools view in the dashboard.</li>
-          <li>Provider matrix: Ollama, OpenAI, Anthropic, Mistral,
-              Gemini, OpenRouter. Per-agent selection.</li>
+          <li>Provider matrix: Ollama, OpenAI, Anthropic, Mistral, and Gemini;
+              OpenRouter was usable through the OpenAI-compatible path.</li>
           <li>Always-on system service (systemd / launchd) via
               <code>axocoatl service install</code>.</li>
           <li>Interactive <code>axocoatl onboard</code> + <code>axocoatl doctor</code>.</li>
           <li>Dashboard: Sessions cockpit, Studio lattice canvas,
               Automations editor, Chat, Files, Skills, MCP, Agents.</li>
-          <li>340+ tests passing across the workspace.</li>
         </ul>
 
       </article>
@@ -267,6 +311,5 @@
   </main>
 
   <ax-footer></ax-footer>
-  <ax-install-bar></ax-install-bar>
 </body>
 </html>

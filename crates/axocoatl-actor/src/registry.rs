@@ -204,6 +204,7 @@ mod tests {
                     input: AgentInput::text("hi"),
                     reply: tx,
                     sink: None,
+                    control: None,
                 },
             )
             .await;

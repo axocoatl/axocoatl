@@ -366,7 +366,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             per_call: 2_048,
             per_execution: 8_000,
             // Context compaction toward the model window is automatic; this policy
-            // is only the spend cap. Warn = log and keep going past the budget.
+            // controls the local token guard. Warn logs and keeps going.
             overflow_policy: OverflowPolicy::Warn,
         }),
         tools: vec![
@@ -439,10 +439,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("{}", "─".repeat(60));
     println!(
-        "Phase 1 total: {} tokens ({} input + {} output) across 3 turns",
+        "Phase 1 total: {} tokens ({} input + {} output + {} reasoning) across 3 turns",
         phase1_usage.total(),
         phase1_usage.input_tokens,
-        phase1_usage.output_tokens
+        phase1_usage.output_tokens,
+        phase1_usage.reasoning_tokens.unwrap_or(0)
     );
 
     // Simulate crash — stop the agent
@@ -548,10 +549,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "=".repeat(60));
     println!("  Conversation turns: 5 (3 before crash + 2 after resume)");
     println!(
-        "  Total tokens used: {} ({} input + {} output)",
+        "  Total tokens used: {} ({} input + {} output + {} reasoning)",
         total_usage.total(),
         total_usage.input_tokens,
-        total_usage.output_tokens
+        total_usage.output_tokens,
+        total_usage.reasoning_tokens.unwrap_or(0)
     );
     println!("  Checkpoint policy: EveryLlmCall");
     println!("  Session resumed successfully: YES");

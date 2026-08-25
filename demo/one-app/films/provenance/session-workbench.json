@@ -1,0 +1,146 @@
+{
+  "schema_version": 2,
+  "film": "session-workbench",
+  "recorded_at": "2026-08-25T06:07:28.721Z",
+  "source": {
+    "branch": "codex/session-capabilities",
+    "head": "e4bfd6042b0a54b06c898c58f7b04fb1b0ff4e29",
+    "dirty": true,
+    "patch_sha256": "9562ed1cea92c0d427fd91449ef09fdc9e2a3fc7a0fd2fb5d38c8f29183a737d",
+    "patch_excludes": [
+      "demo/one-app/films/source/",
+      "demo/one-app/films/staged/",
+      "demo/one-app/films/provenance/",
+      "sites/marketing/assets/films/"
+    ],
+    "content_sha256": "27ceddcd7c6f177767025f7c15a2cf2f9bb95fde19df365f3a18b05afc07cfdf"
+  },
+  "binary": {
+    "path": "target/release/axocoatl",
+    "version": "axocoatl 1.0.0",
+    "sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488"
+  },
+  "capture": {
+    "record": "demo/one-app/films/source/session-workbench/capture.json",
+    "record_sha256": "7566a23bb4f32aa52a943c923295f67b5ecd0e087c8dd3bcad0ecbe1d96c89b0",
+    "url": "http://localhost:18186/",
+    "browser": "Codex in-app browser",
+    "viewport": {
+      "width": 1280,
+      "height": 720,
+      "device_scale_factor": 1
+    },
+    "theme": "dark",
+    "reduced_motion": "no-preference",
+    "keyframes": [
+      {
+        "beat": "visible-defect",
+        "path": "demo/one-app/films/source/session-workbench/shot-visible-defect.jpg",
+        "sha256": "36fe121899e78a3a2a857db7079ff4f943876597986d4fa4c9bdc2b2aec86734"
+      },
+      {
+        "beat": "agent-route",
+        "path": "demo/one-app/films/source/session-workbench/shot-agent-route.jpg",
+        "sha256": "d338e0868b5d928b3a7cfb4094ff88d0cb642551f39752c9601080ee0cc12382"
+      },
+      {
+        "beat": "verified-result",
+        "path": "demo/one-app/films/source/session-workbench/shot-verified-result.jpg",
+        "sha256": "39914447a79fa634b0af1eeb7a60532ba58ad502902c3b02dc738b907a288bd4"
+      },
+      {
+        "beat": "git-ownership",
+        "path": "demo/one-app/films/source/session-workbench/shot-git-ownership.jpg",
+        "sha256": "634fcc418e24e20389d0d26715c83137cbf0881d471474caea23852205c8182c"
+      }
+    ]
+  },
+  "edit": {
+    "timeline": "demo/one-app/films/source/session-workbench/timeline.json",
+    "timeline_sha256": "ab43a85fd88257bd32f10f6cccfc1d91d6b543a26f53927483a0cf864241484a",
+    "stage_record": "demo/one-app/films/source/session-workbench/stage.json",
+    "stage_record_sha256": "3a1307f42c7ef2f9b59d70f241f82a3c3e990c433c328cd3beff5857312c8fe5",
+    "poster_frame": 252,
+    "poster_beat": "verified-result",
+    "poster_source_sha256": "39914447a79fa634b0af1eeb7a60532ba58ad502902c3b02dc738b907a288bd4",
+    "frame_count": 360,
+    "sequence_sha256": "08fec48d68043019c48bb488a651fce3b3ab0cd359fc08acf65d2390aa9008c0"
+  },
+  "media": {
+    "mp4": {
+      "path": "sites/marketing/assets/films/session-workbench.mp4",
+      "sha256": "b54c040308dacd9c696738b896cd019757f02fca599d22311caa6ecfd8796e86",
+      "duration_seconds": 45,
+      "codec": "h264",
+      "width": 1280,
+      "height": 720,
+      "pixel_format": "yuv420p",
+      "fps": "24/1",
+      "audio_streams": 0,
+      "fast_start": true
+    },
+    "poster": {
+      "path": "sites/marketing/assets/films/session-workbench.jpg",
+      "sha256": "39914447a79fa634b0af1eeb7a60532ba58ad502902c3b02dc738b907a288bd4",
+      "codec": "mjpeg",
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "evidence": {
+    "record": "demo/one-app/films/source/session-workbench/evidence.json",
+    "record_sha256": "eb6186e09d56c16287d1262e0c6f063ef316fed711a3b80dfd763feb93f3dde8",
+    "checks": [
+      {
+        "id": "visible-defect",
+        "status": "passed",
+        "detail": "The accepted Northstar capture visibly pairs the Conference cable pack at -$20.00 / Invariant broken with the pre-edit repository result: 6 tests, 5 passed, 1 failed, specifically never returns a negative payable total."
+      },
+      {
+        "id": "agent-route",
+        "status": "passed",
+        "detail": "Completed canonical Turn turn-c82de2fe-74ef-4d2c-ba06-0ddce6d116ea retains bounded grep, read_file, edit_file, and bash events; its successful edit is one replacement in lib/orders.js and its final npm run check exits 0."
+      },
+      {
+        "id": "verified-result",
+        "status": "passed",
+        "detail": "The same repaired checkout visibly pairs Preview at $0.00 / Ready with a fresh primary-checkout Terminal run reporting 6 passed and 0 failed."
+      },
+      {
+        "id": "git-ownership",
+        "status": "passed",
+        "detail": "Last turn Source Control shows exactly one unstaged file, lib/orders.js at +1/-1, with the Math.max(0, subtotal - off) production hunk readable; Commit remains at 0 staged and HEAD is unchanged."
+      }
+    ],
+    "identities": {
+      "workspace_id": "wsp-8df537b9-6b42-4111-9c13-b5097b10ccb6",
+      "session_id": "ses-3d045b8e-b2c9-4683-af38-b1380122b962",
+      "turn_id": "turn-c82de2fe-74ef-4d2c-ba06-0ddce6d116ea",
+      "agent_id": "coder",
+      "successful_edit_tool_call_id": "call_e6s9c073",
+      "successful_edit_tool_call_sha256": "70af6caf7886aa059f4b78728dabf1e512c2bd8bff5147f6a73f94e4cd6de63d",
+      "successful_check_tool_call_id": "call_elj0avc3",
+      "successful_check_tool_call_sha256": "10e95355e0860ce79695c97d24080700c809a470a56264c4b6f92e3e13c7bf28",
+      "source_head": "19ca67cd4be1f5c2fe72478887f4d21fa0d3d773",
+      "source_tree": "e87d1ce9b03c65ad10978692eba2f52d8d1237b0",
+      "changed_path": "lib/orders.js",
+      "git_status": "main; lib/orders.js modified, unstaged, +1/-1; no other paths",
+      "initial_check_result": "6 tests; 5 passed; 1 failed; never returns a negative payable total; exit 1",
+      "final_check_result": "6 tests; 6 passed; 0 failed; exit 0",
+      "release_binary": "target/release/axocoatl 1.0.0",
+      "release_binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+      "capture_config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+      "orders_js_sha256": "8569c2fe3062a7918ee3be4b5a4624c79446b1c7921ca71d44ca252c7681498e",
+      "orders_test_js_sha256": "2bbe98746d19c850b8fad7ae7bab12c1f7ac73b1b80f1630562fec4f6c1514b4",
+      "accepted_turn_ledger_records_sha256": "7318074ad90c343178586d72a914fec36a709388e16f74617898c1f466a651d3",
+      "workspace_record_sha256": "8b269091f50dd68e9f5456d1229e3855904161f4746d244cd31d2aaa6348de55",
+      "session_record_sha256": "1fe27f1e1529d832b709322b740ced09b9965affb1efa08a53054d292b7fc1c9",
+      "keyframe_sha256": [
+        "36fe121899e78a3a2a857db7079ff4f943876597986d4fa4c9bdc2b2aec86734",
+        "d338e0868b5d928b3a7cfb4094ff88d0cb642551f39752c9601080ee0cc12382",
+        "39914447a79fa634b0af1eeb7a60532ba58ad502902c3b02dc738b907a288bd4",
+        "634fcc418e24e20389d0d26715c83137cbf0881d471474caea23852205c8182c"
+      ]
+    }
+  }
+}

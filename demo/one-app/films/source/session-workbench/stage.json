@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "film": "session-workbench",
+  "timeline": "demo/one-app/films/source/session-workbench/timeline.json",
+  "timeline_sha256": "ab43a85fd88257bd32f10f6cccfc1d91d6b543a26f53927483a0cf864241484a",
+  "input_fps": 8,
+  "frame_count": 360,
+  "duration_seconds": 45,
+  "sequence_sha256": "08fec48d68043019c48bb488a651fce3b3ab0cd359fc08acf65d2390aa9008c0",
+  "shots": [
+    {
+      "beat": "visible-defect",
+      "source": "shot-visible-defect.jpg",
+      "source_sha256": "36fe121899e78a3a2a857db7079ff4f943876597986d4fa4c9bdc2b2aec86734",
+      "hold_frames": 88,
+      "first_frame": 1,
+      "last_frame": 88
+    },
+    {
+      "beat": "agent-route",
+      "source": "shot-agent-route.jpg",
+      "source_sha256": "d338e0868b5d928b3a7cfb4094ff88d0cb642551f39752c9601080ee0cc12382",
+      "hold_frames": 120,
+      "first_frame": 89,
+      "last_frame": 208
+    },
+    {
+      "beat": "verified-result",
+      "source": "shot-verified-result.jpg",
+      "source_sha256": "39914447a79fa634b0af1eeb7a60532ba58ad502902c3b02dc738b907a288bd4",
+      "hold_frames": 88,
+      "first_frame": 209,
+      "last_frame": 296
+    },
+    {
+      "beat": "git-ownership",
+      "source": "shot-git-ownership.jpg",
+      "source_sha256": "634fcc418e24e20389d0d26715c83137cbf0881d471474caea23852205c8182c",
+      "hold_frames": 64,
+      "first_frame": 297,
+      "last_frame": 360
+    }
+  ],
+  "poster_beat": "verified-result",
+  "poster_frame": 252
+}

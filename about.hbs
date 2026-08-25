@@ -1,0 +1,18 @@
+RUST DEPENDENCIES
+=================
+
+This section is generated from the `axocoatl-cli` release graph in
+`Cargo.lock` for all four native release targets by cargo-about 0.9.1.
+
+{{#each licenses}}
+-------------------------------------------------------------------------------
+{{{name}}} ({{{id}}})
+
+Used by:
+{{#each used_by}}
+- {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

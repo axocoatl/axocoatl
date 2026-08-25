@@ -24,17 +24,18 @@ import { adopt } from './sheets.js';
 /**
  * The modules, and what opens them.
  *
- * Bindings follow the platform conventions people already have in their hands:
- * ⌘P for files, ⌘T for a terminal-ish surface. Inventing our own would cost
- * familiarity and buy nothing.
+ * The command center is the discoverable route to every module. Common editor
+ * bindings stay reserved for their familiar jobs (for example Cmd/Ctrl+P is
+ * file Quick Open), so module rows describe the action instead of claiming a
+ * conflicting global shortcut.
  */
 export const MODULES = [
-  { id: 'files',    title: 'Files',      hint: 'Project tree and editor',   key: 'p',  ico: '▤' },
-  { id: 'stream',   title: 'Activity',   hint: 'What the agents are doing', key: 'a',  ico: '✦' },
-  { id: 'compare',  title: 'Attempts',   hint: 'Compare several ways at once', key: 'e', ico: '⑂' },
-  { id: 'terminal', title: 'Terminal',   hint: 'A shell in the sandbox',    key: 't',  ico: '❯' },
-  { id: 'browser',  title: 'Browser',    hint: 'Preview the running app',   key: 'b',  ico: '◈' },
-  { id: 'trace',    title: 'Agent graph',hint: 'How the work coordinated',  key: 'g',  ico: '◉' },
+  { id: 'stream',   title: 'Conversation', hint: 'Return to the Session',                 ico: '✦' },
+  { id: 'files',    title: 'Files',        hint: 'Project tree, editor, and Source Control', ico: '▤' },
+  { id: 'browser',  title: 'Preview',      hint: 'Open and inspect the running app',       ico: '◈' },
+  { id: 'compare',  title: 'Review ways',  hint: 'Compare Outcome and Route',              ico: '⑂' },
+  { id: 'terminal', title: 'Terminal',     hint: 'A shell in the sandbox',                 ico: '❯' },
+  { id: 'trace',    title: 'Agent graph',  hint: 'How the work coordinated',               ico: '◉' },
 ];
 
 const CSS = `
@@ -75,6 +76,7 @@ kbd {
   border: 1px solid var(--border-strong); border-radius: var(--r-sm);
   padding: 1px 6px; flex-shrink: 0;
 }
+.open-label { color: var(--muted-2); font-size: var(--fs-xs); flex-shrink: 0; }
 .empty { padding: var(--sp-4); color: var(--muted-2); font-size: var(--fs-sm); text-align: center; }
 `;
 
@@ -162,7 +164,7 @@ export class AxLauncher extends HTMLElement {
       row.innerHTML = `<span class="ico">${m.ico}</span>
         <span class="txt"><span class="title"></span><span class="hint"></span></span>
         ${this.#openIds.has(m.id) ? '<span class="on">on</span>' : ''}
-        <kbd>⌘${m.key.toUpperCase()}</kbd>`;
+        <span class="open-label">Open</span>`;
       row.querySelector('.title').textContent = m.title;
       row.querySelector('.hint').textContent = m.hint;
       row.addEventListener('click', () => this.#choose(m));

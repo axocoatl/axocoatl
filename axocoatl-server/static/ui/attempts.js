@@ -13,6 +13,7 @@ import { adopt } from './sheets.js';
  * @attr {string} session  Session whose draft and active attempts are shown.
  *
  * @fires attempt-instruction  detail: {task, instruction, plan}
+ * @fires attempt-explore      detail: {session} — open Explore several ways configuration
  * @fires attempt-review       detail: {session, attempt_set_id}
  * @fires attempts-error       detail: {action, session, attempt_set_id, message, ...context}
  */
@@ -46,7 +47,11 @@ async function jsonRequest(url, options) {
   }
   if (!response.ok) {
     const message = body && typeof body === 'object' ? body.error : body;
-    throw new Error(message || `HTTP ${response.status}`);
+    const error = new Error(message || `HTTP ${response.status}`);
+    if (body && typeof body === 'object' && body.control_usage) {
+      error.controlUsage = body.control_usage;
+    }
+    throw error;
   }
   return body;
 }
@@ -88,6 +93,7 @@ const CSS = `
 }
 .empty, .hint { color: var(--muted-2); font-size: var(--fs-xs); line-height: 1.45; }
 .empty { padding: var(--sp-2) 0; }
+.empty-action { display: grid; justify-items: start; gap: var(--sp-2); }
 .loading { opacity: .65; }
 .errors { flex-shrink: 0; }
 .errors:empty { display: none; }
@@ -257,6 +263,7 @@ export class AxAttempts extends HTMLElement {
   #baselineProvider = '';
   #draft = { task: '', lanes: [] };
   #plan = null;
+  #planUsage = null;
   #instruction = '';
   #probes = new Map();
   #planning = false;
@@ -299,7 +306,7 @@ export class AxAttempts extends HTMLElement {
         </section>
         <section class="section" aria-labelledby="attempt-cost-title">
           <div class="section-head"><h3 id="attempt-cost-title">Attempt execution cost</h3></div>
-          <div class="hint">Ways only; Plan first and Judge calls are not included.</div>
+          <div class="hint">Ways only; Plan first, model checks, and Judge are reported separately and not included.</div>
           <div class="cost-host">
             <div class="cost-selector-host"></div>
             <div class="cost-body-host"></div>
@@ -321,6 +328,7 @@ export class AxAttempts extends HTMLElement {
       if (action === 'plan') void this.#planFirst();
       if (action === 'use-plan') this.#usePlan();
       if (action === 'probe') void this.#checkModels();
+      if (action === 'explore') this.#requestExplore();
       if (action === 'review') this.#reviewOutcomes();
       if (action === 'retry') this.#retry(button.dataset.retry);
       if (action === 'cost') void this.#loadCost();
@@ -333,6 +341,7 @@ export class AxAttempts extends HTMLElement {
           this.#planRequestId++;
           this.#planning = false;
           this.#plan = null;
+          this.#planUsage = null;
           this.#instruction = '';
         }
         this.#clearError('plan');
@@ -401,6 +410,7 @@ export class AxAttempts extends HTMLElement {
     this.#sessionRecord = null;
     if (!keepInitialDraft) this.#draft = { task: '', lanes: [] };
     this.#plan = null;
+    this.#planUsage = null;
     this.#instruction = '';
     this.#probes.clear();
     this.#planning = false;
@@ -434,6 +444,7 @@ export class AxAttempts extends HTMLElement {
       this.#planRequestId++;
       this.#planning = false;
       this.#plan = null;
+      this.#planUsage = null;
       this.#instruction = '';
       this.#clearError('plan');
     }
@@ -569,8 +580,7 @@ export class AxAttempts extends HTMLElement {
     const previousBaseline = `${this.#baselineProvider}\u0000${this.#baselineModel}`;
     if (!this.#plannerAgent()) {
       const primary = this.#agent(this.#primarySessionAgentId());
-      const planner = primary || this.#agents.find((agent) => agent.role === 'coordinator')
-        || this.#agents[0];
+      const planner = primary || this.#agents[0];
       this.#plannerAgentId = planner?.id || '';
     }
     const choices = this.#baselineChoices();
@@ -617,7 +627,7 @@ export class AxAttempts extends HTMLElement {
         provider: String(agent.provider || ''),
         model: String(agent.model || ''),
         role: String(agent.role || ''),
-      }));
+      })).filter((agent) => agent.role === 'autonomous');
       this.#clearError('agents');
     } else {
       const error = agentsResult.status === 'rejected'
@@ -656,6 +666,7 @@ export class AxAttempts extends HTMLElement {
       this.#planRequestId++;
       this.#planning = false;
       this.#plan = null;
+      this.#planUsage = null;
       this.#instruction = '';
       this.#clearError('plan');
     }
@@ -678,8 +689,7 @@ export class AxAttempts extends HTMLElement {
     this.#clearError('plan');
     this.#renderDraft();
     try {
-      const body = { task, provider: planner.provider };
-      if (planner.model) body.model = planner.model;
+      const body = { task, agent_id: planner.id };
       const response = await jsonRequest(
         `/api/sessions/${encodeURIComponent(sessionId)}/variants/plan`, {
           method: 'POST',
@@ -703,11 +713,20 @@ export class AxAttempts extends HTMLElement {
         acceptance: Array.isArray(response.acceptance)
           ? response.acceptance.map(String) : [],
       };
+      this.#planUsage = response.control_usage && typeof response.control_usage === 'object'
+        ? response.control_usage : null;
       this.#instruction = response.instruction;
       this.#clearError('plan');
     } catch (error) {
       if (requestId !== this.#planRequestId) return;
-      this.#reportError('plan', error, {
+      if (error?.controlUsage && typeof error.controlUsage === 'object') {
+        this.#planUsage = error.controlUsage;
+      }
+      const usage = this.#controlUsageLabel(error?.controlUsage, 'Plan');
+      const visibleError = usage
+        ? new Error(`${String(error?.message || error)}\n${usage}`)
+        : error;
+      this.#reportError('plan', visibleError, {
         session: sessionId,
         attempt_set_id: null,
         task,
@@ -817,6 +836,7 @@ export class AxAttempts extends HTMLElement {
             detail: String(probe?.detail || 'The provider returned no result for this model.'),
             provider: group.provider,
             model,
+            control_usage: probe?.control_usage || null,
           });
         }
       }
@@ -944,6 +964,13 @@ export class AxAttempts extends HTMLElement {
     }));
   }
 
+  #requestExplore() {
+    if (!this.session || (this.#sessionRecord && !this.#supportsAttempts())) return;
+    this.dispatchEvent(new CustomEvent('attempt-explore', {
+      detail: { session: this.session }, bubbles: true, composed: true,
+    }));
+  }
+
   #stopPolling() {
     if (this.#pollTimer) clearTimeout(this.#pollTimer);
     this.#pollTimer = null;
@@ -1034,6 +1061,7 @@ export class AxAttempts extends HTMLElement {
         stateClass = probe.status === 'usable' ? 'good' : 'bad';
         dot = probe.status === 'usable' ? 'usable' : 'unusable';
       }
+      const probeUsage = this.#controlUsageLabel(probe?.control_usage, 'Model check');
       const target = [resolved.provider || 'provider unresolved', resolved.model || 'model unresolved']
         .join(' · ');
       return `<div class="way"><span class="dot ${dot}" aria-hidden="true"></span>`
@@ -1041,7 +1069,7 @@ export class AxAttempts extends HTMLElement {
         + `${html(resolved.agentLabel)}</span></div><div class="way-meta">${html(target)}</div></div>`
         + `<span class="state ${stateClass}">${html(state)}</span>`
         + `${probe?.detail ? `<div class="way-detail ${probe.status === 'usable' ? '' : 'bad'}">`
-          + `${html(probe.detail)}</div>` : ''}</div>`;
+          + `${html(probe.detail)}${probeUsage ? `<br>${html(probeUsage)}` : ''}</div>` : ''}</div>`;
     }).join('');
     const plan = this.#plan ? this.#planMarkup() : '';
     const noTask = !this.#draft.task.trim();
@@ -1100,13 +1128,28 @@ export class AxAttempts extends HTMLElement {
     const acceptance = this.#plan.acceptance.length
       ? `<div class="plan-group"><span class="eyebrow">Done when</span><ul>`
         + this.#plan.acceptance.map((item) => `<li>${html(item)}</li>`).join('') + '</ul></div>' : '';
+    const usage = this.#controlUsageLabel(this.#planUsage, 'Plan');
     return `<div class="plan"><h4>Proposed plan</h4><p>${html(this.#plan.summary)}</p>`
+      + `${usage ? `<div class="hint">${html(usage)} · current page; the Agent’s cumulative total remains in Settings.</div>` : ''}`
       + `${steps}${constraints}${acceptance}<label class="field instruction">`
       + '<span>Instruction every way will receive</span>'
       + '<textarea data-instruction aria-label="Attempt instruction"></textarea></label>'
       + `<div class="actions"><button type="button" class="action primary" data-action="use-plan"`
       + `${this.#instruction.trim() ? '' : ' disabled'}>Use this plan</button>`
       + '<span class="hint">You can edit the instruction before using it.</span></div></div>';
+  }
+
+  #controlUsageLabel(usage, label) {
+    if (!usage || !Number(usage.calls || 0)) return '';
+    const calls = Number(usage.calls || 0);
+    const input = Number(usage.input_tokens || 0);
+    const output = Number(usage.output_tokens || 0);
+    const reasoning = Number(usage.reasoning_tokens || 0);
+    const completeness = usage.token_usage_known === true
+      ? 'exact' : 'known lower bound · incomplete';
+    return `${label} · ${calls} call${calls === 1 ? '' : 's'} · `
+      + `${input} in / ${output} out / ${reasoning} reasoning · `
+      + `${input + output + reasoning} total tokens · ${completeness}`;
   }
 
   #announceLifecycle(message) {
@@ -1154,7 +1197,12 @@ export class AxAttempts extends HTMLElement {
     }
     const set = this.#attemptSet();
     if (!set || this.#lanes().length === 0) {
-      this.#activeHost.innerHTML = '<div class="empty">No active attempts for this session.</div>';
+      const canExplore = !this.#sessionRecord || this.#supportsAttempts();
+      this.#activeHost.innerHTML = '<div class="empty empty-action"><span>No attempts are active for this Session.</span>'
+        + (canExplore
+          ? '<button type="button" class="action primary" data-action="explore">Explore several ways</button>'
+          : '')
+        + '</div>';
       this.#announceLifecycle('No active attempts for this session.');
       restoreFocus();
       return;

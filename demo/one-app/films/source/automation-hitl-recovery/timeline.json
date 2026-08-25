@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "film": "automation-hitl-recovery",
+  "input_fps": 8,
+  "shots": [
+    {
+      "beat": "run",
+      "source": "shot-run.jpg",
+      "hold_frames": 88
+    },
+    {
+      "beat": "interrupt",
+      "source": "shot-interrupt.jpg",
+      "hold_frames": 104
+    },
+    {
+      "beat": "restart",
+      "source": "shot-restart.jpg",
+      "hold_frames": 88
+    },
+    {
+      "beat": "resume",
+      "source": "shot-resume.jpg",
+      "hold_frames": 80
+    },
+    {
+      "beat": "result",
+      "source": "shot-result.jpg",
+      "hold_frames": 80
+    }
+  ]
+}

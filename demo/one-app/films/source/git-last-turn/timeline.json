@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "film": "git-last-turn",
+  "input_fps": 8,
+  "shots": [
+    {
+      "beat": "kept-decision",
+      "source": "shot-kept-decision.jpg",
+      "hold_frames": 40
+    },
+    {
+      "beat": "uncommitted",
+      "source": "shot-uncommitted.jpg",
+      "hold_frames": 40
+    },
+    {
+      "beat": "last-turn",
+      "source": "shot-last-turn.jpg",
+      "hold_frames": 40
+    },
+    {
+      "beat": "restart",
+      "source": "shot-restart.jpg",
+      "hold_frames": 40
+    },
+    {
+      "beat": "ownership",
+      "source": "shot-ownership.jpg",
+      "hold_frames": 40
+    }
+  ]
+}

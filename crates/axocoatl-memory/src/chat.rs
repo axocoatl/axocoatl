@@ -25,6 +25,7 @@
 //! lightweight chats deliberately do *not* use that timeline as history.
 
 use crate::session::StoredMessage;
+use axocoatl_core::{SecureDir, SecureEntryType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -55,6 +56,13 @@ fn now_secs() -> u64 {
 fn gen_id() -> String {
     // Mirrors SessionStore's id convention (see `crates/axocoatl-session`).
     format!("chat-{}", uuid::Uuid::new_v4())
+}
+
+fn is_canonical_chat_id(id: &str) -> bool {
+    let Some(uuid_text) = id.strip_prefix("chat-") else {
+        return false;
+    };
+    uuid::Uuid::parse_str(uuid_text).is_ok_and(|uuid| uuid.hyphenated().to_string() == uuid_text)
 }
 
 /// One attachment reference on a chat. The actual bytes + metadata live in
@@ -130,7 +138,7 @@ impl Chat {
 
 /// JSON-on-disk chat store. One file per chat at `{dir}/{chat_id}.json`.
 pub struct ChatStore {
-    dir: PathBuf,
+    secure_dir: SecureDir,
     chats: HashMap<String, Chat>,
 }
 
@@ -141,22 +149,50 @@ impl ChatStore {
     /// [`load_all`]: ChatStore::load_all
     pub fn new(dir: impl Into<PathBuf>) -> Result<Self, ChatError> {
         let dir = dir.into();
-        std::fs::create_dir_all(&dir)?;
+        let secure_dir = SecureDir::open_or_create_all(&dir)?;
         Ok(Self {
-            dir,
+            secure_dir,
+            chats: HashMap::new(),
+        })
+    }
+
+    pub fn new_in(
+        data_root: impl AsRef<std::path::Path>,
+        relative: impl AsRef<std::path::Path>,
+    ) -> Result<Self, ChatError> {
+        let data_root = SecureDir::open(data_root)?;
+        Self::new_in_secure(&data_root, relative)
+    }
+
+    pub fn new_in_secure(
+        data_root: &SecureDir,
+        relative: impl AsRef<std::path::Path>,
+    ) -> Result<Self, ChatError> {
+        let secure_dir = data_root.child(relative)?;
+        Ok(Self {
+            secure_dir,
             chats: HashMap::new(),
         })
     }
 
     /// Load every persisted chat from disk. Malformed files are skipped.
     pub fn load_all(&mut self) -> Result<(), ChatError> {
-        for entry in std::fs::read_dir(&self.dir)? {
-            let path = entry?.path();
+        for entry in self.secure_dir.entries()? {
+            if entry.file_type != SecureEntryType::File {
+                continue;
+            }
+            let path = std::path::Path::new(&entry.name);
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            if let Ok(bytes) = std::fs::read(&path) {
+            let Some(filename_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            if let Ok(bytes) = self.secure_dir.read(&entry.name) {
                 if let Ok(chat) = serde_json::from_slice::<Chat>(&bytes) {
+                    if chat.id != filename_id || !is_canonical_chat_id(&chat.id) {
+                        continue;
+                    }
                     self.chats.insert(chat.id.clone(), chat);
                 }
             }
@@ -395,9 +431,9 @@ impl ChatStore {
         if self.chats.remove(id).is_none() {
             return Err(ChatError::NotFound(id.to_string()));
         }
-        let path = self.dir.join(format!("{id}.json"));
-        if path.exists() {
-            std::fs::remove_file(path)?;
+        let relative = format!("{id}.json");
+        if self.secure_dir.is_file(&relative)? {
+            self.secure_dir.remove_file(relative)?;
         }
         Ok(())
     }
@@ -436,11 +472,9 @@ impl ChatStore {
 
     /// Atomically write one chat to `{dir}/{id}.json` (temp + rename).
     fn persist(&self, chat: &Chat) -> Result<(), ChatError> {
-        let path = self.dir.join(format!("{}.json", chat.id));
-        let tmp = path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(chat)?;
-        std::fs::write(&tmp, &bytes)?;
-        std::fs::rename(&tmp, &path)?;
+        self.secure_dir
+            .atomic_write(format!("{}.json", chat.id), &bytes)?;
         Ok(())
     }
 }
@@ -479,6 +513,34 @@ mod tests {
         let mut reopened = ChatStore::new(data.path().join("chats")).unwrap();
         reopened.load_all().unwrap();
         assert_eq!(reopened.get(&c.id).unwrap().messages.len(), 2);
+    }
+
+    #[test]
+    fn load_rejects_embedded_chat_id_that_does_not_match_filename() {
+        let data = tempdir().unwrap();
+        let chats_dir = data.path().join("chats");
+        let mut writer = ChatStore::new(&chats_dir).unwrap();
+        let chat = writer.create("coder", "poisoned").unwrap();
+        let original = chats_dir.join(format!("{}.json", chat.id));
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&original).unwrap()).unwrap();
+        value["id"] = serde_json::json!("../outside");
+        std::fs::write(
+            chats_dir.join("safe.json"),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+        value["id"] = serde_json::json!("not-canonical");
+        std::fs::write(
+            chats_dir.join("not-canonical.json"),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+        std::fs::remove_file(original).unwrap();
+
+        let mut reopened = ChatStore::new(chats_dir).unwrap();
+        reopened.load_all().unwrap();
+        assert!(reopened.is_empty());
     }
 
     #[test]

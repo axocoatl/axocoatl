@@ -1,0 +1,112 @@
+---
+title: Install Axocoatl
+description: Install the release binary on macOS 11 or newer, Linux, or WSL2, or build the CLI from source.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Axocoatl publishes release binaries for Linux and macOS 11 or newer on x86_64 and aarch64.
+Windows runs through WSL2; there is no native Windows binary.
+The Linux archives target GNU libc 2.35 or newer. They do not run on
+musl-based distributions such as Alpine; use the Cargo or source path there.
+
+## Install the binary
+
+<Tabs syncKey="install">
+  <TabItem label="Release binary">
+    ```sh
+    curl -fsSL https://raw.githubusercontent.com/axocoatl/axocoatl/main/scripts/install.sh | sh
+    ```
+
+    The installer resolves the latest GitHub release, downloads the tarball for
+    the current OS and architecture, and requires its matching SHA-256 file.
+    A missing, malformed, or mismatched checksum stops installation. The script
+    also stops before download when Linux does not report GNU libc 2.35 or
+    newer, or when macOS is older than version 11. It installs to
+    `/usr/local/bin` when writable and otherwise to `~/.local/bin`.
+  </TabItem>
+  <TabItem label="Cargo">
+    ```sh
+    cargo install axocoatl-cli
+    ```
+
+    Building from crates.io requires Rust 1.88 or newer.
+  </TabItem>
+  <TabItem label="Source checkout">
+    ```sh
+    git clone https://github.com/axocoatl/axocoatl
+    cd axocoatl
+    cargo build -p axocoatl-cli --release
+    ./target/release/axocoatl --version
+    ```
+
+    The root package is not the CLI. Keep the explicit `-p axocoatl-cli`.
+  </TabItem>
+</Tabs>
+
+Verify that your shell can find the binary:
+
+```sh
+axocoatl --version
+axocoatl --help
+```
+
+If installation used `~/.local/bin`, add it to your shell path:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+## Runtime prerequisites
+
+The binary can start without every optional dependency, but the normal local
+workbench path uses:
+
+- **Podman** for folder-anchored Session tools and parallel attempts;
+- at least one configured model provider;
+- **Ollama** plus a pulled model for the simplest local first run.
+
+For a local Ollama setup:
+
+```sh
+ollama serve
+ollama pull llama3.2
+```
+
+Run `ollama serve` in its own terminal or as its own service.
+
+## Windows through WSL2
+
+<Steps>
+
+1. In an administrator PowerShell, install WSL2 and reboot when requested:
+
+   ```powershell
+   wsl --install
+   ```
+
+2. Open the Linux distribution and install Podman. On Ubuntu:
+
+   ```sh
+   sudo apt-get update
+   sudo apt-get install -y podman
+   ```
+
+3. Run the release installer **inside WSL2**, then continue with
+   [`axocoatl onboard`](/start/onboard/).
+
+</Steps>
+
+`axocoatl dev` runs inside WSL2. Open `http://localhost:8080` from the Windows
+browser; WSL2 normally forwards that loopback port to the host.
+
+<Aside type="caution" title="The default sandbox still needs Podman">
+Installing the Axocoatl binary does not install or start Podman. Without a ready
+Podman runtime, `doctor` warns and folder Sessions cannot use the default local
+sandbox. A deliberately configured E2B Cloud backend is the separate
+remote option.
+</Aside>
+
+## Next
+
+[Create a configuration and run doctor →](/start/onboard/)

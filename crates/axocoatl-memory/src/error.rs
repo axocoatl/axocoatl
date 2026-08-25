@@ -27,6 +27,9 @@ pub enum MemoryError {
     #[error("invalid: {0}")]
     Invalid(String),
 
+    #[error("blob is {size} bytes; limit is {limit} bytes")]
+    BlobTooLarge { size: u64, limit: u64 },
+
     #[error("Consolidation LLM call failed: {0}")]
     ConsolidationLlmFailed(String),
 

@@ -10,8 +10,10 @@
 //! more-specific rules win over less-specific ones, and `Deny` always wins
 //! over `Allow` at the same specificity.
 
+use axocoatl_core::SecureDir;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// What the user decided about a candidate tool call.
@@ -87,7 +89,8 @@ pub enum PermissionError {
 /// records. Append-only at the API level (records are never edited in place
 /// — they're added or removed). Read-heavy: every MCP tool call hits this.
 pub struct McpPermissionStore {
-    path: PathBuf,
+    secure_dir: SecureDir,
+    file_name: OsString,
     records: Vec<PermissionRecord>,
 }
 
@@ -97,11 +100,54 @@ impl McpPermissionStore {
     /// we'd rather lose persistence than refuse to boot.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, PermissionError> {
         let path = path.into();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let records = if path.exists() {
-            let bytes = std::fs::read(&path)?;
+        let parent = path.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("permission store path has no parent: {}", path.display()),
+            )
+        })?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("permission store path has no filename: {}", path.display()),
+                )
+            })?
+            .to_os_string();
+        let secure_dir = SecureDir::open_or_create_all(parent)?;
+        Self::open_at(secure_dir, file_name)
+    }
+
+    pub fn open_in(
+        data_root: impl AsRef<Path>,
+        relative: impl AsRef<Path>,
+    ) -> Result<Self, PermissionError> {
+        let data_root = SecureDir::open(data_root)?;
+        Self::open_in_secure(&data_root, relative)
+    }
+
+    pub fn open_in_secure(
+        data_root: &SecureDir,
+        relative: impl AsRef<Path>,
+    ) -> Result<Self, PermissionError> {
+        let relative = relative.as_ref();
+        let file_name = relative
+            .file_name()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "permission store path has no filename",
+                )
+            })?
+            .to_os_string();
+        let secure_dir = data_root.child(relative.parent().unwrap_or_else(|| Path::new("")))?;
+        Self::open_at(secure_dir, file_name)
+    }
+
+    fn open_at(secure_dir: SecureDir, file_name: OsString) -> Result<Self, PermissionError> {
+        let records = if secure_dir.is_file(&file_name)? {
+            let bytes = secure_dir.read(&file_name)?;
             if bytes.is_empty() {
                 Vec::new()
             } else {
@@ -110,7 +156,11 @@ impl McpPermissionStore {
         } else {
             Vec::new()
         };
-        Ok(Self { path, records })
+        Ok(Self {
+            secure_dir,
+            file_name,
+            records,
+        })
     }
 
     /// Look up the decision for `(agent, server, qualified_tool)`.
@@ -188,10 +238,8 @@ impl McpPermissionStore {
     }
 
     fn persist(&self) -> Result<(), PermissionError> {
-        let tmp = self.path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(&self.records)?;
-        std::fs::write(&tmp, &bytes)?;
-        std::fs::rename(&tmp, &self.path)?;
+        self.secure_dir.atomic_write(&self.file_name, &bytes)?;
         Ok(())
     }
 }
@@ -333,5 +381,25 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(s.list().len(), 1);
         assert_eq!(s.list()[0].agent_id.as_deref(), Some("b"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_ancestor_and_predictable_temp_cannot_escape_store() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let sentinel = outside.path().join("sentinel");
+        std::fs::write(&sentinel, b"safe").unwrap();
+        symlink(outside.path(), parent.path().join("linked")).unwrap();
+        assert!(McpPermissionStore::open(parent.path().join("linked/p.json")).is_err());
+
+        symlink(&sentinel, parent.path().join("p.json.tmp")).unwrap();
+        let mut store = McpPermissionStore::open(parent.path().join("p.json")).unwrap();
+        store
+            .record(rec(None, "safe", None, PermissionDecision::Allow))
+            .unwrap();
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"safe");
     }
 }

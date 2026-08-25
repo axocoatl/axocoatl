@@ -12,7 +12,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 
 **`cargo install axocoatl-cli` fails to compile**
-Needs Rust 1.82+. Update with `rustup update stable`. Or use the prebuilt
+Needs Rust 1.88+. Update with `rustup update stable`. Or use the prebuilt
 binary: `curl -fsSL https://raw.githubusercontent.com/axocoatl/axocoatl/main/scripts/install.sh | sh`.
 
 ## Ollama
@@ -28,19 +28,75 @@ Start it: `ollama serve &`. Verify: `curl http://localhost:11434/api/tags`.
 **`Config invalid` / parse errors**
 `axocoatl validate axocoatl.yaml` prints the exact field and a suggestion.
 Common causes: missing `name` on an agent, `per_call > per_execution`,
-duplicate agent IDs, unresolved `${ENV_VAR}` (set it or add to `.env`).
+duplicate agent IDs, unresolved `${ENV_VAR}` (export it in the process
+environment that starts Axocoatl).
 
 **API provider key warnings**
-Set the key in `.env` (copied from `.env.example`) or directly in the config.
-`${OPENAI_API_KEY}`-style placeholders are interpolated from the environment.
+Export the key in the environment that starts Axocoatl.
+`${OPENAI_API_KEY}`-style placeholders are interpolated from that process
+environment. Axocoatl does not load `.env` automatically. If you keep local
+assignments in a file moved from `.env.example`, restrict it, never commit it,
+and explicitly load it before starting Axocoatl:
+
+```sh
+chmod 600 .env
+set -a
+. ./.env
+set +a
+```
 
 ## Runtime
 
+**A Session says `awaiting_approval`**
+Open **Review setup**. Approve only the exact proposed command, or clear it and
+record an explicit no-setup decision. A detected `npm ci` is never approved by
+the daemon's devcontainer default. When
+`sandbox.allow_post_create_command: true`, only the exact unedited
+`devcontainer.json` command starts checked for an unreviewed Session; an
+explicit checked or unchecked Session decision wins.
+
+**A Session environment failed before Files or Terminal opened**
+Read the retained environment error and bounded setup output. Files, Git,
+Terminal, Preview, new turns, and Ways actions that start work or inspect a
+live checkout deliberately fail closed until the Session is Ready. Durable
+History, completed Attempt evidence, and Keep/Discard recovery remain
+available. Correct the image or exact setup command and choose **Rebuild
+environment**; repository tools never fall back to direct host file access.
+
+**Podman is missing, has no VM, or has a stopped VM**
+Axocoatl never installs host software or creates a Podman VM during Session
+startup. Follow the printed installation or `podman machine init` command. It
+may start a VM that already exists but is stopped.
+
+**A `network: none` Session cannot become Ready**
+The selected image may be missing Git or another repository command Axocoatl
+requires. With no container network, distro-aware provisioning cannot download
+it. Use an image that already contains the required commands; an image outside
+the curated list also requires `sandbox.allow_untrusted_images: true`. Podman
+may still pull the selected image as a host operation; that is separate from
+Session container egress.
+
+**E2B rejects the Session image**
+E2B uses the daemon-global `sandbox.e2b.template`; it cannot honor a
+per-Session or devcontainer OCI image. Clear the Session image or switch the
+daemon backend to Podman. If the E2B template lacks required repository
+commands, rebuild the template itself before retrying.
+
+**E2B creation remains blocked with an exact creation token**
+Restore provider access so Axocoatl can reconcile the retained token. If that
+is impossible, delete every sandbox whose metadata contains
+`axocoatl_creation_token=<exact token>`, then use the exact-token manual
+confirmation in **Review setup**. Confirmation only releases the durable
+record; it does not contact or delete E2B.
+
 **`Token budget exceeded: used N, budget M`**
-Working as designed — the budget is enforced before the LLM call. With
-`overflow_policy: abort` the agent stops; switch to `warn` to continue past
-the budget, or raise `per_execution`. Note: core-memory blocks + tool schemas
-count toward the input budget.
+Working as designed. Before each provider call, Axocoatl reserves the locally
+estimated input plus a bounded completion. With `overflow_policy: abort`, a call
+that cannot fit is not sent. A provider-reported overrun also stops the current
+turn, although those remote tokens may already have been incurred. Switch to
+`warn` to continue past the guard, or raise `per_call` / `per_execution`. Core
+memory and tool schemas count toward the input estimate. The guard is not an
+absolute provider billing cap.
 
 **`actor is likely terminated` after a budget abort**
 Expected: `abort` policy terminates the agent. Restart it

@@ -1,0 +1,158 @@
+{
+  "schema_version": 2,
+  "film": "mcp-approval",
+  "recorded_at": "2026-08-25T06:18:25.945Z",
+  "source": {
+    "branch": "codex/session-capabilities",
+    "head": "e4bfd6042b0a54b06c898c58f7b04fb1b0ff4e29",
+    "dirty": true,
+    "patch_sha256": "9562ed1cea92c0d427fd91449ef09fdc9e2a3fc7a0fd2fb5d38c8f29183a737d",
+    "patch_excludes": [
+      "demo/one-app/films/source/",
+      "demo/one-app/films/staged/",
+      "demo/one-app/films/provenance/",
+      "sites/marketing/assets/films/"
+    ],
+    "content_sha256": "27ceddcd7c6f177767025f7c15a2cf2f9bb95fde19df365f3a18b05afc07cfdf"
+  },
+  "binary": {
+    "path": "target/release/axocoatl",
+    "version": "axocoatl 1.0.0",
+    "sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488"
+  },
+  "capture": {
+    "record": "demo/one-app/films/source/mcp-approval/capture.json",
+    "record_sha256": "3caa7930df92b8d969fa82a2a15c695e0f2f8b2b3849bcfb4afef5f57f3c6cdc",
+    "url": "http://localhost:18088/",
+    "browser": "Codex in-app browser",
+    "viewport": {
+      "width": 1280,
+      "height": 720,
+      "device_scale_factor": 1
+    },
+    "theme": "dark",
+    "reduced_motion": "no-preference",
+    "keyframes": [
+      {
+        "beat": "request",
+        "path": "demo/one-app/films/source/mcp-approval/shot-request.jpg",
+        "sha256": "82ab2f083d93d9b8548303e85e85599bd0490641405ed53a434ee0ce82e9771a"
+      },
+      {
+        "beat": "pending-approval",
+        "path": "demo/one-app/films/source/mcp-approval/shot-pending-approval.jpg",
+        "sha256": "463fcd19904884151aceeced298fd031ee183a67acfbdaa5488cebbb98b257ca"
+      },
+      {
+        "beat": "deny",
+        "path": "demo/one-app/films/source/mcp-approval/shot-deny.jpg",
+        "sha256": "c5c9f910af3233047acf035e95df61be326a92af551cffed28d069f2c682d008"
+      },
+      {
+        "beat": "allow",
+        "path": "demo/one-app/films/source/mcp-approval/shot-allow.jpg",
+        "sha256": "4faef366c9a8a57cf702f0bfa246ee6311cde6c0587718dc0da1b10fda5f210e"
+      },
+      {
+        "beat": "durable-result",
+        "path": "demo/one-app/films/source/mcp-approval/shot-durable-result.jpg",
+        "sha256": "c426788dc40709416d45d9d93f55314bc56e21b2be64c295e631c0c04e6190fd"
+      }
+    ]
+  },
+  "edit": {
+    "timeline": "demo/one-app/films/source/mcp-approval/timeline.json",
+    "timeline_sha256": "fad8958524bf850436ec0195d9cef1d28cbda46fc9d9aeedcbbeda8454be2a56",
+    "stage_record": "demo/one-app/films/source/mcp-approval/stage.json",
+    "stage_record_sha256": "a783f8208fb587908d004b4570372c4621abc38b44e8d31331c58bf0b3baafb7",
+    "poster_frame": 72,
+    "poster_beat": "pending-approval",
+    "poster_source_sha256": "463fcd19904884151aceeced298fd031ee183a67acfbdaa5488cebbb98b257ca",
+    "frame_count": 240,
+    "sequence_sha256": "eb1cdaf43ee167248af493ed902bae944ee15109653dac4957dcd91a01376e29"
+  },
+  "media": {
+    "mp4": {
+      "path": "sites/marketing/assets/films/mcp-approval.mp4",
+      "sha256": "b818cf1a0d0a4422cdcdee0fc55e3d100b5344bd25a295d41c104674abdb4d9c",
+      "duration_seconds": 30,
+      "codec": "h264",
+      "width": 1280,
+      "height": 720,
+      "pixel_format": "yuv420p",
+      "fps": "24/1",
+      "audio_streams": 0,
+      "fast_start": true
+    },
+    "poster": {
+      "path": "sites/marketing/assets/films/mcp-approval.jpg",
+      "sha256": "463fcd19904884151aceeced298fd031ee183a67acfbdaa5488cebbb98b257ca",
+      "codec": "mjpeg",
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "evidence": {
+    "record": "demo/one-app/films/source/mcp-approval/evidence.json",
+    "record_sha256": "1db8d95323ae3903d96d5ea3ffc8e9d73fe0d1f3419e551d865c7301dbe3506b",
+    "checks": [
+      {
+        "id": "request",
+        "status": "passed",
+        "detail": "Weather Session ses-58af26fd-1f49-4557-83c5-8ea1a04f17b7 emitted an approval-gated London request for the configured mcp__weather__get_weather tool. The canonical Turn records the qualified tool, Session-scoped weather Agent, weather server, and exact {\"city\":\"London\"} arguments."
+      },
+      {
+        "id": "pending-approval",
+        "status": "passed",
+        "detail": "After a full page reload and the required wait beyond 30 seconds, the same London decision remained actionable with the same Session-scoped Agent, get_weather display tool, weather server, and city arguments."
+      },
+      {
+        "id": "deny",
+        "status": "passed",
+        "detail": "Deny settled call_6l5nitlj with the exact pre-dispatch error User denied mcp__weather__get_weather on weather. The London Turn contains no successful result or weather payload, and the captured successful-dispatch count remained zero."
+      },
+      {
+        "id": "allow",
+        "status": "passed",
+        "detail": "A fresh Tokyo request used Allow once. Turn turn-8be26e1c-eec1-4dc2-89ee-ac47e4606cc6 records one bounded tool start/result pair for call_5m7gwrps and the exact non-error result Weather in Tokyo: 22°C, clear."
+      },
+      {
+        "id": "durable-result",
+        "status": "passed",
+        "detail": "After reload, Session History restored the completed Tokyo request, qualified tool start, Tokyo arguments, deterministic result, and final Agent answer together. /api/mcp/permissions was still [] after Allow once."
+      }
+    ],
+    "identities": {
+      "workspace_id": "wsp-8df537b9-6b42-4111-9c13-b5097b10ccb6",
+      "session_id": "ses-58af26fd-1f49-4557-83c5-8ea1a04f17b7",
+      "session_agent_id": "ses-58af26fd-1f49-4557-83c5-8ea1a04f17b7:weather",
+      "mcp_server": "weather",
+      "qualified_tool": "mcp__weather__get_weather",
+      "deny_turn_id": "turn-3676d6f3-c66f-4e3f-a041-885b909c8786",
+      "deny_call_id": "call_6l5nitlj",
+      "deny_call_id_sha256": "f21e2aee9405ef11251b354f7dd5d0b84ef22292e815b9712daab87b63a53e1d",
+      "deny_tool_error": "User denied mcp__weather__get_weather on weather",
+      "deny_successful_dispatches": "0",
+      "allow_turn_id": "turn-8be26e1c-eec1-4dc2-89ee-ac47e4606cc6",
+      "allow_call_id": "call_5m7gwrps",
+      "allow_call_id_sha256": "cf7798e321bcbfa5bd495f1e6a3fcf880bc58b8854665b18f04a804ec8148b98",
+      "allow_successful_dispatches": "1",
+      "deterministic_result": "Weather in Tokyo: 22°C, clear.",
+      "allow_final_answer": "The current weather in Tokyo is 22°C with clear skies.",
+      "permissions_after_allow_once": "[]",
+      "turn_ledger_sha256": "cad9e1c7f7df0c39e1b61db87edb1052869e3d4d95daa7a09b2d2c5ad629563c",
+      "session_record_sha256": "b40bdd577c0bc212e69a3d7c2725de2a5341e14bc4916a2b836c1864a679761d",
+      "config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+      "binary": "target/release/axocoatl 1.0.0",
+      "binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+      "capture_viewport": "1280x720",
+      "screenshot_sha256": [
+        "shot-request.jpg=82ab2f083d93d9b8548303e85e85599bd0490641405ed53a434ee0ce82e9771a",
+        "shot-pending-approval.jpg=463fcd19904884151aceeced298fd031ee183a67acfbdaa5488cebbb98b257ca",
+        "shot-deny.jpg=c5c9f910af3233047acf035e95df61be326a92af551cffed28d069f2c682d008",
+        "shot-allow.jpg=4faef366c9a8a57cf702f0bfa246ee6311cde6c0587718dc0da1b10fda5f210e",
+        "shot-durable-result.jpg=c426788dc40709416d45d9d93f55314bc56e21b2be64c295e631c0c04e6190fd"
+      ]
+    }
+  }
+}

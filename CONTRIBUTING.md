@@ -48,7 +48,7 @@ If you touch the browser app (`axocoatl-server/static/index.html` or
 
 ## Code style
 
-- **Rust 2021**, MSRV `1.82`. Match the surrounding file's style.
+- **Rust 2021**, MSRV `1.88`. Match the surrounding file's style.
 - **No `unwrap()` / `expect()` in production paths.** They're fine in tests.
 - **Errors**: use `thiserror` for per-crate error types, `anyhow` for
   application-layer glue. Don't construct ad-hoc `String` errors.

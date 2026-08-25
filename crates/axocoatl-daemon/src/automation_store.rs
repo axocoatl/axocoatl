@@ -14,10 +14,11 @@
 //! the previous good file in place.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::Write;
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use axocoatl_config::{Automation, AutomationFolder, AutomationNodeKind, AxocoatlConfig};
+use axocoatl_core::SecureDir;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -44,8 +45,9 @@ pub enum StoreError {
 /// `automation-folders.json` (sibling, holds explicit folder entities so
 /// empty folders survive across daemon restarts).
 pub struct AutomationStore {
-    path: PathBuf,
-    folders_path: PathBuf,
+    secure_dir: SecureDir,
+    file_name: OsString,
+    folders_file_name: OsString,
     /// Whether `automations.json` has ever been successfully established.
     /// An existing `[]` is intentional user state, not an invitation to seed
     /// legacy YAML again.
@@ -208,20 +210,68 @@ impl AutomationStore {
     /// is present. Empty starting state otherwise.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
-        let initialized = path.exists();
+        let parent = path.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("automation store path has no parent: {}", path.display()),
+            )
+        })?;
+        let secure_dir = SecureDir::open_or_create_all(parent)?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("automation store path has no filename: {}", path.display()),
+                )
+            })?
+            .to_os_string();
+        Self::open_at(secure_dir, file_name)
+    }
+
+    /// Open the store at one relative file beneath the data root.
+    pub fn open_in(
+        data_root: impl AsRef<Path>,
+        relative: impl AsRef<Path>,
+    ) -> Result<Self, StoreError> {
+        let data_root = SecureDir::open(data_root)?;
+        Self::open_in_secure(&data_root, relative)
+    }
+
+    pub fn open_in_secure(
+        data_root: &SecureDir,
+        relative: impl AsRef<Path>,
+    ) -> Result<Self, StoreError> {
+        let relative = relative.as_ref();
+        let file_name = relative
+            .file_name()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "automation store path has no filename",
+                )
+            })?
+            .to_os_string();
+        let secure_dir = data_root.child(relative.parent().unwrap_or_else(|| Path::new("")))?;
+        Self::open_at(secure_dir, file_name)
+    }
+
+    fn open_at(secure_dir: SecureDir, file_name: OsString) -> Result<Self, StoreError> {
+        let initialized = secure_dir.is_file(&file_name)?;
         // Sibling file in the same directory. We pick a sibling so the user's
         // single-file backup story stays intact (copy automations.json, get
         // its folders alongside).
-        let folders_path = path.with_file_name("automation-folders.json");
+        let folders_file_name = OsString::from("automation-folders.json");
         let mut store = Self {
-            path,
-            folders_path,
+            secure_dir,
+            file_name,
+            folders_file_name,
             initialized,
             by_id: HashMap::new(),
             folders_by_path: HashMap::new(),
         };
-        if store.path.exists() {
-            let bytes = std::fs::read(&store.path)?;
+        if initialized {
+            let bytes = store.secure_dir.read(&store.file_name)?;
             if !bytes.is_empty() {
                 let list: Vec<Automation> = serde_json::from_slice(&bytes)?;
                 for a in list {
@@ -229,8 +279,8 @@ impl AutomationStore {
                 }
             }
         }
-        if store.folders_path.exists() {
-            let bytes = std::fs::read(&store.folders_path)?;
+        if store.secure_dir.is_file(&store.folders_file_name)? {
+            let bytes = store.secure_dir.read(&store.folders_file_name)?;
             if !bytes.is_empty() {
                 let list: Vec<AutomationFolder> = serde_json::from_slice(&bytes)?;
                 for f in list {
@@ -266,19 +316,10 @@ impl AutomationStore {
 
     /// Atomic-write the store's JSON to disk.
     fn persist(&mut self) -> Result<(), StoreError> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp = self.path.with_extension("json.tmp");
         let mut list: Vec<&Automation> = self.by_id.values().collect();
         list.sort_by(|a, b| a.id.cmp(&b.id));
         let bytes = serde_json::to_vec_pretty(&list)?;
-        {
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(&bytes)?;
-            f.sync_all()?;
-        }
-        std::fs::rename(&tmp, &self.path)?;
+        self.secure_dir.atomic_write(&self.file_name, &bytes)?;
         self.initialized = true;
         Ok(())
     }
@@ -286,19 +327,11 @@ impl AutomationStore {
     /// Persist the folder list to its sibling file. Same temp+rename pattern
     /// as `persist()`. Called after every folder mutation.
     fn persist_folders(&self) -> Result<(), StoreError> {
-        if let Some(parent) = self.folders_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp = self.folders_path.with_extension("json.tmp");
         let mut list: Vec<&AutomationFolder> = self.folders_by_path.values().collect();
         list.sort_by(|a, b| a.path.cmp(&b.path));
         let bytes = serde_json::to_vec_pretty(&list)?;
-        {
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(&bytes)?;
-            f.sync_all()?;
-        }
-        std::fs::rename(&tmp, &self.folders_path)?;
+        self.secure_dir
+            .atomic_write(&self.folders_file_name, &bytes)?;
         Ok(())
     }
 
@@ -888,5 +921,25 @@ mod tests {
         assert_eq!(count, 1);
         assert!(s.get("y").is_none());
         assert_eq!(s.list_folders().len(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_ancestor_and_predictable_temp_cannot_escape_store() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("sentinel");
+        std::fs::write(&sentinel, b"safe").unwrap();
+        symlink(outside.path(), parent.path().join("linked")).unwrap();
+        assert!(AutomationStore::open(parent.path().join("linked/automations.json")).is_err());
+
+        let path = parent.path().join("automations.json");
+        symlink(&sentinel, parent.path().join("automations.json.tmp")).unwrap();
+        let mut store = AutomationStore::open(&path).unwrap();
+        store.create(auto("safe")).unwrap();
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"safe");
+        assert!(store.get("safe").is_some());
     }
 }

@@ -6,6 +6,9 @@ name: debug-pages
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   inspect:
     runs-on: ubuntu-latest

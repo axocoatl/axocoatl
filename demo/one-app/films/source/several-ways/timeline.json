@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "film": "several-ways",
+  "input_fps": 8,
+  "shots": [
+    {
+      "beat": "configuration",
+      "source": "shot-configuration.jpg",
+      "hold_frames": 80
+    },
+    {
+      "beat": "independent-routes",
+      "source": "shot-independent-routes.jpg",
+      "hold_frames": 80
+    },
+    {
+      "beat": "checks",
+      "source": "shot-checks.jpg",
+      "hold_frames": 80
+    },
+    {
+      "beat": "comparison",
+      "source": "shot-comparison.jpg",
+      "hold_frames": 80
+    },
+    {
+      "beat": "judge",
+      "source": "shot-judge.jpg",
+      "hold_frames": 80
+    },
+    {
+      "beat": "keep",
+      "source": "shot-keep.jpg",
+      "hold_frames": 80
+    }
+  ]
+}

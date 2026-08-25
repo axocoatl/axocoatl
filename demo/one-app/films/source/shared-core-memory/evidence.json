@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "film": "shared-core-memory",
+  "checks": [
+    {
+      "id": "write",
+      "status": "passed",
+      "detail": "Writer Turn turn-1757dd88-e3b7-402d-b2dd-df76621ed021 called core_memory_set for shared block team with the exact AXO-DEMO-JADE-731 value. call_ib28vvl1 completed with {block: team, chars: 68, ok: true} before the Agent confirmed it."
+    },
+    {
+      "id": "restart",
+      "status": "passed",
+      "detail": "The daemon restarted against the unchanged /private/tmp/axocoatl-one-app-showcase-v1-signal-capture data root without preparation or reset. The same writer Session was re-prepared after its completed Turn, and the persisted shared/v1/team.json retained the exact value."
+    },
+    {
+      "id": "separate-sessions",
+      "status": "passed",
+      "detail": "Signal Desk retained two distinct Session records and transcripts: Remember release language used Minimal Coder (coder), while Recall release language used Invariant Defender (defender). Each has its own durable Session and Turn id."
+    },
+    {
+      "id": "recall",
+      "status": "passed",
+      "detail": "Reader Turn turn-ac6e09bc-361d-4028-a565-1fab66afa3ad quoted AXO-DEMO-JADE-731: release summaries use Root cause / Change / Proof exactly after restart. Its only execution event is run_started; it has no tool, file, or History event and touched no paths."
+    }
+  ],
+  "identities": {
+    "fixture": "signal-desk",
+    "provider": "ollama",
+    "provider_model": "qwen3:8b",
+    "workspace_id": "wsp-2cbdd568-05f9-4245-b9d6-ef647d99bce3",
+    "workspace_seed_commit": "c202ca01f2ffcd5fb0970f78da107411353bb0c0",
+    "workspace_seed_tree": "e0b853e18e279eb1a7cd52537b614650a6ef692d",
+    "data_root": "/private/tmp/axocoatl-one-app-showcase-v1-signal-capture/data",
+    "memory_block": "team",
+    "memory_value": "AXO-DEMO-JADE-731: release summaries use Root cause / Change / Proof",
+    "memory_file": "/private/tmp/axocoatl-one-app-showcase-v1-signal-capture/data/memory/core/shared/v1/team.json",
+    "memory_file_sha256": "41c1714fee8f7fd322f1ec433121738ce5fae5c4decfa49ade55eff73f2f53e6",
+    "memory_file_inode": "35019190",
+    "memory_file_birth": "2026-08-24T22:30:43-0700",
+    "memory_file_mtime": "2026-08-24T22:30:43-0700",
+    "writer_session_id": "ses-0561a31f-d0f2-4d8e-ba40-61bbe344a3b1",
+    "writer_session_name": "Remember release language",
+    "writer_agent_id": "coder",
+    "writer_agent_name": "Minimal Coder",
+    "writer_turn_id": "turn-1757dd88-e3b7-402d-b2dd-df76621ed021",
+    "writer_call_id": "call_ib28vvl1",
+    "writer_call_id_sha256": "d003b726171b49ea8ef73b48dac9e0728b0943a94a9c31e1598ed01877c05c55",
+    "writer_tool": "core_memory_set",
+    "writer_tool_result": "block=team chars=68 ok=true",
+    "writer_turn_terminal_recorded_at_ms": "1787635848878",
+    "writer_session_prepared_at_s": "1787636433",
+    "reader_session_id": "ses-b87b215a-0666-4e75-b3e6-7eeb131f74ca",
+    "reader_session_name": "Recall release language",
+    "reader_agent_id": "defender",
+    "reader_agent_name": "Invariant Defender",
+    "reader_turn_id": "turn-ac6e09bc-361d-4028-a565-1fab66afa3ad",
+    "reader_execution_events": "run_started only; no tools",
+    "reader_output_sha256": "5491cbbfb1c171939f445a2f0b16dede315bdcf0c5157c389168d21b925e31bb",
+    "writer_session_record_sha256": "d18d39778a12627f7de4e348fd972cfe95168b461521fe4b7c8df831a79ced69",
+    "reader_session_record_sha256": "df0620df0d8fdf4efe4b3ab09de440776235d8f3e7d02293db6971e5ee3d2fbd",
+    "turn_ledger_sha256": "51d77f7836bcd58c0f9d3e5548e483f3631a29918bff275c4014f4cc6de4d8cb",
+    "config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+    "binary": "target/release/axocoatl 1.0.0",
+    "binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+    "capture_viewport": "1280x720",
+    "screenshot_sha256": [
+      "shot-write.jpg=dc954afd5570de57a4fbf6b2fabba08ad4e37e4761dd3093dcd6497987de1283",
+      "shot-restart.jpg=f1efe8b78e24b8f908dbbafa51a47e13349fba1ec6b75194377159ba02c43c57",
+      "shot-separate-sessions.jpg=458859f054df18137979036b99bbf491a64c09f7efab5564bcfd0e09a7612466",
+      "shot-recall.jpg=ec9b9bf89e466eed49f91ce8ed955d6d607abedafa08c808be2151a1711da636"
+    ]
+  }
+}

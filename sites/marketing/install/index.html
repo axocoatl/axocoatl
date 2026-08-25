@@ -1,151 +1,46 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Install — Axocoatl</title>
-  <meta name="description" content="Install Axocoatl with one shell command or Cargo. Prebuilt Linux and macOS releases include SHA-256 checksum files.">
-  <meta name="author" content="Axocoatl Contributors">
-  <meta name="theme-color" content="#3E7C5C">
-  <link rel="canonical" href="https://axocoatl.ai/install">
-  <meta property="og:type" content="website">
-  <meta property="og:site_name" content="Axocoatl">
-  <meta property="og:locale" content="en_US">
-  <meta property="og:url" content="https://axocoatl.ai/install">
-  <meta property="og:title" content="Install — Axocoatl">
-  <meta property="og:description" content="Install Axocoatl with one shell command or Cargo. Prebuilt Linux and macOS releases include SHA-256 checksum files.">
-  <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:site" content="@axocoatl">
-  <meta name="twitter:title" content="Install — Axocoatl">
-  <meta name="twitter:description" content="Install Axocoatl with one shell command or Cargo. Prebuilt Linux and macOS releases include SHA-256 checksum files.">
-  <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="The Axocoatl workbench showing a completed coding session and its attempt controls">
-  <link rel="icon" type="image/png" href="/assets/favicon.png">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/styles/tokens.css">
-  <link rel="stylesheet" href="/styles/base.css">
-  <link rel="stylesheet" href="/styles/finder.css">
-  <script type="module" src="/components/ax-site-nav.js"></script>
-  <script type="module" src="/components/ax-cli-snippet.js"></script>
-  <script type="module" src="/components/ax-footer.js"></script>
-  <script type="module" src="/components/ax-theme-toggle.js"></script>
-  <script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@graph": [
-    {
-      "@type": "WebPage",
-      "@id": "https://axocoatl.ai/install#webpage",
-      "url": "https://axocoatl.ai/install",
-      "name": "Install — Axocoatl",
-      "description": "Install Axocoatl with one shell command or Cargo. Prebuilt Linux and macOS releases include SHA-256 checksum files.",
-      "inLanguage": "en-US",
-      "isPartOf": { "@id": "https://axocoatl.ai/#website" },
-      "primaryImageOfPage": { "@type": "ImageObject", "url": "https://axocoatl.ai/assets/og-home.png" }
-    },
-    {
-      "@type": "TechArticle",
-      "headline": "Install — Axocoatl",
-      "description": "Install Axocoatl with one shell command or Cargo. Prebuilt Linux and macOS releases include SHA-256 checksum files.",
-      "url": "https://axocoatl.ai/install",
-      "image": "https://axocoatl.ai/assets/og-home.png",
-      "author": { "@type": "Organization", "@id": "https://axocoatl.ai/#organization" },
-      "publisher": { "@type": "Organization", "@id": "https://axocoatl.ai/#organization" },
-      "mainEntityOfPage": "https://axocoatl.ai/install",
-      "inLanguage": "en-US"
-    },
-    {"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://axocoatl.ai/"},{"@type":"ListItem","position":2,"name":"Install — Axocoatl","item":"https://axocoatl.ai/install"}]}
-  ]
-}
-  </script>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install Axocoatl</title><meta name="description" content="Install the Axocoatl coding workbench on GNU/Linux with glibc 2.35 or newer, macOS 11 or newer, or Windows through WSL2."><meta name="theme-color" content="#3E7C5C"><link rel="canonical" href="https://axocoatl.ai/install">
+  <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/install"><meta property="og:title" content="Install Axocoatl"><meta property="og:description" content="Install the local-first coding workbench and verify the environment."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Install Axocoatl"><meta name="twitter:description" content="Install the local-first coding workbench and verify the environment."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20260818-narrative"><link rel="stylesheet" href="/styles/finder.css">
+  <script type="module" src="/components/ax-site-nav.js?v=20260818-narrative"></script><script type="module" src="/components/ax-cli-snippet.js"></script><script type="module" src="/components/ax-footer.js?v=20260818-narrative"></script><script type="module" src="/components/ax-theme-toggle.js"></script>
 </head>
 <body>
   <ax-site-nav></ax-site-nav>
+  <main id="main-content">
+    <header class="container hero"><span class="eyebrow">Install</span><h1>Run it on your hardware.</h1><p class="lede">Use a prebuilt release on GNU/Linux with glibc 2.35 or newer, or on macOS 11 or newer. Windows runs through WSL2. Axocoatl needs Podman for the default local Session sandbox.</p></header>
 
-  <main>
-
-    <section class="container hero" style="padding-bottom: var(--s-7);">
-      <span class="eyebrow">Install</span>
-      <h1>One release binary.</h1>
-      <p class="lede">
-        Prebuilt binaries for Linux and macOS, x86_64 and aarch64 — and on
-        Windows, inside WSL2. Releases publish SHA-256 checksum files; the
-        installer verifies the archive when it can retrieve the matching file.
-      </p>
-    </section>
-
-    <section class="container section">
-      <div class="container-narrow" style="padding: 0;">
-
-        <h2>Prebuilt binary</h2>
-        <p class="muted">Recommended path. No Rust toolchain required.</p>
-        <ax-cli-snippet>curl -fsSL https://axocoatl.ai/install.sh | sh</ax-cli-snippet>
-
-        <h2 style="margin-top: var(--s-8);">Cargo</h2>
-        <p class="muted">If you'd rather compile. Requires Rust 1.82+.</p>
-        <ax-cli-snippet>cargo install axocoatl-cli</ax-cli-snippet>
-
-        <h2 style="margin-top: var(--s-8);">From source</h2>
-        <p class="muted">The release binary lands at <code>target/release/axocoatl</code>.</p>
-        <ax-cli-snippet>git clone https://github.com/axocoatl/axocoatl &amp;&amp; cd axocoatl &amp;&amp; cargo build -p axocoatl-cli --release</ax-cli-snippet>
-
-        <h2 style="margin-top: var(--s-8);">Windows (WSL2)</h2>
-        <p class="muted">
-          Axocoatl is Unix-first — the session sandbox is Podman, the service is
-          systemd/launchd — so on Windows it runs inside WSL2, not natively. Set up
-          WSL2 (<code>wsl --install</code> in an admin PowerShell), then inside your
-          distro install Podman and run the same one-liner:
-        </p>
-        <ax-cli-snippet>sudo apt-get install -y podman &amp;&amp; curl -fsSL https://axocoatl.ai/install.sh | sh</ax-cli-snippet>
-        <p class="muted" style="margin-top: var(--s-3);">
-          Run <code>axocoatl dev</code> in WSL, then open <code>http://localhost:8080</code> in
-          your Windows browser. Full steps in the
-          <a href="https://docs.axocoatl.ai/getting-started/#windows-wsl2" target="_blank" rel="noopener">Windows guide</a>.
-        </p>
-
+    <section class="container section section-rule">
+      <div class="split">
+        <div class="stack"><span class="eyebrow">Recommended</span><h2>Install the latest release.</h2><p>The installer detects GNU/Linux or macOS on x86_64 or ARM64, downloads the matching GitHub release, and requires and verifies its published SHA-256 file. Before download it requires Linux to report glibc 2.35 or newer and macOS to report version 11 or newer.</p><ax-cli-snippet>curl -fsSL https://axocoatl.ai/install.sh | sh</ax-cli-snippet><p class="small muted">Review the <a href="https://github.com/axocoatl/axocoatl/blob/main/scripts/install.sh">installer source</a> before piping it to a shell.</p></div>
+        <div class="card"><span class="card-kicker">Requirements</span><ul class="fact-list"><li>GNU/Linux with glibc 2.35+, or macOS 11+</li><li>Windows through WSL2</li><li>Podman for local Session sandboxes</li><li>An Ollama or hosted model provider</li></ul></div>
       </div>
     </section>
 
-    <section class="container section">
-      <div class="container-narrow" style="padding: 0;">
-        <h2>After install</h2>
-        <ol style="padding-left: 1.4rem; line-height: 1.85; color: var(--fg-soft); margin: var(--s-3) 0 0;">
-          <li><code>axocoatl onboard</code>: interactive setup wizard. Picks a provider and scaffolds a project.</li>
-          <li><code>axocoatl doctor</code>: verify Ollama, Podman, and the data directory are reachable.</li>
-          <li><code>axocoatl dev</code>: start the daemon, IPC, and app on <code>:8080</code>.</li>
-          <li>Open <code>http://localhost:8080</code>. Authorize a project and create a session from the workspace/session rail.</li>
-        </ol>
-        <p style="margin-top: var(--s-7);">
-          <a class="btn btn-primary" href="https://docs.axocoatl.ai" target="_blank" rel="noopener">Open the docs →</a>
-          <a class="btn btn-ghost" href="https://docs.axocoatl.ai/guides/troubleshooting/" target="_blank" rel="noopener" style="margin-left: var(--s-3);">Troubleshooting</a>
-        </p>
+    <section class="container section section-rule">
+      <div class="section-head"><span class="eyebrow">Other paths</span><h2>Build it yourself.</h2></div>
+      <div class="grid-3">
+        <article class="card"><span class="card-kicker">Cargo</span><h3>Install from crates.io</h3><p>Requires Rust 1.88 or newer.</p><p style="margin-top:var(--s-4)"><code>cargo install axocoatl-cli</code></p></article>
+        <article class="card"><span class="card-kicker">Source</span><h3>Build this checkout</h3><p>Build the explicit CLI package. The root package is only a benchmark placeholder.</p><p style="margin-top:var(--s-4)"><code>cargo build -p axocoatl-cli --release</code></p></article>
+        <article class="card"><span class="card-kicker">Windows</span><h3>Use WSL2</h3><p>Run <code>wsl --install</code> in an administrator PowerShell, then install Podman and Axocoatl inside the Linux distro.</p></article>
       </div>
     </section>
 
-    <section class="container section" style="padding-bottom: var(--s-10);">
-      <div class="container-narrow" style="padding: 0;">
-        <h2>Bring your own LLM</h2>
-        <p>
-          Axocoatl runs against Ollama (local), OpenAI, Anthropic,
-          Mistral, Gemini, and OpenRouter. Pick one in <code>onboard</code>
-          or set it manually in <code>axocoatl.yaml</code>. Each agent
-          picks its provider independently: local model for one, cloud
-          for another, same workflow.
-        </p>
-        <p>
-          <a href="/integrations/openrouter">OpenRouter setup →</a>
-        </p>
+    <section class="container section section-rule">
+      <div class="split reverse">
+        <div class="code-pane"><div class="code-pane-head">first run</div><pre><code><span class="code-key">axocoatl onboard</span>  <span class="code-comment"># choose a provider</span>
+<span class="code-key">axocoatl doctor</span>   <span class="code-comment"># inspect the environment</span>
+<span class="code-key">axocoatl dev</span>      <span class="code-comment"># start daemon + app</span>
+
+open <span class="code-string">http://localhost:8080</span></code></pre></div>
+        <div class="stack"><span class="eyebrow">First run</span><h2>Verify before you work.</h2><p><code>onboard</code> creates a starting configuration. <code>doctor</code> validates configuration and data access, probes configured Ollama, checks credential presence for OpenAI, OpenRouter, Anthropic, Gemini, and Mistral, checks the Podman CLI and applicable machine state, requires a bounded <code>podman info --format json</code> response before reporting Podman ready, and checks daemon IPC. <code>dev</code> starts the daemon, IPC server, and browser app.</p><p>Open the local app, authorize a project directory, and create a Session from the workspace rail. Review its proposed runtime and setup command before anything in the repository runs.</p><a href="https://docs.axocoatl.ai/start/onboard/">Follow the complete quickstart →</a></div>
       </div>
     </section>
 
+    <section class="container section section-rule"><div class="cta-strip"><div><h2>Bring your model choices.</h2><p>Configure Ollama, OpenAI, OpenRouter, Anthropic, Mistral, or Gemini. Each Agent can use the provider and model that fit its work.</p></div><div class="cta-actions"><a class="btn btn-primary" href="https://docs.axocoatl.ai/start/install/">Get started →</a><a class="btn btn-ghost" href="/integrations/openrouter">OpenRouter setup</a></div></div></section>
   </main>
-
   <ax-footer></ax-footer>
 </body>
 </html>

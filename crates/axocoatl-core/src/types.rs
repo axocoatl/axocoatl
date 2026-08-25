@@ -24,8 +24,9 @@ pub enum ConversationMode {
     Stateless,
 }
 
-/// One attached file the user dropped onto a chat. The runtime reads the
-/// bytes and routes them by MIME: images get base64-inlined to the vision
+/// One attached file the user dropped onto a chat. The retained FileStore
+/// capability resolves the bytes before this value leaves the control-plane
+/// storage boundary. The runtime then routes them by MIME: images get base64-inlined to the vision
 /// model, text-bearing files (PDF/CSV/XLSX/plain) get their *extracted text*
 /// inlined as a `<attachment>` block so the model sees the content directly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,8 +34,11 @@ pub struct AgentAttachment {
     pub id: String,
     pub name: String,
     pub mime: String,
-    /// Absolute path the executor reads raw bytes from (used for images).
-    pub path: String,
+    /// Exact raw bytes read through the retained FileStore directory handle.
+    /// Never replace this with an ambient control-plane path: the configured
+    /// data-root spelling can be renamed or replaced after bootstrap.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bytes: Vec<u8>,
     pub size: u64,
     /// Pre-extracted text from the FileStore (PDF/CSV/XLSX → text; image
     /// OCR for images that have it). When `Some`, the executor inlines this
@@ -64,6 +68,17 @@ pub struct AgentInput {
     /// configured one. Same agent, same memory, different model for one turn.
     #[serde(default)]
     pub model_override: Option<String>,
+    /// Per-call output-format override for stateless execution. When set, this
+    /// takes precedence over the Agent's configured sampling format for that
+    /// inference only. This lets schema-bearing control operations reuse an
+    /// Agent without changing its ordinary Session, Skill, or Automation turns.
+    #[serde(default)]
+    pub response_format_override: Option<crate::ResponseFormat>,
+    /// Disable model reasoning for this stateless control-plane request where
+    /// the selected provider supports it. Ordinary Agent turns leave this
+    /// false and retain the provider's default reasoning behavior.
+    #[serde(default)]
+    pub reasoning_disabled: bool,
     /// Files attached to this turn (images, text docs). The executor reads
     /// each one's bytes and routes them into the LLM call appropriately
     /// for the provider in use.
@@ -100,6 +115,8 @@ impl AgentInput {
             history: Vec::new(),
             system_override: None,
             model_override: None,
+            response_format_override: None,
+            reasoning_disabled: false,
             attachments: Vec::new(),
             conversation_mode: ConversationMode::ActorSession,
             stateless: false,
@@ -141,6 +158,19 @@ impl AgentInput {
 
     pub fn with_model_override(mut self, model: Option<String>) -> Self {
         self.model_override = model;
+        self
+    }
+
+    pub fn with_response_format_override(
+        mut self,
+        response_format: Option<crate::ResponseFormat>,
+    ) -> Self {
+        self.response_format_override = response_format;
+        self
+    }
+
+    pub fn with_reasoning_disabled(mut self, disabled: bool) -> Self {
+        self.reasoning_disabled = disabled;
         self
     }
 
@@ -208,7 +238,16 @@ pub struct ToolCall {
     pub name: String,
     /// Parsed arguments (already deserialized from the LLM's JSON string).
     pub arguments: serde_json::Value,
+    /// Opaque provider protocol fields required to replay this call exactly.
+    /// Executors never receive these values as tool arguments. String values
+    /// preserve signatures byte-for-byte, and the map is extensible without
+    /// adding provider-specific fields to the universal call shape.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub provider_metadata: ProviderMetadata,
 }
+
+/// Opaque provider protocol metadata attached to one tool call.
+pub type ProviderMetadata = std::collections::BTreeMap<String, String>;
 
 /// A chat message in the universal format across all providers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,7 +353,7 @@ impl ChatMessage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, bincode::Encode, bincode::Decode)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MessageRole {
     System,
     User,
@@ -409,6 +448,25 @@ mod tests {
     }
 
     #[test]
+    fn response_format_override_is_explicit_and_backwards_compatible() {
+        let input = AgentInput::text("return a schema")
+            .with_response_format_override(Some(crate::ResponseFormat::Json))
+            .with_reasoning_disabled(true);
+        assert_eq!(
+            input.response_format_override,
+            Some(crate::ResponseFormat::Json)
+        );
+        assert!(input.reasoning_disabled);
+
+        let legacy: AgentInput = serde_json::from_str(
+            r#"{"content":"hi","context":null,"history":[],"stateless":true}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.response_format_override, None);
+        assert!(!legacy.reasoning_disabled);
+    }
+
+    #[test]
     fn conversation_mode_serde_defaults_and_honors_legacy_stateless() {
         let legacy: AgentInput = serde_json::from_str(
             r#"{"content":"hi","context":null,"history":[],"stateless":true}"#,
@@ -490,6 +548,7 @@ mod tests {
             id: "call_1".to_string(),
             name: "get_weather".to_string(),
             arguments: serde_json::json!({ "location": "NYC" }),
+            provider_metadata: ProviderMetadata::new(),
         };
         let msg = ChatMessage::assistant_with_tool_calls("", vec![call.clone()]);
         assert_eq!(msg.role, MessageRole::Assistant);

@@ -5,6 +5,8 @@ pub mod executor;
 pub mod fs_tools;
 pub mod hook_registry;
 pub mod hooks;
+mod limits;
+pub mod provider_names;
 pub mod web_tools;
 
 pub use builtin::*;
@@ -14,4 +16,5 @@ pub use executor::*;
 pub use fs_tools::*;
 pub use hook_registry::*;
 pub use hooks::*;
+pub use provider_names::*;
 pub use web_tools::*;

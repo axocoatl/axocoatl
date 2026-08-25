@@ -103,13 +103,32 @@ pub enum IpcResponse {
         tool_calls: Vec<IpcToolCall>,
         input_tokens: usize,
         output_tokens: usize,
+        #[serde(default)]
+        reasoning_tokens: usize,
+        /// False means the numeric usage is only the best known subtotal.
+        /// Missing older fields decode conservatively as incomplete.
+        #[serde(default)]
+        token_usage_known: bool,
     },
     /// List of agent IDs.
     Agents { ids: Vec<String> },
     /// Pong — health check reply.
     Pong,
     /// Error.
-    Error { message: String },
+    Error {
+        message: String,
+        /// Execution errors carry the paid subtotal observed before failure.
+        /// Generic and pre-dispatch errors omit all four accounting fields so
+        /// older error payloads keep their original wire shape.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_tokens: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_tokens: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_tokens: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_usage_known: Option<bool>,
+    },
     /// Workflow execution result.
     WorkflowResponse {
         workflow_id: String,
@@ -117,6 +136,12 @@ pub enum IpcResponse {
         agent_outputs: Vec<IpcAgentOutput>,
         total_input_tokens: usize,
         total_output_tokens: usize,
+        #[serde(default)]
+        total_reasoning_tokens: usize,
+        /// False means the totals are a known subtotal. Missing older fields
+        /// decode conservatively as incomplete.
+        #[serde(default)]
+        token_usage_known: bool,
         completed_agents: Vec<String>,
         failed_agents: Vec<(String, String)>,
     },
@@ -127,6 +152,13 @@ pub enum IpcResponse {
         per_agent: Vec<IpcTokenUsage>,
         total_input: usize,
         total_output: usize,
+        /// Reasoning tokens are billed output on providers that report them.
+        /// `default` keeps a new CLI able to read a response from an older
+        /// daemon during a rolling local upgrade.
+        #[serde(default)]
+        total_reasoning: usize,
+        #[serde(default)]
+        token_usage_known: bool,
     },
     /// Per-agent status.
     AgentStatuses { statuses: Vec<IpcAgentStatus> },
@@ -146,6 +178,12 @@ pub enum IpcResponse {
         content: String,
         input_tokens: usize,
         output_tokens: usize,
+        #[serde(default)]
+        reasoning_tokens: usize,
+        /// False means the numeric usage is only the best known subtotal.
+        /// Missing older fields decode conservatively as incomplete.
+        #[serde(default)]
+        token_usage_known: bool,
     },
     /// Session closed.
     SessionClosed { session_id: String },
@@ -158,9 +196,21 @@ pub enum IpcResponse {
 pub struct IpcSessionInfo {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub workspace_id: String,
     pub working_dir: String,
     pub mode: String,
     pub status: String,
+    /// Durable environment readiness. Defaults empty when an older daemon or
+    /// cached IPC payload predates readiness reporting.
+    #[serde(default)]
+    pub environment_state: String,
+    /// Exact proposed/approved project setup, never an instruction to execute
+    /// unless `environment_state` is Ready.
+    #[serde(default)]
+    pub setup_command: Option<String>,
+    #[serde(default)]
+    pub environment_error: Option<String>,
 }
 
 /// Build an [`IpcSessionInfo`] from a session.
@@ -174,12 +224,23 @@ fn ipc_session_info(s: &axocoatl_session::Session) -> IpcSessionInfo {
             format!("custom ({} agents)", agents.len())
         }
     };
+    let environment_state = match s.environment.state {
+        axocoatl_session::SessionEnvironmentState::Unprepared => "unprepared",
+        axocoatl_session::SessionEnvironmentState::AwaitingApproval => "awaiting_approval",
+        axocoatl_session::SessionEnvironmentState::Preparing => "preparing",
+        axocoatl_session::SessionEnvironmentState::Ready => "ready",
+        axocoatl_session::SessionEnvironmentState::Failed => "failed",
+    };
     IpcSessionInfo {
         id: s.id.clone(),
         name: s.name.clone(),
+        workspace_id: s.workspace_id.clone(),
         working_dir: s.working_dir.display().to_string(),
         mode,
         status: format!("{:?}", s.status).to_lowercase(),
+        environment_state: environment_state.to_string(),
+        setup_command: s.environment.setup_command.clone(),
+        environment_error: s.environment.error.clone(),
     }
 }
 
@@ -189,6 +250,16 @@ pub struct IpcTokenUsage {
     pub input_tokens: usize,
     pub output_tokens: usize,
     pub reasoning_tokens: Option<usize>,
+    #[serde(default)]
+    pub token_usage_known: bool,
+}
+
+impl IpcTokenUsage {
+    pub fn total(&self) -> usize {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.reasoning_tokens.unwrap_or(0))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -217,6 +288,8 @@ pub struct IpcAgentOutput {
     pub content: String,
     pub input_tokens: usize,
     pub output_tokens: usize,
+    #[serde(default)]
+    pub reasoning_tokens: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -232,6 +305,75 @@ pub struct IpcToolCall {
     pub tool_name: String,
     pub arguments: serde_json::Value,
     pub result: Option<serde_json::Value>,
+}
+
+fn error_response(message: impl ToString) -> IpcResponse {
+    IpcResponse::Error {
+        message: message.to_string(),
+        input_tokens: None,
+        output_tokens: None,
+        reasoning_tokens: None,
+        token_usage_known: None,
+    }
+}
+
+fn measured_error_response(
+    message: impl ToString,
+    usage: &axocoatl_core::TokenUsageStats,
+    token_usage_known: bool,
+) -> IpcResponse {
+    IpcResponse::Error {
+        message: message.to_string(),
+        input_tokens: Some(usage.input_tokens),
+        output_tokens: Some(usage.output_tokens),
+        reasoning_tokens: Some(usage.reasoning_tokens.unwrap_or(0)),
+        token_usage_known: Some(token_usage_known),
+    }
+}
+
+fn measured_daemon_failure_response(
+    failure: crate::bootstrap::MeasuredDaemonFailure,
+) -> IpcResponse {
+    measured_error_response(
+        failure.error,
+        &failure.token_usage,
+        failure.token_usage_known,
+    )
+}
+
+fn workflow_error_response(error: crate::DaemonError) -> IpcResponse {
+    match error.workflow_token_usage() {
+        Some((usage, known)) => measured_error_response(error.to_string(), usage, known),
+        None => measured_error_response(error, &axocoatl_core::TokenUsageStats::default(), true),
+    }
+}
+
+fn workflow_response(output: crate::workflow::WorkflowOutput) -> IpcResponse {
+    if let Some(error) = output.terminal_error() {
+        return workflow_error_response(error);
+    }
+
+    IpcResponse::WorkflowResponse {
+        workflow_id: output.workflow_id,
+        content: output.final_content,
+        agent_outputs: output
+            .agent_outputs
+            .into_iter()
+            .map(|(id, output)| IpcAgentOutput {
+                agent_id: id,
+                content: output.content,
+                input_tokens: output.token_usage.input_tokens,
+                output_tokens: output.token_usage.output_tokens,
+                reasoning_tokens: output.token_usage.reasoning_tokens.unwrap_or(0),
+            })
+            .collect(),
+        total_input_tokens: output.total_token_usage.input_tokens,
+        total_output_tokens: output.total_token_usage.output_tokens,
+        total_reasoning_tokens: output.total_token_usage.reasoning_tokens.unwrap_or(0),
+        token_usage_known: output.token_usage_known,
+        completed_agents: output.completed_agents,
+        failed_agents: output.failed_agents,
+    }
 }
 
 // ── Wire Protocol ────────────────────────────────────────────────
@@ -345,18 +487,46 @@ pub fn serve_ipc_listener(
     daemon: Arc<RwLock<AxocoatlDaemon>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut shutdown = daemon.read().await.shutdown_subscriber();
+        let mut clients = tokio::task::JoinSet::new();
         loop {
-            match listener.accept().await {
-                Ok((stream, _addr)) => {
-                    let daemon = daemon.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, daemon).await {
-                            tracing::debug!(error = %e, "IPC client disconnected");
-                        }
-                    });
+            if *shutdown.borrow() {
+                break;
+            }
+            tokio::select! {
+                biased;
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "IPC accept error");
+                accepted = listener.accept() => match accepted {
+                    Ok((stream, _addr)) => {
+                        let daemon = daemon.clone();
+                        clients.spawn(async move {
+                            if let Err(e) = handle_client(stream, daemon).await {
+                                tracing::debug!(error = %e, "IPC client disconnected");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "IPC accept error");
+                    }
+                },
+                joined = clients.join_next(), if !clients.is_empty() => {
+                    if let Some(Err(error)) = joined {
+                        if !error.is_cancelled() {
+                            tracing::debug!(error = %error, "IPC client task failed");
+                        }
+                    }
+                }
+            }
+        }
+        clients.abort_all();
+        while let Some(joined) = clients.join_next().await {
+            if let Err(error) = joined {
+                if !error.is_cancelled() {
+                    tracing::debug!(error = %error, "IPC client task failed during shutdown");
                 }
             }
         }
@@ -393,10 +563,12 @@ async fn handle_client(
                 session_id: _,
             } => {
                 let daemon = daemon.read().await;
-                match daemon.execute_agent(&agent_id, &input).await {
-                    Ok(output) => IpcResponse::Response {
-                        content: output.content,
-                        tool_calls: output
+                match daemon.execute_agent_measured(&agent_id, &input).await {
+                    Ok(measured) => IpcResponse::Response {
+                        token_usage_known: measured.token_usage_known,
+                        content: measured.output.content,
+                        tool_calls: measured
+                            .output
                             .tool_calls
                             .into_iter()
                             .map(|tc| IpcToolCall {
@@ -405,12 +577,11 @@ async fn handle_client(
                                 result: tc.result,
                             })
                             .collect(),
-                        input_tokens: output.token_usage.input_tokens,
-                        output_tokens: output.token_usage.output_tokens,
+                        input_tokens: measured.output.token_usage.input_tokens,
+                        output_tokens: measured.output.token_usage.output_tokens,
+                        reasoning_tokens: measured.output.token_usage.reasoning_tokens.unwrap_or(0),
                     },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                    Err(failure) => measured_daemon_failure_response(failure),
                 }
             }
             IpcRequest::ListAgents => {
@@ -452,27 +623,8 @@ async fn handle_client(
                     _ => Err(crate::DaemonError::WorkflowNotFound(workflow_id.clone())),
                 };
                 match result {
-                    Ok(output) => IpcResponse::WorkflowResponse {
-                        workflow_id: output.workflow_id,
-                        content: output.final_content,
-                        agent_outputs: output
-                            .agent_outputs
-                            .into_iter()
-                            .map(|(id, o)| IpcAgentOutput {
-                                agent_id: id,
-                                content: o.content,
-                                input_tokens: o.token_usage.input_tokens,
-                                output_tokens: o.token_usage.output_tokens,
-                            })
-                            .collect(),
-                        total_input_tokens: output.total_token_usage.input_tokens,
-                        total_output_tokens: output.total_token_usage.output_tokens,
-                        completed_agents: output.completed_agents,
-                        failed_agents: output.failed_agents,
-                    },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                    Ok(output) => workflow_response(output),
+                    Err(error) => workflow_error_response(error),
                 }
             }
             IpcRequest::ListWorkflows => {
@@ -521,18 +673,27 @@ async fn handle_client(
                     None => daemon.agent_registry.list_ids().await,
                 };
                 let mut per_agent = Vec::new();
-                let mut total_input = 0;
-                let mut total_output = 0;
+                let mut total_input: usize = 0;
+                let mut total_output: usize = 0;
+                let mut total_reasoning: usize = 0;
+                let mut token_usage_known = true;
                 for id in ids {
                     if let Some(actor) = daemon.agent_registry.get(&id).await {
-                        if let Ok(usage) = axocoatl_actor::get_agent_token_usage(&actor).await {
-                            total_input += usage.input_tokens;
-                            total_output += usage.output_tokens;
+                        if let Ok(measured) =
+                            axocoatl_actor::get_agent_measured_token_usage(&actor).await
+                        {
+                            let usage = measured.usage;
+                            token_usage_known &= measured.complete;
+                            total_input = total_input.saturating_add(usage.input_tokens);
+                            total_output = total_output.saturating_add(usage.output_tokens);
+                            total_reasoning =
+                                total_reasoning.saturating_add(usage.reasoning_tokens.unwrap_or(0));
                             per_agent.push(IpcTokenUsage {
                                 agent_id: id.to_string(),
                                 input_tokens: usage.input_tokens,
                                 output_tokens: usage.output_tokens,
                                 reasoning_tokens: usage.reasoning_tokens,
+                                token_usage_known: measured.complete,
                             });
                         }
                     }
@@ -541,6 +702,8 @@ async fn handle_client(
                     per_agent,
                     total_input,
                     total_output,
+                    total_reasoning,
+                    token_usage_known,
                 }
             }
             IpcRequest::GetAgentStatus { agent_id } => {
@@ -568,9 +731,7 @@ async fn handle_client(
                 let daemon = daemon.read().await;
                 match daemon.restart_agent(&agent_id).await {
                     Ok(()) => IpcResponse::RestartAck { agent_id },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                    Err(error) => error_response(error),
                 }
             }
             IpcRequest::ListMcpServers => {
@@ -622,9 +783,7 @@ async fn handle_client(
                     Ok(s) => IpcResponse::Session {
                         session: ipc_session_info(&s),
                     },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                    Err(error) => error_response(error),
                 }
             }
             IpcRequest::ListSessions => {
@@ -639,31 +798,29 @@ async fn handle_client(
             }
             IpcRequest::ExecuteSession { session_id, input } => {
                 let daemon = daemon.read().await;
-                match daemon.execute_session(&session_id, &input).await {
-                    Ok(output) => IpcResponse::SessionResponse {
+                match daemon.execute_session_measured(&session_id, &input).await {
+                    Ok(measured) => IpcResponse::SessionResponse {
                         session_id,
-                        content: output.content,
-                        input_tokens: output.token_usage.input_tokens,
-                        output_tokens: output.token_usage.output_tokens,
+                        content: measured.output.content,
+                        input_tokens: measured.output.token_usage.input_tokens,
+                        output_tokens: measured.output.token_usage.output_tokens,
+                        reasoning_tokens: measured.output.token_usage.reasoning_tokens.unwrap_or(0),
+                        token_usage_known: measured.token_usage_known,
                     },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                    Err(failure) => measured_daemon_failure_response(failure),
                 }
             }
             IpcRequest::CloseSession { session_id } => {
                 let daemon = daemon.read().await;
                 match daemon.close_session(&session_id).await {
                     Ok(()) => IpcResponse::SessionClosed { session_id },
-                    Err(e) => IpcResponse::Error {
-                        message: e.to_string(),
-                    },
+                    Err(error) => error_response(error),
                 }
             }
             IpcRequest::Ping => IpcResponse::Pong,
             IpcRequest::Shutdown => {
                 write_message(&mut stream, &IpcResponse::ShutdownAck).await?;
-                // Signal shutdown will be handled by the caller
+                daemon.read().await.request_shutdown();
                 return Ok(());
             }
         };
@@ -703,6 +860,165 @@ mod tests {
     use super::*;
 
     #[test]
+    fn token_usage_wire_defaults_reasoning_and_totals_reported_reasoning() {
+        let legacy: IpcResponse = serde_json::from_str(
+            r#"{"type":"token_usage","per_agent":[],"total_input":10,"total_output":5}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy,
+            IpcResponse::TokenUsage {
+                total_reasoning: 0,
+                token_usage_known: false,
+                ..
+            }
+        ));
+
+        let usage = IpcTokenUsage {
+            agent_id: "reasoner".to_string(),
+            input_tokens: 10,
+            output_tokens: 5,
+            reasoning_tokens: Some(7),
+            token_usage_known: true,
+        };
+        assert_eq!(usage.total(), 22);
+
+        let legacy_response: IpcResponse = serde_json::from_str(
+            r#"{"type":"response","content":"ok","tool_calls":[],"input_tokens":1,"output_tokens":2}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy_response,
+            IpcResponse::Response {
+                reasoning_tokens: 0,
+                token_usage_known: false,
+                ..
+            }
+        ));
+
+        let legacy_session: IpcResponse = serde_json::from_str(
+            r#"{"type":"session_response","session_id":"s","content":"ok","input_tokens":3,"output_tokens":4}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy_session,
+            IpcResponse::SessionResponse {
+                reasoning_tokens: 0,
+                token_usage_known: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn error_wire_omits_unmeasured_usage_and_retains_measured_subtotals() {
+        let legacy: IpcResponse =
+            serde_json::from_str(r#"{"type":"error","message":"before dispatch"}"#).unwrap();
+        assert!(matches!(
+            legacy,
+            IpcResponse::Error {
+                input_tokens: None,
+                output_tokens: None,
+                reasoning_tokens: None,
+                token_usage_known: None,
+                ..
+            }
+        ));
+
+        let generic = error_response("before dispatch");
+        assert_eq!(
+            serde_json::to_value(generic).unwrap(),
+            serde_json::json!({"type": "error", "message": "before dispatch"})
+        );
+
+        let measured = measured_error_response(
+            "provider stream failed",
+            &axocoatl_core::TokenUsageStats::new(13, 8).with_reasoning(3),
+            false,
+        );
+        assert_eq!(
+            serde_json::to_value(measured).unwrap(),
+            serde_json::json!({
+                "type": "error",
+                "message": "provider stream failed",
+                "input_tokens": 13,
+                "output_tokens": 8,
+                "reasoning_tokens": 3,
+                "token_usage_known": false,
+            })
+        );
+    }
+
+    #[test]
+    fn measured_fatal_and_handled_workflow_failures_project_usage() {
+        let failure = crate::bootstrap::MeasuredDaemonFailure {
+            error: crate::DaemonError::AgentSpawn("provider stream failed".into()),
+            token_usage: axocoatl_core::TokenUsageStats::new(21, 5),
+            token_usage_known: false,
+        };
+        assert!(matches!(
+            measured_daemon_failure_response(failure),
+            IpcResponse::Error {
+                input_tokens: Some(21),
+                output_tokens: Some(5),
+                reasoning_tokens: Some(0),
+                token_usage_known: Some(false),
+                ..
+            }
+        ));
+
+        let output = crate::workflow::WorkflowOutput {
+            workflow_id: "review".into(),
+            agent_outputs: Vec::new(),
+            agent_activations: Vec::new(),
+            final_content: "partial".into(),
+            total_token_usage: axocoatl_core::TokenUsageStats::new(34, 13).with_reasoning(2),
+            token_usage_known: false,
+            completed_agents: vec!["reader".into()],
+            failed_agents: vec![("writer".into(), "provider timeout".into())],
+        };
+        match workflow_response(output) {
+            IpcResponse::Error {
+                message,
+                input_tokens: Some(34),
+                output_tokens: Some(13),
+                reasoning_tokens: Some(2),
+                token_usage_known: Some(false),
+            } => {
+                assert!(message.contains("writer: provider timeout"));
+            }
+            other => panic!("expected measured workflow error, got {other:?}"),
+        }
+
+        let fatal = crate::DaemonError::workflow_execution_measured(
+            "automation graph failed",
+            axocoatl_core::TokenUsageStats::new(55, 8),
+            true,
+        );
+        assert!(matches!(
+            workflow_error_response(fatal),
+            IpcResponse::Error {
+                input_tokens: Some(55),
+                output_tokens: Some(8),
+                reasoning_tokens: Some(0),
+                token_usage_known: Some(true),
+                ..
+            }
+        ));
+
+        assert!(matches!(
+            workflow_error_response(crate::DaemonError::WorkflowNotFound("missing".into())),
+            IpcResponse::Error {
+                input_tokens: Some(0),
+                output_tokens: Some(0),
+                reasoning_tokens: Some(0),
+                token_usage_known: Some(true),
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn socket_path_is_stable_across_working_directories() {
         assert_eq!(
             resolve_socket_path(
@@ -724,6 +1040,38 @@ mod tests {
             ),
             PathBuf::from("/tmp/custom-axo.sock")
         );
+    }
+
+    #[test]
+    fn session_info_reports_setup_gate_and_reads_legacy_payloads() {
+        let data = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        std::fs::write(work.path().join("package-lock.json"), "{}").unwrap();
+        let mut store = axocoatl_session::SessionStore::new(data.path()).unwrap();
+        let session = store
+            .create(
+                "Node project",
+                "wsp-node",
+                work.path(),
+                axocoatl_session::SessionMode::SingleAgent {
+                    agent_id: "coder".into(),
+                },
+                Vec::new(),
+                Vec::new(),
+                None,
+            )
+            .unwrap();
+        let info = ipc_session_info(&session);
+        assert_eq!(info.environment_state, "awaiting_approval");
+        assert_eq!(info.setup_command.as_deref(), Some("npm ci"));
+
+        let legacy: IpcSessionInfo = serde_json::from_str(
+            r#"{"id":"s","name":"Old","workspace_id":"w","working_dir":"/tmp","mode":"single-agent","status":"active"}"#,
+        )
+        .unwrap();
+        assert!(legacy.environment_state.is_empty());
+        assert!(legacy.setup_command.is_none());
+        assert!(legacy.environment_error.is_none());
     }
 
     #[tokio::test]

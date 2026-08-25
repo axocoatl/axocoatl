@@ -8,10 +8,11 @@
 use axocoatl_config::SecretString;
 use axum::{
     extract::Request,
-    http::{HeaderMap, StatusCode},
+    http::{header, uri::Authority, HeaderMap, Method, StatusCode, Uri},
     middleware::Next,
     response::Response,
 };
+use std::str::FromStr;
 
 /// Configuration for server authentication. Credentials are held as
 /// `SecretString` so they are redacted in `Debug` / logs.
@@ -23,6 +24,8 @@ pub struct AuthConfig {
     pub bearer_tokens: Vec<SecretString>,
     /// When false, all requests pass through (loopback/local use).
     pub enabled: bool,
+    /// Explicit operator escape hatch for unauthenticated non-loopback hosts.
+    pub allow_unauthenticated_remote: bool,
 }
 
 impl AuthConfig {
@@ -34,7 +37,14 @@ impl AuthConfig {
             api_keys,
             bearer_tokens,
             enabled,
+            allow_unauthenticated_remote: false,
         }
+    }
+
+    /// Apply the server's explicit unauthenticated remote-bind decision.
+    pub fn with_allow_unauthenticated_remote(mut self, allow: bool) -> Self {
+        self.allow_unauthenticated_remote = allow;
+        self
     }
 }
 
@@ -80,13 +90,116 @@ fn is_authorized(config: &AuthConfig, headers: &HeaderMap) -> bool {
     false
 }
 
+fn origin_matches_request_host(origin: &str, headers: &HeaderMap) -> bool {
+    let Ok(origin_uri) = origin.parse::<Uri>() else {
+        return false;
+    };
+    let Some(origin_authority) = origin_uri.authority() else {
+        return false;
+    };
+    let Some(request_host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    origin_uri
+        .scheme_str()
+        .is_some_and(|scheme| matches!(scheme, "http" | "https"))
+        && origin_authority.as_str().eq_ignore_ascii_case(request_host)
+}
+
+fn origin_is_explicitly_allowed(origin: &str, allowed_origins: &[String]) -> bool {
+    let origin = origin.trim_end_matches('/');
+    allowed_origins
+        .iter()
+        .any(|allowed| allowed.trim_end_matches('/') == origin)
+}
+
+fn request_needs_browser_write_guard(method: &Method, path: &str) -> bool {
+    !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+        || path == "/ws"
+        || path.ends_with("/ws")
+}
+
+fn host_is_canonical_local(headers: &HeaderMap) -> bool {
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return true;
+    };
+    Authority::from_str(host).ok().is_some_and(|authority| {
+        let host = authority
+            .host()
+            .trim_start_matches('[')
+            .trim_end_matches(']');
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .ok()
+                .is_some_and(|ip| ip.is_loopback())
+    })
+}
+
+fn unknown_host_requires_auth(config: &AuthConfig, headers: &HeaderMap) -> bool {
+    !config.enabled && !config.allow_unauthenticated_remote && !host_is_canonical_local(headers)
+}
+
+/// Browser writes and WebSocket handshakes must originate from the workbench
+/// itself or from an origin the operator explicitly allowed. CORS only protects
+/// response reads; it does not stop a cross-origin form POST or a blind fetch.
+/// Origin-less callers remain valid so CLI and local automation clients do not
+/// acquire a browser-only CSRF requirement.
+fn has_disallowed_browser_write_origin(
+    method: &Method,
+    path: &str,
+    headers: &HeaderMap,
+    allowed_origins: &[String],
+) -> bool {
+    if !request_needs_browser_write_guard(method, path) {
+        return false;
+    }
+    let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    else {
+        // Browsers that suppress Origin still identify the relationship to
+        // the target through Fetch Metadata. Preserve truly origin-less CLI
+        // clients, while refusing a browser-declared cross-origin write.
+        return headers
+            .get("sec-fetch-site")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| matches!(value, "cross-site" | "same-site"));
+    };
+    origin == "null"
+        || (!origin_matches_request_host(origin, headers)
+            && !origin_is_explicitly_allowed(origin, allowed_origins))
+}
+
 /// Core auth check. Open requests (auth disabled or a public path) pass through;
 /// everything else needs a valid credential.
 pub async fn enforce(
     config: &AuthConfig,
+    allowed_origins: &[String],
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // Local mode is intentionally credential-free, so its Host header must be
+    // one of the canonical loopback names. Otherwise a DNS-rebinding page can
+    // become same-origin with an unauthenticated daemon. Non-loopback serving
+    // already requires configured auth and keeps those operator hostnames.
+    if unknown_host_requires_auth(config, request.headers()) {
+        return Err(StatusCode::MISDIRECTED_REQUEST);
+    }
+    if has_disallowed_browser_write_origin(
+        request.method(),
+        request.uri().path(),
+        request.headers(),
+        allowed_origins,
+    ) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     if !config.enabled || is_public_path(request.uri().path()) {
         return Ok(next.run(request).await);
     }
@@ -107,7 +220,7 @@ pub async fn auth_middleware(request: Request, next: Next) -> Result<Response, S
         .get::<AuthConfig>()
         .cloned()
         .unwrap_or_default();
-    enforce(&config, request, next).await
+    enforce(&config, &[], request, next).await
 }
 
 #[cfg(test)]
@@ -175,5 +288,125 @@ mod tests {
         assert!(!is_public_path("/api/agents"));
         assert!(!is_public_path("/ws"));
         assert!(!is_public_path("/"));
+    }
+
+    #[test]
+    fn null_browser_origin_cannot_write_or_open_control_websocket() {
+        let mut headers = HeaderMap::new();
+        headers.insert("origin", "null".parse().unwrap());
+        assert!(has_disallowed_browser_write_origin(
+            &Method::POST,
+            "/api/sessions/s1/environment/rebuild",
+            &headers,
+            &[],
+        ));
+        assert!(has_disallowed_browser_write_origin(
+            &Method::GET,
+            "/ws",
+            &headers,
+            &[],
+        ));
+        assert!(!has_disallowed_browser_write_origin(
+            &Method::GET,
+            "/health",
+            &headers,
+            &[],
+        ));
+        assert!(!has_disallowed_browser_write_origin(
+            &Method::POST,
+            "/api/sessions/s1/environment/rebuild",
+            &HeaderMap::new(),
+            &[],
+        ));
+        let mut origin_suppressed_browser = HeaderMap::new();
+        origin_suppressed_browser.insert("sec-fetch-site", "cross-site".parse().unwrap());
+        assert!(has_disallowed_browser_write_origin(
+            &Method::POST,
+            "/api/sessions/s1/environment/rebuild",
+            &origin_suppressed_browser,
+            &[],
+        ));
+    }
+
+    #[test]
+    fn browser_write_origin_guard_separates_preview_from_workbench() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "127.0.0.1:18080".parse().unwrap());
+        headers.insert(
+            header::ORIGIN,
+            "http://ses-123-p5173.localhost:18080".parse().unwrap(),
+        );
+        assert!(has_disallowed_browser_write_origin(
+            &Method::POST,
+            "/api/sessions/ses-123/environment/rebuild",
+            &headers,
+            &[],
+        ));
+
+        headers.insert(header::ORIGIN, "http://127.0.0.1:18080".parse().unwrap());
+        assert!(!has_disallowed_browser_write_origin(
+            &Method::POST,
+            "/api/sessions/ses-123/environment/rebuild",
+            &headers,
+            &[],
+        ));
+    }
+
+    #[test]
+    fn browser_write_origin_guard_preserves_cli_and_configured_cors() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "localhost:8080".parse().unwrap());
+        assert!(!has_disallowed_browser_write_origin(
+            &Method::DELETE,
+            "/api/sessions/ses-123",
+            &headers,
+            &[],
+        ));
+
+        headers.insert(header::ORIGIN, "https://operator.example".parse().unwrap());
+        assert!(!has_disallowed_browser_write_origin(
+            &Method::PATCH,
+            "/api/sessions/ses-123",
+            &headers,
+            &["https://operator.example/".to_string()],
+        ));
+        assert!(has_disallowed_browser_write_origin(
+            &Method::GET,
+            "/ws",
+            &headers,
+            &[],
+        ));
+    }
+
+    #[test]
+    fn unauthenticated_local_mode_rejects_dns_rebinding_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "attacker.example:8080".parse().unwrap());
+        headers.insert(
+            header::ORIGIN,
+            "http://attacker.example:8080".parse().unwrap(),
+        );
+        assert!(unknown_host_requires_auth(&AuthConfig::default(), &headers));
+        assert!(!unknown_host_requires_auth(
+            &AuthConfig::new(vec!["secret".into()], vec![]),
+            &headers,
+        ));
+        assert!(!unknown_host_requires_auth(
+            &AuthConfig::default().with_allow_unauthenticated_remote(true),
+            &headers,
+        ));
+
+        for host in [
+            "localhost:8080",
+            "127.0.0.1:8080",
+            "127.0.0.2:8080",
+            "[::1]:8080",
+        ] {
+            headers.insert(header::HOST, host.parse().unwrap());
+            assert!(!unknown_host_requires_auth(
+                &AuthConfig::default(),
+                &headers
+            ));
+        }
     }
 }

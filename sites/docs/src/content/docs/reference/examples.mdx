@@ -1,0 +1,99 @@
+---
+title: Examples
+description: Runnable source examples and validated configuration recipes, with explicit boundaries between library demonstrations and product workflows.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`examples/` contains standalone Rust packages and YAML recipes. The Rust
+packages teach reusable crates and specific runtime seams; they are not extra
+browser destinations or proof that every demonstrated primitive is wired into
+the product daemon.
+
+Run package commands from the repository root.
+
+## Coordination and planning
+
+| Package | Demonstrates | Run |
+| --- | --- | --- |
+| `stigmergic-workflow` | Example-owned activation loop over reusable event-lattice signals and a dependency DAG; not the daemon's Automation executor | `cargo run -p stigmergic-workflow` |
+| `skills-lattice` | Example-owned `reacts_to`/holder fan-out; product Skills instead publish events for On Skill/On event Automations | `cargo run -p skills-lattice` |
+| `htn-planner` | Symbolic HTN decomposition and model frontiers | `cargo run -p htn-planner` |
+| `crash-recovery` | Standalone multi-step checkpoint and skip-completed recovery | `cargo run -p crash-recovery` |
+
+## Memory and providers
+
+| Package | Demonstrates | Run |
+| --- | --- | --- |
+| `memory-recall` | Core memory, semantic recall, and consolidation; optional neural embeddings | `cargo run -p memory-recall` |
+| `multi-provider` | Per-Agent provider selection and example cost arithmetic using mocks | `cargo run -p multi-provider` |
+
+Use `cargo run -p memory-recall -- --with-embeddings` for its neural path.
+
+## Tools, protocols, and isolation
+
+| Package | Demonstrates | Run |
+| --- | --- | --- |
+| `tool-hooks` | Library-level pre/post hooks, audit output, and a denied traversal write | `cargo run -p tool-hooks` |
+| `mcp-bridge` | External stdio MCP tool calls and the Agent-as-MCP-server direction | `cargo run -p mcp-bridge` |
+| `a2a-server` | In-process A2A discovery/task server and client | `cargo run -p a2a-server` |
+| `sandbox-session` | Reviewed environment contract, curated images, fail-closed Podman readiness, root Node dependency isolation, and live sandbox path | `cargo run -p sandbox-session` |
+
+The YAML `hooks:` section is currently inactive even though `tool-hooks`
+demonstrates the lower-level hook interfaces. The normal `sandbox-session` run
+prints and tests the contract without Podman; its ignored live test requires a
+ready Podman installation and proves both Workspace sharing and root
+`node_modules` masking.
+
+## Automation seed and foundations
+
+| Package | Demonstrates | Run |
+| --- | --- | --- |
+| `proactive-agents` | Legacy schedule/event YAML projection and trigger guards | `cargo run -p proactive-agents` |
+| `research-assistant` | Mock-provider Agent coordination and aggregation | `cargo run -p research-assistant` |
+| `code-reviewer` | Mock-provider review workflow and token budget | `cargo run -p code-reviewer` |
+| `customer-support` | Mock-provider routing/support workflow | `cargo run -p customer-support` |
+
+Read each package README before interpreting output; several use mocks by
+design so they can verify orchestration without live provider credentials.
+
+## Configuration recipes
+
+Every current `examples/configs/*.yaml` recipe passes the structural config
+validator in this source tree:
+
+| File | Demonstrates | Extra requirement |
+| --- | --- | --- |
+| `research-pipeline.yaml` | Two-Agent legacy workflow seed to a manual Automation | Ollama |
+| `feature-dev.yaml` | Multi-stage legacy dependency graph seed | Ollama |
+| `incident-response.yaml` | Skill event metadata and manual graph seed | Ollama; add Automation trigger for reachable reaction |
+| `local-only.yaml` | Ollama with no hosted keys and Session sandbox network disabled | Ollama; image must already contain required in-container commands |
+| `mcp-tools.yaml` | Stdio filesystem MCP server | Ollama and `npx` |
+| `event-webhooks.yaml` | Filtered HMAC-signed event webhook egress | Ollama and intentional receiver/secrets |
+| `e2b-backend.yaml` | Daemon-global E2B Cloud backend and template | E2B endpoint/key; template prebuilt with required repository commands; accepted remote-data boundary |
+
+Validate one without starting it:
+
+```sh
+axocoatl validate examples/configs/research-pipeline.yaml
+```
+
+Then use an isolated data root for a live run:
+
+```sh
+AXOCOATL_DATA_DIR=/absolute/path/to/example-data \
+  axocoatl dev --config examples/configs/research-pipeline.yaml
+```
+
+<Aside type="caution" title="Validation is not a live readiness check">
+A valid recipe can still need model weights, credentials, Podman, Node tooling,
+an MCP process, or a webhook receiver. Review its header and run `axocoatl
+doctor --config ...` where applicable.
+</Aside>
+
+## Source links
+
+- [All example packages](https://github.com/axocoatl/axocoatl/tree/main/examples)
+- [Configuration recipes](https://github.com/axocoatl/axocoatl/tree/main/examples/configs)
+- [MCP bridge README](https://github.com/axocoatl/axocoatl/blob/main/examples/mcp-bridge/README.md)
+- [Sandbox Session README](https://github.com/axocoatl/axocoatl/blob/main/examples/sandbox-session/README.md)

@@ -66,6 +66,10 @@ const CSS = `
 }
 `;
 
+// Retry for as long as this exact element still owns the same Session/task.
+// The cap prevents an unavailable daemon from turning into a tight loop.
+const TERMINAL_RECONNECT_DELAYS_MS = [100, 250, 500, 1000, 2000];
+
 export class AxTerminal extends HTMLElement {
   static get observedAttributes() { return ['session', 'task']; }
 
@@ -73,6 +77,11 @@ export class AxTerminal extends HTMLElement {
   #term = null;
   #fit = null;
   #ws = null;
+  #dataSubscription = null;
+  #retryTimer = null;
+  #retryAttempt = 0;
+  #lifecycle = 0;
+  #destroyed = false;
 
   constructor() {
     super();
@@ -97,7 +106,7 @@ export class AxTerminal extends HTMLElement {
   set task(v) { v ? this.setAttribute('task', v) : this.removeAttribute('task'); }
 
   connectedCallback() {
-    void this.#start();
+    if (!this.#destroyed) void this.#start();
     // Re-fitting on our own resize means the shell does not have to remember to
     // tell us — a terminal that is the wrong size after a pane drag is the most
     // common way this goes wrong.
@@ -113,18 +122,26 @@ export class AxTerminal extends HTMLElement {
   }
 
   attributeChangedCallback(name, prev, next) {
-    if (prev === next || !this.isConnected) return;
+    if (prev === next) return;
     // A different task is a different shell; the old one cannot be reused.
-    this.destroy();
-    void this.#start();
+    // Dispose it even while detached: panes may move a terminal unchanged, but
+    // changing its identity while it is out of the DOM must not preserve a
+    // WebSocket to the previous Session/task until the element is inserted again.
+    const destroyed = this.#destroyed;
+    this.#destroyed = true;
+    this.#disposeCurrent();
+    this.#destroyed = destroyed;
+    if (!destroyed && this.isConnected) void this.#start();
   }
 
   async #start() {
-    if (this.#term || !this.session || !this.task) return;
+    if (this.#destroyed || this.#term || !this.session || !this.task) return;
+    const lifecycle = this.#lifecycle;
     await this.#styled;
     // Another start may have won while we waited, or the element may have been
     // torn down; either way this one is stale.
-    if (this.#term || !this.isConnected) return;
+    if (this.#destroyed || lifecycle !== this.#lifecycle || this.#term
+        || !this.isConnected || !this.session || !this.task) return;
     const Term = window.Terminal;
     if (typeof Term === 'undefined') {
       this.#screen.innerHTML = '<div class="gone">xterm.js failed to load.</div>';
@@ -148,14 +165,41 @@ export class AxTerminal extends HTMLElement {
     // has been laid out once.
     requestAnimationFrame(() => this.fit());
 
+    this.#dataSubscription = term.onData((data) => {
+      const socket = this.#ws;
+      if (socket?.readyState === WebSocket.OPEN) socket.send(data);
+    });
+    this.#retryAttempt = 0;
+    this.#connect(lifecycle);
+  }
+
+  #connect(lifecycle) {
+    if (this.#destroyed || lifecycle !== this.#lifecycle || !this.#term
+      || !this.session || !this.task) return;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${location.host}/api/sessions/`
-      + `${encodeURIComponent(this.session)}/terminals/${encodeURIComponent(this.task)}/ws`);
+    let ws;
+    try {
+      ws = new WebSocket(`${proto}//${location.host}/api/sessions/`
+        + `${encodeURIComponent(this.session)}/terminals/${encodeURIComponent(this.task)}/ws`);
+    } catch {
+      this.#scheduleReconnect(lifecycle);
+      return;
+    }
     ws.binaryType = 'arraybuffer';
     this.#ws = ws;
 
-    ws.onopen = () => this.fit();
+    ws.onopen = () => {
+      if (this.#ws !== ws || lifecycle !== this.#lifecycle || this.#destroyed) {
+        try { ws.close(); } catch { /* stale constructor */ }
+        return;
+      }
+      this.#retryAttempt = 0;
+      this.fit();
+    };
     ws.onmessage = (ev) => {
+      if (this.#ws !== ws || lifecycle !== this.#lifecycle || this.#destroyed) return;
+      const term = this.#term;
+      if (!term) return;
       if (ev.data instanceof ArrayBuffer) { term.write(new Uint8Array(ev.data)); return; }
       if (typeof ev.data !== 'string') return;
       // Could be an error envelope; try JSON first, else write it as output.
@@ -165,11 +209,36 @@ export class AxTerminal extends HTMLElement {
         else term.write(ev.data);
       } catch { term.write(ev.data); }
     };
-    ws.onclose = () => {
-      term.write('\r\n\x1b[2m[disconnected]\x1b[0m\r\n');
-      this.dispatchEvent(new CustomEvent('terminal-closed', { bubbles: true, composed: true }));
+    ws.onclose = (event) => {
+      if (this.#ws !== ws || lifecycle !== this.#lifecycle || this.#destroyed) return;
+      this.#ws = null;
+      this.dispatchEvent(new CustomEvent('terminal-closed', {
+        bubbles: true,
+        composed: true,
+        detail: {
+          code: event.code,
+          reason: event.reason,
+          reconnecting: true,
+        },
+      }));
+      this.#scheduleReconnect(lifecycle);
     };
-    term.onData((d) => { if (ws.readyState === WebSocket.OPEN) ws.send(d); });
+  }
+
+  #scheduleReconnect(lifecycle) {
+    if (this.#destroyed || lifecycle !== this.#lifecycle || this.#retryTimer) return;
+    // A new attach always begins from the server's retained PTY snapshot. The
+    // prior xterm buffer may contain bytes beyond that snapshot cut, so keeping
+    // any of it would create an arbitrary duplicate or gap after reconnect.
+    try { this.#term?.reset(); } catch { /* already disposed */ }
+    try { this.#term?.clear(); } catch { /* already disposed */ }
+    const index = Math.min(this.#retryAttempt, TERMINAL_RECONNECT_DELAYS_MS.length - 1);
+    const delay = TERMINAL_RECONNECT_DELAYS_MS[index];
+    this.#retryAttempt += 1;
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = null;
+      this.#connect(lifecycle);
+    }, delay);
   }
 
   /** Re-measure and tell the far end, so the process wraps at the right width. */
@@ -188,11 +257,29 @@ export class AxTerminal extends HTMLElement {
 
   /** Close the socket and dispose the terminal. Not reversible. */
   destroy() {
-    try { this.#ws?.close(); } catch { /* already closed */ }
-    try { this.#term?.dispose(); } catch { /* already disposed */ }
+    this.#destroyed = true;
+    this.#disposeCurrent();
+  }
+
+  #disposeCurrent() {
+    this.#lifecycle += 1;
+    if (this.#retryTimer) clearTimeout(this.#retryTimer);
+    this.#retryTimer = null;
+    this.#retryAttempt = 0;
+    const ws = this.#ws;
     this.#ws = null;
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      try { ws.close(); } catch { /* already closed */ }
+    }
+    try { this.#dataSubscription?.dispose?.(); } catch { /* already disposed */ }
+    this.#dataSubscription = null;
+    try { this.#term?.dispose(); } catch { /* already disposed */ }
     this.#term = null;
     this.#fit = null;
+    this.#screen.replaceChildren();
   }
 
   #ro = null;

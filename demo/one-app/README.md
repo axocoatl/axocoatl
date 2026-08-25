@@ -5,24 +5,28 @@ Git decision.
 
 This kit creates a disposable Northstar Supply storefront with one visible regression:
 an over-large fixed discount produces a negative payable total. The same defect appears
-as a red repository check and as `-$20.00` in the Browser preview. The demo uses the
+as a red repository check and as `-$20.00` in Preview. The demo uses the
 one-app loop to diagnose it, explore two independently produced ways, verify them, keep
 one, and review the resulting Git change.
 
 ## What this demonstrates
 
 - folder-authorized Workspaces and durable Sessions;
-- normal single-agent chat with streamed repository tools;
-- Files, editor, Terminal, Browser preview, Activity, and Git around the chat spine;
+- a normal single-agent Conversation with streamed repository tools;
+- a Conversation spine with focused Files/editor/Source Control and Preview, a bottom
+  Terminal, and a contextual Ways inspector;
 - Plan first, model probe, two isolated Attempts, Cost, Outcome, Route, diff, Checks,
   Judge, Keep, and Finish without keeping;
 - Agent, Skill, event, and Automation controls in Settings;
 - an optional seven-node human-in-the-loop Automation;
-- reload and reconnect without losing the session decision record.
+- reload and reconnect without losing the session decision record;
+- a post-core drill for **Once**/**Session** attachment context, exact Stop,
+  durable History search/export, and logical rewind.
 
 The core presenter path takes about 20 minutes after the machine is warm. The gated
-Automation and Skill appendix takes another 15–25 minutes. The optional memory prompt
-and presenter fallbacks are untimed and are not part of the rehearsed proof.
+Automation and Skill appendix takes another 15–25 minutes. The optional memory prompt and
+remaining Session export/rewind steps are untimed. A separate 13 August follow-up record below
+defines which Session-history/context claims have been live-verified.
 
 Use [PRESENTER-CHECKLIST.md](PRESENTER-CHECKLIST.md) at the podium. This README is the
 full rehearsal and recovery guide; [PROMPTS.md](PROMPTS.md) is the copy-ready script.
@@ -42,6 +46,24 @@ surviving ways:
 
 The Automation path has a separate verification ledger below. Do not infer that an
 Automation behavior is stage-ready merely because the core coding path is green.
+
+### Session capability follow-up baseline
+
+The 13 August 2026 rebuilt-app pass verified this narrower Session path:
+
+- upload of `AXOCOATL.md` as **Once**, followed by consumption only after acceptance;
+- an answer that actually used the attachment content;
+- a clickable attachment chip on the historical turn after consumption;
+- History rendering four durable turns and the test query returning exactly one result;
+- page reload during generation reattaching to the active turn with partial output and
+  restoring **Stop**;
+- pressing **Stop** and reopening History with the terminal result `Stopped by you` persisted.
+
+The 20 August 1.0 acceptance pass completed the remaining product seams: **Session**
+context survived an accepted turn and was removed only for future turns; Stop waited for
+an already-started side effect, persisted the cancelled Turn, and allowed a clean next
+Turn; History restored completed, cancelled, and failed tool evidence; scoped and
+all-Session search, Markdown/JSON export, and logical rewind all passed in the rebuilt app.
 
 ## Prerequisites
 
@@ -83,11 +105,13 @@ then rerun `prepare.sh`, `start.sh`, and `seed-automation.sh`; the second build 
 
 ### Runtime safety
 
-Do not run this disposable daemon beside another Axocoatl daemon. The current local
-sandbox reaper treats unknown global `axo-ses-*` containers as orphans. `start.sh`
-therefore refuses unknown Axocoatl containers and validates any surviving demo-named
-container against the session records in this demo's isolated data directory. It never
-prunes, resets, or removes an unrelated container for you.
+Every daemon-created Session and Way container carries a stable runtime-authority label
+derived from its canonical data directory. Startup reconciliation lists and removes only
+containers bearing that exact authority, so a second data root cannot reap another
+daemon's work. The disposable demo scripts remain deliberately conservative: they refuse
+surviving demo containers and validate them against this demo's isolated Session records
+so every rehearsal starts at a clean boundary. They never prune, reset, or remove an
+unrelated container for you.
 
 ### Demo root
 
@@ -138,21 +162,73 @@ and IPC paths below `$DEMO_ROOT`, and starts Axocoatl at:
 http://127.0.0.1:18080
 ```
 
+For a 1.0 recording, build the exact locked release candidate first and force
+the launcher to validate and run that binary:
+
+```bash
+cargo build --release --locked -p axocoatl-cli
+AXOCOATL_DEMO_BIN="$PWD/target/release/axocoatl" \
+  ./demo/one-app/start.sh
+```
+
+`AXOCOATL_DEMO_BIN` must be an absolute executable path. The launcher does not
+silently rebuild or substitute the product binary when that override is set;
+it prints the selected path, `--version`, and SHA-256 for capture provenance.
+It still builds the deterministic debug `mcp-bridge` fixture referenced by the
+demo configuration.
+
 In another terminal, seed the advanced Automation:
 
 ```bash
 ./demo/one-app/seed-automation.sh
 ```
 
+## 1.0 product films
+
+[`DEMO-CATALOG.md`](DEMO-CATALOG.md) defines the narrative portfolio and
+[`films/portfolio.json`](films/portfolio.json) is the machine-readable
+authority for its 12 slugs, complete Showcase order, placements, scenarios,
+beats, duration bounds, poster, and evidence. All 12 have been regenerated from
+the final 1.0 workbench and are accepted only with their exact capture, durable
+evidence, staged-frame, binary, and shipped-media provenance.
+
+Use [`films/SHOT-MANIFEST.md`](films/SHOT-MANIFEST.md) for the exact manual
+capture, timeline/holds, staging, encoding, and provenance workflow. Manual
+1280×720 keyframes may be captured into
+`/private/tmp/axocoatl-v1-film-capture/<slug>/` as `shot-<beat>.jpg`; no
+standalone browser-launch script is required.
+
+Verify the contracts in progressively stronger layers:
+
+```bash
+node demo/one-app/films/verify-film-set.mjs --manifest-only
+node demo/one-app/films/verify-film-set.mjs --allow-needs-recording
+node demo/one-app/films/verify-film-set.mjs --portable
+node demo/one-app/films/verify-film-set.mjs --source-bound
+node demo/one-app/films/verify-film-set.mjs
+```
+
+The first command validates all 12 scenario and shot-contract references. The
+second is a work-in-progress gate that warns for each explicit
+`needs_recording` entry while strictly checking any entry marked `ready`. The
+portable gate checks recorded evidence and media without requiring the capture
+machine's binary. The source-bound CI/deployment gate additionally binds every
+film to the current checkout's canonical source-content digest. The unflagged
+local release gate also requires the exact capture binary: every film must be
+`ready`, meet the exact media/duration contract, and match its source-content,
+source-frame, binary, durable evidence, and shipped-media provenance.
+
 ## Create the presenter Session
 
 1. Open `http://127.0.0.1:18080`.
-2. Choose **New session**.
+2. From the Workspace switcher, choose **Open workspace…**.
 3. Authorize `$DEMO_ROOT/workspace` using the expanded platform path from the table
-   above.
-4. Use **Single agent** with `Minimal Coder`.
-5. Keep the detected `npm run check` command.
-6. Keep the repository-provided `localhost/axocoatl-one-app-demo:latest` image and
+   above and name it `Northstar Storefront`.
+4. With `Northstar Storefront` selected, choose **New session** and name the Session
+   `Storefront implementation`.
+5. Use **Single agent** with `Minimal Coder`.
+6. Keep the detected `npm run check` command.
+7. Keep the repository-provided `localhost/axocoatl-one-app-demo:latest` image and
    exposed port `8765`.
 
 Open Terminal and run:
@@ -161,19 +237,18 @@ Open Terminal and run:
 npm run demo
 ```
 
-Open Browser at `http://localhost:8765`. The conference cable pack should visibly show
+Open Preview at `http://localhost:8765`. The conference cable pack should visibly show
 `-$20.00` and `Invariant broken` before the fix.
 
-Collapse the Terminal dock after the server starts. In the current layout an expanded
-bottom dock can cover the Activity composer and **Explore several ways** control. The
-server keeps running when the dock is collapsed; reopen it only when showing command
-output.
+Collapse the Terminal dock after the server starts so the Conversation and composer remain
+prominent. The server keeps running when the dock is collapsed; reopen it only when showing
+command output.
 
 ## The 20-minute presenter path
 
 | Segment | Budget | Audience proof |
 | --- | ---: | --- |
-| Surface and visible defect | 2 min | one session with Activity, Attempts, Terminal, Browser, and Git around it |
+| Surface and visible defect | 2 min | one conversation with contextual Files, Ways, Terminal, Preview, and Source Control |
 | Single-agent diagnosis | 3 min | red check, customer-visible defect, clean Git tree |
 | Plan and two ways | 6 min | two isolated attempts settle independently; budget 2 min of model time each |
 | Outcome, Route, Checks, Judge | 5 min | repository evidence and a ranked recommendation |
@@ -185,10 +260,10 @@ output.
 Show that the Session—not a feature dashboard—is the center:
 
 - the workspace and session live in the left rail;
-- Activity remains the main surface;
-- Attempts stays visible in the right dock;
+- Conversation remains the main surface;
+- Ways opens its contextual inspector only while planning or watching several ways;
 - Terminal stays in the bottom dock;
-- Files, editor, Browser, Git, and comparison focus over the chat when opened.
+- Files, editor, Preview, Source Control, and comparison focus over the conversation when opened.
 
 Open **All sessions** briefly, then return to the prepared Session.
 
@@ -218,7 +293,7 @@ the visible roster, tools, files, and independent progress while waiting; do not
 those exact times.
 
 While they run, show the roster, rail state, in-thread attempt summary, local known-zero
-cost, Files, and Activity. The chat remains the permanent spine.
+cost, Files, and the Conversation. The conversation remains the permanent spine.
 
 ### 4. Compare evidence
 
@@ -241,7 +316,7 @@ explained that choice. A Judge error does not erase the two ways; use the recove
 
 ### 5. Prove the kept result
 
-- Refresh Browser: the negative payable total becomes `$0.00`.
+- Refresh Preview: the negative payable total becomes `$0.00`.
 - Run `npm run check` in the primary Terminal.
 - Send prompt 3 so the primary Agent explains the actual working-tree result.
 - Open Source Control → **Last turn**.
@@ -262,6 +337,41 @@ Keep does not commit, merge, push, or open a pull request.
 
 The one-minute close stops here. Skills, event-triggered work, and the seven-node HITL
 Automation are a separate 15–25 minute appendix, not part of the core 20-minute claim.
+
+## Session context and History drill — core path verified, remaining gates open
+
+This drill exercises the Session-native replacements for the useful parts of the retired
+peer Chat and cross-chat Files surfaces. The attachment, History/search, reload, and Stop path
+is recorded in the 13 August follow-up baseline above. Recheck the exact presentation build;
+steps 3, the all-Session/export portion of step 5, and step 6 remain live-demo gates.
+
+1. Make sure **Explore several ways** is off. Composer attachments currently apply to
+   normal Session turns, not isolated Attempts.
+2. Choose the paperclip and attach the expanded
+   `$DEMO_ROOT/workspace/AXOCOATL.md` path. Leave its chip at **Once**, then send prompt
+   3A from [PROMPTS.md](PROMPTS.md). After the server accepts the turn, the one-turn chip
+   should disappear and the transcript should retain its context name.
+3. Attach the file again and change the chip from **Once** to **Session**. Send a short
+   follow-up from prompt 3A and show that the chip remains selected. Then remove it and show
+   that it stops future inclusion while the attachment link on the historical turn still opens.
+4. Send prompt 3B. Once the response is streaming—or after a read-only tool begins—press
+   **Stop**. The button should show that it is stopping after a safe boundary and the
+   durable turn should settle as cancelled. Do not describe an already-started tool as
+   rolled back.
+5. Open **History**. Search this Session for `reporting format`, then switch to **All
+   sessions** to show the same durable search scope. Export Markdown or JSON.
+6. Create one harmless no-edit turn, use **Rewind** at the preceding turn, and show that
+   the later turn leaves the normal transcript. Explain that this is append-only logical
+   history; it does not undo repository or external side effects and is not secure erasure.
+
+Inline **Retry** is intentionally unavailable for the attachment proof. Resending only the
+visible prompt after a **Once** attachment was consumed would be a different request; compose
+a new turn and reattach the file instead.
+
+Uploads are bounded: declared images are accepted up to 10 MiB and other documents up to
+25 MiB; extracted/OCR context is capped at 256 KiB. Removing used context deactivates future
+inclusion while retaining its historical relation and blob pin. Original content-addressed
+blobs are retained rather than garbage-collected without safe cross-owner reference counts.
 
 ## Optional Automation and Settings appendix — 15–25 minutes
 
@@ -301,14 +411,14 @@ that was in flight when the process stopped.
 A browser-page reload is safe after the attempts settle: the rehearsal restored the
 session, its current attempt set, and the decision record. After a reload:
 
-- click **Review outcomes** if Compare remains at “Reading the attempts…”;
+- click **Review outcomes** if Attempts review remains at “Reading the attempts…”;
 - reselect `Evidence Judge` before judging, because the selector can return to its
   default Agent;
 - verify both checked ways are still listed before pressing Judge or Keep.
 
 A daemon restart is a stronger test. The settled attempt set survived the rehearsal,
 but terminal processes and the preview should not be assumed to survive. Reopen Terminal,
-run `npm run demo` again if necessary, and refresh Browser. The rebuilt rehearsal also
+run `npm run demo` again if necessary, and refresh Preview. The rebuilt rehearsal also
 restored a top-level parked Interrupt to the rail and resumed it without replaying its
 completed upstream nodes. Keep the nested-Subgraph and arbitrary in-flight-call limits
 above when narrating that proof.
@@ -317,8 +427,8 @@ above when narrating that proof.
 
 ### Explore is visible but cannot be clicked
 
-Collapse the bottom Terminal dock. During rehearsal its expanded surface physically
-covered the Activity composer and **Explore several ways** control.
+Collapse the bottom Terminal dock so the Conversation composer and **Explore several ways**
+control remain prominent.
 
 ### Both ways pass but Judge reports an invalid ranking
 
@@ -331,12 +441,12 @@ show green Checks, select `Evidence Judge`, and press Judge again. If the second
 fails, skip Judge and make the operator decision from Checks, diff, Outcome, and Route.
 The two checked ways are still valid evidence.
 
-### Compare keeps reading after a reconnect
+### Attempts review keeps reading after a reconnect
 
 Press **Review outcomes** once to rehydrate the comparison from the durable attempt set.
 Confirm both attempt cards and their green Checks before continuing.
 
-### Browser preview is blank after a daemon restart
+### Preview is blank after a daemon restart
 
 Open the restored primary Terminal and rerun `npm run demo`, then refresh
 `http://localhost:8765`. This affects the disposable preview process, not the persisted
@@ -364,12 +474,23 @@ and updates it to `completed` in place. If it still looks stale, close and reope
 
 - Settings can run, edit, pause, move, and delete seeded Automations, but the current UI
   does not create a net-new Automation. The seed script uses the API.
-- The MCP panel is an extension surface in this kit; no fake live MCP connection is
-  configured.
+- The MCP panel uses a real local stdio connection to the deterministic
+  `mcp-bridge` weather fixture; its values are canned and make no network
+  forecast request.
 - Firing a Skill publishes its declared event. The configured OnEvent Automation is what
   turns that event into Agent work.
 - Attempt tools intentionally omit Skills, MCP, and web search because those external
   effects cannot be rolled back with a Git candidate.
+- Composer attachments are for normal Session turns; Attempts do not currently receive
+  them.
+- Stop is cooperative. It targets the exact turn but waits for an already-started
+  side-effecting tool to reach a safe boundary; it is not rollback.
+- History rewind logically supersedes later turns. It does not erase blobs, reverse Git or
+  tool effects, or rewrite every older checkpoint; it currently requires a single-agent
+  Session so the daemon can reconstruct the next actor checkpoint. A `SIGKILL` between the
+  ledger and checkpoint writes converges from the ledger on the next startup, not instantly.
+- Canonical tool Route evidence is bounded. JSON keeps structured values up to 16 KiB;
+  larger values become 8 KiB audit previews, and Markdown shows at most 2 KiB per Route event.
 - Local-first does not mean no network. Ollama, image pulls, bridged preview ports, MCP,
   integrations, and optional remote sandboxes can use it.
 - Keep is not release automation. The real checkout and Git decision remain visible.

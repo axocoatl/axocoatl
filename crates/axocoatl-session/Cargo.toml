@@ -6,14 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
-description = "Directory-scoped working sessions for Axocoatl — pick a directory, agents build in it"
+description = "Durable workspace, session, context-attachment, and turn-history storage for Axocoatl"
 
 [dependencies]
+axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

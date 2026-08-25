@@ -1,0 +1,140 @@
+---
+title: State and memory
+description: Distinguish the Session ledger, Agent memory tiers, checkpoint cache, attachments, and consolidation behavior.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Axocoatl preserves several kinds of context for different purposes. The
+durable workbench transcript, model-facing Agent memory, and crash-recovery
+checkpoint are related but not interchangeable.
+
+## Session turn ledger
+
+The canonical Session ledger records a durable begin before normal execution,
+then one completed, failed, stopped, or interrupted terminal state. It stores:
+
+- the accepted request and stable turn identity;
+- structured attachment and inline-context references;
+- per-Agent output for supported Session modes;
+- bounded tool start/result events;
+- lifecycle and rewind boundaries.
+
+History, search, export, exact Stop, Last turn attribution, and rewind project
+this ledger. On startup, an orphaned running turn becomes interrupted rather
+than remaining falsely active.
+
+## Agent memory tiers
+
+| Tier | Purpose | Persistence |
+| --- | --- | --- |
+| Session | Live model-facing conversation | In process, recoverable from checkpoint |
+| Daily log | Append-only dated activity records | JSONL on disk |
+| Core memory | Small named blocks injected on every turn | Per-Agent/shared JSON on disk |
+| Semantic memory | Recall by similarity with retained source text | Vector store on disk |
+
+An autonomous Agent owns all four tiers beneath `{session}:{agent}`. A Coordinator owns
+Session/Tier-1 conversation plus its orchestration checkpoint; each declared Worker owns all
+four tiers beneath `{session}:{coordinator}:worker:{worker}`. The Coordinator provider loop does
+not expose Tier 2–4 memory tools in 1.0, and ad-hoc Workers are ephemeral.
+
+Core memory defaults to `persona`, `human`, and `project` blocks. Agents can
+edit them through `core_memory_append`, `core_memory_replace`, and
+`core_memory_set`. A block marked `shared: true` is backed by the process-wide
+shared registry for Agents declaring the same label.
+
+Semantic recall has passive top-k injection and an Agent-driven
+`recall_search` tool. The default neural path uses local embeddings and may
+download model weights on first use; builds without that feature use a weaker
+lexical fallback. `recall_timeframe` reads the dated log by range.
+
+## Sleep-time consolidation
+
+When enabled, a background loop asks registered idle autonomous Agents whose
+behavior supports consolidation to promote durable semantic facts into core-memory
+blocks. It is idle-gated and promotion-only: the pass does not evict semantic
+records. Declared Coordinator Workers still own scoped Tier 1–4 memory, but they
+are created inside coordinator runs and are not polled by this registry loop.
+Stopping an Agent starts no provider or memory work.
+
+```yaml
+consolidation:
+  enabled: true
+  idle_threshold_secs: 120
+  interval_secs: 1800
+```
+
+Consolidation is a model call and therefore can use the configured provider. It
+is not an offline database compaction.
+
+## On-disk namespaces
+
+Current scoped state maps each runtime Agent id to a portable component under
+`checkpoints/v1/`, `memory/daily_log/v1/`, `memory/core/v1/`, and
+`memory/semantic/v1/`; shared blocks use `memory/core/shared/v1/`. Automation
+run history uses `automation/runs-v1/`.
+
+On supported Unix hosts, pre-1.0 paths are compatibility inputs, not current
+write targets. Checkpoints consider only exact bounded legacy directories and
+prefer the current path for the same version. Core and semantic memory fall back
+to the exact legacy file when current state is absent; daily-log reads may merge
+the exact legacy directory but append only to `v1`. Automation run records must
+match both their requested logical identity and physical legacy path before they
+are copied into the current namespace. Compatibility recovery preserves the old
+source and does not provide a general migration or secure-erasure mechanism.
+
+## Checkpoints
+
+Checkpointing serializes the Agent conversation to an atomic, owner-only file
+in a versioned Postcard envelope and retains the latest few versions. The
+default policy checkpoints after each model response. Snapshots have a 64 MiB
+encoded limit. When a canonical Session ledger is reconstructed, Axocoatl keeps
+the newest complete turn segments within an 8 MiB projected-message limit and
+then verifies the final encoding. The canonical ledger itself is not truncated.
+
+After an unexpected Agent stop, the supervision loop starts a new actor and
+loads the latest valid checkpoint. This restores ordered messages and the latest
+cumulative provider-usage subtotal with its sticky completeness flag. It does not resume an
+in-flight provider stream, a half-completed tool, or replace the complete Session ledger.
+
+A Coordinator also writes private orchestration state during its live pass. Canonical terminal
+Session state wins: Completed, Cancelled, Failed, or Interrupted projection clears that private
+state, so the next user turn decomposes fresh. Do not present finished subtasks as surviving a
+terminal Session interruption.
+
+<Aside type="caution" title="Checkpoint is a cache, not the product authority">
+A corrupt or incompatible checkpoint can be discarded and rebuilt where the
+canonical Session ledger permits. Do not use checkpoint files alone for audit,
+backup, or History export. A very long Session can therefore retain more History
+than one recovery checkpoint presents to the model after restart.
+</Aside>
+
+When a pre-1.0 single-agent Session has no canonical turns, Axocoatl can recover
+the exact 0.1.x checkpoint layouts into Session History. It commits the complete
+transcript to the ledger first and only then writes a newer Postcard cache. The
+import is idempotent across restart; a turn without a completed assistant
+response remains visibly interrupted instead of being called complete.
+
+## Attachments
+
+Session attachment relations own the name, selection scope, consumption state,
+and extracted-text snapshot. An immutable content store owns the underlying
+bytes. A reference already used by a turn remains pinned for historical review
+even after it is removed from future selection.
+
+Once-scoped references are consumed after the accepted turn begins durably;
+Session-scoped references remain selected. Rewind and Retry do not silently
+recreate that old selection.
+
+## Rewind consistency
+
+For an autonomous single-Agent Session, Rewind appends a logical supersession boundary to the canonical ledger and
+prepares a checkpoint from the retained transcript. The two stores are not one
+atomic file transaction. If the process is killed between writes, bootstrap
+uses the ledger as authority and repairs the checkpoint before serving.
+
+Coordinator and multi-Agent Sessions cannot currently be rewound because child checkpoints
+cannot be projected safely across that boundary. Rewind is still not filesystem rollback,
+external-effect rollback, secure deletion, or attachment re-selection.
+
+Next: [Coordination and events →](/understand/coordination/)

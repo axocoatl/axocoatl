@@ -1,0 +1,144 @@
+{
+  "schema_version": 2,
+  "film": "event-lattice-automation",
+  "recorded_at": "2026-08-25T06:29:19.508Z",
+  "source": {
+    "branch": "codex/session-capabilities",
+    "head": "e4bfd6042b0a54b06c898c58f7b04fb1b0ff4e29",
+    "dirty": true,
+    "patch_sha256": "9562ed1cea92c0d427fd91449ef09fdc9e2a3fc7a0fd2fb5d38c8f29183a737d",
+    "patch_excludes": [
+      "demo/one-app/films/source/",
+      "demo/one-app/films/staged/",
+      "demo/one-app/films/provenance/",
+      "sites/marketing/assets/films/"
+    ],
+    "content_sha256": "27ceddcd7c6f177767025f7c15a2cf2f9bb95fde19df365f3a18b05afc07cfdf"
+  },
+  "binary": {
+    "path": "target/release/axocoatl",
+    "version": "axocoatl 1.0.0",
+    "sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488"
+  },
+  "capture": {
+    "record": "demo/one-app/films/source/event-lattice-automation/capture.json",
+    "record_sha256": "1b55ad49d2ba80724c3143952e03d539d8e31344daec0dd717abbfebf8d046fc",
+    "url": "http://localhost:18090/",
+    "browser": "Codex in-app browser",
+    "viewport": {
+      "width": 1280,
+      "height": 720,
+      "device_scale_factor": 1
+    },
+    "theme": "dark",
+    "reduced_motion": "no-preference",
+    "keyframes": [
+      {
+        "beat": "skill",
+        "path": "demo/one-app/films/source/event-lattice-automation/shot-skill.jpg",
+        "sha256": "22e29e5aaff763ede5b98ddf07d9acbc29ebeba98458f7d62279f0a42230e9a4"
+      },
+      {
+        "beat": "event",
+        "path": "demo/one-app/films/source/event-lattice-automation/shot-event.jpg",
+        "sha256": "28b6020d258542af45c9c75ac30e9f633a912d05e61c21d61bc1689639cc54a1"
+      },
+      {
+        "beat": "trigger",
+        "path": "demo/one-app/films/source/event-lattice-automation/shot-trigger.jpg",
+        "sha256": "9bb52b4ccce65459cd53bf151752a7896f05a2b1d997710963c11800ba2ea69e"
+      },
+      {
+        "beat": "result",
+        "path": "demo/one-app/films/source/event-lattice-automation/shot-result.jpg",
+        "sha256": "8195851404c3ca95ccd91351ce4f7178a7ca964ea4f69a5f44ef593a0108732e"
+      }
+    ]
+  },
+  "edit": {
+    "timeline": "demo/one-app/films/source/event-lattice-automation/timeline.json",
+    "timeline_sha256": "85217e9d2a9732bcf2f212b0ba45f260d8b0ac05377e9a152d4c59fc5eeefd66",
+    "stage_record": "demo/one-app/films/source/event-lattice-automation/stage.json",
+    "stage_record_sha256": "d04b514d54b145be32e49d134f47d824ddcd7ccf954b4dedc2917c59279df348",
+    "poster_frame": 256,
+    "poster_beat": "result",
+    "poster_source_sha256": "8195851404c3ca95ccd91351ce4f7178a7ca964ea4f69a5f44ef593a0108732e",
+    "frame_count": 296,
+    "sequence_sha256": "8776ba2d130fcab784d30d7cb568f4054052dedc3a61732924cc2f9c97014f02"
+  },
+  "media": {
+    "mp4": {
+      "path": "sites/marketing/assets/films/event-lattice-automation.mp4",
+      "sha256": "254fd9d024309736b35f079fc3cd8bb38bf1eddf5c1ae2649ddfcf65132f2206",
+      "duration_seconds": 37,
+      "codec": "h264",
+      "width": 1280,
+      "height": 720,
+      "pixel_format": "yuv420p",
+      "fps": "24/1",
+      "audio_streams": 0,
+      "fast_start": true
+    },
+    "poster": {
+      "path": "sites/marketing/assets/films/event-lattice-automation.jpg",
+      "sha256": "8195851404c3ca95ccd91351ce4f7178a7ca964ea4f69a5f44ef593a0108732e",
+      "codec": "mjpeg",
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "evidence": {
+    "record": "demo/one-app/films/source/event-lattice-automation/evidence.json",
+    "record_sha256": "c12895e03555e88c760a7c321bdeba0da2e7d59396e991582bf684e0b75129b3",
+    "checks": [
+      {
+        "id": "skill",
+        "status": "passed",
+        "detail": "The real Settings UI shows Release candidate ready (release-candidate-ready) declaring the typed ReleaseCandidateReady event before it is fired once."
+      },
+      {
+        "id": "event",
+        "status": "passed",
+        "detail": "The captured recent-events observation records event dcf2a818-080a-4dc2-84db-d11a60b6e69c at 1787639193, produced by skill:release-candidate-ready with type ReleaseCandidateReady and the exact payload retained in identities."
+      },
+      {
+        "id": "trigger",
+        "status": "passed",
+        "detail": "That Skill dispatch created durable release-gate-review run bf52db2e-14b7-4e3e-ae9e-7f565133dc44 with the same trigger timestamp and payload; gate-review completed before operator-review parked."
+      },
+      {
+        "id": "result",
+        "status": "passed",
+        "detail": "The operator resumed the same durable run, and reloaded completed history exposes its stored Result: Evidence received. Keep the release gated until repository checks and remaining risks are reviewed by an operator."
+      }
+    ],
+    "identities": {
+      "fixture": "signal-desk",
+      "release_version": "1.0.0",
+      "binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+      "capture_config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+      "capture_data_root": "/private/tmp/axocoatl-one-app-showcase-signal-event-launch/data",
+      "workspace_id": "wsp-28d4ba63-39b4-44ac-b43b-a5ce69da28a8",
+      "workspace_path": "/private/tmp/axocoatl-one-app-showcase-signal-event-launch/workspace",
+      "session_id": "ses-8ec1494c-ecff-4452-9794-fe57ab6d4707",
+      "session_name": "V1 proof",
+      "skill_id": "release-candidate-ready",
+      "event_id": "dcf2a818-080a-4dc2-84db-d11a60b6e69c",
+      "event_type": "ReleaseCandidateReady",
+      "event_producer": "skill:release-candidate-ready",
+      "event_timestamp": "1787639193",
+      "event_payload": "{\"agents_holding\":[\"judge\"],\"fired_by_skill\":\"release-candidate-ready\"}",
+      "automation_id": "release-gate-review",
+      "automation_run_id": "bf52db2e-14b7-4e3e-ae9e-7f565133dc44",
+      "automation_run_started_at_unix": "1787639193",
+      "automation_run_finished_at_unix": "1787639332",
+      "automation_run_file_sha256": "f49591fd5d90e21d4cf7d9b96adf34a1c15488c44c69d3d08de32bd3d8a7f9c1",
+      "checkpoint_sequence": [
+        "gate-review:node_completed",
+        "operator-review:interrupt_parked",
+        "operator-review:interrupt_resumed"
+      ],
+      "operator_result": "Evidence received. Keep the release gated until repository checks and remaining risks are reviewed by an operator."
+    }
+  }
+}

@@ -146,19 +146,6 @@
   /* App shell: the session rail is the only persistent navigation chrome. */
   .app { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 1fr; grid-template-areas: 'rail main'; height: 100vh; min-height: 0; }
   ax-rail { grid-area: rail; }
-  body.side-mini   { --side-w: 56px; }
-  body.side-hidden { --side-w: 0; }
-  body.side-mini .logo-name, body.side-mini .logo-tag, body.side-mini .logo-ver { display: none; }
-  body.side-mini .nav-section { display: none; }
-  /* Mini sidebar: hide wordmark + tag, show just the standalone mark. */
-  body.side-mini .logo { padding: 0; align-items: center; }
-  body.side-mini .logo-wordmark, body.side-mini .logo-tag, body.side-mini .logo-ver { display: none; }
-  body.side-mini .logo::before { content: ""; display: block; width: 32px; height: 32px; background: center/contain no-repeat url('/brand/mark.png'); filter: drop-shadow(0 0 8px rgba(var(--axo-jade-rgb),.35)); }
-  body.side-mini .nav-counter { display: none; }
-  body.side-mini .side-foot { display: none; }
-  body.side-hidden .logo, body.side-hidden .side { display: none; }
-  .sidebar-toggle { background: transparent; border: 1px solid var(--border); border-radius: var(--r-md); padding: 4px 9px; color: var(--muted); cursor: pointer; font-size: var(--fs-body); line-height: 1; }
-  .sidebar-toggle:hover { background: var(--bg-3); color: var(--text); }
   /* Shell-owned utilities are projected into the rail's utility slot so Docs,
      daemon state, and theme remain reachable without a second navigation bar. */
   .rail-utilities { display: flex; flex-direction: column; gap: 4px; min-width: 0; width: 100%; }
@@ -264,7 +251,8 @@
 
   /* The one session surface fills the workbench. Inner modules own their
      scrolling so the permanent chat/workspace spine never leaves `/`. */
-  .session-surface { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; }
+  .session-surface { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; position: relative; }
+  .mobile-home-rail-toggle { display: none; }
 
   /* Buttons & inputs */
   /* Buttons — brand jade with a subtle gradient + focus ring.
@@ -324,7 +312,7 @@
   .palette { width: 560px; max-width: 92vw; background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: 0 30px 80px rgba(0,0,0,.5); overflow: hidden; }
   .palette input { width: 100%; background: transparent; border: 0; border-bottom: 1px solid var(--border); padding: 14px 18px; color: var(--text); font-size: var(--fs-body); outline: none; }
   .palette-list { max-height: 360px; overflow-y: auto; }
-  .palette-item { padding: 10px 18px; cursor: pointer; display: flex; gap: 12px; align-items: center; }
+  .palette-item { appearance: none; width: 100%; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; padding: 10px 18px; cursor: pointer; display: flex; gap: 12px; align-items: center; }
   /* A search that finds nothing should say so. Silence reads as a broken box. */
   .palette-empty { padding: 14px 18px; color: var(--muted-2); font-size: var(--fs-sm); }
 
@@ -336,10 +324,72 @@
      in applyCockpitLayout do the load-bearing work; these handle the chrome
      that grid tracks cannot reach. */
   @media (max-width: 860px) {
-    /* The rail collapses to icon width in script but remains present: session
-       switching, status, Docs, and theme must not disappear at narrow widths. */
     .quick-open-card { width: min(94vw, 640px); }
-    .cockpit-shell { --attempts-dock-w: 240px; }
+    .cockpit-shell { --attempts-dock-w: min(380px, calc(100vw - 72px)); }
+    .cockpit-shell.attempts-open .cockpit-grid { margin-right: 0; }
+    .cockpit-shell.attempts-open .attempts-dock-scrim {
+      display: block; position: absolute; inset: 0 0 var(--term-rail-w, 32px) 0;
+      z-index: 10; border: 0; background: rgba(0,0,0,.48); cursor: default;
+    }
+    .cockpit-shell.attempts-open .attempts-dock { box-shadow: var(--shadow-lg); }
+    #session-cockpit .cockpit-bar {
+      height: auto; min-height: 72px; flex-wrap: wrap; align-content: center;
+      row-gap: 4px; padding-block: 5px;
+    }
+    #session-cockpit .cockpit-bar #cockpit-dir { flex: 1 1 160px; }
+    #session-cockpit .cockpit-bar #cockpit-status { display: none; }
+    #session-cockpit .cockpit-bar #cockpit-title { max-width: 160px; }
+    .cockpit-view-nav {
+      order: 3; flex: 1 1 100%; overflow-x: auto; min-width: 0; scrollbar-width: none;
+    }
+    .cockpit-view-nav::-webkit-scrollbar { display: none; }
+  }
+  @media (max-width: 719px) {
+    .app { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'main'; }
+    ax-rail {
+      position: fixed; inset: 0 auto 0 0; z-index: 200; width: min(300px, 84vw);
+      transform: translateX(-102%); transition: transform var(--dur-base) var(--ease);
+      visibility: hidden; pointer-events: none; box-shadow: var(--shadow-lg);
+    }
+    body.mobile-rail-open ax-rail {
+      transform: translateX(0); visibility: visible; pointer-events: auto;
+    }
+    body.mobile-rail-open .mobile-rail-scrim {
+      display: block; position: fixed; inset: 0; z-index: 190;
+      border: 0; background: rgba(0,0,0,.55);
+    }
+    .mobile-rail-toggle {
+      display: inline-flex; flex: 0 0 30px; width: 30px; height: 30px;
+      align-items: center; justify-content: center; padding: 0;
+      border: 0; border-radius: var(--r-md); background: transparent;
+      color: var(--c-muted); cursor: pointer; font-size: var(--fs-body);
+    }
+    .mobile-rail-toggle:hover { color: var(--c-fg); background: var(--bg-3); }
+    .mobile-home-rail-toggle {
+      display: inline-flex; position: absolute; top: 10px; left: 10px; z-index: 5;
+      align-items: center; gap: 7px; min-height: 34px; padding: 0 10px;
+      border: 1px solid var(--border); border-radius: var(--r-md);
+      background: var(--panel-2); color: var(--text); box-shadow: var(--shadow-sm);
+      cursor: pointer; font: 500 var(--fs-sm) var(--font-sans);
+    }
+    .mobile-home-rail-toggle:hover { background: var(--bg-3); }
+    .mobile-home-rail-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    #session-surface.session-open > .mobile-home-rail-toggle { display: none; }
+    #session-cockpit .cockpit-bar { min-height: 82px; padding: 6px 8px; gap: 6px; }
+    #session-cockpit .cockpit-bar #cockpit-back,
+    #session-cockpit .cockpit-bar #cockpit-dir,
+    #session-cockpit .cockpit-bar #cockpit-status,
+    #session-cockpit .cockpit-bar .cockpit-live-pill,
+    #session-cockpit .cockpit-bar #session-history-btn { display: none; }
+    #session-cockpit .cockpit-bar #cockpit-title { max-width: none; flex: 1 1 auto; }
+    #session-cockpit .cockpit-bar > .grow { display: none; }
+    .cockpit-view-nav { flex: 1 1 100%; }
+    .cockpit-view-btn { padding-inline: 8px; }
+    #session-cockpit .cockpit-bar #panes-menu-btn { flex: 0 0 auto; }
+    .cockpit-shell { --attempts-dock-w: min(92vw, 380px); }
+    .attempts-dock { top: 0; bottom: var(--term-rail-w, 32px); }
+    #session-cockpit .session-input-footer { align-items: flex-end; }
+    #session-cockpit .session-input-bar { flex: 1 1 100%; }
   }
   /* Motion is decoration; someone who has asked for less should not get it.
      The app animates panes, popovers and the rail, none of which carry
@@ -394,6 +444,11 @@
      grow inside it. */
   #session-surface > #session-home,
   #session-surface > #session-cockpit { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  #session-surface > #session-home[cockpit-active] {
+    position: fixed; inset: 0 auto auto 0; z-index: 1100;
+    display: block; width: 0; height: 0; min-width: 0; min-height: 0;
+    flex: none; overflow: visible;
+  }
   #session-cockpit { height: 100%; }
   .cockpit-bar { display: flex; align-items: center; gap: 10px; padding: 6px 2px 12px; }
   .cockpit-bar #cockpit-title { font-size: var(--fs-body); letter-spacing: -.005em; }
@@ -413,31 +468,48 @@
     /* The terminal docks along the bottom, so the grid gives up height to it
        rather than width. Terminals live at the bottom of every editor and
        fighting that muscle memory buys nothing. */
-    margin-right: var(--attempts-dock-w, clamp(260px, 25vw, 340px));
+    margin-right: 0;
     margin-bottom: var(--term-rail-w, 32px);
   }
   .attempts-dock {
     position: absolute; top: 0; right: 0; bottom: var(--term-rail-w, 32px);
     width: var(--attempts-dock-w, clamp(260px, 25vw, 340px)); min-width: 0;
-    background: var(--panel); overflow: hidden; z-index: 4;
+    background: var(--panel); overflow: hidden; z-index: 12;
+    opacity: 0; visibility: hidden; pointer-events: none;
+    transition: opacity var(--dur-base) var(--ease), visibility 0s linear var(--dur-base);
   }
+  .cockpit-shell.attempts-open .cockpit-grid { margin-right: var(--attempts-dock-w, clamp(280px, 25vw, 340px)); }
+  .cockpit-shell.attempts-open .attempts-dock {
+    opacity: 1; visibility: visible; pointer-events: auto;
+    transition-delay: 0s;
+  }
+  .attempts-dock-close {
+    position: absolute; top: 9px; right: 44px; z-index: 2;
+    width: 28px; height: 28px; border: 0; border-radius: var(--r-md);
+    background: transparent; color: var(--muted); cursor: pointer; font-size: var(--fs-lg);
+  }
+  .attempts-dock-close:hover { background: var(--bg-3); color: var(--text); }
+  .attempts-dock-close:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .attempts-dock-scrim { display: none; }
   .attempts-dock ax-attempts { display: flex; width: 100%; height: 100%; min-height: 0; }
   .col-resizer { cursor: col-resize; background: transparent; transition: background .15s; user-select: none; touch-action: none; }
   .col-resizer:hover, .col-resizer.dragging { background: var(--accent); opacity: .55; }
   .trace-body { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; }
   .trace-body ax-lattice { width: 100%; height: 100%; display: block; }
-  /* Fan-out control + in-thread variants */
-  /* No align-self: the button stretches with the row exactly like Send, so the
-     two are always the same height. */
+  /* Answer-mode control + in-thread variants. It configures the next turn;
+     unlike Send, it is deliberately a quiet select-style control. */
   .fanout-btn { display: inline-flex; align-items: center; gap: 4px;
-                background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-lg);
-                color: var(--muted); cursor: pointer; padding: 0 13px; font-size: var(--fs-body); flex-shrink: 0;
-                transition: filter .15s ease, box-shadow .15s ease; }
-  .fanout-btn:hover { color: var(--text); }
-  .fanout-btn.on { color: #fff; background: var(--accent); border-color: var(--accent); }
-  .fanout-glyph { font-size: var(--fs-body); opacity: .85; }
-  .fanout-btn.on .fanout-glyph { opacity: 1; }
-  .fanout-n { font-weight: 600; font-variant-numeric: tabular-nums; }
+                background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--r-md);
+                color: var(--text); cursor: pointer; padding: 4px 9px;
+                font: var(--fs-xs) 'JetBrains Mono', ui-monospace, monospace; flex-shrink: 0;
+                transition: border-color .15s ease, color .15s ease, box-shadow .15s ease; }
+  .fanout-btn:hover { color: var(--text); border-color: var(--border-strong); }
+  .fanout-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .fanout-btn.on { color: var(--text); background: rgba(var(--axo-jade-rgb), .12); border-color: var(--accent); }
+  .fanout-btn:disabled { opacity: .45; cursor: not-allowed; }
+  .fanout-caret { opacity: .55; font-size: 9px; transition: transform .15s ease; }
+  .fanout-btn[aria-expanded="true"] .fanout-caret { transform: rotate(180deg); }
+  .fanout-control { display: inline-flex; position: relative; min-width: 0; }
   /* Fan-out config popover — opens above the composer button. */
   .fanout-pop { position: fixed; width: 264px; background: var(--panel); border: 1px solid var(--border-strong);
                 border-radius: 11px; padding: 13px; z-index: 60; box-shadow: 0 12px 34px rgba(0,0,0,.42); }
@@ -582,6 +654,9 @@
   }
   .term-rail-list { flex: 1; display: flex; flex-direction: row; align-items: center; gap: 4px; overflow-x: auto; overflow-y: hidden; padding: 0; min-width: 0; height: 100%; }
   .term-rail-row {
+    appearance: none;
+    background: transparent;
+    border: 0;
     padding: 4px var(--sp-2);
     font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: var(--fs-xs);
@@ -614,6 +689,7 @@
   .terminals-list { width: 130px; border-right: 1px solid var(--border); overflow-y: auto; padding: 4px; flex-shrink: 0; }
   .terminals-empty { padding: 10px; }
   .term-row { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: var(--r-sm); cursor: pointer; font-size: var(--fs-sm); }
+  button.term-row { appearance: none; width: 100%; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
   .term-row:hover { background: var(--bg-3); }
   .term-row.active { background: rgba(var(--axo-jade-rgb),.16); color: var(--fg); }
   .term-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
@@ -665,10 +741,10 @@
   .chat-ref { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 6px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 11px; font-size: var(--fs-xs); font-family: ui-monospace, monospace; max-width: 100%; }
   .chat-ref .chip-icon { font-size: var(--fs-xs); opacity: .7; }
   .chat-ref .chip-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-  .chat-ref .chip-x { color: var(--muted); cursor: pointer; padding: 0 2px; }
+  .chat-ref .chip-x { appearance: none; border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0 2px; font: inherit; }
   .chat-ref .chip-x:hover { color: var(--accent); }
   /* Selection bubble inside the code viewer */
-  .sel-bubble { position: fixed; z-index: 80; background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: var(--r-md); padding: 4px 9px; font-size: var(--fs-xs); cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.4); user-select: none; }
+  .sel-bubble { position: fixed; z-index: 80; background: var(--panel-2); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--r-md); padding: 4px 9px; font: inherit; font-size: var(--fs-xs); cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.4); user-select: none; }
   .sel-bubble:hover { border-color: var(--accent); }
   .vmode { padding: 4px 11px; background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: var(--fs-xs); border-right: 1px solid var(--border); }
   .vmode:hover { background: var(--bg-3); color: var(--fg); }
@@ -687,9 +763,10 @@
   .browser-body { flex: 1; min-height: 0; background: #fff; display: flex; }
   .browser-body iframe { width: 100%; height: 100%; border: 0; position: relative; z-index: 0; }
   .bx-suggest { display: flex; flex-wrap: wrap; gap: 5px; padding: 5px 7px; border-bottom: 1px solid var(--border); background: var(--panel-2); }
-  .bx-chip { padding: 2px 7px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 11px; font-size: var(--fs-xs); cursor: pointer; font-family: ui-monospace, monospace; color: var(--fg); }
-  .bx-chip:hover { background: var(--bg-2); border-color: var(--accent); }
-  .bx-chip-x { margin-left: 4px; color: var(--muted); cursor: pointer; }
+  .bx-chip { display: inline-flex; align-items: center; padding: 2px 5px 2px 7px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 11px; font-size: var(--fs-xs); font-family: ui-monospace, monospace; color: var(--fg); }
+  .bx-chip:hover, .bx-chip:focus-within { background: var(--bg-2); border-color: var(--accent); }
+  .bx-chip-open, .bx-chip-x { appearance: none; border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0; font: inherit; }
+  .bx-chip-x { margin-left: 4px; color: var(--muted); padding-inline: 2px; }
   /* DOM hierarchy panel */
   .browser-body { position: relative; }
   .dom-hier { position: absolute; top: 8px; right: 8px; width: 300px;
@@ -705,6 +782,7 @@
   .dom-hier-close:hover { color: var(--accent); }
   .dom-hier-list { padding: 5px 4px; max-height: 200px; overflow-y: auto; }
   .dom-hier-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: var(--r-sm);
+                  width: 100%; border: 0; background: transparent; color: inherit; text-align: left;
                   cursor: pointer; font-family: ui-monospace, monospace; font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; }
   .dom-hier-row:hover { background: var(--bg-3); }
   .dom-hier-row.active { background: rgba(var(--axo-jade-rgb),.18); color: var(--accent); }
@@ -719,8 +797,11 @@
   /* Panes menu */
   .cockpit-bar { position: relative; }
   .panes-menu { position: fixed; background: var(--panel); border: 1px solid var(--border-strong); border-radius: var(--r-lg); padding: 5px; min-width: 220px; z-index: 50; box-shadow: 0 6px 22px rgba(0,0,0,.35); }
-  .pm-item { display: flex; align-items: center; gap: 9px; padding: 7px 10px; cursor: pointer; border-radius: var(--r-md); font-size: var(--fs-sm); user-select: none; }
+  .pm-heading { padding: 8px 10px 2px; color: var(--text); font-size: var(--fs-sm); font-weight: 600; }
+  .pm-hint { max-width: 260px; padding: 2px 10px 7px; color: var(--muted-2); font-size: var(--fs-xs); line-height: 1.45; }
+  .pm-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 10px; cursor: pointer; border: 0; border-radius: var(--r-md); background: transparent; color: inherit; font: inherit; text-align: left; font-size: var(--fs-sm); user-select: none; }
   .pm-item:hover { background: var(--bg-3); }
+  .pm-item:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   .pm-item ax-toggle { margin-left: auto; }
   .pm-label { color: var(--text); }
   .pm-item .pm-shortcut { margin-left: auto; font-size: var(--fs-xs); color: var(--muted-2); }
@@ -728,10 +809,12 @@
   .pm-action { color: var(--muted); }
   .pm-action:hover { color: var(--text); }
   .ftab { display: flex; align-items: center; gap: 5px; padding: 5px 9px; font-size: var(--fs-xs); border-right: 1px solid var(--border); cursor: pointer; white-space: nowrap; max-width: 200px; }
+  .ftab-main { appearance: none; display: flex; min-width: 0; border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0; font: inherit; }
+  .ftab-main:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
   .ftab:hover { background: var(--bg-3); }
   .ftab.active { background: var(--panel-2); border-bottom: 2px solid var(--accent); }
   .ftab-name { overflow: hidden; text-overflow: ellipsis; }
-  .ftab-close { opacity: .45; padding: 0 2px; font-size: var(--fs-body); }
+  .ftab-close { appearance: none; border: 0; background: transparent; color: inherit; cursor: pointer; opacity: .45; padding: 0 2px; font: inherit; font-size: var(--fs-body); }
   .ftab-close:hover { opacity: 1; color: var(--err); }
   .grow { flex: 1; }
   /* Files pane inner layout — VS Code-style horizontal split.  The
@@ -757,7 +840,7 @@
   .file-search { padding: 6px 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
   .file-search-input { flex: 1; min-width: 0; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 4px 8px; color: var(--text); font-size: var(--fs-sm); outline: none; font-family: inherit; }
   .file-search-input:focus { border-color: var(--accent); }
-  .file-search-clear { color: var(--muted); cursor: pointer; padding: 0 2px; font-size: var(--fs-lg); line-height: 1; user-select: none; }
+  .file-search-clear { appearance: none; border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0 2px; font: inherit; font-size: var(--fs-lg); line-height: 1; user-select: none; }
   .file-search-clear:hover { color: var(--text); }
   .file-search-clear.hide { display: none; }
   /* <ax-file-tree> owns its rows; the shell owns how much room it gets. */
@@ -776,8 +859,8 @@
      a control that sits next to Commit. */
   .btn.ghost.danger { color: var(--err); border-color: transparent; background: none; }
   .btn.ghost.danger:hover { background: var(--bg-3); border-color: var(--err); filter: none; }
-  /* The popover hangs above the composer row it belongs to. */
-  .session-input-row { position: relative; }
+  /* The popover hangs above the footer control that owns it. */
+  .session-input-footer { position: relative; }
   ax-file-tree.hide { display: none; }
   .file-viewer { flex: 1; overflow: auto; padding: 0; }
   .file-viewer pre { margin: 0; padding: 10px 12px; font-size: var(--fs-sm); }
@@ -786,7 +869,7 @@
   .quick-open-card { background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: var(--r-lg); width: min(640px, 92vw); box-shadow: 0 12px 48px rgba(0,0,0,.55); overflow: hidden; display: flex; flex-direction: column; max-height: 60vh; }
   .quick-open-input { background: var(--bg-3); border: 0; padding: 10px 14px; color: var(--text); font-size: var(--fs-body); outline: none; font-family: inherit; border-bottom: 1px solid var(--border); }
   .quick-open-list { overflow: auto; max-height: calc(60vh - 50px); }
-  .quick-open-item { display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; font-size: var(--fs-sm); }
+  .quick-open-item { appearance: none; width: 100%; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; font-size: var(--fs-sm); }
   .quick-open-item:hover, .quick-open-item.active { background: rgba(var(--axo-jade-rgb),.18); }
   .quick-open-name { color: var(--text); }
   .quick-open-path { color: var(--muted); font-size: var(--fs-xs); margin-left: auto; overflow: hidden; text-overflow: ellipsis; max-width: 60%; white-space: nowrap; direction: rtl; text-align: left; }
@@ -810,11 +893,35 @@
   .session-active .sa-chip .sa-kind { color: var(--muted); text-transform: uppercase; letter-spacing: .6px; font-size: 9.5px; }
   .session-active .sa-chip .sa-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--axo-jade-glow); }
   .session-active .sa-eyebrow { font-family: 'Space Grotesk', sans-serif; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .8px; color: var(--muted-2); margin-right: 4px; font-weight: 600; }
+  .session-environment {
+    display: flex; flex-shrink: 0; align-items: center; gap: var(--sp-3);
+    margin: var(--sp-3) var(--sp-3) 0; padding: var(--sp-3);
+    border: 1px solid color-mix(in srgb, var(--accent-2) 46%, var(--border));
+    border-radius: var(--r-lg); background: color-mix(in srgb, var(--accent-2) 7%, var(--panel));
+  }
+  .session-environment.hide { display: none; }
+  .session-environment[data-state="failed"] {
+    border-color: color-mix(in srgb, var(--err) 55%, var(--border));
+    background: color-mix(in srgb, var(--err) 7%, var(--panel));
+  }
+  .session-environment[data-state="preparing"] {
+    border-color: color-mix(in srgb, var(--warn) 52%, var(--border));
+  }
+  .session-environment-copy { display: grid; min-width: 0; flex: 1; gap: 3px; }
+  .session-environment-copy strong { color: var(--text); font-size: var(--fs-sm); }
+  .session-environment-copy span { color: var(--muted); font-size: var(--fs-xs); line-height: 1.45; }
+  .session-environment-copy code {
+    width: fit-content; max-width: 100%; overflow: hidden; padding: 3px 6px;
+    border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-3);
+    color: var(--accent-2); font: var(--fs-xs) var(--font-mono); text-overflow: ellipsis; white-space: nowrap;
+  }
+  .session-environment > button { flex-shrink: 0; }
   .session-msgs { flex: 1; overflow-y: auto; padding: 14px 14px 12px; display: flex; flex-direction: column; gap: 12px; }
   .session-input { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-top: 1px solid var(--border); flex-shrink: 0; background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.012)); }
   .session-input-bar { display: flex; align-items: center; gap: 8px; }
-  .session-input-row { display: flex; gap: 8px; }
-  .session-input textarea { flex: 1; min-height: 42px; max-height: 140px; }
+  .session-input-row { display: block; min-width: 0; }
+  .session-input-footer { display: flex; min-width: 0; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .session-input textarea { display: block; width: 100%; min-height: 42px; max-height: 140px; box-sizing: border-box; }
   /* The per-turn model + agent-target pickers are <ax-select> web components
      now — they style themselves in shadow DOM (see class AxSelect). */
   .smsg { font-size: var(--fs-body); line-height: 1.55; }
@@ -829,8 +936,8 @@
   .smsg-typing span:nth-child(3) { animation-delay: .30s; }
   @keyframes typing-dot { 0%, 80%, 100% { opacity: .25; transform: scale(.85);} 40% { opacity: 1; transform: scale(1);} }
   /* Tool-call card */
-  .toolcard { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; background: var(--bg); }
-  .toolcard-head { display: flex; align-items: center; gap: 7px; padding: 6px 9px; cursor: pointer; font-size: var(--fs-sm); }
+  .toolcard { flex: 0 0 auto; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; background: var(--bg); }
+  .toolcard-head { appearance: none; width: 100%; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; display: flex; align-items: center; gap: 7px; padding: 6px 9px; cursor: pointer; font-size: var(--fs-sm); }
   .toolcard-head:hover { background: var(--bg-3); }
   .toolcard-ico { font-size: var(--fs-xs); }
   .toolcard.running .toolcard-ico { animation: pulse 1.1s infinite; }
@@ -854,21 +961,26 @@
                 font-size: 9.5px; padding: 0 5px; min-width: 14px; text-align: center; font-weight: 600; }
   .git-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 
-  /* Per-message action row (Copy, Edit & branch). Appears under each
-     bubble. Quiet by default; brand-jade focus highlight. */
+  /* Per-message actions stay reachable without becoming a repeated toolbar.
+     Hover is a convenience; focus-within is the keyboard equivalent, and
+     coarse pointers keep the actions visible because they have no hover. */
   .smsg-actions {
     display: flex;
     gap: 6px;
     margin-top: 6px;
-    opacity: .55;
-    transition: opacity .14s ease;
+    min-height: 28px;
+    align-items: center;
+    opacity: .32;
+    transition: opacity var(--dur-fast) var(--ease);
   }
-  .smsg:hover .smsg-actions { opacity: 1; }
+  .smsg:hover .smsg-actions,
+  .smsg:focus-within .smsg-actions { opacity: 1; }
+  .smsg.user .smsg-actions { justify-content: flex-end; }
   .smsg-act {
     background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    padding: 3px 9px;
+    border: 1px solid transparent;
+    color: var(--muted-2);
+    padding: 3px 7px;
     border-radius: var(--r-sm);
     cursor: pointer;
     font-size: var(--fs-xs);
@@ -877,8 +989,18 @@
   }
   .smsg-act:hover {
     color: var(--text);
-    border-color: var(--axo-jade-glow);
+    border-color: var(--border);
     background: var(--bg-3);
+  }
+  .smsg-act:focus-visible {
+    outline: none;
+    color: var(--text);
+    border-color: var(--axo-jade-glow);
+    box-shadow: var(--focus-ring);
+  }
+  .smsg-act:disabled { cursor: not-allowed; opacity: .45; }
+  @media (hover: none), (pointer: coarse) {
+    .smsg-actions { opacity: .72; }
   }
   /* Reasoning collapsible (extended-thinking models). Folded by default. */
   details.chat-reasoning {
@@ -999,6 +1121,8 @@
   .axo-modal-choice {
     display: flex; align-items: center; gap: 8px;
     padding: 10px 12px;
+    width: 100%; border: 0; text-align: left; font: inherit; color: inherit;
+    background: transparent;
     border-radius: var(--r-md);
     cursor: pointer;
     transition: background .12s ease;
@@ -1029,6 +1153,7 @@
   }
   .run-view-status.running { color: var(--axo-jade-glow); border-color: var(--axo-jade-glow); }
   .run-view-status.done    { color: var(--axo-jade-glow); border-color: var(--axo-jade-glow); }
+  .run-view-status.cancelled { color: var(--warn); border-color: var(--warn); }
   .run-view-status.error   { color: var(--err); border-color: var(--err); }
   .run-view-body {
     padding: 18px 20px 20px; max-height: 74vh; overflow-y: auto;
@@ -1067,6 +1192,7 @@
   .rv-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); }
   .rv-dot.running { background: var(--axo-jade-glow); animation: rv-pulse 1.1s ease-in-out infinite; }
   .rv-dot.done    { background: var(--axo-jade-glow); }
+  .rv-dot.cancelled { background: var(--warn); }
   .rv-dot.error   { background: var(--err); }
   @keyframes rv-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   .rv-winner { margin-left: auto; font-size: var(--fs-xs); color: var(--muted-2); white-space: nowrap; }
@@ -1130,9 +1256,12 @@
   #session-cockpit .cockpit-bar {
     display: flex;
     align-items: center;
+    flex-wrap: nowrap;
     gap: 12px;
     height: 40px;
+    min-width: 0;
     padding: 0 14px;
+    overflow: hidden;
     background: var(--c-head-bg);
     border-bottom: 1px solid var(--c-border);
     font-size: var(--fs-sm);
@@ -1149,9 +1278,17 @@
     color: var(--c-fg-soft);
     cursor: pointer;
     border-radius: 0;
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
   #session-cockpit .cockpit-bar #cockpit-back:hover { color: var(--c-fg); }
   #session-cockpit .cockpit-bar #cockpit-title {
+    min-width: 0;
+    max-width: 240px;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--c-fg);
     font-family: 'Space Grotesk', sans-serif;
     font-weight: 600;
@@ -1165,6 +1302,24 @@
     color: var(--c-muted);
     letter-spacing: 0;
   }
+  #session-cockpit .cockpit-bar #cockpit-dir {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #session-cockpit .cockpit-bar #cockpit-status {
+    min-width: 0;
+    max-width: 220px;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The directory now owns the flexible header space. Keep the historical
+     spacer inert so it cannot force identity text to wrap or controls away. */
+  #session-cockpit .cockpit-bar > .grow { flex: 0 0 0; }
   /* Render dir · status as one continuous meta line with a middle-dot. */
   #session-cockpit .cockpit-bar #cockpit-status:not(:empty)::before {
     content: '·';
@@ -1172,7 +1327,8 @@
     color: var(--c-muted-2);
   }
   #session-cockpit .cockpit-bar .cockpit-live-pill {
-    margin-left: auto;
+    margin-left: 0;
+    flex: 0 0 auto;
     height: 22px;
     padding: 0 10px 0 8px;
     background: transparent;
@@ -1194,6 +1350,7 @@
     background: var(--c-muted-2); box-shadow: none;
   }
   #session-cockpit .cockpit-bar #panes-menu-btn {
+    flex: 0 0 auto;
     background: transparent;
     border: 0;
     color: var(--c-muted);
@@ -1203,6 +1360,30 @@
     cursor: pointer;
   }
   #session-cockpit .cockpit-bar #panes-menu-btn:hover { color: var(--c-fg); background: rgba(255,255,255,.04); }
+  #session-cockpit .cockpit-bar #session-history-btn { flex: 0 0 auto; }
+  .cockpit-view-nav {
+    display: flex; align-items: center; gap: 2px; flex: 0 0 auto;
+    padding: 2px; border: 1px solid var(--border); border-radius: var(--r-lg);
+    background: rgba(255,255,255,.018);
+  }
+  .cockpit-view-btn {
+    display: inline-flex; align-items: center; gap: 5px; min-height: 28px;
+    padding: 3px 9px; border: 0; border-radius: var(--r-md);
+    background: transparent; color: var(--c-muted); cursor: pointer;
+    font: 500 var(--fs-xs) var(--font-sans); white-space: nowrap;
+  }
+  .cockpit-view-nav .cockpit-view-btn { display: inline-flex; }
+  .cockpit-view-btn:hover { color: var(--c-fg); background: rgba(255,255,255,.04); }
+  .cockpit-view-btn.active { color: var(--c-fg); background: var(--bg-3); box-shadow: var(--shadow-sm); }
+  .cockpit-view-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .view-count {
+    min-width: 16px; padding: 0 5px; border-radius: var(--r-pill);
+    background: rgba(var(--axo-jade-rgb),.18); color: var(--accent-lift);
+    font: var(--fs-xs) var(--font-mono); text-align: center;
+  }
+  @media (min-width: 720px) {
+    .mobile-rail-toggle, .mobile-rail-scrim { display: none; }
+  }
 
   /* ─── Grid: flat columns, no outer border, no gap. ─── */
   #session-cockpit .cockpit-grid { gap: 0; background: var(--c-cockpit-bg); }
@@ -1217,6 +1398,19 @@
   }
   /* JS sets .is-rightmost on whichever pane is visually last after reorder. */
   #session-cockpit .cockpit-pane.is-rightmost { border-right: 0; }
+
+  /* The Session conversation is the canvas, not another dashboard card.
+     The shell sets `.conversation-only` whenever no focused review surface is
+     replacing it. Components remain mounted; this only changes hierarchy. */
+  #session-cockpit #cockpit-stream {
+    --session-reading-width: 760px;
+    min-width: 0;
+  }
+  #session-cockpit.conversation-only #cockpit-stream {
+    border-right: 0;
+    background: var(--c-pane-bg);
+  }
+  #session-cockpit.conversation-only #cockpit-stream > .pane-head { display: none; }
 
   /* ─── Pane head: 9px 12px, #131720, Space Grotesk caps, .8px tracking. */
   #session-cockpit .pane-head {
@@ -1235,6 +1429,14 @@
     font-weight: 600;
   }
   #session-cockpit .pane-head-title { color: var(--c-muted-2); }
+  #session-cockpit .pane-return {
+    margin-left: auto; padding: 3px 8px; border: 0; border-radius: var(--r-sm);
+    background: transparent; color: var(--c-muted); cursor: pointer;
+    font: 500 var(--fs-xs) var(--font-sans); text-transform: none; letter-spacing: 0;
+  }
+  #session-cockpit .pane-return:hover { color: var(--c-fg); background: var(--bg-3); }
+  #session-cockpit .pane-return:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  #session-cockpit .pane-return + .pane-btn { margin-left: 0; }
   #session-cockpit .pane-head-meta {
     margin-left: auto;
     font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -1267,17 +1469,89 @@
   #session-cockpit .ftab.active { color: var(--c-fg); background: var(--c-pane-bg); border-bottom: 2px solid var(--axo-jade); }
   #session-cockpit .file-viewer { background: var(--c-ink); }
 
-  /* ─── Activity: messages + tool cards + typing indicator. ─── */
+  /* ─── Conversation: readable measure, calm rhythm, one composer. ─── */
   #session-cockpit .session-msgs {
-    padding: 12px 14px;
-    gap: 10px;
+    padding: var(--sp-5) var(--sp-4);
+    gap: var(--sp-5);
     background: var(--c-pane-bg);
+    scroll-padding-block: var(--sp-5);
+  }
+  #session-cockpit .session-msgs > * {
+    width: 100%;
+    max-width: var(--session-reading-width, 760px);
+    margin-inline: auto;
   }
   #session-cockpit .session-input {
-    background: var(--c-pane-bg);
-    border-top: 1px solid var(--c-border);
+    box-sizing: border-box;
+    gap: var(--sp-2);
+    margin: var(--sp-2) var(--sp-3) var(--sp-3);
+    padding: var(--sp-3);
+    background: var(--panel-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-xl);
+    box-shadow: var(--shadow-md);
   }
-  #session-cockpit .smsg { font-size: var(--fs-sm); line-height: 1.55; }
+  #session-cockpit.conversation-only #cockpit-stream > .session-input {
+    width: min(calc(100% - var(--sp-6)), var(--session-reading-width, 760px));
+    margin: 0 auto var(--sp-4);
+  }
+  #session-cockpit.conversation-only #cockpit-stream > .session-active,
+  #session-cockpit.conversation-only #cockpit-stream > .session-environment,
+  #session-cockpit.conversation-only #cockpit-stream > .chat-refs {
+    width: min(calc(100% - var(--sp-6)), var(--session-reading-width, 760px));
+    margin-inline: auto;
+    border-bottom: 0;
+  }
+  #session-cockpit .session-input-bar {
+    min-width: 0;
+    flex: 1 1 260px;
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+  }
+  #session-cockpit .session-input-row {
+    min-width: 0;
+  }
+  #session-cockpit .session-input-footer {
+    min-width: 0;
+    align-items: center;
+    gap: var(--sp-2);
+  }
+  #session-cockpit .session-input textarea.input {
+    min-width: 0;
+    min-height: 56px;
+    max-height: 200px;
+    padding: var(--sp-2) var(--sp-1);
+    resize: vertical;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  #session-cockpit .session-input textarea.input:hover,
+  #session-cockpit .session-input textarea.input:focus {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+  #session-cockpit .session-input textarea.input::placeholder {
+    color: var(--muted);
+  }
+  #session-cockpit .session-input .fanout-btn {
+    min-height: 28px;
+  }
+  #session-cockpit .session-input #session-send {
+    min-height: 40px;
+    min-width: 72px;
+    margin-left: auto;
+    padding-inline: var(--sp-4);
+    background: var(--axo-jade);
+  }
+  #session-cockpit .session-input #session-send:hover { filter: none; }
+  #session-cockpit .smsg {
+    min-width: 0;
+    font-size: var(--fs-body);
+    line-height: 1.62;
+  }
   #session-cockpit .smsg-role {
     font-family: 'Space Grotesk', sans-serif;
     font-size: var(--fs-xs);
@@ -1285,18 +1559,37 @@
     letter-spacing: .04em;
     text-transform: uppercase;
     color: var(--c-muted-2);
-    margin-bottom: 4px;
+    margin-bottom: var(--sp-2);
   }
   /* User + agent role labels stay in the muted palette so the chat reads
      as a single transcript, not a two-team chat surface. */
   #session-cockpit .smsg.user .smsg-role,
   #session-cockpit .smsg.agent .smsg-role { color: var(--c-muted-2); }
-  #session-cockpit .smsg.user .smsg-body,
   #session-cockpit .smsg.agent .smsg-body {
     background: transparent;
     border: 0;
     padding: 0;
     color: var(--c-fg-soft);
+  }
+  #session-cockpit .smsg.user {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+  #session-cockpit .smsg.user .smsg-role {
+    margin-right: var(--sp-2);
+    text-align: right;
+  }
+  #session-cockpit .smsg.user .smsg-body {
+    width: fit-content;
+    max-width: min(88%, 640px);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--bg-3);
+    border: 1px solid var(--c-border);
+    border-radius: var(--r-xl);
+    color: var(--c-fg-soft);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   #session-cockpit .smsg .smsg-body code {
     font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -1335,6 +1628,28 @@
     40%         { transform: translateY(-3px); background: var(--axo-jade-glow); }
   }
 
+  @media (max-width: 720px) {
+    #session-cockpit .cockpit-bar { gap: var(--sp-2); padding-inline: var(--sp-2); }
+    #session-cockpit .cockpit-bar #cockpit-title { max-width: 140px; }
+    #session-cockpit .cockpit-bar #cockpit-status { display: none; }
+    #session-cockpit .session-msgs {
+      padding: var(--sp-4) var(--sp-3);
+      gap: var(--sp-4);
+    }
+    #session-cockpit.conversation-only #cockpit-stream > .session-input,
+    #session-cockpit.conversation-only #cockpit-stream > .session-active,
+    #session-cockpit.conversation-only #cockpit-stream > .session-environment,
+    #session-cockpit.conversation-only #cockpit-stream > .chat-refs {
+      width: calc(100% - var(--sp-4));
+    }
+    #session-cockpit.conversation-only #cockpit-stream > .session-input {
+      margin-bottom: var(--sp-2);
+    }
+    #session-cockpit .session-environment { align-items: stretch; flex-direction: column; }
+    #session-cockpit .session-environment > button { align-self: flex-start; }
+    #session-cockpit .smsg.user .smsg-body { max-width: 94%; }
+  }
+
   /* ─── Browser pane: flat toolbar matching head bg. ─── */
   #session-cockpit .browser-toolbar { background: var(--c-head-bg); border-bottom: 1px solid var(--c-border); }
   #session-cockpit .bx-url { background: var(--c-cockpit-bg); border: 1px solid var(--c-border); color: var(--c-fg-soft); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: var(--fs-xs); }
@@ -1361,6 +1676,23 @@
   }
   @keyframes term-blink { 50% { opacity: 0; } }
 
+  /* Final narrow composition lives after the desktop cockpit overrides so it
+     wins the cascade: identity/actions on row one, Session views on row two. */
+  @media (max-width: 719px) {
+    #session-cockpit .cockpit-bar {
+      display: flex; flex-wrap: wrap; align-content: center;
+      min-height: 82px; height: auto; overflow: hidden;
+    }
+    #session-cockpit .cockpit-bar .mobile-rail-toggle { display: inline-flex; order: 0; }
+    #session-cockpit .cockpit-bar #cockpit-title {
+      display: block; order: 0; flex: 1 1 auto; min-width: 0; max-width: none;
+    }
+    #session-cockpit .cockpit-bar #panes-menu-btn { order: 0; }
+    #session-cockpit .cockpit-bar .cockpit-view-nav {
+      order: 3; flex: 1 1 100%; width: 100%; max-width: 100%;
+    }
+  }
+
   /* ─── Col resizers stay subtle but visible on hover/drag. ─── */
   #session-cockpit .col-resizer:hover,
   #session-cockpit .col-resizer.dragging {
@@ -1375,4 +1707,305 @@
   #session-cockpit .pane-head.drag-over {
     background: rgba(var(--axo-jade-rgb), .14);
     box-shadow: inset 0 -2px 0 var(--axo-jade-glow);
+  }
+
+  /* ────────────────────────────────────────────────────────────────
+     Session shell contract (v11)
+
+     One center surface, one optional Conversation split, one Ways inspector,
+     and one bottom Terminal dock. These final rules intentionally override
+     the dashboard-era pane styling above while the shell is migrated in place.
+     ──────────────────────────────────────────────────────────────── */
+  #session-cockpit .cockpit-grid {
+    min-width: 0;
+    overflow: hidden;
+  }
+  #session-cockpit .cockpit-pane { min-width: 0; }
+  #session-cockpit.two-up .pane-return { display: none; }
+  #session-cockpit.review-focused .pane-return { display: inline-flex; }
+
+  .cockpit-tool-toggles {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 2px;
+    padding-left: 6px;
+    border-left: 1px solid var(--border);
+  }
+  .cockpit-tool-toggles .cockpit-view-btn {
+    min-height: 28px;
+    padding-inline: 7px;
+  }
+
+  /* Ways may reserve width only when JS has proven that the resting
+     Conversation still has room. Every review and split uses the overlay. */
+  .cockpit-shell.attempts-overlay.attempts-open .cockpit-grid { margin-right: 0; }
+  .cockpit-shell.attempts-overlay.attempts-open .attempts-dock {
+    width: min(380px, calc(100% - 24px));
+    border-left: 1px solid var(--border-strong);
+    box-shadow: var(--shadow-lg);
+  }
+  .cockpit-shell.attempts-overlay.attempts-open .attempts-dock-scrim {
+    display: block;
+    position: absolute;
+    inset: 0 0 var(--term-rail-w, 32px) 0;
+    z-index: 10;
+    border: 0;
+    background: rgba(0, 0, 0, .46);
+  }
+
+  /* Every resizer has a persistent hairline, a generous hit target, a focus
+     ring, and keyboard semantics supplied by the shell. */
+  #session-cockpit .col-resizer,
+  #session-cockpit .files-inner-resizer,
+  #session-cockpit .terminals-inner-resizer,
+  #session-cockpit .term-drawer-outer-resizer {
+    position: relative;
+    background: transparent;
+    opacity: 1;
+    outline: none;
+  }
+  #session-cockpit .col-resizer::before,
+  #session-cockpit .files-inner-resizer::before,
+  #session-cockpit .terminals-inner-resizer::before {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0; left: 50%;
+    width: 1px;
+    transform: translateX(-50%);
+    background: var(--border-strong);
+  }
+  #session-cockpit .term-drawer-outer-resizer::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: 50%;
+    height: 1px;
+    transform: translateY(-50%);
+    background: var(--border-strong);
+  }
+  #session-cockpit .col-resizer:hover::before,
+  #session-cockpit .col-resizer.dragging::before,
+  #session-cockpit .col-resizer:focus-visible::before,
+  #session-cockpit .files-inner-resizer:hover::before,
+  #session-cockpit .files-inner-resizer.dragging::before,
+  #session-cockpit .files-inner-resizer:focus-visible::before,
+  #session-cockpit .terminals-inner-resizer:hover::before,
+  #session-cockpit .terminals-inner-resizer.dragging::before,
+  #session-cockpit .terminals-inner-resizer:focus-visible::before {
+    width: 2px;
+    background: var(--accent);
+  }
+  #session-cockpit .term-drawer-outer-resizer:hover::before,
+  #session-cockpit .term-drawer-outer-resizer.dragging::before,
+  #session-cockpit .term-drawer-outer-resizer:focus-visible::before {
+    height: 2px;
+    background: var(--accent);
+  }
+  #session-cockpit .col-resizer:focus-visible,
+  #session-cockpit .files-inner-resizer:focus-visible,
+  #session-cockpit .terminals-inner-resizer:focus-visible,
+  #session-cockpit .term-drawer-outer-resizer:focus-visible {
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  #session-cockpit .files-inner-resizer,
+  #session-cockpit .terminals-inner-resizer { width: 8px; flex: 0 0 8px; }
+  #session-cockpit .term-drawer-outer-resizer { height: 8px; }
+
+  /* Files: useful list widths, separate per Files/SCM in JS, plus a real
+     detail identity bar. Wide surfaces are split; constrained surfaces become
+     list → detail and expose an explicit Back action. */
+  #session-cockpit .files-explorer {
+    width: var(--explorer-w, 280px);
+    min-width: 0;
+    max-width: 600px;
+    flex: 0 0 var(--explorer-w, 280px);
+  }
+  #session-cockpit .files-editor { min-width: 0; }
+  #session-cockpit .files-pane-inner.editor-collapsed > .files-editor { display: flex; }
+  #session-cockpit .files-pane-inner.editor-collapsed > .files-inner-resizer { display: block; }
+  #session-cockpit .files-pane-inner.editor-collapsed > .files-explorer {
+    width: var(--explorer-w, 280px);
+    max-width: 600px;
+    flex: 0 0 var(--explorer-w, 280px);
+    border-right: 1px solid var(--c-border);
+  }
+  #session-cockpit .files-detail-bar {
+    display: flex;
+    flex: 0 0 34px;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 8px;
+    border-bottom: 1px solid var(--c-border);
+    background: var(--c-head-bg);
+    color: var(--c-muted);
+    font: var(--fs-xs) var(--font-mono);
+  }
+  #session-cockpit .files-detail-path {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    color: var(--c-fg-soft);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #session-cockpit .files-detail-status {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border-radius: var(--r-pill);
+    background: rgba(var(--axo-jade-rgb), .12);
+    color: var(--accent-lift);
+    font-family: var(--font-sans);
+    white-space: nowrap;
+  }
+  #session-cockpit .files-detail-back,
+  #session-cockpit .files-detail-mode,
+  #session-cockpit .files-detail-close {
+    flex: 0 0 auto;
+    min-height: 26px;
+    padding: 2px 7px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--c-muted);
+    cursor: pointer;
+    font: var(--fs-xs) var(--font-sans);
+  }
+  #session-cockpit .files-detail-back { display: none; }
+  #session-cockpit .files-detail-close { padding-inline: 6px; font-size: var(--fs-body); }
+  #session-cockpit .files-detail-back:hover,
+  #session-cockpit .files-detail-mode:hover,
+  #session-cockpit .files-detail-close:hover { color: var(--c-fg); background: var(--bg-3); }
+  #session-cockpit .files-detail-back:focus-visible,
+  #session-cockpit .files-detail-mode:focus-visible,
+  #session-cockpit .files-detail-close:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  #session-cockpit .files-empty-detail {
+    box-sizing: border-box;
+    display: flex;
+    width: 100%; height: 100%;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 7px;
+    padding: 32px;
+    color: var(--c-muted);
+    text-align: center;
+  }
+  #session-cockpit .files-empty-detail strong {
+    color: var(--c-fg-soft);
+    font: 600 var(--fs-body) var(--font-sans);
+  }
+  #session-cockpit .files-empty-detail > span:last-child {
+    max-width: 360px;
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+  }
+  #session-cockpit .files-empty-glyph { color: var(--c-muted-2); font-size: 24px; }
+  #session-cockpit .files-pane-inner.files-compact.show-master > .files-editor,
+  #session-cockpit .files-pane-inner.files-compact.show-master > .files-inner-resizer {
+    display: none;
+  }
+  #session-cockpit .files-pane-inner.files-compact.show-master > .files-explorer {
+    width: auto;
+    max-width: none;
+    flex: 1 1 auto;
+    border-right: 0;
+  }
+  #session-cockpit .files-pane-inner.files-compact.show-detail > .files-explorer,
+  #session-cockpit .files-pane-inner.files-compact.show-detail > .files-inner-resizer {
+    display: none;
+  }
+  #session-cockpit .files-pane-inner.files-compact.show-detail > .files-editor { flex: 1 1 auto; }
+  #session-cockpit .files-pane-inner.files-compact.show-detail .files-detail-back { display: inline-flex; }
+
+  /* Collapsed tool evidence remains evidence: exact tool, lifecycle, and a
+     bounded result summary are visible before the details are expanded. */
+  #session-cockpit .toolcard-head {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) auto 16px;
+    grid-template-rows: auto auto;
+    column-gap: 8px;
+    row-gap: 2px;
+    align-items: center;
+    padding: 8px 10px;
+  }
+  #session-cockpit .toolcard-ico { grid-column: 1; grid-row: 1 / span 2; }
+  #session-cockpit .toolcard-title {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    min-width: 0;
+    align-items: baseline;
+    gap: 7px;
+  }
+  #session-cockpit .toolcard-verb {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--c-fg-soft);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #session-cockpit .toolcard-name {
+    flex: 0 1 auto;
+    overflow: hidden;
+    color: var(--c-muted-2);
+    font: var(--fs-xs) var(--font-mono);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #session-cockpit .toolcard-state {
+    grid-column: 3;
+    grid-row: 1;
+    color: var(--c-muted);
+    font: var(--fs-xs) var(--font-mono);
+    text-transform: uppercase;
+  }
+  #session-cockpit .toolcard.running .toolcard-state { color: var(--accent-lift); }
+  #session-cockpit .toolcard.err .toolcard-state { color: var(--err); }
+  #session-cockpit .toolcard-summary {
+    grid-column: 2 / 4;
+    grid-row: 2;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--c-muted);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #session-cockpit .toolcard-chevron {
+    grid-column: 4;
+    grid-row: 1 / span 2;
+    color: var(--c-muted-2);
+    font-size: var(--fs-body);
+    transform: rotate(0deg);
+    transition: transform var(--dur-fast) var(--ease);
+  }
+  #session-cockpit .toolcard-head[aria-expanded="true"] .toolcard-chevron { transform: rotate(90deg); }
+  #session-cockpit .toolcard-head:focus-visible { outline: none; box-shadow: inset var(--focus-ring); }
+
+  #session-cockpit .cockpit-live-pill[data-state="running"]::before,
+  #session-cockpit .cockpit-live-pill[data-state="starting"]::before { background: var(--accent); }
+  #session-cockpit .cockpit-live-pill[data-state="stopping"]::before,
+  #session-cockpit .cockpit-live-pill[data-state="reconnecting"]::before { background: var(--warn); }
+  #session-cockpit .cockpit-live-pill[data-state="error"]::before { background: var(--err); }
+
+  @media (max-width: 1180px) {
+    #session-cockpit .cockpit-bar #cockpit-dir,
+    #session-cockpit .cockpit-bar #cockpit-status { display: none; }
+  }
+  @media (max-width: 860px) {
+    #session-cockpit .cockpit-bar { overflow: visible; }
+    #session-cockpit .cockpit-tool-toggles { order: 3; }
+  }
+  @media (max-width: 719px) {
+    #session-cockpit .cockpit-bar { min-height: 86px; overflow: visible; }
+    #session-cockpit .cockpit-bar .cockpit-view-nav {
+      order: 3;
+      width: auto;
+      max-width: none;
+      flex: 1 1 auto;
+    }
+    #session-cockpit .cockpit-tool-toggles { order: 3; padding-left: 3px; }
+    #session-cockpit .cockpit-tool-toggles .cockpit-view-btn { padding-inline: 5px; }
   }

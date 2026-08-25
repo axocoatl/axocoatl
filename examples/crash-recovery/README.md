@@ -53,7 +53,7 @@ output read back from disk.
 
 State is persisted exactly the way the production coordinator persists a
 resumable run: the workflow state is serialized to JSON and stored in
-`AgentCheckpoint.behavior_state` via `CheckpointStore`, which writes a bincode
+`AgentCheckpoint.behavior_state` via `CheckpointStore`, which writes a compact binary
 snapshot atomically (temp file + rename), restricts it to owner-only, and prunes
 to the last 3 versions. `load_latest` reads the highest version back. This
 example uses that same store and the same `behavior_state` JSON convention — it

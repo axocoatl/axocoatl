@@ -292,6 +292,82 @@ pub struct ModelProbe {
     pub usable: bool,
     /// What happened, in a sentence a user can act on.
     pub detail: String,
+    /// Provider work performed by this preflight. Model checks are real,
+    /// billable control-plane calls and are intentionally separate from Way
+    /// execution totals.
+    #[serde(default)]
+    pub control_usage: ControlUsage,
+}
+
+/// Usage incurred outside the attempts themselves while preparing or judging
+/// an Explore several ways run.
+///
+/// These calls are visible but deliberately not folded into lane economics:
+/// doing so would attribute one shared planning, preflight, or judging call to
+/// an arbitrary candidate. `token_usage_known == false` means at least one
+/// dispatched call lacks a complete terminal measurement, not that it was free.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ControlUsage {
+    /// Configured Agent used for the call. Model probes target a provider/model
+    /// pair directly and therefore leave this unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub calls: usize,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+    #[serde(default)]
+    pub token_usage_known: bool,
+}
+
+impl ControlUsage {
+    pub fn known(
+        agent_id: Option<String>,
+        calls: usize,
+        usage: &axocoatl_core::TokenUsageStats,
+    ) -> Self {
+        Self::measured(agent_id, calls, usage, true)
+    }
+
+    pub fn measured(
+        agent_id: Option<String>,
+        calls: usize,
+        usage: &axocoatl_core::TokenUsageStats,
+        token_usage_known: bool,
+    ) -> Self {
+        Self {
+            agent_id,
+            calls,
+            input_tokens: usage.input_tokens as u64,
+            output_tokens: usage.output_tokens as u64,
+            reasoning_tokens: usage.reasoning_tokens.unwrap_or(0) as u64,
+            token_usage_known,
+        }
+    }
+
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.reasoning_tokens)
+    }
+
+    /// Add another control-plane operation while keeping completeness sticky.
+    /// A missing Usage response can never be repaired by a later successful
+    /// call, so a combined total remains a lower bound once either side is.
+    pub fn merge(&mut self, other: &Self) {
+        if self.agent_id.is_none() {
+            self.agent_id = other.agent_id.clone();
+        }
+        self.calls = self.calls.saturating_add(other.calls);
+        self.input_tokens = self.input_tokens.saturating_add(other.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
+        self.reasoning_tokens = self.reasoning_tokens.saturating_add(other.reasoning_tokens);
+        self.token_usage_known &= other.token_usage_known;
+    }
 }
 
 /// One file the plan expects to change, and what to do in it.
@@ -361,6 +437,10 @@ pub struct LaneUsage {
     pub model: Option<String>,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Provider-reported reasoning tokens, billed at the configured output
+    /// rate. Older attempt records predate this field and default to zero.
+    #[serde(default)]
+    pub reasoning_tokens: u64,
     /// Whether the token totals are complete. A failed remote request can cost
     /// something before returning no usage data; its persisted zeroes are an
     /// unknown volume, not evidence that no tokens were billed.
@@ -430,10 +510,12 @@ pub struct ModelPrice {
 }
 
 impl ModelPrice {
-    /// Cost of a token count at this price.
-    pub fn cost(&self, input_tokens: u64, output_tokens: u64) -> f64 {
+    /// Cost of a token count at this price. Callers include any separately
+    /// reported reasoning tokens in `billable_output_tokens` because current
+    /// provider pricing treats them as output spend.
+    pub fn cost(&self, input_tokens: u64, billable_output_tokens: u64) -> f64 {
         (input_tokens as f64 / 1_000_000.0) * self.input_per_mtok
-            + (output_tokens as f64 / 1_000_000.0) * self.output_per_mtok
+            + (billable_output_tokens as f64 / 1_000_000.0) * self.output_per_mtok
     }
 }
 
@@ -463,6 +545,10 @@ pub struct Judgment {
     pub candidates: Vec<CandidateRationale>,
     /// The comparison in prose — what actually separates them.
     pub reasoning: String,
+    /// The Judge Agent call. This is persisted with the judgment but kept out
+    /// of per-Way execution cost.
+    #[serde(default)]
+    pub control_usage: ControlUsage,
 }
 
 /// Validate a judge response against the exact lanes that survived Checks.
@@ -642,14 +728,20 @@ pub fn unfence_json(s: &str) -> &str {
         .unwrap_or_else(|| rest.trim())
 }
 
-/// A variant plus the working-tree status of its worktree — what the Compare
-/// lanes show as each variant's changes.
+/// An attempt plus the changed paths shown by Compare. Before Checks this may
+/// be a process-owned live worktree; afterwards it is the protected checked
+/// candidate that Judge and Keep consume.
 #[derive(Debug, Clone, Serialize)]
 pub struct VariantStatus {
     pub index: usize,
     pub branch: String,
     pub worktree: String,
     pub status: GitStatus,
+    /// A lane-specific protected-review failure. Keeping this on the lane lets
+    /// Compare continue showing surviving checked candidates without calling a
+    /// stopped lane's setup merely to fill in missing paths.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_error: Option<String>,
     /// Model this lane ran, recovered from the persisted roster.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -1385,6 +1477,7 @@ mod tests {
         .expect("results written before attempt-set identity still parse");
         assert!(old_results.attempt_set.is_none());
         assert!(old_results.lane_states.is_empty());
+        assert_eq!(old_results.usage[0].reasoning_tokens, 0);
         assert!(!old_results.usage[0].cost_known);
     }
 
@@ -1415,6 +1508,7 @@ mod tests {
             winner: 0,
             candidates: vec![],
             reasoning: "best fit".into(),
+            control_usage: ControlUsage::default(),
         }
     }
 
@@ -1513,6 +1607,7 @@ mod tests {
                 model: None,
                 input_tokens: 100,
                 output_tokens: 20,
+                reasoning_tokens: 4,
                 token_usage_known: true,
                 cost_usd: 0.0,
                 cost_known: true,
@@ -1526,6 +1621,7 @@ mod tests {
                 winner: 0,
                 candidates: vec![],
                 reasoning: "only survivor".into(),
+                control_usage: ControlUsage::default(),
             }),
         };
         let json = serde_json::to_string(&results).unwrap();
@@ -1535,6 +1631,7 @@ mod tests {
         assert_eq!(back.lane_states[0].state, AttemptLaneState::Completed);
         assert!(back.verdicts[0].passed);
         assert_eq!(back.usage[0].duration_ms, 4_200);
+        assert_eq!(back.usage[0].reasoning_tokens, 4);
         assert!(back.usage[0].cost_known);
         assert_eq!(back.outputs[0].content, "Implemented the selected route.");
         assert_eq!(back.judgment.unwrap().winner, 0);
@@ -1549,6 +1646,7 @@ mod tests {
         )
         .expect("a record without duration_ms still parses");
         assert_eq!(old.duration_ms, 0);
+        assert_eq!(old.reasoning_tokens, 0);
         assert!(!old.token_usage_known);
         assert!(!old.cost_known);
     }
@@ -1704,6 +1802,7 @@ mod tests {
                 tradeoffs: "Clearer, but adds an indirection".into(),
             }],
             reasoning: "Candidate 2 fits the existing style".into(),
+            control_usage: ControlUsage::default(),
         };
         let parsed: Judgment = serde_json::from_str(&serde_json::to_string(&j).unwrap()).unwrap();
         assert_eq!(parsed, j);
@@ -1724,6 +1823,7 @@ mod tests {
             winner: 2,
             candidates: vec![candidate(5, 2), candidate(2, 1)],
             reasoning: "two is the best fit".into(),
+            control_usage: ControlUsage::default(),
         };
         assert_eq!(validate_judgment(&valid, &[2, 5]), Ok(()));
 
@@ -1774,6 +1874,7 @@ mod tests {
                 winner: 0,
                 candidates: vec![],
                 reasoning: String::new(),
+                control_usage: ControlUsage::default(),
             },
             &[],
         )
@@ -1786,6 +1887,7 @@ mod tests {
             winner: 2,
             candidates: vec![candidate(2, 1)],
             reasoning: "only survivor".into(),
+            control_usage: ControlUsage::default(),
         }
     }
 

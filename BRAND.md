@@ -12,38 +12,44 @@ Last updated: 2026-08-10.
 
 ## 1 · What it's actually for
 
-Axocoatl exists for one reason: **the agent-tooling industry has a theater
-problem, and we are for engineers who need the work to hold up in a repository.**
+Axocoatl exists for one reason: **agent tooling has a theater problem, and
+engineers need the work to hold up in a repository.**
 
-The competition optimizes for the *aesthetic* of AI work — Mac mini
-farms, glowing terminals, demo videos, screenshots of conversations.
-Their videos are great. Their throughput is theoretical. Their users
-churn after the demo high wears off.
+Polished demos and final answers can hide the facts that matter: what was accepted,
+what executed, what failed, what changed, and what remains for the engineer to decide.
 
-We optimize for the unglamorous reality: agents that work against real files, run
-repository checks, expose what they changed, survive restarts, and let the engineer
-choose among several real attempts. The diff that can be reviewed. The failing check
-that stays visible. The result that can be kept without hiding the git truth. Real
-workflows. Not demos.
+We optimize for the unglamorous reality: agents that work against real files, use
+the terminal and preview, keep their context across restarts, expose what they changed,
+and leave the repository under the engineer's control. When a problem has several
+plausible solutions, the same workbench can compare real attempts without turning
+them into unrelated chats. While that decision is unresolved, candidate Routes, diffs,
+failures, Checks, and Judge evidence stay together for comparison. After Keep completes, the
+selected output and turn attribution join durable Session History, and Git shows the current
+diff for the attributed paths. Real workflows. Not demos.
 
-If a piece of copy could appear on a competitor's site without changing
-its meaning, the copy is wrong.
+If a piece of copy does not name a fact the code and reachable product can prove,
+the copy is wrong.
 
 ## 2 · Positioning statement
 
 > Axocoatl is the open-source, local-first coding workbench for engineers who want
-> agents to try real solutions, show their work, and leave one inspectable result.
-> One Rust binary. Your repository. Your model choices. Your decision.
+> agents to do real repository work inside one durable Session. Conversation, context,
+> files, terminal, preview, tools, history, and Git stay together. Start with the Agent
+> or configured team that fits the work; several Ways are available when the decision
+> merits them.
 
 Three pillars. Every page should reinforce one or more:
 
-1. **One work surface.** A folder-anchored session chat is the spine. Files,
-   editor, terminal, browser, attempts, comparison, and git open around it.
-2. **Several real attempts.** Choose different agents and models, run repository
-   checks, compare outcome and route, and keep one.
-3. **Yours by default.** Actor-supervised, checkpointed, sandboxed, local-first.
-   No Axocoatl telemetry. Provider, integration, and remote-sandbox egress are
-   explicit choices.
+1. **One durable work surface.** A folder-anchored Session conversation is the spine.
+   Files, editor, Terminal, Preview, context, History, and Git open around it.
+2. **Inspectable execution.** Agents use real tools against the repository. Their
+   normal Turns retain bounded tool activity, output, lifecycle, and path attribution in
+   History. An unresolved Ways set retains its candidate Routes, failures, diffs, Checks,
+   cost, and optional Judge until the engineer Keeps one or finishes. Several Ways are an
+   optional decision mode inside this surface, not the product category.
+3. **Yours and extensible.** Actor-supervised, checkpointed, sandboxed, local-first.
+   Bring providers, Agents, Skills, MCP servers, and Automations. No Axocoatl telemetry;
+   integration and remote-sandbox egress are explicit choices.
 
 ## 3 · Voice
 
@@ -258,15 +264,20 @@ first.
 
 ## 9 · Product demonstrations
 
-Show the actual one-app session loop whenever a page is about the product: prompt,
-several attempts, visible checks and comparison, one kept result, and git review.
-A demonstration must match a reachable current journey. Never label a mock 1:1 or
+Show the actual one-app Session whenever a page is about the product: durable
+conversation, repository context, visible agent execution, focused workspace tools,
+and deliberate Git review. The default demonstration should show one agent completing
+normal repository work. A Ways-specific page may extend that Session into several
+attempts, visible Checks and comparison, one kept result, and Git review. Do not make
+parallelism the premise of a general product demonstration.
+
+A demonstration must match a reachable current workflow. Never label a mock 1:1 or
 exact unless it was compared to the current app in the same change.
 
 The interactive `<ax-lattice>` remains a supporting illustration for event and
 runtime-concept pages, including the `/concepts` lattice section. A homepage hero
-must show the workbench's current signature loop rather than lead with a lattice
-or other runtime subsystem.
+must show the current workbench rather than lead with Ways, the lattice, or another
+subsystem.
 
 Do not use the lattice canvas as a substitute for showing the workbench. It explains
 the engine; it is not the primary product shell.

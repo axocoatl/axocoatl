@@ -1,0 +1,155 @@
+---
+title: CLI reference
+description: Complete current axocoatl command tree, arguments, defaults, and runtime boundaries.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+This page covers the current command tree. The installed binary remains the
+authority for its exact version:
+
+```sh
+axocoatl --help
+axocoatl <command> --help
+```
+
+## Project and runtime
+
+| Command | Purpose |
+| --- | --- |
+| `axocoatl init [NAME]` | Scaffold `NAME` (default `my-axocoatl-project`) with config, `.env.example`, and `data/` |
+| `axocoatl onboard [--install-daemon]` | Run the interactive provider/project wizard; the flag writes a service template only |
+| `axocoatl doctor [-c, --config CONFIG]` | Check environment and config; default `axocoatl.yaml` |
+| `axocoatl validate [CONFIG]` | Parse and validate a positional config path; default `axocoatl.yaml` |
+| `axocoatl dev [-c, --config CONFIG]` | Run daemon, IPC, HTTP app, triggers, supervision, and consolidation in foreground |
+| `axocoatl serve [-c, --config CONFIG]` | Run the same runtime entrypoint used by the installed service |
+
+`dev` prints additional startup information, but neither command forces debug
+logging. Set `RUST_LOG`, for example:
+
+```sh
+RUST_LOG=debug axocoatl dev --config ./axocoatl.yaml
+```
+
+## Console chat
+
+```text
+axocoatl chat [-a, --agent AGENT] [-c, --config CONFIG] [--session LABEL]
+```
+
+Defaults are Agent `assistant` and config `axocoatl.yaml`. Chat uses daemon IPC
+when reachable and otherwise bootstraps a runtime in process.
+
+<Aside type="caution" title="--session is only a display label">
+The console flag does not select or resume a stored Workspace Session. Use the
+browser workbench or `axocoatl session` commands when durable folder Session
+identity matters.
+</Aside>
+
+## Directory Sessions
+
+These commands require a running daemon and use its already-loaded config:
+
+| Command | Purpose |
+| --- | --- |
+| `axocoatl session new <DIRECTORY> [-a, --agent AGENT] [-n, --name NAME]` | Create a single-Agent folder Session; Agent defaults to `assistant` |
+| `axocoatl session list` | List directory Sessions from the running daemon |
+| `axocoatl session exec <SESSION_ID> <INPUT>` | Execute one instruction and print the completed output |
+| `axocoatl session close <SESSION_ID>` | Soft-close the Session and stop its sandbox |
+
+CLI Session creation does not expose the browser form's Skills, image, port,
+or multi-Agent mode options. It also does not approve detected repository
+setup. `session new` prints the proposed command as **not run** and directs you
+to the browser's **Review setup** flow; it prints `session exec` guidance only
+after the environment is Ready. `session list` includes the durable environment
+state. An `exec` request against a non-Ready Session fails rather than running
+outside the reviewed environment.
+
+## Agents
+
+| Command | Purpose |
+| --- | --- |
+| `axocoatl agents list [-c, --config CONFIG]` | List configured Agents |
+| `axocoatl agents status [-c, --config CONFIG]` | Show status for all Agents |
+| `axocoatl agents restart <AGENT_ID> [-c, --config CONFIG]` | Ask the running daemon to restart one Agent |
+
+List/status can use daemon IPC or an in-process fallback. Restart requires a
+running daemon. Its config option does not reload that file into the daemon;
+the Agent respawns from the daemon's current in-memory config.
+
+## CLI Skills templates
+
+| Command | Purpose |
+| --- | --- |
+| `axocoatl skills list` | List the compiled prompt templates `summarize`, `code_review`, `research`, and `translate` |
+| `axocoatl skills run <NAME> [PARAMS]...` | Render one template from trailing `key=value` parameters and print it |
+
+The rendered prompt is not sent to an Agent. Pipe or paste it into a request if
+desired. These commands are separate from configured YAML Skills; use Settings
+or `POST /api/skills/{id}/fire` for those event-producing records.
+
+## MCP
+
+| Command | Purpose |
+| --- | --- |
+| `axocoatl mcp servers [-c, --config CONFIG]` | List connected MCP servers |
+| `axocoatl mcp tools [-c, --config CONFIG] [-s, --server SERVER]` | List discovered tools, optionally for one server |
+| `axocoatl mcp serve [-c, --config CONFIG]` | Speak MCP over stdio and expose Agents as `agent_<id>` tools |
+
+Queries use the running daemon when available, otherwise an in-process
+bootstrap. `mcp serve` reserves stdout for protocol messages; logs use stderr.
+
+## Token report
+
+```text
+axocoatl tokens report [-c, --config CONFIG]
+```
+
+Prints per-Agent input/output/reasoning usage available to the current daemon or fallback
+runtime. It is runtime accounting, not a provider invoice.
+
+## Workflow compatibility
+
+| Command | Purpose |
+| --- | --- |
+| `axocoatl workflow list [-c, --config CONFIG]` | List manual records projected from the canonical Automation store |
+| `axocoatl workflow run <WORKFLOW_ID> -i, --input <INPUT> [-c, --config CONFIG]` | Execute one manual Automation and wait for its result |
+
+This compatibility view does not expose full Automation CRUD, folders,
+triggers, run history, or Interrupt controls. Use Settings or the HTTP API.
+
+## Benchmark guidance
+
+```text
+axocoatl benchmark [NAME]
+```
+
+`NAME` defaults to `all`. The current command does not execute a benchmark; it
+prints guidance to use the repository's Criterion harness through `cargo
+bench`. Run those commands from a source checkout.
+
+## Background service
+
+| Command | Purpose |
+| --- | --- |
+| `axocoatl service install [-c, --config CONFIG]` | Write/register a per-user systemd or launchd definition using absolute paths |
+| `axocoatl service start` | Start now and enable at login |
+| `axocoatl service stop` | Stop without uninstalling |
+| `axocoatl service status` | Report backend, installed/running/enabled state, and detail |
+| `axocoatl service uninstall` | Stop, deregister, and remove the definition |
+
+Install supports Linux systemd user units and macOS LaunchAgents. It does not
+start the service or load `.env`; see [Run as a service](/operate/service/).
+
+## Global help and version
+
+```sh
+axocoatl --help
+axocoatl --version
+axocoatl session --help
+axocoatl session new --help
+```
+
+The docs content check reads the Clap enums in `axocoatl-cli/src/main.rs` and
+fails when a top-level or nested command disappears from this reference. Flags
+and behavior still require source review and binary help when changed.

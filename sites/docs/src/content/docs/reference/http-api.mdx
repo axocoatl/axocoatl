@@ -1,0 +1,375 @@
+---
+title: HTTP API reference
+description: Complete current HTTP route inventory for health, Agents, Sessions, Git, Attempts, Automations, integrations, and compatibility stores.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The daemon listens on `http://127.0.0.1:8080` by default. JSON errors generally
+use `{ "error": "message" }`. The router in `axocoatl-server/src/lib.rs` and
+handler Serde types remain authoritative; there is not yet a generated OpenAPI
+document.
+
+The docs content check compares every literal router path with this page and
+the [WebSocket reference](/reference/websocket/).
+
+## Authentication, CORS, and rate limits
+
+Workbench and control-router routes other than `/health`, `/health/ready`, and
+`/health/live` pass through configured authentication. The dedicated Preview
+virtual Host is intercepted before that router and is constrained separately by
+its exact Session/port Host and browser-origin boundary. Send one of:
+
+```http
+x-api-key: <key>
+Authorization: Bearer <token>
+```
+
+An empty `server.cors_origins` allows same-origin workbench requests only.
+Browser writes and WebSockets with an opaque `Origin: null` are always rejected;
+other cross-origin browser writes require an explicitly allowed origin. In the
+default unauthenticated loopback mode, an unknown Host is rejected independently
+to prevent DNS rebinding. Origin-less CLI clients remain supported. Cross-origin
+preflight for the control router advertises HEAD, GET, POST, PUT, PATCH, and
+DELETE. Control-router rate limiting is disabled by default and applies per
+client IP when enabled; Preview traffic stays outside that middleware.
+
+Preview applications use a separate virtual origin shaped like
+`<session>-p<port>.localhost:<listener-port>`. That Host is intercepted
+before the workbench router, so no `/api`, `/ws`, app-shell, or static-asset
+path can fall through to the control origin. Each Session and logical port has
+its own browser storage/cookie origin. Modern browsers can block ordinary app
+cookies while that origin is embedded; the workbench's **Open full preview**
+action opens the same virtual URL top-level with `noopener`, where host-only
+cookies work without becoming shared sibling cookies. A browser GET or HEAD
+for the exact `/` workbench document on a loopback IP literal redirects to
+`localhost` on the same listener and preserves the query. API, health, and
+asset URLs do not redirect.
+
+## App, assets, and health
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/` | Embedded Session-first workbench; the only interactive browser destination |
+| GET | `/ui/{*file}` | Embedded UI modules and styles |
+| GET | `/vendor/{*file}` | Vendored Monaco, xterm, highlighting, fonts, and icons |
+| GET | `/lattice/{file}` | Lattice web-component assets |
+| GET | `/brand/{file}` | Canonical brand assets |
+| GET | `/.axocoatl/preview-picker.js` on a Preview Host | Picker bridge for the dedicated Preview origin; communication is limited to source-and-origin-validated `postMessage` events |
+| GET | `/axo-tap.js` | Compatibility picker asset for the response-sandboxed legacy proxy |
+| GET | `/health` | Overall status and Agent count |
+| GET | `/health/ready` | `200` when at least one Agent is spawned, otherwise `503` |
+| GET | `/health/live` | Liveness probe |
+
+## Models, Agents, and tokens
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/llm-health` | Ollama-only reachability and missing-model summary |
+| GET | `/api/llm/models?agent=<id>` | Live Ollama list; curated hosted lists; current Agent model is always included |
+| GET | `/api/agents` | Config projection for every Agent; live status is separate |
+| GET | `/api/agents/{agent_id}/status` | Current actor status |
+| POST | `/api/agents/{agent_id}/execute` | `{input, system_override?, model_override?, stateless?}`; waits for output and returns input/output/reasoning/total tokens plus `token_usage_known` |
+| POST | `/api/agents/{agent_id}/restart` | Restart from current in-memory config and latest checkpoint |
+| PATCH | `/api/agents/{agent_id}` | Temporary in-memory name/model/prompt/dependency/budget patch; defaults to restart |
+| GET | `/api/tokens/report` | Per-Agent and total runtime token counts |
+
+An execute override implies stateless execution. Agent PATCH does not update
+YAML. `/api/agents` does not make one status request per Agent; consumers that
+need liveness must call the status route. Stateless execution performs one
+provider inference, advertises no tools, and does not enter a tool loop.
+An execution error carries the same token fields. A false known flag marks the
+numeric value as a known subtotal rather than an exact total.
+
+## MCP, configured Skills, and event projections
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/mcp/catalog` | Bundled catalog JSON |
+| POST | `/api/mcp/install` | `{slug, values?, name?}`; connect in the live registry only |
+| GET | `/api/mcp/servers` | Connected server name, transport, tool count |
+| POST | `/api/mcp/servers/{name}` | Reconnect cached live transport |
+| DELETE | `/api/mcp/servers/{name}` | Remove from live registry |
+| GET | `/api/mcp/tools` | Discovered tool name, server, and description |
+| GET | `/api/mcp/permissions` | Durable saved permission decisions |
+| DELETE | `/api/mcp/permissions?server=…&agent_id=…&tool=…` | Revoke matching decision; Agent/tool are optional |
+| GET | `/api/skills` | Configured YAML Skills |
+| POST | `/api/skills/{id}/fire` | Publish every event in the Skill's `emits` list |
+| GET | `/api/events/recent` | In-memory recent typed-event log |
+
+Catalog connection changes are not persisted to YAML and do not rebuild
+already-created Agent tool executors. Approval decisions use the WebSocket
+command described in the next reference.
+
+## Legacy workflow, schedule, and proactive projections
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/workflows` | Manual canonical Automations projected as workflows |
+| POST | `/api/workflows/{workflow_id}/execute` | `{input}`; execute compatibility workflow and wait; handled step failures and structural failures return a measured error |
+| GET | `/api/schedules` | Schedule-triggered Automation projection and observations |
+| PATCH | `/api/schedules/{id}` | `{enabled?, every?, input?}` on the canonical record |
+| POST | `/api/schedules/{id}/run` | Run the schedule immediately and wait; success and failure retain completeness-aware usage |
+| GET | `/api/proactive` | Event-, Skill-, and legacy proactive schedule projection |
+
+These are compatibility views. Full Automation records use the canonical API
+below.
+
+## Sessions and History
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/workspaces` | Every persisted named Workspace, including one with no Sessions |
+| POST | `/api/workspaces` | Register `{path, name?}`; canonical path is unique and an omitted name preserves an existing custom label |
+| GET | `/api/workspaces/{id}` | One Workspace |
+| PATCH | `/api/workspaces/{id}` | Rename with `{name}`; the filesystem path does not change |
+| GET | `/api/workspaces/{id}/sessions` | Every Session owned by the Workspace, including closed records |
+| POST | `/api/workspaces/{id}/sessions` | Create from `{name, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}` under the Workspace's fixed path |
+| GET | `/api/sessions` | Every persisted Session, including closed records |
+| POST | `/api/sessions` | Compatibility create from `{name, working_dir, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}`; finds or creates the matching Workspace |
+| PATCH | `/api/sessions/{id}` | Rename with `{name}` |
+| DELETE | `/api/sessions/{id}?force=false` | Soft-close; `force=true` deletes the Session record |
+| PUT | `/api/sessions/{id}/environment` | Review/change `{image, setup_command, setup_approved, setup_reviewed:true}` and synchronously prepare that exact generation |
+| POST | `/api/sessions/{id}/environment/rebuild` | Remove the old runtime and reproduce the persisted reviewed environment plan |
+| POST | `/api/sessions/{id}/environment/confirm-runtime-cleanup` | High-friction E2B recovery acknowledgment. Send exactly one target: `{runtime_id, confirmed:true}` after manually deleting that retained runtime, or `{creation_token, confirmed_all_matching_sandboxes_deleted:true}` after manually deleting every sandbox whose metadata contains `axocoatl_creation_token=<exact token>` |
+| POST | `/api/sessions/{id}/reopen` | Explicitly reactivate a closed Session before any live runtime can be resumed or reconstructed |
+| POST | `/api/sessions/{id}/execute` | `{input}` synchronous compatibility execution with completeness-aware success/error usage; other execute override fields are ignored here |
+| GET | `/api/sessions/{id}/messages` | Older checkpoint-backed transcript projection |
+| GET | `/api/sessions/{id}/turns` | Canonical visible durable turns |
+| GET | `/api/sessions/{id}/active-turn` | Exact live run/turn ownership for Stop, or `null` |
+| GET | `/api/sessions/{id}/turns/{turn_id}` | One canonical turn owned by this Session |
+| GET | `/api/session-turns/search?q=…&session_id=…` | Literal case-insensitive search; omit Session ID for all |
+| GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json` |
+| POST | `/api/sessions/{id}/rewind` | `{keep_through_turn_id?}`; legacy `{keep}` is raw message count |
+
+Workspace paths and Session `working_dir` values are canonical absolute paths.
+Every Session response carries its durable `workspace_id`; `working_dir` remains
+for execution and compatibility clients.
+
+`environment.state` is `unprepared`, `awaiting_approval`, `preparing`, `ready`,
+or `failed`. A setup command is executable only when the durable Session record
+binds `setup_approved:true` to that exact text. A reviewed API request can grant
+that approval; the operator's visible devcontainer default described below can
+grant it only while the Session remains unreviewed. Clearing the command with
+`setup_reviewed:true` is an explicit no-setup decision. Expected
+runtime/setup failures return the updated Session in `failed` state so clients
+can render retained evidence; malformed consent is `400`, and an active turn or
+Attempt ownership conflict is `409`. File, task, Git, Preview, turn, and Ways
+execution fail closed until the environment is Ready.
+
+Live-checkout routes return `404` for a missing Session and `409` for every
+existing non-Ready environment. This applies to Session file tree/read/write,
+tasks and terminal attach, Git, Preview, HTTP execute, and Ways routes that
+start work or inspect a live checkout. Durable History and attachments,
+environment review/rebuild, completed Attempt results and cost, and the exact
+Keep/Discard recovery actions remain available so a failed Session can still be
+understood or resolved.
+
+`GET /api/fs/project?path=…` includes runtime capability metadata. Under E2B,
+`supports_session_image` is false and `template` names the daemon-configured
+runtime; create or reconfigure rejects an explicit/devcontainer OCI image
+before provisioning. `auto_approve_devcontainer_setup` exposes the operator
+default for the exact devcontainer command. A browser/API request with
+`setup_reviewed:true` remains authoritative, including an unchecked veto;
+lockfile-detected commands are never covered by that policy.
+
+Session `mode` is tagged JSON such as
+`{"kind":"single_agent","agent_id":"coder"}` or `{"kind":"lattice"}`.
+The directory must already exist when registering a new Workspace. The server has
+no configured folder allowlist.
+
+Rewind is blocked during an active turn or unresolved Attempt set and currently
+requires an autonomous single-Agent Session. It changes the logical conversation head; it
+does not restore files or reverse effects.
+
+## Session attachments
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/sessions/{id}/attachments` | Active composer relations |
+| POST | `/api/sessions/{id}/attachments?scope=this_turn` | Multipart `file`; scope is `this_turn` or `session` |
+| GET | `/api/sessions/{id}/attachments/{reference_id}` | Metadata for one owned reference |
+| PATCH | `/api/sessions/{id}/attachments/{reference_id}` | `{scope}` before a one-turn relation is consumed |
+| DELETE | `/api/sessions/{id}/attachments/{reference_id}` | Remove future selection while retaining historical pins when used |
+| GET | `/api/sessions/{id}/attachments/{reference_id}/content` | Download/preview bytes through owning relation |
+
+Declared images are capped at 10 MiB; other documents at 25 MiB. Extracted/OCR
+text is bounded. Attempts do not receive these references.
+
+## Session files, tasks, Terminal, and Preview
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/sessions/{id}/tree?path=…` | Lazy one-level directory listing within Session root |
+| GET | `/api/sessions/{id}/file?path=…` | Read one file, capped at 512 KiB |
+| POST | `/api/sessions/{id}/file?path=…` | Atomically overwrite existing resolved path with `{content}` |
+| GET | `/api/sessions/{id}/tasks` | Background task and terminal state |
+| POST | `/api/sessions/{id}/tasks` | `{command, interactive?, rows?, cols?}`; uses or reconstructs the already-Ready sandbox and never prepares an unreviewed environment implicitly |
+| GET (WS) | `/api/sessions/{id}/terminals/{tid}/ws` | Raw PTY output as binary; input binary/text; resize JSON |
+| Any HTTP method | `/api/sessions/{id}/proxy/{port}` | Legacy response-sandboxed Preview proxy root |
+| Any HTTP method | `/api/sessions/{id}/proxy/{port}/{*tail}` | Legacy response-sandboxed Preview proxy path |
+
+File resolution rejects paths outside the canonical Session root. Tree, read,
+and write execute through the Ready sandbox: local Podman operates on the
+read-write Workspace bind, while E2B operates on its remote clone. There is no
+host-filesystem fallback for a failed remote runtime or a container-local
+dependency volume. The write endpoint does not create missing parent
+directories. Terminal resize is `{"kind":"resize","rows":30,"cols":100}`.
+
+The workbench opens the virtual Preview Host, not the legacy path. The Host
+boundary validates the exact Session and logical port, resolves that pair to
+the sandbox's dynamically assigned loopback transport, and forwards normal app
+HTTP methods, query strings, request bodies, cookies, module/root assets, and
+WebSocket upgrades. HTML receives the source-and-origin-pinned picker bridge;
+non-HTML bodies stream without whole-response buffering. The upstream app sees
+the validated virtual authority while the TCP connection remains loopback.
+Sibling Sessions can therefore use the same logical port without sharing a
+host port, browser origin, host-only cookies, or control-plane access. Rejection
+of a parent-domain cookie such as `Domain=localhost` is browser policy; the
+current Chromium journey verifies it, while the proxy forwards application
+`Set-Cookie` headers unchanged.
+
+## Session Git and Checks
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/sessions/{id}/git/status` | Branch and staged/unstaged file state, including Last turn flags |
+| GET | `/api/sessions/{id}/git/diff?path=…` | One path's working diff |
+| GET | `/api/sessions/{id}/git/branches` | Current and available branches |
+| GET | `/api/sessions/{id}/git/hunks?path=…&staged=false` | Parsed staged or unstaged hunks |
+| POST | `/api/sessions/{id}/git/stage` | `{paths}`; empty list means all |
+| POST | `/api/sessions/{id}/git/unstage` | `{paths}`; empty list means all |
+| POST | `/api/sessions/{id}/git/hunk` | `{path, index, stage}`; stage defaults true |
+| POST | `/api/sessions/{id}/git/hunk/discard` | `{path, index}`; destructive unstaged hunk discard |
+| POST | `/api/sessions/{id}/git/discard` | `{path?}`; omitted path discards all unstaged changes |
+| POST | `/api/sessions/{id}/git/checkout` | `{"ref":"branch-or-ref"}` |
+| POST | `/api/sessions/{id}/git/commit` | `{message?, stage_all?}`; default commits existing index |
+| PUT | `/api/sessions/{id}/check` | `{check_command}`; null/empty clears it |
+
+Discard and checkout can destroy or obscure working changes. API clients must
+provide their own confirmation UX.
+
+## Attempts: Explore several ways
+
+One Session can own one unresolved set. Except for `results`, set-scoped calls
+use `attempt_set_id`; a stale ID returns `409` rather than touching a newer set.
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| POST | `/api/sessions/{id}/variants` | `{input, task?, n?, lanes?}`; starts isolated local-Podman Attempts |
+| GET | `/api/sessions/{id}/variants/status?attempt_set_id=…` | Changed-file status per Attempt |
+| GET | `/api/sessions/{id}/variants/results` | Durable current set, outputs, verdicts, usage, and Judgment |
+| GET | `/api/sessions/{id}/variants/trajectories?attempt_set_id=…&baseline=0` | Aligned Route comparison |
+| GET | `/api/sessions/{id}/variants/diff?attempt_set_id=…&index=0&path=…` | One file before/after for one Attempt |
+| POST | `/api/sessions/{id}/variants/verify` | `{attempt_set_id, check}`; run Checks after all Ways are terminal |
+| POST | `/api/sessions/{id}/variants/judge` | `{attempt_set_id, agent_id}`; rank passing non-empty survivors with that configured Agent |
+| GET | `/api/variants/probe?provider=…&models=a,b` | Preflight comma-separated models for structured tool calls; each result includes `control_usage` |
+| POST | `/api/sessions/{id}/variants/plan` | `{task, agent_id}`; return plan, rendered instruction, and `control_usage` |
+| GET | `/api/sessions/{id}/variants/cost?attempt_set_id=…&baseline=…&baseline_provider=…` | Actual and counterfactual price report with known flags |
+| POST | `/api/sessions/{id}/variants/adopt` | `{attempt_set_id, index}`; resumable Keep without commit |
+| POST | `/api/sessions/{id}/variants/discard` | `{attempt_set_id}`; cancel/join and remove without keeping |
+
+Attempts require an autonomous single-Agent Session, Git, and local Podman. A keepable
+candidate must be completed, non-empty, and passing. Keep phases are durable
+and retrying the same index resumes; discard is rejected after apply begins.
+
+Remote missing prices remain unknown. `total_usd` is complete only when its
+known flag says so. Plan, model-check, and Judge calls are outside Attempt execution totals and
+use `control_usage`. Plan/Judge error responses also include that field so a failed or invalid
+Agent response does not hide a paid call; `token_usage_known: false` marks a known subtotal.
+
+## Canonical Automations
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/automations` | List canonical records |
+| POST | `/api/automations` | Create from a complete Automation JSON body |
+| GET | `/api/automations/{id}` | Read one record |
+| PUT/PATCH | `/api/automations/{id}` | Full replacement/upsert; path ID must equal body ID; PATCH is not partial |
+| DELETE | `/api/automations/{id}` | Delete the record |
+| POST | `/api/automations/{id}/run` | `{input?, inputs?}`; background start, returns `{ok,id}` where ID is the Automation ID |
+| POST | `/api/automations/{id}/move` | `{folder}`; null moves to root |
+| GET | `/api/automation-folders` | List durable folders |
+| POST | `/api/automation-folders` | `{path, name?}` |
+| PATCH | `/api/automation-folders` | `{old_path, new_path, new_name?}` |
+| DELETE | `/api/automation-folders?path=…&keep_contents=true` | Move contents up by default or recursively delete |
+| GET | `/api/tools` | Tool IDs available to Automation editor/runtime |
+
+Automation JSON contains `id`, `name`, optional `description`, `nodes`,
+`edges`, tagged `trigger`, `enabled`, and optional `folder`. Node kinds are
+`agent`, `tool`, `conditional`, `map`, `subgraph`, `text_input`, and
+`interrupt`. Triggers are `manual`, `schedule`, `on_event`, and `on_skill`.
+
+## Automation runs and Interrupts
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/automations/{id}/runs` | Run history for one Automation |
+| GET | `/api/automations/{id}/runs/{run_id}` | One run with node state and diagnostic detail |
+| POST | `/api/automations/{id}/runs/{run_id}/fork` | `{input?}`; fresh whole-graph rerun from start, not continuation |
+| GET | `/api/interrupts` | Every pending operator Interrupt |
+| POST | `/api/automations/{id}/runs/{run_id}/nodes/{node_id}/resume` | `{value?}`; continue from top-level durable pause |
+| POST | `/api/automations/{id}/runs/{run_id}/nodes/{node_id}/cancel` | Wake with empty value and continue; does not cancel whole run |
+
+Observe run creation and lifecycle through run history and WebSocket events.
+The generic `/run` response does not return the new run ID.
+
+## Lightweight Chat compatibility API
+
+These routes keep directoryless Chat integrations working. They do not provide
+a separate browser destination.
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/chat?q=…` | List or search compatibility Chats |
+| POST | `/api/chat` | `{agent_id, name?}` |
+| GET | `/api/chat/{id}` | Read one Chat |
+| PATCH | `/api/chat/{id}` | `{name?, starred?, system_override?, model_override?}`; null clears overrides |
+| DELETE | `/api/chat/{id}` | Delete Chat record |
+| POST | `/api/chat/{id}/fork` | `{truncate_at, replacement_content?, replacement_role?}` |
+| GET | `/api/chat/{id}/export` | Export compatibility transcript |
+| POST | `/api/chat/{id}/attach` | Multipart file upload and attach |
+| PUT | `/api/chat/{id}/attach` | Attach existing FileStore entry with `{file_id}` |
+| GET | `/api/chat/{id}/attach/{file_id}` | Read referenced bytes |
+| PATCH | `/api/chat/{id}/attach/{file_id}` | `{pinned}` |
+| DELETE | `/api/chat/{id}/attach/{file_id}` | Remove relation, not underlying FileStore entry |
+
+Streaming Chat turns use the retained WebSocket `chat-turn` command.
+
+## Cross-chat FileStore compatibility API
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/files` | List/search shared entries using supported query fields |
+| POST | `/api/files` | Multipart `file` upload without attaching to a Chat |
+| GET | `/api/files/{id}` | Read metadata |
+| PATCH | `/api/files/{id}` | `{name?, tags?}` |
+| DELETE | `/api/files/{id}` | Delete unless retained by historical Session context; removes Chat references |
+| GET | `/api/files/{id}/bytes` | Download stored bytes |
+
+The FileStore API is not the Session Files editor and does not expose the
+Workspace tree.
+
+## Filesystem picker and interoperability
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/fs/list?path=…&hidden=false` | List child directories for the Session folder picker |
+| GET | `/api/fs/project?path=…` | Probe devcontainer metadata and ancestor `AXOCOATL.md` files |
+| GET | `/.well-known/agent.json` | A2A discovery card |
+| POST | `/a2a/tasks` | Inbound A2A task dispatch to local `receiver_id` |
+
+The folder picker defaults to the daemon user's home when `path` is omitted.
+It is a read endpoint but can enumerate any daemon-readable directory; protect
+the API accordingly. A2A is inbound only.
+
+## WebSockets
+
+The unified live endpoint is `GET /ws`. Terminal PTYs use their separate
+Session route. See [WebSocket reference →](/reference/websocket/)
+
+<Aside type="note" title="No generated client contract yet">
+Route coverage is source-checked, but bodies are still hand documented. Pin a
+server version, inspect handler types, and add integration tests for production
+clients until a source-owned OpenAPI schema is available.
+</Aside>

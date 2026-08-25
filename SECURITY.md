@@ -2,8 +2,16 @@
 
 ## Supported versions
 
-The `main` branch and the latest `0.x.y` release receive security fixes.
+The `main` branch and the latest stable release receive security fixes.
 Older versions do not.
+
+## Dependency policy
+
+CI audits `Cargo.lock` against the current RustSec database on dependency
+changes and every day. It fails on known vulnerabilities, unsound advisories,
+newly unmaintained dependencies, or yanked versions. Narrow informational
+exceptions live in `.cargo/audit.toml` with an in-repository rationale and must
+not be used for a known vulnerability.
 
 ## Reporting a vulnerability
 

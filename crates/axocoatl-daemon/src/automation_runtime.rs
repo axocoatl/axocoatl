@@ -450,19 +450,48 @@ fn outcome_summary(result: &Result<WorkflowOutput, DaemonError>) -> (String, Opt
                 .collect::<Vec<_>>()
                 .join("; ");
             (
-                format!("FAIL · {} failed step(s)", output.failed_agents.len()),
+                format!(
+                    "FAIL · {} failed step(s) · {}{} tokens{}",
+                    output.failed_agents.len(),
+                    if output.token_usage_known { "" } else { "≥" },
+                    output.total_token_usage.total(),
+                    if output.token_usage_known {
+                        ""
+                    } else {
+                        " known subtotal"
+                    }
+                ),
                 Some(detail),
             )
         }
         Ok(output) => (
             format!(
-                "OK · {} agents · {} tokens",
+                "OK · {} agents · {}{} tokens{}",
                 output.completed_agents.len(),
-                output.total_token_usage.input_tokens + output.total_token_usage.output_tokens
+                if output.token_usage_known { "" } else { "≥" },
+                output.total_token_usage.total(),
+                if output.token_usage_known {
+                    ""
+                } else {
+                    " known subtotal"
+                }
             ),
             None,
         ),
-        Err(error) => (format!("FAIL · {error}"), Some(error.to_string())),
+        Err(error) => {
+            let usage = error.workflow_token_usage().map(|(usage, known)| {
+                format!(
+                    " · {}{} tokens{}",
+                    if known { "" } else { "≥" },
+                    usage.total(),
+                    if known { "" } else { " known subtotal" }
+                )
+            });
+            (
+                format!("FAIL · {error}{}", usage.unwrap_or_default()),
+                Some(error.to_string()),
+            )
+        }
     }
 }
 
@@ -871,15 +900,46 @@ mod tests {
         let result = Ok(WorkflowOutput {
             workflow_id: "partial".into(),
             agent_outputs: Vec::new(),
+            agent_activations: Vec::new(),
             final_content: "downstream continued".into(),
             total_token_usage: axocoatl_core::TokenUsageStats::default(),
+            token_usage_known: true,
             completed_agents: vec!["after".into()],
             failed_agents: vec![("broken".into(), "provider unavailable".into())],
         });
 
         let (summary, error) = outcome_summary(&result);
-        assert_eq!(summary, "FAIL · 1 failed step(s)");
+        assert_eq!(summary, "FAIL · 1 failed step(s) · 0 tokens");
         assert_eq!(error.as_deref(), Some("broken: provider unavailable"));
+    }
+
+    #[test]
+    fn observation_summary_preserves_incomplete_numeric_subtotal() {
+        let mut output = WorkflowOutput {
+            workflow_id: "partial".into(),
+            agent_outputs: Vec::new(),
+            agent_activations: Vec::new(),
+            final_content: "downstream continued".into(),
+            total_token_usage: axocoatl_core::TokenUsageStats::new(70, 30),
+            token_usage_known: false,
+            completed_agents: vec!["after".into()],
+            failed_agents: vec![("broken".into(), "provider unavailable".into())],
+        };
+
+        let (failed_summary, error) = outcome_summary(&Ok(output.clone()));
+        assert_eq!(
+            failed_summary,
+            "FAIL · 1 failed step(s) · ≥100 tokens known subtotal"
+        );
+        assert_eq!(error.as_deref(), Some("broken: provider unavailable"));
+
+        output.failed_agents.clear();
+        let (success_summary, error) = outcome_summary(&Ok(output));
+        assert_eq!(
+            success_summary,
+            "OK · 1 agents · ≥100 tokens known subtotal"
+        );
+        assert!(error.is_none());
     }
 
     #[test]

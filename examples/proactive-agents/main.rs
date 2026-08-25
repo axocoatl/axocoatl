@@ -101,8 +101,8 @@ impl LlmProvider for OpsDiagnosticLlm {
              mid-execution (timeout or rate limit), so its turn never produced \
              output.\n\
              Suggested fix:\n\
-             1. Re-run the failed agent with an OverflowPolicy::Warn budget so a \
-                spend cap can't abort it silently.\n\
+             1. Re-run the failed agent with an OverflowPolicy::Warn budget so \
+                the local token guard can't abort it silently.\n\
              2. Add a retry-with-backoff around the provider call.\n\
              3. If it recurs, fail the workflow loudly instead of leaving a \
                 half-finished DAG."
@@ -412,10 +412,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 watcher.id,
                 notif.event_type.name()
             );
-            println!(
-                "    The {} agent ran with its diagnostic prompt:\n",
-                watcher_agent
-            );
+            println!("    The {watcher_agent} agent ran with its diagnostic prompt:\n");
             for line in output.lines() {
                 println!("      {line}");
             }

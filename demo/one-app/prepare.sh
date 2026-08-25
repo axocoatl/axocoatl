@@ -2,13 +2,65 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-case "$(uname -s)" in
-  Darwin) DEFAULT_DEMO_ROOT="/private/tmp/axocoatl-one-app-showcase" ;;
-  *) DEFAULT_DEMO_ROOT="/tmp/axocoatl-one-app-showcase" ;;
+# shellcheck source=scenario-contract.sh
+source "$SCRIPT_DIR/scenario-contract.sh"
+
+usage() {
+  cat <<EOF
+Usage: $0 [--scenario NAME]
+       $0 --list-scenarios
+
+Prepare one fresh, isolated Axocoatl demonstration root. With no arguments,
+the original northstar-storefront scenario and root are preserved.
+EOF
+}
+
+SCENARIO="northstar-storefront"
+case "$#" in
+  0) ;;
+  1)
+    case "$1" in
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      --list-scenarios)
+        scenario_list
+        exit 0
+        ;;
+      *)
+        usage >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  2)
+    if [ "$1" != "--scenario" ]; then
+      usage >&2
+      exit 2
+    fi
+    SCENARIO="$2"
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
 esac
+scenario_load "$SCENARIO"
+
+case "$(uname -s)" in
+  Darwin) DEMO_TMP_PARENT="/private/tmp" ;;
+  *) DEMO_TMP_PARENT="/tmp" ;;
+esac
+if [ "$SCENARIO" = "northstar-storefront" ]; then
+  DEFAULT_DEMO_ROOT="$DEMO_TMP_PARENT/axocoatl-one-app-showcase"
+else
+  DEFAULT_DEMO_ROOT="$DEMO_TMP_PARENT/axocoatl-one-app-showcase-$SCENARIO"
+fi
 DEMO_ROOT="${AXOCOATL_DEMO_ROOT:-$DEFAULT_DEMO_ROOT}"
 WORKSPACE="$DEMO_ROOT/workspace"
 MARKER="$DEMO_ROOT/.axocoatl-showcase"
+SCENARIO_MARKER="$DEMO_ROOT/.axocoatl-showcase-scenario"
 DEMO_IMAGE="localhost/axocoatl-one-app-demo:latest"
 
 DEMO_PARENT="$(dirname -- "$DEMO_ROOT")"
@@ -39,6 +91,15 @@ for required in curl git node npm podman; do
     exit 1
   fi
 done
+
+if [ ! -d "$SCENARIO_FIXTURE" ] || [ -L "$SCENARIO_FIXTURE" ]; then
+  echo "Scenario fixture is missing or unsafe: $SCENARIO_FIXTURE" >&2
+  exit 2
+fi
+if find "$SCENARIO_FIXTURE" -type l -print -quit | grep -q .; then
+  echo "Scenario fixtures must not contain symbolic links: $SCENARIO_FIXTURE" >&2
+  exit 2
+fi
 
 tcp_port_open() {
   (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
@@ -110,34 +171,36 @@ fi
 mkdir -p "$WORKSPACE" "$DEMO_ROOT/data" "$DEMO_ROOT/run"
 chmod 700 "$DEMO_ROOT" "$DEMO_ROOT/data" "$DEMO_ROOT/run"
 touch "$MARKER"
-cp -R "$SCRIPT_DIR/workspace-template/." "$WORKSPACE/"
+printf '%s\n' "$SCENARIO" >"$SCENARIO_MARKER"
+cp -R "$SCENARIO_FIXTURE/." "$WORKSPACE/"
 
 git -C "$WORKSPACE" init --quiet --initial-branch=main
 git -C "$WORKSPACE" config user.name "Axocoatl Demo"
 git -C "$WORKSPACE" config user.email "demo@localhost"
 git -C "$WORKSPACE" add .
-git -C "$WORKSPACE" commit --quiet -m "Seed storefront discount regression"
+git -C "$WORKSPACE" commit --quiet -m "$SCENARIO_COMMIT"
 git -C "$WORKSPACE" tag demo-seed
 
 CHECK_LOG="$DEMO_ROOT/seed-check.log"
-if (cd "$WORKSPACE" && npm run check >"$CHECK_LOG" 2>&1); then
-  echo "The demo seed unexpectedly passed. The fixture must begin with one red check." >&2
+"$SCRIPT_DIR/verify-scenario.sh" "$SCENARIO" "$WORKSPACE" "$CHECK_LOG"
+
+if [ -n "$(git -C "$WORKSPACE" status --porcelain)" ]; then
+  echo "Scenario verification changed the prepared workspace unexpectedly." >&2
+  git -C "$WORKSPACE" status --short >&2
   exit 1
 fi
-if ! grep -q "never returns a negative payable total" "$CHECK_LOG"; then
-  echo "The demo failed for an unexpected reason. Read $CHECK_LOG" >&2
-  exit 1
-fi
-if ! grep -Eq 'tests[[:space:]]+6[[:space:]]*$' "$CHECK_LOG" ||
-   ! grep -Eq 'pass[[:space:]]+5[[:space:]]*$' "$CHECK_LOG" ||
-   ! grep -Eq 'fail[[:space:]]+1[[:space:]]*$' "$CHECK_LOG"; then
-  echo "The demo seed must have exactly 6 tests, 5 passing and 1 failing." >&2
-  echo "Read $CHECK_LOG before presenting." >&2
+if [ "$(git -C "$WORKSPACE" rev-parse HEAD)" != "$(git -C "$WORKSPACE" rev-parse demo-seed^{commit})" ]; then
+  echo "The demo-seed tag does not identify the prepared scenario commit." >&2
   exit 1
 fi
 
 echo
 echo "Demo prepared."
+echo "Scenario:  $SCENARIO"
 echo "Workspace: $WORKSPACE"
 echo "Expected red check: $CHECK_LOG"
-echo "Next: $SCRIPT_DIR/start.sh"
+if [ "$DEMO_ROOT" = "$DEMO_TMP_PARENT/axocoatl-one-app-showcase" ]; then
+  echo "Next: $SCRIPT_DIR/start.sh"
+else
+  printf 'Next: AXOCOATL_DEMO_ROOT=%q %q\n' "$DEMO_ROOT" "$SCRIPT_DIR/start.sh"
+fi

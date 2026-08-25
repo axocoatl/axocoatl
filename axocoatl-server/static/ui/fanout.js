@@ -35,8 +35,9 @@ const MAX = 100;
 const CSS = `
 :host { display: contents; }
 .pop {
-  position: absolute; bottom: calc(100% + var(--sp-2)); right: 0;
-  width: min(420px, 92vw); z-index: 400;
+  position: fixed; left: var(--fanout-left, var(--sp-2)); top: var(--fanout-top, var(--sp-2));
+  box-sizing: border-box; width: min(420px, calc(100vw - 16px)); max-height: calc(100vh - 16px);
+  z-index: 400; overflow: auto;
   background: var(--panel-2); border: 1px solid var(--border-strong);
   border-radius: var(--r-lg); box-shadow: var(--shadow-lg);
   font-family: var(--font-sans); color: var(--text);
@@ -138,7 +139,7 @@ export class AxFanout extends HTMLElement {
             <span class="track"></span>
             <span class="sw-label">Off</span>
           </label>
-          <button class="x" title="Close">×</button>
+          <button class="x" type="button" aria-label="Close answer mode configuration" title="Close">×</button>
         </div>
         <div class="rows"></div>
         <div class="acts"><button class="add">+ Add an attempt</button></div>
@@ -151,6 +152,7 @@ export class AxFanout extends HTMLElement {
     this.#add = this.#root.querySelector('.add');
     this.#sw = this.#root.querySelector('.on');
     this.#swLabel = this.#root.querySelector('.sw-label');
+    this._positionOpen = () => { if (this.open) this.#position(); };
     // The only way fan-out turns on. It was lost when this component was
     // extracted from the shell, which left `enabled` write-only: the rows were
     // configurable, the `lanes` getter returned [] regardless, and no run could
@@ -203,13 +205,42 @@ export class AxFanout extends HTMLElement {
   }
 
   async connectedCallback() {
+    window.addEventListener('resize', this._positionOpen);
     await this.loadChoices();
     this.#render();
   }
 
+  disconnectedCallback() {
+    window.removeEventListener('resize', this._positionOpen);
+  }
+
   attributeChangedCallback(name) {
-    if (name === 'open' && this.open) this.#render();
+    if (name === 'open' && this.open) {
+      this.#render();
+      requestAnimationFrame(() => this.#position());
+    }
     if (name === 'enabled' || name === 'disabled') this.#syncSwitch();
+  }
+
+  #position() {
+    const anchor = this.previousElementSibling;
+    const pop = this.#root.querySelector('.pop');
+    if (!anchor || !pop || !this.open) return;
+    const rect = anchor.getBoundingClientRect();
+    const margin = 8;
+    const width = Math.min(420, Math.max(0, window.innerWidth - margin * 2));
+    pop.style.width = `${width}px`;
+    pop.style.visibility = 'hidden';
+    const height = Math.min(pop.scrollHeight, Math.max(0, window.innerHeight - margin * 2));
+    const left = Math.min(
+      Math.max(margin, rect.right - width),
+      Math.max(margin, window.innerWidth - margin - width),
+    );
+    let top = rect.top - height - margin;
+    if (top < margin) top = Math.min(window.innerHeight - margin - height, rect.bottom + margin);
+    pop.style.setProperty('--fanout-left', `${left}px`);
+    pop.style.setProperty('--fanout-top', `${Math.max(margin, top)}px`);
+    pop.style.visibility = '';
   }
 
   /** Read the installed agents, preserving what resolves each lane's models. */
@@ -221,7 +252,7 @@ export class AxFanout extends HTMLElement {
       const a = await response.json();
       const list = Array.isArray(a) ? a : (a?.agents || []);
       this.#agents = list
-        .filter((x) => x?.id)
+        .filter((x) => x?.id && x.role === 'autonomous')
         .map((x) => ({ id: x.id, provider: x.provider || '', model: x.model || '' }));
     } catch {
       this.#agents = [];
@@ -375,7 +406,8 @@ export class AxFanout extends HTMLElement {
       const drop = document.createElement('button');
       drop.className = 'drop';
       drop.textContent = '×';
-      drop.title = 'Remove this attempt';
+      drop.setAttribute('aria-label', `Remove attempt ${i + 1}`);
+      drop.title = `Remove attempt ${i + 1}`;
       // Two is the floor: one attempt is not a comparison, it is a send.
       drop.disabled = this.disabled || this.#lanes.length <= 2;
       drop.onclick = () => {

@@ -1,208 +1,155 @@
 import { adopt } from './sheets.js';
 
 /**
- * `<ax-rail>` — the app's navigation: workspaces, and the sessions inside them.
+ * `<ax-rail>` is the stable Workspace -> Session navigation spine.
  *
- * Replaces a strip of eight peer destinations. That strip encoded an admin
- * console — chat was one noun among Agents, Skills, MCP, Studio — when the
- * product is one thing: you are in a session, working. So the rail lists one
- * kind of thing, sessions, grouped by the directory they are anchored to, and
- * everything else becomes a module or a setting.
+ * Workspace identity is durable and independent from the open Session. The
+ * selector contains every authorized Workspace, while the list beneath it is
+ * deliberately scoped to the selected Workspace. Cross-Workspace navigation
+ * is explicit through the selector or All Sessions.
  *
- * Each row carries live attempt state. When a session fans out, its row shows a
- * dot per attempt, so an attempt that stopped and is waiting on you is visible
- * from a session you are not currently looking at. The failure of parallel work
- * is not being unable to see it, it is not noticing one stopped — and no other
- * tool's navigation has to express this, because no other tool runs N attempts
- * against one task.
+ * @attr {string} current    Open Session id.
+ * @attr {string} workspace  Selected Workspace id.
+ * @attr {boolean} collapsed Icon-width presentation.
  *
- * @element ax-rail
- *
- * @attr {string} current   Id of the open session.
- * @attr {boolean} collapsed  Icon-width only.
- *
- * @prop {Array<{path: string, label?: string}>} favourites  Pinned directories.
- *
- * @fires session-open     detail: {id}
- * @fires session-new      start a session somewhere new
- * @fires sessions-browse  open the browse-everything view
- * @fires workspace-open   detail: {dir} — go to a directory
- * @fires collapse-change  detail: {collapsed} — so the shell can remember it
+ * @fires workspace-open   detail: {workspace}
+ * @fires workspace-new
+ * @fires workspace-rename detail: {workspace}
+ * @fires session-open     detail: {id, workspaceId}
+ * @fires session-new      detail: {workspace}
+ * @fires sessions-browse
+ * @fires collapse-change
  * @fires settings-open
- *
- * @slot utility  Shell-owned Docs, status, and theme controls.
- *
- * @cssprop --ax-rail-w   Expanded width (default 248px)
  */
 
 const CSS = `
 :host {
-  display: flex; flex-direction: column;
-  width: var(--ax-rail-w, 248px);
-  flex-shrink: 0;
-  background: var(--bg-2);
-  border-right: 1px solid var(--border);
-  font-family: var(--font-sans);
-  color: var(--text);
-  min-height: 0;
+  display: flex; position: relative; width: var(--ax-rail-w, 248px);
+  min-height: 0; flex-shrink: 0; flex-direction: column;
+  border-right: 1px solid var(--border); background: var(--bg-2);
+  color: var(--text); font-family: var(--font-sans);
   transition: width var(--dur-base) var(--ease);
 }
+* { box-sizing: border-box; }
+button { font: inherit; }
 :host([collapsed]) { width: 52px; }
-:host([collapsed]) .label, :host([collapsed]) .group-h,
-:host([collapsed]) .ws-path, :host([collapsed]) .dots { display: none; }
 
-.top {
-  display: flex; align-items: center; gap: var(--sp-2);
-  padding: var(--sp-3) var(--sp-3) var(--sp-2);
-  flex-shrink: 0;
-}
+.top { display: flex; flex-shrink: 0; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-3) var(--sp-2); }
 .mark { width: 22px; height: 22px; flex-shrink: 0; border-radius: var(--r-sm); }
-.brand { font-weight: var(--fw-bold); font-size: var(--fs-body); letter-spacing: .01em; }
-.brand span { color: var(--muted-2); font-weight: var(--fw-normal); }
+.brand { font-size: var(--fs-body); font-weight: var(--fw-bold); letter-spacing: .01em; }
 .grow { flex: 1; }
-
-.scroll { flex: 1; overflow-y: auto; padding: 0 var(--sp-2) var(--sp-2); min-height: 0; }
-
-.group-h {
-  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .08em;
-  color: var(--muted-2); padding: var(--sp-3) var(--sp-2) var(--sp-1);
-  font-weight: var(--fw-medium);
+.top-collapse {
+  display: inline-flex; width: 32px; height: 32px; flex-shrink: 0; align-items: center;
+  justify-content: center; padding: 0; border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--muted-2); cursor: pointer; font-size: var(--fs-body); line-height: 1;
 }
+.top-collapse:hover { color: var(--text); }
 
+.switch {
+  display: flex; width: calc(100% - var(--sp-4)); min-width: 0; align-items: center; gap: var(--sp-2);
+  margin: 0 var(--sp-2) var(--sp-2); padding: 7px var(--sp-2); border: 1px solid var(--border);
+  border-radius: var(--r-md); background: var(--bg-3); color: var(--text); cursor: pointer; text-align: left;
+}
+.switch:hover { border-color: var(--accent); }
+.workspace-mark { width: 18px; flex: 0 0 18px; color: var(--axo-bronze-glow, var(--muted)); text-align: center; }
+.cur { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; }
+.cur-name { overflow: hidden; font-size: var(--fs-sm); font-weight: var(--fw-medium); text-overflow: ellipsis; white-space: nowrap; }
+.cur-path { overflow: hidden; color: var(--muted-2); font: var(--fs-xs) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.caret { flex-shrink: 0; color: var(--muted-2); }
+
+.menu {
+  position: absolute; z-index: 60; top: 76px; right: var(--sp-2); left: var(--sp-2);
+  max-height: min(66vh, 520px); overflow-y: auto; padding: var(--sp-1);
+  border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  background: var(--panel-2); box-shadow: var(--shadow-lg);
+}
+.menu[hidden] { display: none; }
+.menu-label { padding: 6px 8px 4px; color: var(--muted-2); font-size: var(--fs-xs); font-weight: var(--fw-medium); letter-spacing: .08em; text-transform: uppercase; }
+.menu-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; border-radius: var(--r-sm); }
+.menu-workspace:hover { background: var(--bg-3); }
+.menu-workspace.selected { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.menu button { border: 0; background: none; color: var(--text); cursor: pointer; text-align: left; }
+.workspace-choice { display: grid; min-width: 0; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 7px 5px 7px 8px; }
+.workspace-copy { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
+.workspace-name { overflow: hidden; font-size: var(--fs-sm); text-overflow: ellipsis; white-space: nowrap; }
+.workspace-path { overflow: hidden; color: var(--muted-2); font: var(--fs-xs) var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.workspace-rename { width: 26px; height: 26px; padding: 0; border-radius: var(--r-sm); color: var(--muted-2) !important; text-align: center !important; }
+.workspace-rename:hover { color: var(--text) !important; background: var(--panel); }
+.menu-rule { height: 1px; margin: var(--sp-1) 3px; background: var(--border); }
+.menu-action { display: flex; width: 100%; align-items: center; gap: var(--sp-2); padding: 7px 8px; border-radius: var(--r-sm); font-size: var(--fs-sm); }
+.menu-action:hover { background: var(--bg-3); }
+
+.scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--sp-2) var(--sp-2); }
+.section-h { display: flex; align-items: center; gap: var(--sp-1); padding: var(--sp-2) var(--sp-1) var(--sp-1) var(--sp-2); }
+.section-label { flex: 1; color: var(--muted-2); font-size: var(--fs-xs); font-weight: var(--fw-medium); letter-spacing: .08em; text-transform: uppercase; }
+.section-new { width: 25px; height: 25px; padding: 0; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); cursor: pointer; }
+.section-new:hover:not(:disabled) { background: var(--bg-3); color: var(--text); }
+.section-new:disabled { opacity: .35; cursor: default; }
+.sessions { display: flex; flex-direction: column; gap: 1px; }
 .item {
-  display: flex; align-items: center; gap: var(--sp-2);
-  padding: 6px var(--sp-2); border-radius: var(--r-md);
-  cursor: pointer; color: var(--text); font-size: var(--fs-sm);
-  border: 0; background: none; width: 100%; text-align: left;
-  font-family: inherit;
+  display: flex; width: 100%; align-items: center; gap: var(--sp-2); padding: 6px var(--sp-2);
+  border: 0; border-radius: var(--r-md); background: none; color: var(--text);
+  cursor: pointer; font-family: inherit; font-size: var(--fs-sm); text-align: left;
   transition: background var(--dur-fast) var(--ease);
 }
-.item:hover { background: var(--bg-3); }
+.item:hover:not(:disabled) { background: var(--bg-3); }
 .item[aria-current="true"] { background: var(--panel); }
-.item:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.item:disabled { opacity: .4; cursor: default; }
 .ico { width: 16px; flex-shrink: 0; opacity: .8; text-align: center; }
 .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty { padding: var(--sp-3) var(--sp-2); color: var(--muted-2); font-size: var(--fs-xs); line-height: var(--lh-body); }
+.empty button { display: block; margin-top: var(--sp-2); padding: 5px 9px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-3); color: var(--text); cursor: pointer; }
+.empty button:hover { border-color: var(--accent); color: var(--accent); }
 
-/* A workspace is a directory. Sessions live under the one they are anchored to,
-   which is the model the finder already used: a session at /a/b/c belongs to
-   /a/b/c, not to a flat cloud list. */
-.ws { margin-top: var(--sp-1); }
-.ws-h {
-  display: flex; align-items: baseline; gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-2) 2px;
-}
-.badge { display: inline-flex; align-items: center; gap: var(--sp-1); flex-shrink: 0; }
-:host([collapsed]) .badge .count { display: none; }
-.ws-name { font-size: var(--fs-sm); font-weight: var(--fw-medium); }
-.ws-path {
-  font-size: var(--fs-xs); color: var(--muted-2); overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left;
-}
-.sessions { display: flex; flex-direction: column; gap: 1px; }
-.sessions .item { padding-left: var(--sp-4); }
-
-/* Live attempt state. A row that needs a human pulses, because that is the one
-   thing you must not miss. */
-.dots { display: flex; gap: 3px; flex-shrink: 0; }
+.badge { display: inline-flex; flex-shrink: 0; align-items: center; gap: var(--sp-1); }
+.dots { display: flex; flex-shrink: 0; gap: 3px; }
 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2); }
-.dot.run  { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+.dot.run { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
 .dot.pass { background: var(--ok); }
 .dot.fail { background: var(--err); }
 .dot.need { background: var(--accent-2); animation: pulse 1s ease-in-out infinite; }
+.dot.aggregate { display: none; }
+.count { flex-shrink: 0; color: var(--muted-2); font: var(--fs-xs) var(--font-mono); }
+.environment-status { display: inline-flex; flex-shrink: 0; align-items: center; }
+.environment-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); }
+.environment-dot.awaiting_approval, .environment-dot.unprepared { background: var(--accent-2); }
+.environment-dot.preparing { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
+.environment-dot.failed { background: var(--err); }
 @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
-.count {
-  font-size: var(--fs-xs); color: var(--muted-2); font-family: var(--font-mono);
-  flex-shrink: 0;
-}
 
-/* The workspace switcher. The rail lists sessions grouped by directory, and
-   with several directories in play the list gets long — this jumps to one
-   without scrolling for it, and names which one you are in. */
-.switch {
-  display: flex; align-items: center; gap: var(--sp-1);
-  width: calc(100% - var(--sp-4)); margin: 0 var(--sp-2) var(--sp-1);
-  padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md);
-  background: var(--bg-3); border: 1px solid var(--border);
-  color: var(--text); font: var(--fs-xs) var(--font-mono); cursor: pointer;
-  text-align: left;
+.load-error {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--sp-2);
+  margin: var(--sp-2) 0; padding: var(--sp-2); border: 1px solid color-mix(in srgb, var(--err) 45%, var(--border));
+  border-radius: var(--r-md); background: var(--panel); color: var(--err); font-size: var(--fs-xs);
 }
-.switch:hover { border-color: var(--accent); }
-.switch:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.switch .cur {
-  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  direction: rtl; text-align: left;
-}
-.switch .caret { color: var(--muted-2); flex-shrink: 0; }
-:host([collapsed]) .switch { display: none; }
-
-.menu {
-  position: absolute; z-index: 60; left: var(--sp-2); right: var(--sp-2);
-  background: var(--panel-2); border: 1px solid var(--border-strong);
-  border-radius: var(--r-md); box-shadow: var(--shadow-lg);
-  padding: var(--sp-1); max-height: 50vh; overflow-y: auto;
-}
-.menu[hidden] { display: none; }
-.menu button {
-  display: flex; align-items: center; gap: var(--sp-2); width: 100%;
-  background: none; border: 0; color: var(--text); cursor: pointer;
-  padding: var(--sp-1) var(--sp-2); border-radius: var(--r-sm);
-  font: var(--fs-xs) var(--font-mono); text-align: left;
-}
-.menu button:hover { background: var(--bg-3); }
-.menu button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.menu .m-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* Pinned directories. They were only reachable from the browse view, which is
-   the one place you go to stop browsing — a pin you have to navigate to is not
-   a pin. */
-.fav .item .ico { color: var(--accent-2); }
-
-.top-collapse {
-  background: none; border: 0; color: var(--muted-2); cursor: pointer;
-  padding: 0 var(--sp-1); font-size: var(--fs-body); line-height: 1; flex-shrink: 0;
-  border-radius: var(--r-sm);
-}
-.top-collapse:hover { color: var(--text); }
-.top-collapse:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-
-.utility {
-  flex-shrink: 0; min-height: 0; max-height: min(42vh, 300px); overflow: auto;
-  border-top: 1px solid var(--border); padding: var(--sp-2);
-}
+.load-error button { padding: 3px 7px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--bg-3); color: var(--text); cursor: pointer; }
+.utility { max-height: min(42vh, 300px); min-height: 0; flex-shrink: 0; overflow: auto; padding: var(--sp-2); border-top: 1px solid var(--border); }
 slot[name="utility"] { display: block; width: 100%; }
 ::slotted([slot="utility"]) { width: 100%; min-width: 0; }
-.foot { flex-shrink: 0; border-top: 1px solid var(--border); padding: var(--sp-2); }
-.empty { color: var(--muted-2); font-size: var(--fs-xs); padding: var(--sp-3) var(--sp-2); }
-.load-error {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
-  gap: var(--sp-2); margin: var(--sp-2) 0; padding: var(--sp-2);
-  border: 1px solid color-mix(in srgb, var(--err) 45%, var(--border));
-  border-radius: var(--r-md); color: var(--err); background: var(--panel);
-  font-size: var(--fs-xs); line-height: var(--lh-body);
-}
-.load-error button {
-  padding: 3px 7px; border: 1px solid var(--border-strong); border-radius: var(--r-sm);
-  background: var(--bg-3); color: var(--text); cursor: pointer; font: inherit;
-}
-.load-error button:hover { border-color: var(--accent); color: var(--accent); }
-.load-error button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.foot { flex-shrink: 0; padding: var(--sp-2); border-top: 1px solid var(--border); }
+
+button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+:host([collapsed]) .top { justify-content: center; gap: 0; padding: var(--sp-2); }
+:host([collapsed]) .top .mark, :host([collapsed]) .brand, :host([collapsed]) .grow, :host([collapsed]) .switch { display: none; }
+:host([collapsed]) .top-collapse { display: inline-flex; width: 36px; height: 36px; align-items: center; justify-content: center; padding: 0; }
+:host([collapsed]) .section-h { justify-content: center; padding: var(--sp-1); }
+:host([collapsed]) .section-label, :host([collapsed]) .label, :host([collapsed]) .dots, :host([collapsed]) .count { display: none; }
+:host([collapsed]) .item { justify-content: center; }
+:host([collapsed]) .badge .aggregate { display: block; }
+:host([collapsed]) .empty, :host([collapsed]) .load-error { display: none; }
 `;
 
-/** Trailing path segment — what a directory is actually called. */
-const baseName = (p) => (p || '').replace(/\/+$/, '').split('/').pop() || p;
+const workspacePath = (workspace) => workspace?.canonical_path || '';
 
 export class AxRail extends HTMLElement {
-  static get observedAttributes() { return ['current', 'collapsed']; }
+  static get observedAttributes() { return ['current', 'workspace', 'collapsed']; }
 
   #root;
   #scroll;
   #switch;
   #menu;
-  /** Pinned directories, as the shell knows them. */
-  #favourites = [];
-  /** Sessions as served, newest activity first. */
+  #workspaces = [];
   #sessions = [];
-  /** session id → [{state}] for lanes currently running. */
   #attempts = new Map();
   #refreshGeneration = 0;
   #loadError = '';
@@ -212,45 +159,49 @@ export class AxRail extends HTMLElement {
     this.#root = this.attachShadow({ mode: 'open' });
     this.#root.innerHTML = `
       <div class="top">
-        <img class="mark" src="/brand/mark.png" alt="" />
-        <div class="brand label">Axocoatl</div>
-        <div class="grow"></div>
-        <button class="top-collapse" id="collapse" title="Collapse the rail" aria-label="Collapse the rail">⟨</button>
+        <img class="mark" src="/brand/mark.png" alt="">
+        <div class="brand">Axocoatl</div><div class="grow"></div>
+        <button class="top-collapse" id="collapse" type="button" title="Collapse the rail"
+          aria-label="Collapse the rail" aria-expanded="true"><span class="collapse-glyph" aria-hidden="true">⟨</span></button>
       </div>
-      <button class="switch" id="switch" aria-haspopup="true" aria-expanded="false">
-        <span class="cur">no workspace</span><span class="caret">▾</span>
+      <button class="switch" id="switch" type="button" aria-haspopup="menu" aria-controls="menu"
+        aria-expanded="false" aria-label="Choose a workspace">
+        <span class="workspace-mark" aria-hidden="true">▱</span>
+        <span class="cur"><span class="cur-name">Choose a workspace</span><span class="cur-path">No folder selected</span></span>
+        <span class="caret" aria-hidden="true">▾</span>
       </button>
-      <div class="menu" id="menu" role="menu" hidden></div>
+      <div class="menu" id="menu" role="menu" aria-label="Workspaces" hidden></div>
       <div class="scroll"></div>
       <div class="utility"><slot name="utility"></slot></div>
       <div class="foot">
-        <button class="item" id="new"><span class="ico">＋</span><span class="label">New session</span></button>
-        <button class="item" id="browse"><span class="ico">▤</span><span class="label">All sessions</span></button>
-        <button class="item" id="settings"><span class="ico">◇</span><span class="label">Settings</span></button>
+        <button class="item" id="open-workspace" type="button" title="Open workspace" aria-label="Open workspace"><span class="ico" aria-hidden="true">＋</span><span class="label">Open workspace…</span></button>
+        <button class="item" id="browse" type="button" title="All sessions" aria-label="All sessions"><span class="ico" aria-hidden="true">▤</span><span class="label">All sessions</span></button>
+        <button class="item" id="settings" type="button" title="Settings" aria-label="Settings"><span class="ico" aria-hidden="true">◇</span><span class="label">Settings</span></button>
       </div>`;
     this.#scroll = this.#root.querySelector('.scroll');
     this.#switch = this.#root.querySelector('#switch');
     this.#menu = this.#root.querySelector('#menu');
-    this.#switch.addEventListener('click', (e) => { e.stopPropagation(); this.#toggleMenu(); });
-    // A menu that outlives the click that opened it is a menu you have to
-    // dismiss on purpose; this closes on any click elsewhere and on Escape.
-    document.addEventListener('click', () => this.#closeMenu());
-    this.#root.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !this.#menu.hidden) { e.stopPropagation(); this.#closeMenu(); }
+
+    this.#switch.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.#menu.hidden ? this.#openMenu('first') : this.#closeMenu({ restoreFocus: true });
     });
-    // Collapsing is the shell's to remember, so it is announced rather than
-    // stored here — the component does not own where preferences live.
-    this.#root.querySelector('#collapse').addEventListener('click', () => {
+    this.#switch.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      event.preventDefault();
+      this.#openMenu(event.key === 'ArrowUp' ? 'last' : 'first');
+    });
+    this.#root.addEventListener('keydown', (event) => this.#onMenuKeyDown(event));
+
+    const collapse = this.#root.querySelector('#collapse');
+    const toggleCollapsed = () => {
       this.collapsed = !this.collapsed;
       this.dispatchEvent(new CustomEvent('collapse-change', {
         detail: { collapsed: this.collapsed }, bubbles: true, composed: true,
       }));
-    });
-    // Starting work is a navigation act, so it belongs in the navigation. It
-    // used to require going back to the browse view first, which made "new
-    // session" something you found rather than something you did.
-    this.#root.querySelector('#new').addEventListener('click', () =>
-      this.dispatchEvent(new CustomEvent('session-new', { bubbles: true, composed: true })));
+    };
+    collapse.addEventListener('click', toggleCollapsed);
+    this.#root.querySelector('#open-workspace').addEventListener('click', () => this.#requestWorkspace());
     this.#root.querySelector('#browse').addEventListener('click', () =>
       this.dispatchEvent(new CustomEvent('sessions-browse', { bubbles: true, composed: true })));
     this.#root.querySelector('#settings').addEventListener('click', () =>
@@ -259,283 +210,327 @@ export class AxRail extends HTMLElement {
   }
 
   get current() { return this.getAttribute('current') || ''; }
-  set current(v) { v ? this.setAttribute('current', v) : this.removeAttribute('current'); }
-
+  set current(value) { value ? this.setAttribute('current', value) : this.removeAttribute('current'); }
+  get workspace() { return this.getAttribute('workspace') || ''; }
+  set workspace(value) { value ? this.setAttribute('workspace', value) : this.removeAttribute('workspace'); }
   get collapsed() { return this.hasAttribute('collapsed'); }
-  set collapsed(v) {
-    v ? this.setAttribute('collapsed', '') : this.removeAttribute('collapsed');
-    this.#root.querySelector('#collapse').textContent = v ? '⟩' : '⟨';
-    this.#root.querySelector('#collapse').title = v ? 'Expand the rail' : 'Collapse the rail';
+  set collapsed(value) { value ? this.setAttribute('collapsed', '') : this.removeAttribute('collapsed'); }
+  get workspaces() { return this.#workspaces.slice(); }
+  get sessions() { return this.#sessions.slice(); }
+  workspaceById(id) { return this.#workspaces.find((workspace) => workspace.id === id) || null; }
+
+  connectedCallback() {
+    if (!this.hasAttribute('role')) this.setAttribute('role', 'navigation');
+    if (!this.hasAttribute('aria-label')) this.setAttribute('aria-label', 'Workspaces and Sessions');
+    document.addEventListener('click', this.#handleDocumentClick);
+    void this.refresh();
   }
 
-  get favourites() { return this.#favourites.slice(); }
-  set favourites(v) { this.#favourites = Array.isArray(v) ? v.slice() : []; this.render(); }
-
-  connectedCallback() { void this.refresh(); }
-  disconnectedCallback() { this.#refreshGeneration += 1; }
+  disconnectedCallback() {
+    document.removeEventListener('click', this.#handleDocumentClick);
+    this.#refreshGeneration += 1;
+    this.#closeMenu();
+  }
 
   attributeChangedCallback(name) {
-    if (name === 'current') { this.#markCurrent(); this.#syncSwitch(); }
+    if (name === 'collapsed') this.#syncCollapsedControl();
+    if (name === 'current') this.#markCurrent();
+    if (name === 'workspace') this.render();
   }
 
-  /** The directory of the open session — what the switcher is showing. */
-  get currentDir() {
-    return this.#sessions.find((s) => s.id === this.current)?.working_dir || '';
-  }
+  focusFirstControl() { this.#root.querySelector('#collapse')?.focus(); }
 
-  #syncSwitch() {
-    const dir = this.currentDir;
-    const cur = this.#root.querySelector('.cur');
-    cur.textContent = dir || 'no workspace';
-    cur.title = dir || '';
-  }
-
-  #toggleMenu() { this.#menu.hidden ? this.#openMenu() : this.#closeMenu(); }
-
-  #closeMenu() {
-    this.#menu.hidden = true;
-    this.#switch.setAttribute('aria-expanded', 'false');
-  }
-
-  /**
-   * Every directory you could go to: the ones you have sessions in, plus the
-   * ones you pinned but may have no session in yet.
-   */
-  #openMenu() {
-    const dirs = [...new Set(this.#sessions.map((s) => s.working_dir).filter(Boolean))];
-    for (const f of this.#favourites) if (f.path && !dirs.includes(f.path)) dirs.push(f.path);
-    this.#menu.textContent = '';
-    if (!dirs.length) {
-      const e = document.createElement('div');
-      e.className = 'empty';
-      e.textContent = 'No workspaces yet.';
-      this.#menu.append(e);
-    }
-    for (const d of dirs) {
-      const b = document.createElement('button');
-      b.setAttribute('role', 'menuitem');
-      const pinned = this.#favourites.some((f) => f.path === d);
-      const ico = document.createElement('span');
-      ico.textContent = pinned ? '★' : '▸';
-      const name = document.createElement('span');
-      name.className = 'm-name';
-      name.textContent = d;
-      name.title = d;
-      b.append(ico, name);
-      b.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.#closeMenu();
-        this.dispatchEvent(new CustomEvent('workspace-open', {
-          detail: { dir: d }, bubbles: true, composed: true,
-        }));
-      });
-      this.#menu.append(b);
-    }
-    this.#menu.hidden = false;
-    this.#switch.setAttribute('aria-expanded', 'true');
-  }
-
-  /** Re-read the session list. */
   async refresh() {
     const generation = ++this.#refreshGeneration;
     try {
-      const response = await fetch('/api/sessions');
-      if (!response.ok) {
-        const detail = await response.json().catch(() => ({}));
-        throw new Error(detail?.error || `HTTP ${response.status}`);
+      const [workspaceResponse, sessionResponse] = await Promise.all([
+        fetch('/api/workspaces'), fetch('/api/sessions'),
+      ]);
+      if (!workspaceResponse.ok || !sessionResponse.ok) {
+        const failed = !workspaceResponse.ok ? workspaceResponse : sessionResponse;
+        const detail = await failed.json().catch(() => ({}));
+        throw new Error(detail?.error || `HTTP ${failed.status}`);
       }
-      const list = await response.json();
+      const [workspaces, sessions] = await Promise.all([workspaceResponse.json(), sessionResponse.json()]);
       if (!this.isConnected || generation !== this.#refreshGeneration) return false;
-      if (!Array.isArray(list)) throw new Error('The sessions endpoint returned an invalid list.');
-      // Closing a session is how you say "I am done with this". Listing it
-      // afterwards makes the act look like it failed, and the rail is for the
-      // work you are doing rather than the work you have finished.
-      this.#sessions = list.filter((s) => s.status !== 'closed');
+      if (!Array.isArray(workspaces) || !Array.isArray(sessions)) throw new Error('Workspace navigation returned an invalid list.');
+      this.#workspaces = workspaces.slice().sort((a, b) => (b.last_active || 0) - (a.last_active || 0));
+      this.#sessions = sessions;
       this.#loadError = '';
+      this.#ensureSelection();
     } catch (error) {
       if (!this.isConnected || generation !== this.#refreshGeneration) return false;
-      // Navigation is durable state. A transient daemon or network failure must
-      // not replace the last-known list with a false empty state.
       this.#loadError = String(error?.message || error);
     }
     this.render();
     return !this.#loadError;
   }
 
-  /**
-   * Report live attempt state for a session.
-   * @param {string} id
-   * @param {Array<'run'|'pass'|'fail'|'need'>} states one entry per attempt
-   */
   setAttempts(id, states) {
-    if (!states || !states.length) this.#attempts.delete(id);
+    if (!states?.length) this.#attempts.delete(id);
     else this.#attempts.set(id, states);
     this.render();
   }
 
   render() {
-    const groups = new Map();
-    for (const s of this.#sessions) {
-      const dir = s.working_dir || '';
-      if (!groups.has(dir)) groups.set(dir, []);
-      groups.get(dir).push(s);
-    }
-    // Most recently touched workspace first — the one you are working in.
-    const ordered = [...groups.entries()].sort((a, b) =>
-      Math.max(...b[1].map((s) => s.last_active || 0)) -
-      Math.max(...a[1].map((s) => s.last_active || 0)));
-
-    this.#scroll.textContent = '';
-    this.#renderFavourites();
-    if (this.#loadError) {
-      const error = document.createElement('div');
-      error.className = 'load-error';
-      error.setAttribute('role', 'status');
-      const message = document.createElement('span');
-      message.textContent = this.#sessions.length
-        ? 'Sessions are temporarily unavailable. Showing the last known list.'
-        : 'Sessions are temporarily unavailable.';
-      message.title = this.#loadError;
-      const retry = document.createElement('button');
-      retry.type = 'button';
-      retry.textContent = 'Retry';
-      retry.addEventListener('click', () => void this.refresh());
-      error.append(message, retry);
-      this.#scroll.append(error);
-    }
-    if (!ordered.length) {
-      if (!this.#loadError) {
-        const e = document.createElement('div');
-        e.className = 'empty';
-        e.textContent = 'No sessions yet.';
-        this.#scroll.append(e);
-      }
-      this.#syncSwitch();
-      return;
-    }
-
-    const head = document.createElement('div');
-    head.className = 'group-h';
-    head.textContent = 'Workspaces';
-    this.#scroll.append(head);
-
-    for (const [dir, sessions] of ordered) {
-      const ws = document.createElement('div');
-      ws.className = 'ws';
-
-      const h = document.createElement('div');
-      h.className = 'ws-h';
-      const name = document.createElement('div');
-      name.className = 'ws-name label';
-      name.textContent = baseName(dir);
-      const path = document.createElement('div');
-      path.className = 'ws-path';
-      path.textContent = dir;
-      path.title = dir;
-      h.append(name, path);
-      // The workspace's own live state, so a collapsed rail — or one scrolled
-      // past this group — still shows that something in here is running or
-      // waiting on you. Per-session dots answer "which session"; this answers
-      // "is there anything at all in this directory".
-      const wsStates = sessions.flatMap((s) => this.#attempts.get(s.id) || []);
-      if (wsStates.length) h.append(this.#stateBadge(wsStates));
-      ws.append(h);
-
-      const list = document.createElement('div');
-      list.className = 'sessions';
-      sessions.sort((a, b) => (b.last_active || 0) - (a.last_active || 0));
-      for (const s of sessions) list.append(this.#sessionRow(s));
-      ws.append(list);
-      this.#scroll.append(ws);
-    }
-    this.#markCurrent();
+    if (!this.#scroll) return;
+    this.#scroll.replaceChildren();
     this.#syncSwitch();
+    if (this.#loadError) this.#renderLoadError();
+
+    const workspace = this.workspaceById(this.workspace);
+    const heading = document.createElement('div');
+    heading.className = 'section-h';
+    const label = document.createElement('span');
+    label.className = 'section-label';
+    label.textContent = 'Sessions';
+    const add = document.createElement('button');
+    add.type = 'button'; add.className = 'section-new'; add.textContent = '＋';
+    add.disabled = !workspace;
+    add.title = workspace ? `New session in ${workspace.name}` : 'Open a workspace first';
+    add.setAttribute('aria-label', add.title);
+    add.addEventListener('click', () => workspace && this.#requestSession(workspace));
+    heading.append(label, add);
+    this.#scroll.append(heading);
+
+    if (!workspace) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = this.#workspaces.length ? 'Choose a workspace to see its sessions.' : 'Open a project folder to begin.';
+      const open = document.createElement('button');
+      open.type = 'button'; open.textContent = 'Open workspace…';
+      open.addEventListener('click', () => this.#requestWorkspace());
+      empty.append(open); this.#scroll.append(empty); return;
+    }
+
+    const sessions = this.#sessions
+      .filter((session) => session.workspace_id === workspace.id)
+      .filter((session) => session.status !== 'closed' || session.id === this.current)
+      .sort((a, b) => (b.last_active || 0) - (a.last_active || 0));
+    if (!sessions.length) {
+      const hasClosed = this.#sessions.some((session) => session.workspace_id === workspace.id && session.status === 'closed');
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = hasClosed ? `No open sessions in ${workspace.name}. Closed sessions remain in All sessions.` : `No sessions in ${workspace.name} yet.`;
+      const create = document.createElement('button');
+      create.type = 'button'; create.textContent = 'New session';
+      create.addEventListener('click', () => this.#requestSession(workspace));
+      empty.append(create); this.#scroll.append(empty); return;
+    }
+    const list = document.createElement('div');
+    list.className = 'sessions';
+    sessions.forEach((session) => list.append(this.#sessionRow(session)));
+    this.#scroll.append(list);
+    this.#markCurrent();
   }
 
-  #sessionRow(s) {
+  #ensureSelection() {
+    if (this.workspaceById(this.workspace)) return;
+    const current = this.#sessions.find((session) => session.id === this.current);
+    if (current?.workspace_id && this.workspaceById(current.workspace_id)) this.workspace = current.workspace_id;
+  }
+
+  #selectedWorkspace() { return this.workspaceById(this.workspace); }
+
+  #syncSwitch() {
+    const workspace = this.#selectedWorkspace();
+    const name = this.#root.querySelector('.cur-name');
+    const path = this.#root.querySelector('.cur-path');
+    name.textContent = workspace?.name || 'Choose a workspace';
+    path.textContent = workspace ? workspacePath(workspace) : 'No folder selected';
+    name.title = workspace?.name || '';
+    path.title = workspace ? workspacePath(workspace) : '';
+    const label = workspace ? `Switch workspace. Current workspace: ${workspace.name}` : 'Choose a workspace';
+    this.#switch.title = workspace ? `${workspace.name} — ${workspacePath(workspace)}` : label;
+    this.#switch.setAttribute('aria-label', label);
+  }
+
+  #sessionRow(session) {
     const row = document.createElement('button');
-    row.className = 'item';
-    row.dataset.id = s.id;
-
+    row.type = 'button'; row.className = 'item'; row.dataset.id = session.id;
     const ico = document.createElement('span');
-    ico.className = 'ico';
-    ico.textContent = '▣';
+    ico.className = 'ico'; ico.textContent = '▣'; ico.setAttribute('aria-hidden', 'true');
     const label = document.createElement('span');
-    label.className = 'label';
-    label.textContent = s.name || baseName(s.working_dir);
-    label.title = s.name || '';
+    label.className = 'label'; label.textContent = session.name || 'Untitled Session';
     row.append(ico, label);
-
-    const states = this.#attempts.get(s.id);
+    const states = this.#attempts.get(session.id);
     if (states?.length) row.append(this.#stateBadge(states));
-
+    const environmentLabel = this.#environmentLabel(session);
+    if (environmentLabel) row.append(this.#environmentBadge(session, environmentLabel));
+    const attemptLabel = states?.length ? `. ${this.#attemptLabel(states)}` : '';
+    const environmentSuffix = environmentLabel ? `. ${environmentLabel}` : '';
+    row.title = `${session.name || 'Untitled Session'}${attemptLabel}${environmentSuffix}`;
+    row.setAttribute('aria-label', `Open Session ${session.name || 'Untitled Session'}${attemptLabel}${environmentSuffix}`);
     row.addEventListener('click', () => this.dispatchEvent(new CustomEvent('session-open', {
-      detail: { id: s.id }, bubbles: true, composed: true,
+      detail: { id: session.id, workspaceId: session.workspace_id }, bubbles: true, composed: true,
     })));
     return row;
   }
 
-  /**
-   * `⑂N` and one dot per attempt, wrapped so it can be appended anywhere.
-   *
-   * The same shape serves a session row and a workspace header, because it is
-   * the same question at two scales — and answering it differently at each
-   * would make the rail two vocabularies instead of one.
-   */
+  #environmentLabel(session) {
+    const state = session?.environment?.state || 'unprepared';
+    return {
+      unprepared: 'Project environment not prepared',
+      awaiting_approval: 'Project setup approval needed',
+      preparing: 'Project environment preparing',
+      failed: 'Project environment failed',
+    }[state] || '';
+  }
+
+  #environmentBadge(session, label) {
+    const state = session?.environment?.state || 'unprepared';
+    const badge = document.createElement('span');
+    badge.className = 'environment-status';
+    badge.setAttribute('role', 'img');
+    badge.setAttribute('aria-label', label);
+    badge.title = label;
+    const dot = document.createElement('span');
+    dot.className = `environment-dot ${state}`;
+    dot.setAttribute('aria-hidden', 'true');
+    badge.append(dot);
+    return badge;
+  }
+
   #stateBadge(states) {
     const wrap = document.createElement('span');
     wrap.className = 'badge';
+    const label = this.#attemptLabel(states);
+    wrap.setAttribute('role', 'img'); wrap.setAttribute('aria-label', label); wrap.title = label;
     const count = document.createElement('span');
-    count.className = 'count';
-    count.textContent = `⑂${states.length}`;
+    count.className = 'count'; count.textContent = `⑂${states.length}`; count.setAttribute('aria-hidden', 'true');
     const dots = document.createElement('span');
-    dots.className = 'dots';
-    // A workspace can run more attempts than there is room for; the count
-    // stays exact while the dots stop at a readable number.
-    for (const st of states.slice(0, 6)) {
-      const d = document.createElement('span');
-      d.className = `dot ${st}`;
-      dots.append(d);
-    }
-    wrap.append(count, dots);
-    return wrap;
+    dots.className = 'dots'; dots.setAttribute('aria-hidden', 'true');
+    states.slice(0, 6).forEach((state) => {
+      const dot = document.createElement('span'); dot.className = `dot ${state}`; dots.append(dot);
+    });
+    const aggregate = document.createElement('span');
+    const aggregateState = ['need', 'fail', 'run', 'pass'].find((state) => states.includes(state)) || '';
+    aggregate.className = `dot aggregate ${aggregateState}`; aggregate.setAttribute('aria-hidden', 'true');
+    wrap.append(count, dots, aggregate); return wrap;
   }
 
-  /** Pinned directories, above the workspaces you happen to have open. */
-  #renderFavourites() {
-    if (!this.#favourites.length) return;
-    const head = document.createElement('div');
-    head.className = 'group-h';
-    head.textContent = 'Pinned';
-    const list = document.createElement('div');
-    list.className = 'sessions fav';
-    for (const f of this.#favourites) {
-      const b = document.createElement('button');
-      b.className = 'item';
-      const ico = document.createElement('span');
-      ico.className = 'ico';
-      ico.textContent = '★';
-      const label = document.createElement('span');
-      label.className = 'label';
-      label.textContent = f.label || baseName(f.path);
-      label.title = f.path;
-      b.append(ico, label);
-      // A pinned directory may have live work in it even with no session open.
-      const states = this.#sessions
-        .filter((s) => s.working_dir === f.path)
-        .flatMap((s) => this.#attempts.get(s.id) || []);
-      if (states.length) b.append(this.#stateBadge(states));
-      b.addEventListener('click', () => this.dispatchEvent(new CustomEvent('workspace-open', {
-        detail: { dir: f.path }, bubbles: true, composed: true,
-      })));
-      list.append(b);
+  #attemptLabel(states) {
+    const names = { need: 'waiting for you', fail: 'failed', run: 'running', pass: 'passed' };
+    const counts = new Map();
+    states.forEach((state) => counts.set(state, (counts.get(state) || 0) + 1));
+    const parts = ['need', 'fail', 'run', 'pass'].filter((state) => counts.has(state))
+      .map((state) => `${counts.get(state)} ${names[state]}`);
+    return `${states.length} ${states.length === 1 ? 'attempt' : 'attempts'}${parts.length ? `: ${parts.join(', ')}` : ''}`;
+  }
+
+  #workspaceStates(workspaceId) {
+    return this.#sessions.filter((session) => session.workspace_id === workspaceId)
+      .flatMap((session) => this.#attempts.get(session.id) || []);
+  }
+
+  #openMenu(focus = 'first') {
+    this.#menu.replaceChildren();
+    const heading = document.createElement('div');
+    heading.className = 'menu-label'; heading.textContent = 'Workspaces'; this.#menu.append(heading);
+    if (!this.#workspaces.length) {
+      const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = 'No Workspaces yet.'; this.#menu.append(empty);
     }
-    this.#scroll.append(head, list);
+    this.#workspaces.forEach((workspace) => {
+      const row = document.createElement('div');
+      row.className = `menu-workspace${workspace.id === this.workspace ? ' selected' : ''}`;
+      const choice = document.createElement('button');
+      choice.type = 'button'; choice.className = 'workspace-choice'; choice.setAttribute('role', 'menuitem'); choice.tabIndex = -1;
+      const check = document.createElement('span');
+      check.textContent = workspace.id === this.workspace ? '✓' : '▱'; check.setAttribute('aria-hidden', 'true');
+      const copy = document.createElement('span'); copy.className = 'workspace-copy';
+      const name = document.createElement('span'); name.className = 'workspace-name'; name.textContent = workspace.name;
+      const path = document.createElement('span'); path.className = 'workspace-path'; path.textContent = workspacePath(workspace); path.title = workspacePath(workspace);
+      copy.append(name, path); choice.append(check, copy);
+      const states = this.#workspaceStates(workspace.id); if (states.length) choice.append(this.#stateBadge(states));
+      choice.setAttribute('aria-label', `Open Workspace ${workspace.name}`);
+      choice.addEventListener('click', (event) => {
+        event.stopPropagation(); this.workspace = workspace.id; this.#closeMenu();
+        this.dispatchEvent(new CustomEvent('workspace-open', { detail: { workspace }, bubbles: true, composed: true }));
+      });
+      const rename = document.createElement('button');
+      rename.type = 'button'; rename.className = 'workspace-rename'; rename.textContent = '•••'; rename.tabIndex = -1;
+      rename.title = `Rename ${workspace.name}`; rename.setAttribute('aria-label', rename.title);
+      rename.addEventListener('click', (event) => {
+        event.stopPropagation(); this.#closeMenu();
+        this.dispatchEvent(new CustomEvent('workspace-rename', { detail: { workspace }, bubbles: true, composed: true }));
+      });
+      row.append(choice, rename); this.#menu.append(row);
+    });
+    const rule = document.createElement('div'); rule.className = 'menu-rule'; this.#menu.append(rule);
+    const open = document.createElement('button');
+    open.type = 'button'; open.className = 'menu-action'; open.setAttribute('role', 'menuitem'); open.tabIndex = -1;
+    open.innerHTML = '<span aria-hidden="true">＋</span><span>Open workspace…</span>';
+    open.addEventListener('click', (event) => { event.stopPropagation(); this.#closeMenu(); this.#requestWorkspace(); });
+    const manage = document.createElement('button');
+    manage.type = 'button'; manage.className = 'menu-action'; manage.setAttribute('role', 'menuitem'); manage.tabIndex = -1;
+    manage.innerHTML = '<span aria-hidden="true">⌘</span><span>Manage workspaces…</span>';
+    manage.addEventListener('click', (event) => {
+      event.stopPropagation(); this.#closeMenu();
+      this.dispatchEvent(new CustomEvent('sessions-browse', { detail: { view: 'workspaces' }, bubbles: true, composed: true }));
+    });
+    this.#menu.append(open, manage);
+    this.#menu.hidden = false; this.#switch.setAttribute('aria-expanded', 'true');
+    const items = this.#menuItems();
+    if (items.length) items[focus === 'last' ? items.length - 1 : 0].focus();
+  }
+
+  #menuItems() { return [...this.#menu.querySelectorAll('button:not([disabled])')]; }
+  #closeMenu({ restoreFocus = false } = {}) {
+    this.#menu.hidden = true; this.#switch.setAttribute('aria-expanded', 'false');
+    if (restoreFocus && this.isConnected && !this.collapsed) this.#switch.focus();
+  }
+  #handleDocumentClick = () => this.#closeMenu();
+
+  #onMenuKeyDown(event) {
+    if (this.#menu.hidden) return;
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation(); this.#closeMenu({ restoreFocus: true }); return;
+    }
+    if (event.key === 'Tab') { this.#closeMenu(); return; }
+    if (!this.#menu.contains(event.target)) return;
+    const items = this.#menuItems(); if (!items.length) return;
+    const current = items.indexOf(event.target);
+    let next = null;
+    if (event.key === 'ArrowDown') next = current < 0 ? 0 : (current + 1) % items.length;
+    if (event.key === 'ArrowUp') next = current < 0 ? items.length - 1 : (current - 1 + items.length) % items.length;
+    if (event.key === 'Home') next = 0;
+    if (event.key === 'End') next = items.length - 1;
+    if (next === null) return;
+    event.preventDefault(); event.stopPropagation(); items[next].focus();
+  }
+
+  #requestWorkspace() {
+    this.dispatchEvent(new CustomEvent('workspace-new', { bubbles: true, composed: true }));
+  }
+  #requestSession(workspace) {
+    this.dispatchEvent(new CustomEvent('session-new', { detail: { workspace }, bubbles: true, composed: true }));
+  }
+
+  #renderLoadError() {
+    const box = document.createElement('div'); box.className = 'load-error'; box.setAttribute('role', 'status');
+    const message = document.createElement('span');
+    message.textContent = this.#workspaces.length ? 'Workspace navigation is temporarily unavailable. Showing the last known list.' : 'Workspaces are temporarily unavailable.';
+    message.title = this.#loadError;
+    const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = 'Retry'; retry.addEventListener('click', () => void this.refresh());
+    box.append(message, retry); this.#scroll.append(box);
   }
 
   #markCurrent() {
-    for (const row of this.#root.querySelectorAll('.item[data-id]')) {
-      row.setAttribute('aria-current', String(row.dataset.id === this.current));
+    this.#root.querySelectorAll('.item[data-id]').forEach((row) =>
+      row.setAttribute('aria-current', String(row.dataset.id === this.current)));
+  }
+
+  #syncCollapsedControl() {
+    const button = this.#root.querySelector('#collapse');
+    const collapsed = this.collapsed;
+    const label = collapsed ? 'Expand the rail' : 'Collapse the rail';
+    const active = this.#root.activeElement;
+    const focusWillHide = active === this.#switch || this.#menu.contains(active);
+    button.querySelector('.collapse-glyph').textContent = collapsed ? '⟩' : '⟨';
+    button.title = label; button.setAttribute('aria-label', label); button.setAttribute('aria-expanded', String(!collapsed));
+    if (collapsed) {
+      this.#closeMenu();
+      if (focusWillHide && this.isConnected) button.focus();
     }
   }
 }

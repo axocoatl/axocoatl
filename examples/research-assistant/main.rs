@@ -419,7 +419,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             per_call: 4_096,
             per_execution: 10_000,
             // Context compaction toward the model window is automatic; this policy
-            // is only the spend cap. Warn = log and keep going past the budget.
+            // controls the local token guard. Warn logs and keeps going.
             overflow_policy: OverflowPolicy::Warn,
         }),
         tools: vec![
@@ -514,9 +514,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect::<Vec<_>>()
     );
     println!(
-        "Tokens: {} input, {} output, {} total",
+        "Tokens: {} input, {} output, {} reasoning, {} total",
         research_output.token_usage.input_tokens,
         research_output.token_usage.output_tokens,
+        research_output.token_usage.reasoning_tokens.unwrap_or(0),
         research_output.token_usage.total()
     );
 
@@ -531,9 +532,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Final Summary:\n");
     println!("{}", summary_output.content);
     println!(
-        "\nTokens: {} input, {} output, {} total",
+        "\nTokens: {} input, {} output, {} reasoning, {} total",
         summary_output.token_usage.input_tokens,
         summary_output.token_usage.output_tokens,
+        summary_output.token_usage.reasoning_tokens.unwrap_or(0),
         summary_output.token_usage.total()
     );
 
@@ -555,10 +557,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         summary_output.token_usage.total()
     );
     println!(
-        "  Total:      {} tokens ({} input + {} output)",
+        "  Total:      {} tokens ({} input + {} output + {} reasoning)",
         total_usage.total(),
         total_usage.input_tokens,
-        total_usage.output_tokens
+        total_usage.output_tokens,
+        total_usage.reasoning_tokens.unwrap_or(0)
     );
 
     // -----------------------------------------------------------------------

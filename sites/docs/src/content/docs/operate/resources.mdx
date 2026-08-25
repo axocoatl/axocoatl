@@ -1,0 +1,109 @@
+---
+title: Resource sizing
+description: Estimate local container, model, disk, and port demand without treating fixed caps as reservations.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Axocoatl does not include a capacity planner. Size the host from the number of
+concurrent sandbox containers, the model runtime, Workspace copies, and the
+repository's own build behavior.
+
+## Measure the actor control plane
+
+`benches/resource_footprint.rs` provides a repeatable, no-network measurement
+of the idle in-process actor control plane. Run it from the exact commit and on
+the host you intend to characterize:
+
+```bash
+cargo bench --bench resource_footprint -- \
+  --output /tmp/axocoatl-resource-footprint.json
+
+cargo bench --bench resource_footprint -- \
+  --validate /tmp/axocoatl-resource-footprint.json
+```
+
+Keep the raw JSON local. It records host, process, toolchain, and source-state
+metadata, and the measurements are specific to that machine. Review that
+metadata and require a clean source tree before publishing any conclusion.
+
+This harness measures a minimum idle actor floor, not end-to-end product
+sizing. It excludes the full daemon, provider clients and model inference,
+tool and MCP execution, Workspace and Session data, repository isolation,
+terminals and Preview processes, sandbox containers, and virtual machines.
+Measure complete Sessions and Ways separately for the repository and model
+workload you plan to run.
+
+## Fixed local container requests
+
+When the host supports them, each local Podman Session container is started
+with these maxima:
+
+| Resource | Limit |
+| --- | ---: |
+| Memory | 2 GiB |
+| CPU | 2 cores |
+| PIDs | 512 |
+
+They are maximums, not preallocated reservations. When rootless cgroups cannot
+apply them, the default `require_resource_limits: false` continues uncapped and
+logs a warning. Set the flag to `true` when failing closed is safer than running
+without limits.
+
+## Count Attempt concurrency
+
+One ordinary local Session uses one container. Explore several ways creates an
+independent `--no-hardlinks` Git clone and a dedicated container for each
+Attempt. At peak, the potential container demand grows with the number of
+concurrent Ways, in addition to the main Session and any other Sessions.
+
+For example, three running Ways can expose up to roughly three times the fixed
+Attempt-container maxima, but actual memory and CPU depend on the builds and
+commands. The local Ollama process runs outside these containers and needs its
+own model memory.
+
+## Plan disk use
+
+Account for:
+
+- Podman images and writable layers;
+- Session- and Attempt-owned root `node_modules` volumes for Node projects;
+- every Workspace repository and its build artifacts;
+- `.axo-variants/` clones and manifests during unresolved Attempts;
+- the full Axocoatl data root and attachments;
+- local model weights and embedding downloads;
+- backups.
+
+Git clones can share object storage in some layouts, but build outputs and
+untracked files can still multiply. Finish Attempt cleanup and confirm
+`.axo-variants/` state before assuming the space has been reclaimed.
+
+## Plan ports and networking
+
+Exposed ports are selected when the Session is created. Local Podman allocates
+dynamic loopback host mappings and retries the complete mapping when a rootless
+proxy race collides. If the requested set still cannot be allocated, environment
+preparation fails with retained evidence; Axocoatl does not silently drop one
+Preview port. Keep one known logical container port per development server when
+possible and verify it in Preview.
+
+`network: none` disables outbound access and port publication. Bridge mode
+allows both, subject to the host firewall and process binding.
+
+## Operational sizing method
+
+1. Measure one representative Session running its heaviest repository check.
+2. Measure the model process separately.
+3. Repeat with the maximum intended number of Ways.
+4. Observe host memory pressure, CPU saturation, PID use, disk growth, and
+   check duration.
+5. Lower concurrency or separate the model workload if the host approaches a
+   failure boundary.
+
+<Aside type="note" title="Guidance is not a guarantee">
+Repository scripts can spawn child processes, download large dependencies, or
+consume resources outside normal estimates. Use host/container observability
+and enforce policy appropriate to the project.
+</Aside>
+
+Next: [Troubleshooting →](/operate/troubleshooting/)

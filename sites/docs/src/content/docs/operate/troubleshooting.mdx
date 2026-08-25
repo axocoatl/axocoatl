@@ -1,0 +1,132 @@
+---
+title: Troubleshooting
+description: Diagnose startup, provider, Session, Preview, Attempts, History, MCP, Automation, and service failures from the current state boundaries.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Start with evidence from the same config, data root, and daemon process that the
+workbench uses.
+
+## First-response sequence
+
+<Steps>
+
+1. Record the version and current directory:
+
+   ```sh
+   axocoatl --version
+   pwd
+   ```
+
+2. Validate and run doctor with the exact config path:
+
+   ```sh
+   axocoatl validate /absolute/path/to/axocoatl.yaml
+   axocoatl doctor --config /absolute/path/to/axocoatl.yaml
+   ```
+
+3. Check whether another daemon owns the per-user IPC socket:
+
+   ```sh
+   axocoatl service status
+   ```
+
+4. Stop the service before a foreground diagnostic run:
+
+   ```sh
+   axocoatl service stop
+   RUST_LOG=debug axocoatl dev --config /absolute/path/to/axocoatl.yaml
+   ```
+
+5. Reproduce once, record the full error, and inspect the browser console for a
+   workbench-only failure.
+
+</Steps>
+
+## Startup and state
+
+| Symptom | Likely boundary | Action |
+| --- | --- | --- |
+| Config parses in one shell but not the service | Environment variable is not injected | Configure the service environment; `.env` is not auto-loaded |
+| Old Sessions disappeared | Different relative `./data` root | Set and inspect an absolute `AXOCOATL_DATA_DIR` |
+| “Address/socket already in use” | Another daemon owns HTTP or IPC | Stop the service/other process; do not run two default daemons |
+| “Data directory is already owned” | Another daemon or direct CLI bootstrap holds the same durable runtime authority | Use the running daemon or stop that process; never point two live Axocoatl processes at one data root |
+| Non-loopback bind is refused | Authentication is absent | Configure API keys or bearer tokens; keep loopback for local use |
+| `doctor` passes but a hosted request fails | Doctor checks key presence, not provider access | Verify exported key, model entitlement, endpoint, and provider response |
+| OpenRouter credential warning | The configured key is empty, a placeholder, or an unresolved environment reference | Export the referenced key in the process environment that starts Axocoatl; doctor checks presence but does not make a live OpenRouter request |
+
+## Sessions and tools
+
+| Symptom | Check |
+| --- | --- |
+| Session needs setup review | Inspect the exact proposed image and command; approve that command explicitly or clear it and continue without setup |
+| Session is stuck Preparing after a disconnect | Reopen it; cancellation recovery should mark the exact generation failed and offer Review setup/Rebuild rather than leaving tools enabled |
+| Session environment failed | Read the retained setup result/error, correct the runtime or command, then choose Rebuild environment |
+| Files, Source Control, Terminal, Preview, or Send returns a lifecycle conflict | The Session is not Ready; review or rebuild its environment. These tools do not fall back to the host checkout |
+| Session creation fails | Podman readiness, existing canonical directory, curated/arbitrary image policy, malformed `.devcontainer` metadata, selected Agent |
+| Podman is missing | Install and initialize it yourself using `axocoatl doctor` guidance; Session startup never runs a host package manager or creates the VM |
+| A `network: none` Session lacks `git`, `realpath`, or another required command | Select an image that already contains Axocoatl's repository commands; in-container readiness provisioning cannot download them without a network |
+| Host `node_modules` is absent inside a root Node Session | Expected on local Podman: a Session-owned Linux volume masks the host dependency tree; run approved setup inside the sandbox |
+| E2B rejects the selected image | Clear the Session/devcontainer OCI image or switch the daemon to Podman; E2B uses one daemon-global template |
+| E2B environment fails its command probe | Build the required repository commands into the configured template; Axocoatl verifies but does not package-provision E2B |
+| An E2B Session fails to resume | Inspect its retained exact runtime ID and authority error; Axocoatl will not silently replace a missing or unreachable remote workspace with a fresh clone |
+| E2B creation remains blocked with an exact creation token | Restore provider access so Axocoatl can reconcile it. If that is impossible, delete every sandbox bearing metadata `axocoatl_creation_token=<exact token>`, then use the exact-token manual confirmation in **Review setup**; confirmation itself does not contact or delete E2B |
+| Terminal or Agent command cannot reach the internet | `sandbox.network`, DNS, proxy, and host policy |
+| Preview cannot connect | Exposed port at creation, server still running, bind to `0.0.0.0` inside sandbox |
+| Preview says the port is not configured | Create a Session with that logical container port under **Exposed ports** |
+| Preview transport cannot be allocated | Check Podman health; each Session receives its own dynamic loopback host mapping |
+| Files show unexpected changes | `git status --short`, Source Control **All**, then **Last turn** |
+| Stop appears ineffective | The current tool may be reaching a safe boundary; inspect active turn and History |
+| Retry is unavailable | The historical turn used immutable attached context; attach it again and send a new turn |
+
+## Ways and Git
+
+| Symptom | Check |
+| --- | --- |
+| Explore ways is disabled | Autonomous single-Agent Session, local Podman backend, Git repository, no unresolved set |
+| Model preflight fails | Exact Agent provider/model and credential availability |
+| Checks never finish | Use a bounded non-interactive command, not a watcher/server |
+| Judge is disabled | Checks finished and at least two non-empty Attempts passed |
+| Keep is in recovery | Reopen the same set and choose **Finish Keep**; do not discard after apply begins |
+| Cleanup is incomplete | Choose **Finish cleanup** and inspect `.axo-variants/` only after the UI reports terminal cleanup |
+
+## Settings, MCP, and Automations
+
+| Symptom | Cause/action |
+| --- | --- |
+| Agent Settings edits vanished | They are in-memory only; copy accepted values into YAML and restart the daemon |
+| Editing YAML + `agents restart` had no effect | That command restarts from already-loaded config; restart the daemon |
+| Catalog-connected MCP server vanished | Connect/remove is process-local; add durable YAML and restart |
+| Existing Agent cannot see a newly connected MCP tool | Agent executors were already built; restart from durable config |
+| MCP call remains parked | Resolve the approval; after five minutes or disconnect it denies |
+| YAML Skill did not run from `axocoatl skills run` | CLI Skills are separate prompt templates; fire the configured Skill in Settings/API |
+| Scheduled Automation did not fire at a calendar time | Only fixed intervals are supported; cron is not |
+| Run was `running` across restart | Arbitrary in-flight calls are marked failed; only a top-level Interrupt resumes durably |
+
+## Service problems
+
+On Linux:
+
+```sh
+systemctl --user status axocoatl
+journalctl --user -u axocoatl --since today
+```
+
+On macOS:
+
+```sh
+launchctl print gui/$(id -u)/ai.axocoatl.daemon
+```
+
+Re-run `axocoatl service install --config ...` when the binary or config path
+changes. Installation does not start the service; follow it with
+`axocoatl service start`.
+
+<Aside type="caution" title="Do not clear data as a first fix">
+The data root contains Session history, checkpoints, Automations, permissions,
+and attachments. Stop the daemon and make a cold backup before moving or
+repairing it. A new empty data root can hide the original problem.
+</Aside>
+
+Next: [Local verification →](/operate/verification/)

@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use axocoatl_daemon::AxocoatlDaemon;
 use axum::{
-    routing::{get, post},
+    extract::DefaultBodyLimit,
+    routing::{any, get, post},
     Router,
 };
 use tokio::sync::RwLock;
@@ -26,6 +27,9 @@ pub fn build_router(
     rate_limiter: Arc<middleware::RateLimiter>,
 ) -> Router {
     let auth_for_mw = auth.clone();
+    let cors_origins_for_auth = Arc::new(cors_origins.clone());
+    let preview_state = state.clone();
+    let shutdown_state = state.clone();
     Router::new()
         .route("/", get(routes::dashboard))
         .route("/lattice/{file}", get(routes::lattice_asset))
@@ -81,9 +85,53 @@ pub fn build_router(
             "/api/sessions",
             get(routes::list_sessions).post(routes::create_session),
         )
+        .route(
+            "/api/workspaces",
+            get(routes::list_workspaces).post(routes::create_workspace),
+        )
+        .route(
+            "/api/workspaces/{id}",
+            get(routes::get_workspace).patch(routes::rename_workspace),
+        )
+        .route(
+            "/api/workspaces/{id}/sessions",
+            get(routes::list_workspace_sessions).post(routes::create_workspace_session),
+        )
         .route("/api/sessions/{id}/execute", post(routes::execute_session))
         .route("/api/sessions/{id}/messages", get(routes::session_messages))
+        .route("/api/sessions/{id}/turns", get(routes::session_turns))
+        .route(
+            "/api/sessions/{id}/active-turn",
+            get(routes::active_session_turn),
+        )
+        .route(
+            "/api/sessions/{id}/turns/{turn_id}",
+            get(routes::session_turn),
+        )
+        .route(
+            "/api/session-turns/search",
+            get(routes::search_session_turns),
+        )
+        .route("/api/sessions/{id}/export", get(routes::export_session))
         .route("/api/sessions/{id}/rewind", post(routes::rewind_session))
+        .route(
+            "/api/sessions/{id}/attachments",
+            get(routes::list_session_attachments)
+                .post(routes::upload_session_attachment)
+                // Multipart has boundary overhead in addition to the 25 MiB
+                // document cap enforced while reading the file field.
+                .layer(DefaultBodyLimit::max(26 * 1024 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/attachments/{reference_id}",
+            get(routes::get_session_attachment)
+                .patch(routes::patch_session_attachment)
+                .delete(routes::delete_session_attachment),
+        )
+        .route(
+            "/api/sessions/{id}/attachments/{reference_id}/content",
+            get(routes::get_session_attachment_content),
+        )
         .route("/api/sessions/{id}/git/status", get(routes::git_status))
         .route("/api/sessions/{id}/git/diff", get(routes::git_diff))
         .route("/api/sessions/{id}/git/branches", get(routes::git_branches))
@@ -91,6 +139,18 @@ pub fn build_router(
         .route(
             "/api/sessions/{id}/check",
             axum::routing::put(routes::set_session_check),
+        )
+        .route(
+            "/api/sessions/{id}/environment",
+            axum::routing::put(routes::configure_session_environment),
+        )
+        .route(
+            "/api/sessions/{id}/environment/rebuild",
+            post(routes::rebuild_session_environment),
+        )
+        .route(
+            "/api/sessions/{id}/environment/confirm-runtime-cleanup",
+            post(routes::confirm_session_runtime_cleanup),
         )
         .route("/api/sessions/{id}/git/hunks", get(routes::git_hunks))
         .route(
@@ -165,11 +225,11 @@ pub fn build_router(
         )
         .route(
             "/api/sessions/{id}/proxy/{port}",
-            get(routes::session_browser_proxy_root),
+            any(routes::session_browser_proxy_root),
         )
         .route(
             "/api/sessions/{id}/proxy/{port}/{*tail}",
-            get(routes::session_browser_proxy),
+            any(routes::session_browser_proxy),
         )
         .route("/axo-tap.js", get(routes::axo_tap_script))
         .route("/brand/{file}", get(routes::brand_asset))
@@ -213,6 +273,7 @@ pub fn build_router(
             "/api/sessions/{id}",
             axum::routing::delete(routes::close_session).patch(routes::rename_session),
         )
+        .route("/api/sessions/{id}/reopen", post(routes::reopen_session))
         // ── Chats ── lightweight conversations, no directory/sandbox.
         .route(
             "/api/chat",
@@ -228,7 +289,13 @@ pub fn build_router(
         .route("/api/chat/{id}/export", get(routes::export_chat))
         .route(
             "/api/chat/{id}/attach",
-            post(routes::upload_chat_attachment).put(routes::attach_file_to_chat),
+            post(routes::upload_chat_attachment)
+                .put(routes::attach_file_to_chat)
+                // Multipart has boundary overhead in addition to the 10 MiB
+                // image cap enforced by the upload handler. Without this
+                // override Axum's default body limit rejects valid images
+                // before the handler can apply its type-specific limit.
+                .layer(DefaultBodyLimit::max(11 * 1024 * 1024)),
         )
         .route(
             "/api/chat/{id}/attach/{file_id}",
@@ -239,7 +306,11 @@ pub fn build_router(
         // Retained cross-chat FileStore API (no peer Files browser surface).
         .route(
             "/api/files",
-            get(routes::list_files).post(routes::upload_file),
+            get(routes::list_files)
+                .post(routes::upload_file)
+                // Keep the compatibility FileStore uploader aligned with the
+                // same bounded 10 MiB image contract as chat attachments.
+                .layer(DefaultBodyLimit::max(11 * 1024 * 1024)),
         )
         .route(
             "/api/files/{id}",
@@ -262,7 +333,8 @@ pub fn build_router(
         .layer(axum::middleware::from_fn(
             move |req: axum::extract::Request, next: axum::middleware::Next| {
                 let cfg = auth_for_mw.clone();
-                async move { auth::enforce(&cfg, req, next).await }
+                let allowed_origins = cors_origins_for_auth.clone();
+                async move { auth::enforce(&cfg, allowed_origins.as_slice(), req, next).await }
             },
         ))
         .layer(axum::middleware::from_fn(
@@ -273,6 +345,21 @@ pub fn build_router(
         ))
         .layer(axum::middleware::from_fn(middleware::request_logging))
         .layer(middleware::cors_layer(&cors_origins))
+        // Preview uses the same listener but never the workbench router. This
+        // outermost Host boundary maps every virtual-host path or WebSocket to
+        // one Session/port and rejects invalid/non-local Preview hosts.
+        .layer(axum::middleware::from_fn_with_state(
+            preview_state,
+            routes::preview_host_boundary,
+        ))
+        // Outermost request ownership: a shutdown notification drops every
+        // in-flight HTTP handler, including Preview routing and runtime
+        // creation, before checked Session cleanup waits on its admission
+        // barrier. Upgraded socket tasks use their own lifecycle gates.
+        .layer(axum::middleware::from_fn_with_state(
+            shutdown_state,
+            middleware::cancel_on_shutdown,
+        ))
         .with_state(state)
 }
 
@@ -302,7 +389,8 @@ pub async fn serve_shared(state: AppState, host: &str, port: u16) -> std::io::Re
         let d = state.read().await;
         let s = &d.config.server;
         (
-            auth::AuthConfig::new(s.auth.api_keys.clone(), s.auth.bearer_tokens.clone()),
+            auth::AuthConfig::new(s.auth.api_keys.clone(), s.auth.bearer_tokens.clone())
+                .with_allow_unauthenticated_remote(s.auth.allow_unauthenticated),
             s.cors_origins.clone(),
             s.auth.allow_unauthenticated,
             s.rate_limit.clone(),
@@ -320,10 +408,15 @@ pub async fn serve_shared(state: AppState, host: &str, port: u16) -> std::io::Re
              upstream proxy enforces auth."
         );
         tracing::error!("{msg}");
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            msg,
-        ));
+        state.read().await.begin_shutdown();
+        let cleanup = state.read().await.shutdown_session_runtimes_checked().await;
+        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, msg);
+        return Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup_error) => std::io::Error::other(format!(
+                "{error}; Session runtime cleanup after the rejected bind was incomplete: {cleanup_error}"
+            )),
+        });
     }
     if auth.enabled {
         tracing::info!(host, "Axocoatl API authentication enabled");
@@ -347,20 +440,146 @@ pub async fn serve_shared(state: AppState, host: &str, port: u16) -> std::io::Re
         );
     }
 
-    let app = build_router(state, auth, cors_origins, rate_limiter);
+    let app = build_router(state.clone(), auth, cors_origins, rate_limiter);
 
     let addr = format!("{host}:{port}");
     tracing::info!(addr = %addr, "Starting Axocoatl API server");
 
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    // `into_make_service_with_connect_info` exposes the peer `SocketAddr` to the
-    // rate-limit middleware so it can key per client IP.
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .await?;
-    Ok(())
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            state.read().await.begin_shutdown();
+            let cleanup = state.read().await.shutdown_session_runtimes_checked().await;
+            return Err(match cleanup {
+                Ok(()) => error,
+                Err(cleanup_error) => std::io::Error::other(format!(
+                    "{error}; Session runtime cleanup after bind failure was incomplete: {cleanup_error}"
+                )),
+            });
+        }
+    };
+    // Start draining connections as soon as OS or IPC shutdown is requested,
+    // while checked runtime cleanup proceeds concurrently. A stuck WebSocket
+    // or request gets a bounded grace period; aborting the server then drops
+    // that request so its runtime creation lease can roll back and cleanup can
+    // finish rather than hanging forever.
+    let (graceful_tx, mut graceful_rx) = tokio::sync::watch::channel(false);
+    let mut server_task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            while !*graceful_rx.borrow() {
+                if graceful_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .await
+    });
+    let shutdown_request = wait_for_shutdown_request(state.clone());
+    tokio::pin!(shutdown_request);
+
+    tokio::select! {
+        joined = &mut server_task => {
+            let server = match joined {
+                Ok(server) => server,
+                Err(error) => Err(std::io::Error::other(format!("HTTP server task failed: {error}"))),
+            };
+            state.read().await.begin_shutdown();
+            let cleanup = state.read().await.shutdown_session_runtimes_checked().await;
+            combine_server_cleanup(server, cleanup)
+        }
+        _ = &mut shutdown_request => {
+            state.read().await.begin_shutdown();
+            let _ = graceful_tx.send(true);
+            let cleanup_state = state.clone();
+            let cleanup_task = tokio::spawn(async move {
+                cleanup_state.read().await.shutdown_session_runtimes_checked().await
+            });
+
+            let server = match tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                &mut server_task,
+            ).await {
+                Ok(joined) => match joined {
+                    Ok(server) => server,
+                    Err(error) => Err(std::io::Error::other(format!(
+                        "HTTP server task failed: {error}"
+                    ))),
+                },
+                Err(_) => {
+                    tracing::warn!("forcing remaining HTTP connections closed after shutdown grace period");
+                    server_task.abort();
+                    let _ = server_task.await;
+                    Ok(())
+                }
+            };
+            let cleanup = match cleanup_task.await {
+                Ok(cleanup) => cleanup,
+                Err(error) => {
+                    let server_detail = server
+                        .as_ref()
+                        .err()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "HTTP server stopped".to_string());
+                    return Err(std::io::Error::other(format!(
+                        "{server_detail}; Session runtime cleanup task failed: {error}"
+                    )));
+                }
+            };
+            combine_server_cleanup(server, cleanup)
+        }
+    }
+}
+
+fn combine_server_cleanup(
+    server: std::io::Result<()>,
+    cleanup: Result<(), axocoatl_daemon::DaemonError>,
+) -> std::io::Result<()> {
+    match (server, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(cleanup_error)) => Err(std::io::Error::other(cleanup_error.to_string())),
+        (Err(error), Err(cleanup_error)) => Err(std::io::Error::other(format!(
+            "{error}; Session runtime shutdown was incomplete: {cleanup_error}"
+        ))),
+    }
+}
+
+async fn wait_for_shutdown_request(state: AppState) {
+    let notifier = state.read().await.shutdown_notifier();
+    if state.read().await.shutdown_requested() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = terminate.recv() => {}
+                    _ = notifier.notified() => {}
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "could not install SIGTERM handler; shutdown remains available through Ctrl-C and the daemon control path");
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = notifier.notified() => {}
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = notifier.notified() => {}
+        }
+    }
+    state.read().await.begin_shutdown();
 }
 
 #[cfg(test)]

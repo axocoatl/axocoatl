@@ -31,7 +31,7 @@ use axocoatl_core::{AgentOutput, TokenUsageStats};
 use crate::bootstrap::AxocoatlDaemon;
 use crate::error::DaemonError;
 use crate::interrupt::PendingInterrupt;
-use crate::workflow::WorkflowOutput;
+use crate::workflow::{AgentActivationOutput, WorkflowOutput};
 
 /// Owned, clonable dependencies for an Automation run.
 ///
@@ -48,7 +48,7 @@ pub struct AutomationExecutionContext {
     >,
     run_store: Arc<crate::automation_runs::AutomationRunStore>,
     tool_executor: Arc<axocoatl_tools::ToolExecutor>,
-    stream_bus: tokio::sync::broadcast::Sender<crate::stream::StreamFrame>,
+    stream_bus: crate::stream::StreamBus,
     pub(crate) schedule_table: crate::scheduler::ScheduleTable,
     pub(crate) proactive_table: crate::proactive::ProactiveTable,
 }
@@ -251,9 +251,13 @@ pub async fn resolve_pending_interrupt(
             )
             .await;
             let status = final_run_status(&result, had_recorded_failure);
+            let final_content = result
+                .as_ref()
+                .ok()
+                .map(|output| output.final_content.clone());
             if let Err(error) = context
                 .run_store
-                .finish(&automation.id, &run.run_id, status)
+                .finish_with_content(&automation.id, &run.run_id, status, final_content)
                 .await
             {
                 tracing::warn!(automation = %automation.id, run = %run.run_id, error = %error, "could not finalize recovered Automation run");
@@ -392,9 +396,13 @@ pub async fn execute_started_automation_run_in_context(
     )
     .await;
     let status = final_run_status(&result, false);
+    let final_content = result
+        .as_ref()
+        .ok()
+        .map(|output| output.final_content.clone());
     if let Err(e) = daemon
         .run_store
-        .finish(&automation.id, run_id, status)
+        .finish_with_content(&automation.id, run_id, status, final_content)
         .await
     {
         tracing::warn!("could not finalize run: {e}");
@@ -454,6 +462,84 @@ struct RecoveredInterruptState {
     cancelled: bool,
 }
 
+#[derive(Debug, Clone)]
+struct WorkflowProgress {
+    agent_outputs: Vec<(String, AgentOutput)>,
+    agent_activations: Vec<AgentActivationOutput>,
+    completed_agents: Vec<String>,
+    failed_agents: Vec<(String, String)>,
+    total_token_usage: TokenUsageStats,
+    token_usage_known: bool,
+}
+
+impl Default for WorkflowProgress {
+    fn default() -> Self {
+        Self {
+            agent_outputs: Vec::new(),
+            agent_activations: Vec::new(),
+            completed_agents: Vec::new(),
+            failed_agents: Vec::new(),
+            total_token_usage: TokenUsageStats::default(),
+            // A run that never dispatches a provider is exactly known zero.
+            token_usage_known: true,
+        }
+    }
+}
+
+impl WorkflowProgress {
+    fn from_checkpoint(checkpoint: &crate::automation_runs::Checkpoint) -> Self {
+        Self {
+            agent_outputs: checkpoint.agent_outputs.clone(),
+            agent_activations: checkpoint.agent_activations.clone(),
+            completed_agents: checkpoint.completed_agents.clone(),
+            failed_agents: checkpoint.failed_agents.clone(),
+            total_token_usage: checkpoint.total_token_usage.clone(),
+            token_usage_known: checkpoint.token_usage_known,
+        }
+    }
+
+    fn record_agent_success(
+        &mut self,
+        activation_id: String,
+        agent_id: &str,
+        output: AgentOutput,
+        token_usage_known: bool,
+    ) {
+        self.total_token_usage.merge(&output.token_usage);
+        self.token_usage_known &= token_usage_known;
+        self.agent_outputs
+            .push((agent_id.to_string(), output.clone()));
+        self.agent_activations.push(AgentActivationOutput {
+            activation_id,
+            agent_id: agent_id.to_string(),
+            output,
+        });
+    }
+
+    fn merge_workflow(&mut self, prefix: &str, output: WorkflowOutput) {
+        self.total_token_usage.merge(&output.total_token_usage);
+        self.token_usage_known &= output.token_usage_known;
+        self.agent_outputs.extend(output.agent_outputs);
+        self.agent_activations
+            .extend(output.agent_activations.into_iter().map(|mut activation| {
+                activation.activation_id = format!("{prefix}/{}", activation.activation_id);
+                activation
+            }));
+        self.completed_agents.extend(
+            output
+                .completed_agents
+                .into_iter()
+                .map(|identity| format!("{prefix}/{identity}")),
+        );
+        self.failed_agents.extend(
+            output
+                .failed_agents
+                .into_iter()
+                .map(|(identity, error)| (format!("{prefix}/{identity}"), error)),
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute_automation_from_state<'a>(
     daemon: &'a AutomationExecutionContext,
@@ -490,18 +576,19 @@ fn execute_automation_from_state<'a>(
         // Restore the executor's durable state when this is a continuation.
         // Completed nodes are represented by output keys; active edges retain
         // the exact branch decisions already made before the Interrupt.
+        let mut progress = recovered
+            .as_ref()
+            .map(|state| WorkflowProgress::from_checkpoint(&state.checkpoint))
+            .unwrap_or_default();
         let mut active: HashSet<(String, String)> = match recovered.as_ref() {
-            Some(state) => restore_active_edges(&state.checkpoint.active_edges)?,
+            Some(state) => restore_active_edges(&state.checkpoint.active_edges)
+                .map_err(|error| workflow_error_with_progress(error, &progress))?,
             None => HashSet::new(),
         };
         let mut outputs: HashMap<String, String> = recovered
             .as_ref()
             .map(|state| state.checkpoint.outputs.clone())
             .unwrap_or_default();
-        let mut agent_outputs: Vec<(String, AgentOutput)> = Vec::new();
-        let mut completed: Vec<String> = Vec::new();
-        let mut failed: Vec<(String, String)> = Vec::new();
-        let mut total_tokens = TokenUsageStats::default();
         let mut step_idx: usize = recovered
             .as_ref()
             .map(|state| state.checkpoint.step_idx)
@@ -518,17 +605,23 @@ fn execute_automation_from_state<'a>(
                 .iter()
                 .find(|node| node.id == node_id)
                 .ok_or_else(|| {
-                    DaemonError::WorkflowExecution(format!(
-                        "run '{run_id}' is parked at missing interrupt '{node_id}'"
-                    ))
+                    workflow_error_with_progress(
+                        DaemonError::WorkflowExecution(format!(
+                            "run '{run_id}' is parked at missing interrupt '{node_id}'"
+                        )),
+                        &progress,
+                    )
                 })?;
             let AutomationNodeKind::Interrupt {
                 resume_strategy, ..
             } = &node.kind
             else {
-                return Err(DaemonError::WorkflowExecution(format!(
-                    "run '{run_id}' is parked at node '{node_id}', which is no longer an Interrupt"
-                )));
+                return Err(workflow_error_with_progress(
+                    DaemonError::WorkflowExecution(format!(
+                        "run '{run_id}' is parked at node '{node_id}', which is no longer an Interrupt"
+                    )),
+                    &progress,
+                ));
             };
             let resolved_input = resolve_node_input(node, trigger_input, &outputs);
             let final_out = if state.cancelled {
@@ -542,7 +635,9 @@ fn execute_automation_from_state<'a>(
                 }
             };
             outputs.insert(node_id.clone(), final_out);
-            completed.push(format!("interrupt:{node_id}"));
+            progress
+                .completed_agents
+                .push(format!("interrupt:{node_id}"));
             activate_all_outgoing(automation, &node_id, &mut active);
             transition_with_checkpoint(
                 daemon,
@@ -554,8 +649,10 @@ fn execute_automation_from_state<'a>(
                 crate::automation_runs::CheckpointEvent::InterruptResumed,
                 &outputs,
                 &active,
+                &progress,
             )
-            .await?;
+            .await
+            .map_err(|error| workflow_error_with_progress(error, &progress))?;
             emit_event(
                 daemon,
                 &automation.id,
@@ -613,27 +710,26 @@ fn execute_automation_from_state<'a>(
             }
 
             let resolved_input = resolve_node_input(node, trigger_input, &outputs);
-            let failure_count_before_node = failed.len();
+            let failure_count_before_node = progress.failed_agents.len();
 
             match &node.kind {
                 AutomationNodeKind::Agent { agent_id, .. } => {
                     match run_agent_node(daemon, &automation.id, node_id, agent_id, &resolved_input)
                         .await
                     {
-                        Ok(output) => {
-                            outputs.insert(node_id.clone(), output.content.clone());
-                            total_tokens.input_tokens = total_tokens
-                                .input_tokens
-                                .saturating_add(output.token_usage.input_tokens);
-                            total_tokens.output_tokens = total_tokens
-                                .output_tokens
-                                .saturating_add(output.token_usage.output_tokens);
-                            agent_outputs.push((agent_id.clone(), output));
-                            completed.push(agent_id.clone());
+                        Ok(measured) => {
+                            outputs.insert(node_id.clone(), measured.output.content.clone());
+                            progress.record_agent_success(
+                                node_id.clone(),
+                                agent_id,
+                                measured.output,
+                                measured.token_usage_known,
+                            );
+                            progress.completed_agents.push(agent_id.clone());
                             activate_all_outgoing(automation, node_id, &mut active);
                         }
                         Err(e) => {
-                            record_failure(&mut failed, &mut outputs, node_id, agent_id, e);
+                            record_failure(&mut progress, &mut outputs, node_id, agent_id, e);
                             // Failed agents still activate outgoing edges so the user
                             // can route to a "handle failure" branch if they want.
                             // Whether the cascade continues is up to those downstream.
@@ -645,7 +741,7 @@ fn execute_automation_from_state<'a>(
                     match run_tool_node(daemon, tool_id, &resolved_input).await {
                         Ok(output_str) => {
                             outputs.insert(node_id.clone(), output_str.clone());
-                            completed.push(format!("tool:{tool_id}"));
+                            progress.completed_agents.push(format!("tool:{tool_id}"));
                             activate_all_outgoing(automation, node_id, &mut active);
                             // Preserve a TaskCompleted-style observability frame
                             // for compatibility consumers of Automation events.
@@ -661,7 +757,9 @@ fn execute_automation_from_state<'a>(
                         }
                         Err(e) => {
                             let msg = e.to_string();
-                            failed.push((format!("tool:{tool_id}"), msg.clone()));
+                            progress
+                                .failed_agents
+                                .push((format!("tool:{tool_id}"), msg.clone()));
                             outputs.insert(node_id.clone(), String::new());
                             tracing::warn!(
                                 "automation '{}' tool node '{}' (tool {}) failed: {}",
@@ -706,7 +804,9 @@ fn execute_automation_from_state<'a>(
                             automation.id, node_id
                         );
                         tracing::warn!("{message}");
-                        failed.push((format!("map:{node_id}"), message.clone()));
+                        progress
+                            .failed_agents
+                            .push((format!("map:{node_id}"), message.clone()));
                         outputs.insert(node_id.clone(), "[]".to_string());
                         activate_all_outgoing(automation, node_id, &mut active);
                         emit_event(
@@ -728,6 +828,7 @@ fn execute_automation_from_state<'a>(
                             Some(&message),
                             &outputs,
                             &active,
+                            &progress,
                         )
                         .await;
                         step_idx += 1;
@@ -747,33 +848,98 @@ fn execute_automation_from_state<'a>(
                         // / FromTrigger / Literal / Template all work normally.
                         let body_input =
                             resolve_node_input_with_item(body, trigger_input, &outputs, Some(item));
-                        let result: Result<String, DaemonError> = match &body.kind {
-                            AutomationNodeKind::Agent { agent_id, .. } => run_agent_node(
-                                daemon,
-                                &automation.id,
-                                &format!("{node_id}#{idx}"),
-                                agent_id,
-                                &body_input,
-                            )
-                            .await
-                            .map(|o| o.content),
+                        let activation_id = format!("{node_id}#{idx}");
+                        match &body.kind {
+                            AutomationNodeKind::Agent { agent_id, .. } => {
+                                match run_agent_node(
+                                    daemon,
+                                    &automation.id,
+                                    &activation_id,
+                                    agent_id,
+                                    &body_input,
+                                )
+                                .await
+                                {
+                                    Ok(measured) => {
+                                        collected.push(measured.output.content.clone());
+                                        progress.record_agent_success(
+                                            activation_id.clone(),
+                                            agent_id,
+                                            measured.output,
+                                            measured.token_usage_known,
+                                        );
+                                        progress
+                                            .completed_agents
+                                            .push(format!("{activation_id}/{agent_id}"));
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!("Map iteration {idx} failed: {error}");
+                                        collected.push(String::new());
+                                        record_failure(
+                                            &mut progress,
+                                            &mut outputs,
+                                            &activation_id,
+                                            &format!("map:{activation_id}/{agent_id}"),
+                                            error,
+                                        );
+                                    }
+                                }
+                            }
                             AutomationNodeKind::Tool { tool_id, .. } => {
-                                run_tool_node(daemon, tool_id, &body_input).await
+                                match run_tool_node(daemon, tool_id, &body_input).await {
+                                    Ok(output) => collected.push(output),
+                                    Err(error) => {
+                                        tracing::warn!("Map iteration {idx} failed: {error}");
+                                        collected.push(String::new());
+                                        merge_nested_workflow_failure(&mut progress, &error);
+                                        progress.failed_agents.push((
+                                            format!("map:{activation_id}/tool:{tool_id}"),
+                                            error.to_string(),
+                                        ));
+                                    }
+                                }
                             }
                             AutomationNodeKind::Subgraph { automation_id, .. } => {
-                                run_subgraph_node(daemon, automation_id, &body_input, depth + 1)
-                                    .await
+                                match run_subgraph_node(
+                                    daemon,
+                                    automation_id,
+                                    &body_input,
+                                    depth + 1,
+                                )
+                                .await
+                                {
+                                    Ok(output) => {
+                                        let failed = !output.failed_agents.is_empty();
+                                        let content = output.final_content.clone();
+                                        progress.merge_workflow(
+                                            &format!("{activation_id}/subgraph:{automation_id}"),
+                                            output,
+                                        );
+                                        collected.push(if failed {
+                                            String::new()
+                                        } else {
+                                            content
+                                        });
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!("Map iteration {idx} failed: {error}");
+                                        collected.push(String::new());
+                                        merge_nested_workflow_failure(&mut progress, &error);
+                                        progress.failed_agents.push((
+                                            format!("map:{activation_id}/subgraph:{automation_id}"),
+                                            error.to_string(),
+                                        ));
+                                    }
+                                }
                             }
-                            _ => Err(DaemonError::WorkflowExecution(format!(
-                                "Map body node '{body_node}' has unsupported kind for iteration"
-                            ))),
-                        };
-                        match result {
-                            Ok(out) => collected.push(out),
-                            Err(e) => {
-                                tracing::warn!("Map iteration {idx} failed: {e}");
+                            _ => {
+                                let error = DaemonError::WorkflowExecution(format!(
+                                    "Map body node '{body_node}' has unsupported kind for iteration"
+                                ));
                                 collected.push(String::new());
-                                failed.push((format!("map:{node_id}#{idx}"), e.to_string()));
+                                progress
+                                    .failed_agents
+                                    .push((format!("map:{activation_id}"), error.to_string()));
                             }
                         }
                     }
@@ -787,7 +953,9 @@ fn execute_automation_from_state<'a>(
                             .collect(),
                     );
                     outputs.insert(node_id.clone(), arr.to_string());
-                    completed.push(format!("map:{node_id} ({} items)", items.len()));
+                    progress
+                        .completed_agents
+                        .push(format!("map:{node_id} ({} items)", items.len()));
                     activate_all_outgoing(automation, node_id, &mut active);
                     emit_event(
                         daemon,
@@ -803,12 +971,28 @@ fn execute_automation_from_state<'a>(
                     match run_subgraph_node(daemon, automation_id, &resolved_input, depth + 1).await
                     {
                         Ok(out) => {
-                            outputs.insert(node_id.clone(), out);
-                            completed.push(format!("subgraph:{automation_id}"));
+                            let failed = !out.failed_agents.is_empty();
+                            let content = out.final_content.clone();
+                            progress.merge_workflow(
+                                &format!("{node_id}/subgraph:{automation_id}"),
+                                out,
+                            );
+                            outputs.insert(
+                                node_id.clone(),
+                                if failed { String::new() } else { content },
+                            );
+                            if !failed {
+                                progress
+                                    .completed_agents
+                                    .push(format!("subgraph:{automation_id}"));
+                            }
                             activate_all_outgoing(automation, node_id, &mut active);
                         }
                         Err(e) => {
-                            failed.push((format!("subgraph:{automation_id}"), e.to_string()));
+                            merge_nested_workflow_failure(&mut progress, &e);
+                            progress
+                                .failed_agents
+                                .push((format!("subgraph:{automation_id}"), e.to_string()));
                             outputs.insert(node_id.clone(), String::new());
                             activate_all_outgoing(automation, node_id, &mut active);
                         }
@@ -823,7 +1007,7 @@ fn execute_automation_from_state<'a>(
                         .or_else(|| default_value.clone())
                         .unwrap_or_default();
                     outputs.insert(node_id.clone(), value);
-                    completed.push(format!("input:{node_id}"));
+                    progress.completed_agents.push(format!("input:{node_id}"));
                     activate_all_outgoing(automation, node_id, &mut active);
                     emit_event(
                         daemon,
@@ -851,11 +1035,12 @@ fn execute_automation_from_state<'a>(
                         crate::automation_runs::CheckpointEvent::InterruptParked,
                         &outputs,
                         &active,
+                        &progress,
                     )
                     .await;
                     if let Err(error) = parked {
                         if depth == 0 {
-                            return Err(error);
+                            return Err(workflow_error_with_progress(error, &progress));
                         }
                         // Subgraphs currently execute inside their parent's
                         // run without their own Run record. Preserve their live
@@ -885,7 +1070,9 @@ fn execute_automation_from_state<'a>(
                         .await
                         .remove(&format!("{}:{}:{}", automation.id, run_id, node_id));
                     outputs.insert(node_id.clone(), final_out);
-                    completed.push(format!("interrupt:{node_id}"));
+                    progress
+                        .completed_agents
+                        .push(format!("interrupt:{node_id}"));
                     activate_all_outgoing(automation, node_id, &mut active);
                     let resumed = transition_with_checkpoint(
                         daemon,
@@ -897,11 +1084,12 @@ fn execute_automation_from_state<'a>(
                         crate::automation_runs::CheckpointEvent::InterruptResumed,
                         &outputs,
                         &active,
+                        &progress,
                     )
                     .await;
                     if let Err(error) = resumed {
                         if depth == 0 {
-                            return Err(error);
+                            return Err(workflow_error_with_progress(error, &progress));
                         }
                         tracing::warn!(automation = %automation.id, run = %run_id, error = %error, "nested Automation Interrupt resume is process-local");
                     }
@@ -921,7 +1109,7 @@ fn execute_automation_from_state<'a>(
 
             // Standard checkpoint after Agent / Tool / Conditional / Map / Subgraph.
             // Interrupt has its own checkpointing above (parked + resumed).
-            let node_failures = &failed[failure_count_before_node..];
+            let node_failures = &progress.failed_agents[failure_count_before_node..];
             let (event, failure_detail) = if node_failures.is_empty() {
                 (crate::automation_runs::CheckpointEvent::NodeCompleted, None)
             } else {
@@ -958,6 +1146,7 @@ fn execute_automation_from_state<'a>(
                 failure_detail.as_deref(),
                 &outputs,
                 &active,
+                &progress,
             )
             .await;
             step_idx += 1;
@@ -967,13 +1156,30 @@ fn execute_automation_from_state<'a>(
 
         Ok(WorkflowOutput {
             workflow_id: automation.id.clone(),
-            agent_outputs,
+            agent_outputs: progress.agent_outputs,
+            agent_activations: progress.agent_activations,
             final_content,
-            total_token_usage: total_tokens,
-            completed_agents: completed,
-            failed_agents: failed,
+            total_token_usage: progress.total_token_usage,
+            token_usage_known: progress.token_usage_known,
+            completed_agents: progress.completed_agents,
+            failed_agents: progress.failed_agents,
         })
     })
+}
+
+fn workflow_error_with_progress(error: DaemonError, progress: &WorkflowProgress) -> DaemonError {
+    DaemonError::workflow_execution_measured(
+        error,
+        progress.total_token_usage.clone(),
+        progress.token_usage_known,
+    )
+}
+
+fn merge_nested_workflow_failure(progress: &mut WorkflowProgress, error: &DaemonError) {
+    if let Some((usage, known)) = error.workflow_token_usage() {
+        progress.total_token_usage.merge(usage);
+        progress.token_usage_known &= known;
+    }
 }
 
 /// Return the outputs of the nodes where this execution actually terminated.
@@ -1082,26 +1288,14 @@ async fn run_subgraph_node(
     automation_id: &str,
     input: &str,
     depth: usize,
-) -> Result<String, DaemonError> {
+) -> Result<WorkflowOutput, DaemonError> {
     let inner = daemon.get_automation(automation_id).await.ok_or_else(|| {
         DaemonError::WorkflowExecution(format!(
             "subgraph references unknown automation '{automation_id}'"
         ))
     })?;
     let run_id = uuid::Uuid::new_v4().to_string();
-    let out = execute_automation_inner(daemon, &inner, input, &run_id, depth).await?;
-    if !out.failed_agents.is_empty() {
-        let failures = out
-            .failed_agents
-            .iter()
-            .map(|(subject, error)| format!("{subject}: {error}"))
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(DaemonError::WorkflowExecution(format!(
-            "subgraph '{automation_id}' failed: {failures}"
-        )));
-    }
-    Ok(out.final_content)
+    execute_automation_inner(daemon, &inner, input, &run_id, depth).await
 }
 
 /// Park a HITL interrupt and return the handle the caller awaits on.
@@ -1189,6 +1383,7 @@ async fn write_checkpoint(
     failure_detail: Option<&str>,
     outputs: &HashMap<String, String>,
     active: &HashSet<(String, String)>,
+    progress: &WorkflowProgress,
 ) {
     if let Err(error) = write_checkpoint_durable(
         daemon,
@@ -1200,6 +1395,7 @@ async fn write_checkpoint(
         failure_detail,
         outputs,
         active,
+        progress,
     )
     .await
     {
@@ -1218,8 +1414,17 @@ async fn write_checkpoint_durable(
     failure_detail: Option<&str>,
     outputs: &HashMap<String, String>,
     active: &HashSet<(String, String)>,
+    progress: &WorkflowProgress,
 ) -> Result<(), DaemonError> {
-    let checkpoint = checkpoint_snapshot(step_idx, node_id, event, failure_detail, outputs, active);
+    let checkpoint = checkpoint_snapshot(
+        step_idx,
+        node_id,
+        event,
+        failure_detail,
+        outputs,
+        active,
+        progress,
+    );
     daemon
         .run_store
         .checkpoint(automation_id, run_id, checkpoint)
@@ -1242,8 +1447,9 @@ async fn transition_with_checkpoint(
     event: crate::automation_runs::CheckpointEvent,
     outputs: &HashMap<String, String>,
     active: &HashSet<(String, String)>,
+    progress: &WorkflowProgress,
 ) -> Result<(), DaemonError> {
-    let checkpoint = checkpoint_snapshot(step_idx, node_id, event, None, outputs, active);
+    let checkpoint = checkpoint_snapshot(step_idx, node_id, event, None, outputs, active, progress);
     daemon
         .run_store
         .transition_with_checkpoint(automation_id, run_id, status, checkpoint)
@@ -1262,6 +1468,7 @@ fn checkpoint_snapshot(
     failure_detail: Option<&str>,
     outputs: &HashMap<String, String>,
     active: &HashSet<(String, String)>,
+    progress: &WorkflowProgress,
 ) -> crate::automation_runs::Checkpoint {
     let flat: HashSet<String> = active.iter().map(|(a, b)| format!("{a}→{b}")).collect();
     crate::automation_runs::Checkpoint {
@@ -1271,6 +1478,12 @@ fn checkpoint_snapshot(
         failure_detail: failure_detail.map(str::to_string),
         outputs: outputs.clone(),
         active_edges: flat,
+        agent_outputs: progress.agent_outputs.clone(),
+        agent_activations: progress.agent_activations.clone(),
+        completed_agents: progress.completed_agents.clone(),
+        failed_agents: progress.failed_agents.clone(),
+        total_token_usage: progress.total_token_usage.clone(),
+        token_usage_known: progress.token_usage_known,
         at_unix: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -1279,14 +1492,18 @@ fn checkpoint_snapshot(
 }
 
 fn record_failure(
-    failed: &mut Vec<(String, String)>,
+    progress: &mut WorkflowProgress,
     outputs: &mut HashMap<String, String>,
     node_id: &str,
     agent_id: &str,
-    e: DaemonError,
+    failure: AutomationAgentFailure,
 ) {
-    let msg = e.to_string();
-    failed.push((agent_id.to_string(), msg.clone()));
+    progress.total_token_usage.merge(&failure.token_usage);
+    progress.token_usage_known &= failure.token_usage_known;
+    let msg = failure.error.to_string();
+    progress
+        .failed_agents
+        .push((agent_id.to_string(), msg.clone()));
     outputs.insert(node_id.to_string(), String::new());
     tracing::warn!(
         "automation node '{}' (agent {}) failed: {}",
@@ -1294,6 +1511,45 @@ fn record_failure(
         agent_id,
         msg
     );
+}
+
+#[derive(Debug)]
+struct MeasuredAutomationAgentOutput {
+    output: AgentOutput,
+    token_usage_known: bool,
+}
+
+#[derive(Debug)]
+struct AutomationAgentFailure {
+    error: DaemonError,
+    token_usage: TokenUsageStats,
+    token_usage_known: bool,
+}
+
+impl AutomationAgentFailure {
+    fn before_dispatch(error: DaemonError) -> Self {
+        Self {
+            error,
+            token_usage: TokenUsageStats::default(),
+            token_usage_known: true,
+        }
+    }
+
+    fn from_execution(error: axocoatl_actor::AgentExecutionFailure) -> Self {
+        let message = error.to_string();
+        let token_usage = error.token_usage;
+        Self {
+            error: DaemonError::AgentSpawn(message),
+            token_usage: token_usage.usage,
+            token_usage_known: token_usage.complete,
+        }
+    }
+}
+
+impl std::fmt::Display for AutomationAgentFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
 }
 
 fn pick_branch(
@@ -1326,15 +1582,15 @@ async fn run_agent_node(
     node_id: &str,
     agent_id: &str,
     input: &str,
-) -> Result<AgentOutput, DaemonError> {
+) -> Result<MeasuredAutomationAgentOutput, AutomationAgentFailure> {
     let actor = daemon
         .agent_registry
         .get(&axocoatl_core::AgentId::new(agent_id))
         .await
         .ok_or_else(|| {
-            DaemonError::AgentSpawn(format!(
+            AutomationAgentFailure::before_dispatch(DaemonError::AgentSpawn(format!(
                 "automation '{automation_id}' references unknown agent '{agent_id}'"
-            ))
+            )))
         })?;
 
     emit_event(
@@ -1347,9 +1603,14 @@ async fn run_agent_node(
         None,
     );
 
-    let out = axocoatl_actor::execute_agent(&actor, axocoatl_core::AgentInput::text(input))
-        .await
-        .map_err(DaemonError::AgentSpawn)?;
+    let measured =
+        axocoatl_actor::execute_agent_measured(&actor, axocoatl_core::AgentInput::text(input))
+            .await
+            .map_err(AutomationAgentFailure::from_execution)?;
+    let token_usage_known = measured.token_usage.complete;
+    let token_usage = measured.token_usage.usage.clone();
+    let mut out = measured.outcome.into_output();
+    out.token_usage = token_usage;
 
     emit_event(
         daemon,
@@ -1361,7 +1622,10 @@ async fn run_agent_node(
         Some(out.token_usage.total() as u64),
     );
 
-    Ok(out)
+    Ok(MeasuredAutomationAgentOutput {
+        output: out,
+        token_usage_known,
+    })
 }
 
 /// Run a registered tool. The node's resolved input is parsed as JSON; if
@@ -1415,9 +1679,73 @@ fn _branch_expr_referenced(_: &BranchExpr) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axocoatl_actor::{AgentActor, AgentBehavior, AgentError};
     use axocoatl_config::{
         AutomationEdge, AutomationNodeKind as Kind, AutomationTrigger, NodeInput, ResumeStrategy,
     };
+    use axocoatl_core::{AgentConfig, AgentId, AgentInput};
+    use axocoatl_tools::{BuiltinTool, ToolError};
+    use ractor::Actor;
+
+    struct MeasuredFailureBehavior {
+        token_usage: axocoatl_core::MeasuredTokenUsage,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentBehavior for MeasuredFailureBehavior {
+        async fn on_start(&mut self, _: &AgentConfig) -> Result<(), AgentError> {
+            Ok(())
+        }
+
+        async fn execute(&mut self, _: AgentInput) -> Result<AgentOutput, AgentError> {
+            Err(AgentError::Provider(
+                "scripted provider failure".to_string(),
+            ))
+        }
+
+        fn last_execution_token_usage_measurement(
+            &self,
+        ) -> Option<axocoatl_core::MeasuredTokenUsage> {
+            Some(self.token_usage.clone())
+        }
+
+        async fn on_stop(&mut self) -> Result<(), AgentError> {
+            Ok(())
+        }
+    }
+
+    /// Test tool for the Automation executor's documented raw-input fallback.
+    /// Production Echo intentionally accepts only its declared `text` field.
+    struct InputEchoTool;
+
+    #[async_trait::async_trait]
+    impl BuiltinTool for InputEchoTool {
+        fn description(&self) -> &str {
+            "echo the Automation raw-input fallback"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({
+                "type": "object",
+                "properties": { "input": { "type": "string" } },
+                "required": ["input"]
+            })
+        }
+
+        async fn execute(
+            &self,
+            arguments: serde_json::Value,
+        ) -> Result<serde_json::Value, ToolError> {
+            arguments
+                .get("input")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| ToolError::InvalidArgs {
+                    tool: "input_echo".to_string(),
+                    reason: "expected string field 'input'".to_string(),
+                })?;
+            Ok(arguments)
+        }
+    }
 
     fn tmpdir(label: &str) -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -1457,9 +1785,9 @@ mod tests {
                 AutomationNode {
                     id: "after".into(),
                     kind: Kind::Tool {
-                        tool_id: "echo".into(),
-                        input: NodeInput::Template {
-                            template: r#"{"text":"{{node:approval}}"}"#.into(),
+                        tool_id: "input_echo".into(),
+                        input: NodeInput::FromUpstream {
+                            nodes: vec!["approval".into()],
                         },
                     },
                     position: None,
@@ -1490,7 +1818,8 @@ mod tests {
     ) -> AutomationExecutionContext {
         let mut tools = axocoatl_tools::ToolExecutor::new();
         tools.register_builtin("echo", Arc::new(axocoatl_tools::EchoTool));
-        let (stream_bus, _) = tokio::sync::broadcast::channel(16);
+        tools.register_builtin("input_echo", Arc::new(InputEchoTool));
+        let stream_bus = crate::stream::StreamBus::new(16);
         AutomationExecutionContext {
             agent_registry: axocoatl_actor::AgentRegistry::new(),
             automation_store,
@@ -1501,6 +1830,210 @@ mod tests {
             schedule_table: Arc::new(std::sync::Mutex::new(Vec::new())),
             proactive_table: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    async fn register_measured_failure_agent(
+        context: &AutomationExecutionContext,
+        agent_id: &str,
+        token_usage: axocoatl_core::MeasuredTokenUsage,
+    ) {
+        let id = AgentId::new(agent_id);
+        let (actor, handle) = AgentActor::spawn(
+            Some(format!(
+                "automation-test-{agent_id}-{}",
+                uuid::Uuid::new_v4()
+            )),
+            AgentActor,
+            (
+                AgentConfig {
+                    id: id.clone(),
+                    ..AgentConfig::default()
+                },
+                Box::new(MeasuredFailureBehavior { token_usage }) as Box<dyn AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        context.agent_registry.register(id, actor).await;
+        // The actor terminates itself after the scripted Execute error. Its
+        // registry reference remains long enough for the Automation dispatch.
+        drop(handle);
+    }
+
+    fn measured_usage() -> TokenUsageStats {
+        TokenUsageStats {
+            input_tokens: 11,
+            output_tokens: 7,
+            reasoning_tokens: Some(3),
+        }
+    }
+
+    fn one_agent_automation(id: &str, agent_id: &str) -> Automation {
+        Automation {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: None,
+            nodes: vec![AutomationNode {
+                id: "agent-node".into(),
+                kind: Kind::Agent {
+                    agent_id: agent_id.to_string(),
+                    input: NodeInput::FromTrigger,
+                },
+                position: None,
+            }],
+            edges: Vec::new(),
+            trigger: AutomationTrigger::Manual,
+            enabled: true,
+            folder: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_agent_usage_and_completeness_reach_output_and_checkpoint() {
+        for (suffix, measurement, expected_known, expected_total) in [
+            (
+                "known",
+                axocoatl_core::MeasuredTokenUsage::known(measured_usage()),
+                true,
+                21,
+            ),
+            (
+                "lower-bound",
+                axocoatl_core::MeasuredTokenUsage::lower_bound(measured_usage()),
+                false,
+                21,
+            ),
+            (
+                "unknown",
+                axocoatl_core::MeasuredTokenUsage::lower_bound(TokenUsageStats::default()),
+                false,
+                0,
+            ),
+        ] {
+            let root = tmpdir(&format!("automation-agent-failure-{suffix}"));
+            let automation_store = Arc::new(tokio::sync::RwLock::new(
+                crate::automation_store::AutomationStore::open(root.join("automations.json"))
+                    .unwrap(),
+            ));
+            let run_store = Arc::new(
+                crate::automation_runs::AutomationRunStore::open(root.join("runs")).unwrap(),
+            );
+            let context = test_context(automation_store, run_store.clone(), HashMap::new());
+            let agent_id = format!("failing-{suffix}");
+            register_measured_failure_agent(&context, &agent_id, measurement).await;
+            let automation = one_agent_automation(&format!("failure-{suffix}"), &agent_id);
+
+            let output = execute_automation_with_inputs_in_context(
+                &context,
+                &automation,
+                "work",
+                &HashMap::new(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(output.total_token_usage.total(), expected_total);
+            assert_eq!(output.token_usage_known, expected_known);
+            assert_eq!(output.failed_agents.len(), 1);
+            let run = run_store.list(&automation.id).await.unwrap().pop().unwrap();
+            let checkpoint = run.checkpoints.last().unwrap();
+            assert_eq!(checkpoint.total_token_usage.total(), expected_total);
+            assert_eq!(checkpoint.token_usage_known, expected_known);
+        }
+    }
+
+    #[tokio::test]
+    async fn map_and_subgraph_preserve_failed_agent_usage() {
+        let root = tmpdir("automation-nested-failure-usage");
+        let automation_path = root.join("automations.json");
+        let mut store = crate::automation_store::AutomationStore::open(&automation_path).unwrap();
+        let inner = one_agent_automation("inner-failure", "subgraph-agent");
+        store.create(inner).unwrap();
+        let automation_store = Arc::new(tokio::sync::RwLock::new(store));
+        let run_store =
+            Arc::new(crate::automation_runs::AutomationRunStore::open(root.join("runs")).unwrap());
+        let context = test_context(automation_store, run_store.clone(), HashMap::new());
+        register_measured_failure_agent(
+            &context,
+            "map-agent",
+            axocoatl_core::MeasuredTokenUsage::lower_bound(measured_usage()),
+        )
+        .await;
+        register_measured_failure_agent(
+            &context,
+            "subgraph-agent",
+            axocoatl_core::MeasuredTokenUsage::lower_bound(measured_usage()),
+        )
+        .await;
+
+        let map = Automation {
+            id: "map-failure".into(),
+            name: "Map failure".into(),
+            description: None,
+            nodes: vec![
+                AutomationNode {
+                    id: "body".into(),
+                    kind: Kind::Agent {
+                        agent_id: "map-agent".into(),
+                        input: NodeInput::FromMapItem,
+                    },
+                    position: None,
+                },
+                AutomationNode {
+                    id: "map".into(),
+                    kind: Kind::Map {
+                        input: NodeInput::Literal {
+                            value: r#"["one"]"#.into(),
+                        },
+                        body_node: "body".into(),
+                    },
+                    position: None,
+                },
+            ],
+            edges: Vec::new(),
+            trigger: AutomationTrigger::Manual,
+            enabled: true,
+            folder: None,
+        };
+        let map_output =
+            execute_automation_with_inputs_in_context(&context, &map, "unused", &HashMap::new())
+                .await
+                .unwrap();
+        assert_eq!(map_output.total_token_usage.total(), 21);
+        assert!(!map_output.token_usage_known);
+        let map_run = run_store.list(&map.id).await.unwrap().pop().unwrap();
+        let map_checkpoint = map_run.checkpoints.last().unwrap();
+        assert_eq!(map_checkpoint.total_token_usage.total(), 21);
+        assert!(!map_checkpoint.token_usage_known);
+
+        let outer = Automation {
+            id: "outer-failure".into(),
+            name: "Outer failure".into(),
+            description: None,
+            nodes: vec![AutomationNode {
+                id: "nested".into(),
+                kind: Kind::Subgraph {
+                    automation_id: "inner-failure".into(),
+                    input: NodeInput::FromTrigger,
+                },
+                position: None,
+            }],
+            edges: Vec::new(),
+            trigger: AutomationTrigger::Manual,
+            enabled: true,
+            folder: None,
+        };
+        let subgraph_output =
+            execute_automation_with_inputs_in_context(&context, &outer, "unused", &HashMap::new())
+                .await
+                .unwrap();
+        assert_eq!(subgraph_output.total_token_usage.total(), 21);
+        assert!(!subgraph_output.token_usage_known);
+        assert!(!subgraph_output.failed_agents.is_empty());
+        let outer_run = run_store.list(&outer.id).await.unwrap().pop().unwrap();
+        let outer_checkpoint = outer_run.checkpoints.last().unwrap();
+        assert_eq!(outer_checkpoint.total_token_usage.total(), 21);
+        assert!(!outer_checkpoint.token_usage_known);
     }
 
     #[test]
@@ -1669,8 +2202,10 @@ mod tests {
         let output = WorkflowOutput {
             workflow_id: "recovered".into(),
             agent_outputs: Vec::new(),
+            agent_activations: Vec::new(),
             final_content: "continued".into(),
             total_token_usage: TokenUsageStats::default(),
+            token_usage_known: true,
             completed_agents: vec!["after".into()],
             failed_agents: Vec::new(),
         };
@@ -1766,7 +2301,7 @@ mod tests {
         ));
         let run_store =
             Arc::new(crate::automation_runs::AutomationRunStore::open(root.join("runs")).unwrap());
-        let context = test_context(automation_store, run_store, HashMap::new());
+        let context = test_context(automation_store, run_store.clone(), HashMap::new());
         let automation = Automation {
             id: "terminal-output".into(),
             name: "Terminal output".into(),
@@ -1827,6 +2362,12 @@ mod tests {
             "independent sink\n\n{\"text\":\"tool sink\"}"
         );
         assert!(output.agent_outputs.is_empty());
+        let persisted = run_store.list(&automation.id).await.unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(
+            persisted[0].final_content.as_deref(),
+            Some("independent sink\n\n{\"text\":\"tool sink\"}")
+        );
     }
 
     #[tokio::test]
@@ -1846,7 +2387,7 @@ mod tests {
                 AutomationNode {
                     id: "body".into(),
                     kind: Kind::Tool {
-                        tool_id: "echo".into(),
+                        tool_id: "input_echo".into(),
                         input: NodeInput::FromMapItem,
                     },
                     position: None,
@@ -2009,6 +2550,7 @@ mod tests {
         // written by older daemons (including the live demo run that exposed
         // this bug). Recovery must validate and use the current Automation.
         let run_path = runs_path
+            .with_file_name(".axocoatl-runs-v1")
             .join("durable-interrupt")
             .join(format!("{run_id}.json"));
         let mut legacy_json: serde_json::Value =

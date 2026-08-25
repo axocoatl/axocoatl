@@ -1,11 +1,13 @@
 pub mod agent;
 pub mod error;
+pub mod secure_fs;
 pub mod skill;
 pub mod token;
 pub mod types;
 
 pub use agent::*;
 pub use error::*;
+pub use secure_fs::*;
 pub use skill::*;
 pub use token::*;
 pub use types::*;

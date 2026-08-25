@@ -1,0 +1,12 @@
+{
+  "name": "axocoatl-browser-regressions",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node support/run-tests.mjs",
+    "test:no-build": "node support/run-tests.mjs --no-build"
+  },
+  "devDependencies": {
+    "playwright": "1.60.0"
+  }
+}

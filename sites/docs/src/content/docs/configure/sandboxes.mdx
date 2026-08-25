@@ -1,0 +1,162 @@
+---
+title: Sandboxes
+description: Choose local Podman or the remote E2B Cloud backend and make trust, network, and resource policy explicit.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Every Session executes repository tools inside a sandbox selected by
+`sandbox.backend`. The default is a local rootless Podman container. A remote
+E2B Cloud backend is available for ordinary Sessions, with different
+network and trust implications.
+
+## Local Podman
+
+```yaml
+sandbox:
+  backend: podman
+  network: bridge
+  allow_post_create_command: false
+  allow_untrusted_images: false
+  require_resource_limits: false
+```
+
+Secure defaults prevent a newly opened repository from defaulting its own
+post-create command to approved or selecting an arbitrary image. Enable either
+exception only for repositories you trust.
+
+The Session setup review may select an exact curated image—Alpine 3.20, Debian slim,
+Ubuntu, Python slim, Node 20 slim, or Rust bookworm—without enabling arbitrary
+images. Other image references require `allow_untrusted_images: true`. Common
+Docker Hub aliases of a curated preset are canonicalized to the same trusted
+reference; no unknown image is silently substituted. Curated means accepted by
+this policy, not audited as safe or guaranteed to contain a project's tools.
+
+Before Ready, local Podman probes the POSIX and Git commands that Files, Source
+Control, Ways, and Agent tools require. If any are absent, it attempts
+distro-aware provisioning inside the container and probes again. A container
+that still lacks the required commands is removed and the Session records a
+failed environment instead of deferring the failure to a later tool call.
+
+Repository metadata can propose a setup command. With
+`allow_post_create_command: true`, the exact devcontainer post-create command
+defaults to checked in an unreviewed Session; that policy is visible, and the
+Session checkbox can override it. Lockfile-detected `npm ci` always starts
+unchecked, and editing any command clears approval. Clearing the command is an
+explicit decision to continue without project setup. On local Podman, a root
+Node project's `node_modules` is a container-local volume rather than the host's
+native dependency tree. The workspace is still mounted read-write: an approved
+command may change tracked or untracked project files, and nested package
+directories are not given an additional dependency-volume boundary.
+
+Axocoatl automatically protects its control-plane data root and external daemon-lease
+root from that bind. It canonicalizes the Workspace before mounting it. If either
+protected root is below the Workspace, Podman overlays that exact directory with a
+nested `tmpfs`; if the Workspace is equal to or below a protected root, environment
+startup fails with an overlap error. A symlink alias cannot bypass the comparison.
+There is no YAML switch to weaken this boundary.
+
+Session startup never invokes a host package manager and never creates a Podman
+VM. If Podman is absent or its VM has not been initialized, Axocoatl fails with
+manual setup guidance. It may start an existing stopped VM.
+
+`network` accepts:
+
+- `bridge` — outbound access and explicitly published Preview ports;
+- `none` — no container network, which also disables package downloads,
+  remote tools called from the container, and port publication.
+
+With `network: none`, choose an image that already contains Axocoatl's required
+repository commands. Readiness provisioning cannot download missing commands
+without a container network, and a repository setup command that needs packages
+will likewise fail with retained evidence. Podman may still pull the selected
+image as a host operation; that is not Session container egress.
+
+When supported by the host, local Session containers request 2 GiB memory, two
+CPUs, and 512 PIDs. With `require_resource_limits: false`, a host that cannot
+apply cgroup limits falls back to an uncapped container and logs a warning.
+Set it to `true` to fail Session creation instead.
+
+## Remote E2B backend
+
+```yaml
+sandbox:
+  backend: e2b
+  e2b:
+    api_url: "https://api.e2b.dev"
+    api_key: "${E2B_API_KEY}"
+    template: base
+    domain: e2b.app
+    git_token: "${GITHUB_TOKEN}"
+```
+
+Axocoatl 1.0 targets E2B Cloud with this backend. Third-party E2B API
+implementations are not part of the 1.0 support scope.
+
+`git_token` supports
+GitHub-compatible token authentication when the
+remote VM must clone or push a private repository. The runtime injects it as a
+sandbox secret for an origin-scoped Git credential helper rather than writing
+it into repository Git configuration. Other Git hosts may require a different
+username or credential flow and are not implied by this field.
+
+The selected template is daemon-global. E2B does not accept a per-Session OCI
+image; the Session review shows the configured template and blocks an explicit
+or devcontainer image until it is cleared or the daemon switches to Podman.
+
+Before Ready, Axocoatl verifies that the template contains the repository
+commands required by Files, Source Control, and Agent tools; a deficient
+template fails with retained environment evidence instead of degrading later.
+
+Unlike local Podman, Axocoatl does not package-provision the remote template;
+build those commands into the daemon-selected template itself.
+
+E2B does not implement Axocoatl's local Preview transport or exposed-port
+mapping. Leave Session ports empty and use the remote provider's deliberate
+service-exposure mechanism when needed. `sandbox.network: none` is likewise a
+Podman enforcement option; Axocoatl rejects that combination with E2B rather
+than claiming to disable remote egress.
+
+With the E2B Cloud backend, Axocoatl persists the exact runtime identity and remote
+working root. Closing
+a Ready E2B Session pauses that VM; reopening or recovering after a daemon restart
+connects to the same runtime, so scratch and uncommitted work are not replaced by
+a fresh clone. Failed or interrupted preparation is cleaned up instead. Deleting
+the Session or choosing Change/Rebuild runtime is the explicit destructive
+boundary from Ready. A missing runtime fails visibly instead of silently creating
+a replacement.
+
+<Aside type="caution" title="Remote means the Workspace leaves the machine">
+A remote backend transfers repository content and command data to the selected
+service. Review its operator, retention, region, access controls, and template
+before authorizing sensitive code.
+</Aside>
+
+## Backend capability boundary
+
+<Tabs>
+  <TabItem label="Ordinary Sessions">
+    Use either configured backend for normal single-agent or multi-agent work,
+    subject to that backend's connection and repository requirements.
+  </TabItem>
+  <TabItem label="Explore several ways">
+    Isolated Attempts currently require local Podman and a Git repository. An
+    E2B-backed Session cannot start the Ways workflow.
+  </TabItem>
+</Tabs>
+
+## Choose a policy
+
+| Need | Recommended configuration |
+| --- | --- |
+| Default local development | Podman, bridge network, trust flags off |
+| Review untrusted code without Session egress | Podman, `network: none`, an image already containing required commands, trust flags off, limits required if the host supports them; account separately for host-side image pulls |
+| Run a local web app in Preview | Podman bridge plus an exposed Session port |
+| Remote isolated compute | E2B Cloud with scoped credentials and an approved template; no Axocoatl Preview ports |
+| Several isolated Ways | Local Podman |
+
+Sandboxing reduces risk; it does not make prompts, dependencies, images, MCP
+servers, webhooks, provider endpoints, or copied secrets trustworthy. See
+[Security](/operate/security/) for the complete boundary.
+
+Next: [Configure Skills and MCP →](/configure/skills-mcp/)

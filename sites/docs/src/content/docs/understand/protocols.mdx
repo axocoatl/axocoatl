@@ -1,0 +1,93 @@
+---
+title: Protocols
+description: Connect external MCP tools, expose Agents over MCP, accept inbound A2A work, and emit signed event webhooks.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Axocoatl integrates through MCP in both directions, accepts inbound A2A tasks,
+and sends opt-in event webhooks. Each protocol has its own authority and
+durability boundary.
+
+## MCP client: call external tools
+
+At bootstrap, the daemon connects to configured `mcp_servers` over `stdio` or
+`streamable_http`/`http`, discovers tools, and registers qualified names such
+as `mcp__server__tool`. The live client remains connected so an Agent tool call
+can round-trip to the server.
+
+Stdio servers run as child processes with configured environment variables.
+HTTP servers receive the configured URL and headers. Connection failure warns
+and lets daemon bootstrap continue, leaving those tools unavailable.
+
+First-use calls pass through the human approval gate. See
+[Skills and MCP](/configure/skills-mcp/) for decision scopes and current live-
+registry limitations.
+
+## MCP server: expose local Agents
+
+Run:
+
+```sh
+axocoatl mcp serve --config /absolute/path/to/axocoatl.yaml
+```
+
+The process speaks MCP over stdio and exposes each configured Agent as
+`agent_<id>`. Logs stay on stderr so they do not corrupt the protocol stream.
+An MCP client can list those tools and execute the local Agent.
+
+## A2A: accept inbound tasks
+
+The HTTP server mounts:
+
+- `GET /.well-known/agent.json` for discovery;
+- `POST /a2a/tasks` for dispatch to a local `receiver_id`.
+
+A2A is inbound only. The running daemon does not include an outbound A2A client
+for delegating a local task to a remote A2A Agent.
+
+## Webhooks: emit event notifications
+
+```yaml
+webhooks:
+  - name: internal-events
+    url: "https://hooks.example.internal/axocoatl"
+    events: [TaskCompleted, AgentFailed]
+    secret: "${WEBHOOK_SECRET}"
+    headers:
+      Authorization: "${INTERNAL_TOKEN}"
+    enabled: true
+```
+
+When an event type matches, Axocoatl sends JSON containing a delivery ID, event
+ID/type, producer, timestamp, and payload. An empty `events` list selects all
+coordination events but excludes pure telemetry unless named explicitly.
+
+With `secret`, the raw body is signed with HMAC-SHA256 and sent in
+`X-Axocoatl-Signature` using the `sha256=<hex>` form. Verify the signature and
+use the delivery ID for idempotency.
+
+Delivery is concurrency-bounded, best-effort, and at least once while the
+process is alive. Transient failures are retried with backoff; ordinary client
+errors are not. The delivery queue is not durable across daemon restart. Use a
+durable broker or receiving buffer when loss across process failure is
+unacceptable.
+
+<Aside type="caution" title="Protocol access is code and data access">
+An MCP server can receive arguments and return adversarial content; A2A can
+execute a local Agent; webhooks carry event data outward. Authenticate the HTTP
+server, scope credentials, inspect tool approvals, and configure only endpoints
+you trust.
+</Aside>
+
+## Choose the right inbound interface
+
+| Caller | Interface | Direction |
+| --- | --- | --- |
+| Axocoatl Agent calling an external tool | MCP client | Outbound from daemon/tool process |
+| MCP-capable application calling an Axocoatl Agent | `axocoatl mcp serve` | Inbound over stdio |
+| Remote Agent system | A2A HTTP | Inbound |
+| Your own application | Native HTTP execute/Session APIs | Inbound |
+| Event consumer | Signed webhook | Outbound |
+
+Continue with [CLI reference →](/reference/cli/)

@@ -122,6 +122,7 @@ fn bench_single_message(c: &mut Criterion) {
                         input: AgentInput::text("bench"),
                         reply: tx,
                         sink: None,
+                        control: None,
                     })
                     .unwrap();
                 let result = rx.await.unwrap();
@@ -159,6 +160,7 @@ fn bench_sequential_messages(c: &mut Criterion) {
                             input: AgentInput::text("bench"),
                             reply: tx,
                             sink: None,
+                            control: None,
                         })
                         .unwrap();
                     let result = rx.await.unwrap();
@@ -203,6 +205,7 @@ fn bench_fanout_100_actors(c: &mut Criterion) {
                             input: AgentInput::text("fanout"),
                             reply: tx,
                             sink: None,
+                            control: None,
                         })
                         .unwrap();
                     receivers.push(rx);

@@ -85,8 +85,11 @@ struct Pricing {
 impl Pricing {
     /// Cost in USD for a given usage at this price.
     fn cost(&self, usage: &TokenUsageStats) -> f64 {
+        let billable_output = usage
+            .output_tokens
+            .saturating_add(usage.reasoning_tokens.unwrap_or(0));
         (usage.input_tokens as f64 / 1000.0) * self.input_per_1k
-            + (usage.output_tokens as f64 / 1000.0) * self.output_per_1k
+            + (billable_output as f64 / 1000.0) * self.output_per_1k
     }
 }
 
@@ -528,10 +531,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cost = pricing.cost(&output.token_usage);
         println!("{}", output.content);
         println!(
-            "   └─ {} tok ({} in + {} out)  →  ${:.5}",
+            "   └─ {} tok ({} in + {} out + {} reasoning)  →  ${:.5}",
             output.token_usage.total(),
             output.token_usage.input_tokens,
             output.token_usage.output_tokens,
+            output.token_usage.reasoning_tokens.unwrap_or(0),
             cost
         );
 
@@ -631,8 +635,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if total_cost > 0.0 {
         let frontier_pct = (frontier_cost / total_cost) * 100.0;
         println!(
-            "  the frontier step is {:.0}% of the ${:.5} total — routing it to a cheap",
-            frontier_pct, total_cost
+            "  the frontier step is {frontier_pct:.0}% of the ${total_cost:.5} total — routing it to a cheap"
         );
         println!(
             "  local model would have flattened the bill, but the synthesis needs the big model."

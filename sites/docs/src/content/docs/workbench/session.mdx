@@ -1,0 +1,115 @@
+---
+title: Work in a Session
+description: Use Conversation as the durable spine of a workspace and open focused tools only when the task needs them.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+A Session is the durable conversation and working state for one authorized
+Workspace. Conversation stays at the center; Files, Preview, Terminal, attempt
+review, Git, and the Agent graph open around it.
+
+## Send a normal turn
+
+Before the first turn, the Session environment must be **Ready**. If the
+conversation shows **Review setup**, inspect the selected image and exact
+proposed command. Detection is not permission: Axocoatl will not run the command
+until you check its explicit approval control. A Preparing or failed environment
+keeps Send and repository tools gated instead of pretending the Session is usable.
+The daemon's `allow_post_create_command` setting can default only the exact
+devcontainer command to checked on an unreviewed Session; a reviewed checked or
+unchecked choice wins, and lockfile-detected or edited commands remain outside
+that default.
+
+<Steps>
+
+1. Open a Session from the left rail.
+2. State the outcome, the constraints, and the check that should pass.
+3. Attach context if the request depends on material outside the Workspace.
+4. Select a model override only when this turn needs one. In a multi-agent
+   Session, you can also target a particular Agent.
+5. Press **Enter** to send. Use **Shift+Enter** for a newline.
+
+</Steps>
+
+For example:
+
+```text
+Add validation to the existing import endpoint. Preserve the response schema,
+add focused tests for malformed input, run the smallest relevant test command,
+and do not commit.
+```
+
+Tool calls and their results stay inline with the response. Expand them when
+you need to inspect how the Agent reached its answer, not only what it claimed.
+
+## Open the tool you need
+
+The Session header exposes the common tools directly:
+
+| Control | Use it for |
+| --- | --- |
+| **Conversation** | Requests, responses, tool calls, and durable turn state |
+| **Files** | File search, editing, rendered file previews, and Source Control |
+| **Preview** | A running web app exposed from the Session sandbox |
+| **Ways** | Preparing and following several attempts at one task |
+| **Terminal** | Session-scoped PTYs in the bottom dock |
+| **History** | Search, export, context review, and rewind |
+| **More** | Agent graph and focused attempt review, or a tool pinned beside Conversation |
+
+Choosing a primary view focuses it. **More** can pin an additional surface
+beside Conversation when comparing information is useful. Ways is contextual:
+it opens while you prepare or monitor attempts and does not reserve an empty
+right column in ordinary work.
+
+## Follow a running turn
+
+The Session status and live indicator distinguish idle, starting, running,
+stopped, interrupted, and failed work. Streaming text is only one signal: a
+tool may still be running after the visible prose pauses.
+
+Use **Stop** to request a cooperative stop for the exact active turn. A tool
+that has already started is allowed to reach a safe boundary; filesystem or
+external effects already produced are not rolled back. See
+[Context, History, and Stop](/workbench/history/) for the full state model.
+
+If the live connection drops, Axocoatl re-reads the canonical turn and
+conversation state after reconnecting. Wait for History to finish loading
+before sending another turn; this avoids building new work on an incomplete
+local transcript.
+
+## Review before the next request
+
+After a modifying turn:
+
+1. Read the response and expand important tool calls.
+2. Open **Files** and inspect the actual edits.
+3. Open **Source Control → Last turn** to narrow the review.
+4. Run or repeat the repository check in Terminal.
+5. Commit deliberately only when the result is acceptable.
+
+<Aside type="caution" title="The Workspace remains authoritative">
+An Agent response can be incomplete or wrong. Git status, the file contents,
+the check output, and any external system touched by a tool are the evidence.
+</Aside>
+
+## Single-agent and multi-agent Sessions
+
+A single-agent Session sends turns to one configured autonomous Agent or coordinator. Explore
+several ways currently requires the autonomous form. A multi-agent Session keeps a shared durable transcript
+and lets you target individual Agents, but it does not currently support the
+separate isolated Attempts workflow.
+
+A configured Agent acts as a template. An autonomous Agent's normal Session conversation,
+checkpoint, daily log, core memory, and semantic memory are scoped to that Session and survive
+actor restart. A Coordinator owns scoped Tier-1 conversation and orchestration checkpointing;
+each declared Worker owns its own scoped Tier 1–4 identity beneath the Coordinator. Ad-hoc
+Workers are ephemeral. Starting another Session with the same configured template does not
+inherit those local memories; only core blocks explicitly configured with `shared: true` cross
+Session scopes. Terminal Completed, Cancelled, Failed, or Interrupted Coordinator work is not
+auto-resumed on a later turn.
+
+Changing the Agent roster after Session creation is not a hot-add workflow.
+Create a new Session when the composition or sandbox boundary needs to change.
+
+Continue with [Files, Preview, and Terminal →](/workbench/tools/)

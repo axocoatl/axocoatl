@@ -1,0 +1,68 @@
+# Capture-only configuration for the deterministic Harbor Several Ways fixture.
+# Start the provider first, then launch the release binary with this config and
+# an isolated AXOCOATL_DATA_DIR / AXOCOATL_SOCKET_PATH.
+agents:
+  - id: coder
+    name: "Minimal Coder"
+    provider: ollama
+    model: harbor-ways-fixture
+    system_prompt: |
+      You are a concise senior JavaScript engineer. Inspect the repository,
+      make the smallest correct production change, use repository tools, run
+      the configured checks, and report Diagnosis / Decision / Evidence /
+      Tradeoff. Do not alter tests to make a failure disappear. /no_think
+    depends_on: []
+    token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
+
+  - id: defender
+    name: "Invariant Defender"
+    provider: ollama
+    model: harbor-ways-fixture
+    system_prompt: |
+      You are a defensive JavaScript engineer. Treat tests as a contract, look
+      for boundary and invariant failures, keep the patch focused, run the
+      configured checks, and report Diagnosis / Decision / Evidence / Tradeoff.
+      Do not commit. /no_think
+    depends_on: []
+    token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
+
+  - id: planner
+    name: "Acceptance Planner"
+    provider: ollama
+    model: harbor-ways-fixture
+    system_prompt: |
+      Turn a coding task into concise acceptance criteria, constraints, and a
+      verification plan. Preserve the user's scope. /no_think
+    depends_on: []
+    sampling: { temperature: 0.0, max_tokens: 500 }
+    token_budget: { per_execution: 4000, per_call: 2500, overflow_policy: warn }
+
+  - id: judge
+    name: "Evidence Judge"
+    provider: ollama
+    model: harbor-ways-fixture
+    system_prompt: |
+      Rank candidate changes only from repository checks, diff quality, and
+      route evidence. Prefer the smallest complete change and state tradeoffs.
+      /no_think
+    depends_on: []
+    sampling: { temperature: 0.0, max_tokens: 500 }
+    token_budget: { per_execution: 4000, per_call: 2500, overflow_policy: warn }
+
+providers:
+  ollama:
+    base_url: "http://127.0.0.1:18110"
+
+server:
+  host: "127.0.0.1"
+  port: 18092
+
+sandbox:
+  backend: podman
+  allow_untrusted_images: true
+  allow_post_create_command: false
+  network: bridge
+  require_resource_limits: false
+
+consolidation:
+  enabled: false

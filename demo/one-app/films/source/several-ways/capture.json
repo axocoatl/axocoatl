@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "film": "several-ways",
+  "captured_at": "2026-08-25T08:35:48.805Z",
+  "url": "http://localhost:18092/",
+  "browser": "Codex in-app browser",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1
+  },
+  "theme": "dark",
+  "reduced_motion": "no-preference",
+  "timeline": "demo/one-app/films/source/several-ways/timeline.json",
+  "timeline_sha256": "4771ba9aad75502ae2eb11e4c8a7c1fd48d497859ee3773c598ae1cf2a6548d9",
+  "keyframes": [
+    {
+      "beat": "configuration",
+      "path": "demo/one-app/films/source/several-ways/shot-configuration.jpg",
+      "sha256": "a32f2970ab537e1eadf887cd39056ba9e39abdd724eca0b963b4aeb5e6b5bed7"
+    },
+    {
+      "beat": "independent-routes",
+      "path": "demo/one-app/films/source/several-ways/shot-independent-routes.jpg",
+      "sha256": "774905103d1cd6557679531f77ccf889775aaa399384080125e82a1c29b6375d"
+    },
+    {
+      "beat": "checks",
+      "path": "demo/one-app/films/source/several-ways/shot-checks.jpg",
+      "sha256": "312eafab1410b2ce1bd56041ca4560b062c98bba90c72fd733b6b74c7fe82e68"
+    },
+    {
+      "beat": "comparison",
+      "path": "demo/one-app/films/source/several-ways/shot-comparison.jpg",
+      "sha256": "71b88c043850500c44f594479ce0be78c4da8cfcdfafdf6dd5e5b8b5f4b92474"
+    },
+    {
+      "beat": "judge",
+      "path": "demo/one-app/films/source/several-ways/shot-judge.jpg",
+      "sha256": "1aecd072f4d5c1c223c08511496201dff82cc48cc1b5af7484d97dc0e658fe72"
+    },
+    {
+      "beat": "keep",
+      "path": "demo/one-app/films/source/several-ways/shot-keep.jpg",
+      "sha256": "1e47148b1669dcf8b43821ac257debb0864fbaffa7765d0785748d1fd1c86326"
+    }
+  ]
+}

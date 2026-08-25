@@ -148,8 +148,34 @@ if [ -z "$CARGO_BIN" ] || [ ! -x "$CARGO_BIN" ]; then
 fi
 
 cd "$REPO_ROOT"
-"$CARGO_BIN" build -p axocoatl-cli
-target/debug/axocoatl validate "$SCRIPT_DIR/axocoatl.demo.yaml"
+AXOCOATL_BIN="${AXOCOATL_DEMO_BIN:-}"
+if [ -n "$AXOCOATL_BIN" ]; then
+  case "$AXOCOATL_BIN" in
+    /*) ;;
+    *)
+      echo "AXOCOATL_DEMO_BIN must be an absolute path to the exact release candidate." >&2
+      exit 2
+      ;;
+  esac
+  if [ ! -f "$AXOCOATL_BIN" ] || [ ! -x "$AXOCOATL_BIN" ]; then
+    echo "AXOCOATL_DEMO_BIN is not an executable file: $AXOCOATL_BIN" >&2
+    exit 1
+  fi
+  # The deterministic local MCP fixture remains a separate debug helper named
+  # by axocoatl.demo.yaml; only the product binary is overridden.
+  "$CARGO_BIN" build -p mcp-bridge
+else
+  "$CARGO_BIN" build -p axocoatl-cli -p mcp-bridge
+  AXOCOATL_BIN="$REPO_ROOT/target/debug/axocoatl"
+fi
+
+"$AXOCOATL_BIN" validate "$SCRIPT_DIR/axocoatl.demo.yaml"
+AXOCOATL_VERSION="$("$AXOCOATL_BIN" --version)"
+if command -v shasum >/dev/null 2>&1; then
+  AXOCOATL_SHA256="$(shasum -a 256 "$AXOCOATL_BIN" | awk '{print $1}')"
+else
+  AXOCOATL_SHA256="$(sha256sum "$AXOCOATL_BIN" | awk '{print $1}')"
+fi
 
 export AXOCOATL_DATA_DIR="$DEMO_ROOT/data"
 export AXOCOATL_SOCKET_PATH="$DEMO_ROOT/run/axocoatl.sock"
@@ -159,7 +185,11 @@ echo
 echo "Axocoatl demo"
 echo "App:       http://127.0.0.1:18080"
 echo "Workspace: $WORKSPACE"
+echo "Binary:    $AXOCOATL_BIN"
+echo "Version:   $AXOCOATL_VERSION"
+echo "SHA-256:   $AXOCOATL_SHA256"
 echo "Prompts:   $SCRIPT_DIR/PROMPTS.md"
+echo "Seed:      $SCRIPT_DIR/seed-runtime-demos.sh"
 echo
 
-exec target/debug/axocoatl dev -c "$SCRIPT_DIR/axocoatl.demo.yaml"
+exec "$AXOCOATL_BIN" dev -c "$SCRIPT_DIR/axocoatl.demo.yaml"

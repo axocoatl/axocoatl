@@ -6,6 +6,9 @@ pub enum AgentError {
     #[error("Token budget exceeded: used {used}, budget {budget}")]
     TokenBudgetExceeded { used: usize, budget: usize },
 
+    #[error("Current request needs {required} context tokens, exceeding limit {limit}")]
+    ContextLimitExceeded { required: usize, limit: usize },
+
     #[error("Agent initialization failed: {0}")]
     InitFailed(String),
 

@@ -7,7 +7,7 @@ evidence, not a substitute for exercising that journey.
 
 ## Prerequisites
 
-- Rust 1.82 or newer.
+- Rust 1.88 or newer.
 - Ollama with `llama3.2` available for the local-provider checks.
 - Podman for directory sessions and parallel attempts.
 - A disposable Git repository for any test that lets an agent change files.
@@ -61,14 +61,20 @@ authoritative and YAML is not imported again.
 
 Open `http://localhost:8080` and use a disposable Git repository.
 
-1. Authorize the repository as a workspace and create a session with the
-   `researcher` agent.
-2. Ask for a small, verifiable file change.
-3. Confirm chat remains in the main area while Files, editor, Terminal,
-   Activity, Browser, git, and Agent graph open around it.
-4. Run the repository's real check command from the workbench.
-5. Inspect the resulting git diff. The app must not commit automatically.
-6. Reload the page and resume the same session. Verify the transcript and
+1. Choose **Open workspace…**, authorize the repository, and confirm its Workspace name.
+2. With that Workspace selected, create a Session with the `researcher` agent.
+3. Review the exact runtime and setup proposal. Leave a detected command such
+   as `npm ci` unchecked unless you intend to run it, or explicitly choose no
+   setup. Wait for the durable environment state to become **Ready**.
+4. Before Ready, confirm Conversation Send, Files, Source Control, Terminal,
+   Preview, and Ways fail closed rather than reading or executing on the host.
+5. Ask for a small, verifiable file change.
+6. Confirm Conversation remains in the main area. From the Session header or
+   **More**, open Files/editor, Preview, Source Control, and Agent graph as focused
+   tools; Terminal stays in its bottom dock.
+7. Run the repository's real check command from the workbench.
+8. Inspect the resulting git diff. The app must not commit automatically.
+9. Reload the page and resume the same Session. Verify the transcript and
    workspace identity remain attached to it.
 
 For UI changes, also inspect light, dark, narrow, and reduced-motion states and
@@ -76,14 +82,18 @@ check the browser console. A DOM-only check is not visual verification.
 
 ## 4. Exercise several attempts
 
-Parallel attempts currently require a single-agent session on the local Podman
-backend and a Git repository.
+Parallel attempts currently require a single autonomous-Agent Session on the local Podman
+backend and a Git repository. A coordinator or worker cannot be selected as a Way. Ways use
+their configured primary provider/model without rate-limit fallback so the retained identity
+and cost cannot describe a route that did not run.
 
-1. From the session, choose **Explore several ways** and create at least two
-   attempts with deliberately different agent/model selections where available.
-2. Observe running, completed, failed, blocked, or interrupted states without
-   losing the session chat.
-3. Run **Checks** after every attempt is terminal.
+1. From the session, choose **Explore several ways**. Use the contextual **Ways**
+   inspector to configure at least two attempts with deliberately different
+   agent/model selections where available.
+2. In the Ways inspector, observe running, completed, failed, blocked, or
+   interrupted states without losing the Session conversation.
+3. Open the focused **Attempts** review and run **Checks** after every attempt
+   is terminal.
 4. Compare **Outcome** and **Route**, then use **Judge** if configured.
 5. Choose **Keep this one** only for a passing, non-empty result.
 6. Confirm the selected delta is in the primary working tree, no commit was
@@ -131,6 +141,13 @@ With the daemon running, use a disposable repository path:
 ```bash
 cargo run -p axocoatl-cli -- session new /absolute/path/to/repository --agent researcher
 cargo run -p axocoatl-cli -- session list
+```
+
+`session new` does not silently approve detected project setup. If its output
+prints a proposed command as **not run**, open the browser, review that exact
+Session environment, and wait for Ready. Only then execute and close it:
+
+```bash
 cargo run -p axocoatl-cli -- session exec <session-id> "Inspect the repository and report its checks."
 cargo run -p axocoatl-cli -- session close <session-id>
 ```

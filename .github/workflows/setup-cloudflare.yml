@@ -13,6 +13,7 @@ jobs:
   bootstrap:
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: read
     steps:
       - name: Create Pages projects + custom domains
@@ -20,10 +21,56 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          set -e
+          set -euo pipefail
           API="https://api.cloudflare.com/client/v4"
           ACCT="$CLOUDFLARE_ACCOUNT_ID"
           AUTH="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          test -n "$ACCT"
+          test -n "$CLOUDFLARE_API_TOKEN"
+
+          api_get() {
+            curl --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              --silent --show-error --fail-with-body \
+              -H "$AUTH" "$API/$1"
+          }
+
+          verify_project() {
+            local name="$1"
+            local response
+            response="$(api_get "accounts/$ACCT/pages/projects/$name")"
+            test "$(jq -r '.success' <<<"$response")" = "true"
+            test "$(jq -r '.result.name' <<<"$response")" = "$name"
+            test "$(jq -r '.result.production_branch' <<<"$response")" = "main" || {
+              echo "  ✗ existing project $name does not use production branch main" >&2
+              return 1
+            }
+            echo "  ✓ verified project identity and production branch"
+          }
+
+          verify_domain() {
+            local project="$1"
+            local domain="$2"
+            local response status
+            for attempt in {1..18}; do
+              response="$(api_get "accounts/$ACCT/pages/projects/$project/domains")"
+              test "$(jq -r '.success' <<<"$response")" = "true"
+              status="$(jq -r --arg domain "$domain" \
+                '[.result[] | select(.name == $domain) | .status] | if length == 1 then .[0] else "" end' \
+                <<<"$response")"
+              if [ "$status" = "active" ]; then
+                echo "  ✓ verified active on $project"
+                return 0
+              fi
+              if [ -n "$status" ] && [ "$attempt" -lt 18 ]; then
+                echo "  … domain status is $status; waiting for active"
+                sleep 10
+                continue
+              fi
+              break
+            done
+            echo "  ✗ $domain is not uniquely active on $project (status: ${status:-missing})" >&2
+            return 1
+          }
 
           create_project() {
             local name="$1"
@@ -38,18 +85,19 @@ jobs:
             if [ "$success" = "true" ]; then
               echo "  ✓ created"
               echo "$response" | jq -r '.result | "    subdomain: " + .subdomain'
-              return 0
-            fi
-            # Idempotent: already-exists is fine
-            local code
-            code=$(echo "$response" | jq -r '.errors[0].code // empty')
-            if [ "$code" = "8000007" ]; then
+            else
+              # Idempotent only after the existing project's identity and
+              # production branch are positively verified below.
+              local code
+              code=$(echo "$response" | jq -r '.errors[0].code // empty')
+              if [ "$code" != "8000007" ]; then
+                echo "  ✗ failed:"
+                echo "$response" | jq .
+                return 1
+              fi
               echo "  ✓ already exists"
-              return 0
             fi
-            echo "  ✗ failed:"
-            echo "$response" | jq .
-            return 1
+            verify_project "$name"
           }
 
           add_domain() {
@@ -65,18 +113,19 @@ jobs:
             success=$(echo "$response" | jq -r '.success')
             if [ "$success" = "true" ]; then
               echo "  ✓ attached"
-              return 0
-            fi
-            # Domain may already be attached
-            local msg
-            msg=$(echo "$response" | jq -r '.errors[0].message // empty')
-            if echo "$msg" | grep -qi "already\|duplicate"; then
+            else
+              # An already/duplicate response is acceptable only if the
+              # project-specific domain list proves the requested attachment.
+              local msg
+              msg=$(echo "$response" | jq -r '.errors[0].message // empty')
+              if ! echo "$msg" | grep -qi "already\|duplicate"; then
+                echo "  ✗ failed:"
+                echo "$response" | jq .
+                return 1
+              fi
               echo "  ✓ already attached"
-              return 0
             fi
-            echo "  ✗ failed:"
-            echo "$response" | jq .
-            return 1
+            verify_domain "$project" "$domain"
           }
 
           # Step 1 — projects
@@ -95,8 +144,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh workflow run marketing-deploy.yml --ref main || true
-          gh workflow run docs-deploy.yml      --ref main || true
-        # We don't fail the job if gh workflow run is rate-limited or
-        # the workflow doesn't accept dispatch — the user can re-run
-        # manually if needed.
+          gh workflow run marketing-deploy.yml --repo "$GITHUB_REPOSITORY" --ref main
+          gh workflow run docs-deploy.yml --repo "$GITHUB_REPOSITORY" --ref main

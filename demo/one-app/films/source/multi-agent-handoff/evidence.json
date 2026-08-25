@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "film": "multi-agent-handoff",
+  "checks": [
+    {
+      "id": "dependency-edge",
+      "status": "passed",
+      "detail": "Before execution, Film · Handoff sequence showed exactly architect → reviewer. The persisted Session is Custom mode with only architect and reviewer, and the captured configuration declares reviewer depends_on [architect]."
+    },
+    {
+      "id": "architect",
+      "status": "passed",
+      "detail": "On accepted Turn turn-6143b973-73bd-4136-8a32-90c928ecf5b7, architect recorded the first non-empty Agent output (1,841 characters) before reviewer. The Turn has no tool start or result events."
+    },
+    {
+      "id": "reviewer",
+      "status": "passed",
+      "detail": "The configured downstream reviewer recorded the second non-empty Agent output (1,208 characters), assessed the architect's key-invalidation proposal, and ended with a standalone SHIP."
+    },
+    {
+      "id": "durable-outputs",
+      "status": "passed",
+      "detail": "After reload and reopen, the accepted completed Turn still rendered architect and reviewer as separate labeled outputs. Its terminal metadata has an empty touched-path list, and the Harbor checkout remained clean."
+    }
+  ],
+  "identities": {
+    "fixture": "harbor-catalog",
+    "workspace_path": "/private/tmp/axocoatl-one-app-showcase-harbor-launch/workspace",
+    "workspace_id": "wsp-9d0e1ab5-47e5-47ca-a512-1dd6bc6d33c1",
+    "session_id": "ses-b6ad5acf-b80f-4a09-aae1-efb503dc134d",
+    "session_mode": "custom",
+    "agent_ids": [
+      "architect",
+      "reviewer"
+    ],
+    "dependency_edge": "architect->reviewer",
+    "turn_id": "turn-6143b973-73bd-4136-8a32-90c928ecf5b7",
+    "agent_output_order": [
+      "architect@1787641422701",
+      "reviewer@1787641447572"
+    ],
+    "agent_output_sha256": [
+      "architect=e7ef11260f05d7d7a3f56e633e8be45c678ff57ca29cf52483ee30263003d08e",
+      "reviewer=de575d263f6e9d9063a6bc4baec6a26d716d3b601bd7d679a4b748e310f4c742"
+    ],
+    "turn_status": "completed",
+    "turn_tool_events": "0",
+    "turn_touched_paths": "[]",
+    "turn_ledger_sha256": "1e747f91aa7984b995cd185a85ba0961b075cde06e460b0ed1f1dfe340e1fef3",
+    "session_record_sha256": "b7756613984c7eac62437435adc382247c7b7a5b3af10ef31d3cac1c5ce74cc0",
+    "source_head": "1057eb4bf46f80f990020d71680de4ef8c42ce39",
+    "source_tree": "8c199747fb22965ebf57740cc6a42f775703df3c",
+    "source_status": "clean",
+    "config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+    "binary": "target/release/axocoatl 1.0.0",
+    "binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+    "capture_viewport": "1280x720",
+    "screenshot_sha256": [
+      "shot-dependency-edge.jpg=37ed3ca1e569631aac0c6866fbca86816397eb6a28559bfa382280aff1ee0384",
+      "shot-architect.jpg=12243f7cccabfefd6713371c3e3e311355887311ee4b034eb26361afbac4f738",
+      "shot-reviewer.jpg=1f1bbd091c6089130debb297a90f07458d1975d3a8894ea5b8641d34bdf06147",
+      "shot-durable-outputs.jpg=78e29764575636bd44cdeabcb9224543c58f45c0e68b317e76f0d5fd75b3c2a1"
+    ]
+  }
+}

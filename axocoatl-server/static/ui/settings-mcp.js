@@ -327,11 +327,11 @@ export class AxSettingsMcp extends HTMLElement {
   }
 
   #renderServers(host) {
-    this.#toolbar(host, 'Servers', `${this.#servers.length} connected`);
+    this.#toolbar(host, 'Servers', `${this.#servers.length} connected · until daemon restart`);
     const body = h('div', 'detail-body');
     if (!this.#servers.length) {
       body.append(h('div', 'empty', this.#available.servers
-        ? 'No MCP servers connected yet. Open Catalog in the sidebar to install one.'
+        ? 'No MCP servers connected yet. Open Catalog in the sidebar to connect one for this daemon run.'
         : 'The connected-server list could not be loaded. Retry above.'));
     } else {
       const grid = h('div', 'grid');
@@ -410,17 +410,17 @@ export class AxSettingsMcp extends HTMLElement {
     if (!entries.length) {
       body.append(h('div', 'empty', this.#available.catalog ? 'The catalog is empty.' : 'The catalog could not be loaded. Retry above.'));
     } else {
-      const installed = new Set(this.#servers.map((server) => server.name));
+    const connected = new Set(this.#servers.map((server) => server.name));
       const sorted = [...filtered].sort((a, b) => a.recommended === b.recommended
         ? String(a.name).localeCompare(String(b.name)) : (a.recommended ? -1 : 1));
       const grid = h('div', 'grid');
-      sorted.forEach((entry) => grid.append(this.#catalogCard(entry, installed.has(entry.slug))));
+      sorted.forEach((entry) => grid.append(this.#catalogCard(entry, connected.has(entry.slug))));
       body.append(grid);
     }
     host.append(body);
   }
 
-  #catalogCard(entry, installed) {
+  #catalogCard(entry, connected) {
     const card = h('article', 'card server-card');
     const head = h('div', 'card-head');
     head.append(h('span', 'card-icon', mcpIconFor(entry.category)), h('span', 'card-name', entry.name));
@@ -428,12 +428,12 @@ export class AxSettingsMcp extends HTMLElement {
     card.append(head, h('p', 'card-desc', entry.description || ''));
     const foot = h('div', 'card-foot');
     foot.append(h('span', 'category', entry.category || ''), h('span', 'grow'));
-    if (installed) foot.append(h('span', 'installed-dot'), h('span', 'muted', 'installed'));
+    if (connected) foot.append(h('span', 'installed-dot'), h('span', 'muted', 'connected'));
     else {
-      const install = h('button', 'action primary', this.#busy === `install:${entry.slug}` ? 'Installing…' : '+ Install');
-      install.type = 'button'; install.disabled = Boolean(this.#busy);
-      install.addEventListener('click', () => void this.#install(entry));
-      foot.append(install);
+      const connect = h('button', 'action primary', this.#busy === `install:${entry.slug}` ? 'Connecting…' : '+ Connect');
+      connect.type = 'button'; connect.disabled = Boolean(this.#busy);
+      connect.addEventListener('click', () => void this.#install(entry));
+      foot.append(connect);
     }
     card.append(foot);
     return card;
@@ -488,7 +488,7 @@ export class AxSettingsMcp extends HTMLElement {
     if (this.#busy) return;
     const confirmed = await this.#ask({
       title: `Remove ${server.name}?`,
-      body: 'Disconnect from this MCP server. Its tools become unavailable. The catalog entry remains so you can install it again.',
+      body: 'Disconnect from this MCP server. Its tools become unavailable. The catalog entry remains so you can connect it again.',
       okLabel: 'Remove', danger: true,
     });
     if (!confirmed) return;
@@ -513,10 +513,10 @@ export class AxSettingsMcp extends HTMLElement {
       required: true,
     }));
     const values = await this.#ask({
-      title: `Install ${entry.name}`,
-      body: entry.description || '',
+      title: `Connect ${entry.name}`,
+      body: `${entry.description || ''}\n\nThis connection lasts until the Axocoatl daemon restarts. Add it to axocoatl.yaml when it should reconnect on future launches.`,
       fields,
-      okLabel: 'Install',
+      okLabel: 'Connect',
     });
     if (!values) return;
     this.#busy = `install:${entry.slug}`; this.#renderDetail();
@@ -526,9 +526,9 @@ export class AxSettingsMcp extends HTMLElement {
         body: JSON.stringify({ slug: entry.slug, values: fields.length ? values : {} }),
       });
       this.#operationError = '';
-      emit(this, 'notify', { title: 'Installed', body: `${result.name} · ${result.tools} tool${result.tools === 1 ? '' : 's'}`, kind: 'ok' });
+      emit(this, 'notify', { title: 'Connected', body: `${result.name} · ${result.tools} tool${result.tools === 1 ? '' : 's'} · until daemon restart`, kind: 'ok' });
       await this.refresh();
-    } catch (error) { this.#actionFailed('Install failed', entry.name, error); }
+    } catch (error) { this.#actionFailed('Connection failed', entry.name, error); }
     finally { this.#busy = ''; this.#renderDetail(); }
   }
 

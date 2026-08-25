@@ -28,8 +28,8 @@ RUST_MINOR="${RUST_REMAINDER%%.*}"
 if [[ ! "$RUST_MAJOR" =~ ^[0-9]+$ || ! "$RUST_MINOR" =~ ^[0-9]+$ ]]; then
     fail "Could not parse rustc version '$RUST_VERSION'"
 fi
-if (( RUST_MAJOR < 1 || (RUST_MAJOR == 1 && RUST_MINOR < 82) )); then
-    fail "Rust 1.82 or newer is required (found $RUST_VERSION). Run: rustup update stable"
+if (( RUST_MAJOR < 1 || (RUST_MAJOR == 1 && RUST_MINOR < 88) )); then
+    fail "Rust 1.88 or newer is required (found $RUST_VERSION). Run: rustup update stable"
 fi
 info "Rust $RUST_VERSION"
 
@@ -53,11 +53,6 @@ printf '%s\n' \
     '  cargo clippy --workspace --all-targets --all-features -- -D warnings' \
     '  cargo test --workspace' \
     '  cargo test --doc --workspace' \
-    '' \
-    'Experimental isolation crate modules (Linux-only and not selectable as' \
-    'workbench session backends):' \
-    '  cargo check -p axocoatl-isolation --features oci-isolation' \
-    '  cargo check -p axocoatl-isolation --features firecracker-isolation' \
     '' \
     'The workbench uses rootless Podman locally or a configured E2B-compatible' \
     'remote backend.'

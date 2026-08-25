@@ -1,0 +1,99 @@
+---
+title: Create your first Session
+description: Authorize a repository, create a single-agent Session, send a bounded task, and verify the result.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+A Workspace is the durable, named Axocoatl identity for an authorized project
+directory. A Session is durable work and conversation created inside that
+Workspace. Start with one Agent and a disposable or clean Git repository until
+you know the tool and sandbox behavior you want.
+
+## Before you open the folder
+
+Run the repository's own checks once and inspect Git:
+
+```sh
+git status --short
+```
+
+Know the command that should decide whether a change is acceptable—for example
+`cargo test`, `npm test`, or `pytest`. Axocoatl can detect common project
+metadata, but the repository remains the authority.
+
+## Create the Session
+
+<Steps>
+
+1. Start the runtime with `axocoatl dev` and open `http://localhost:8080`.
+2. From the Workspace switcher, choose **Open workspace…** and navigate to the
+   repository.
+3. Confirm or edit the Workspace name. The canonical path remains visible as
+   secondary context; renaming the Workspace never renames the folder.
+4. With that Workspace selected, choose **New session** beside **Sessions** and
+   give the Session its own work-item name.
+5. Keep **Single agent** for the first run and select a configured Agent.
+6. Leave **Exposed ports** empty unless the task needs Preview. A root
+   `package-lock.json` can suggest the curated Node 20 image. A devcontainer's
+   exact image is shown as repository input and may require arbitrary-image
+   trust; under E2B, clear it because the daemon-global template is the runtime.
+7. Review the proposed project setup. A command such as `npm ci` is shown but
+   remains unchecked and unexecuted until you approve that exact command. You
+   may edit it or explicitly continue without a setup command. If the daemon
+   defaults an exact devcontainer command to checked, that policy is visible;
+   your checked or unchecked reviewed choice wins.
+8. Wait for the Session environment to report **Ready**, then send a bounded
+   first request from Conversation.
+
+</Steps>
+
+A useful first prompt is:
+
+```text
+Inspect this repository without changing files. Identify its purpose, the command
+used for its automated checks, and the three files most relevant to a small first fix.
+Report any uncertainty explicitly.
+```
+
+Then ask for a small change:
+
+```text
+Fix the smallest verified issue you found. Run the repository's documented check
+command, summarize the result, and do not commit.
+```
+
+## Verify the result
+
+The accepted result is not just the final prose. Check the workbench:
+
+1. Expand tool calls in Conversation to see the commands and files used.
+2. Open **Files** to inspect the edited file.
+3. Open **Source Control** and select **Last turn** to isolate paths touched by
+   the most recent Agent turn.
+4. Run the repository check in Terminal if the Agent did not, or repeat it
+   independently.
+5. Commit only after you have reviewed the actual diff.
+
+<Aside type="note" title="Axocoatl does not commit the normal result for you">
+Agent edits remain in the Session working tree. Keeping an Attempt also applies
+its delta without committing. Source Control exposes stage, unstage, discard,
+hunk review, branch checkout, and commit as deliberate user actions.
+</Aside>
+
+## If creation fails
+
+- Run `axocoatl doctor` and resolve the Podman warning.
+- Confirm the selected Agent exists in `axocoatl.yaml`.
+- An image outside Axocoatl's curated presets is rejected unless
+  `sandbox.allow_untrusted_images: true`.
+- Axocoatl does not install Podman or create a Podman VM during Session startup.
+  Follow the explicit `doctor` guidance, then retry.
+- With `sandbox.network: none`, the local image must already contain Axocoatl's
+  required repository commands; offline startup cannot download missing tools.
+- E2B uses one daemon-global template and rejects a per-Session or devcontainer
+  OCI image. Clear the image or switch the daemon to Podman.
+- A detected repository setup command is only a proposal. Open **Review setup**
+  and approve the exact command or explicitly continue without one.
+
+Continue with [Work in a Session →](/workbench/session/)

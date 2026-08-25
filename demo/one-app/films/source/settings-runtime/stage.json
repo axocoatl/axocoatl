@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "film": "settings-runtime",
+  "timeline": "demo/one-app/films/source/settings-runtime/timeline.json",
+  "timeline_sha256": "7857f4d6148252fe8efb3314b4521f6b5c2c693c4e4e86c4440a527282912268",
+  "input_fps": 8,
+  "frame_count": 232,
+  "duration_seconds": 29,
+  "sequence_sha256": "78c8cfdc7a47938b78ed21ce9037c810cf8ec7c1d835460f3fb9f4ab9f5983ce",
+  "shots": [
+    {
+      "beat": "session",
+      "source": "shot-session.jpg",
+      "source_sha256": "ff1aafbd978137a207616f085279b708d8446dfc046660b947621a6930e4467c",
+      "hold_frames": 48,
+      "first_frame": 1,
+      "last_frame": 48
+    },
+    {
+      "beat": "agents",
+      "source": "shot-agents.jpg",
+      "source_sha256": "1be77feaafe5223208cb7dd41ee2dc70a6961d2cf043d3e155d330024eea4a34",
+      "hold_frames": 40,
+      "first_frame": 49,
+      "last_frame": 88
+    },
+    {
+      "beat": "agent-dependency",
+      "source": "shot-agent-dependency.jpg",
+      "source_sha256": "ad111cd195aef8b1dc93137330c940c37c4a4d6a607fe22c5aa312abb227c528",
+      "hold_frames": 32,
+      "first_frame": 89,
+      "last_frame": 120
+    },
+    {
+      "beat": "skills",
+      "source": "shot-skills.jpg",
+      "source_sha256": "22e29e5aaff763ede5b98ddf07d9acbc29ebeba98458f7d62279f0a42230e9a4",
+      "hold_frames": 32,
+      "first_frame": 121,
+      "last_frame": 152
+    },
+    {
+      "beat": "mcp",
+      "source": "shot-mcp.jpg",
+      "source_sha256": "c0915d9ec59ea031544e444c59d2fff4bf2cc2d23956ff0ab56970e08164e7c8",
+      "hold_frames": 32,
+      "first_frame": 153,
+      "last_frame": 184
+    },
+    {
+      "beat": "automations",
+      "source": "shot-automations.jpg",
+      "source_sha256": "8195851404c3ca95ccd91351ce4f7178a7ca964ea4f69a5f44ef593a0108732e",
+      "hold_frames": 48,
+      "first_frame": 185,
+      "last_frame": 232
+    }
+  ],
+  "poster_beat": "agents",
+  "poster_frame": 68
+}

@@ -19,17 +19,98 @@ use std::sync::{Arc, Mutex};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tokio::sync::broadcast;
 
+const PTY_SCROLLBACK_MAX_BYTES: usize = 64 * 1024;
+
+struct PtyOutputInner {
+    /// Serializes one append+publish commit with subscribe+snapshot cuts.
+    gate: Mutex<()>,
+    scrollback: Mutex<Vec<u8>>,
+    sender: broadcast::Sender<Vec<u8>>,
+}
+
+/// Shared output owner used by both local and remote PTY pumps.
+///
+/// Keeping construction crate-private prevents a backend from accidentally
+/// updating scrollback and live subscribers as two unrelated operations.
+#[derive(Clone)]
+pub(crate) struct PtyOutput {
+    inner: Arc<PtyOutputInner>,
+}
+
+impl PtyOutput {
+    pub(crate) fn new(capacity: usize) -> Self {
+        let (sender, _) = broadcast::channel(capacity);
+        Self {
+            inner: Arc::new(PtyOutputInner {
+                gate: Mutex::new(()),
+                scrollback: Mutex::new(Vec::new()),
+                sender,
+            }),
+        }
+    }
+
+    /// Append to the retained tail and publish the same bytes as one commit.
+    pub(crate) fn append(&self, chunk: Vec<u8>) {
+        let _commit = self
+            .inner
+            .gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut scrollback = self
+            .inner
+            .scrollback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        scrollback.extend_from_slice(&chunk);
+        if scrollback.len() > PTY_SCROLLBACK_MAX_BYTES {
+            let cut = scrollback.len() - PTY_SCROLLBACK_MAX_BYTES;
+            scrollback.drain(..cut);
+        }
+        // With no subscriber the retained scrollback is still authoritative.
+        // With subscribers this send occurs before the append commit unlocks.
+        let _ = self.inner.sender.send(chunk);
+    }
+
+    /// Atomically subscribe to future output and copy the retained tail.
+    ///
+    /// Output committed before this cut appears only in `snapshot`; output
+    /// committed after it appears only through `receiver`.
+    fn attach(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
+        let _commit = self
+            .inner
+            .gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let receiver = self.inner.sender.subscribe();
+        let snapshot = self
+            .inner
+            .scrollback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        (snapshot, receiver)
+    }
+
+    fn snapshot(&self) -> Vec<u8> {
+        let _commit = self
+            .inner
+            .gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.inner
+            .scrollback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
 /// Live terminal we can drive over a WebSocket: reads stream out, keystrokes
 /// stream in. Dropping it tears the backing child/stream down.
 pub struct PtyTerminal {
     pub id: String,
     pub command: String,
-    /// Cumulative scrollback we tee from the reader, capped to ~64 KiB.
-    /// New WS connections receive this so freshly-attached UIs catch up
-    /// without re-running the command.
-    pub scrollback: Arc<Mutex<Vec<u8>>>,
-    /// Live output broadcast — every new chunk goes to all subscribers.
-    pub output_tx: broadcast::Sender<Vec<u8>>,
+    output: PtyOutput,
     /// Keystrokes from any subscriber funnel into here and reach the terminal's
     /// stdin via the writer/pump.
     pub input_tx: std::sync::mpsc::Sender<Vec<u8>>,
@@ -93,15 +174,13 @@ impl PtyTerminal {
             .take_writer()
             .map_err(|e| format!("take writer: {e}"))?;
 
-        let scrollback = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let (output_tx, _) = broadcast::channel::<Vec<u8>>(64);
+        let output = PtyOutput::new(64);
         let (input_tx, input_rx) = std::sync::mpsc::channel::<Vec<u8>>();
         let alive = Arc::new(Mutex::new(true));
 
         // Reader: blocking std::io::Read, so run it on a blocking thread.
         {
-            let scrollback = scrollback.clone();
-            let output_tx = output_tx.clone();
+            let output = output.clone();
             std::thread::spawn(move || {
                 let mut reader = reader;
                 let mut buf = [0u8; 4096];
@@ -111,16 +190,7 @@ impl PtyTerminal {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
                             let chunk = buf[..n].to_vec();
-                            if let Ok(mut sb) = scrollback.lock() {
-                                sb.extend_from_slice(&chunk);
-                                if sb.len() > 64 * 1024 {
-                                    let cut = sb.len() - 64 * 1024;
-                                    sb.drain(..cut);
-                                }
-                            }
-                            // Best-effort broadcast — if there are no
-                            // subscribers, we silently drop and keep going.
-                            let _ = output_tx.send(chunk);
+                            output.append(chunk);
                         }
                     }
                 }
@@ -167,8 +237,7 @@ impl PtyTerminal {
         Ok(Self {
             id,
             command: command.to_string(),
-            scrollback,
-            output_tx,
+            output,
             input_tx,
             alive,
             resize_hook,
@@ -179,11 +248,10 @@ impl PtyTerminal {
     /// Used by remote backends whose output/input pumps are set up by the caller
     /// (the Podman path uses [`PtyTerminal::spawn_podman`] instead).
     #[allow(clippy::too_many_arguments)]
-    pub fn from_parts(
+    pub(crate) fn from_parts(
         id: String,
         command: String,
-        scrollback: Arc<Mutex<Vec<u8>>>,
-        output_tx: broadcast::Sender<Vec<u8>>,
+        output: PtyOutput,
         input_tx: std::sync::mpsc::Sender<Vec<u8>>,
         alive: Arc<Mutex<bool>>,
         resize_hook: Box<dyn Fn(u16, u16) + Send + Sync>,
@@ -191,8 +259,7 @@ impl PtyTerminal {
         Self {
             id,
             command,
-            scrollback,
-            output_tx,
+            output,
             input_tx,
             alive,
             resize_hook,
@@ -209,12 +276,69 @@ impl PtyTerminal {
         self.alive.lock().map(|a| *a).unwrap_or(false)
     }
 
+    /// Return one exact attach cut: retained output followed by a receiver that
+    /// contains only output committed after that retained snapshot.
+    pub fn attach_output(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
+        self.output.attach()
+    }
+
     /// Snapshot of the scrollback so far — sent to new subscribers so they
     /// catch up before the live stream starts.
     pub fn snapshot(&self) -> Vec<u8> {
-        self.scrollback
+        self.output.snapshot()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attach_cut_delivers_output_committed_during_the_cut_exactly_once() {
+        let output = PtyOutput::new(8);
+        output.append(b"before".to_vec());
+        let (input_tx, _input_rx) = std::sync::mpsc::channel();
+        let terminal = Arc::new(PtyTerminal::from_parts(
+            "term-exact-cut".to_string(),
+            "sh".to_string(),
+            output.clone(),
+            input_tx,
+            Arc::new(Mutex::new(true)),
+            Box::new(|_, _| {}),
+        ));
+
+        // Hold scrollback after attach has taken the outer gate. The append is
+        // forced to queue behind that gate, so it must land in the returned
+        // receiver rather than being duplicated into or lost from snapshot.
+        let scrollback = output
+            .inner
+            .scrollback
             .lock()
-            .map(|s| s.clone())
-            .unwrap_or_default()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let attach_terminal = terminal.clone();
+        let attach = std::thread::spawn(move || attach_terminal.attach_output());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            if output.inner.gate.try_lock().is_err() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "attach did not acquire the output gate"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let append_output = output.clone();
+        let append = std::thread::spawn(move || append_output.append(b"during".to_vec()));
+        drop(scrollback);
+
+        let (snapshot, mut receiver) = attach.join().unwrap();
+        append.join().unwrap();
+        assert_eq!(snapshot, b"before");
+        assert_eq!(receiver.try_recv().unwrap(), b"during");
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
     }
 }

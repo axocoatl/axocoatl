@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "film": "automation-hitl-recovery",
+  "captured_at": "2026-08-25T06:51:18.350Z",
+  "url": "http://localhost:18182/",
+  "browser": "Codex in-app browser",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1
+  },
+  "theme": "dark",
+  "reduced_motion": "no-preference",
+  "timeline": "demo/one-app/films/source/automation-hitl-recovery/timeline.json",
+  "timeline_sha256": "a3622d817a4acbefc62c2a90f49bf89deaeb0ef5be6227f4e5552957a0dff868",
+  "keyframes": [
+    {
+      "beat": "run",
+      "path": "demo/one-app/films/source/automation-hitl-recovery/shot-run.jpg",
+      "sha256": "a077680511a5e78bcd74304ca06921caf607568fb7a3853120a9e69ad3cc8bff"
+    },
+    {
+      "beat": "interrupt",
+      "path": "demo/one-app/films/source/automation-hitl-recovery/shot-interrupt.jpg",
+      "sha256": "beb54c02b498355fbaa39afbd1873679746e4a52f2a4325ca60ce32964aa83fc"
+    },
+    {
+      "beat": "restart",
+      "path": "demo/one-app/films/source/automation-hitl-recovery/shot-restart.jpg",
+      "sha256": "76a1ef902bbda200cd1ead8c729c8dbe695f2825474f0451b57aaf4bc4d99c81"
+    },
+    {
+      "beat": "resume",
+      "path": "demo/one-app/films/source/automation-hitl-recovery/shot-resume.jpg",
+      "sha256": "0f9a745e3608c8a303b00cc165cb8bb60e3886d39257881662accb21e9a83441"
+    },
+    {
+      "beat": "result",
+      "path": "demo/one-app/films/source/automation-hitl-recovery/shot-result.jpg",
+      "sha256": "a7a9ff49c2408d5d79d4db540584bbc6cfd8ef4add21b637afb8b1bea87b8215"
+    }
+  ]
+}

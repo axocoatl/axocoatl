@@ -20,6 +20,8 @@
  * @element ax-editor
  *
  * @attr {string} session  Session whose files are being edited.
+ * @attr {boolean} suspended  Pause editor work without dropping open buffers.
+ * @attr {boolean} disabled  Alias for `suspended`.
  *
  * @fires files-changed  the set of open files, or which is active, changed
  * @fires state-changed  detail: {path, dirty} — a file's saved-ness moved
@@ -53,11 +55,6 @@ export function loadMonaco() {
     const tag = document.createElement('script');
     tag.src = '/vendor/monaco/vs/loader.js';
     tag.onload = () => {
-      // Workers come from the same origin through the vendor route, so no Blob
-      // shim is needed.
-      self.MonacoEnvironment = {
-        getWorkerUrl: () => '/vendor/monaco/vs/assets/editor.worker-Be8ye1pW.js',
-      };
       window.require.config({ paths: { vs: '/vendor/monaco/vs' } });
       window.require(['vs/editor/editor.main'], () => {
         try {
@@ -74,7 +71,7 @@ export function loadMonaco() {
 }
 
 export class AxEditor extends HTMLElement {
-  static get observedAttributes() { return ['session']; }
+  static get observedAttributes() { return ['session', 'suspended', 'disabled']; }
 
   #host = null;
   #editor = null;
@@ -84,9 +81,23 @@ export class AxEditor extends HTMLElement {
   #files = [];
   #active = null;
   #loading = false;
+  /** Invalidates every asynchronous operation when the owning session resets. */
+  #generation = 0;
+  /** Monotonic identities let a newer request for one file supersede an older one. */
+  #requestSequence = 0;
+  /** path → the currently owning open/save/reload request. */
+  #fileRequests = new Map();
+  /** The latest deferred Monaco mount. */
+  #mountRequest = null;
+  /** True while the owning Session has yielded its runtime to Ways. */
+  #suspendedMode = false;
 
   get session() { return this.getAttribute('session') || ''; }
   set session(v) { v ? this.setAttribute('session', v) : this.removeAttribute('session'); }
+  get suspended() { return this.#suspendedMode; }
+  set suspended(v) { this.toggleAttribute('suspended', Boolean(v)); }
+  get disabled() { return this.#suspendedMode; }
+  set disabled(v) { this.toggleAttribute('disabled', Boolean(v)); }
 
   /** Open files, as plain data for whoever draws the tabs. */
   get files() {
@@ -103,44 +114,64 @@ export class AxEditor extends HTMLElement {
     this.style.display = 'flex';
     this.style.minHeight = '0';
     this.style.minWidth = '0';
+    this.#syncSuspension();
   }
 
   attributeChangedCallback(name, prev, next) {
     // A different session is a different project; nothing carries over.
-    if (name === 'session' && prev && prev !== next) this.reset();
+    if (name === 'session' && prev !== next) this.reset();
+    if ((name === 'suspended' || name === 'disabled') && prev !== next) this.#syncSuspension();
   }
 
   /** Open a file, or activate it if already open. */
   async open(path) {
+    if (this.#suspendedMode) return;
     const already = this.#files.find((f) => f.path === path);
     if (already) { this.activate(path); return; }
-    if (!this.session) return;
+    const session = this.session;
+    if (!session) return;
+    const request = this.#beginFileRequest('open', session, path);
     this.#loading = true;
     this.#announce();
-    let j;
     try {
-      j = await fetch(`/api/sessions/${encodeURIComponent(this.session)}`
-        + `/file?path=${encodeURIComponent(path)}`).then((r) => r.json());
+      const response = await fetch(`/api/sessions/${encodeURIComponent(session)}`
+        + `/file?path=${encodeURIComponent(path)}`, { signal: request.controller.signal });
+      if (!this.#ownsFileRequest(request)) {
+        this.#finishFileRequest(request);
+        return;
+      }
+      const j = await response.json();
+      if (!this.#ownsFileRequest(request)) {
+        this.#finishFileRequest(request);
+        return;
+      }
+      this.#finishFileRequest(request);
+      if (j.error) { this.#fail(j.error); return; }
+      // Two callers may ask for the same unopened path before either request
+      // finishes. Only one file record and model may own that path.
+      if (this.#files.some((f) => f.path === path)) return;
+      this.#files.push({
+        path,
+        content: j.content || '',
+        lang: j.lang || '',
+        truncated: !!j.truncated,
+        draft: null,
+        dirty: false,
+      });
+      this.activate(path);
     } catch (e) {
-      this.#loading = false;
+      if (!this.#ownsFileRequest(request)) {
+        this.#finishFileRequest(request);
+        return;
+      }
+      this.#finishFileRequest(request);
       this.#fail(String(e));
-      return;
     }
-    this.#loading = false;
-    if (j.error) { this.#fail(j.error); return; }
-    this.#files.push({
-      path,
-      content: j.content || '',
-      lang: j.lang || '',
-      truncated: !!j.truncated,
-      draft: null,
-      dirty: false,
-    });
-    this.activate(path);
   }
 
   /** Make a file the visible one, preserving where you were in the last. */
   activate(path) {
+    if (this.#suspendedMode) return;
     if (!this.#files.some((f) => f.path === path)) return;
     this.#active = path;
     this.#announce();
@@ -172,6 +203,7 @@ export class AxEditor extends HTMLElement {
 
   /** Close everything. Used when the session changes. */
   reset() {
+    this.#invalidateAsync();
     for (const path of [...this.#models.keys()]) this.close(path);
     this.#files = [];
     this.#active = null;
@@ -189,21 +221,34 @@ export class AxEditor extends HTMLElement {
 
   /** Write the active file back. Truncated files are never written. */
   async save() {
+    if (this.#suspendedMode) return;
     const f = this.activeFile;
-    if (!f || !this.session) return;
+    const session = this.session;
+    if (!f || !session) return;
     if (f.truncated) {
       this.#emit('save-result', { path: f.path, ok: false, error: 'file was truncated' });
       return;
     }
     const content = this.contentOf(f.path);
+    const request = this.#beginFileRequest('save', session, f.path, f);
     try {
-      const r = await fetch(`/api/sessions/${encodeURIComponent(this.session)}`
+      const r = await fetch(`/api/sessions/${encodeURIComponent(session)}`
         + `/file?path=${encodeURIComponent(f.path)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ content }),
+        signal: request.controller.signal,
       });
+      if (!this.#ownsFileRequest(request)) {
+        this.#finishFileRequest(request);
+        return;
+      }
       const j = await r.json().catch(() => ({}));
+      if (!this.#ownsFileRequest(request)) {
+        this.#finishFileRequest(request);
+        return;
+      }
+      this.#finishFileRequest(request);
       if (!r.ok) {
         this.#emit('save-result', { path: f.path, ok: false, error: j.error || `HTTP ${r.status}` });
         return;
@@ -215,6 +260,11 @@ export class AxEditor extends HTMLElement {
       this.#emit('save-result', { path: f.path, ok: true, bytes: j.bytes });
       this.#announce();
     } catch (e) {
+      if (!this.#ownsFileRequest(request)) {
+        this.#finishFileRequest(request);
+        return;
+      }
+      this.#finishFileRequest(request);
       this.#emit('save-result', { path: f.path, ok: false, error: String(e) });
     }
   }
@@ -227,12 +277,25 @@ export class AxEditor extends HTMLElement {
    * left alone and reported instead.
    */
   async reload(path) {
+    if (this.#suspendedMode) return false;
     const f = this.#files.find((x) => x.path === path);
-    if (!f || !this.session) return false;
+    const session = this.session;
+    if (!f || !session) return false;
     if (f.dirty) return false;
+    const request = this.#beginFileRequest('reload', session, path, f);
     try {
-      const j = await fetch(`/api/sessions/${encodeURIComponent(this.session)}`
-        + `/file?path=${encodeURIComponent(path)}`).then((r) => r.json());
+      const response = await fetch(`/api/sessions/${encodeURIComponent(session)}`
+        + `/file?path=${encodeURIComponent(path)}`, { signal: request.controller.signal });
+      if (!this.#ownsFileRequest(request) || f.dirty) {
+        this.#finishFileRequest(request);
+        return false;
+      }
+      const j = await response.json();
+      if (!this.#ownsFileRequest(request) || f.dirty) {
+        this.#finishFileRequest(request);
+        return false;
+      }
+      this.#finishFileRequest(request);
       if (j.error) return false;
       f.content = j.content || '';
       f.truncated = !!j.truncated;
@@ -244,12 +307,17 @@ export class AxEditor extends HTMLElement {
         const full = entry.model.getFullModelRange();
         entry.model.pushEditOperations([], [{ range: full, text: f.content }], () => null);
       }
+      this.#announce();
       return true;
-    } catch { return false; }
+    } catch {
+      this.#finishFileRequest(request);
+      return false;
+    }
   }
 
   /** Revert the active file to what is on disk. */
   revert(path) {
+    if (this.#suspendedMode) return;
     const f = this.#files.find((x) => x.path === (path || this.#active));
     if (!f) return;
     const entry = this.#models.get(f.path);
@@ -260,7 +328,10 @@ export class AxEditor extends HTMLElement {
     this.#announce();
   }
 
-  focus() { try { this.#editor?.focus(); } catch { /* not created yet */ } }
+  focus() {
+    if (this.#suspendedMode) return;
+    try { this.#editor?.focus(); } catch { /* not created yet */ }
+  }
 
   /**
    * Re-measure.
@@ -287,6 +358,68 @@ export class AxEditor extends HTMLElement {
 
   #showEmpty() { this.textContent = ''; }
 
+  #beginFileRequest(kind, session, path, file = null) {
+    try { this.#fileRequests.get(path)?.controller.abort(); } catch { /* already settled */ }
+    const request = {
+      kind,
+      session,
+      path,
+      file,
+      generation: this.#generation,
+      id: ++this.#requestSequence,
+      controller: new AbortController(),
+    };
+    this.#fileRequests.set(path, request);
+    return request;
+  }
+
+  #ownsFileRequest(request) {
+    if (this.#suspendedMode) return false;
+    if (request.session !== this.session || request.generation !== this.#generation) return false;
+    if (this.#fileRequests.get(request.path) !== request) return false;
+    return !request.file || this.#files.find((f) => f.path === request.path) === request.file;
+  }
+
+  #finishFileRequest(request) {
+    if (this.#fileRequests.get(request.path) !== request) return;
+    this.#fileRequests.delete(request.path);
+    this.#loading = [...this.#fileRequests.values()].some((pending) => pending.kind === 'open');
+  }
+
+  #invalidateAsync() {
+    this.#generation += 1;
+    for (const request of this.#fileRequests.values()) {
+      try { request.controller.abort(); } catch { /* already settled */ }
+    }
+    this.#fileRequests.clear();
+    this.#mountRequest = null;
+    this.#loading = false;
+  }
+
+  #syncSuspension() {
+    const suspended = this.hasAttribute('suspended') || this.hasAttribute('disabled');
+    if (suspended === this.#suspendedMode) return;
+    this.#suspendedMode = suspended;
+    this.#invalidateAsync();
+    const f = this.activeFile;
+    try { this.#editor?.updateOptions({ readOnly: suspended || !!f?.truncated }); } catch { /* not mounted */ }
+    this.#announce();
+    if (!suspended) {
+      const session = this.session;
+      const generation = this.#generation;
+      const cleanPaths = this.#files.filter((file) => !file.dirty).map((file) => file.path);
+      void this.#reloadCleanFilesAfterResume(session, generation, cleanPaths);
+      if (f) void this.#mount();
+    }
+  }
+
+  async #reloadCleanFilesAfterResume(session, generation, paths) {
+    await Promise.all(paths.map(async (path) => {
+      if (this.#suspendedMode || session !== this.session || generation !== this.#generation) return;
+      await this.reload(path);
+    }));
+  }
+
   #fail(msg) {
     this.textContent = '';
     const d = document.createElement('div');
@@ -296,8 +429,17 @@ export class AxEditor extends HTMLElement {
   }
 
   async #mount() {
+    if (this.#suspendedMode) return;
     const f = this.activeFile;
     if (!f) { this.#showEmpty(); return; }
+    const request = {
+      session: this.session,
+      generation: this.#generation,
+      path: f.path,
+      file: f,
+      id: ++this.#requestSequence,
+    };
+    this.#mountRequest = request;
 
     // The host survives tab switches so the editor instance is never rebuilt.
     if (!this.#host) {
@@ -318,9 +460,14 @@ export class AxEditor extends HTMLElement {
     if (this.#host.parentNode !== this) this.append(this.#host);
 
     let monaco;
-    try { monaco = await loadMonaco(); } catch (e) { this.#fail(`Editor failed to load: ${e}`); return; }
-    // The active file may have changed while Monaco was loading.
-    if (this.activeFile !== f) return;
+    try {
+      monaco = await loadMonaco();
+    } catch (e) {
+      if (this.#ownsMount(request)) this.#fail(`Editor failed to load: ${e}`);
+      return;
+    }
+    // The session or active file may have changed while Monaco was loading.
+    if (!this.#ownsMount(request)) return;
 
     if (!this.#editor) {
       this.#editor = monaco.editor.create(this.#host, {
@@ -388,6 +535,15 @@ export class AxEditor extends HTMLElement {
     if (entry.viewState) this.#editor.restoreViewState(entry.viewState);
     this.#editor.updateOptions({ readOnly: !!f.truncated });
     this.#editor.focus();
+  }
+
+  #ownsMount(request) {
+    return !this.#suspendedMode
+      && this.#mountRequest === request
+      && request.session === this.session
+      && request.generation === this.#generation
+      && request.path === this.#active
+      && this.activeFile === request.file;
   }
 }
 

@@ -17,7 +17,7 @@ axocoatl-tools = { path = "../../crates/axocoatl-tools" }
 # to expose a trivial `get_weather` tool over stdio (the `server`/`macros`
 # features + ToolRouter) when this binary re-execs in --mcp-server mode. The
 # tool CALL goes through axocoatl's own registry + executor, not rmcp directly.
-rmcp = { version = "1.2", features = [
+rmcp = { version = "1.8.0", features = [
     "server",
     "client",
     "transport-child-process",

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "film": "settings-runtime",
+  "checks": [
+    {
+      "id": "session",
+      "status": "passed",
+      "detail": "The film begins in the real V1 proof Session at the Signal Desk workspace, and Settings opens over that unchanged Conversation surface."
+    },
+    {
+      "id": "agents",
+      "status": "passed",
+      "detail": "Settings > Agents exposes reviewer as Critical Reviewer with provider ollama, model qwen3:8b, its configured role prompt, and its token budget."
+    },
+    {
+      "id": "agent-dependency",
+      "status": "passed",
+      "detail": "Scrolling the same Critical Reviewer drawer exposes architect as its checked dependency without changing the Agent or configuration."
+    },
+    {
+      "id": "skills",
+      "status": "passed",
+      "detail": "Settings > Skills shows Release candidate ready (release-candidate-ready) declaring the typed ReleaseCandidateReady event without firing it again."
+    },
+    {
+      "id": "mcp",
+      "status": "passed",
+      "detail": "Settings > MCP servers shows weather connected over stdio and exposes the qualified mcp__weather__get_weather tool without changing Permissions."
+    },
+    {
+      "id": "automations",
+      "status": "passed",
+      "detail": "Settings > Automations shows completed release-gate-review run bf52db2e-14b7-4e3e-ae9e-7f565133dc44 and its non-empty stored Result while the same Session remains selected behind Settings."
+    }
+  ],
+  "identities": {
+    "fixture": "signal-desk",
+    "release_version": "1.0.0",
+    "binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+    "capture_config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+    "capture_data_root": "/private/tmp/axocoatl-one-app-showcase-signal-event-launch/data",
+    "workspace_id": "wsp-28d4ba63-39b4-44ac-b43b-a5ce69da28a8",
+    "workspace_path": "/private/tmp/axocoatl-one-app-showcase-signal-event-launch/workspace",
+    "session_id": "ses-8ec1494c-ecff-4452-9794-fe57ab6d4707",
+    "session_name": "V1 proof",
+    "session_agent_id": "coder",
+    "inspected_agent_id": "reviewer",
+    "inspected_agent_name": "Critical Reviewer",
+    "inspected_agent_provider": "ollama",
+    "inspected_agent_model": "qwen3:8b",
+    "inspected_agent_dependency": "architect",
+    "skill_id": "release-candidate-ready",
+    "skill_event_type": "ReleaseCandidateReady",
+    "mcp_server": "weather",
+    "mcp_transport": "stdio",
+    "mcp_tool": "mcp__weather__get_weather",
+    "automation_id": "release-gate-review",
+    "automation_run_id": "bf52db2e-14b7-4e3e-ae9e-7f565133dc44",
+    "automation_run_file_sha256": "f49591fd5d90e21d4cf7d9b96adf34a1c15488c44c69d3d08de32bd3d8a7f9c1",
+    "automation_result": "Evidence received. Keep the release gated until repository checks and remaining risks are reviewed by an operator."
+  }
+}

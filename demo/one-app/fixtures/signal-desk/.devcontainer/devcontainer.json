@@ -1,0 +1,10 @@
+{
+  "name": "Signal Desk demo",
+  "image": "localhost/axocoatl-one-app-demo:latest",
+  "forwardPorts": [8765],
+  "portsAttributes": {
+    "8765": {
+      "label": "Incident preview"
+    }
+  }
+}

@@ -1,0 +1,101 @@
+---
+title: Automations
+description: Build durable explicit DAGs, choose manual or automatic triggers, inspect runs, and recover operator interrupts.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+An Automation is an explicit directed acyclic graph. Nodes perform work and
+edges carry control flow. The canonical Automation store powers Settings, the
+HTTP API, manual runs, interval scheduling, and lattice event triggers.
+
+## Create a working graph
+
+<Steps>
+
+1. Open **Settings → Automations** and choose **+ Automation**.
+2. Set a stable ID, name, starter Agent, and trigger.
+3. For an automatic trigger, provide the instruction sent when it fires.
+4. Create the record. Axocoatl starts it as a valid **Text input → Agent** DAG.
+5. Open the editor, add nodes and edges, resolve any missing references, and
+   save before running.
+
+</Steps>
+
+You can group records into folders, move or rename them, pause or enable them,
+run them now, and inspect saved run detail from the same surface.
+
+## Choose a trigger
+
+| Trigger | Behavior |
+| --- | --- |
+| **Manual** | Runs from Settings, CLI, or API with supplied inputs |
+| **Schedule** | Fires on a fixed interval such as `30s`, `5m`, `2h`, or `1d` |
+| **On event** | Matches a lattice event type exactly |
+| **On Skill** | Matches a producer exactly as `skill:<skill-id>` |
+
+There is no cron syntax. Interval scheduling measures a cadence; it is not a
+calendar scheduler for “09:00 every weekday.”
+
+One automatically triggered Automation cannot overlap itself. Event-triggered
+runs also use a cooldown around execution to reduce immediate feedback loops.
+
+## Node kinds
+
+| Node | Purpose |
+| --- | --- |
+| **Agent** | Run one configured Agent with resolved input |
+| **Tool** | Call a registered tool directly without an LLM |
+| **Conditional** | Activate a labeled branch from an expression, with optional default |
+| **Map** | Run an Agent, Tool, or Subgraph body once per list item, then continue |
+| **Subgraph** | Call another Automation within a bounded nesting depth |
+| **Text input** | Declare a first-class manual/default input slot |
+| **Interrupt** | Park the run for a human decision |
+
+The editor validates references such as a Map body or Subgraph target before
+save and run. The runtime also rejects cycles and invalid graph state.
+
+## Run and inspect
+
+Manual records can request values for Text input nodes and trigger input. The
+Runs drawer shows node checkpoints, outputs, and failure detail. Final content
+contains the outputs of executed runtime sinks in Automation declaration order.
+
+CLI compatibility commands remain available:
+
+```sh
+axocoatl workflow list --config ./axocoatl.yaml
+axocoatl workflow run automation-id --input "Run the release check" --config ./axocoatl.yaml
+```
+
+The HTTP Automation endpoints expose the full canonical model; see
+[HTTP API](/reference/http-api/).
+
+## Resume or skip an Interrupt
+
+An Interrupt node records its message and payload, then parks the run. An
+operator can:
+
+- **Resume** with a value, which replaces or appends to the paused output
+  according to the node strategy;
+- **Skip**, which emits a distinct cancellation event, returns an empty output
+  for that node, and lets downstream execution continue.
+
+A top-level parked Interrupt is durable. After daemon restart, Axocoatl
+reconstructs its prompt and can continue from recorded outputs and edges
+without replaying completed nodes.
+
+<Aside type="caution" title="Recovery stops at explicit checkpoints">
+Axocoatl does not reconstruct an arbitrary provider or tool call that was in
+flight when the daemon stopped. A nested Subgraph Interrupt is also process-
+local because it lacks its own durable parent-continuation record.
+</Aside>
+
+## Legacy YAML is seed input
+
+On first boot without a canonical store, `workflows:`, `schedules:`, and
+`proactive:` entries can be projected into Automation records. After the store
+exists, it remains authoritative—even when empty. Editing or deleting YAML does
+not silently resurrect records removed through Settings or the API.
+
+Next: [Run Axocoatl as a service →](/operate/service/)

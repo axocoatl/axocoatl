@@ -1,0 +1,162 @@
+{
+  "schema_version": 2,
+  "film": "settings-runtime",
+  "recorded_at": "2026-08-25T07:59:57.030Z",
+  "source": {
+    "branch": "codex/session-capabilities",
+    "head": "e4bfd6042b0a54b06c898c58f7b04fb1b0ff4e29",
+    "dirty": true,
+    "patch_sha256": "9562ed1cea92c0d427fd91449ef09fdc9e2a3fc7a0fd2fb5d38c8f29183a737d",
+    "patch_excludes": [
+      "demo/one-app/films/source/",
+      "demo/one-app/films/staged/",
+      "demo/one-app/films/provenance/",
+      "sites/marketing/assets/films/"
+    ],
+    "content_sha256": "27ceddcd7c6f177767025f7c15a2cf2f9bb95fde19df365f3a18b05afc07cfdf"
+  },
+  "binary": {
+    "path": "target/release/axocoatl",
+    "version": "axocoatl 1.0.0",
+    "sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488"
+  },
+  "capture": {
+    "record": "demo/one-app/films/source/settings-runtime/capture.json",
+    "record_sha256": "a6cad727c347f89b837ae04810b26001e082471a831481239a8dda572c03a9b9",
+    "url": "http://localhost:18180/",
+    "browser": "Codex in-app browser",
+    "viewport": {
+      "width": 1280,
+      "height": 720,
+      "device_scale_factor": 1
+    },
+    "theme": "dark",
+    "reduced_motion": "no-preference",
+    "keyframes": [
+      {
+        "beat": "session",
+        "path": "demo/one-app/films/source/settings-runtime/shot-session.jpg",
+        "sha256": "ff1aafbd978137a207616f085279b708d8446dfc046660b947621a6930e4467c"
+      },
+      {
+        "beat": "agents",
+        "path": "demo/one-app/films/source/settings-runtime/shot-agents.jpg",
+        "sha256": "1be77feaafe5223208cb7dd41ee2dc70a6961d2cf043d3e155d330024eea4a34"
+      },
+      {
+        "beat": "agent-dependency",
+        "path": "demo/one-app/films/source/settings-runtime/shot-agent-dependency.jpg",
+        "sha256": "ad111cd195aef8b1dc93137330c940c37c4a4d6a607fe22c5aa312abb227c528"
+      },
+      {
+        "beat": "skills",
+        "path": "demo/one-app/films/source/settings-runtime/shot-skills.jpg",
+        "sha256": "22e29e5aaff763ede5b98ddf07d9acbc29ebeba98458f7d62279f0a42230e9a4"
+      },
+      {
+        "beat": "mcp",
+        "path": "demo/one-app/films/source/settings-runtime/shot-mcp.jpg",
+        "sha256": "c0915d9ec59ea031544e444c59d2fff4bf2cc2d23956ff0ab56970e08164e7c8"
+      },
+      {
+        "beat": "automations",
+        "path": "demo/one-app/films/source/settings-runtime/shot-automations.jpg",
+        "sha256": "8195851404c3ca95ccd91351ce4f7178a7ca964ea4f69a5f44ef593a0108732e"
+      }
+    ]
+  },
+  "edit": {
+    "timeline": "demo/one-app/films/source/settings-runtime/timeline.json",
+    "timeline_sha256": "7857f4d6148252fe8efb3314b4521f6b5c2c693c4e4e86c4440a527282912268",
+    "stage_record": "demo/one-app/films/source/settings-runtime/stage.json",
+    "stage_record_sha256": "f440884fdb2babcd95311bf836ac606247a030fedd275e9e7455a5d4518ab0b5",
+    "poster_frame": 68,
+    "poster_beat": "agents",
+    "poster_source_sha256": "1be77feaafe5223208cb7dd41ee2dc70a6961d2cf043d3e155d330024eea4a34",
+    "frame_count": 232,
+    "sequence_sha256": "78c8cfdc7a47938b78ed21ce9037c810cf8ec7c1d835460f3fb9f4ab9f5983ce"
+  },
+  "media": {
+    "mp4": {
+      "path": "sites/marketing/assets/films/settings-runtime.mp4",
+      "sha256": "580425da358b64ad5c2e4ac1e71077910613ae6eda977eeb2ef003ab04aaad19",
+      "duration_seconds": 29,
+      "codec": "h264",
+      "width": 1280,
+      "height": 720,
+      "pixel_format": "yuv420p",
+      "fps": "24/1",
+      "audio_streams": 0,
+      "fast_start": true
+    },
+    "poster": {
+      "path": "sites/marketing/assets/films/settings-runtime.jpg",
+      "sha256": "1be77feaafe5223208cb7dd41ee2dc70a6961d2cf043d3e155d330024eea4a34",
+      "codec": "mjpeg",
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "evidence": {
+    "record": "demo/one-app/films/source/settings-runtime/evidence.json",
+    "record_sha256": "d096b2a2e33eb036a6443ac2320a4c8c1c6a834f43adace08752e43cc21ab689",
+    "checks": [
+      {
+        "id": "session",
+        "status": "passed",
+        "detail": "The film begins in the real V1 proof Session at the Signal Desk workspace, and Settings opens over that unchanged Conversation surface."
+      },
+      {
+        "id": "agents",
+        "status": "passed",
+        "detail": "Settings > Agents exposes reviewer as Critical Reviewer with provider ollama, model qwen3:8b, its configured role prompt, and its token budget."
+      },
+      {
+        "id": "agent-dependency",
+        "status": "passed",
+        "detail": "Scrolling the same Critical Reviewer drawer exposes architect as its checked dependency without changing the Agent or configuration."
+      },
+      {
+        "id": "skills",
+        "status": "passed",
+        "detail": "Settings > Skills shows Release candidate ready (release-candidate-ready) declaring the typed ReleaseCandidateReady event without firing it again."
+      },
+      {
+        "id": "mcp",
+        "status": "passed",
+        "detail": "Settings > MCP servers shows weather connected over stdio and exposes the qualified mcp__weather__get_weather tool without changing Permissions."
+      },
+      {
+        "id": "automations",
+        "status": "passed",
+        "detail": "Settings > Automations shows completed release-gate-review run bf52db2e-14b7-4e3e-ae9e-7f565133dc44 and its non-empty stored Result while the same Session remains selected behind Settings."
+      }
+    ],
+    "identities": {
+      "fixture": "signal-desk",
+      "release_version": "1.0.0",
+      "binary_sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488",
+      "capture_config_sha256": "6904e9601e4cc78245b65319f264f9d6984b71c8b873fc2ca37144e1817d6a4a",
+      "capture_data_root": "/private/tmp/axocoatl-one-app-showcase-signal-event-launch/data",
+      "workspace_id": "wsp-28d4ba63-39b4-44ac-b43b-a5ce69da28a8",
+      "workspace_path": "/private/tmp/axocoatl-one-app-showcase-signal-event-launch/workspace",
+      "session_id": "ses-8ec1494c-ecff-4452-9794-fe57ab6d4707",
+      "session_name": "V1 proof",
+      "session_agent_id": "coder",
+      "inspected_agent_id": "reviewer",
+      "inspected_agent_name": "Critical Reviewer",
+      "inspected_agent_provider": "ollama",
+      "inspected_agent_model": "qwen3:8b",
+      "inspected_agent_dependency": "architect",
+      "skill_id": "release-candidate-ready",
+      "skill_event_type": "ReleaseCandidateReady",
+      "mcp_server": "weather",
+      "mcp_transport": "stdio",
+      "mcp_tool": "mcp__weather__get_weather",
+      "automation_id": "release-gate-review",
+      "automation_run_id": "bf52db2e-14b7-4e3e-ae9e-7f565133dc44",
+      "automation_run_file_sha256": "f49591fd5d90e21d4cf7d9b96adf34a1c15488c44c69d3d08de32bd3d8a7f9c1",
+      "automation_result": "Evidence received. Keep the release gated until repository checks and remaining risks are reviewed by an operator."
+    }
+  }
+}

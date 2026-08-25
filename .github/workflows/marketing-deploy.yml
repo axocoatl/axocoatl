@@ -1,40 +1,167 @@
 name: marketing-deploy
 
-# Publish sites/marketing/ to Cloudflare Pages whenever the marketing
-# tree or its brand-asset source changes on main. Manual workflow_dispatch
-# trigger is also exposed for forced redeploys.
+# Build sites/marketing/ after relevant main changes, but deploy only when the
+# workspace version already has a public GitHub release. release.yml calls this
+# workflow after publishing that release and requires the deployment to finish.
 on:
   push:
     branches: [main]
     paths:
       - 'sites/marketing/**'
+      - 'llms.txt'
+      - 'demo/one-app/films/portfolio.json'
+      - 'demo/one-app/**'
+      - 'scripts/install.sh'
       - 'branding/**'
       - '.github/workflows/marketing-deploy.yml'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Public product release that authorizes this deployment
+        required: true
+        type: string
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        description: Cloudflare API token used for the marketing Pages deployment
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        description: Cloudflare account that owns the marketing Pages project
+        required: true
+
+concurrency:
+  # GitHub does not promise FIFO ordering inside a concurrency group. Cancel the
+  # older deployment so a slower stale build cannot finish after newer content.
+  group: axocoatl-production-marketing
+  cancel-in-progress: true
 
 jobs:
+  released-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      published: ${{ steps.release.outputs.published }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Require the current product version to be published
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CALLED_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="$(awk '
+            $0 == "[workspace.package]" { workspace_package = 1; next }
+            workspace_package && /^\[/ { exit }
+            workspace_package && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' Cargo.toml)"
+          test -n "$version"
+          expected_tag="v$version"
+          if [ -n "$CALLED_RELEASE_TAG" ] && [ "$CALLED_RELEASE_TAG" != "$expected_tag" ]; then
+            echo "Called release '$CALLED_RELEASE_TAG' does not match product $expected_tag." >&2
+            exit 1
+          fi
+          response="$(mktemp)"
+          attempts=1
+          if [ -n "$CALLED_RELEASE_TAG" ]; then attempts=12; fi
+          status=""
+          for attempt in $(seq 1 "$attempts"); do
+            status="$(curl --retry 2 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              --silent --show-error --output "$response" --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$expected_tag")"
+            if [ "$status" = "200" ]; then break; fi
+            if [ -n "$CALLED_RELEASE_TAG" ] && [ "$status" = "404" ] && [ "$attempt" -lt "$attempts" ]; then
+              sleep 5
+              continue
+            fi
+            break
+          done
+          if [ "$status" = "200" ] \
+            && [ "$(jq --raw-output '.draft' "$response")" = "false" ] \
+            && [ "$(jq --raw-output '.prerelease' "$response")" = "false" ]; then
+            expected_assets="$({
+              for target in \
+                x86_64-unknown-linux-gnu \
+                aarch64-unknown-linux-gnu \
+                x86_64-apple-darwin \
+                aarch64-apple-darwin
+              do
+                archive="axocoatl-${expected_tag}-${target}.tar.gz"
+                printf '%s\n%s\n' "$archive" "$archive.sha256"
+              done
+            } | LC_ALL=C sort)"
+            actual_assets="$(jq --raw-output '.assets[].name' "$response" | LC_ALL=C sort)"
+            test "$actual_assets" = "$expected_assets" || {
+              echo "$expected_tag does not expose the exact four-platform archive and checksum set; refusing deployment." >&2
+              exit 1
+            }
+            jq --exit-status \
+              'all(.assets[]; .state == "uploaded" and .size > 0)' \
+              "$response" >/dev/null || {
+                echo "$expected_tag contains an incomplete or empty release asset; refusing deployment." >&2
+                exit 1
+              }
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "$CALLED_RELEASE_TAG" ] && [ "$status" = "404" ]; then
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "Current v$version release is not published; leaving the existing production site untouched."
+          else
+            echo "Could not prove that $expected_tag is a public release (HTTP $status); refusing to report a successful deployment." >&2
+            exit 1
+          fi
+
   deploy:
+    needs: released-version
+    if: needs.released-version.outputs.published == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       deployments: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Exercise installer OS, libc, and checksum failures
+        run: ./scripts/test-install.sh
+
+      - name: Install film inspection dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Verify the complete recorded film portfolio
+        run: node demo/one-app/films/verify-film-set.mjs --source-bound
 
       - name: Sync brand assets into sites/marketing/assets/
         run: |
           chmod +x sites/marketing/scripts/sync-assets.sh
           sites/marketing/scripts/sync-assets.sh
 
+      - name: Validate and build the marketing site
+        run: |
+          node sites/marketing/scripts/validate.mjs --strict-films
+          node sites/marketing/scripts/build.mjs /tmp/axocoatl-marketing
+          node sites/marketing/scripts/validate.mjs /tmp/axocoatl-marketing --strict-films
+
       # The homepage tells people to `curl https://axocoatl.ai/install.sh | sh`.
       # Stage the canonical installer at the web root so that URL resolves
       # (single source of truth — scripts/install.sh).
       - name: Stage the installer at the web root
-        run: cp scripts/install.sh sites/marketing/install.sh
+        run: |
+          cp scripts/install.sh /tmp/axocoatl-marketing/install.sh
+          sh -n /tmp/axocoatl-marketing/install.sh
+          cmp -s scripts/install.sh /tmp/axocoatl-marketing/install.sh
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy sites/marketing --project-name=axocoatl-marketing --branch=main
+          command: pages deploy /tmp/axocoatl-marketing --project-name=axocoatl-marketing --branch=main

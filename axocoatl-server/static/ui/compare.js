@@ -12,6 +12,7 @@ import { adopt } from './sheets.js';
  * @attr {string} session  Session whose attempts to show.
  * @attr {string} view     'outcome' | 'route'
  *
+ * @fires attempt-explore  detail: {session} — open Explore several ways configuration
  * @fires attempt-keep     detail: {session, attempt_set_id, index, attempt, result}
  * @fires attempt-discard  detail: {session, attempt_set_id, result}
  * @fires attempt-set-changed detail: {session, previous_attempt_set_id, attempt_set_id}
@@ -34,6 +35,18 @@ const sentence = (value) => {
   const state = String(value || '').replaceAll('_', ' ');
   return state === 'discarding' ? 'cleaning up' : state;
 };
+const controlUsageLabel = (usage, label) => {
+  if (!usage || !Number(usage.calls || 0)) return '';
+  const calls = Number(usage.calls || 0);
+  const input = Number(usage.input_tokens || 0);
+  const output = Number(usage.output_tokens || 0);
+  const reasoning = Number(usage.reasoning_tokens || 0);
+  const completeness = usage.token_usage_known === true
+    ? 'exact' : 'known lower bound · incomplete';
+  return `${label} · ${calls} call${calls === 1 ? '' : 's'} · `
+    + `${input} in / ${output} out / ${reasoning} reasoning · `
+    + `${input + output + reasoning} total tokens · ${completeness}`;
+};
 const KEEP_RECOVERY_STATES = new Set(['applying', 'applied', 'transcript_recorded']);
 
 /** What an attempt is called: the agent, else the model, else its position. */
@@ -48,7 +61,11 @@ async function jsonRequest(url, options) {
   }
   if (!response.ok) {
     const message = body && typeof body === 'object' ? body.error : body;
-    throw new Error(message || `HTTP ${response.status}`);
+    const error = new Error(message || `HTTP ${response.status}`);
+    if (body && typeof body === 'object' && body.control_usage) {
+      error.controlUsage = body.control_usage;
+    }
+    throw error;
   }
   return body;
 }
@@ -154,6 +171,7 @@ button.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err)
 
 .body { flex: 1; overflow: auto; padding: var(--sp-3); min-height: 0; }
 .empty { color: var(--muted-2); font-size: var(--fs-sm); padding: var(--sp-5); text-align: center; }
+.empty .action { display: block; margin: var(--sp-3) auto 0; }
 .empty.loading { opacity: .6; }
 .empty.failed, .failed { color: var(--err); }
 .retry {
@@ -416,6 +434,14 @@ export class AxCompare extends HTMLElement {
     this.#body.addEventListener('click', (event) => {
       const retry = event.target.closest('[data-retry]');
       if (retry) { void this.refresh(); return; }
+      const explore = event.target.closest('[data-explore]');
+      if (explore) {
+        if (!this.session) return;
+        this.dispatchEvent(new CustomEvent('attempt-explore', {
+          detail: { session: this.session }, bubbles: true, composed: true,
+        }));
+        return;
+      }
       const back = event.target.closest('[data-inspect-back]');
       if (back) { this.#inspect = null; this.render(); return; }
       const keep = event.target.closest('[data-keep]');
@@ -578,6 +604,11 @@ export class AxCompare extends HTMLElement {
     return Array.isArray(files) ? files : null;
   }
 
+  #reviewError(index) {
+    const error = this.#variantStatus(index)?.review_error;
+    return typeof error === 'string' && error.trim() ? error : '';
+  }
+
   #judgeAgent() {
     return this.#agents.find((agent) => agent.id === this.#judgeAgentId) || null;
   }
@@ -585,7 +616,6 @@ export class AxCompare extends HTMLElement {
   #selectJudgeAgent() {
     if (this.#judgeAgent()) return;
     const preferred = this.#agents.find((agent) => agent.id === this.#sessionAgentId)
-      || this.#agents.find((agent) => agent.role === 'coordinator')
       || this.#agents[0];
     this.#judgeAgentId = preferred?.id || '';
   }
@@ -688,8 +718,7 @@ export class AxCompare extends HTMLElement {
           body: JSON.stringify({ attempt_set_id: attemptSetId, check }),
         });
       } else {
-        const body = { attempt_set_id: attemptSetId, provider: judgeAgent.provider };
-        if (judgeAgent.model) body.model = judgeAgent.model;
+        const body = { attempt_set_id: attemptSetId, agent_id: judgeAgent.id };
         await jsonRequest(`/api/sessions/${session}/variants/judge`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -698,7 +727,12 @@ export class AxCompare extends HTMLElement {
       }
       if (this.#actionCurrent(actionId, sessionId, attemptSetId)) await this.refresh();
     } catch (error) {
-      this.#emitError(action, error, action === 'judge'
+      const usage = action === 'judge'
+        ? controlUsageLabel(error?.controlUsage, 'Judge') : '';
+      const visibleError = usage
+        ? new Error(`${String(error?.message || error)} · ${usage}`)
+        : error;
+      this.#emitError(action, visibleError, action === 'judge'
         ? {
           session: sessionId,
           attempt_set_id: attemptSetId,
@@ -1058,7 +1092,8 @@ export class AxCompare extends HTMLElement {
       this.#sessionAgentId = current?.mode?.agent_id || current?.agent_id || '';
     }
     if (agentsResult.status === 'fulfilled') {
-      this.#agents = Array.isArray(agentsResult.value) ? agentsResult.value : [];
+      this.#agents = (Array.isArray(agentsResult.value) ? agentsResult.value : [])
+        .filter((agent) => agent?.id && agent.role === 'autonomous');
       this.#agentsError = null;
       this.#selectJudgeAgent();
     } else {
@@ -1098,6 +1133,7 @@ export class AxCompare extends HTMLElement {
       this.#branches.hidden = true;
       this.#branches.textContent = '';
       this.#bar.querySelector('[data-act="branches"]').textContent = 'Show the branches';
+      this.#statuses = [];
     }
     if (this.#setState() === 'discarding') {
       this.#inspect = null;
@@ -1108,7 +1144,6 @@ export class AxCompare extends HTMLElement {
       this.#bar.querySelector('[data-act="branches"]').textContent = 'Show the branches';
     }
 
-    this.#statuses = [];
     this.#statusError = null;
     const materializationUnavailable = ['checking', 'discarding'].includes(this.#setState())
       || this.#isKeepRecovery();
@@ -1205,7 +1240,8 @@ export class AxCompare extends HTMLElement {
     }
     if (attempts.length < 2) {
       this.#gist.textContent = '';
-      this.#body.innerHTML = '<div class="empty">Explore a task several ways to compare the attempts.</div>';
+      this.#body.innerHTML = '<div class="empty">Explore a task several ways to compare Outcome and Route.'
+        + '<button type="button" class="action primary" data-explore>Explore several ways</button></div>';
       return;
     }
     if (this.#inspect) { this.#renderInspect(); return; }
@@ -1219,6 +1255,7 @@ export class AxCompare extends HTMLElement {
     const usage = this.#usage(attempt.index);
     const rationale = this.#rationale(attempt.index);
     const files = this.#files(attempt.index);
+    const reviewError = this.#reviewError(attempt.index);
     const state = this.#laneState(attempt.index);
     let outcome = sentence(state);
     if (verdict) {
@@ -1229,14 +1266,16 @@ export class AxCompare extends HTMLElement {
       lifecycle: sentence(state),
       outcome,
       rank: rationale ? `#${rationale.rank}` : '—',
-      files: files ? String(files.length) : (verdict ? String(verdict.changed_files) : 'unknown'),
+      files: reviewError
+        ? 'unavailable' : (files ? String(files.length) : (verdict ? String(verdict.changed_files) : 'unknown')),
       tests: verdict ? (verdict.touched_tests?.length
         ? `changed ${verdict.touched_tests.length}` : 'untouched') : '—',
       duration: usage ? secs(usage.duration_ms || 0) : '—',
       cost: usage ? (usage.cost_known === true ? money(usage.cost_usd || 0) : 'unknown') : '—',
       tokens: usage
         ? (usage.token_usage_known === false
-          ? 'unknown' : String((usage.input_tokens || 0) + (usage.output_tokens || 0)))
+          ? 'unknown' : String((usage.input_tokens || 0) + (usage.output_tokens || 0)
+            + (usage.reasoning_tokens || 0)))
         : '—',
     };
   }
@@ -1276,11 +1315,13 @@ export class AxCompare extends HTMLElement {
     }).join('');
     const task = this.#attemptSet()?.task;
     const judgment = this.#results?.judgment;
+    const judgeUsage = controlUsageLabel(judgment?.control_usage, 'Judge');
     const taskBlock = task ? `<section class="task"><span class="eyebrow">Task</span>`
       + `<p>${html(task)}</p></section>` : '';
     const judgmentBlock = judgment
       ? `<section class="judgment" aria-labelledby="judge-reasoning"><h3 id="judge-reasoning">`
-        + `Judge’s reasoning</h3><p>${html(judgment.reasoning || 'No overall reasoning returned.')}</p></section>`
+        + `Judge’s reasoning</h3><p>${html(judgment.reasoning || 'No overall reasoning returned.')}</p>`
+        + `${judgeUsage ? `<p class="muted">${html(judgeUsage)} · excluded from each Way’s execution cost.</p>` : ''}</section>`
       : '';
 
     this.#gist.textContent = `${order.length} attempts · ${sentence(this.#setState())}`;
@@ -1300,6 +1341,7 @@ export class AxCompare extends HTMLElement {
     const rationale = this.#rationale(index);
     const output = this.#output(index);
     const files = this.#files(index);
+    const reviewError = this.#reviewError(index);
     const winner = this.#results?.judgment?.winner === index;
     const keepReason = this.#keepReason(index);
     let verdictTitle = 'Checks have not run for this attempt.';
@@ -1320,6 +1362,8 @@ export class AxCompare extends HTMLElement {
     let filesBlock = `<div><span class="section-title">Changed paths</span>`;
     if (cleanupOnly) {
       filesBlock += '<span class="muted">Unavailable while attempt cleanup finishes.</span>';
+    } else if (reviewError) {
+      filesBlock += `<span class="muted">Changed paths unavailable: ${html(reviewError)}</span>`;
     } else if (files?.length) {
       filesBlock += `<ul class="paths">${files.map((file, fileIndex) => {
         const counts = file.added == null || file.removed == null
@@ -1328,13 +1372,16 @@ export class AxCompare extends HTMLElement {
           + `data-file="${fileIndex}" title="Inspect ${html(file.path)}">${html(file.path)}</button>`
           + `<span class="file-state">${html(sentence(file.state))}</span>${counts}</li>`;
       }).join('')}</ul>`;
+      if (this.#statusError) {
+        filesBlock += `<span class="muted">Showing last known paths; refresh failed: ${html(this.#statusError)}</span>`;
+      }
     } else if (files) {
       filesBlock += '<span class="muted">No changed paths.</span>';
     } else {
       filesBlock += `<span class="muted">${this.#statusError
         ? `Changed paths unavailable: ${html(this.#statusError)}` : 'Changed paths are still loading.'}</span>`;
     }
-    if (!cleanupOnly) {
+    if (!cleanupOnly && !reviewError) {
       filesBlock += `<div class="card-actions"><button type="button" class="action" data-inspect="${index}">`
         + 'Inspect files</button></div>';
     }
@@ -1367,7 +1414,7 @@ export class AxCompare extends HTMLElement {
 
   // ── File inspection ──────────────────────────────────────────────────
   #openInspect(index, fileIndex = null) {
-    if (this.#setState() === 'discarding') return;
+    if (this.#setState() === 'discarding' || this.#reviewError(index)) return;
     const files = this.#files(index) || [];
     this.#inspect = { index, fileIndex: null, diff: null, loading: false, error: null };
     this.render();

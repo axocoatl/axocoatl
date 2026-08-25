@@ -1,0 +1,180 @@
+---
+title: Providers
+description: Configure supported model providers, per-Agent models, compatible endpoints, and one-target rate-limit fallback.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Each Agent selects a provider and model. Credentials and provider endpoints
+live under `providers:` in `axocoatl.yaml`; secret values should come from
+process environment interpolation.
+
+## Supported provider IDs
+
+| `provider:` | Adapter |
+| --- | --- |
+| `ollama` | Ollama at a configured local or remote endpoint |
+| `openai` | OpenAI, or an OpenAI-compatible endpoint via `base_url` |
+| `anthropic` | Anthropic Messages API |
+| `gemini` | Google Gemini |
+| `mistral` | Mistral Chat API |
+| `openrouter` | OpenRouter through its OpenAI-compatible endpoint |
+
+The onboarding wizard offers Ollama, OpenRouter, Anthropic, and OpenAI. Gemini
+and Mistral are supported but must currently be added to YAML manually.
+
+## Configure a hosted provider
+
+```yaml
+agents:
+  - id: coder
+    name: Coder
+    provider: anthropic
+    model: claude-sonnet-4-6
+
+providers:
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+```
+
+Export the value in the environment that starts Axocoatl:
+
+```sh
+export ANTHROPIC_API_KEY=replace-me
+```
+
+Axocoatl interpolates `${NAME}` before parsing YAML and wraps configured secret
+fields so debug formatting does not reveal them. That does not protect a
+secret committed in plaintext, exposed by shell history, or logged by an
+external server.
+
+You may keep shell assignments in a local `.env` file, but Axocoatl does not
+load it automatically. Source it before `axocoatl dev` or arrange equivalent
+environment injection in the service manager.
+
+## Configure Ollama
+
+```yaml
+agents:
+  - id: local-coder
+    name: Local coder
+    provider: ollama
+    model: qwen2.5-coder:14b
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+```
+
+`axocoatl doctor` treats a configured Ollama endpoint as a required check: the
+endpoint must respond and the configured Agent models must be present.
+
+Some Ollama-served models return a requested tool call as response text instead
+of the structured field. Axocoatl recovers only complete, bounded calls whose
+names were actually offered in that Ollama request. The selected effective
+route must still be Ollama; response text from other providers remains text
+because Axocoatl cannot safely invent their native call ids, signatures, or
+content-block sequence.
+
+## Use an OpenAI-compatible endpoint
+
+The `openai` adapter honors `base_url`. Include the API-version suffix expected
+by the server, commonly `/v1`.
+
+```yaml
+agents:
+  - id: local-compatible
+    name: Local compatible model
+    provider: openai
+    model: your-model-id
+
+providers:
+  openai:
+    api_key: "${LOCAL_MODEL_API_KEY}"
+    base_url: "http://localhost:1234/v1"
+```
+
+This can target implementations such as LM Studio, MLX/oMLX, or vLLM when
+their API behavior matches what the adapter uses. A non-empty key may still be
+required by Axocoatl even when the local server ignores its value.
+
+## Select models per Agent
+
+Provider registration is shared, but the Agent's configured `model` is sent on
+each request. Agents using the same provider may therefore target different
+models.
+
+```yaml
+agents:
+  - { id: triage, name: Triage, provider: ollama, model: llama3.2 }
+  - { id: implement, name: Implement, provider: openai, model: gpt-5 }
+```
+
+A per-turn model override in Conversation changes the model for that request
+within the Agent's provider. It does not supply another provider's credentials.
+
+## Configure one rate-limit fallback
+
+A hosted provider may specify one fallback as `provider` or `provider:model`:
+
+```yaml
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    fallback: "anthropic:claude-sonnet-4-6"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+```
+
+Axocoatl retries once only when the primary request is rate-limited before a
+stream is established. It does not traverse a fallback chain and does not
+switch providers for non-rate-limit or mid-stream failures.
+
+This fallback applies to ordinary Session and global Agent execution. Explore several ways
+uses each Way's configured primary provider/model directly for now; a rate limit fails that
+Way so its retained provider/model and cost evidence cannot silently describe the wrong route.
+
+For a plain-text-only history, that choice is per call. Once a response starts a
+tool exchange, Axocoatl records and pins the exact selected slot, provider, and
+model for every request that still carries that native transaction—including
+later user turns and a restored Session. This prevents provider-native call ids,
+thought signatures, or thinking blocks from crossing APIs. Removing the complete
+transaction during context compression removes the pin. Missing, conflicting, or
+stale route markers fail closed; start a new Session or restore the matching
+provider/model configuration instead of forcing incompatible history through a
+different endpoint.
+
+If the primary is rate-limited before streaming and a fallback has a smaller
+known context limit than the already prepared request, Axocoatl fails locally
+instead of sending an oversized fallback call. Custom or otherwise unknown model
+IDs are not assigned invented limits or feature flags; their compatibility is
+validated by the configured endpoint.
+
+## Verify a provider
+
+<Tabs>
+  <TabItem label="Configuration">
+
+```sh
+axocoatl validate ./axocoatl.yaml
+axocoatl doctor --config ./axocoatl.yaml
+```
+
+  </TabItem>
+  <TabItem label="Agent status">
+
+```sh
+axocoatl agents list --config ./axocoatl.yaml
+axocoatl agents status --config ./axocoatl.yaml
+```
+
+  </TabItem>
+</Tabs>
+
+<Aside type="note" title="Live compatibility remains provider-dependent">
+Repository tests use fixtures for adapter behavior. Successful live use also
+depends on current credentials, model entitlement, endpoint behavior, and the
+provider's API. Axocoatl does not claim identical behavior across every model.
+</Aside>
+
+Next: [Configure Agents and budgets →](/configure/agents/)

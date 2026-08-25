@@ -1,0 +1,152 @@
+---
+title: Architecture
+description: Follow one request from the browser or CLI through the daemon, Agent actor, provider, tools, persistence, and sandbox.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Axocoatl ships as one Rust binary assembled from focused crates. `axocoatl dev`,
+`axocoatl serve`, the installed service, the CLI IPC client, and the embedded
+browser app converge on one daemon state.
+
+## Runtime shape
+
+```text
+Browser / CLI / integration
+        │ HTTP + WebSocket / Unix-socket IPC / MCP / A2A
+        ▼
+Axocoatl server and daemon
+  ├── Provider registry
+  ├── Agent actor registry and supervision
+  ├── Session, turn, attachment, memory, and checkpoint stores
+  ├── Sandbox and repository tools
+  ├── MCP tool registry and approval gate
+  ├── Automation store, DAG executor, and trigger dispatcher
+  └── Typed event lattice and webhook subscribers
+```
+
+The HTTP router embeds the static workbench at `/`. WebSocket frames carry live
+Session, tool, event, approval, and Automation updates. IPC lets the CLI reach
+the running daemon without creating a second runtime.
+
+## One normal Session turn
+
+1. The server validates the Session and appends a durable turn begin, including
+   stable request identity and structured context references.
+2. The Session dispatches to its selected Agent or multi-Agent ordering.
+3. An autonomous Agent builds model input from its conversation, core memory,
+   passive recall, tools, and current request. A Coordinator instead builds its
+   decomposition/synthesis input from Tier-1 conversation and delegates to declared
+   Workers, which each own the ordinary Tier 1–4 pipeline.
+4. Token-budget preflight runs before a provider call.
+5. The provider streams output. Tool calls execute inside the Session sandbox
+   or through the host daemon for registered integrations such as MCP.
+6. Tool start/result events and the final turn state are persisted and then
+   broadcast to the browser.
+7. The model-facing conversation is checkpointed for actor restart recovery. A
+   terminal Coordinator turn clears its private orchestration state and the next
+   turn decomposes fresh.
+
+The Session ledger is canonical for workbench History. The Agent checkpoint is
+a model-facing recovery cache and cannot stand in for multi-Agent output,
+structured attachments, Stop state, or every tool event.
+
+## Session isolation
+
+The daemon-global sandbox config selects either local Podman or an
+E2B Cloud remote backend when a Session sandbox starts. The Session
+creation request chooses the directory, mode, optional enabled Skills, exposed
+ports, and—on Podman—an allowed image; it does not independently switch the
+configured backend. E2B uses the daemon-global template and rejects an explicit
+or devcontainer OCI image instead of silently replacing it.
+
+A Ready E2B Session persists its exact provider identity, data-plane domain, and
+remote root. Close and graceful daemon shutdown pause that runtime; Reopen and
+restart recovery connect to the same ID instead of cloning a replacement. Delete
+Session and Change/Rebuild runtime are the checked destructive transitions.
+
+Local file and shell tools run in a rootless Podman container. The Workspace is
+the repository boundary visible to those tools. The host daemon still owns
+providers, persistence, MCP connections, webhooks, and the browser/API.
+
+Before any repository tool runs, the Session persists one environment
+generation through `unprepared`, `awaiting_approval`, `preparing`, `ready`, or
+`failed`. Detection may propose an image and exact setup command, but does not
+grant consent. The operator may default only the exact devcontainer command for
+an unreviewed Session; a reviewed checked or unchecked choice wins, and an
+edited or lockfile-detected command remains outside that default.
+
+Local Podman accepts only a fixed curated image set unless the operator enables
+arbitrary images. It probes the repository commands Axocoatl requires,
+provisions them inside a supported distribution when possible, and removes the
+container if it still cannot become Ready. It never installs host software or
+creates a Podman VM, though it may start an existing stopped VM. With
+`network: none`, the image must already contain those commands because
+in-container provisioning cannot download them.
+
+Files tree/read/write, Git, Terminal, Preview, Agent tools, and Ways operations
+that start work or inspect a live checkout all use the same Ready sandbox
+instead of falling back to host filesystem access. Durable History and exact
+Keep/Discard recovery do not require reconstructing that live checkout. A local
+root Node project gets a Podman volume over root `node_modules`, masking the
+host's native dependencies while leaving the Workspace bind read-write. An E2B
+template must already contain Axocoatl's repository commands; readiness verifies
+the template but does not package-provision it.
+
+Attempts add a stricter path: each Way receives an independent no-origin clone
+and local Podman container. Attachments, Skills, MCP, web search, and writable
+shared memory are withheld to keep comparison inputs and write ownership
+bounded.
+
+## Coordination paths
+
+Do not collapse all multi-Agent behavior into one scheduler:
+
+- **Automations** execute explicit persisted DAGs manually or from triggers.
+- **Multi-Agent Sessions** run selected configured Agents in dependency order
+  inside one foreground Session sandbox.
+- **The event lattice** publishes typed notifications to triggers, webhooks,
+  and observers; signal-threshold library results do not execute Agents in the
+  product daemon.
+- **Coordinator Agents** dynamically decompose a goal and auction subtasks to
+  worker Agents during that Agent execution.
+
+## Failure and recovery seams
+
+- A non-Ready Session rejects live checkout and compute operations while
+  retaining its exact environment plan, bounded setup evidence, durable
+  History, and explicit review/rebuild path.
+- An orphaned running Session turn is reconciled to interrupted on restart.
+- Agent supervision polls liveness and restores the latest conversation
+  checkpoint, not an arbitrary in-flight tool.
+- Provider responses reject a 129th tool call before hooks or dispatch. Text
+  recovery is bounded and restricted to the effective Ollama route; parallel
+  dispatch retains each original call identity even if one task panics.
+- Top-level Automation Interrupts are durable; arbitrary running nodes are not.
+- Attempt Keep and cleanup have resumable lifecycle states.
+- Rewind makes the ledger authoritative and repairs the checkpoint on restart
+  if a process death interrupted the cross-file sequence.
+
+<Aside type="note" title="One binary does not mean one state file">
+State is deliberately split by ownership. Operational backup must stop the
+daemon and copy the whole data root plus Workspace repositories and config.
+</Aside>
+
+## Crate map
+
+- `axocoatl-cli` — commands and service entrypoints;
+- `axocoatl-server` — HTTP, WebSocket, protocols, and embedded app;
+- `axocoatl-daemon` — composition root and runtime orchestration;
+- `axocoatl-actor` — Agent execution and coordinator behavior;
+- `axocoatl-session` — folder Session and durable turn model;
+- `axocoatl-memory` — memory stores, embeddings, and checkpoints;
+- `axocoatl-isolation` — local Podman and the optional E2B Cloud backend;
+- `axocoatl-coordination` — lattice, HTN, and auction primitives;
+- `axocoatl-mcp` and `axocoatl-a2a` — interoperability;
+- `packages/lattice` — browser graph web components.
+
+The isolation crate contains other implementation experiments, but Podman and
+E2B Cloud Sessions are the selectable daemon backends. Do not infer a
+product tier merely from a crate or feature existing in source.
+
+Next: [State and memory →](/understand/state/)

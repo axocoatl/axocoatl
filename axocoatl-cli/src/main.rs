@@ -1,5 +1,7 @@
+use std::io::Write;
 use std::path::PathBuf;
 
+use axocoatl_core::SecureDir;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -33,7 +35,7 @@ enum Commands {
         config: PathBuf,
     },
 
-    /// Validate a axocoatl.yaml configuration file
+    /// Validate an axocoatl.yaml configuration file
     Validate {
         /// Path to config file (default: axocoatl.yaml)
         #[arg(default_value = "axocoatl.yaml")]
@@ -497,22 +499,48 @@ server:
 const ENV_EXAMPLE: &str =
     "OPENAI_API_KEY=sk-your-key-here\nANTHROPIC_API_KEY=sk-ant-your-key-here\n";
 
+fn next_steps_text(project_name: &str) -> String {
+    format!(
+        r#"
+Created Axocoatl project: {project_name}/
+  axocoatl.yaml    — Agent configuration
+  .env.example     — process-environment template
+  data/            — runtime data directory
+
+Next steps — copy/paste:
+
+  cd {project_name}
+  mv .env.example .env       # edit provider keys; never commit this file
+  chmod 600 .env
+  set -a
+  . ./.env
+  set +a
+  axocoatl doctor            # verify your environment
+  axocoatl validate          # check the config
+  axocoatl dev               # start the daemon + API server
+  axocoatl chat -a assistant # chat with your Agent
+
+Axocoatl reads provider keys from its process environment and does not load
+.env automatically. Source it again in each new shell, or configure equivalent
+environment injection for the service.
+
+"#
+    )
+}
+
 fn print_next_steps(project_name: &str) {
-    println!();
-    println!("Created Axocoatl project: {project_name}/");
-    println!("  axocoatl.yaml    — agent configuration");
-    println!("  .env.example     — API key template");
-    println!("  data/            — runtime data directory");
-    println!();
-    println!("Next steps — copy/paste:");
-    println!();
-    println!("  cd {project_name}");
-    println!("  cp .env.example .env       # then edit .env with your API keys");
-    println!("  axocoatl doctor            # verify your environment");
-    println!("  axocoatl validate          # check the config");
-    println!("  axocoatl dev               # start the daemon + API server");
-    println!("  axocoatl chat -a assistant # chat with your agent");
-    println!();
+    let text = next_steps_text(project_name);
+    print!("{text}");
+}
+
+fn hosted_key_prompt(provider: &str) -> String {
+    format!("{provider} API key (leave blank to set in the process environment later)")
+}
+
+fn missing_provider_key_hint(provider: &str) -> String {
+    format!(
+        "Export it in the process environment that starts Axocoatl before using {provider} Agents."
+    )
 }
 
 async fn cmd_init(name: Option<String>) {
@@ -520,7 +548,7 @@ async fn cmd_init(name: Option<String>) {
     let dir = PathBuf::from(&project_name);
 
     if dir.exists() {
-        eprintln!("Error: Directory '{}' already exists", project_name);
+        eprintln!("Error: Directory '{project_name}' already exists");
         std::process::exit(1);
     }
 
@@ -648,7 +676,7 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
             if key.is_empty() || key.contains("your-key") || key.starts_with("${") {
                 warn(
                     &format!("{name} API key not set"),
-                    &format!("Set it in .env or the config before using {name} agents."),
+                    &missing_provider_key_hint(name),
                 );
             } else {
                 pass(&format!("{name} API key present"));
@@ -666,14 +694,14 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
         if let Some(c) = &config.providers.mistral {
             cred_check("Mistral", c.api_key.expose_secret());
         }
+        if let Some(c) = &config.providers.openrouter {
+            cred_check("OpenRouter", c.api_key.expose_secret());
+        }
     }
 
     // 5. Data dir writable
     let data_dir = std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
-    match std::fs::create_dir_all(&data_dir).and_then(|_| {
-        let probe = std::path::Path::new(&data_dir).join(".write_probe");
-        std::fs::write(&probe, b"ok").and_then(|_| std::fs::remove_file(&probe))
-    }) {
+    match probe_data_dir(std::path::Path::new(&data_dir)) {
         Ok(()) => pass(&format!("Data dir writable: {data_dir}")),
         Err(e) => {
             hard_ok = false;
@@ -735,6 +763,25 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
         println!("Some required checks FAILED — see hints above.");
     }
     hard_ok
+}
+
+fn probe_data_dir(path: &std::path::Path) -> std::io::Result<()> {
+    let data = SecureDir::open_or_create_all(path)?;
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+        // SAFETY: geteuid takes no arguments and has no failure sentinel.
+        data.require_owner_and_private_writes(unsafe { geteuid() })?;
+    }
+    data.restrict_owner_only()?;
+    let name = format!(".write-probe-{}", uuid::Uuid::new_v4());
+    let mut probe = data.create_new(&name)?;
+    probe.write_all(b"ok")?;
+    probe.sync_all()?;
+    drop(probe);
+    data.remove_file(name)
 }
 
 async fn cmd_doctor(config_path: &std::path::Path) {
@@ -861,7 +908,7 @@ server:
         1 => {
             // OpenRouter — one key for the model IDs available to the account.
             let key: String = Input::new()
-                .with_prompt("OpenRouter API key (leave blank to set later in .env)")
+                .with_prompt(hosted_key_prompt("OpenRouter"))
                 .allow_empty(true)
                 .interact_text()
                 .unwrap_or_default();
@@ -904,7 +951,7 @@ server:
         2 => {
             // Anthropic
             let key: String = Input::new()
-                .with_prompt("Anthropic API key (leave blank to set later in .env)")
+                .with_prompt(hosted_key_prompt("Anthropic"))
                 .allow_empty(true)
                 .interact_text()
                 .unwrap_or_default();
@@ -939,7 +986,7 @@ server:
         _ => {
             // OpenAI
             let key: String = Input::new()
-                .with_prompt("OpenAI API key (leave blank to set later in .env)")
+                .with_prompt(hosted_key_prompt("OpenAI"))
                 .allow_empty(true)
                 .interact_text()
                 .unwrap_or_default();
@@ -1111,7 +1158,7 @@ async fn cmd_dev(config_path: &std::path::Path) {
     // Shared state for both IPC and HTTP
     let state: std::sync::Arc<tokio::sync::RwLock<axocoatl_daemon::AxocoatlDaemon>> =
         std::sync::Arc::new(tokio::sync::RwLock::new(daemon));
-    let _ipc_handle = start_cli_ipc(ipc_reservation, state.clone());
+    let ipc_handle = start_cli_ipc(ipc_reservation, state.clone());
 
     // One live runtime dispatches every canonical Automation trigger. Legacy
     // schedules/proactive YAML was already used (once) to seed that store.
@@ -1143,7 +1190,10 @@ async fn cmd_dev(config_path: &std::path::Path) {
     println!("Axocoatl is running. Press Ctrl+C to stop.");
 
     // Start the HTTP server (blocks until shutdown) — shares state with IPC
-    if let Err(e) = axocoatl_server::serve_shared(state, &host, port).await {
+    let server = axocoatl_server::serve_shared(state, &host, port).await;
+    ipc_handle.abort();
+    let _ = ipc_handle.await;
+    if let Err(e) = server {
         eprintln!("Server error: {e}");
         std::process::exit(1);
     }
@@ -1175,7 +1225,7 @@ async fn cmd_serve(config_path: &std::path::Path) {
     // Shared runtime state for the HTTP server and background services.
     let state: std::sync::Arc<tokio::sync::RwLock<axocoatl_daemon::AxocoatlDaemon>> =
         std::sync::Arc::new(tokio::sync::RwLock::new(daemon));
-    let _ipc_handle = start_cli_ipc(ipc_reservation, state.clone());
+    let ipc_handle = start_cli_ipc(ipc_reservation, state.clone());
     axocoatl_daemon::start_automation_runtime(state.clone()).await;
 
     // Supervise agents: restart any that crash, from their last checkpoint.
@@ -1186,7 +1236,10 @@ async fn cmd_serve(config_path: &std::path::Path) {
     let consolidation = { state.read().await.config.consolidation.clone() };
     axocoatl_daemon::consolidation::start_consolidation(state.clone(), consolidation);
 
-    if let Err(e) = axocoatl_server::serve_shared(state, &host, port).await {
+    let server = axocoatl_server::serve_shared(state, &host, port).await;
+    ipc_handle.abort();
+    let _ = ipc_handle.await;
+    if let Err(e) = server {
         eprintln!("Server error: {e}");
         std::process::exit(1);
     }
@@ -1206,7 +1259,7 @@ async fn cmd_mcp_serve(config_path: &std::path::Path) {
         }
     };
 
-    let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap(config).await {
+    let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap_headless(config).await {
         Ok(d) => d,
         Err(e) => {
             eprintln!("Failed to bootstrap daemon: {e}");
@@ -1303,7 +1356,7 @@ async fn cmd_tokens_report(config_path: &std::path::Path) {
                 std::process::exit(1);
             }
         };
-        let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap(config).await {
+        let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap_headless(config).await {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("Failed to bootstrap daemon: {e}");
@@ -1312,18 +1365,25 @@ async fn cmd_tokens_report(config_path: &std::path::Path) {
         };
         let ids = daemon.agent_registry.list_ids().await;
         let mut per_agent = Vec::new();
-        let mut total_in = 0;
-        let mut total_out = 0;
+        let mut total_in: usize = 0;
+        let mut total_out: usize = 0;
+        let mut total_reasoning: usize = 0;
+        let mut token_usage_known = true;
         for id in ids {
             if let Some(actor) = daemon.agent_registry.get(&id).await {
-                if let Ok(u) = axocoatl_actor::get_agent_token_usage(&actor).await {
-                    total_in += u.input_tokens;
-                    total_out += u.output_tokens;
+                if let Ok(measured) = axocoatl_actor::get_agent_measured_token_usage(&actor).await {
+                    let u = measured.usage;
+                    token_usage_known &= measured.complete;
+                    total_in = total_in.saturating_add(u.input_tokens);
+                    total_out = total_out.saturating_add(u.output_tokens);
+                    total_reasoning =
+                        total_reasoning.saturating_add(u.reasoning_tokens.unwrap_or(0));
                     per_agent.push(axocoatl_daemon::ipc::IpcTokenUsage {
                         agent_id: id.to_string(),
                         input_tokens: u.input_tokens,
                         output_tokens: u.output_tokens,
                         reasoning_tokens: u.reasoning_tokens,
+                        token_usage_known: measured.complete,
                     });
                 }
             }
@@ -1333,6 +1393,8 @@ async fn cmd_tokens_report(config_path: &std::path::Path) {
             per_agent,
             total_input: total_in,
             total_output: total_out,
+            total_reasoning,
+            token_usage_known,
         })
     };
 
@@ -1341,35 +1403,62 @@ async fn cmd_tokens_report(config_path: &std::path::Path) {
             per_agent,
             total_input,
             total_output,
+            total_reasoning,
+            token_usage_known,
         }) => {
             println!(
-                "{:<20} {:>10} {:>10} {:>10}",
-                "AGENT", "INPUT", "OUTPUT", "TOTAL"
+                "{:<20} {:>10} {:>10} {:>10} {:>12}",
+                "AGENT", "INPUT", "OUTPUT", "REASONING", "TOTAL / SUBTOTAL"
             );
-            println!("{}", "-".repeat(54));
+            println!("{}", "-".repeat(69));
             for u in &per_agent {
+                let reasoning = u.reasoning_tokens.unwrap_or(0);
                 println!(
-                    "{:<20} {:>10} {:>10} {:>10}",
+                    "{:<20} {:>10} {:>10} {:>10} {:>12}",
                     u.agent_id,
                     u.input_tokens,
                     u.output_tokens,
-                    u.input_tokens + u.output_tokens
+                    reasoning,
+                    format!(
+                        "{}{}",
+                        if u.token_usage_known { "" } else { "≥" },
+                        u.input_tokens
+                            .saturating_add(u.output_tokens)
+                            .saturating_add(reasoning)
+                    )
                 );
             }
-            println!("{}", "-".repeat(54));
+            println!("{}", "-".repeat(69));
             println!(
-                "{:<20} {:>10} {:>10} {:>10}",
-                "TOTAL",
+                "{:<20} {:>10} {:>10} {:>10} {:>12}",
+                if token_usage_known {
+                    "TOTAL"
+                } else {
+                    "KNOWN SUBTOTAL"
+                },
                 total_input,
                 total_output,
-                total_input + total_output
+                total_reasoning,
+                format!(
+                    "{}{}",
+                    if token_usage_known { "" } else { "≥" },
+                    total_input
+                        .saturating_add(total_output)
+                        .saturating_add(total_reasoning)
+                )
             );
+            if !token_usage_known {
+                println!("At least one dispatched call lacks terminal usage; the subtotal is a lower bound.");
+            }
         }
-        Ok(IpcResponse::Error { message }) => {
+        Ok(IpcResponse::Error { message, .. }) => {
             eprintln!("Error: {message}");
             std::process::exit(1);
         }
-        Ok(_) => eprintln!("Unexpected response from daemon"),
+        Ok(_) => {
+            eprintln!("Unexpected response from daemon");
+            std::process::exit(1);
+        }
         Err(e) => {
             eprintln!("Failed to query token usage: {e}");
             std::process::exit(1);
@@ -1381,18 +1470,10 @@ async fn cmd_tokens_report(config_path: &std::path::Path) {
 fn display_tool_calls(tool_calls: &[axocoatl_core::ToolCallRecord]) {
     for tc in tool_calls {
         let args_summary = tc.arguments.to_string();
-        let args_display = if args_summary.len() > 80 {
-            format!("{}...", &args_summary[..77])
-        } else {
-            args_summary
-        };
+        let args_display = truncate_for_display(&args_summary, 80);
         if let Some(result) = &tc.result {
             let result_str = result.to_string();
-            let result_display = if result_str.len() > 60 {
-                format!("{}...", &result_str[..57])
-            } else {
-                result_str
-            };
+            let result_display = truncate_for_display(&result_str, 60);
             println!(
                 "  [tool: {}({})] -> {}",
                 tc.tool_name, args_display, result_display
@@ -1403,7 +1484,88 @@ fn display_tool_calls(tool_calls: &[axocoatl_core::ToolCallRecord]) {
     }
 }
 
+fn truncate_for_display(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes.saturating_sub(3).min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &value[..end])
+}
+
 const LEGACY_CHAT_SESSION_WARNING: &str = "warning: `chat --session` is a legacy display label only; it does not select or resume stored chat history";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CliTokenMeasurement {
+    input: usize,
+    output: usize,
+    reasoning: usize,
+    complete: bool,
+}
+
+impl CliTokenMeasurement {
+    fn known_zero() -> Self {
+        Self {
+            input: 0,
+            output: 0,
+            reasoning: 0,
+            complete: true,
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.input = self.input.saturating_add(other.input);
+        self.output = self.output.saturating_add(other.output);
+        self.reasoning = self.reasoning.saturating_add(other.reasoning);
+        self.complete &= other.complete;
+    }
+
+    fn total(self) -> usize {
+        self.input
+            .saturating_add(self.output)
+            .saturating_add(self.reasoning)
+    }
+
+    fn clause(self, scope: &str) -> String {
+        if self.complete {
+            format!(
+                "{scope} tokens: {} in / {} out / {} reasoning ({} total)",
+                self.input,
+                self.output,
+                self.reasoning,
+                self.total()
+            )
+        } else {
+            format!(
+                "{scope} known token subtotal (lower bound): {} in / {} out / {} reasoning (≥{} total)",
+                self.input,
+                self.output,
+                self.reasoning,
+                self.total()
+            )
+        }
+    }
+}
+
+fn ipc_error_measurement(
+    input: Option<usize>,
+    output: Option<usize>,
+    reasoning: Option<usize>,
+    complete: Option<bool>,
+) -> Option<CliTokenMeasurement> {
+    Some(CliTokenMeasurement {
+        input: input?,
+        output: output?,
+        reasoning: reasoning?,
+        complete: complete?,
+    })
+}
+
+fn workflow_response_is_failure(failed_agents: &[(String, String)]) -> bool {
+    !failed_agents.is_empty()
+}
 
 fn resolve_chat_label(session_label: Option<String>) -> (String, Option<&'static str>) {
     let warning = session_label.as_ref().map(|_| LEGACY_CHAT_SESSION_WARNING);
@@ -1446,7 +1608,7 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
     // If no daemon running, bootstrap in-process
     let daemon = if ipc_client.is_none() {
         Some(
-            match axocoatl_daemon::AxocoatlDaemon::bootstrap(config).await {
+            match axocoatl_daemon::AxocoatlDaemon::bootstrap_headless(config).await {
                 Ok(d) => d,
                 Err(e) => {
                     eprintln!("Failed to bootstrap daemon: {e}");
@@ -1471,8 +1633,7 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
     let stdin = io::stdin();
     let mut stdout = io::stdout();
 
-    let mut total_input_tokens: usize = 0;
-    let mut total_output_tokens: usize = 0;
+    let mut chat_usage = CliTokenMeasurement::known_zero();
     let mut turn_count: usize = 0;
 
     // Mutable IPC client (needs to be mutable for requests)
@@ -1480,10 +1641,26 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
 
     loop {
         print!("you> ");
-        stdout.flush().unwrap();
+        if let Err(error) = stdout.flush() {
+            eprintln!("chat output error: {error}");
+            if let Some(daemon) = daemon {
+                daemon.shutdown().await;
+            }
+            std::process::exit(1);
+        }
 
         let mut line = String::new();
-        if stdin.lock().read_line(&mut line).unwrap() == 0 {
+        let bytes_read = match stdin.lock().read_line(&mut line) {
+            Ok(bytes_read) => bytes_read,
+            Err(error) => {
+                eprintln!("chat input error: {error}");
+                if let Some(daemon) = daemon {
+                    daemon.shutdown().await;
+                }
+                std::process::exit(1);
+            }
+        };
+        if bytes_read == 0 {
             break; // EOF
         }
 
@@ -1510,6 +1687,8 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
                     tool_calls,
                     input_tokens,
                     output_tokens,
+                    reasoning_tokens,
+                    token_usage_known,
                 }) => {
                     turn_count += 1;
 
@@ -1526,16 +1705,37 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
 
                     println!("\nagent> {content}\n");
 
-                    total_input_tokens += input_tokens;
-                    total_output_tokens += output_tokens;
+                    let turn_usage = CliTokenMeasurement {
+                        input: input_tokens,
+                        output: output_tokens,
+                        reasoning: reasoning_tokens,
+                        complete: token_usage_known,
+                    };
+                    chat_usage.merge(turn_usage);
                     println!(
-                        "  (tokens: {} in / {} out | chat total: {} in / {} out)",
-                        input_tokens, output_tokens, total_input_tokens, total_output_tokens,
+                        "  ({} | {})",
+                        turn_usage.clause("turn"),
+                        chat_usage.clause("chat")
                     );
                     println!();
                 }
-                Ok(axocoatl_daemon::ipc::IpcResponse::Error { message }) => {
+                Ok(axocoatl_daemon::ipc::IpcResponse::Error {
+                    message,
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    token_usage_known,
+                }) => {
                     eprintln!("\nerror> {message}\n");
+                    if let Some(usage) = ipc_error_measurement(
+                        input_tokens,
+                        output_tokens,
+                        reasoning_tokens,
+                        token_usage_known,
+                    ) {
+                        chat_usage.merge(usage);
+                        eprintln!("  {}", usage.clause("failed turn"));
+                    }
                 }
                 Ok(_) => {
                     eprintln!("\nerror> unexpected response from daemon\n");
@@ -1545,26 +1745,38 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
                 }
             }
         } else if let Some(ref daemon) = daemon {
-            match daemon.execute_agent(agent_id, input).await {
-                Ok(output) => {
+            match daemon.execute_agent_measured(agent_id, input).await {
+                Ok(measured) => {
+                    let output = measured.output;
                     turn_count += 1;
                     display_tool_calls(&output.tool_calls);
 
                     println!("\nagent> {}\n", output.content);
 
-                    total_input_tokens += output.token_usage.input_tokens;
-                    total_output_tokens += output.token_usage.output_tokens;
+                    let turn_usage = CliTokenMeasurement {
+                        input: output.token_usage.input_tokens,
+                        output: output.token_usage.output_tokens,
+                        reasoning: output.token_usage.reasoning_tokens.unwrap_or(0),
+                        complete: measured.token_usage_known,
+                    };
+                    chat_usage.merge(turn_usage);
                     println!(
-                        "  (tokens: {} in / {} out | chat total: {} in / {} out)",
-                        output.token_usage.input_tokens,
-                        output.token_usage.output_tokens,
-                        total_input_tokens,
-                        total_output_tokens,
+                        "  ({} | {})",
+                        turn_usage.clause("turn"),
+                        chat_usage.clause("chat")
                     );
                     println!();
                 }
-                Err(e) => {
-                    eprintln!("\nerror> {e}\n");
+                Err(failure) => {
+                    eprintln!("\nerror> {}\n", failure.error);
+                    let usage = CliTokenMeasurement {
+                        input: failure.token_usage.input_tokens,
+                        output: failure.token_usage.output_tokens,
+                        reasoning: failure.token_usage.reasoning_tokens.unwrap_or(0),
+                        complete: failure.token_usage_known,
+                    };
+                    chat_usage.merge(usage);
+                    eprintln!("  {}", usage.clause("failed turn"));
                 }
             }
         }
@@ -1573,10 +1785,7 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
     println!();
     println!("Chat summary:");
     println!("  Turns:  {turn_count}");
-    println!(
-        "  Tokens: {total_input_tokens} in / {total_output_tokens} out ({} total)",
-        total_input_tokens + total_output_tokens
-    );
+    println!("  {}", chat_usage.clause("chat"));
     println!("  Label:  {chat_label}");
     println!();
     println!("Goodbye!");
@@ -1624,16 +1833,16 @@ async fn cmd_session_new(directory: &str, agent: &str, name: Option<String>) {
             println!("  name:      {}", session.name);
             println!("  directory: {}", session.working_dir);
             println!("  mode:      {}", session.mode);
-            println!(
-                "\nSend it work:  axocoatl session exec {} \"<instruction>\"",
-                session.id
-            );
+            println!("\n{}", session_readiness_guidance(&session));
         }
-        Ok(axocoatl_daemon::ipc::IpcResponse::Error { message }) => {
+        Ok(axocoatl_daemon::ipc::IpcResponse::Error { message, .. }) => {
             eprintln!("✗ {message}");
             std::process::exit(1);
         }
-        Ok(_) => eprintln!("✗ unexpected daemon response"),
+        Ok(_) => {
+            eprintln!("✗ unexpected daemon response");
+            std::process::exit(1);
+        }
         Err(e) => {
             eprintln!("✗ {e}");
             std::process::exit(1);
@@ -1653,23 +1862,90 @@ async fn cmd_session_list() {
                 println!("Create one:  axocoatl session new <directory>");
                 return;
             }
-            println!("{:<40} {:<18} {:<10} DIRECTORY", "ID", "NAME", "STATUS");
-            println!("{}", "-".repeat(96));
+            println!(
+                "{:<40} {:<18} {:<10} {:<18} DIRECTORY",
+                "ID", "NAME", "STATUS", "ENVIRONMENT"
+            );
+            println!("{}", "-".repeat(115));
             for s in sessions {
                 println!(
-                    "{:<40} {:<18} {:<10} {}",
-                    s.id, s.name, s.status, s.working_dir
+                    "{:<40} {:<18} {:<10} {:<18} {}",
+                    s.id,
+                    s.name,
+                    s.status,
+                    display_environment_state(&s.environment_state),
+                    s.working_dir
                 );
             }
         }
-        Ok(axocoatl_daemon::ipc::IpcResponse::Error { message }) => {
+        Ok(axocoatl_daemon::ipc::IpcResponse::Error { message, .. }) => {
             eprintln!("✗ {message}");
             std::process::exit(1);
         }
-        Ok(_) => eprintln!("✗ unexpected daemon response"),
+        Ok(_) => {
+            eprintln!("✗ unexpected daemon response");
+            std::process::exit(1);
+        }
         Err(e) => {
             eprintln!("✗ {e}");
             std::process::exit(1);
+        }
+    }
+}
+
+fn display_environment_state(state: &str) -> &str {
+    match state {
+        "ready" => "ready",
+        "awaiting_approval" => "needs setup review",
+        "preparing" => "preparing",
+        "failed" => "setup failed",
+        "unprepared" | "" => "needs setup review",
+        other => other,
+    }
+}
+
+fn session_readiness_guidance(session: &axocoatl_daemon::ipc::IpcSessionInfo) -> String {
+    match session.environment_state.as_str() {
+        "ready" => format!(
+            "Send it work:  axocoatl session exec {} \"<instruction>\"",
+            session.id
+        ),
+        "preparing" => concat!(
+            "Environment preparation is still running.\n",
+            "Open Axocoatl in your browser and select this Session to monitor it."
+        )
+        .to_string(),
+        "failed" => {
+            let mut guidance = String::from("Environment preparation failed.");
+            if let Some(error) = session
+                .environment_error
+                .as_deref()
+                .filter(|error| !error.trim().is_empty())
+            {
+                guidance.push_str("\n  Error: ");
+                guidance.push_str(error.trim());
+            }
+            guidance.push_str(
+                "\nOpen Axocoatl in your browser, select this Session, and choose Review setup.",
+            );
+            guidance
+        }
+        _ => {
+            let mut guidance = String::from(
+                "Setup review is required before this Session can run project commands.",
+            );
+            if let Some(command) = session
+                .setup_command
+                .as_deref()
+                .filter(|command| !command.trim().is_empty())
+            {
+                guidance.push_str("\n  Proposed command (not run): ");
+                guidance.push_str(command.trim());
+            }
+            guidance.push_str(
+                "\nOpen Axocoatl in your browser, select this Session, and choose Review setup.",
+            );
+            guidance
         }
     }
 }
@@ -1686,16 +1962,44 @@ async fn cmd_session_exec(session_id: &str, input: &str) {
             content,
             input_tokens,
             output_tokens,
+            reasoning_tokens,
+            token_usage_known,
             ..
         }) => {
             println!("{content}");
-            println!("\n[{input_tokens} in / {output_tokens} out tokens]");
+            println!(
+                "\n[{}]",
+                CliTokenMeasurement {
+                    input: input_tokens,
+                    output: output_tokens,
+                    reasoning: reasoning_tokens,
+                    complete: token_usage_known,
+                }
+                .clause("session")
+            );
         }
-        Ok(axocoatl_daemon::ipc::IpcResponse::Error { message }) => {
+        Ok(axocoatl_daemon::ipc::IpcResponse::Error {
+            message,
+            input_tokens,
+            output_tokens,
+            reasoning_tokens,
+            token_usage_known,
+        }) => {
             eprintln!("✗ {message}");
+            if let Some(usage) = ipc_error_measurement(
+                input_tokens,
+                output_tokens,
+                reasoning_tokens,
+                token_usage_known,
+            ) {
+                eprintln!("  {}", usage.clause("failed session"));
+            }
             std::process::exit(1);
         }
-        Ok(_) => eprintln!("✗ unexpected daemon response"),
+        Ok(_) => {
+            eprintln!("✗ unexpected daemon response");
+            std::process::exit(1);
+        }
         Err(e) => {
             eprintln!("✗ {e}");
             std::process::exit(1);
@@ -1712,11 +2016,14 @@ async fn cmd_session_close(session_id: &str) {
         Ok(axocoatl_daemon::ipc::IpcResponse::SessionClosed { .. }) => {
             println!("✓ Session closed")
         }
-        Ok(axocoatl_daemon::ipc::IpcResponse::Error { message }) => {
+        Ok(axocoatl_daemon::ipc::IpcResponse::Error { message, .. }) => {
             eprintln!("✗ {message}");
             std::process::exit(1);
         }
-        Ok(_) => eprintln!("✗ unexpected daemon response"),
+        Ok(_) => {
+            eprintln!("✗ unexpected daemon response");
+            std::process::exit(1);
+        }
         Err(e) => {
             eprintln!("✗ {e}");
             std::process::exit(1);
@@ -1734,7 +2041,7 @@ async fn cmd_agents_status(config_path: &std::path::Path) {
             .await
         {
             Ok(IpcResponse::AgentStatuses { statuses }) => (statuses, "daemon (IPC)"),
-            Ok(IpcResponse::Error { message }) => {
+            Ok(IpcResponse::Error { message, .. }) => {
                 eprintln!("Error: {message}");
                 std::process::exit(1);
             }
@@ -1755,7 +2062,7 @@ async fn cmd_agents_status(config_path: &std::path::Path) {
                 std::process::exit(1);
             }
         };
-        let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap(config).await {
+        let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap_headless(config).await {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("Failed to bootstrap daemon: {e}");
@@ -1806,7 +2113,7 @@ async fn cmd_agents_restart(_config_path: &std::path::Path, agent_id: &str) {
         Ok(IpcResponse::RestartAck { agent_id }) => {
             println!("Agent '{agent_id}' restarted (session restored from checkpoint).");
         }
-        Ok(IpcResponse::Error { message }) => {
+        Ok(IpcResponse::Error { message, .. }) => {
             eprintln!("Restart failed: {message}");
             std::process::exit(1);
         }
@@ -1889,7 +2196,7 @@ async fn mcp_query(
             std::process::exit(1);
         }
     };
-    let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap(config).await {
+    let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap_headless(config).await {
         Ok(d) => d,
         Err(e) => {
             eprintln!("Failed to bootstrap daemon: {e}");
@@ -1923,6 +2230,10 @@ async fn mcp_query(
         },
         _ => IpcResponse::Error {
             message: "unsupported in-process request".to_string(),
+            input_tokens: None,
+            output_tokens: None,
+            reasoning_tokens: None,
+            token_usage_known: None,
         },
     };
     drop(reg); // release the read lock before shutting down the daemon
@@ -1946,11 +2257,14 @@ async fn cmd_mcp_servers(config_path: &std::path::Path) {
                 println!("{:<20} {:<18} {:>10}", s.name, s.transport, s.tool_count);
             }
         }
-        IpcResponse::Error { message } => {
+        IpcResponse::Error { message, .. } => {
             eprintln!("Error: {message}");
             std::process::exit(1);
         }
-        _ => eprintln!("Unexpected response from daemon"),
+        _ => {
+            eprintln!("Unexpected response from daemon");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -1970,11 +2284,14 @@ async fn cmd_mcp_tools(config_path: &std::path::Path, server: Option<String>) {
                 println!("{:<24} {:<16} {}", t.name, t.server, desc);
             }
         }
-        IpcResponse::Error { message } => {
+        IpcResponse::Error { message, .. } => {
             eprintln!("Error: {message}");
             std::process::exit(1);
         }
-        _ => eprintln!("Unexpected response from daemon"),
+        _ => {
+            eprintln!("Unexpected response from daemon");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -1983,79 +2300,74 @@ async fn cmd_workflow_list(config_path: &std::path::Path) {
     use axocoatl_daemon::ipc::{IpcRequest, IpcResponse, IpcWorkflowInfo};
 
     let socket_path = axocoatl_daemon::ipc::default_socket_path();
-    let workflows = if let Ok(mut client) =
-        axocoatl_daemon::ipc::IpcClient::connect(&socket_path).await
-    {
-        match client.request(&IpcRequest::ListWorkflows).await {
-            Ok(IpcResponse::Workflows { workflows }) => workflows,
-            Ok(IpcResponse::Error { message }) => {
-                eprintln!("Workflow error: {message}");
-                std::process::exit(1);
-            }
-            Ok(_) => {
-                eprintln!("Unexpected response from daemon");
-                std::process::exit(1);
-            }
-            Err(error) => {
-                eprintln!("IPC error: {error}");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        // No daemon is running, so open the same canonical store bootstrap
-        // uses. Legacy YAML can seed a missing file once; an existing `[]`
-        // remains an intentional empty Settings state.
-        let config = match axocoatl_config::load_config(config_path).await {
-            Ok(config) => config,
-            Err(error) => {
-                eprintln!("Configuration error:\n{error}");
-                std::process::exit(1);
-            }
-        };
-        let data_dir = std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
-        let path = std::path::Path::new(&data_dir).join("automations.json");
-        let mut store = match axocoatl_daemon::automation_store::AutomationStore::open(&path) {
-            Ok(store) => store,
-            Err(error) => {
-                eprintln!("Could not open Automation store: {error}");
-                std::process::exit(1);
-            }
-        };
-        if let Err(error) = store.seed_from_legacy_if_empty(&config) {
-            eprintln!("Could not initialize Automation store: {error}");
-            std::process::exit(1);
-        }
-        store
-            .list()
-            .into_iter()
-            .filter(|automation| matches!(&automation.trigger, AutomationTrigger::Manual))
-            .map(|automation| {
-                let agents = automation
-                    .nodes
-                    .iter()
-                    .filter_map(|node| match &node.kind {
-                        AutomationNodeKind::Agent { agent_id, .. } => Some(agent_id.clone()),
-                        _ => None,
-                    })
-                    .collect();
-                let entry_point = automation.nodes.iter().find_map(|node| {
-                    let has_incoming = automation.edges.iter().any(|edge| edge.to == node.id);
-                    match (&node.kind, has_incoming) {
-                        (AutomationNodeKind::Agent { agent_id, .. }, false) => {
-                            Some(agent_id.clone())
-                        }
-                        _ => None,
-                    }
-                });
-                IpcWorkflowInfo {
-                    id: automation.id,
-                    name: automation.name,
-                    agents,
-                    entry_point,
+    let workflows =
+        if let Ok(mut client) = axocoatl_daemon::ipc::IpcClient::connect(&socket_path).await {
+            match client.request(&IpcRequest::ListWorkflows).await {
+                Ok(IpcResponse::Workflows { workflows }) => workflows,
+                Ok(IpcResponse::Error { message, .. }) => {
+                    eprintln!("Workflow error: {message}");
+                    std::process::exit(1);
                 }
-            })
-            .collect()
-    };
+                Ok(_) => {
+                    eprintln!("Unexpected response from daemon");
+                    std::process::exit(1);
+                }
+                Err(error) => {
+                    eprintln!("IPC error: {error}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            // No daemon is running. Use the lease-owned offline read so this
+            // fallback performs the same legacy-runtime preflight and retained
+            // storage-capability checks without spawning providers, actors, MCP
+            // clients, webhooks, or other daemon services. A direct store open here
+            // could race a live daemon during a transient IPC outage.
+            let config = match axocoatl_config::load_config(config_path).await {
+                Ok(config) => config,
+                Err(error) => {
+                    eprintln!("Configuration error:\n{error}");
+                    std::process::exit(1);
+                }
+            };
+            let automations =
+                match axocoatl_daemon::AxocoatlDaemon::list_automations_offline(config).await {
+                    Ok(automations) => automations,
+                    Err(error) => {
+                        eprintln!("Failed to read Automations: {error}");
+                        std::process::exit(1);
+                    }
+                };
+            automations
+                .into_iter()
+                .filter(|automation| matches!(&automation.trigger, AutomationTrigger::Manual))
+                .map(|automation| {
+                    let agents = automation
+                        .nodes
+                        .iter()
+                        .filter_map(|node| match &node.kind {
+                            AutomationNodeKind::Agent { agent_id, .. } => Some(agent_id.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    let entry_point = automation.nodes.iter().find_map(|node| {
+                        let has_incoming = automation.edges.iter().any(|edge| edge.to == node.id);
+                        match (&node.kind, has_incoming) {
+                            (AutomationNodeKind::Agent { agent_id, .. }, false) => {
+                                Some(agent_id.clone())
+                            }
+                            _ => None,
+                        }
+                    });
+                    IpcWorkflowInfo {
+                        id: automation.id,
+                        name: automation.name,
+                        agents,
+                        entry_point,
+                    }
+                })
+                .collect()
+        };
 
     if workflows.is_empty() {
         println!("No manual Automations configured.");
@@ -2106,15 +2418,29 @@ async fn cmd_workflow_run(config_path: &std::path::Path, workflow_id: &str, inpu
                 agent_outputs,
                 total_input_tokens,
                 total_output_tokens,
+                total_reasoning_tokens,
+                token_usage_known,
                 completed_agents,
                 failed_agents,
             }) => {
-                println!("Workflow '{workflow_id}' completed.\n");
+                let workflow_failed = workflow_response_is_failure(&failed_agents);
+                if workflow_failed {
+                    eprintln!("Workflow '{workflow_id}' finished with failed steps.\n");
+                } else {
+                    println!("Workflow '{workflow_id}' completed.\n");
+                }
                 println!("Agent outputs:");
                 for output in &agent_outputs {
                     println!(
-                        "  [{}] ({} in / {} out tokens)",
-                        output.agent_id, output.input_tokens, output.output_tokens
+                        "  [{}] ({} in / {} out / {} reasoning tokens; {} total)",
+                        output.agent_id,
+                        output.input_tokens,
+                        output.output_tokens,
+                        output.reasoning_tokens,
+                        output
+                            .input_tokens
+                            .saturating_add(output.output_tokens)
+                            .saturating_add(output.reasoning_tokens)
                     );
                     println!("    {}\n", output.content);
                 }
@@ -2131,12 +2457,35 @@ async fn cmd_workflow_run(config_path: &std::path::Path, workflow_id: &str, inpu
                     );
                 }
                 println!(
-                    "Total tokens: {} in / {} out",
-                    total_input_tokens, total_output_tokens
+                    "{}",
+                    CliTokenMeasurement {
+                        input: total_input_tokens,
+                        output: total_output_tokens,
+                        reasoning: total_reasoning_tokens,
+                        complete: token_usage_known,
+                    }
+                    .clause("workflow")
                 );
+                if workflow_failed {
+                    std::process::exit(1);
+                }
             }
-            Ok(axocoatl_daemon::ipc::IpcResponse::Error { message }) => {
+            Ok(axocoatl_daemon::ipc::IpcResponse::Error {
+                message,
+                input_tokens,
+                output_tokens,
+                reasoning_tokens,
+                token_usage_known,
+            }) => {
                 eprintln!("Workflow error: {message}");
+                if let Some(usage) = ipc_error_measurement(
+                    input_tokens,
+                    output_tokens,
+                    reasoning_tokens,
+                    token_usage_known,
+                ) {
+                    eprintln!("{}", usage.clause("failed workflow"));
+                }
                 std::process::exit(1);
             }
             Ok(_) => {
@@ -2153,7 +2502,7 @@ async fn cmd_workflow_run(config_path: &std::path::Path, workflow_id: &str, inpu
 
     // Fall back to in-process execution
     println!("No running daemon, bootstrapping in-process...");
-    let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap(config).await {
+    let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap_headless(config).await {
         Ok(d) => d,
         Err(e) => {
             eprintln!("Failed to bootstrap daemon: {e}");
@@ -2188,14 +2537,24 @@ async fn cmd_workflow_run(config_path: &std::path::Path, workflow_id: &str, inpu
 
     match result {
         Ok(output) => {
-            println!("Workflow '{}' completed.\n", output.workflow_id);
+            let terminal_error = output.terminal_error();
+            if terminal_error.is_some() {
+                eprintln!(
+                    "Workflow '{}' finished with failed steps.\n",
+                    output.workflow_id
+                );
+            } else {
+                println!("Workflow '{}' completed.\n", output.workflow_id);
+            }
             println!("Agent outputs:");
             for (agent_id, agent_output) in &output.agent_outputs {
                 println!(
-                    "  [{}] ({} in / {} out tokens)",
+                    "  [{}] ({} in / {} out / {} reasoning tokens; {} total)",
                     agent_id,
                     agent_output.token_usage.input_tokens,
-                    agent_output.token_usage.output_tokens
+                    agent_output.token_usage.output_tokens,
+                    agent_output.token_usage.reasoning_tokens.unwrap_or(0),
+                    agent_output.token_usage.total()
                 );
                 println!("    {}\n", agent_output.content);
             }
@@ -2213,12 +2572,35 @@ async fn cmd_workflow_run(config_path: &std::path::Path, workflow_id: &str, inpu
                 );
             }
             println!(
-                "Total tokens: {} in / {} out",
-                output.total_token_usage.input_tokens, output.total_token_usage.output_tokens
+                "{}",
+                CliTokenMeasurement {
+                    input: output.total_token_usage.input_tokens,
+                    output: output.total_token_usage.output_tokens,
+                    reasoning: output.total_token_usage.reasoning_tokens.unwrap_or(0),
+                    complete: output.token_usage_known,
+                }
+                .clause("workflow")
             );
+            if let Some(error) = terminal_error {
+                eprintln!("Workflow error: {error}");
+                daemon.shutdown().await;
+                std::process::exit(1);
+            }
         }
         Err(e) => {
             eprintln!("Workflow error: {e}");
+            if let Some((usage, known)) = e.workflow_token_usage() {
+                eprintln!(
+                    "{}",
+                    CliTokenMeasurement {
+                        input: usage.input_tokens,
+                        output: usage.output_tokens,
+                        reasoning: usage.reasoning_tokens.unwrap_or(0),
+                        complete: known,
+                    }
+                    .clause("failed workflow")
+                );
+            }
             std::process::exit(1);
         }
     }
@@ -2236,6 +2618,19 @@ async fn cmd_benchmark(name: &str) {
 mod tests {
     use super::*;
     use clap::{CommandFactory, Parser};
+
+    #[cfg(unix)]
+    #[test]
+    fn doctor_probe_never_follows_the_predictable_legacy_probe_name() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(outside.path(), b"safe").unwrap();
+        symlink(outside.path(), root.path().join(".write_probe")).unwrap();
+        probe_data_dir(root.path()).unwrap();
+        assert_eq!(std::fs::read(outside.path()).unwrap(), b"safe");
+    }
 
     #[test]
     fn legacy_chat_session_flag_is_only_a_display_label() {
@@ -2269,5 +2664,146 @@ mod tests {
 
         assert!(uuid::Uuid::parse_str(&label).is_ok());
         assert_eq!(warning, None);
+    }
+
+    #[test]
+    fn measured_usage_keeps_numeric_subtotal_and_sticky_lower_bound_wording() {
+        let mut total = CliTokenMeasurement::known_zero();
+        total.merge(CliTokenMeasurement {
+            input: 10,
+            output: 5,
+            reasoning: 7,
+            complete: true,
+        });
+        total.merge(CliTokenMeasurement {
+            input: 3,
+            output: 2,
+            reasoning: 1,
+            complete: false,
+        });
+        total.merge(CliTokenMeasurement {
+            input: 4,
+            output: 1,
+            reasoning: 0,
+            complete: true,
+        });
+
+        assert_eq!(total.total(), 33);
+        assert!(
+            !total.complete,
+            "a later exact turn cannot restore completeness"
+        );
+        let rendered = total.clause("chat");
+        assert!(rendered.contains("known token subtotal (lower bound)"));
+        assert!(rendered.contains("≥33 total"));
+        assert!(rendered.contains("8 reasoning"));
+    }
+
+    #[test]
+    fn ipc_error_measurement_distinguishes_legacy_error_from_paid_failure() {
+        assert_eq!(ipc_error_measurement(None, None, None, None), None);
+
+        let measured = ipc_error_measurement(Some(13), Some(8), Some(3), Some(false))
+            .expect("measured execution error");
+        assert_eq!(measured.total(), 24);
+        assert!(!measured.complete);
+        assert!(measured.clause("failed session").contains("lower bound"));
+    }
+
+    #[test]
+    fn workflow_with_handled_failed_steps_is_terminal_failure() {
+        assert!(!workflow_response_is_failure(&[]));
+        assert!(workflow_response_is_failure(&[(
+            "writer".to_string(),
+            "provider timeout".to_string(),
+        )]));
+    }
+
+    #[test]
+    fn tool_display_truncation_is_utf8_safe_and_bounded() {
+        let rendered = truncate_for_display(&"€".repeat(40), 80);
+        assert!(rendered.ends_with("..."));
+        assert!(rendered.len() <= 80);
+        assert!(rendered.is_char_boundary(rendered.len()));
+        assert_eq!(truncate_for_display("short", 80), "short");
+    }
+
+    #[test]
+    fn generated_next_steps_explicitly_load_the_process_environment() {
+        let steps = next_steps_text("demo-project");
+
+        assert!(steps.contains("cd demo-project"));
+        assert!(steps.contains("mv .env.example .env"));
+        assert!(steps.contains("never commit this file"));
+        assert!(steps.contains("set -a\n  . ./.env\n  set +a"));
+        assert!(steps.contains("process environment"));
+        assert!(steps.contains("does not load\n.env automatically"));
+        assert!(!steps.contains("cp .env.example .env"));
+    }
+
+    #[test]
+    fn hosted_provider_copy_never_implies_automatic_dotenv_loading() {
+        for provider in ["OpenRouter", "Anthropic", "OpenAI"] {
+            let prompt = hosted_key_prompt(provider);
+            let hint = missing_provider_key_hint(provider);
+
+            assert!(prompt.contains("process environment"));
+            assert!(!prompt.contains(".env"));
+            assert!(hint.contains("process environment that starts Axocoatl"));
+            assert!(!hint.contains(".env"));
+        }
+    }
+
+    fn ipc_session_with_environment(
+        state: &str,
+        setup_command: Option<&str>,
+        environment_error: Option<&str>,
+    ) -> axocoatl_daemon::ipc::IpcSessionInfo {
+        axocoatl_daemon::ipc::IpcSessionInfo {
+            id: "ses-demo".to_string(),
+            name: "Demo".to_string(),
+            workspace_id: "wsp-demo".to_string(),
+            working_dir: "/tmp/demo".to_string(),
+            mode: "single-agent (coder)".to_string(),
+            status: "active".to_string(),
+            environment_state: state.to_string(),
+            setup_command: setup_command.map(str::to_string),
+            environment_error: environment_error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn session_new_only_suggests_exec_after_the_environment_is_ready() {
+        let ready = ipc_session_with_environment("ready", Some("npm ci"), None);
+        let ready_guidance = session_readiness_guidance(&ready);
+        assert!(ready_guidance.contains("axocoatl session exec ses-demo"));
+        assert!(!ready_guidance.contains("Review setup"));
+
+        let awaiting = ipc_session_with_environment("awaiting_approval", Some("npm ci"), None);
+        let awaiting_guidance = session_readiness_guidance(&awaiting);
+        assert!(awaiting_guidance.contains("Proposed command (not run): npm ci"));
+        assert!(awaiting_guidance.contains("Review setup"));
+        assert!(!awaiting_guidance.contains("session exec"));
+
+        let failed = ipc_session_with_environment(
+            "failed",
+            Some("npm ci"),
+            Some("package manager unavailable"),
+        );
+        let failed_guidance = session_readiness_guidance(&failed);
+        assert!(failed_guidance.contains("package manager unavailable"));
+        assert!(failed_guidance.contains("Review setup"));
+        assert!(!failed_guidance.contains("session exec"));
+    }
+
+    #[test]
+    fn session_list_environment_labels_are_actionable() {
+        assert_eq!(
+            display_environment_state("awaiting_approval"),
+            "needs setup review"
+        );
+        assert_eq!(display_environment_state("failed"), "setup failed");
+        assert_eq!(display_environment_state("ready"), "ready");
+        assert_eq!(display_environment_state(""), "needs setup review");
     }
 }

@@ -15,6 +15,13 @@ agents:
       the configured checks, and report Root cause / Change / Proof. Do not
       alter tests to make a failure disappear. /no_think
     depends_on: []
+    memory:
+      core:
+        blocks:
+          - label: team
+            limit: 1000
+            shared: true
+            description: "Durable facts intentionally shared by the demo team."
     token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
 
   - id: defender
@@ -27,6 +34,13 @@ agents:
       configured checks, and report Root cause / Change / Proof. Do not commit.
       /no_think
     depends_on: []
+    memory:
+      core:
+        blocks:
+          - label: team
+            limit: 1000
+            shared: true
+            description: "Durable facts intentionally shared by the demo team."
     token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
 
   - id: planner
@@ -37,6 +51,7 @@ agents:
       Turn a coding task into concise acceptance criteria, constraints, and a
       verification plan. Preserve the user's scope. /no_think
     depends_on: []
+    sampling: { temperature: 0.0, max_tokens: 2000 }
     token_budget: { per_execution: 4000, per_call: 2500, overflow_policy: warn }
 
   - id: judge
@@ -48,6 +63,7 @@ agents:
       route evidence. Prefer the smallest complete change and state tradeoffs.
       /no_think
     depends_on: []
+    sampling: { temperature: 0.0, max_tokens: 2000 }
     token_budget: { per_execution: 4000, per_call: 2500, overflow_policy: warn }
 
   - id: architect
@@ -58,6 +74,7 @@ agents:
       Turn a product proposal into a concrete technical design with explicit
       assumptions, risks, and acceptance criteria. /no_think
     depends_on: []
+    sampling: { temperature: 0.0, max_tokens: 2000 }
     token_budget: { per_execution: 5000, per_call: 3000, overflow_policy: warn }
 
   - id: reviewer
@@ -68,10 +85,71 @@ agents:
       Review designs for correctness, security, performance, and operability.
       Mark ship-blocking issues with the literal word BLOCKING. /no_think
     depends_on: [architect]
+    sampling: { temperature: 0.0, max_tokens: 2000 }
     token_budget: { per_execution: 5000, per_call: 3000, overflow_policy: warn }
+
+  - id: investigator
+    name: "Incident Investigator"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      You are the first responder in a production incident handoff. Inspect the
+      production sample, lib/correlate.js, tests, and runbook. Do not edit files
+      and do not use memory tools. Use no more than five repository tool calls.
+      Then stop and report Evidence / Root cause / Constraints / Handoff for the
+      implementer. /no_think
+    depends_on: []
+    sampling: { temperature: 0.0, max_tokens: 800 }
+    token_budget: { per_execution: 9000, per_call: 3000, overflow_policy: abort }
+
+  - id: implementer
+    name: "Incident Implementer"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      You receive an investigator's evidence before the user's request. Do not
+      use memory tools. Read only the relevant runbook, implementation, and
+      tests; apply the smallest production correction once; run npm run check
+      once. If it passes, do not edit or search again: immediately report the
+      exact Change / Proof / Tradeoff. Do not commit. /no_think
+    depends_on: [investigator]
+    sampling: { temperature: 0.0, max_tokens: 800 }
+    token_budget: { per_execution: 10000, per_call: 3000, overflow_policy: abort }
+
+  - id: verifier
+    name: "Release Verifier"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      You receive the investigator and implementer handoffs. Inspect the actual
+      diff and run npm run check exactly once. This is a read-only verification:
+      never edit files and never use memory tools. Return SHIP or BLOCK with the
+      exact diff meaning, check result, and one Remaining risk, then stop.
+      /no_think
+    depends_on: [implementer]
+    sampling: { temperature: 0.0, max_tokens: 700 }
+    token_budget: { per_execution: 9000, per_call: 3000, overflow_policy: abort }
+
+  - id: weather
+    name: "Weather MCP Agent"
+    provider: ollama
+    model: qwen3:8b
+    system_prompt: |
+      For every weather request, call mcp__weather__get_weather with the city
+      before answering. Never invent conditions and never answer from memory.
+      Return the tool result in one concise sentence. /no_think
+    tools: [mcp__weather__get_weather]
+    depends_on: []
+    token_budget: { per_execution: 2500, per_call: 1500, overflow_policy: warn }
 
 # On a fresh demo data directory this becomes a Manual Automation in Settings.
 workflows:
+  - id: incident-response
+    name: "Incident response"
+    description: "Investigate, repair, then verify one production incident."
+    agents: [investigator, implementer, verifier]
+    entry_point: investigator
+
   - id: release-review
     name: "Release review"
     description: "Architect a change, then review its risks."
@@ -79,25 +157,19 @@ workflows:
     entry_point: architect
 
 skills:
-  - id: demo-health-check
-    name: "Demo health check"
-    description: "Publish a DemoRequested event into Activity."
-    emits: ["DemoRequested"]
+  - id: release-candidate-ready
+    name: "Release candidate ready"
+    description: "Publish a typed release event for the automated gate review."
+    emits: ["ReleaseCandidateReady"]
     reacts_to: []
     agents: [judge]
-    prompt: "Report whether the current demonstration is ready."
+    prompt: "Publish the release candidate evidence for an automated gate review."
 
-# This becomes an OnEvent Automation. Firing the Skill above exercises the
-# canonical Skill → event lattice → Automation path.
-proactive:
-  - id: demo-event-response
-    name: "Demo event response"
-    agent: judge
-    trigger:
-      type: on_event
-      event: DemoRequested
-    input: "A demo health event fired. Return three concise readiness checks."
-    enabled: true
+mcp_servers:
+  - name: weather
+    transport: stdio
+    command: target/debug/mcp-bridge
+    args: ["--mcp-server"]
 
 providers:
   ollama:

@@ -6,17 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
-description = "Tiered isolation layer for Axocoatl tool execution (Wasmtime + youki OCI + Firecracker)"
+description = "Sandbox backends and terminal plumbing for Axocoatl sessions"
 
 [dependencies]
-axocoatl-core = { version = "0.1.0", path = "../axocoatl-core" }
-wasmtime = { workspace = true }
-wasmtime-wasi = { workspace = true }
+axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
@@ -24,25 +21,14 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
-portable-pty = "0.8"
+portable-pty = "0.9.0"
 bytes = "1"
 reqwest = { workspace = true }
 base64 = { workspace = true }
 tokio-stream = { workspace = true }
-# Firecracker — behind feature flag (requires Linux + KVM)
-# OCI container runtime (youki) — behind feature flag (requires Linux)
-[target.'cfg(target_os = "linux")'.dependencies]
-firepilot = { version = "1.2", optional = true }
-libcontainer = { version = "0.6", optional = true, default-features = false, features = ["v1", "v2"] }
-
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 tempfile = "3.27"
-wat = "1.245"
 
 [features]
-default = ["wasmtime-sandbox"]
-wasmtime-sandbox = []
-firecracker-isolation = ["dep:firepilot"]
-firecracker-integration = ["firecracker-isolation"]
-oci-isolation = ["dep:libcontainer"]
+default = []

@@ -27,6 +27,12 @@ export const SETTINGS_SECTIONS = [
   { id: 'automations', title: 'Automations', hint: 'Work that starts itself' },
 ];
 
+function deepActiveElement() {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+  return active;
+}
+
 const CSS = `
 :host { display: none; }
 :host([open]) {
@@ -144,7 +150,7 @@ export class AxSettings extends HTMLElement {
 
   show(section) {
     if (section) this.setAttribute('section', section);
-    if (!this.open) this.#returnFocus = document.activeElement;
+    if (!this.open) this.#returnFocus = deepActiveElement();
     this.open = true;
     queueMicrotask(() => this.#nav.querySelector(`[data-id="${globalThis.CSS.escape(this.section)}"]`)?.focus());
   }

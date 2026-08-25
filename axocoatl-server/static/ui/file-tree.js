@@ -167,6 +167,9 @@ export class AxFileTree extends HTMLElement {
    * generation is still the live one and drops itself if not.
    */
   #gen = 0;
+  /** Reads still in transport. A Session unbind must cancel them, not only
+   * ignore whatever they eventually return. */
+  #readControllers = new Set();
 
   constructor() {
     super();
@@ -188,7 +191,9 @@ export class AxFileTree extends HTMLElement {
   get selected() { return this.getAttribute('selected') || ''; }
   set selected(v) { v ? this.setAttribute('selected', v) : this.removeAttribute('selected'); }
 
-  connectedCallback() { if (this.session) this.reload(); }
+  connectedCallback() { if (this.session) void this.reload(); }
+
+  disconnectedCallback() { this.#invalidateReads(); }
 
   attributeChangedCallback(name, prev, next) {
     if (prev === next) return;
@@ -199,13 +204,20 @@ export class AxFileTree extends HTMLElement {
 
   /** Reload from the root. Safe to call at any time, including concurrently. */
   async reload() {
-    const gen = ++this.#gen;
+    const gen = this.#invalidateReads();
     this.#tree.textContent = '';
-    if (!this.session) return;
+    if (!this.session || !this.isConnected) return;
     await this.#load('', this.#tree, gen);
-    if (gen !== this.#gen) return;
+    if (gen !== this.#gen || !this.session || !this.isConnected) return;
     this.#applySelection();
     this.#applyFilter();
+  }
+
+  #invalidateReads() {
+    this.#gen += 1;
+    for (const controller of this.#readControllers) controller.abort();
+    this.#readControllers.clear();
+    return this.#gen;
   }
 
   /**
@@ -217,23 +229,33 @@ export class AxFileTree extends HTMLElement {
    * showing the reassuring one is how a broken session looks like a finished
    * one.
    */
-  async #fetch(relPath) {
-    const url = `/api/sessions/${encodeURIComponent(this.session)}/tree`
+  async #fetch(relPath, session, gen) {
+    if (!session || session !== this.session || gen !== this.#gen || !this.isConnected) {
+      return { cancelled: true };
+    }
+    const controller = new AbortController();
+    this.#readControllers.add(controller);
+    const url = `/api/sessions/${encodeURIComponent(session)}/tree`
       + (relPath ? `?path=${encodeURIComponent(relPath)}` : '');
     try {
-      const r = await fetch(url);
+      const r = await fetch(url, { signal: controller.signal });
       const body = await r.json().catch(() => null);
       if (!r.ok) return { error: body?.error || `HTTP ${r.status}` };
       if (body && body.error) return { error: body.error };
       return { entries: Array.isArray(body) ? body : [] };
     } catch (e) {
+      if (controller.signal.aborted || e?.name === 'AbortError') return { cancelled: true };
       // The pane is one part of a session and must not take the page with it,
       // so this is caught — but it is reported, not swallowed.
       return { error: String(e.message || e) };
+    } finally {
+      this.#readControllers.delete(controller);
     }
   }
 
   async #load(relPath, container, gen) {
+    const session = this.session;
+    if (!session || gen !== this.#gen || !this.isConnected) return;
     // Reading a directory over a socket is not instant, and an empty container
     // in the meantime is indistinguishable from an empty directory.
     const wait = document.createElement('div');
@@ -241,8 +263,8 @@ export class AxFileTree extends HTMLElement {
     wait.textContent = 'Reading…';
     container.append(wait);
 
-    const res = await this.#fetch(relPath);
-    if (gen !== this.#gen) return; // superseded while fetching
+    const res = await this.#fetch(relPath, session, gen);
+    if (res.cancelled || gen !== this.#gen || session !== this.session || !this.isConnected) return;
     wait.remove();
 
     if (res.error) {

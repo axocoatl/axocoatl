@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "film": "session-workbench",
+  "captured_at": "2026-08-25T06:07:28.721Z",
+  "url": "http://localhost:18186/",
+  "browser": "Codex in-app browser",
+  "viewport": {
+    "width": 1280,
+    "height": 720,
+    "device_scale_factor": 1
+  },
+  "theme": "dark",
+  "reduced_motion": "no-preference",
+  "timeline": "demo/one-app/films/source/session-workbench/timeline.json",
+  "timeline_sha256": "ab43a85fd88257bd32f10f6cccfc1d91d6b543a26f53927483a0cf864241484a",
+  "keyframes": [
+    {
+      "beat": "visible-defect",
+      "path": "demo/one-app/films/source/session-workbench/shot-visible-defect.jpg",
+      "sha256": "36fe121899e78a3a2a857db7079ff4f943876597986d4fa4c9bdc2b2aec86734"
+    },
+    {
+      "beat": "agent-route",
+      "path": "demo/one-app/films/source/session-workbench/shot-agent-route.jpg",
+      "sha256": "d338e0868b5d928b3a7cfb4094ff88d0cb642551f39752c9601080ee0cc12382"
+    },
+    {
+      "beat": "verified-result",
+      "path": "demo/one-app/films/source/session-workbench/shot-verified-result.jpg",
+      "sha256": "39914447a79fa634b0af1eeb7a60532ba58ad502902c3b02dc738b907a288bd4"
+    },
+    {
+      "beat": "git-ownership",
+      "path": "demo/one-app/films/source/session-workbench/shot-git-ownership.jpg",
+      "sha256": "634fcc418e24e20389d0d26715c83137cbf0881d471474caea23852205c8182c"
+    }
+  ]
+}

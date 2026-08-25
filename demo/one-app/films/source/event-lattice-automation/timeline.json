@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "film": "event-lattice-automation",
+  "input_fps": 8,
+  "shots": [
+    {
+      "beat": "skill",
+      "source": "shot-skill.jpg",
+      "hold_frames": 64
+    },
+    {
+      "beat": "event",
+      "source": "shot-event.jpg",
+      "hold_frames": 72
+    },
+    {
+      "beat": "trigger",
+      "source": "shot-trigger.jpg",
+      "hold_frames": 80
+    },
+    {
+      "beat": "result",
+      "source": "shot-result.jpg",
+      "hold_frames": 80
+    }
+  ]
+}

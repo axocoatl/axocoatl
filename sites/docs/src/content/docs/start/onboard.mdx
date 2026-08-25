@@ -1,0 +1,100 @@
+---
+title: Onboard and run doctor
+description: Scaffold axocoatl.yaml, configure a provider, and interpret the environment health checks.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+`axocoatl onboard` creates a new project directory containing `axocoatl.yaml`,
+`.env.example`, and `data/`. It then runs the same environment checks as
+`axocoatl doctor` against the new configuration.
+
+## Run the setup wizard
+
+```sh
+axocoatl onboard
+```
+
+The current wizard offers four starting providers:
+
+- Ollama;
+- OpenRouter;
+- Anthropic;
+- OpenAI.
+
+Gemini and Mistral are supported by the runtime but are configured manually
+after onboarding. See [Providers](/configure/providers/).
+
+For Ollama, the wizard asks for a model and can run `ollama pull` for you. For a
+hosted provider, it can place the supplied key in the generated `.env.example`.
+Move that populated file out of its template name, restrict it, and explicitly
+load it into the process environment before starting Axocoatl:
+
+```sh
+cd my-axocoatl-project
+mv .env.example .env
+chmod 600 .env
+set -a
+. ./.env
+set +a
+```
+
+<Aside type="caution" title="Axocoatl does not load .env for you">
+The current runtime interpolates process environment variables but does not
+invoke a dotenv loader. Copying or renaming the file alone is insufficient;
+source it in the shell or configure the service environment. The wizard may
+write a real supplied key into `.env.example`, so treat that generated file as
+a secret immediately and do not commit it.
+</Aside>
+
+## Run doctor
+
+```sh
+axocoatl doctor
+```
+
+Use `-c` when the configuration has another name or location:
+
+```sh
+axocoatl doctor -c /absolute/path/to/axocoatl.yaml
+```
+
+Doctor performs these checks against the current source:
+
+| Check | Failure level | What to do |
+|---|---|---|
+| Configuration parses and validates | Required | Fix the reported field, then run `axocoatl validate`. |
+| Configured Ollama endpoint responds | Required when configured | Start Ollama or correct `providers.ollama.base_url`. |
+| Every configured Ollama model is present | Required when configured | Run `ollama pull <model>`. |
+| Data directory is writable | Required | Fix permissions or set `AXOCOATL_DATA_DIR`. |
+| Rust toolchain | Warning | Needed only to build from source. |
+| Hosted-provider key appears present | Warning | Export the named environment variable before using that Agent. OpenAI, Anthropic, Gemini, Mistral, and OpenRouter are checked when configured. |
+| Daemon IPC is reachable | Warning | Start `axocoatl dev` or `axocoatl serve` when you need it. |
+| Podman runtime answers a bounded `podman info --format json` probe | Warning | Required for default folder Sessions and several Ways; follow the reported install, machine, or runtime guidance. |
+| Configured webhooks | Egress notice | Confirm that each named destination is intentional. |
+
+Doctor exits non-zero when a required check fails. A Podman warning does not
+make a provider-only one-shot command fail, but it does block the normal local
+Session path. Before reporting Podman ready, doctor checks the client, checks
+the applicable machine state on macOS, and requires the bounded runtime probe
+to return a JSON object successfully.
+
+## Validate without starting the runtime
+
+```sh
+axocoatl validate axocoatl.yaml
+```
+
+Validation checks identities, provider and model fields, dependencies, MCP
+transports, token-budget relationships, and other schema constraints. It does
+not prove that a hosted credential is valid or that a model account currently
+permits access.
+
+## Start the workbench
+
+```sh
+axocoatl dev
+```
+
+By default the app is at `http://localhost:8080`. Keep this process running,
+then [create your first Session →](/start/first-session/)

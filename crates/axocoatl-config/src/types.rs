@@ -38,8 +38,9 @@ pub struct AxocoatlConfig {
     /// Model prices, in dollars per million tokens, used to report what a
     /// variants run cost against what it would have cost on one expensive model.
     /// Models absent from this map have an unknown price. The daemon separately
-    /// recognizes explicitly selected Ollama models as known-free, so an unpriced
-    /// remote model is never misreported as costing $0.
+    /// recognizes Ollama at a configured loopback endpoint as having a known-zero
+    /// model API charge, so an unpriced remote model—including non-loopback
+    /// Ollama—is never misreported as costing $0.
     #[serde(default)]
     pub pricing: std::collections::HashMap<String, ModelPriceYaml>,
 }
@@ -402,8 +403,10 @@ pub struct ProviderCredentials {
     /// Opt-in rate-limit fallback, written as `"provider:model"` (e.g.
     /// `"anthropic:claude-sonnet-4-6"`). If this provider returns a rate-limit
     /// error, the request is retried once on the named backup provider using
-    /// that model. A bare `"provider"` uses the backup's own default model.
-    /// Not a credential.
+    /// that model. A tool-bearing current turn then remains pinned to that
+    /// exact provider and model for native-history replay; plain-text turns
+    /// may select independently. A bare `"provider"` uses the backup's own
+    /// default model. Not a credential.
     pub fallback: Option<String>,
 }
 
@@ -522,9 +525,10 @@ fn default_host() -> String {
 /// an attacker-chosen image. Loosen these only for repositories you trust.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxConfigYaml {
-    /// Run a repo's `postCreateCommand` automatically when a session opens.
-    /// Off by default — otherwise opening a hostile repo is remote code
-    /// execution.
+    /// Default an exact devcontainer `postCreateCommand` to approved for an
+    /// unreviewed Session. The browser exposes that default and an explicit
+    /// per-Session decision overrides it. It never covers an independently
+    /// detected setup command such as `npm ci`.
     #[serde(default)]
     pub allow_post_create_command: bool,
     /// Honor a repo/UI-specified base image other than the trusted default.
@@ -541,9 +545,9 @@ pub struct SandboxConfigYaml {
     #[serde(default)]
     pub require_resource_limits: bool,
     /// Isolation backend: `"podman"` (default — a local rootless container) or
-    /// `"e2b"` (a remote E2B-compatible microVM — E2B cloud or self-hosted
-    /// CubeSandbox). Per-project/session choice: point some projects local, some
-    /// remote. `"e2b"` requires the `e2b:` block below.
+    /// `"e2b"` (a remote microVM backend validated with E2B Cloud). This is one
+    /// daemon-global choice, not a per-Workspace or per-Session picker. `"e2b"`
+    /// requires the `e2b:` block below.
     #[serde(default = "default_sandbox_backend")]
     pub backend: String,
     /// Settings for the `e2b` backend. Ignored unless `backend: e2b`.
@@ -572,20 +576,20 @@ fn default_sandbox_backend() -> String {
     "podman".to_string()
 }
 
-/// Connection settings for an E2B-compatible sandbox backend (E2B cloud or a
-/// self-hosted CubeSandbox). The same shape hits both — CubeSandbox reimplements
-/// the E2B API, so you only change `api_url` (and the key/template).
+/// Connection settings for the remote E2B backend. Axocoatl 1.0 validates these
+/// semantics with E2B Cloud; third-party E2B API implementations are outside the
+/// 1.0 support claim.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct E2bBackendYaml {
-    /// Control-plane API URL. E2B cloud = `https://api.e2b.dev`; a self-hosted
-    /// CubeSandbox = its endpoint (e.g. `http://127.0.0.1:3000`).
+    /// Control-plane API URL. The validated E2B Cloud value is
+    /// `https://api.e2b.dev`.
     #[serde(default = "default_e2b_api_url")]
     pub api_url: String,
     /// Control-plane API key. Write `${E2B_API_KEY}` to source it from the
     /// environment rather than committing it to the config file.
     #[serde(default)]
     pub api_key: SecretString,
-    /// Sandbox template / image id (E2B `"base"`, or a CubeSandbox template id).
+    /// E2B sandbox template / image id, such as `"base"`.
     #[serde(default = "default_e2b_template")]
     pub template: String,
     /// Data-plane host domain — the `envd` control host is

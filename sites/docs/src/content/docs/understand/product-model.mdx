@@ -1,0 +1,81 @@
+---
+title: Product model
+description: Understand the Workspace, Session, Attempt, Agent, and Automation boundaries behind the workbench.
+---
+
+Axocoatl is one local-first coding workbench backed by a durable multi-Agent
+runtime. The browser page at `/` is the product surface. Everything else opens
+around work anchored to a folder.
+
+## The permanent spine
+
+```text
+Named Workspace · canonical project folder
+├── Session: Storefront triage
+│   ├── Conversation and durable turn History
+│   ├── Files, editor, Source Control, and Last turn
+│   ├── Terminal and Preview
+│   └── Ways → isolated Attempts → Checks → Judge → Keep this one
+└── Session: Release review
+    └── Its own transcript, mode, context, and Agent graph
+```
+
+A **Workspace** is a persistent, user-named identity for one authorized project
+directory. Its path is immutable secondary context; the name can change without
+renaming the folder. A **Session** is durable conversation and runtime state owned
+by that Workspace. On local Podman, several Sessions bind the same Workspace
+checkout while retaining separate transcripts, modes, dependency volumes, and
+runtime configuration. An E2B-backed Session instead operates on its remote
+clone of a committed ref. Closing and reopening a tool does not create another
+conversation; the Session remains the shared context.
+
+The Workspace switcher is global. Once a Workspace is selected, the rail lists
+only its Sessions and **New session** cannot browse into another folder. **All
+sessions** is the explicit global browser: opening a result from another Workspace
+switches both identities together.
+
+Settings contains Agents, Skills, MCP servers, and Automations because they
+configure how work runs. They are not peer destinations beside Sessions.
+
+## The signature loop
+
+1. Open or resume a Workspace Session.
+2. Ask for one solution or explore several heterogeneous Ways.
+3. Watch each Attempt, including blocked and failed states.
+4. Run repository Checks and compare both Outcome and Route.
+5. Keep one Attempt, review the Git changes, and commit deliberately.
+
+Ordinary single-Agent work does not require Attempts. After its reviewed
+environment is Ready, Conversation, Files, Terminal, Preview, and Source
+Control remain available for direct iteration.
+
+## State owners are intentionally distinct
+
+| State | Authority | Important boundary |
+| --- | --- | --- |
+| Session turn History | Durable Session ledger | Records accepted request, context, output, and terminal status |
+| Agent conversation | Actor memory and checkpoint | Model-facing cache; not the complete product transcript |
+| Session files | Ready sandbox working tree: local Workspace bind mount or E2B clone | Git represents file state, not every external effect; Files never bypasses the sandbox |
+| Attempt set | Attempt manifest, clones, and containers | One unresolved set per Session; requires explicit Keep or cleanup |
+| Automations | Canonical JSON store and run records | Independent background/manual DAG lifecycle |
+| MCP permissions | Durable permission store | Separate from MCP server definitions in YAML/live registry |
+
+These boundaries explain why Stop is cooperative, rewind does not restore
+files, Agent restart does not resume an in-flight tool, and History export is
+not a complete backup.
+
+## Product language and Git plumbing
+
+The interface presents **Ways**, **Outcome**, **Route**, **Checks**, **Judge**,
+and **Keep this one**. Underneath, isolated Attempts use independent Git clones
+and set-scoped branches. Those mechanics remain inspectable in focused attempt
+review, but the decision is about which verified result to keep—not branch
+management as the primary task.
+
+## Compatibility surfaces
+
+The HTTP API still includes lightweight Chat and cross-chat FileStore routes
+for integrations and older callers. They are data/API compatibility surfaces,
+not separate browser destinations. The interactive workbench is Session-first.
+
+Next: [Architecture →](/understand/architecture/)
