@@ -2612,14 +2612,14 @@ impl std::fmt::Display for SessionRunFailure {
 /// disappears behind a generic error.
 #[derive(Debug)]
 pub struct WaysControlFailure {
-    pub error: DaemonError,
+    pub error: Box<DaemonError>,
     pub control_usage: crate::git::ControlUsage,
 }
 
 impl WaysControlFailure {
     fn before_call(error: DaemonError, agent_id: Option<String>) -> Self {
         Self {
-            error,
+            error: Box::new(error),
             control_usage: crate::git::ControlUsage::known(
                 agent_id,
                 0,
@@ -2630,7 +2630,7 @@ impl WaysControlFailure {
 
     fn with_usage(error: DaemonError, control_usage: crate::git::ControlUsage) -> Self {
         Self {
-            error,
+            error: Box::new(error),
             control_usage,
         }
     }
@@ -2984,7 +2984,7 @@ impl Drop for PreparedSessionSandbox {
 struct SessionEnvironmentPreparationError {
     error: DaemonError,
     effective_image: Option<String>,
-    runtime: Option<SessionRuntimeIdentity>,
+    runtime: Option<Box<SessionRuntimeIdentity>>,
     setup_results: Vec<SessionSetupResult>,
 }
 
@@ -3234,7 +3234,7 @@ impl SessionEnvironmentPreparationError {
         Self {
             error,
             effective_image,
-            runtime,
+            runtime: runtime.map(Box::new),
             setup_results: Vec::new(),
         }
     }
@@ -7514,7 +7514,7 @@ impl AxocoatlDaemon {
         SessionEnvironmentPreparationError {
             error,
             effective_image: Some(effective_image),
-            runtime: Some(runtime),
+            runtime: Some(Box::new(runtime)),
             setup_results,
         }
     }
@@ -7737,7 +7737,7 @@ impl AxocoatlDaemon {
                         return Err(SessionEnvironmentPreparationError {
                             error: DaemonError::Session(error),
                             effective_image: None,
-                            runtime: Some(Self::podman_runtime_identity(&session.id)),
+                            runtime: Some(Box::new(Self::podman_runtime_identity(&session.id))),
                             setup_results: Vec::new(),
                         });
                     }
@@ -7774,7 +7774,7 @@ impl AxocoatlDaemon {
                         return Err(SessionEnvironmentPreparationError {
                             error: DaemonError::Session(error),
                             effective_image: Some(effective_image),
-                            runtime: Some(Self::podman_runtime_identity(&session.id)),
+                            runtime: Some(Box::new(Self::podman_runtime_identity(&session.id))),
                             setup_results: Vec::new(),
                         });
                     }
@@ -7790,7 +7790,7 @@ impl AxocoatlDaemon {
                     return Err(SessionEnvironmentPreparationError {
                         error: DaemonError::Session(error),
                         effective_image: Some(effective_image),
-                        runtime: Some(Self::podman_runtime_identity(&session.id)),
+                        runtime: Some(Box::new(Self::podman_runtime_identity(&session.id))),
                         setup_results,
                     });
                 }
@@ -7897,7 +7897,7 @@ impl AxocoatlDaemon {
                             .to_string(),
                     ),
                     effective_image: current.environment.effective_image.clone(),
-                    runtime: current.environment.runtime.clone(),
+                    runtime: current.environment.runtime.clone().map(Box::new),
                     setup_results: current.environment.setup_results.clone(),
                 })
             }
@@ -7991,7 +7991,7 @@ impl AxocoatlDaemon {
                         &session.id,
                         preparing.environment.generation,
                         failure.effective_image,
-                        failure.runtime,
+                        failure.runtime.map(|runtime| *runtime),
                         failure.setup_results,
                         failure.error.to_string(),
                     )
@@ -10826,7 +10826,7 @@ done
             ));
         }
         let mut entries = Vec::with_capacity(payload_len / 3);
-        for chunk in fields[..payload_len].chunks_exact(3) {
+        for chunk in fields[..payload_len].as_chunks::<3>().0 {
             let name = chunk[0].to_string();
             let kind = chunk[1].to_string();
             if kind != "dir" && kind != "file" {

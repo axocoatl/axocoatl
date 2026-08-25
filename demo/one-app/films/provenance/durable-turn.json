@@ -4,21 +4,21 @@
   "recorded_at": "2026-08-25T07:25:45.249Z",
   "source": {
     "branch": "codex/session-capabilities",
-    "head": "60b1bce3d5293495409b0ef2c8f7fff1b4ba1e4b",
+    "head": "897df7be05dab1e7b6747ca7075ade8a4f782ac6",
     "dirty": true,
-    "patch_sha256": "708e1b97ef0d8c61e8f1536a5dcb7273d02c61a0d5c3628e4b18ad0c46277649",
+    "patch_sha256": "5240edf4c745b56f13c7154dbac8a9d4bd8aa705b6faa0fb14de27b244d4a3a4",
     "patch_excludes": [
       "demo/one-app/films/source/",
       "demo/one-app/films/staged/",
       "demo/one-app/films/provenance/",
       "sites/marketing/assets/films/"
     ],
-    "content_sha256": "f2a42cb9b37a47e1712ad2a998effb94d30764d979c679536c5594d6ff24133b"
+    "content_sha256": "cdade5ea322bbe5146f01b9331a0ae78452953fc411b2e42133552424eb258e7"
   },
   "binary": {
     "path": "target/release/axocoatl",
     "version": "axocoatl 1.0.0",
-    "sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488"
+    "sha256": "afcb51e75c5c64a6e1d1da36fa07110b5f9ba6031e3a2f3ce660de9879b045d1"
   },
   "capture": {
     "record": "demo/one-app/films/source/durable-turn/capture.json",

@@ -198,7 +198,7 @@ impl HtnPlanner {
             );
 
             // Resolve each frontier task and register as new methods
-            let frontiers: Vec<HtnTask> = current_plan.llm_frontiers.drain(..).collect();
+            let frontiers = std::mem::take(&mut current_plan.llm_frontiers);
             for frontier_task in frontiers {
                 let subtasks = resolver.resolve(&frontier_task, &self.state).await?;
 

@@ -1,7 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("Configuration error: {0}")]
-    Config(#[from] axocoatl_config::ConfigError),
+    Config(#[source] Box<axocoatl_config::ConfigError>),
 
     #[error("Provider setup failed: {0}")]
     Provider(String),
@@ -61,6 +61,12 @@ pub enum DaemonError {
     /// flattening a safe concurrency guard into a generic bad request.
     #[error("Attempt conflict: {0}")]
     AttemptConflict(String),
+}
+
+impl From<axocoatl_config::ConfigError> for DaemonError {
+    fn from(error: axocoatl_config::ConfigError) -> Self {
+        Self::Config(Box::new(error))
+    }
 }
 
 impl DaemonError {

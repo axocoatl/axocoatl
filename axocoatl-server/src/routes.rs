@@ -2141,7 +2141,7 @@ pub type WaysControlRouteError = (StatusCode, Json<WaysControlErrorResponse>);
 
 fn ways_control_err(error: axocoatl_daemon::WaysControlFailure) -> WaysControlRouteError {
     let status = if matches!(
-        &error.error,
+        error.error.as_ref(),
         axocoatl_daemon::DaemonError::AttemptConflict(_)
             | axocoatl_daemon::DaemonError::SessionConflict(_)
     ) {
@@ -6463,9 +6463,9 @@ fn inject_preview_bridge(mut html: String, mode: &PreviewProxyMode) -> String {
 async fn resolve_preview_host_port(
     state: &AppState,
     target: &PreviewHostTarget,
-) -> Result<u16, Response> {
+) -> Result<u16, Box<Response>> {
     if let Err(error) = require_ready_session(state, &target.session_id).await {
-        return Err(error.into_response());
+        return Err(Box::new(error.into_response()));
     }
     state
         .read()
@@ -6482,14 +6482,16 @@ async fn resolve_preview_host_port(
             } else {
                 StatusCode::BAD_GATEWAY
             };
-            (
-                status,
-                format!(
-                    "Preview is unavailable for Session '{}' on port {}: {error}",
-                    target.session_id, target.logical_port
-                ),
+            Box::new(
+                (
+                    status,
+                    format!(
+                        "Preview is unavailable for Session '{}' on port {}: {error}",
+                        target.session_id, target.logical_port
+                    ),
+                )
+                    .into_response(),
             )
-                .into_response()
         })
 }
 
@@ -6502,7 +6504,7 @@ async fn proxy_preview_http(
 ) -> Response {
     let host_port = match resolve_preview_host_port(&state, &target).await {
         Ok(host_port) => host_port,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     proxy_preview_http_to_port(target, tail, request, mode, host_port).await
 }
@@ -6718,7 +6720,7 @@ async fn preview_websocket_proxy(
 ) -> Response {
     let host_port = match resolve_preview_host_port(&state, &target).await {
         Ok(host_port) => host_port,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     preview_websocket_proxy_to_port(target, request, host_port).await
 }
