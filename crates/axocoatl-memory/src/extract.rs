@@ -866,7 +866,7 @@ mod tests {
         let command = dir.path().join("mode-tesseract");
         std::fs::write(
             &command,
-            "#!/bin/sh\nmode=$(stat -c %a \"$1\" 2>/dev/null || stat -f %Lp \"$1\")\n[ \"$mode\" = 600 ] || exit 42\nprintf extracted\n",
+            "#!/bin/sh\nmode=$(stat -L -c %a \"$1\" 2>/dev/null || stat -L -f %Lp \"$1\")\n[ \"$mode\" = 600 ] || exit 42\nprintf extracted\n",
         )
         .unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
