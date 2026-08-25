@@ -83,7 +83,7 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install the pinned license notice generator
-        run: cargo install cargo-about --locked --version '=0.9.1'
+        run: cargo install cargo-about --locked --version '=0.9.1' --features cli
       - name: Fetch the locked native release dependency graph
         run: cargo fetch --locked --manifest-path axocoatl-cli/Cargo.toml
       - name: Verify package-local embedded assets

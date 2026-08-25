@@ -82,7 +82,7 @@ jobs:
       - name: Install the pinned audit tool
         run: cargo install cargo-audit --locked --version 0.22.2
       - name: Install the pinned license notice generator
-        run: cargo install cargo-about --locked --version '=0.9.1'
+        run: cargo install cargo-about --locked --version '=0.9.1' --features cli
       - name: Deny vulnerabilities, unsoundness, new maintenance warnings, and yanked crates
         run: cargo audit -D warnings
       - name: Fetch the locked native release dependency graph
