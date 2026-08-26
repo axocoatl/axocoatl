@@ -573,76 +573,150 @@ jobs:
           tar -xOf "$server_archive" "$server_prefix/LICENSE" | cmp -s LICENSE -
           tar -xOf "$server_archive" "$server_prefix/THIRD_PARTY_LICENSES.txt" |
             cmp -s axocoatl-server/THIRD_PARTY_LICENSES.txt -
-          remote_ref=refs/axocoatl-release/remote-tag
-          git fetch --no-tags --force origin \
-            "+refs/tags/$GITHUB_REF_NAME:$remote_ref"
+          : > crate-checksums.sha256
+          for c in $crates; do
+            sha256sum "target/package/${c}-${version}.crate" >> crate-checksums.sha256
+          done
+          test "$(wc -l < crate-checksums.sha256 | tr -d '[:space:]')" = "22"
           expected_commit="$(git rev-parse "$GITHUB_SHA^{commit}")"
-          remote_commit="$(git rev-parse "$remote_ref^{commit}")"
-          test "$remote_commit" = "$expected_commit" || {
-            echo "Remote tag $GITHUB_REF_NAME moved from $expected_commit to $remote_commit; refusing to publish crates." >&2
-            exit 1
+
+          fetch_crate() {
+            local c=$1 response=$2
+            curl --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+              --user-agent "axocoatl-release-workflow ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY)" \
+              --silent --show-error --output "$response" --write-out '%{http_code}' \
+              "https://crates.io/api/v1/crates/${c}/${version}"
           }
+
+          reviewed_checksum() {
+            local c=$1
+            local archive="target/package/${c}-${version}.crate"
+            awk -v archive="$archive" '$2 == archive { print $1 }' crate-checksums.sha256
+          }
+
+          verify_published_crate() {
+            local c=$1 response=$2 local_checksum
+            local_checksum="$(reviewed_checksum "$c")"
+            test -n "$local_checksum"
+            jq --exit-status \
+              --arg version "$version" \
+              --arg checksum "$local_checksum" \
+              '
+                .version.num == $version
+                and .version.checksum == $checksum
+                and .version.yanked == false
+              ' "$response" >/dev/null || {
+                echo "$c $version differs from the packaged release or is yanked." >&2
+                exit 1
+              }
+          }
+
+          require_remote_tag() {
+            local remote_ref=refs/axocoatl-release/remote-tag
+            local remote_commit
+            git fetch --no-tags --force origin \
+              "+refs/tags/$GITHUB_REF_NAME:$remote_ref"
+            remote_commit="$(git rev-parse "$remote_ref^{commit}")"
+            test "$remote_commit" = "$expected_commit" || {
+              echo "Remote tag $GITHUB_REF_NAME moved from $expected_commit to $remote_commit; refusing to publish crates." >&2
+              exit 1
+            }
+          }
+
+          # Discover every pre-existing version before the first upload. This
+          # prevents a divergent later package from being found only after
+          # earlier missing packages have already been published.
+          for c in $crates; do
+            response="$(mktemp)"
+            status="$(fetch_crate "$c" "$response")"
+            case "$status" in
+              200) verify_published_crate "$c" "$response" ;;
+              404) ;;
+              *)
+                echo "Unexpected crates.io status $status while checking $c $version." >&2
+                exit 1
+                ;;
+            esac
+            rm -f "$response"
+          done
+
           for c in $crates; do
             echo "::group::publish $c"
             archive="target/package/${c}-${version}.crate"
-            local_checksum="$(sha256sum "$archive" | awk '{print $1}')"
-            url="https://crates.io/api/v1/crates/${c}/${version}"
+            original_checksum="$(reviewed_checksum "$c")"
             response="$(mktemp)"
-            status="$(curl --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
-              --user-agent "axocoatl-release-workflow ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY)" \
-              --silent --show-error --output "$response" --write-out '%{http_code}' "$url")"
+            status="$(fetch_crate "$c" "$response")"
             case "$status" in
               200)
-                echo "$c $version is already published"
+                verify_published_crate "$c" "$response"
+                echo "$c $version is already exact and non-yanked."
                 ;;
               404)
                 # The exact 22-crate set was already packaged and verified as
                 # one graph above. Avoid discovering a deterministic package
                 # build failure only after earlier versions were published.
-                CARGO_REGISTRY_TOKEN="$registry_token" \
-                  cargo publish --locked --no-verify -p "$c"
-                visible=false
-                for attempt in {1..18}; do
-                  status="$(curl --retry 2 --retry-all-errors --connect-timeout 10 --max-time 30 \
-                    --user-agent "axocoatl-release-workflow ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY)" \
-                    --silent --show-error --output "$response" --write-out '%{http_code}' "$url")"
-                  case "$status" in
-                    200)
-                      visible=true
-                      break
-                      ;;
-                    404)
-                      sleep 10
-                      ;;
-                    *)
-                      echo "Unexpected crates.io status $status while proving $c $version" >&2
-                      exit 1
-                      ;;
-                  esac
-                done
-                test "$visible" = "true" || {
-                  echo "$c $version was not visible on crates.io after publishing" >&2
+                require_remote_tag
+                status="$(fetch_crate "$c" "$response")"
+                if [ "$status" = "200" ]; then
+                  verify_published_crate "$c" "$response"
+                elif [ "$status" = "404" ]; then
+                  publish_status=0
+                  if CARGO_REGISTRY_TOKEN="$registry_token" \
+                    cargo publish --locked --no-verify -p "$c"; then
+                    echo "Cargo accepted the $c upload."
+                  else
+                    publish_status=$?
+                    echo "Cargo returned $publish_status; resolving the ambiguous upload from crates.io."
+                  fi
+                  visible=false
+                  for attempt in {1..18}; do
+                    status="$(fetch_crate "$c" "$response")"
+                    case "$status" in
+                      200)
+                        verify_published_crate "$c" "$response"
+                        visible=true
+                        break
+                        ;;
+                      404) sleep 10 ;;
+                      *)
+                        echo "Unexpected crates.io status $status while proving $c $version." >&2
+                        exit 1
+                        ;;
+                    esac
+                  done
+                  test "$visible" = "true" || {
+                    echo "$c $version remains absent after cargo returned $publish_status." >&2
+                    exit 1
+                  }
+                  sleep 10
+                else
+                  echo "Unexpected crates.io status $status immediately before publishing $c $version." >&2
                   exit 1
-                }
-                sleep 10
+                fi
                 ;;
               *)
-                echo "Unexpected crates.io status $status while checking $c $version" >&2
+                echo "Unexpected crates.io status $status while checking $c $version." >&2
                 exit 1
                 ;;
             esac
-            published_checksum="$(jq --raw-output '.version.checksum // ""' "$response")"
-            published_yanked="$(jq --raw-output '.version.yanked // ""' "$response")"
+            test "$(sha256sum "$archive" | awk '{print $1}')" = "$original_checksum" || {
+              echo "Cargo changed the reviewed $c package archive." >&2
+              exit 1
+            }
             rm -f "$response"
-            test "$published_checksum" = "$local_checksum" || {
-              echo "$c $version checksum mismatch: packaged $local_checksum, crates.io $published_checksum" >&2
-              exit 1
-            }
-            test "$published_yanked" = "false" || {
-              echo "$c $version is yanked on crates.io; refusing to publish a divergent release." >&2
-              exit 1
-            }
             echo "::endgroup::"
+          done
+
+          require_remote_tag
+          for c in $crates; do
+            response="$(mktemp)"
+            status="$(fetch_crate "$c" "$response")"
+            test "$status" = "200" || {
+              echo "$c $version is not public after publication (HTTP $status)." >&2
+              exit 1
+            }
+            verify_published_crate "$c" "$response"
+            rm -f "$response"
           done
 
   release:
@@ -710,6 +784,7 @@ jobs:
     uses: ./.github/workflows/marketing-deploy.yml
     with:
       release_tag: ${{ github.ref_name }}
+      release_sha: ${{ github.sha }}
     secrets:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -723,6 +798,7 @@ jobs:
     uses: ./.github/workflows/docs-deploy.yml
     with:
       release_tag: ${{ github.ref_name }}
+      release_sha: ${{ github.sha }}
     secrets:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

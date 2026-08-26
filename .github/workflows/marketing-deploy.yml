@@ -21,6 +21,10 @@ on:
         description: Public product release that authorizes this deployment
         required: true
         type: string
+      release_sha:
+        description: Frozen product source commit to build and deploy
+        required: true
+        type: string
     secrets:
       CLOUDFLARE_API_TOKEN:
         description: Cloudflare API token used for the marketing Pages deployment
@@ -44,11 +48,16 @@ jobs:
       published: ${{ steps.release.outputs.published }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Reusable release callers must build the frozen release source, not
+          # the newer workflow commit that is coordinating a recovery.
+          ref: ${{ inputs.release_sha || github.sha }}
       - name: Require the current product version to be published
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
           CALLED_RELEASE_TAG: ${{ inputs.release_tag }}
+          CALLED_RELEASE_SHA: ${{ inputs.release_sha }}
         run: |
           set -euo pipefail
           version="$(awk '
@@ -65,6 +74,13 @@ jobs:
           if [ -n "$CALLED_RELEASE_TAG" ] && [ "$CALLED_RELEASE_TAG" != "$expected_tag" ]; then
             echo "Called release '$CALLED_RELEASE_TAG' does not match product $expected_tag." >&2
             exit 1
+          fi
+          if [ -n "$CALLED_RELEASE_SHA" ]; then
+            [[ "$CALLED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            test "$(git rev-parse 'HEAD^{commit}')" = "$CALLED_RELEASE_SHA" || {
+              echo "The deployment checkout does not match frozen source $CALLED_RELEASE_SHA." >&2
+              exit 1
+            }
           fi
           response="$(mktemp)"
           attempts=1
@@ -84,9 +100,15 @@ jobs:
             fi
             break
           done
+          draft=""
+          prerelease=""
+          if [ "$status" = "200" ]; then
+            draft="$(jq --raw-output '.draft' "$response")"
+            prerelease="$(jq --raw-output '.prerelease' "$response")"
+          fi
           if [ "$status" = "200" ] \
-            && [ "$(jq --raw-output '.draft' "$response")" = "false" ] \
-            && [ "$(jq --raw-output '.prerelease' "$response")" = "false" ]; then
+            && [ "$draft" = "false" ] \
+            && [ "$prerelease" = "false" ]; then
             expected_assets="$({
               for target in \
                 x86_64-unknown-linux-gnu \
@@ -110,7 +132,12 @@ jobs:
                 exit 1
               }
             echo "published=true" >> "$GITHUB_OUTPUT"
-          elif [ -z "$CALLED_RELEASE_TAG" ] && [ "$status" = "404" ]; then
+          elif [ -z "$CALLED_RELEASE_TAG" ] && { \
+            [ "$status" = "404" ] || { \
+              [ "$status" = "200" ] \
+                && { [ "$draft" = "true" ] || [ "$prerelease" = "true" ]; }; \
+            }; \
+          }; then
             echo "published=false" >> "$GITHUB_OUTPUT"
             echo "Current v$version release is not published; leaving the existing production site untouched."
           else
@@ -127,6 +154,8 @@ jobs:
       deployments: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.release_sha || github.sha }}
 
       - name: Exercise installer OS, libc, and checksum failures
         run: ./scripts/test-install.sh
