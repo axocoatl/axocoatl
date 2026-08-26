@@ -3,17 +3,17 @@
   "film": "sandbox-terminal-preview",
   "recorded_at": "2026-08-25T06:09:15.266Z",
   "source": {
-    "branch": "codex/v1-release-fixture",
-    "head": "d906e1923b83bf828a668359aeff3fd7fb9caa86",
+    "branch": "codex/v1-release-recovery",
+    "head": "f9214961efd0408b7fc312f19c6ea8a907cb3303",
     "dirty": true,
-    "patch_sha256": "3ca3c0aa3898c1495f6fc509042a2cdfe2ebed64f37fdfff3b4a3fb502683df2",
+    "patch_sha256": "f19fe5eb519d3905a41b1d2a6b5d31d609d9e5546b2d022b09eda97b41651deb",
     "patch_excludes": [
       "demo/one-app/films/source/",
       "demo/one-app/films/staged/",
       "demo/one-app/films/provenance/",
       "sites/marketing/assets/films/"
     ],
-    "content_sha256": "da11e865ae9f06be806054605ca25549be43df15cce4d67a4a62fed5683f9e56"
+    "content_sha256": "de2de255a2bf6966417585bea9cf3f74360886a99ebea3cdecb374468bbbe154"
   },
   "binary": {
     "path": "target/release/axocoatl",
