@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-08-27
+
 ### Fixed
 - **User-level first run.** `axocoatl onboard` now writes one owner-only user
   configuration and platform data directory instead of creating an unrelated project
@@ -16,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path; repositories become Workspaces through **Open workspace…** in the app. The
   combined `onboard --install-daemon` flow refuses shell-only credential placeholders
   that the generated service cannot inherit.
+- **Release dependency gate.** The lockfile now selects non-yanked `chacha20`
+  0.10.2 instead of the yanked 0.10.1 transitive release.
 
 ## [1.0.0] — 2026-08-25
 
@@ -599,6 +603,7 @@ First public release. The framework is functional end-to-end with a real LLM
 - `LICENSE` copyright attribution corrected to "Axocoatl Contributors".
 - Zero compiler warnings across the workspace.
 
+[1.0.1]: https://github.com/axocoatl/axocoatl/releases/tag/v1.0.1
 [1.0.0]: https://github.com/axocoatl/axocoatl/releases/tag/v1.0.0
 [0.1.4]: https://github.com/axocoatl/axocoatl/releases/tag/v0.1.4
 [0.1.3]: https://github.com/axocoatl/axocoatl/releases/tag/v0.1.3

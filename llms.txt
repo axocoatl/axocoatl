@@ -18,7 +18,7 @@ that Git action.
 # Install a checksum-verified native release on supported macOS or glibc Linux.
 curl -fsSL https://axocoatl.ai/install.sh | sh
 
-# Configure a provider and starter project, check host prerequisites, and run.
+# Configure Axocoatl once for this OS user, check host prerequisites, and run.
 axocoatl onboard
 axocoatl doctor
 axocoatl dev
@@ -86,7 +86,7 @@ integrations remain separate paths.
 ## Selected interfaces
 
 ```text
-axocoatl onboard                 Interactive setup
+axocoatl onboard                 Configure Axocoatl for this OS user
 axocoatl doctor                  Environment and dependency checks
 axocoatl validate <config>       Validate configuration
 axocoatl dev | serve             Run the daemon and browser product

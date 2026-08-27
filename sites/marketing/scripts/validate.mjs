@@ -57,6 +57,7 @@ function validateLlms(source, label) {
     ['durable Session spine', 'durable, folder-anchored Session'],
     ['separate repository truth', 'Source Control separately shows the repository as it exists now'],
     ['honest network boundary', 'Local-first does not mean every configured path is offline'],
+    ['user-level onboarding', 'Configure Axocoatl once for this OS user'],
     ['canonical product reference', 'docs/PRODUCT.md'],
   ]) {
     if (!source.includes(marker)) fail(label, `missing ${contract}`);
@@ -66,6 +67,8 @@ function validateLlms(source, label) {
     'building self-coordinating multi-agent systems',
     'stigmergic pheromone',
     'no central orchestrator',
+    'provider and starter project',
+    'axocoatl onboard                 Interactive setup',
   ]) {
     if (source.toLowerCase().includes(retired.toLowerCase())) {
       fail(label, `retired pre-1.0 narrative: ${retired}`);

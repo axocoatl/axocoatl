@@ -1,6 +1,6 @@
 [package]
 name = "axocoatl-cli"
-version.workspace = true
+version = "1.0.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
