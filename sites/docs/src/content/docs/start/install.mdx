@@ -15,7 +15,7 @@ musl-based distributions such as Alpine; use the Cargo or source path there.
 <Tabs syncKey="install">
   <TabItem label="Release binary">
     ```sh
-    curl -fsSL https://raw.githubusercontent.com/axocoatl/axocoatl/main/scripts/install.sh | sh
+    curl -fsSL https://axocoatl.ai/install.sh | sh
     ```
 
     The installer resolves the latest GitHub release, downloads the tarball for
@@ -57,6 +57,10 @@ If installation used `~/.local/bin`, add it to your shell path:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+The binary is installed once for the current user or system. The next command,
+`axocoatl onboard`, creates user-level Axocoatl configuration and data; it does
+not create a repository or Workspace.
+
 ## Runtime prerequisites
 
 The binary can start without every optional dependency, but the normal local
@@ -93,7 +97,7 @@ Run `ollama serve` in its own terminal or as its own service.
    ```
 
 3. Run the release installer **inside WSL2**, then continue with
-   [`axocoatl onboard`](/start/onboard/).
+   [user-level onboarding](/start/onboard/).
 
 </Steps>
 
@@ -109,4 +113,4 @@ remote option.
 
 ## Next
 
-[Create a configuration and run doctor →](/start/onboard/)
+[Configure Axocoatl for this user and run doctor →](/start/onboard/)

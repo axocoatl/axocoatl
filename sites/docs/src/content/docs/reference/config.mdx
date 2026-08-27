@@ -1,12 +1,26 @@
 ---
 title: Configuration reference
-description: Current axocoatl.yaml root keys, nested fields, defaults, persistence boundaries, and validation limits.
+description: Current YAML root keys, user-level defaults, explicit local overrides, persistence boundaries, and validation limits.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-`axocoatl.yaml` is loaded when a daemon bootstraps. Use an explicit path and
-validate it before restart:
+Normal commands load the current user's configuration independent of the
+current directory:
+
+- macOS: `~/Library/Application Support/Axocoatl/config.yaml`
+- Linux/WSL: `${XDG_CONFIG_HOME:-$HOME/.config}/axocoatl/config.yaml`
+
+`axocoatl onboard` creates this file without creating a project, repository,
+Workspace, Session, or `.env` file. Validate it before restart:
+
+```sh
+axocoatl validate
+axocoatl dev
+```
+
+A project-local configuration is an explicit advanced override. Axocoatl never
+selects a cwd `axocoatl.yaml` merely because it exists:
 
 ```sh
 axocoatl validate /absolute/path/to/axocoatl.yaml
@@ -17,7 +31,9 @@ axocoatl dev --config /absolute/path/to/axocoatl.yaml
 
 `${NAME}` expressions are replaced from the process environment before YAML is
 parsed. An unset variable becomes an empty string. Axocoatl does not load a
-`.env` file automatically.
+`.env` file automatically. Onboarding uses a masked credential prompt and
+writes a supplied key literally to the owner-only user configuration; leaving
+the prompt blank keeps the corresponding environment placeholder.
 
 Secret fields use redacting wrappers in debug output, but YAML, shell history,
 service definitions, external servers, and backups still need normal secret
@@ -26,9 +42,15 @@ handling.
 ## Process data root
 
 The control-plane data root is process configuration, not a YAML key.
-`AXOCOATL_DATA_DIR` selects it; otherwise Axocoatl resolves `./data` from the
-daemon working directory. Use one explicit absolute path outside every Workspace
-for the clearest ownership and backup boundary.
+`AXOCOATL_DATA_DIR` selects it when set. Otherwise the normal user
+configuration uses:
+
+- macOS: `~/Library/Application Support/Axocoatl/data`
+- Linux/WSL: `${XDG_DATA_HOME:-$HOME/.local/share}/axocoatl`
+
+An explicit `--config /path/to/config.yaml` uses
+`/path/to/data` unless `AXOCOATL_DATA_DIR` overrides it. Neither default depends
+on the daemon's current working directory.
 
 On supported Unix hosts, bootstrap retains an opened handle to that root and
 acquires an external current lease, the 0.1-compatible in-root lease, and a

@@ -15,6 +15,13 @@ A folder-anchored session is the unit of work. Its conversation is the permanent
 Files/editor/Source Control, Preview, comparison, and agent graph open as focused tools;
 Ways is a contextual inspector and Terminal remains in its bottom dock.
 
+Installation and onboarding configure one Axocoatl product for the current OS user.
+Onboarding never manufactures a project, repository, Workspace, or Session directory.
+The app starts with no authorized Workspace until the person chooses **Open workspace…**.
+The normal configuration and durable data live in platform user directories; a
+project-local YAML configuration is an explicit operator override and is never selected
+merely because it exists in the current working directory.
+
 ## The primary loop
 
 1. Start Axocoatl and open the local app.

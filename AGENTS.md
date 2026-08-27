@@ -22,6 +22,11 @@ attempt state, comparison, git, and agent graph open around that session. Agents
 Skills, MCP servers, and Automations belong in Settings rather than becoming peer
 destinations.
 
+Installation and onboarding configure Axocoatl for the current OS user. Onboarding
+must not create a project, repository, Workspace, or Session folder. A repository
+becomes a Workspace only through **Open workspace…** in the app. Never select a cwd
+`axocoatl.yaml` implicitly; project-local configuration requires an explicit path.
+
 The signature loop is:
 
 1. Open or resume a workspace session.

@@ -10,24 +10,30 @@ filesystem copy made while the daemon is stopped.
 
 ## Locate the data root
 
-Axocoatl uses `AXOCOATL_DATA_DIR` when set; otherwise it uses `./data` relative
-to the daemon's working directory. A service definition uses the directory
-containing its config as the working directory. A foreground process uses the
-directory from which it was started.
+Axocoatl uses `AXOCOATL_DATA_DIR` when set. Otherwise, the normal installed
+product uses a user-level root independent of the current directory:
 
-Set an absolute path in the daemon environment to make this unambiguous:
+- macOS: `~/Library/Application Support/Axocoatl/data`
+- Linux/WSL: `${XDG_DATA_HOME:-$HOME/.local/share}/axocoatl`
+
+Its matching configuration is
+`~/Library/Application Support/Axocoatl/config.yaml` on macOS or
+`${XDG_CONFIG_HOME:-$HOME/.config}/axocoatl/config.yaml` on Linux/WSL.
+
+An explicit project-local configuration uses a sibling `data` directory. For
+example, this command uses `/absolute/path/to/data`:
 
 ```sh
-export AXOCOATL_DATA_DIR=/absolute/path/to/axocoatl-data
 axocoatl dev --config /absolute/path/to/axocoatl.yaml
 ```
 
-Starting from another directory without that variable can create a different
-`./data` tree and make prior Sessions appear missing.
+Set `AXOCOATL_DATA_DIR` only when that deterministic default is not the desired
+location.
 
 An absolute data root outside every Workspace is easiest to reason about and back
-up. A descendant `./data` remains supported: local Podman masks it inside the
-Workspace container. A Workspace that is the data root, or lies below it, is rejected.
+up. A project-local sibling `data` directory remains supported: local Podman
+masks it inside the Workspace container. A Workspace that is the data root, or
+lies below it, is rejected.
 
 ## What is stored
 
@@ -87,16 +93,16 @@ those temporary paths are outside the data root.
 
 3. Confirm no Axocoatl process owns the runtime and do not edit the Workspace
    while copying.
-4. Copy the complete resolved data root, `axocoatl.yaml`, the secret-management
-   metadata needed to recreate its process environment, and each Workspace
-   repository to a versioned backup location.
+4. Copy the complete resolved data root, the active configuration, any
+   secret-management metadata needed to recreate its process environment, and
+   each Workspace repository to a versioned backup location.
 5. Preserve permissions and verify the copy can be listed and checksummed.
 6. Restart Axocoatl the same way it was started before the backup, then check
    status.
 
 </Steps>
 
-For example, after substituting explicit paths:
+For an explicit advanced configuration, after substituting paths:
 
 ```sh
 cp -a /absolute/path/to/axocoatl-data /backup/2026-08-17/axocoatl-data
@@ -114,7 +120,9 @@ or every attachment/store required for restoration.
 
 There is no schema-aware restore command. Use a compatible Axocoatl build,
 stop the daemon, place the copied directories back at explicit paths with the
-original ownership and permissions, restore the config/environment, then run:
+original ownership and permissions, restore the configuration/environment,
+then run `axocoatl validate` and `axocoatl doctor` for the normal user paths.
+For an explicit advanced configuration, run:
 
 ```sh
 axocoatl validate /absolute/path/to/axocoatl.yaml

@@ -7,7 +7,9 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 A Workspace is the durable, named Axocoatl identity for an authorized project
 directory. A Session is durable work and conversation created inside that
-Workspace. Start with one Agent and a disposable or clean Git repository until
+Workspace. Onboarding does not create this directory or modify it into an
+Axocoatl project; **Open workspace…** authorizes an existing folder after the
+app starts. Start with one Agent and a disposable or clean Git repository until
 you know the tool and sandbox behavior you want.
 
 ## Before you open the folder
@@ -26,7 +28,9 @@ metadata, but the repository remains the authority.
 
 <Steps>
 
-1. Start the runtime with `axocoatl dev` and open `http://localhost:8080`.
+1. Start the runtime with `axocoatl dev` from any directory and open
+   `http://localhost:8080`. It uses the current user's configuration and data
+   root.
 2. From the Workspace switcher, choose **Open workspace…** and navigate to the
    repository.
 3. Confirm or edit the Workspace name. The canonical path remains visible as
@@ -84,7 +88,8 @@ hunk review, branch checkout, and commit as deliberate user actions.
 ## If creation fails
 
 - Run `axocoatl doctor` and resolve the Podman warning.
-- Confirm the selected Agent exists in `axocoatl.yaml`.
+- Confirm the selected Agent exists in the active user configuration (or the
+  explicit file passed with `--config`).
 - An image outside Axocoatl's curated presets is rejected unless
   `sandbox.allow_untrusted_images: true`.
 - Axocoatl does not install Podman or create a Podman VM during Session startup.

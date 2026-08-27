@@ -57,6 +57,7 @@ function validateLlms(source, label) {
     ['durable Session spine', 'durable, folder-anchored Session'],
     ['separate repository truth', 'Source Control separately shows the repository as it exists now'],
     ['honest network boundary', 'Local-first does not mean every configured path is offline'],
+    ['user-level onboarding', 'Configure Axocoatl once for this OS user'],
     ['canonical product reference', 'docs/PRODUCT.md'],
   ]) {
     if (!source.includes(marker)) fail(label, `missing ${contract}`);
@@ -66,6 +67,8 @@ function validateLlms(source, label) {
     'building self-coordinating multi-agent systems',
     'stigmergic pheromone',
     'no central orchestrator',
+    'provider and starter project',
+    'axocoatl onboard                 Interactive setup',
   ]) {
     if (source.toLowerCase().includes(retired.toLowerCase())) {
       fail(label, `retired pre-1.0 narrative: ${retired}`);
@@ -466,8 +469,19 @@ for (const page of pages) {
     for (const word of forbidden) if (new RegExp(`\\b${word.replace('-', '[- ]')}\\b`, 'i').test(visible)) fail(page, `forbidden marketing phrase: ${word}`);
     if (/\bv0\.1\.4\b/i.test(visible)) fail(page, 'stale release version in current product copy');
     if (/\b(?:Activity pane|Sessions cockpit|Studio lattice|Browser pane)\b/i.test(visible)) fail(page, 'retired product vocabulary in current copy');
-    if (page === 'integrations/openrouter/index.html' && !/does not load dotenv files automatically/i.test(visible)) {
-      fail(page, 'must explain that provider variables come from the process environment, not automatic dotenv loading');
+    if (page === 'integrations/openrouter/index.html') {
+      if (!/API-key prompt is masked/i.test(visible)) {
+        fail(page, 'must explain that normal onboarding masks the OpenRouter key prompt');
+      }
+      if (!/owner-only Axocoatl configuration/i.test(visible)) {
+        fail(page, 'must explain that normal onboarding uses the owner-only user configuration');
+      }
+      if (!/does not load dotenv files automatically/i.test(visible)) {
+        fail(page, 'must explain dotenv behavior for advanced environment injection');
+      }
+      if (/\.env\.example/i.test(visible)) {
+        fail(page, 'must not describe the retired onboarding .env.example flow');
+      }
     }
   }
 }

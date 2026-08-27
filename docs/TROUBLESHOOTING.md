@@ -13,7 +13,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 **`cargo install axocoatl-cli` fails to compile**
 Needs Rust 1.88+. Update with `rustup update stable`. Or use the prebuilt
-binary: `curl -fsSL https://raw.githubusercontent.com/axocoatl/axocoatl/main/scripts/install.sh | sh`.
+binary: `curl -fsSL https://axocoatl.ai/install.sh | sh`.
 
 ## Ollama
 
@@ -26,23 +26,37 @@ Start it: `ollama serve &`. Verify: `curl http://localhost:11434/api/tags`.
 ## Config
 
 **`Config invalid` / parse errors**
-`axocoatl validate axocoatl.yaml` prints the exact field and a suggestion.
+`axocoatl validate` checks the current user's configuration and prints the
+exact field and a suggestion. For an explicit project-local configuration, run
+`axocoatl validate /absolute/path/to/axocoatl.yaml` instead.
 Common causes: missing `name` on an agent, `per_call > per_execution`,
 duplicate agent IDs, unresolved `${ENV_VAR}` (export it in the process
 environment that starts Axocoatl).
 
 **API provider key warnings**
-Export the key in the environment that starts Axocoatl.
-`${OPENAI_API_KEY}`-style placeholders are interpolated from that process
-environment. Axocoatl does not load `.env` automatically. If you keep local
-assignments in a file moved from `.env.example`, restrict it, never commit it,
-and explicitly load it before starting Axocoatl:
+`axocoatl onboard` asks for hosted-provider keys with a masked prompt. A value
+entered there is stored literally in the current user's owner-only
+`config.yaml`; leaving the prompt blank keeps the `${OPENAI_API_KEY}`-style
+placeholder instead. In that case, export the variable in the process that
+starts Axocoatl. Axocoatl does not create or load a `.env` file.
+
+The default user files are:
+
+- macOS: `~/Library/Application Support/Axocoatl/config.yaml` and
+  `~/Library/Application Support/Axocoatl/data`
+- Linux/WSL: `${XDG_CONFIG_HOME:-$HOME/.config}/axocoatl/config.yaml` and
+  `${XDG_DATA_HOME:-$HOME/.local/share}/axocoatl`
+
+Normal commands use those paths regardless of the current directory. A local
+`axocoatl.yaml` is used only when you pass it explicitly with `--config` (or as
+the positional argument to `validate`).
+
+If you deliberately use an environment placeholder, export it before starting
+the foreground daemon:
 
 ```sh
-chmod 600 .env
-set -a
-. ./.env
-set +a
+export OPENAI_API_KEY=replace-me
+axocoatl dev
 ```
 
 ## Runtime

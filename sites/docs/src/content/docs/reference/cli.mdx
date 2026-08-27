@@ -13,22 +13,34 @@ axocoatl --help
 axocoatl <command> --help
 ```
 
-## Project and runtime
+## Configuration and runtime
 
 | Command | Purpose |
 | --- | --- |
-| `axocoatl init [NAME]` | Scaffold `NAME` (default `my-axocoatl-project`) with config, `.env.example`, and `data/` |
-| `axocoatl onboard [--install-daemon]` | Run the interactive provider/project wizard; the flag writes a service template only |
-| `axocoatl doctor [-c, --config CONFIG]` | Check environment and config; default `axocoatl.yaml` |
-| `axocoatl validate [CONFIG]` | Parse and validate a positional config path; default `axocoatl.yaml` |
-| `axocoatl dev [-c, --config CONFIG]` | Run daemon, IPC, HTTP app, triggers, supervision, and consolidation in foreground |
-| `axocoatl serve [-c, --config CONFIG]` | Run the same runtime entrypoint used by the installed service |
+| `axocoatl init [NAME]` | Scaffold an advanced project-local config in `NAME` (default `my-axocoatl-project`); follow-up commands must pass its path explicitly |
+| `axocoatl onboard [--install-daemon]` | Configure the current OS user without creating a project or Workspace; the flag additionally installs the per-user service definition but does not start it, and hosted-provider keys must be supplied rather than left as shell-environment placeholders |
+| `axocoatl doctor [-c, --config CONFIG]` | Check environment and config; an omitted path resolves the user configuration |
+| `axocoatl validate [CONFIG]` | Parse and validate a config path; an omitted path resolves the user configuration |
+| `axocoatl dev [-c, --config CONFIG]` | Run daemon, IPC, HTTP app, triggers, supervision, and consolidation in foreground; config defaults to the user configuration |
+| `axocoatl serve [-c, --config CONFIG]` | Run the same runtime entrypoint used by the installed service; config defaults to the user configuration |
+
+The user configuration is
+`~/Library/Application Support/Axocoatl/config.yaml` on macOS. On Linux and
+WSL2 it is `$XDG_CONFIG_HOME/axocoatl/config.yaml` when XDG is set, otherwise
+`$HOME/.config/axocoatl/config.yaml`. Config-aware commands resolve that path
+regardless of the current directory; a repository's `axocoatl.yaml` is never
+selected implicitly.
+
+Pass `--config /absolute/path/to/axocoatl.yaml` (or the positional path accepted
+by `validate`) for an advanced project-local configuration. `AXOCOATL_DATA_DIR`
+overrides its data location; otherwise an explicit configuration uses `data/`
+beside that file.
 
 `dev` prints additional startup information, but neither command forces debug
 logging. Set `RUST_LOG`, for example:
 
 ```sh
-RUST_LOG=debug axocoatl dev --config ./axocoatl.yaml
+RUST_LOG=debug axocoatl dev
 ```
 
 ## Console chat
@@ -37,8 +49,8 @@ RUST_LOG=debug axocoatl dev --config ./axocoatl.yaml
 axocoatl chat [-a, --agent AGENT] [-c, --config CONFIG] [--session LABEL]
 ```
 
-Defaults are Agent `assistant` and config `axocoatl.yaml`. Chat uses daemon IPC
-when reachable and otherwise bootstraps a runtime in process.
+Defaults are Agent `assistant` and the resolved user configuration. Chat uses
+daemon IPC when reachable and otherwise bootstraps a runtime in process.
 
 <Aside type="caution" title="--session is only a display label">
 The console flag does not select or resume a stored Workspace Session. Use the
@@ -132,14 +144,16 @@ bench`. Run those commands from a source checkout.
 
 | Command | Purpose |
 | --- | --- |
-| `axocoatl service install [-c, --config CONFIG]` | Write/register a per-user systemd or launchd definition using absolute paths |
+| `axocoatl service install [-c, --config CONFIG]` | Write/register a per-user systemd or launchd definition; config defaults to the resolved user configuration and is recorded as an absolute path |
 | `axocoatl service start` | Start now and enable at login |
 | `axocoatl service stop` | Stop without uninstalling |
 | `axocoatl service status` | Report backend, installed/running/enabled state, and detail |
 | `axocoatl service uninstall` | Stop, deregister, and remove the definition |
 
 Install supports Linux systemd user units and macOS LaunchAgents. It does not
-start the service or load `.env`; see [Run as a service](/operate/service/).
+start the service or load dotenv files. If onboarding left a hosted-provider
+environment reference instead of storing a supplied key, inject that variable
+through the service manager; see [Run as a service](/operate/service/).
 
 ## Global help and version
 

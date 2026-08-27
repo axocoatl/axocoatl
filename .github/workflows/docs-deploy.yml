@@ -1,7 +1,7 @@
 name: docs-deploy
 
 # Build sites/docs/ after relevant main changes, but deploy only when the
-# workspace version already has a public GitHub release. release.yml calls this
+# CLI product version already has a public GitHub release. release.yml calls this
 # workflow after publishing that release and requires the deployment to finish.
 on:
   push:
@@ -58,15 +58,18 @@ jobs:
         run: |
           set -euo pipefail
           version="$(awk '
-            $0 == "[workspace.package]" { workspace_package = 1; next }
-            workspace_package && /^\[/ { exit }
-            workspace_package && $1 == "version" {
+            $0 == "[package]" { package_section = 1; next }
+            package_section && /^\[/ { exit }
+            package_section && $1 == "version" {
               gsub(/"/, "", $3)
               print $3
               exit
             }
-          ' Cargo.toml)"
-          test -n "$version"
+          ' axocoatl-cli/Cargo.toml)"
+          test -n "$version" || {
+            echo "Could not read the product version from axocoatl-cli/Cargo.toml." >&2
+            exit 1
+          }
           expected_tag="v$version"
           if [ -n "$CALLED_RELEASE_TAG" ] && [ "$CALLED_RELEASE_TAG" != "$expected_tag" ]; then
             echo "Called release '$CALLED_RELEASE_TAG' does not match product $expected_tag." >&2

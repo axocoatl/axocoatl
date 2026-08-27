@@ -116,6 +116,32 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v1.0.1</span>
+        <span class="release-date">2026-08-27</span>
+        <h2>First run configures Axocoatl, not a project.</h2>
+
+        <p>
+          Axocoatl is installed and configured once for the current OS user.
+          Repositories become Workspaces only when you choose
+          <strong>Open workspace…</strong> in the app.
+        </p>
+
+        <h3>Fixed</h3>
+        <ul>
+          <li><code>axocoatl onboard</code> no longer creates an unrelated
+              starter-project folder. It writes one owner-only user
+              configuration and platform data directory instead.</li>
+          <li>Config-aware commands now resolve that user configuration from
+              any working directory. An explicit project-local YAML path is
+              still available when requested.</li>
+          <li>Hosted-provider credentials use a masked prompt and a private
+              <code>0600</code> configuration file. Combined daemon setup
+              rejects shell-only credential placeholders that the service
+              could not inherit.</li>
+        </ul>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v1.0.0</span>
         <span class="release-date">2026-08-25</span>
         <h2>The durable coding workbench.</h2>

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Axocoatl installer — downloads a prebuilt binary from GitHub Releases.
-# Usage: curl -fsSL https://raw.githubusercontent.com/axocoatl/axocoatl/main/scripts/install.sh | sh
+# Usage: curl -fsSL https://axocoatl.ai/install.sh | sh
 set -eu
 
 REPO="axocoatl/axocoatl"
@@ -149,5 +149,6 @@ if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && ! command -v podman >/
 fi
 
 echo
-echo "Next:  ${BIN} onboard      # interactive setup"
+echo "Next:  ${BIN} onboard      # configure Axocoatl for this user"
 echo "       ${BIN} doctor       # verify environment"
+echo "       ${BIN} dev          # open the workbench, then choose a Workspace"
