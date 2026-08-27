@@ -12,18 +12,17 @@ workbench uses.
 
 <Steps>
 
-1. Record the version and current directory:
+1. Record the version:
 
    ```sh
    axocoatl --version
-   pwd
    ```
 
-2. Validate and run doctor with the exact config path:
+2. Validate and run doctor against the current user's configuration:
 
    ```sh
-   axocoatl validate /absolute/path/to/axocoatl.yaml
-   axocoatl doctor --config /absolute/path/to/axocoatl.yaml
+   axocoatl validate
+   axocoatl doctor
    ```
 
 3. Check whether another daemon owns the per-user IPC socket:
@@ -36,7 +35,7 @@ workbench uses.
 
    ```sh
    axocoatl service stop
-   RUST_LOG=debug axocoatl dev --config /absolute/path/to/axocoatl.yaml
+   RUST_LOG=debug axocoatl dev
    ```
 
 5. Reproduce once, record the full error, and inspect the browser console for a
@@ -48,13 +47,13 @@ workbench uses.
 
 | Symptom | Likely boundary | Action |
 | --- | --- | --- |
-| Config parses in one shell but not the service | Environment variable is not injected | Configure the service environment; `.env` is not auto-loaded |
-| Old Sessions disappeared | Different relative `./data` root | Set and inspect an absolute `AXOCOATL_DATA_DIR` |
+| Config parses in one shell but not the service | An environment placeholder is not injected into the service | Configure the service environment; Axocoatl does not create or load `.env` |
+| Expected Sessions are missing | The process uses an explicit `--config` or `AXOCOATL_DATA_DIR` different from the normal user paths | Start without the override, or inspect the exact explicit config and sibling/overridden data root |
 | “Address/socket already in use” | Another daemon owns HTTP or IPC | Stop the service/other process; do not run two default daemons |
 | “Data directory is already owned” | Another daemon or direct CLI bootstrap holds the same durable runtime authority | Use the running daemon or stop that process; never point two live Axocoatl processes at one data root |
 | Non-loopback bind is refused | Authentication is absent | Configure API keys or bearer tokens; keep loopback for local use |
 | `doctor` passes but a hosted request fails | Doctor checks key presence, not provider access | Verify exported key, model entitlement, endpoint, and provider response |
-| OpenRouter credential warning | The configured key is empty, a placeholder, or an unresolved environment reference | Export the referenced key in the process environment that starts Axocoatl; doctor checks presence but does not make a live OpenRouter request |
+| OpenRouter credential warning | The configured key is empty or an unresolved environment reference | Re-run onboarding to store the key in the owner-only user config, or export the referenced key in the process environment; doctor checks presence but does not make a live OpenRouter request |
 
 ## Sessions and tools
 
@@ -119,8 +118,9 @@ On macOS:
 launchctl print gui/$(id -u)/ai.axocoatl.daemon
 ```
 
-Re-run `axocoatl service install --config ...` when the binary or config path
-changes. Installation does not start the service; follow it with
+Re-run `axocoatl service install` when the binary or user configuration path
+changes. Use `--config ...` only for an explicit advanced configuration.
+Installation does not start the service; follow it with
 `axocoatl service start`.
 
 <Aside type="caution" title="Do not clear data as a first fix">

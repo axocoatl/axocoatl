@@ -28,9 +28,9 @@ observers.
 
 ```bash
 # 1. Install (no Rust toolchain required)
-curl -fsSL https://raw.githubusercontent.com/axocoatl/axocoatl/main/scripts/install.sh | sh
+curl -fsSL https://axocoatl.ai/install.sh | sh
 
-# 2. Interactive setup wizard — picks a provider, scaffolds a project
+# 2. Configure Axocoatl for this OS user
 axocoatl onboard
 
 # 3. Check your environment
@@ -39,6 +39,7 @@ axocoatl doctor
 # 4. Start the daemon and open the one app
 axocoatl dev
 # http://localhost:8080
+# Choose Open workspace… in the app to authorize a repository.
 ```
 
 Prebuilt releases support macOS 11 or newer and GNU/Linux with glibc 2.35 or
@@ -47,10 +48,13 @@ binary.
 
 Prefer Cargo? `cargo install axocoatl-cli` (requires Rust 1.88+).
 
-> **Skipping `onboard`?** Copy [`axocoatl.example.yaml`](axocoatl.example.yaml)
-> to `axocoatl.yaml` for a small starter config. The full `axocoatl.yaml`
-> shipped in the repo is a larger populated demo with interval triggers,
-> Skills, and MCP servers.
+`axocoatl onboard` creates no project, repository, Workspace, or Session. It
+writes one owner-only user configuration and platform data directory. Repositories
+become Workspaces only when you authorize them through **Open workspace…**.
+
+> **Advanced project-local configuration:** `axocoatl init <name>` scaffolds an
+> explicit local `axocoatl.yaml`. Pass it with `--config`; Axocoatl never selects
+> a repository's configuration merely because it is the current directory.
 
 ---
 
@@ -249,9 +253,9 @@ Run `axocoatl --help` and `axocoatl <subcommand> --help` for the authoritative
 surface of the installed version.
 
 ```
-axocoatl onboard                 Interactive setup wizard
+axocoatl onboard                 Configure Axocoatl for this OS user
 axocoatl doctor                  Environment / dependency health check
-axocoatl init <name>             Scaffold a project non-interactively
+axocoatl init <name>             Scaffold an explicit project-local config
 axocoatl validate <config>       Validate a config file
 axocoatl dev | serve             Run daemon (+ IPC) / production server
 axocoatl chat -a <agent>         Interactive chat

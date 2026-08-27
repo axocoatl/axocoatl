@@ -4,6 +4,22 @@ use std::path::PathBuf;
 use axocoatl_core::SecureDir;
 use clap::{Parser, Subcommand};
 
+mod user_paths;
+
+fn default_config_path_for_clap() -> PathBuf {
+    user_paths::UserPaths::discover()
+        .map(|paths| paths.config_path)
+        // A child of the running executable can never be a file because the
+        // executable itself is a regular file. This is a fail-closed fallback
+        // for unusual HOME/XDG-less processes, without consulting cwd or a
+        // predictable shared temporary path. An explicit --config still wins.
+        .unwrap_or_else(|_| {
+            std::env::current_exe()
+                .unwrap_or_else(|_| PathBuf::from("/dev/null"))
+                .join("axocoatl-user-config-unavailable.yaml")
+        })
+}
+
 #[derive(Parser)]
 #[command(name = "axocoatl")]
 #[command(about = "Axocoatl - local-first coding workbench and agent runtime")]
@@ -15,13 +31,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize a new Axocoatl project
+    /// Initialize a project-local configuration (advanced)
     Init {
         /// Project name / directory
         name: Option<String>,
     },
 
-    /// Interactive setup wizard — provider, model, project scaffold
+    /// Configure Axocoatl for the current user
     Onboard {
         /// Also install a background daemon service unit
         #[arg(long)]
@@ -31,28 +47,28 @@ enum Commands {
     /// Check environment, dependencies, and config health
     Doctor {
         /// Path to config file
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
 
-    /// Validate an axocoatl.yaml configuration file
+    /// Validate an Axocoatl configuration file
     Validate {
-        /// Path to config file (default: axocoatl.yaml)
-        #[arg(default_value = "axocoatl.yaml")]
+        /// Path to config file (default: user configuration)
+        #[arg(default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
 
     /// Start in development mode (verbose logging, no daemonization)
     Dev {
         /// Path to config file
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
 
     /// Start the daemon + API server in production mode
     Serve {
         /// Path to config file
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
 
@@ -63,7 +79,7 @@ enum Commands {
         agent: String,
 
         /// Config file
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
 
         /// Legacy display label only; does not select or resume stored chat history
@@ -126,8 +142,8 @@ enum ServiceCommands {
     /// Install the daemon as an OS background service (systemd / launchd)
     Install {
         /// Config file the service will run with
-        #[arg(short, long, default_value = "axocoatl.yaml")]
-        config: String,
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
+        config: PathBuf,
     },
     /// Start the Always-On Service now (and enable it at login)
     Start,
@@ -172,19 +188,19 @@ enum SessionCommands {
 enum AgentCommands {
     /// List all configured agents
     List {
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
     /// Show agent status
     Status {
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
     /// Restart an agent
     Restart {
         /// Agent ID
         agent_id: String,
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
 }
@@ -207,12 +223,12 @@ enum SkillCommands {
 enum McpCommands {
     /// List connected MCP servers
     Servers {
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
     /// List available MCP tools
     Tools {
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
         /// Filter by server name
         #[arg(short, long)]
@@ -222,7 +238,7 @@ enum McpCommands {
     /// tool (`agent_<id>`). Point any MCP client (Claude Desktop, etc.) at
     /// `axocoatl mcp serve`.
     Serve {
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
 }
@@ -231,7 +247,7 @@ enum McpCommands {
 enum WorkflowCommands {
     /// List configured workflows
     List {
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
     /// Run a workflow
@@ -244,7 +260,7 @@ enum WorkflowCommands {
         input: String,
 
         /// Config file
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
 }
@@ -253,7 +269,7 @@ enum WorkflowCommands {
 enum TokenCommands {
     /// Show token usage report
     Report {
-        #[arg(short, long, default_value = "axocoatl.yaml")]
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
 }
@@ -342,7 +358,7 @@ async fn main() {
 // own while the daemon runs. Service management is synchronous (it shells out
 // to systemctl / launchctl), so these are plain functions.
 
-fn cmd_service_install(config: &str) {
+fn cmd_service_install(config: &std::path::Path) {
     let mgr = match axocoatl_service::manager() {
         Ok(m) => m,
         Err(e) => {
@@ -366,14 +382,17 @@ fn cmd_service_install(config: &str) {
             std::process::exit(1);
         }
     };
-    let config_abs = match std::path::Path::new(config).canonicalize() {
+    let config_abs = match config.canonicalize() {
         Ok(path) if path.is_file() => path,
         Ok(path) => {
             eprintln!("✗ the service config is not a file: {}", path.display());
             std::process::exit(1);
         }
         Err(error) => {
-            eprintln!("✗ could not resolve service config '{config}': {error}");
+            eprintln!(
+                "✗ could not resolve service config '{}': {error}",
+                config.display()
+            );
             std::process::exit(1);
         }
     };
@@ -515,10 +534,10 @@ Next steps — copy/paste:
   set -a
   . ./.env
   set +a
-  axocoatl doctor            # verify your environment
-  axocoatl validate          # check the config
-  axocoatl dev               # start the daemon + API server
-  axocoatl chat -a assistant # chat with your Agent
+  axocoatl doctor --config axocoatl.yaml
+  axocoatl validate axocoatl.yaml
+  axocoatl dev --config axocoatl.yaml
+  axocoatl chat --config axocoatl.yaml -a assistant
 
 Axocoatl reads provider keys from its process environment and does not load
 .env automatically. Source it again in each new shell, or configure equivalent
@@ -534,13 +553,96 @@ fn print_next_steps(project_name: &str) {
 }
 
 fn hosted_key_prompt(provider: &str) -> String {
-    format!("{provider} API key (leave blank to set in the process environment later)")
+    format!(
+        "{provider} API key (stored in your private Axocoatl configuration; leave blank to use the process environment)"
+    )
 }
 
 fn missing_provider_key_hint(provider: &str) -> String {
     format!(
         "Export it in the process environment that starts Axocoatl before using {provider} Agents."
     )
+}
+
+fn config_secret(key: &str, environment_variable: &str) -> String {
+    if key.is_empty() {
+        format!("\"${{{environment_variable}}}\"")
+    } else {
+        serde_json::to_string(key).expect("serializing a string cannot fail")
+    }
+}
+
+fn config_uses_process_environment(config_yaml: &str) -> bool {
+    config_yaml.contains("${")
+}
+
+fn reject_uninherited_service_environment(config_yaml: &str) -> Result<(), &'static str> {
+    if config_uses_process_environment(config_yaml) {
+        Err(
+            "the generated background service does not inherit shell environment variables; rerun `axocoatl onboard` and enter the hosted provider key, or configure Axocoatl without `--install-daemon`",
+        )
+    } else {
+        Ok(())
+    }
+}
+
+fn admit_private_directory(directory: &SecureDir) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+        // SAFETY: geteuid takes no arguments and has no failure sentinel.
+        directory.require_owner_and_private_writes(unsafe { geteuid() })?;
+    }
+    directory.restrict_owner_only()
+}
+
+fn write_user_configuration(
+    paths: &user_paths::UserPaths,
+    config_yaml: &str,
+) -> std::io::Result<()> {
+    let config_dir = SecureDir::open_or_create_all(&paths.config_dir)?;
+    admit_private_directory(&config_dir)?;
+    config_dir.atomic_write("config.yaml", config_yaml.as_bytes())?;
+
+    let data_dir = SecureDir::open_or_create_all(&paths.data_dir)?;
+    admit_private_directory(&data_dir)
+}
+
+fn default_data_dir_for_config(config_path: &std::path::Path) -> PathBuf {
+    if let Ok(user_paths) = user_paths::UserPaths::discover() {
+        if config_path == user_paths.config_path {
+            return user_paths.data_dir;
+        }
+    }
+
+    config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("data")
+}
+
+fn configure_data_dir(config_path: &std::path::Path) -> Result<PathBuf, String> {
+    if let Some(configured) =
+        std::env::var_os("AXOCOATL_DATA_DIR").filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(configured));
+    }
+
+    let data_dir = default_data_dir_for_config(config_path);
+    std::env::set_var("AXOCOATL_DATA_DIR", &data_dir);
+    Ok(data_dir)
+}
+
+async fn load_cli_config(
+    config_path: &std::path::Path,
+) -> Result<axocoatl_config::AxocoatlConfig, String> {
+    configure_data_dir(config_path)?;
+    axocoatl_config::load_config(config_path)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn cmd_init(name: Option<String>) {
@@ -558,7 +660,7 @@ async fn cmd_init(name: Option<String>) {
     }
 
     print_next_steps(&project_name);
-    println!("Tip: `axocoatl onboard` runs an interactive setup wizard instead.");
+    println!("Tip: `axocoatl onboard` configures the installed product for this user instead.");
 }
 
 /// Ping an Ollama server; returns the list of installed model names on success.
@@ -611,7 +713,7 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
     }
 
     // 2. Config file exists & validates
-    let config = match axocoatl_config::load_config(config_path).await {
+    let config = match load_cli_config(config_path).await {
         Ok(c) => {
             pass(&format!("Config valid: {}", config_path.display()));
             Some(c)
@@ -620,7 +722,7 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
             hard_ok = false;
             fail(
                 &format!("Config invalid: {}", config_path.display()),
-                &format!("{e}"),
+                &e.to_string(),
             );
             None
         }
@@ -791,14 +893,74 @@ async fn cmd_doctor(config_path: &std::path::Path) {
     }
 }
 
+fn onboard_completion_text(
+    paths: &user_paths::UserPaths,
+    missing_environment_variable: Option<&str>,
+) -> String {
+    let environment_hint = missing_environment_variable
+        .map(|variable| format!("Before starting Axocoatl, export {variable} in this shell.\n"))
+        .unwrap_or_default();
+    format!(
+        "\n✓ Axocoatl configured for this user.\n  Config: {}\n  Data:   {}\n\n{environment_hint}Next:\n  axocoatl dev\n  Open http://localhost:8080 and choose Open workspace…\n",
+        paths.config_path.display(),
+        paths.data_dir.display()
+    )
+}
+
 async fn cmd_onboard(install_daemon: bool) {
-    use dialoguer::{Confirm, Input, Select};
+    use dialoguer::{Confirm, Input, Password, Select};
 
     println!("┌─────────────────────────────────────────┐");
     println!("│   Axocoatl — interactive setup wizard    │");
     println!("└─────────────────────────────────────────┘\n");
 
-    // 1. Provider
+    let paths = match user_paths::UserPaths::discover() {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("Cannot determine user configuration location: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    if paths.config_path.exists()
+        && !Confirm::new()
+            .with_prompt(format!(
+                "Replace the existing Axocoatl configuration at {}?",
+                paths.config_path.display()
+            ))
+            .default(false)
+            .interact()
+            .unwrap_or(false)
+    {
+        println!(
+            "Configuration left unchanged: {}",
+            paths.config_path.display()
+        );
+
+        if install_daemon {
+            let existing_config = match std::fs::read_to_string(&paths.config_path) {
+                Ok(config) => config,
+                Err(error) => {
+                    eprintln!("Failed to read the existing user configuration: {error}");
+                    std::process::exit(1);
+                }
+            };
+            if let Err(error) = reject_uninherited_service_environment(&existing_config) {
+                eprintln!("Cannot install the Always-On Service: {error}");
+                std::process::exit(1);
+            }
+            if let Err(error) = configure_data_dir(&paths.config_path) {
+                eprintln!("Failed to select the user data directory: {error}");
+                std::process::exit(1);
+            }
+            if !run_doctor_checks(&paths.config_path).await {
+                std::process::exit(1);
+            }
+            cmd_service_install(&paths.config_path);
+        }
+        return;
+    }
+
     let providers = [
         "Ollama (local, no API key)",
         "OpenRouter (cloud, models available to your account)",
@@ -812,28 +974,13 @@ async fn cmd_onboard(install_daemon: bool) {
         .interact()
         .unwrap_or(0);
 
-    // 2. Project name
-    let project_name: String = Input::new()
-        .with_prompt("Project directory name")
-        .default("my-axocoatl-project".to_string())
-        .interact_text()
-        .unwrap_or_else(|_| "my-axocoatl-project".to_string());
-
-    let dir = PathBuf::from(&project_name);
-    if dir.exists() {
-        eprintln!("Error: Directory '{project_name}' already exists");
-        std::process::exit(1);
-    }
-
-    // 3. Provider-specific config
-    let (config_yaml, env_example) = match provider_idx {
+    let (config_yaml, missing_environment_variable) = match provider_idx {
         0 => {
-            // Ollama
             if which_ollama().is_none() {
                 println!("\nOllama is not installed.");
                 println!("Install it from https://ollama.com/download, then re-run onboard.");
                 if !Confirm::new()
-                    .with_prompt("Continue scaffolding anyway?")
+                    .with_prompt("Continue configuring Axocoatl anyway?")
                     .default(true)
                     .interact()
                     .unwrap_or(true)
@@ -861,13 +1008,16 @@ async fn cmd_onboard(install_daemon: bool) {
                     .status();
             }
 
+            let model_yaml =
+                serde_json::to_string(&model).expect("serializing a model identifier cannot fail");
+
             let cfg = format!(
                 r#"# Axocoatl — local Ollama setup
 agents:
   - id: assistant
     name: "Assistant"
     provider: ollama
-    model: {model}
+    model: {model_yaml}
     system_prompt: "You are a helpful assistant powered by Axocoatl."
     token_budget:
       per_execution: 16000
@@ -877,14 +1027,14 @@ agents:
   - id: researcher
     name: "Researcher"
     provider: ollama
-    model: {model}
+    model: {model_yaml}
     system_prompt: "You are a research assistant. Provide detailed, factual answers."
     depends_on: []
 
   - id: summarizer
     name: "Summarizer"
     provider: ollama
-    model: {model}
+    model: {model_yaml}
     system_prompt: "Summarize the input in 1-2 sentences."
     depends_on: [researcher]
 
@@ -903,20 +1053,22 @@ server:
   host: "127.0.0.1"
 "#
             );
-            (cfg, String::from("# No API keys needed for local Ollama\n"))
+            (cfg, None)
         }
         1 => {
-            // OpenRouter — one key for the model IDs available to the account.
-            let key: String = Input::new()
+            let key = Password::new()
                 .with_prompt(hosted_key_prompt("OpenRouter"))
-                .allow_empty(true)
-                .interact_text()
+                .allow_empty_password(true)
+                .interact()
                 .unwrap_or_default();
             let model: String = Input::new()
                 .with_prompt("Default model (vendor/model)")
                 .default("openai/gpt-4o-mini".to_string())
                 .interact_text()
                 .unwrap_or_else(|_| "openai/gpt-4o-mini".to_string());
+            let model_yaml =
+                serde_json::to_string(&model).expect("serializing a model identifier cannot fail");
+            let secret = config_secret(&key, "OPENROUTER_API_KEY");
             let cfg = format!(
                 r#"# Axocoatl — OpenRouter setup
 # OpenRouter is OpenAI-compatible. Choose a model ID available to your
@@ -925,7 +1077,7 @@ agents:
   - id: assistant
     name: "Assistant"
     provider: openrouter
-    model: "{model}"
+    model: {model_yaml}
     system_prompt: "You are a helpful assistant."
     token_budget:
       per_execution: 16000
@@ -934,28 +1086,24 @@ agents:
 
 providers:
   openrouter:
-    api_key: "${{OPENROUTER_API_KEY}}"
+    api_key: {secret}
 
 server:
   port: 8080
   host: "127.0.0.1"
 "#
             );
-            let env = if key.is_empty() {
-                "OPENROUTER_API_KEY=sk-or-your-key-here\n".to_string()
-            } else {
-                format!("OPENROUTER_API_KEY={key}\n")
-            };
-            (cfg, env)
+            (cfg, key.is_empty().then_some("OPENROUTER_API_KEY"))
         }
         2 => {
-            // Anthropic
-            let key: String = Input::new()
+            let key = Password::new()
                 .with_prompt(hosted_key_prompt("Anthropic"))
-                .allow_empty(true)
-                .interact_text()
+                .allow_empty_password(true)
+                .interact()
                 .unwrap_or_default();
-            let cfg = r#"# Axocoatl — Anthropic setup
+            let secret = config_secret(&key, "ANTHROPIC_API_KEY");
+            let cfg = format!(
+                r#"# Axocoatl — Anthropic setup
 agents:
   - id: assistant
     name: "Assistant"
@@ -969,52 +1117,57 @@ agents:
 
 providers:
   anthropic:
-    api_key: "${ANTHROPIC_API_KEY}"
+    api_key: {secret}
 
 server:
   port: 8080
   host: "127.0.0.1"
 "#
-            .to_string();
-            let env = if key.is_empty() {
-                "ANTHROPIC_API_KEY=sk-ant-your-key-here\n".to_string()
-            } else {
-                format!("ANTHROPIC_API_KEY={key}\n")
-            };
-            (cfg, env)
+            );
+            (cfg, key.is_empty().then_some("ANTHROPIC_API_KEY"))
         }
         _ => {
-            // OpenAI
-            let key: String = Input::new()
+            let key = Password::new()
                 .with_prompt(hosted_key_prompt("OpenAI"))
-                .allow_empty(true)
-                .interact_text()
+                .allow_empty_password(true)
+                .interact()
                 .unwrap_or_default();
-            let env = if key.is_empty() {
-                "OPENAI_API_KEY=sk-your-key-here\n".to_string()
-            } else {
-                format!("OPENAI_API_KEY={key}\n")
-            };
-            (TEMPLATE_OPENAI.to_string(), env)
+            let secret = config_secret(&key, "OPENAI_API_KEY");
+            let cfg = TEMPLATE_OPENAI.replace("\"${OPENAI_API_KEY}\"", &secret);
+            (cfg, key.is_empty().then_some("OPENAI_API_KEY"))
         }
     };
 
-    if let Err(e) = scaffold_project(&dir, &config_yaml, &env_example) {
-        eprintln!("Failed to scaffold project: {e}");
+    if install_daemon {
+        if let Err(error) = reject_uninherited_service_environment(&config_yaml) {
+            eprintln!("Cannot install the Always-On Service: {error}");
+            std::process::exit(1);
+        }
+    }
+
+    if let Err(error) = write_user_configuration(&paths, &config_yaml) {
+        eprintln!("Failed to save the user configuration: {error}");
         std::process::exit(1);
     }
 
-    if install_daemon {
-        write_daemon_unit(&dir, &project_name);
+    if let Err(error) = configure_data_dir(&paths.config_path) {
+        eprintln!("Failed to select the user data directory: {error}");
+        std::process::exit(1);
+    }
+    let checks_ok = run_doctor_checks(&paths.config_path).await;
+
+    if checks_ok && install_daemon {
+        cmd_service_install(&paths.config_path);
     }
 
-    println!("\n✓ Project scaffolded.\n");
+    print!(
+        "{}",
+        onboard_completion_text(&paths, missing_environment_variable)
+    );
 
-    // Run doctor inline against the new config
-    let cfg_path = dir.join("axocoatl.yaml");
-    let _ = run_doctor_checks(&cfg_path).await;
-
-    print_next_steps(&project_name);
+    if !checks_ok {
+        std::process::exit(1);
+    }
 }
 
 /// Locate the `ollama` binary on PATH.
@@ -1023,49 +1176,6 @@ fn which_ollama() -> Option<PathBuf> {
     std::env::split_paths(&path)
         .map(|p| p.join("ollama"))
         .find(|p| p.is_file())
-}
-
-/// Drop a service unit template for `--install-daemon`.
-fn write_daemon_unit(dir: &std::path::Path, project_name: &str) {
-    #[cfg(target_os = "macos")]
-    {
-        let plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>dev.axocoatl.daemon</string>
-  <key>ProgramArguments</key><array>
-    <string>axocoatl</string><string>serve</string>
-    <string>-c</string><string>{project_name}/axocoatl.yaml</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-</dict></plist>
-"#
-        );
-        let _ = std::fs::write(dir.join("dev.axocoatl.daemon.plist"), plist);
-        println!("Wrote launchd unit: {project_name}/dev.axocoatl.daemon.plist");
-        println!("Enable: cp {project_name}/dev.axocoatl.daemon.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/dev.axocoatl.daemon.plist");
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let unit = format!(
-            r#"[Unit]
-Description=Axocoatl daemon
-After=network.target
-
-[Service]
-ExecStart=axocoatl serve -c %h/{project_name}/axocoatl.yaml
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-"#
-        );
-        let _ = std::fs::write(dir.join("axocoatl.service"), unit);
-        println!("Wrote systemd unit: {project_name}/axocoatl.service");
-        println!("Enable: mkdir -p ~/.config/systemd/user && cp {project_name}/axocoatl.service ~/.config/systemd/user/ && systemctl --user enable --now axocoatl");
-    }
 }
 
 async fn cmd_validate(config_path: &std::path::Path) {
@@ -1128,7 +1238,7 @@ fn start_cli_ipc(
 }
 
 async fn cmd_dev(config_path: &std::path::Path) {
-    let config = match axocoatl_config::load_config(config_path).await {
+    let config = match load_cli_config(config_path).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Configuration error:\n{e}");
@@ -1200,7 +1310,7 @@ async fn cmd_dev(config_path: &std::path::Path) {
 }
 
 async fn cmd_serve(config_path: &std::path::Path) {
-    let config = match axocoatl_config::load_config(config_path).await {
+    let config = match load_cli_config(config_path).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Configuration error:\n{e}");
@@ -1251,7 +1361,7 @@ async fn cmd_serve(config_path: &std::path::Path) {
 async fn cmd_mcp_serve(config_path: &std::path::Path) {
     use rmcp::ServiceExt;
 
-    let config = match axocoatl_config::load_config(config_path).await {
+    let config = match load_cli_config(config_path).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Configuration error:\n{e}");
@@ -1312,7 +1422,7 @@ impl axocoatl_mcp::AgentExecutor for DaemonAgentExecutor {
 }
 
 async fn cmd_agents_list(config_path: &std::path::Path) {
-    let config = match axocoatl_config::load_config(config_path).await {
+    let config = match load_cli_config(config_path).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Configuration error:\n{e}");
@@ -1349,7 +1459,7 @@ async fn cmd_tokens_report(config_path: &std::path::Path) {
     } else {
         // No running daemon: bootstrap in-process. Fresh agents report
         // their restored-from-checkpoint usage (often zero on first run).
-        let config = match axocoatl_config::load_config(config_path).await {
+        let config = match load_cli_config(config_path).await {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("Configuration error:\n{e}");
@@ -1581,7 +1691,7 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
         eprintln!("{warning}");
     }
 
-    let config = match axocoatl_config::load_config(config_path).await {
+    let config = match load_cli_config(config_path).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Configuration error:\n{e}");
@@ -2055,7 +2165,7 @@ async fn cmd_agents_status(config_path: &std::path::Path) {
             }
         }
     } else {
-        let config = match axocoatl_config::load_config(config_path).await {
+        let config = match load_cli_config(config_path).await {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("Configuration error:\n{e}");
@@ -2189,7 +2299,7 @@ async fn mcp_query(
         });
     }
 
-    let config = match axocoatl_config::load_config(config_path).await {
+    let config = match load_cli_config(config_path).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Configuration error:\n{e}");
@@ -2323,7 +2433,7 @@ async fn cmd_workflow_list(config_path: &std::path::Path) {
             // storage-capability checks without spawning providers, actors, MCP
             // clients, webhooks, or other daemon services. A direct store open here
             // could race a live daemon during a transient IPC outage.
-            let config = match axocoatl_config::load_config(config_path).await {
+            let config = match load_cli_config(config_path).await {
                 Ok(config) => config,
                 Err(error) => {
                     eprintln!("Configuration error:\n{error}");
@@ -2392,7 +2502,7 @@ async fn cmd_workflow_list(config_path: &std::path::Path) {
 }
 
 async fn cmd_workflow_run(config_path: &std::path::Path, workflow_id: &str, input: &str) {
-    let config = match axocoatl_config::load_config(config_path).await {
+    let config = match load_cli_config(config_path).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Configuration error:\n{e}");
@@ -2729,7 +2839,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_next_steps_explicitly_load_the_process_environment() {
+    fn advanced_init_steps_require_an_explicit_local_config() {
         let steps = next_steps_text("demo-project");
 
         assert!(steps.contains("cd demo-project"));
@@ -2738,20 +2848,149 @@ mod tests {
         assert!(steps.contains("set -a\n  . ./.env\n  set +a"));
         assert!(steps.contains("process environment"));
         assert!(steps.contains("does not load\n.env automatically"));
+        assert!(steps.contains("doctor --config axocoatl.yaml"));
+        assert!(steps.contains("validate axocoatl.yaml"));
+        assert!(steps.contains("dev --config axocoatl.yaml"));
+        assert!(steps.contains("chat --config axocoatl.yaml"));
         assert!(!steps.contains("cp .env.example .env"));
     }
 
     #[test]
-    fn hosted_provider_copy_never_implies_automatic_dotenv_loading() {
+    fn normal_onboarding_copy_describes_user_configuration_and_workspace_choice() {
+        let paths = user_paths::UserPaths {
+            config_dir: PathBuf::from("/users/alex/config"),
+            config_path: PathBuf::from("/users/alex/config/config.yaml"),
+            data_dir: PathBuf::from("/users/alex/data"),
+        };
+        let completion = onboard_completion_text(&paths, None);
+
+        assert!(completion.contains("configured for this user"));
+        assert!(completion.contains("Open workspace"));
+        assert!(!completion.contains("Project"));
+        assert!(!completion.contains(".env"));
+
         for provider in ["OpenRouter", "Anthropic", "OpenAI"] {
             let prompt = hosted_key_prompt(provider);
             let hint = missing_provider_key_hint(provider);
 
+            assert!(prompt.contains("private Axocoatl configuration"));
             assert!(prompt.contains("process environment"));
             assert!(!prompt.contains(".env"));
             assert!(hint.contains("process environment that starts Axocoatl"));
             assert!(!hint.contains(".env"));
         }
+    }
+
+    #[test]
+    fn plain_commands_default_to_the_user_config_and_explicit_paths_stay_explicit() {
+        let expected = user_paths::UserPaths::discover().unwrap().config_path;
+        let cli = Cli::try_parse_from(["axocoatl", "dev"]).unwrap();
+        let Commands::Dev { config } = cli.command else {
+            panic!("expected dev command");
+        };
+        assert_eq!(config, expected);
+
+        let cli = Cli::try_parse_from(["axocoatl", "dev", "--config", "/tmp/custom.yaml"]).unwrap();
+        let Commands::Dev { config } = cli.command else {
+            panic!("expected dev command");
+        };
+        assert_eq!(config, PathBuf::from("/tmp/custom.yaml"));
+    }
+
+    #[test]
+    fn user_and_explicit_configs_have_deterministic_data_roots() {
+        let paths = user_paths::UserPaths::discover().unwrap();
+        assert_eq!(
+            default_data_dir_for_config(&paths.config_path),
+            paths.data_dir
+        );
+        assert_eq!(
+            default_data_dir_for_config(std::path::Path::new("/tmp/project/axocoatl.yaml")),
+            PathBuf::from("/tmp/project/data")
+        );
+    }
+
+    #[test]
+    fn hosted_secret_is_yaml_safe_and_blank_keeps_environment_mode() {
+        let key = "sk-test:\"# value\\nnext";
+        let yaml = format!(
+            r#"agents:
+  - id: assistant
+    name: Assistant
+    provider: openrouter
+    model: vendor/model
+providers:
+  openrouter:
+    api_key: {}
+"#,
+            config_secret(key, "OPENROUTER_API_KEY")
+        );
+        let config = axocoatl_config::parse_config(&yaml, std::path::Path::new("config.yaml"))
+            .expect("quoted key should parse");
+        assert_eq!(
+            config
+                .providers
+                .openrouter
+                .as_ref()
+                .unwrap()
+                .api_key
+                .expose_secret(),
+            key
+        );
+        assert_eq!(
+            config_secret("", "OPENROUTER_API_KEY"),
+            "\"${OPENROUTER_API_KEY}\""
+        );
+        assert!(
+            reject_uninherited_service_environment("api_key: \"${OPENROUTER_API_KEY}\"").is_err()
+        );
+        assert!(reject_uninherited_service_environment("api_key: \"sk-stored\"").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn user_configuration_is_private_and_rejects_a_symlinked_target() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = tempfile::tempdir().unwrap();
+        let paths = user_paths::UserPaths {
+            config_dir: root.path().join("config"),
+            config_path: root.path().join("config/config.yaml"),
+            data_dir: root.path().join("data"),
+        };
+        write_user_configuration(&paths, "agents: []\n").unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&paths.config_dir)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&paths.config_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(&paths.data_dir)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+
+        std::fs::remove_file(&paths.config_path).unwrap();
+        let outside = root.path().join("outside");
+        std::fs::write(&outside, "safe").unwrap();
+        symlink(&outside, &paths.config_path).unwrap();
+        assert!(write_user_configuration(&paths, "agents: []\n").is_err());
+        assert_eq!(std::fs::read_to_string(outside).unwrap(), "safe");
     }
 
     fn ipc_session_with_environment(

@@ -13,6 +13,11 @@ destinations such as Studio, Sessions, Agents, Skills, or MCP tabs. Configuratio
 in Settings. Runtime concepts remain important, but they explain how the workbench is
 trustworthy rather than replacing the user journey.
 
+`axocoatl onboard` configures the product for the current OS user. It creates no
+project or repository folder. The person authorizes repositories through **Open
+workspace…** after the app starts; project-local configuration is an explicit advanced
+override.
+
 Lead with the session loop: one chat spine, optional parallel attempts, checks,
 comparison, keep, and git review. Use the product vocabulary defined in the root
 instructions.

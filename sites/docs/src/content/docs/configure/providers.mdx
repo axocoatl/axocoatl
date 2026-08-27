@@ -6,8 +6,9 @@ description: Configure supported model providers, per-Agent models, compatible e
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 Each Agent selects a provider and model. Credentials and provider endpoints
-live under `providers:` in `axocoatl.yaml`; secret values should come from
-process environment interpolation.
+live under `providers:` in the active YAML configuration. `axocoatl onboard`
+creates the current user's configuration; it does not create a project or a
+repository-level `.env` file.
 
 ## Supported provider IDs
 
@@ -25,6 +26,14 @@ and Mistral are supported but must currently be added to YAML manually.
 
 ## Configure a hosted provider
 
+For the normal installed-product flow, run `axocoatl onboard`. The credential
+prompt is masked. A key entered there is written literally to the owner-only
+user configuration (`0600` on supported Unix hosts). Leaving it blank keeps an
+environment placeholder, so the value must be present in the process that
+starts Axocoatl.
+
+The following is the equivalent manual YAML form:
+
 ```yaml
 agents:
   - id: coder
@@ -37,7 +46,8 @@ providers:
     api_key: "${ANTHROPIC_API_KEY}"
 ```
 
-Export the value in the environment that starts Axocoatl:
+For the placeholder form, export the value in the environment that starts
+Axocoatl:
 
 ```sh
 export ANTHROPIC_API_KEY=replace-me
@@ -48,9 +58,9 @@ fields so debug formatting does not reveal them. That does not protect a
 secret committed in plaintext, exposed by shell history, or logged by an
 external server.
 
-You may keep shell assignments in a local `.env` file, but Axocoatl does not
-load it automatically. Source it before `axocoatl dev` or arrange equivalent
-environment injection in the service manager.
+Axocoatl does not create or load a `.env` file. Use process-environment or
+service-manager injection when you choose a placeholder rather than the
+owner-only user configuration.
 
 ## Configure Ollama
 
@@ -156,20 +166,28 @@ validated by the configured endpoint.
   <TabItem label="Configuration">
 
 ```sh
-axocoatl validate ./axocoatl.yaml
-axocoatl doctor --config ./axocoatl.yaml
+axocoatl validate
+axocoatl doctor
 ```
 
   </TabItem>
   <TabItem label="Agent status">
 
 ```sh
-axocoatl agents list --config ./axocoatl.yaml
-axocoatl agents status --config ./axocoatl.yaml
+axocoatl agents list
+axocoatl agents status
 ```
 
   </TabItem>
 </Tabs>
+
+These commands use the user configuration independent of the current
+directory. For an explicit project-local configuration, pass its path:
+
+```sh
+axocoatl validate /absolute/path/to/axocoatl.yaml
+axocoatl doctor --config /absolute/path/to/axocoatl.yaml
+```
 
 <Aside type="note" title="Live compatibility remains provider-dependent">
 Repository tests use fixtures for adapter behavior. Successful live use also

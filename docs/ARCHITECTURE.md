@@ -22,6 +22,13 @@ state; `serve` is also what the installed background service runs.
 
 ## Product surface
 
+The installed CLI resolves one user configuration and durable data root independent of
+the current working directory. On macOS these live under
+`~/Library/Application Support/Axocoatl/`; Linux and WSL use XDG configuration and data
+directories. `axocoatl onboard` configures that user-level product and creates no
+repository folder. An explicit `--config` retains project-local operator mode and uses
+data beside that configuration unless `AXOCOATL_DATA_DIR` overrides it.
+
 The browser app at `/` is the operational face of the runtime and the only supported
 interactive browser route. A Workspace is a durable, user-named identity for one authorized
 project directory; a Session belongs to one Workspace and owns persistent work and chat

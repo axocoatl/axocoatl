@@ -17,21 +17,21 @@ agent on macOS.
 
 <Steps>
 
-1. Use an absolute, validated configuration and set an absolute data root when
-   you do not want state location to depend on the working directory.
+1. Validate the current user's configuration:
 
    ```sh
-   axocoatl validate /absolute/path/to/axocoatl.yaml
+   axocoatl validate
    ```
 
 2. Install the service definition:
 
    ```sh
-   axocoatl service install --config /absolute/path/to/axocoatl.yaml
+   axocoatl service install
    ```
 
-3. Configure provider secrets in the service manager environment if hosted
-   Agents need them. The generated definition does not load `.env`.
+3. If the configuration contains environment placeholders, inject those values
+   through the service manager. A literal key supplied during onboarding needs
+   no separate environment injection.
 4. Start it and enable it at login:
 
    ```sh
@@ -42,19 +42,33 @@ agent on macOS.
 </Steps>
 
 Install resolves both the current `axocoatl` executable and the config file to
-absolute paths. The service working directory is the config file's parent, so
-the default relative data root becomes `<config-directory>/data`.
+absolute paths. The default service uses the same user configuration and data
+root as foreground commands. An explicit `--config` keeps advanced local mode;
+its data defaults to `<config-directory>/data` unless
+`AXOCOATL_DATA_DIR` overrides it.
+
+For an explicit configuration, validate and install it deliberately:
+
+```sh
+axocoatl validate /absolute/path/to/axocoatl.yaml
+axocoatl service install --config /absolute/path/to/axocoatl.yaml
+```
 
 <Aside type="caution" title="Install does not start the service">
 `axocoatl service install` writes/registers the definition. Run `service start`
-separately. Likewise, `onboard --install-daemon` writes a template into the
-new project but does not install or start the real service manager entry.
+separately. `axocoatl onboard --install-daemon` installs that real per-user
+definition with the user configuration, but it also does not start the service.
+For a hosted provider, that combined command requires a key stored by onboarding;
+it refuses to install a service that would depend on an uninherited shell
+environment placeholder.
 </Aside>
 
 ## Supply environment variables
 
 Axocoatl interpolates process environment variables in YAML and does not load
 dotenv files. The generated service unit/plist does not inject provider keys.
+This section applies only when the active configuration retains an environment
+placeholder.
 
 <Tabs>
   <TabItem label="Linux systemd">
@@ -123,7 +137,10 @@ For an interactive diagnostic run, stop the service first so it releases the
 per-user IPC socket, then run:
 
 ```sh
-RUST_LOG=debug axocoatl dev --config /absolute/path/to/axocoatl.yaml
+RUST_LOG=debug axocoatl dev
 ```
+
+Pass `--config /absolute/path/to/axocoatl.yaml` as well only when diagnosing an
+explicit advanced configuration.
 
 Next: [Data and backup →](/operate/data-backup/)

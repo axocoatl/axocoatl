@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **User-level first run.** `axocoatl onboard` now writes one owner-only user
+  configuration and platform data directory instead of creating an unrelated project
+  folder. Plain config-aware commands resolve that configuration consistently from any
+  working directory. Hosted credentials use a masked prompt and a private `0600`
+  configuration file. Project-local YAML remains available only through an explicit
+  path; repositories become Workspaces through **Open workspace…** in the app. The
+  combined `onboard --install-daemon` flow refuses shell-only credential placeholders
+  that the generated service cannot inherit.
+
 ## [1.0.0] — 2026-08-25
 
 ### Changed

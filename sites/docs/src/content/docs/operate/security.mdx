@@ -95,12 +95,15 @@ expose the data root or external lease root. It then verifies that both paths st
 resolve to the opened directories. Invalid Session records cannot supply a replacement
 cleanup id.
 
-Use an absolute `AXOCOATL_DATA_DIR` outside every Workspace when practical. The default
-`./data` remains supported: if a protected data or lease root is a descendant of the
-canonical Workspace, local Podman places an exact nested `tmpfs` over it. A Workspace
-equal to or below a protected root is rejected instead. This boundary prevents repository
-tools from reaching Axocoatl control-plane state; it does not protect secrets deliberately
-placed elsewhere in the read-write Workspace.
+The normal data root is user-level and outside every Workspace: under macOS
+Application Support or the Linux/WSL XDG data directory. An explicit
+project-local `--config` uses a sibling `data` directory unless
+`AXOCOATL_DATA_DIR` overrides it. If a protected data or lease root is a
+descendant of the canonical Workspace, local Podman places an exact nested
+`tmpfs` over it. A Workspace equal to or below a protected root is rejected
+instead. This boundary prevents repository tools from reaching Axocoatl
+control-plane state; it does not protect secrets deliberately placed elsewhere
+in the read-write Workspace.
 
 ## Constrain sandbox execution
 
@@ -161,10 +164,14 @@ It does not prove the safety of any destination.
 
 ## Handle secrets
 
-- Keep credentials in the process environment or an approved OS secret
-  injection mechanism; Axocoatl does not load `.env` automatically.
-- The onboarding wizard may place a supplied key in `.env.example`; move it,
-  restrict it, and do not commit it.
+- The onboarding wizard uses a masked prompt. A supplied hosted-provider key is
+  stored literally in the current user's `config.yaml`; leaving it blank keeps
+  an environment placeholder. Axocoatl creates no `.env` file.
+- On supported Unix hosts, onboarding restricts the user configuration
+  directory and data directory to `0700` and the configuration file to `0600`.
+  These permissions do not encrypt the literal key at rest.
+- For environment placeholders, inject credentials into the process or service
+  through an approved OS secret mechanism.
 - Scope E2B Git tokens, MCP credentials, webhook headers, API keys, and bearer
   tokens to the smallest usable authority.
 - Protect the data root, backups, config, service definition, and logs. Axocoatl

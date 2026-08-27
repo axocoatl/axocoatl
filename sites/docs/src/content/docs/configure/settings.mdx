@@ -1,6 +1,6 @@
 ---
 title: Settings
-description: Know what can be changed live in the app and what still belongs in axocoatl.yaml.
+description: Know what can be changed live in the app and what still belongs in the active YAML configuration.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -19,9 +19,11 @@ center (`Ctrl+K` on Windows/Linux, `⌘K` on macOS).
 | **Automations** | Create, edit, trigger, run, organize, inspect, and resume DAGs |
 
 Providers, sandbox policy, server binding, memory tuning, webhooks, and pricing
-are configured in `axocoatl.yaml`; they are not hidden Settings sections. Run
-`axocoatl validate` after changing the file and restart the daemon when the
-running process must pick up those changes.
+are configured in the active YAML file; they are not hidden Settings sections.
+The normal file is the current user's `config.yaml` under macOS Application
+Support or the Linux/WSL XDG config directory. Run `axocoatl validate` after
+changing it and restart the daemon when the running process must pick up those
+changes. A repository-local file is used only with an explicit `--config` path.
 
 ## Agent edits are live, not durable
 
@@ -31,8 +33,9 @@ choose **Save & restart**. **Restart only** reloads the current in-memory Agent
 configuration from its checkpoint.
 
 These edits apply only to the current daemon process. They do not rewrite
-`axocoatl.yaml`, and a full daemon restart restores the YAML values. Copy an
-accepted change into YAML when it should survive restart, then validate it.
+the active YAML configuration, and a full daemon restart restores its values.
+Copy an accepted change into that file when it should survive restart, then
+validate it.
 
 <Aside type="caution" title="A restart does not resume in-flight work">
 Agent restart restores the latest checkpointed conversation and cumulative usage subtotal,

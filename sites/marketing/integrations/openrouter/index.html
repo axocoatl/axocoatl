@@ -14,15 +14,10 @@
 
     <section class="container section section-rule">
       <div class="split">
-        <div class="stack"><span class="eyebrow">Configure</span><h2>One credential block.</h2><p>Export <code>OPENROUTER_API_KEY</code> and <code>OPENROUTER_MODEL</code> in the process environment that starts Axocoatl, then reference them from <code>axocoatl.yaml</code>. Axocoatl does not load dotenv files automatically; if you keep assignments in a local <code>.env</code>, explicitly source it before starting the workbench.</p><p>Set <code>provider: openrouter</code> on the agents that should use it. Model availability, pricing, routing, and account access are controlled by OpenRouter, so use a model identifier currently available to your account.</p></div>
-        <div class="code-pane"><div class="code-pane-head">axocoatl.yaml</div><pre><code><span class="code-key">providers:</span>
-  <span class="code-key">openrouter:</span>
-    <span class="code-key">api_key:</span> <span class="code-string">"${OPENROUTER_API_KEY}"</span>
-
-<span class="code-key">agents:</span>
-  - <span class="code-key">id:</span> <span class="code-string">builder</span>
-    <span class="code-key">provider:</span> <span class="code-string">openrouter</span>
-    <span class="code-key">model:</span> <span class="code-string">"${OPENROUTER_MODEL}"</span></code></pre></div>
+        <div class="stack"><span class="eyebrow">First run</span><h2>Configure OpenRouter once.</h2><p>Run <code>axocoatl onboard</code> and choose OpenRouter. The API-key prompt is masked. A supplied key is stored with the provider and starting Agent in the current user's owner-only Axocoatl configuration.</p><p>Onboarding creates no project folder or repository. After <code>axocoatl dev</code> opens the workbench, choose <strong>Open workspace…</strong> and select the repository you want to use. Model availability, pricing, routing, and account access remain controlled by OpenRouter.</p></div>
+        <div class="code-pane"><div class="code-pane-head">first run</div><pre><code><span class="code-key">axocoatl onboard</span>  <span class="code-comment"># choose OpenRouter</span>
+<span class="code-key">axocoatl doctor</span>   <span class="code-comment"># verify configuration</span>
+<span class="code-key">axocoatl dev</span>      <span class="code-comment"># open the workbench</span></code></pre></div>
       </div>
     </section>
 
@@ -31,8 +26,18 @@
       <div class="grid-3"><article class="card"><span class="card-kicker">Roles</span><h3>Different agents, different models</h3><p>Use a focused model for a narrow builder and a larger model for a coordinator or difficult repository task.</p></article><article class="card"><span class="card-kicker">Hybrid</span><h3>Local and hosted together</h3><p>Keep one Agent on Ollama and another on OpenRouter. Optional Ways can compare configured agents when the decision merits it.</p></article><article class="card"><span class="card-kicker">Cost</span><h3>Configure prices honestly</h3><p>Within Ways, when remote pricing is not configured, Axocoatl marks the known subtotal as incomplete instead of treating the call as free.</p></article></div>
     </section>
 
-    <section class="container-narrow section section-rule">
-      <div class="stack"><span class="eyebrow">Onboard</span><h2>Let the wizard write the starting config.</h2><p>Select OpenRouter when <code>axocoatl onboard</code> asks for a provider. It writes the provider and Agent structure and can place a supplied key in <code>.env.example</code>. Move that populated file out of its template name, restrict it, and explicitly source it before starting Axocoatl; renaming the file alone does not load it.</p><ax-cli-snippet>axocoatl onboard</ax-cli-snippet></div>
+    <section class="container section section-rule">
+      <div class="split">
+        <div class="stack"><span class="eyebrow">Advanced configuration</span><h2>Keep environment injection explicit.</h2><p>If you prefer process-environment injection, leave the key blank during onboarding or manage an explicit YAML configuration. Export <code>OPENROUTER_API_KEY</code> in the process that starts Axocoatl and pass an explicit configuration path when it is not the user default.</p><p>Axocoatl does not load dotenv files automatically. Protect environment files, explicit configurations, shell history, and backups as secrets.</p></div>
+        <div class="code-pane"><div class="code-pane-head">advanced axocoatl.yaml</div><pre><code><span class="code-key">providers:</span>
+  <span class="code-key">openrouter:</span>
+    <span class="code-key">api_key:</span> <span class="code-string">"${OPENROUTER_API_KEY}"</span>
+
+<span class="code-key">agents:</span>
+  - <span class="code-key">id:</span> <span class="code-string">builder</span>
+    <span class="code-key">provider:</span> <span class="code-string">openrouter</span>
+    <span class="code-key">model:</span> <span class="code-string">"${OPENROUTER_MODEL}"</span></code></pre></div>
+      </div>
     </section>
 
     <section class="container-narrow section section-rule">
