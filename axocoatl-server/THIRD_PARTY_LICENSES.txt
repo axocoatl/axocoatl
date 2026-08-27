@@ -7446,7 +7446,7 @@ Used by:
 - block-buffer 0.10.4 (https://github.com/RustCrypto/utils)
 - block-padding 0.3.3 (https://github.com/RustCrypto/utils)
 - cbc 0.1.2 (https://github.com/RustCrypto/block-modes)
-- chacha20 0.10.1 (https://github.com/RustCrypto/stream-ciphers)
+- chacha20 0.10.2 (https://github.com/RustCrypto/stream-ciphers)
 - cipher 0.4.4 (https://github.com/RustCrypto/traits)
 - cpufeatures 0.2.17 (https://github.com/RustCrypto/utils)
 - cpufeatures 0.3.0 (https://github.com/RustCrypto/utils)
@@ -7665,7 +7665,7 @@ limitations under the License.
 Apache License 2.0 (Apache-2.0)
 
 Used by:
-- axocoatl-cli 1.0.0 (https://github.com/axocoatl/axocoatl)
+- axocoatl-cli 1.0.1 (https://github.com/axocoatl/axocoatl)
 - axocoatl-server 1.0.0 (https://github.com/axocoatl/axocoatl)
 - axocoatl-a2a 1.0.0 (https://github.com/axocoatl/axocoatl)
 - axocoatl-actor 1.0.0 (https://github.com/axocoatl/axocoatl)

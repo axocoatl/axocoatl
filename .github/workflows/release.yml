@@ -586,11 +586,16 @@ jobs:
               echo "Could not identify the previous release for the CLI-only package proof." >&2
               exit 1
             }
-            git diff --quiet "$previous_tag^{commit}" "$GITHUB_SHA^{commit}" -- \
-              Cargo.toml axocoatl-server crates packages || {
+            # The aggregate notice ships beside native binaries and must track
+            # the current lockfile even when no library crate is republished.
+            non_cli_changes="$(git diff --name-only \
+              "$previous_tag^{commit}" "$GITHUB_SHA^{commit}" -- \
+              Cargo.toml axocoatl-server crates packages)"
+            unexpected_non_cli_changes="$(printf '%s\n' "$non_cli_changes" | sed \
+              '/^axocoatl-server\/THIRD_PARTY_LICENSES\.txt$/d; /^$/d')"
+            test -z "$unexpected_non_cli_changes" || {
                 echo "A CLI-only release contains unpublished non-CLI package changes since $previous_tag." >&2
-                git diff --name-only "$previous_tag^{commit}" "$GITHUB_SHA^{commit}" -- \
-                  Cargo.toml axocoatl-server crates packages >&2
+                printf '%s\n' "$unexpected_non_cli_changes" >&2
                 exit 1
               }
           fi
