@@ -148,15 +148,24 @@ test('a Session-authorized Skill triggers a UI-created Automation whose result s
     await automations.locator('.shell:not(.loading)').waitFor({ state: 'visible' });
     await automations.getByRole('button', { name: '+ Automation' }).first().click();
     const createDialog = automations.getByRole('dialog', { name: 'New Automation' });
-    const fields = createDialog.locator('input, textarea');
-    await fields.nth(0).fill('Launch proof recorder');
-    await fields.nth(1).fill('launch-proof-recorder');
-    await fields.nth(2).fill('Records the Session-authorized launch Skill signal.');
-    await createDialog.locator('select').nth(2).selectOption('on_skill');
-    await createDialog.locator('select').nth(3).selectOption('launch_ready');
+    const nameField = createDialog.getByPlaceholder('Review release readiness');
+    const idField = createDialog.getByPlaceholder('review-release-readiness');
+    const descriptionField = createDialog.getByPlaceholder('Optional: what this Automation does.');
+    await nameField.fill('Launch proof recorder');
+    await idField.fill('launch-proof-recorder');
+    await descriptionField.fill('Records the Session-authorized launch Skill signal.');
+    await createDialog.locator('select:has(option[value="on_skill"])').selectOption('on_skill');
+    await createDialog.locator('select:has(option[value="launch_ready"])').selectOption('launch_ready');
     const instructionText = 'Reply with exactly: Launch Automation recorded the signal.';
     const instruction = createDialog.getByPlaceholder('Explain what the Agent should do whenever this trigger fires.');
+    await instruction.waitFor({ state: 'visible' });
+    await instruction.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
     await instruction.fill(instructionText);
+    assert.equal(await nameField.inputValue(), 'Launch proof recorder');
+    assert.equal(await idField.inputValue(), 'launch-proof-recorder');
+    assert.equal(await descriptionField.inputValue(), 'Records the Session-authorized launch Skill signal.');
     assert.equal(await instruction.inputValue(), instructionText);
     const createResponse = page.waitForResponse((response) => {
       const request = response.request();
@@ -195,19 +204,37 @@ test('a Session-authorized Skill triggers a UI-created Automation whose result s
     ]);
 
     await runtime.restart();
+    const durableAutomations = await runtime.listAutomations();
+    assert.ok(
+      durableAutomations.some((automation) => automation.id === 'launch-proof-recorder'),
+      `the restarted daemon must reload the persisted Automation: ${JSON.stringify(durableAutomations)}\n${runtime.logs()}`,
+    );
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction((sessionId) => {
       const rail = document.querySelector('ax-rail');
       return Boolean(customElements.get('ax-settings')
         && customElements.get('ax-automation-settings')
         && customElements.get('ax-settings-skills')
+        && document.querySelector('ax-settings')?._wired
         && rail?.shadowRoot
         && rail.current === sessionId);
     }, createdSession.id);
     assert.equal(new URL(page.url()).searchParams.get('session'), createdSession.id);
     await openSettingsSection(page, 'Automations Work that starts itself');
     const restoredAutomations = page.locator('ax-automation-settings');
-    await restoredAutomations.locator(`[data-automation-id="launch-proof-recorder"]`).click();
+    await restoredAutomations.evaluate((element) => element.refresh());
+    await restoredAutomations.locator('.shell:not(.loading)').waitFor({ state: 'visible' });
+    const restoredState = await restoredAutomations.evaluate((element) => ({
+      automations: element.automations,
+      errors: Array.from(element.shadowRoot.querySelectorAll('.error .message'), (node) => node.textContent),
+    }));
+    assert.ok(
+      restoredState.automations.some((automation) => automation.id === 'launch-proof-recorder'),
+      `the Automation UI must hydrate the persisted catalog: ${JSON.stringify(restoredState)}\n${runtime.logs()}`,
+    );
+    const restoredAutomation = restoredAutomations.locator('[data-automation-id="launch-proof-recorder"]');
+    await restoredAutomation.waitFor({ state: 'visible' });
+    await restoredAutomation.click();
     await restoredAutomations.getByRole('button', { name: '⟲ Runs' }).click();
     const restoredRun = restoredAutomations.locator(`[data-run-id="${runId}"]`);
     await restoredRun.waitFor({ state: 'visible' });

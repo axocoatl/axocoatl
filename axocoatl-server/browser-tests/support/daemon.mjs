@@ -251,6 +251,9 @@ consolidation:
       async listSessions() {
         return api(baseUrl, 'GET', '/api/sessions');
       },
+      async listAutomations() {
+        return api(baseUrl, 'GET', '/api/automations');
+      },
       async pathExists(target) {
         try { await access(target); return true; } catch { return false; }
       },
