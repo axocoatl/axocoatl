@@ -36,7 +36,10 @@ that finds a deterministic failure.
 The preflight deliberately checks the runtimes CI pins: Node 22, Python 3.13.7,
 Go 1.26.2, active Rust 1.95.0, installed Rust 1.88.0, `cargo-audit` 0.22.2,
 and `cargo-about` 0.9.1. It also requires `ffmpeg`/`ffprobe`, npm, Ruby, `jq`,
-and Playwright's pinned Chromium download. Install the Rust prerequisites with:
+and Playwright's pinned Chromium download. The actionlint wrapper downloads and
+SHA-256-verifies ShellCheck 0.11.0 for the current macOS or Linux architecture,
+so local workflow shell analysis cannot silently differ from CI. Install the
+Rust prerequisites with:
 
 ```bash
 rustup toolchain install 1.88.0

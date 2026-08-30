@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 # Static, network-free checks for workflow syntax, pinning, shell syntax, and
-# shared-gate orchestration. This complements actionlint when it is installed.
+# shared-gate orchestration. The actionlint wrapper supplies its pinned
+# ShellCheck binary on every supported development and CI host.
 require "open3"
 require "pathname"
 require "tmpdir"
@@ -69,6 +70,21 @@ scripts.each do |relative|
   next unless interpreter
   _stdout, stderr, status = Open3.capture3(interpreter, "-n", path.to_s)
   errors << "#{relative}: invalid #{interpreter} syntax: #{stderr.strip}" unless status.success?
+end
+
+actionlint_runner = ROOT.join("scripts/run-actionlint.sh").read
+[
+  "shellcheck_version=v0.11.0",
+  "339b930feb1ea764467013cc1f72d09cd6b869ebf1013296ba9055ab2ffbd26f",
+  "c2c15e08df0e8fbc374c335b230a7ee958c313fa5714817a59aa59f1aa594f51",
+  "68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc",
+  "b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6",
+  "https://github.com/koalaman/shellcheck/releases/download/",
+  "unset SHELLCHECK_OPTS",
+  '-shellcheck "$shellcheck_path"',
+].each do |marker|
+  errors << "scripts/run-actionlint.sh: missing pinned ShellCheck contract #{marker.inspect}" \
+    unless actionlint_runner.include?(marker)
 end
 
 contracts = {
