@@ -12,6 +12,11 @@ fail() {
   exit 1
 }
 
+run_fixture_gate() (
+  unset GITHUB_ACTIONS
+  AXO_CROSS_REPO_ROOT="$fixture" "$gate" "$@"
+)
+
 mkdir -p "$fixture/axocoatl-cli/src" "$fixture/crates/example/src"
 git -C "$fixture" init -q
 git -C "$fixture" config user.name 'Axocoatl Test'
@@ -25,12 +30,20 @@ git -C "$fixture" add .
 git -C "$fixture" commit -qm baseline
 base=$(git -C "$fixture" rev-parse HEAD)
 
-AXO_CROSS_REPO_ROOT="$fixture" "$gate" prove-unchanged "$base" >/dev/null
+if GITHUB_ACTIONS=true AXO_CROSS_REPO_ROOT="$fixture" \
+  "$gate" prove-unchanged "$base" >"$work_dir/github-actions.out" 2>&1; then
+  fail 'a repository-root override unexpectedly passed in GitHub Actions'
+fi
+grep -F 'AXO_CROSS_REPO_ROOT overrides are forbidden in GitHub Actions' \
+  "$work_dir/github-actions.out" >/dev/null \
+  || fail 'the GitHub Actions override rejection was not explicit'
+
+run_fixture_gate prove-unchanged "$base" >/dev/null
 printf '%s\n' 'documentation changed' >> "$fixture/README.md"
-AXO_CROSS_REPO_ROOT="$fixture" "$gate" prove-unchanged "$base" >/dev/null
+run_fixture_gate prove-unchanged "$base" >/dev/null
 
 printf '%s\n' '# changed lock' >> "$fixture/Cargo.lock"
-if AXO_CROSS_REPO_ROOT="$fixture" "$gate" prove-unchanged "$base" \
+if run_fixture_gate prove-unchanged "$base" \
   >"$work_dir/changed.out" 2>&1; then
   fail 'a changed tracked build input unexpectedly passed'
 fi
@@ -39,7 +52,7 @@ grep -F 'Linux aarch64 build inputs changed' "$work_dir/changed.out" >/dev/null 
 
 git -C "$fixture" restore Cargo.lock
 printf '%s\n' 'pub fn new_input() {}' > "$fixture/crates/example/src/new.rs"
-if AXO_CROSS_REPO_ROOT="$fixture" "$gate" prove-unchanged "$base" \
+if run_fixture_gate prove-unchanged "$base" \
   >"$work_dir/untracked.out" 2>&1; then
   fail 'an untracked build input unexpectedly passed'
 fi
