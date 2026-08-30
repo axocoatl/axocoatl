@@ -239,6 +239,20 @@ fn require_session_environment_ready(session: &Session) -> Result<(), DaemonErro
     }
 }
 
+/// Reject an invalid local image without waking Podman. Remote backends own a
+/// different image/template contract and validate it in their preparation
+/// path, so this preflight deliberately applies only to the local backend.
+fn preflight_local_session_image(
+    backend: &str,
+    image: Option<&str>,
+    allow_untrusted_image: bool,
+) -> Result<(), axocoatl_isolation::IsolationError> {
+    if !matches!(backend, "" | "podman") {
+        return Ok(());
+    }
+    SessionSandbox::resolve_effective_image(image, allow_untrusted_image).map(|_| ())
+}
+
 const MISSING_E2B_RUNTIME_ID_ERROR: &str = "Axocoatl cannot verify or delete the E2B runtime left by an earlier build because its durable remote identity is missing. Check E2B for an older sandbox, then use Change runtime to explicitly prepare a replacement.";
 
 fn unconfirmed_ready_e2b_runtime(session: &Session) -> Option<&SessionRuntimeIdentity> {
@@ -8063,6 +8077,19 @@ impl AxocoatlDaemon {
             // the persisted identity below owns idempotent cleanup/recreation.
             self.session_sandboxes.lock().await.remove(&session.id);
         }
+        let configured_backend = match self.config.sandbox.backend.as_str() {
+            "" | "podman" => "podman",
+            other => other,
+        };
+        // Validate the replacement contract before announcing or performing
+        // any recovery / persisted-runtime teardown. An invalid local image
+        // must fail without waking Podman or destroying a recoverable runtime.
+        let local_image_error = preflight_local_session_image(
+            configured_backend,
+            latest.image.as_deref(),
+            self.config.sandbox.allow_untrusted_images,
+        )
+        .err();
         // The Ready record has no matching published runtime. From this point
         // the cold path can stop a recovery handle, persist Failed, reconnect a
         // remote runtime, or delete/reprepare a local one. Gate every connected
@@ -8070,6 +8097,29 @@ impl AxocoatlDaemon {
         let _environment_change = self
             .stream_bus
             .begin_session_environment_change(&session.id, latest.environment.generation);
+        if let Some(error) = local_image_error {
+            let message = format!("starting session sandbox: {error}");
+            let failed = self
+                .session_store
+                .lock()
+                .await
+                .set_environment(
+                    &latest.id,
+                    SessionEnvironmentState::Failed,
+                    latest.environment.effective_image.clone(),
+                    latest.environment.runtime.clone(),
+                    latest.environment.setup_results.clone(),
+                    Some(message.clone()),
+                )
+                .map_err(|persist_error| {
+                    DaemonError::Session(format!(
+                        "{message}; persisting the exact Session failure also failed: {persist_error}"
+                    ))
+                })?;
+            return Err(DaemonError::Session(
+                failed.environment.error.unwrap_or(message),
+            ));
+        }
         // A recovery-only handle skipped setup by design. It cannot be
         // promoted into normal work; tear it down before preparing the Ready
         // environment from the persisted contract.
@@ -8121,10 +8171,6 @@ impl AxocoatlDaemon {
         if runtime.backend == "e2b" && !runtime.cleanup_confirmed {
             return self.reattach_ready_e2b_runtime(&latest, &runtime).await;
         }
-        let configured_backend = match self.config.sandbox.backend.as_str() {
-            "" | "podman" => "podman",
-            other => other,
-        };
         let cleanup_result = if runtime.cleanup_confirmed {
             if runtime.backend == "podman" && configured_backend != "podman" {
                 SessionSandbox::remove_named_with_dependencies(&latest.id)
@@ -20801,6 +20847,30 @@ trap - 0 1 2 15
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_image_preflight_rejects_untrusted_and_skips_remote_contracts() {
+        assert!(preflight_local_session_image("podman", None, false).is_ok());
+        assert!(preflight_local_session_image("", Some("node:20-slim"), false).is_ok());
+
+        let error = preflight_local_session_image(
+            "podman",
+            Some("registry.example.invalid/project/runtime:latest"),
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("requires explicit trust"));
+
+        // E2B validates its template/image contract in the remote preparation
+        // path; the local Podman preflight must not reinterpret that input.
+        assert!(preflight_local_session_image(
+            "e2b",
+            Some("registry.example.invalid/project/runtime:latest"),
+            false,
+        )
+        .is_ok());
+    }
 
     #[tokio::test]
     async fn workspace_attempt_operation_excludes_peer_session_admission() {

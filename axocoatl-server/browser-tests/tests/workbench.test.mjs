@@ -24,6 +24,28 @@ async function waitForTwoFrames(page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
+function requestPathname(request) {
+  try { return new URL(request.url).pathname; } catch { return ''; }
+}
+
+function isAbortedGet(request, pathname) {
+  return request.method === 'GET'
+    && request.error === 'net::ERR_ABORTED'
+    && requestPathname(request) === pathname;
+}
+
+function isSupersededSessionHydrationAbort(request, sessionId) {
+  return isAbortedGet(request, `/api/sessions/${sessionId}/turns`)
+    || isAbortedGet(request, `/api/sessions/${sessionId}/attachments`);
+}
+
+function isSuccessfulGet(response, pathname) {
+  return response.method === 'GET'
+    && response.status >= 200
+    && response.status < 300
+    && requestPathname(response) === pathname;
+}
+
 async function openSession(
   session,
   viewport = { width: 1280, height: 800 },
@@ -57,11 +79,27 @@ async function openSession(
     url: request.url(),
     error: request.failure()?.errorText || 'request failed',
   }));
+  // The product's first-run Ollama warning is correct, but provider health is
+  // outside these workbench journeys and its nine-second toast can cover the
+  // More menu. Keep the shared harness deterministic without requiring an
+  // external provider; provider discovery is not part of these journeys.
+  await page.route('**/api/llm-health', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      ollama: {
+        base_url: 'http://127.0.0.1:9',
+        reachable: true,
+        configured: true,
+        missing_models: [],
+      },
+    }),
+  }));
   if (beforeGoto) await beforeGoto({ context, page });
   await page.goto(`${targetRuntime.baseUrl}/?session=${encodeURIComponent(session.id)}`, {
     waitUntil: 'domcontentloaded',
   });
-  await page.waitForFunction((sessionId) => {
+  const waitForCockpit = () => page.waitForFunction((sessionId) => {
     const rail = document.querySelector('ax-rail');
     const cockpit = document.querySelector('#session-cockpit');
     return Boolean(
@@ -72,6 +110,62 @@ async function openSession(
       && cockpit?.style.display === 'flex',
     );
   }, session.id);
+  const visibleState = () => page.evaluate(() => ({
+    url: location.href,
+    session: globalThis.S?.session || null,
+    railCurrent: document.querySelector('ax-rail')?.current || null,
+    railReady: Boolean(document.querySelector('ax-rail')?.shadowRoot),
+    homeDefined: Boolean(customElements.get('ax-session-home')),
+    cockpitDisplay: document.querySelector('#session-cockpit')?.style.display || null,
+  })).catch((stateError) => ({ stateError: String(stateError?.message || stateError) }));
+  const readinessError = async (error, prefix = '') => new Error([
+    prefix ? `${prefix}: ${error.message}` : error.message,
+    `visible=${JSON.stringify(await visibleState())}`,
+    `browserErrors=${JSON.stringify(browserErrors)}`,
+    `consoleMessages=${JSON.stringify(consoleMessages)}`,
+    `requestFailures=${JSON.stringify(requestFailures)}`,
+    targetRuntime.logs(),
+  ].join('\n'));
+  try {
+    await waitForCockpit();
+  } catch (error) {
+    const visible = await visibleState();
+    const transientStaticFailure = !visible?.session?.id
+      && visible?.cockpitDisplay !== 'flex'
+      && requestFailures.some((failure) => {
+        if (failure.method !== 'GET' || failure.error !== 'net::ERR_NETWORK_CHANGED') return false;
+        try {
+          const url = new URL(failure.url);
+          const target = new URL(targetRuntime.baseUrl);
+          const sameLoopbackListener = url.port === target.port
+            && ['localhost', '127.0.0.1'].includes(url.hostname)
+            && ['localhost', '127.0.0.1'].includes(target.hostname);
+          return sameLoopbackListener
+            && (url.pathname.startsWith('/vendor/')
+              || url.pathname.startsWith('/ui/')
+              || /\.(?:css|js)$/.test(url.pathname));
+        } catch {
+          return false;
+        }
+      });
+    if (!transientStaticFailure) throw await readinessError(error);
+
+    // Chromium can invalidate one localhost request set while its network
+    // service observes a daemon restart. Retry only this exact pre-mount
+    // transport failure; the successful document still has to satisfy every
+    // ordinary browser/console assertion below.
+    browserErrors.length = 0;
+    browserRequests.length = 0;
+    browserResponses.length = 0;
+    requestFailures.length = 0;
+    consoleMessages.length = 0;
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    try {
+      await waitForCockpit();
+    } catch (retryError) {
+      throw await readinessError(retryError, 'cockpit retry after net::ERR_NETWORK_CHANGED failed');
+    }
+  }
   return {
     context,
     page,
@@ -619,6 +713,7 @@ test('restored unresolved Ways keep primary runtime surfaces unbound', async () 
   try {
     await page.waitForFunction(({ sessionId, setId }) =>
       S.session.id === sessionId
+      && S.session.historyState === 'ready'
       && S.session.attemptRestorePending === false
       && S.threadVariants?.attemptSetId === setId,
     { sessionId: session.id, setId: results.attempt_set.id });
@@ -662,7 +757,22 @@ test('restored unresolved Ways keep primary runtime surfaces unbound', async () 
       [],
       'Ways restoration must not produce failed HTTP responses',
     );
-    assert.deepEqual(requestFailures, [], 'Ways restoration must not produce failed browser requests');
+    for (const pathname of [
+      `/api/sessions/${session.id}/turns`,
+      `/api/sessions/${session.id}/attachments`,
+    ]) {
+      assert.ok(
+        browserResponses.some((response) => isSuccessfulGet(response, pathname)),
+        `Ways restoration must finish the authoritative GET ${pathname}`,
+      );
+    }
+    const unexpectedFailures = requestFailures.filter((failure) =>
+      !isSupersededSessionHydrationAbort(failure, session.id));
+    assert.deepEqual(
+      unexpectedFailures,
+      [],
+      'only deliberately superseded Session hydration reads may be aborted',
+    );
     assert.deepEqual(consoleMessages, [], 'Ways restoration must leave the console clean');
     assert.equal(await page.locator('.toast', { hasText: 'Auto terminal failed' }).count(), 0);
     assertNoBrowserErrors();
@@ -776,10 +886,9 @@ test('a stale task snapshot cannot repopulate runtime state after Ways takes own
     assert.equal(await editorSessionBinding(page), session.id);
     assert.equal(await editorSuspended(page), true);
     assert.deepEqual(browserResponses.filter((response) => response.status >= 400), []);
-    const unexpectedFailures = requestFailures.filter((failure) => {
-      const pathname = new URL(failure.url).pathname;
-      return pathname !== `/api/sessions/${session.id}/tasks`;
-    });
+    const unexpectedFailures = requestFailures.filter((failure) =>
+      !isAbortedGet(failure, `/api/sessions/${session.id}/tasks`)
+      && !isSupersededSessionHydrationAbort(failure, session.id));
     assert.deepEqual(
       unexpectedFailures,
       [],
@@ -976,14 +1085,14 @@ test('Ways suspension cancels delayed primary reads and preserves dirty editor d
       [],
       'suspension must not turn delayed primary reads into failed HTTP responses',
     );
-    const unexpectedFailures = requestFailures.filter((failure) => {
-      const pathname = new URL(failure.url).pathname;
-      return pathname !== `/api/sessions/${session.id}/tree`
-        && pathname !== `/api/sessions/${session.id}/file`
-        && pathname !== `/api/sessions/${session.id}/git/status`
-        && (pathname !== `/api/sessions/${session.id}/turns`
-          || failure.error !== 'net::ERR_ABORTED');
-    });
+    const deliberatelyAbortedPrimaryRead = (failure) => [
+      `/api/sessions/${session.id}/tree`,
+      `/api/sessions/${session.id}/file`,
+      `/api/sessions/${session.id}/git/status`,
+    ].some((pathname) => isAbortedGet(failure, pathname));
+    const unexpectedFailures = requestFailures.filter((failure) =>
+      !deliberatelyAbortedPrimaryRead(failure)
+      && !isSupersededSessionHydrationAbort(failure, session.id));
     assert.deepEqual(
       unexpectedFailures,
       [],
@@ -1947,12 +2056,8 @@ test('a cross-tab Keep settlement clears a judged comparison and restores the ke
     assert.ok(turnReads >= 2, 'the kept canonical Turn must be reloaded');
     assert.equal(taskPosts, 0, 'settlement must reuse the authoritative live terminal');
     assert.deepEqual(browserResponses.filter((response) => response.status >= 400), []);
-    const unexpectedFailures = requestFailures.filter((failure) => {
-      const pathname = new URL(failure.url).pathname;
-      return failure.error !== 'net::ERR_ABORTED'
-        || (pathname !== `/api/sessions/${session.id}/turns`
-          && pathname !== `/api/sessions/${session.id}/attachments`);
-    });
+    const unexpectedFailures = requestFailures.filter((failure) =>
+      !isSupersededSessionHydrationAbort(failure, session.id));
     assert.deepEqual(
       unexpectedFailures,
       [],
@@ -2003,10 +2108,32 @@ test('cross-tab Close and Delete retire the visible Session instead of leaving a
       }), session.id);
       await page.waitForFunction(() => S.session.runtimeActivationPending === true);
       if (lifecycle === 'closed') {
+        // Remount the same Session while disconnected, then receive an
+        // authoritative transition snapshot whose generation matches the old
+        // edge. The snapshot must rebind retirement to this new cockpit.
+        await page.evaluate((sessionId) => {
+          const reopened = structuredClone(sessionHome().session(sessionId));
+          closeCockpit();
+          openCockpit(reopened);
+          replaceSessionEnvironmentTransitions([{ session: sessionId, generation: 1 }]);
+        }, session.id);
+        await page.waitForFunction((sessionId) => S.session.id === sessionId
+          && S.session.status === 'active'
+          && _sessionEnvironmentTransitions.has(sessionId), session.id);
         canonical = structuredClone(canonical);
         canonical.status = 'closed';
+        retired = true;
+        // Force the hardest ordering: the Session list mutates the mounted
+        // cockpit to Closed before the matching settled edge arrives. The
+        // transition must still retire the exact cockpit that was Active when
+        // the destructive change began.
+        await page.evaluate(() => sessionHome().refresh());
+        await page.waitForFunction((sessionId) => S.session.id === sessionId
+          && S.session.status === 'closed'
+          && _sessionEnvironmentTransitions.has(sessionId), session.id);
+      } else {
+        retired = true;
       }
-      retired = true;
       await page.evaluate((sessionId) => handleWsFrame({
         kind: 'session-environment-settled', session: sessionId,
       }), session.id);
@@ -2087,17 +2214,57 @@ test('turn, task-poll, and Preview failures all reconcile a stale Ready cockpit'
 
 test('Preview app code cannot cross from its dedicated origin into the workbench', async () => {
   const session = runtime.fixtures.alpha.sessions[0];
-  const { context, page, browserRequests, assertNoBrowserErrors } = await openSession(session);
+  const ready = structuredClone(session);
+  ready.status = 'active';
+  ready.environment = {
+    ...ready.environment,
+    generation: Number(ready.environment?.generation || 0) + 1,
+    state: 'ready',
+    error: null,
+    setup_results: [],
+  };
+  const opened = await openSession(
+    ready,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: target }) => {
+      const sessions = JSON.stringify([ready]);
+      await target.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => route.fulfill({
+          status: 200, contentType: 'application/json', body: sessions,
+        }),
+      );
+      await target.route('**/api/sessions', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: sessions,
+      }));
+      await target.route(`**/api/sessions/${session.id}/tree**`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: '[]',
+      }));
+      await target.route(`**/api/sessions/${session.id}/tasks`, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: route.request().method() === 'GET'
+          ? JSON.stringify([{
+            id: 'preview-security-shell', kind: 'terminal', command: 'sh', status: 'running',
+          }])
+          : JSON.stringify({ id: 'unexpected-preview-security-shell' }),
+      }));
+      await target.route(`**/api/sessions/${session.id}/git/**`, (route) => {
+        const pathname = new URL(route.request().url()).pathname;
+        const body = pathname.endsWith('/git/status')
+          ? { branch: 'main', files: [], clean: true }
+          : pathname.endsWith('/git/branches')
+            ? { current: 'main', branches: ['main'] }
+            : {};
+        return route.fulfill({
+          status: 200, contentType: 'application/json', body: JSON.stringify(body),
+        });
+      });
+    },
+  );
+  const { context, page, browserRequests, assertNoBrowserErrors } = opened;
   try {
-    const ready = structuredClone(session);
-    ready.status = 'active';
-    ready.environment = {
-      ...ready.environment,
-      generation: Number(ready.environment?.generation || 0) + 1,
-      state: 'ready',
-      error: null,
-      setup_results: [],
-    };
     const rebuildPath = `/api/sessions/${session.id}/environment/rebuild`;
     const controlResponses = [];
     page.on('response', (response) => {
@@ -2105,38 +2272,6 @@ test('Preview app code cannot cross from its dedicated origin into the workbench
           && new URL(response.url()).pathname === rebuildPath) {
         controlResponses.push(response.status());
       }
-    });
-    await page.route(
-      `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
-      (route) => route.fulfill({
-        status: 200, contentType: 'application/json', body: JSON.stringify([ready]),
-      }),
-    );
-    await page.route('**/api/sessions', (route) => route.fulfill({
-      status: 200, contentType: 'application/json', body: JSON.stringify([ready]),
-    }));
-    await page.route(`**/api/sessions/${session.id}/tree**`, (route) => route.fulfill({
-      status: 200, contentType: 'application/json', body: '[]',
-    }));
-    await page.route(`**/api/sessions/${session.id}/tasks`, (route) => route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: route.request().method() === 'GET'
-        ? JSON.stringify([{
-          id: 'preview-security-shell', kind: 'terminal', command: 'sh', status: 'running',
-        }])
-        : JSON.stringify({ id: 'unexpected-preview-security-shell' }),
-    }));
-    await page.route(`**/api/sessions/${session.id}/git/**`, (route) => {
-      const pathname = new URL(route.request().url()).pathname;
-      const body = pathname.endsWith('/git/status')
-        ? { branch: 'main', files: [], clean: true }
-        : pathname.endsWith('/git/branches')
-          ? { current: 'main', branches: ['main'] }
-          : {};
-      return route.fulfill({
-        status: 200, contentType: 'application/json', body: JSON.stringify(body),
-      });
     });
     await page.route(/ses-[a-z0-9-]+-p\d+\.localhost:\d+\//, (route) => route.fulfill({
       status: 200,
@@ -2993,17 +3128,61 @@ test('Closed unresolved Attempts mount read-only and route setup-free recovery w
           contentType: 'application/json',
           body: JSON.stringify({ run: null }),
         }));
-        await page.route(
-          `**/api/sessions/${closed.id}/variants/results`,
-          (route) => route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify(results),
-          }),
-        );
-        await page.route(
-          `**/api/sessions/${closed.id}/variants/${recovery.endpoint}`,
-          (route) => {
+        await page.route(`**/api/sessions/${closed.id}/variants/**`, (route) => {
+          const url = new URL(route.request().url());
+          const pathname = url.pathname;
+          if (pathname.endsWith('/results')) {
+            return route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify(results),
+            });
+          }
+          if (pathname.endsWith('/status')) {
+            return route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify(results.lanes.map((lane) => ({
+                index: lane.index,
+                branch: lane.branch,
+                status: { branch: lane.branch, clean: false, files: [] },
+              }))),
+            });
+          }
+          if (pathname.endsWith('/trajectories')) {
+            return route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify({ baseline: 0, steps: [], diverged_steps: 0 }),
+            });
+          }
+          if (pathname.endsWith('/cost')) {
+            const baseline = url.searchParams.get('baseline') || '';
+            return route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                attempt_set_id: setId,
+                baseline_model: baseline,
+                total_usd: 0,
+                actual_cost_known: true,
+                baseline_usd: 0,
+                baseline_cost_known: true,
+                saved_usd: 0,
+                all_local: true,
+                lanes: results.lanes.map((lane) => ({
+                  index: lane.index,
+                  model: lane.model,
+                  provider: lane.provider,
+                  cost_usd: 0,
+                  cost_known: true,
+                  token_usage_known: true,
+                })),
+              }),
+            });
+          }
+          if (pathname.endsWith(`/${recovery.endpoint}`)
+              && route.request().method() === 'POST') {
             routedAction = {
               method: route.request().method(),
               body: route.request().postDataJSON(),
@@ -3014,8 +3193,9 @@ test('Closed unresolved Attempts mount read-only and route setup-free recovery w
               contentType: 'application/json',
               body: JSON.stringify({ recovered: true }),
             });
-          },
-        );
+          }
+          return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+        });
         // If implicit activation ever returns, fail at the product seam without
         // letting this regression mutate the fixture daemon's real Session.
         await page.route(`**/api/sessions/${closed.id}/reopen`, (route) => route.fulfill({
@@ -3035,6 +3215,31 @@ test('Closed unresolved Attempts mount read-only and route setup-free recovery w
           && S.threadVariants?.attemptSetId === expectedSetId
           && compare?.attemptSetId === expectedSetId;
       }, { sessionId: closed.id, expectedSetId: setId });
+
+      const reconciled = await page.evaluate(async ({ sessionId, expectedSetId }) => {
+        await reconcileSessionEnvironmentLifecycle(sessionId);
+        return {
+          sessionId: S.session.id,
+          status: S.session.status,
+          attemptSetId: S.threadVariants?.attemptSetId || '',
+          compareSetId: document.querySelector('#compare')?.attemptSetId || '',
+          cockpitVisible: document.querySelector('#session-cockpit')?.style.display === 'flex',
+          expectedSetId,
+        };
+      }, { sessionId: closed.id, expectedSetId: setId });
+      assert.deepEqual(reconciled, {
+        sessionId: closed.id,
+        status: 'closed',
+        attemptSetId: setId,
+        compareSetId: setId,
+        cockpitVisible: true,
+        expectedSetId: setId,
+      }, 'authoritative reconnect reconciliation must preserve the Closed recovery view');
+      assert.deepEqual(
+        await page.locator('.toast.err').allTextContents(),
+        [],
+        'the controlled Closed recovery journey must not report background request errors',
+      );
 
       assert.match(await page.locator('#session-msgs').textContent(), /Durable request before Close/);
       assert.match(await page.locator('#session-msgs').textContent(), /Durable answer remains readable/);
@@ -3095,69 +3300,78 @@ test('Closed unresolved Attempts mount read-only and route setup-free recovery w
 
 test('a cross-tab Close removes Ready runtime bindings until an explicit Reopen', async () => {
   const session = runtime.fixtures.alpha.sessions[0];
-  const { context, page, browserRequests, assertNoBrowserErrors } = await openSession(session);
-  try {
-    const active = structuredClone(session);
-    active.status = 'active';
-    active.environment = {
-      ...active.environment,
-      generation: Number(active.environment?.generation || 0) + 1,
-      state: 'ready',
-      error: null,
-      setup_results: [],
-    };
-    const closed = structuredClone(active);
-    closed.status = 'closed';
-    let listed = closed;
-    let reopened = false;
-
-    await page.route(
-      `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
-      (route) => route.fulfill({
+  const active = structuredClone(session);
+  active.status = 'active';
+  active.environment = {
+    ...active.environment,
+    generation: Number(active.environment?.generation || 0) + 1,
+    state: 'ready',
+    error: null,
+    setup_results: [],
+  };
+  const closed = structuredClone(active);
+  closed.status = 'closed';
+  let listed = active;
+  let closedRemotely = false;
+  let reopened = false;
+  const opened = await openSession(
+    active,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: target }) => {
+      const fulfillSessions = (route) => route.fulfill({
         status: 200, contentType: 'application/json', body: JSON.stringify([listed]),
-      }),
-    );
-    await page.route('**/api/sessions', (route) => route.fulfill({
-      status: 200, contentType: 'application/json', body: JSON.stringify([listed]),
-    }));
-    await page.route(`**/api/sessions/${session.id}/tree**`, (route) => route.fulfill({
-      status: 200, contentType: 'application/json', body: '[]',
-    }));
-    await page.route(`**/api/sessions/${session.id}/tasks`, async (route) => {
-      if (!reopened) {
-        return route.fulfill({
-          status: 409,
-          contentType: 'application/json',
-          body: JSON.stringify({ error: 'Session is closed; reopen it explicitly' }),
-        });
-      }
-      if (route.request().method() === 'POST') {
+      });
+      await target.route('**/api/sessions', fulfillSessions);
+      await target.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        fulfillSessions,
+      );
+      await target.route(`**/api/sessions/${session.id}/tree**`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: '[]',
+      }));
+      await target.route(`**/api/sessions/${session.id}/git/**`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: '{}',
+      }));
+      await target.route(`**/api/sessions/${session.id}/tasks`, (route) => {
+        if (reopened) {
+          if (route.request().method() === 'POST') {
+            return route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify({ id: 'reopened-shell' }),
+            });
+          }
+          return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+        }
+        if (closedRemotely) {
+          return route.fulfill({
+            status: 409,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: 'Session is closed; reopen it explicitly' }),
+          });
+        }
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ id: 'reopened-shell' }),
+          body: JSON.stringify([{
+            id: 'active-shell', kind: 'terminal', command: 'sh', status: 'running',
+          }]),
         });
-      }
-      return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
-    });
-    await page.route(`**/api/sessions/${session.id}/reopen`, (route) => {
-      reopened = true;
-      listed = active;
-      return route.fulfill({
-        status: 200, contentType: 'application/json', body: JSON.stringify(active),
       });
-    });
-
-    // Supersede any Session-home refresh started while the cockpit was opening
-    // before injecting the stale Ready state this test is meant to reconcile.
-    await page.evaluate(() => sessionHome().refresh());
-    await page.waitForFunction((sessionId) =>
-      sessionHome().session(sessionId)?.status === 'closed', session.id);
-    await page.evaluate((ready) => {
-      clearInterval(S.session.taskTimer);
-      S.session.taskTimer = null;
-      applySessionEnvironmentUpdate(ready, { activateRuntime: false });
-    }, active);
+      await target.route(`**/api/sessions/${session.id}/reopen`, (route) => {
+        reopened = true;
+        closedRemotely = false;
+        listed = active;
+        return route.fulfill({
+          status: 200, contentType: 'application/json', body: JSON.stringify(active),
+        });
+      });
+    },
+  );
+  const { context, page, browserRequests, assertNoBrowserErrors } = opened;
+  try {
+    await page.waitForFunction(() => sessionRuntimeSurfaceReady(S.session));
     const activeState = await page.evaluate(() => ({
       ready: sessionEnvironmentReady(),
       id: S.session.id,
@@ -3166,6 +3380,8 @@ test('a cross-tab Close removes Ready runtime bindings until an explicit Reopen'
     }));
     assert.equal(activeState.ready, true, JSON.stringify(activeState));
 
+    listed = closed;
+    closedRemotely = true;
     await page.evaluate((sessionId) => refreshSessionTasks(sessionId), session.id);
     await page.waitForFunction(() => S.session.status === 'closed');
     assert.equal(await page.evaluate(() => sessionEnvironmentReady()), false);
@@ -3972,7 +4188,12 @@ test('active Session hydration orders authoritative HTTP state against newer soc
   const agent = session.mode.agent_id;
   const { context, page, assertNoBrowserErrors } = await openSession(session);
   try {
-    await page.waitForFunction(() => _liveSessionSnapshotEpoch > 0);
+    // The assertions below deliberately start a second hydration. Let the
+    // normal open-session transcript + Attempt restore finish first so that
+    // its authoritative reload cannot supersede the synthetic request.
+    await page.waitForFunction(() => _liveSessionSnapshotEpoch > 0
+      && S.session.historyState === 'ready'
+      && S.session.attemptRestorePending === false);
     let responseRun = null;
     let requestGate = null;
     await page.route(`**/api/sessions/${session.id}/active-turn`, async (route) => {
@@ -4236,43 +4457,56 @@ test('a rejected pending send cannot clear a different active Session turn', asy
 
 test('manual E2B cleanup confirmation requires the exact retained runtime affirmation', async () => {
   const session = runtime.fixtures.beta.sessions[0];
-  const { context, page, browserRequests, assertNoBrowserErrors } = await openSession(session);
+  const runtimeId = 'e2b-runtime-exact-123';
+  const retained = structuredClone(session);
+  retained.environment = {
+    ...retained.environment,
+    runtime: {
+      backend: 'e2b',
+      id: runtimeId,
+      control_plane: 'https://api.e2b.dev',
+      authority_fingerprint: 'test-fingerprint',
+      cleanup_confirmed: false,
+    },
+  };
+  const confirmed = structuredClone(retained);
+  confirmed.environment.runtime.cleanup_confirmed = true;
+  let listed = retained;
+  let confirmationResponse = confirmed;
+  const opened = await openSession(
+    retained,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page }) => {
+      const fulfillSessions = (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify([listed]),
+      });
+      await page.route('**/api/sessions', fulfillSessions);
+      await page.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        fulfillSessions,
+      );
+      await page.route(
+        `**/api/sessions/${session.id}/environment/confirm-runtime-cleanup`,
+        (route) => {
+          listed = confirmationResponse;
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(confirmationResponse),
+          });
+        },
+      );
+    },
+  );
+  const { context, page, browserRequests, assertNoBrowserErrors } = opened;
   try {
-    const runtimeId = 'e2b-runtime-exact-123';
-    const retained = structuredClone(session);
-    retained.environment = {
-      ...retained.environment,
-      runtime: {
-        backend: 'e2b',
-        id: runtimeId,
-        control_plane: 'https://api.e2b.dev',
-        authority_fingerprint: 'test-fingerprint',
-        cleanup_confirmed: false,
-      },
-    };
-    const confirmed = structuredClone(retained);
-    confirmed.environment.runtime.cleanup_confirmed = true;
-    let listed = retained;
-    let confirmationResponse = confirmed;
-
-    await page.route('**/api/sessions', (route) => route.fulfill({
-      status: 200, contentType: 'application/json', body: JSON.stringify([listed]),
-    }));
-    await page.route(
-      `**/api/sessions/${session.id}/environment/confirm-runtime-cleanup`,
-      (route) => {
-        listed = confirmationResponse;
-        return route.fulfill({
-          status: 200,
-          contentType: 'application/json',
-          body: JSON.stringify(confirmationResponse),
-        });
-      },
-    );
-    await page.evaluate(({ sessionId, value }) => {
-      Object.assign(sessionHome().session(sessionId), value);
-      sessionHome().configureEnvironment(sessionId);
-    }, { sessionId: session.id, value: retained });
+    await page.waitForFunction(({ sessionId, expectedRuntimeId }) =>
+      sessionHome().session(sessionId)?.environment?.runtime?.id === expectedRuntimeId
+      && S.session.historyState === 'ready'
+      && S.session.attemptRestorePending === false,
+    { sessionId: session.id, expectedRuntimeId: runtimeId });
+    await page.evaluate((sessionId) => sessionHome().configureEnvironment(sessionId), session.id);
 
     const checkbox = page.locator('ax-session-home [data-field="runtime-cleanup-confirmed"]');
     const confirm = page.locator('ax-session-home [data-action="confirm-runtime-cleanup"]');
@@ -4297,6 +4531,10 @@ test('manual E2B cleanup confirmation requires the exact retained runtime affirm
     await page.waitForFunction(() =>
       S.session.environment?.runtime?.cleanup_confirmed === true);
     assert.equal(await page.locator('ax-session-home [role="dialog"]').isHidden(), true);
+    await page.waitForFunction(() =>
+      document.querySelector('ax-session-home')?.shadowRoot
+        ?.querySelector('.notice.success')?.textContent
+        ?.includes('Manual cleanup confirmed'));
 
     const creationToken = 'create-token-exact-456';
     const retainedCreation = structuredClone(session);
@@ -4317,11 +4555,22 @@ test('manual E2B cleanup confirmation requires the exact retained runtime affirm
       new URL(candidate.url).pathname
         === `/api/sessions/${session.id}/environment/confirm-runtime-cleanup`).length;
 
-    await page.evaluate(({ sessionId, value }) => {
-      Object.assign(sessionHome().session(sessionId), value);
-      applySessionEnvironmentUpdate(value, { activateRuntime: false });
-      sessionHome().configureEnvironment(sessionId);
-    }, { sessionId: session.id, value: retainedCreation });
+    const creationReview = await page.evaluate(async (sessionId) => {
+      const refreshed = await sessionHome().refresh();
+      const current = sessionHome().session(sessionId);
+      applySessionEnvironmentUpdate(current, { activateRuntime: false });
+      const configured = sessionHome().configureEnvironment(sessionId);
+      return {
+        refreshed,
+        configured,
+        creationToken: current?.environment?.runtime_creation?.token || '',
+      };
+    }, session.id);
+    assert.deepEqual(creationReview, {
+      refreshed: true,
+      configured: true,
+      creationToken,
+    });
 
     await checkbox.waitFor({ state: 'visible' });
     assert.deepEqual(await page.evaluate(() => S.session.environment.runtime_creation), {
