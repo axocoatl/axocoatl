@@ -3,22 +3,22 @@
   "film": "durable-turn",
   "recorded_at": "2026-08-25T07:25:45.249Z",
   "source": {
-    "branch": "codex/v1-release-recovery",
-    "head": "f9214961efd0408b7fc312f19c6ea8a907cb3303",
+    "branch": "codex/session-capabilities",
+    "head": "e4bfd6042b0a54b06c898c58f7b04fb1b0ff4e29",
     "dirty": true,
-    "patch_sha256": "f19fe5eb519d3905a41b1d2a6b5d31d609d9e5546b2d022b09eda97b41651deb",
+    "patch_sha256": "9562ed1cea92c0d427fd91449ef09fdc9e2a3fc7a0fd2fb5d38c8f29183a737d",
     "patch_excludes": [
       "demo/one-app/films/source/",
       "demo/one-app/films/staged/",
       "demo/one-app/films/provenance/",
       "sites/marketing/assets/films/"
     ],
-    "content_sha256": "de2de255a2bf6966417585bea9cf3f74360886a99ebea3cdecb374468bbbe154"
+    "content_sha256": "27ceddcd7c6f177767025f7c15a2cf2f9bb95fde19df365f3a18b05afc07cfdf"
   },
   "binary": {
     "path": "target/release/axocoatl",
     "version": "axocoatl 1.0.0",
-    "sha256": "afcb51e75c5c64a6e1d1da36fa07110b5f9ba6031e3a2f3ce660de9879b045d1"
+    "sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488"
   },
   "capture": {
     "record": "demo/one-app/films/source/durable-turn/capture.json",

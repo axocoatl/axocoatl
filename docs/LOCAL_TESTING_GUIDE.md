@@ -171,15 +171,16 @@ HTTP-only.
 
 ## 8. Repository verification gates
 
-Run the gates appropriate to the change. The baseline is:
+Before pushing any PR, run the complete repository gate with the CI-pinned
+runtimes and tools documented in `CONTRIBUTING.md`:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
-cargo test --doc --workspace
-cargo build -p axocoatl-cli
+./scripts/preflight.sh
 ```
+
+This includes workflow, film, site, browser, cross-Linux, installer, release,
+MSRV, Rust, and package checks. The focused commands below are useful during
+iteration, but they do not replace a green preflight before a PR.
 
 Some sandbox tests require Podman and are ignored by default. Webhook tests bind
 a local port; if an execution sandbox blocks that bind, rerun the same test in

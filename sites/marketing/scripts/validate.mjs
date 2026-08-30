@@ -519,9 +519,7 @@ if (root === sourceRoot) {
     for (const [contract, marker] of [
       ['AI-readable narrative trigger', "'llms.txt'"],
       ['authoritative portfolio trigger', "'demo/one-app/films/portfolio.json'"],
-      ['source-bound film provenance gate', 'node demo/one-app/films/verify-film-set.mjs --source-bound'],
-      ['source strict-film gate', 'node sites/marketing/scripts/validate.mjs --strict-films'],
-      ['built strict-film gate', 'node sites/marketing/scripts/validate.mjs /tmp/axocoatl-marketing --strict-films'],
+      ['shared source-bound release gate', './scripts/verify-marketing-gate.sh source-bound'],
       ['validated build deployment', 'pages deploy /tmp/axocoatl-marketing'],
     ]) {
       if (!workflow.includes(marker)) fail(workflowLabel, `missing ${contract}`);

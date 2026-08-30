@@ -4,11 +4,11 @@ import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
   fail,
-  filmsDir,
   loadPortfolio,
   probePoster,
   probeVideo,
   readJson,
+  repoRoot,
   resolveRepoPath,
   run,
   sha256Buffer,
@@ -16,27 +16,37 @@ import {
   sourceContentDigest,
   validateTimeline,
 } from './film-lib.mjs';
+import { verifyReleaseCompatibility } from './release-compatibility.mjs';
 
 function usage() {
   console.error(`Usage: verify-film-set.mjs [--manifest-only | --portable | --source-bound | --allow-needs-recording]
+       verify-film-set.mjs --release-compatibility <attestation> --release-root <frozen-checkout>
 
 With no flag, verification is release-strict: all 12 films must be ready, match
 the technical contract and duration, have complete recorded provenance, and match
-the exact local release binary and source content used for capture.
+the local binary to the first-committed declared hash/version and source content.
 
 --manifest-only verifies the authoritative portfolio, scenario references, and
 12 shot-contract anchors without inspecting media.
 
 --portable verifies every recorded source frame, capture record, evidence record,
 timeline, staged-sequence digest, and final media file. It validates the recorded
-binary identity without requiring that platform-specific binary in the checkout.
+binary declaration without requiring that platform-specific binary in the checkout;
+the binary bytes themselves are not preserved by this portfolio.
 
 --source-bound performs portable verification and additionally requires the
 recorded source-content digest to match this checkout. It does not require the
-platform-specific capture binary, so it is the CI and deployment provenance gate.
+platform-specific capture binary. It remains the strict contract for a new capture
+or a checkout that exactly materializes the first-committed source declaration.
 
 --allow-needs-recording performs the same structural verification, warns for
 films explicitly marked needs_recording, and strictly verifies any ready film.
+
+--release-compatibility performs portable verification in the explicit frozen
+release checkout, audits its historical source/binary-only provenance rewrite
+against the restored first-committed declarations in the control checkout, and
+binds the complete release delta. It does not claim capture with the patch binary
+and never changes or falls back from the ordinary source-bound gate.
 `);
 }
 
@@ -64,10 +74,10 @@ function jsonEqual(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function verifyMedia(portfolio, film) {
+function verifyMedia(portfolio, film, activeRepoRoot) {
   const contract = portfolio.media_contract;
-  const mp4Path = resolveRepoPath(film.media.mp4);
-  const posterPath = resolveRepoPath(film.media.poster);
+  const mp4Path = resolveRepoPath(film.media.mp4, activeRepoRoot);
+  const posterPath = resolveRepoPath(film.media.poster, activeRepoRoot);
   assertRegular(mp4Path, `${film.slug} MP4`);
   assertRegular(posterPath, `${film.slug} poster`);
   const video = probeVideo(mp4Path);
@@ -90,8 +100,8 @@ function verifyMedia(portfolio, film) {
   return { mp4Path, posterPath, video, poster };
 }
 
-function verifyProvenance(portfolio, film, media, { verifyLocalBinary, currentSourceContentSha256 }) {
-  const path = resolveRepoPath(film.provenance);
+function verifyProvenance(portfolio, film, media, { verifyLocalBinary, currentSourceContentSha256, activeRepoRoot }) {
+  const path = resolveRepoPath(film.provenance, activeRepoRoot);
   assertRegular(path, `${film.slug} provenance`);
   const provenance = readJson(path);
   assert([1, 2].includes(provenance.schema_version), `${film.slug}: provenance.schema_version must be 1 or 2.`);
@@ -123,7 +133,7 @@ function verifyProvenance(portfolio, film, media, { verifyLocalBinary, currentSo
       'source content differs from the recorded checkout. Recapture the film with the exact release source.',
     );
   }
-  if (verifyLocalBinary) run('git', ['cat-file', '-e', `${provenance.source.head}^{commit}`]);
+  if (verifyLocalBinary) run('git', ['cat-file', '-e', `${provenance.source.head}^{commit}`], { cwd: activeRepoRoot });
   assert(
     jsonEqual(provenance.source.patch_excludes, [
       'demo/one-app/films/source/',
@@ -135,7 +145,7 @@ function verifyProvenance(portfolio, film, media, { verifyLocalBinary, currentSo
   );
 
   assert(provenance.binary && typeof provenance.binary === 'object', `${film.slug}: missing binary provenance.`);
-  const binaryPath = resolveRepoPath(provenance.binary.path);
+  const binaryPath = resolveRepoPath(provenance.binary.path, activeRepoRoot);
   assertHash(provenance.binary.sha256, `${film.slug}.binary.sha256`);
   assert(typeof provenance.binary.version === 'string' && provenance.binary.version, `${film.slug}: binary.version is missing.`);
   if (verifyLocalBinary) {
@@ -146,7 +156,7 @@ function verifyProvenance(portfolio, film, media, { verifyLocalBinary, currentSo
   }
 
   assert(provenance.capture && typeof provenance.capture === 'object', `${film.slug}: missing capture provenance.`);
-  const capturePath = resolveRepoPath(provenance.capture.record);
+  const capturePath = resolveRepoPath(provenance.capture.record, activeRepoRoot);
   assertRegular(capturePath, `${film.slug} capture record`);
   assertHash(provenance.capture.record_sha256, `${film.slug}.capture.record_sha256`);
   assert(provenance.capture.record_sha256 === sha256File(capturePath), `${film.slug}: capture record hash changed.`);
@@ -172,7 +182,7 @@ function verifyProvenance(portfolio, film, media, { verifyLocalBinary, currentSo
   const keyframeHashes = new Map();
   for (const [index, keyframe] of capture.keyframes.entries()) {
     assert(keyframe.beat === film.beats[index].id, `${film.slug}: capture beat order mismatch.`);
-    const keyframePath = resolveRepoPath(keyframe.path);
+    const keyframePath = resolveRepoPath(keyframe.path, activeRepoRoot);
     assertRegular(keyframePath, `${film.slug} ${keyframe.beat} keyframe`);
     assertHash(keyframe.sha256, `${film.slug} ${keyframe.beat} keyframe hash`);
     assert(keyframe.sha256 === sha256File(keyframePath), `${film.slug}: keyframe hash changed for ${keyframe.beat}.`);
@@ -189,8 +199,8 @@ function verifyProvenance(portfolio, film, media, { verifyLocalBinary, currentSo
   }
 
   assert(provenance.edit && typeof provenance.edit === 'object', `${film.slug}: missing edit provenance.`);
-  const timelinePath = resolveRepoPath(provenance.edit.timeline);
-  const stagePath = resolveRepoPath(provenance.edit.stage_record);
+  const timelinePath = resolveRepoPath(provenance.edit.timeline, activeRepoRoot);
+  const stagePath = resolveRepoPath(provenance.edit.stage_record, activeRepoRoot);
   assertRegular(timelinePath, `${film.slug} timeline`);
   assertRegular(stagePath, `${film.slug} stage record`);
   assertHash(provenance.edit.timeline_sha256, `${film.slug}.edit.timeline_sha256`);
@@ -254,7 +264,7 @@ function verifyProvenance(portfolio, film, media, { verifyLocalBinary, currentSo
   assert(jsonEqual(provenance.media.poster, { path: film.media.poster, sha256: sha256File(media.posterPath), ...media.poster }), `${film.slug}: poster probe provenance mismatch.`);
 
   assert(provenance.evidence && typeof provenance.evidence === 'object', `${film.slug}: missing durable evidence provenance.`);
-  const evidencePath = resolveRepoPath(provenance.evidence.record);
+  const evidencePath = resolveRepoPath(provenance.evidence.record, activeRepoRoot);
   assertRegular(evidencePath, `${film.slug} evidence record`);
   assertHash(provenance.evidence.record_sha256, `${film.slug}.evidence.record_sha256`);
   assert(provenance.evidence.record_sha256 === sha256File(evidencePath), `${film.slug}: evidence record hash changed.`);
@@ -279,12 +289,18 @@ if (args.includes('--help')) {
   usage();
   process.exit(0);
 }
-if (args.some(argument => !['--manifest-only', '--portable', '--source-bound', '--allow-needs-recording'].includes(argument)) || args.length > 1) {
+const releaseCompatibility =
+  args.length === 4 && args[0] === '--release-compatibility' && args[2] === '--release-root';
+const ordinaryMode =
+  args.length <= 1 && args.every(argument => ['--manifest-only', '--portable', '--source-bound', '--allow-needs-recording'].includes(argument));
+if (!releaseCompatibility && !ordinaryMode) {
   usage();
   process.exit(64);
 }
+const compatibilityPath = releaseCompatibility ? resolve(args[1]) : null;
+const activeRepoRoot = releaseCompatibility ? resolve(args[3]) : repoRoot;
 const manifestOnly = args[0] === '--manifest-only';
-const portable = args[0] === '--portable';
+const portable = args[0] === '--portable' || releaseCompatibility;
 const sourceBound = args[0] === '--source-bound';
 const allowNeedsRecording = args[0] === '--allow-needs-recording';
 const releaseStrict = args.length === 0;
@@ -293,19 +309,19 @@ const failures = [];
 let portfolio;
 let currentSourceContentSha256 = null;
 try {
-  portfolio = loadPortfolio();
-  if (releaseStrict || sourceBound) currentSourceContentSha256 = sourceContentDigest();
+  portfolio = loadPortfolio(activeRepoRoot);
+  if (releaseStrict || sourceBound) currentSourceContentSha256 = sourceContentDigest(activeRepoRoot);
 } catch (error) {
   console.error(`FAIL portfolio: ${error.message}`);
   process.exit(1);
 }
 
-const shotManifestPath = resolve(filmsDir, 'SHOT-MANIFEST.md');
+const shotManifestPath = resolve(activeRepoRoot, 'demo/one-app/films/SHOT-MANIFEST.md');
 assertRegular(shotManifestPath, 'Shot manifest');
 const shotManifest = readFileSync(shotManifestPath, 'utf8');
 for (const film of portfolio.films) {
   try {
-    const scenarioPath = resolveRepoPath(film.scenario);
+    const scenarioPath = resolveRepoPath(film.scenario, activeRepoRoot);
     assertRegular(scenarioPath, `${film.slug} scenario`);
     const scenario = readFileSync(scenarioPath, 'utf8');
     assert(scenario.includes('## Recording beats'), `${film.slug}: scenario must declare Recording beats.`);
@@ -327,10 +343,11 @@ if (!manifestOnly) {
       continue;
     }
     try {
-      const media = verifyMedia(portfolio, film);
+      const media = verifyMedia(portfolio, film, activeRepoRoot);
       verifyProvenance(portfolio, film, media, {
         verifyLocalBinary: !portable && !sourceBound,
         currentSourceContentSha256,
+        activeRepoRoot,
       });
     } catch (error) {
       failures.push(`${film.slug}: ${error.message}`);
@@ -344,8 +361,32 @@ if (failures.length) {
   process.exit(1);
 }
 
+let compatibilityResult = null;
+if (releaseCompatibility) {
+  try {
+    compatibilityResult = verifyReleaseCompatibility(compatibilityPath, {
+      releaseRoot: activeRepoRoot,
+      controlRoot: repoRoot,
+      portfolio,
+    });
+  } catch (error) {
+    console.error(`FAIL release compatibility: ${error.message}`);
+    process.exit(1);
+  }
+}
+
 if (manifestOnly) console.log('Film portfolio manifest: PASS (12 scenarios, placements, and shot contracts)');
 else if (allowNeedsRecording) console.log('Film portfolio structure: PASS (ready films strict; needs_recording films warned)');
-else if (portable) console.log('Film portfolio portable contract: PASS (12 ready films with complete recorded provenance)');
+else if (releaseCompatibility) {
+  console.log(
+    `Film portfolio release compatibility: PASS (${compatibilityResult.tag} at ${compatibilityResult.commit}; ` +
+    `${compatibilityResult.films} restored first-committed provenance records, ` +
+    `${compatibilityResult.changedPaths} exact changed paths: ` +
+    `${compatibilityResult.nonRecordingPaths} non-recording + ` +
+    `${compatibilityResult.provenanceRewrites} audited source/binary-only rewrites; ` +
+    `not captured with the patch binary)`,
+  );
+}
+else if (portable) console.log('Film portfolio portable contract: PASS (12 ready films with restored first-committed provenance declarations)');
 else if (sourceBound) console.log('Film portfolio source-bound contract: PASS (12 ready films with recorded provenance matching this checkout)');
-else console.log('Film portfolio release contract: PASS (12 ready films, recorded provenance, exact source content, and exact capture binary)');
+else console.log('Film portfolio release contract: PASS (12 ready films, exact source content, and local binary matching the first-committed declaration)');

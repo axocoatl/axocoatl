@@ -67,15 +67,18 @@ refresh the embedded UI. Use an explicit package command.
 
 ## Build and verification
 
-Baseline Rust gate:
+Required pre-PR gate:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
-cargo test --doc --workspace
-cargo build -p axocoatl-cli
+./scripts/preflight.sh
 ```
+
+This is the repository contract, not an optional final pass. It validates the
+workflow, film, marketing, documentation, browser, cross-Linux, installation,
+release, MSRV, formatting, lint, test, doc-test, and release-build gates with
+the CI-pinned runtimes documented in `CONTRIBUTING.md`. Focused Cargo commands
+are useful during implementation but do not replace a green preflight before a
+PR.
 
 Some sandbox tests require Podman and are ignored by default. Webhook tests bind a
 local port. If an execution sandbox blocks that bind, rerun the same test outside

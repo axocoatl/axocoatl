@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Fail-closed release retries.** Normal releases and the incident-locked v1.0.1
+  recovery now use deterministic archives, run-scoped byte-identical handoffs,
+  complete stable-release frontier checks, exact Git tag and GitHub Release
+  metadata, API plus sparse-index crate proofs, and pre-mutation asset
+  reconciliation. Re-running a completed release accepts only the same exact
+  public latest release and never overwrites published state.
+- **Local CI parity.** One repository preflight now exercises workflow contracts,
+  installation, browser-product, documentation, marketing, film, release-order,
+  publication-retry, cross-Linux, MSRV, formatting, lint, test, documentation-test,
+  and release-build gates before a change reaches pull-request CI.
+- **Truthful film provenance.** The 12 launch-film provenance records are restored
+  byte-for-byte to their first committed capture declarations. A separate,
+  verifier-enforced v1.0.1 compatibility attestation binds the frozen release
+  source and audited delta without claiming that the films were captured with the
+  v1.0.1 binary.
+
 ## [1.0.1] — 2026-08-27
 
 ### Fixed

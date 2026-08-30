@@ -11,9 +11,24 @@ PROGRAM="axocoatl"
 LICENSE_ENTRY="LICENSE"
 THIRD_PARTY_ENTRY="THIRD_PARTY_LICENSES.txt"
 script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-repo_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
-source_license="$repo_root/LICENSE"
-source_third_party="$repo_root/axocoatl-server/THIRD_PARTY_LICENSES.txt"
+control_repo_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
+release_source_root="${AXO_RELEASE_SOURCE_ROOT:-$control_repo_root}"
+case "$release_source_root" in
+  /*) ;;
+  *) fail_early="AXO_RELEASE_SOURCE_ROOT must be absolute: $release_source_root" ;;
+esac
+[ -z "${fail_early:-}" ] || {
+  echo "release-artifact: $fail_early" >&2
+  exit 1
+}
+release_source_root="$(CDPATH= cd -- "$release_source_root" && pwd)" \
+  || {
+    echo "release-artifact: release source root does not exist: $release_source_root" >&2
+    exit 1
+  }
+source_license="$release_source_root/LICENSE"
+source_third_party="$release_source_root/axocoatl-server/THIRD_PARTY_LICENSES.txt"
+archive_builder="$control_repo_root/scripts/create-release-archive.py"
 work_dir=""
 
 fail() {
@@ -230,8 +245,11 @@ package_artifact() {
   cp "$source_third_party" "$staging/$THIRD_PARTY_ENTRY"
   chmod 0755 "$staging/$PROGRAM"
   chmod 0644 "$staging/$LICENSE_ENTRY" "$staging/$THIRD_PARTY_ENTRY"
-  tar -czf "$archive" -C "$staging" \
-    "$PROGRAM" "$LICENSE_ENTRY" "$THIRD_PARTY_ENTRY"
+  command -v python3 >/dev/null 2>&1 \
+    || fail "python3 is required for deterministic release archives"
+  [ -f "$archive_builder" ] && [ ! -L "$archive_builder" ] \
+    || fail "deterministic archive builder is missing: $archive_builder"
+  python3 "$archive_builder" "$archive" "$staging"
 
   digest="$(sha256_file "$archive" | tr 'A-F' 'a-f')"
   printf '%s  %s\n' "$digest" "$name" > "$manifest"

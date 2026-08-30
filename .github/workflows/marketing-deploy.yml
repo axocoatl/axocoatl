@@ -34,14 +34,15 @@ on:
         required: true
 
 concurrency:
-  # GitHub does not promise FIFO ordering inside a concurrency group. Cancel the
-  # older deployment so a slower stale build cannot finish after newer content.
+  # A release-caller must not turn red because an unrelated main push cancelled
+  # its production deployment. Serialize all production marketing mutations.
   group: axocoatl-production-marketing
-  cancel-in-progress: true
+  queue: max
+  cancel-in-progress: false
 
 jobs:
   released-version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -60,98 +61,19 @@ jobs:
           CALLED_RELEASE_SHA: ${{ inputs.release_sha }}
         run: |
           set -euo pipefail
-          version="$(awk '
-            $0 == "[package]" { package_section = 1; next }
-            package_section && /^\[/ { exit }
-            package_section && $1 == "version" {
-              gsub(/"/, "", $3)
-              print $3
-              exit
-            }
-          ' axocoatl-cli/Cargo.toml)"
-          test -n "$version" || {
-            echo "Could not read the product version from axocoatl-cli/Cargo.toml." >&2
-            exit 1
-          }
-          expected_tag="v$version"
-          if [ -n "$CALLED_RELEASE_TAG" ] && [ "$CALLED_RELEASE_TAG" != "$expected_tag" ]; then
-            echo "Called release '$CALLED_RELEASE_TAG' does not match product $expected_tag." >&2
-            exit 1
-          fi
-          if [ -n "$CALLED_RELEASE_SHA" ]; then
-            [[ "$CALLED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-            test "$(git rev-parse 'HEAD^{commit}')" = "$CALLED_RELEASE_SHA" || {
-              echo "The deployment checkout does not match frozen source $CALLED_RELEASE_SHA." >&2
-              exit 1
-            }
-          fi
-          response="$(mktemp)"
-          attempts=1
-          if [ -n "$CALLED_RELEASE_TAG" ]; then attempts=12; fi
-          status=""
-          for attempt in $(seq 1 "$attempts"); do
-            status="$(curl --retry 2 --retry-all-errors --connect-timeout 10 --max-time 30 \
-              --silent --show-error --output "$response" --write-out '%{http_code}' \
-              --header 'Accept: application/vnd.github+json' \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header 'X-GitHub-Api-Version: 2022-11-28' \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/tags/$expected_tag")"
-            if [ "$status" = "200" ]; then break; fi
-            if [ -n "$CALLED_RELEASE_TAG" ] && [ "$status" = "404" ] && [ "$attempt" -lt "$attempts" ]; then
-              sleep 5
-              continue
-            fi
-            break
-          done
-          draft=""
-          prerelease=""
-          if [ "$status" = "200" ]; then
-            draft="$(jq --raw-output '.draft' "$response")"
-            prerelease="$(jq --raw-output '.prerelease' "$response")"
-          fi
-          if [ "$status" = "200" ] \
-            && [ "$draft" = "false" ] \
-            && [ "$prerelease" = "false" ]; then
-            expected_assets="$({
-              for target in \
-                x86_64-unknown-linux-gnu \
-                aarch64-unknown-linux-gnu \
-                x86_64-apple-darwin \
-                aarch64-apple-darwin
-              do
-                archive="axocoatl-${expected_tag}-${target}.tar.gz"
-                printf '%s\n%s\n' "$archive" "$archive.sha256"
-              done
-            } | LC_ALL=C sort)"
-            actual_assets="$(jq --raw-output '.assets[].name' "$response" | LC_ALL=C sort)"
-            test "$actual_assets" = "$expected_assets" || {
-              echo "$expected_tag does not expose the exact four-platform archive and checksum set; refusing deployment." >&2
-              exit 1
-            }
-            jq --exit-status \
-              'all(.assets[]; .state == "uploaded" and .size > 0)' \
-              "$response" >/dev/null || {
-                echo "$expected_tag contains an incomplete or empty release asset; refusing deployment." >&2
-                exit 1
-              }
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          elif [ -z "$CALLED_RELEASE_TAG" ] && { \
-            [ "$status" = "404" ] || { \
-              [ "$status" = "200" ] \
-                && { [ "$draft" = "true" ] || [ "$prerelease" = "true" ]; }; \
-            }; \
-          }; then
-            echo "published=false" >> "$GITHUB_OUTPUT"
-            echo "Current v$version release is not published; leaving the existing production site untouched."
-          else
-            echo "Could not prove that $expected_tag is a public release (HTTP $status); refusing to report a successful deployment." >&2
-            exit 1
+          mode=optional
+          if [ -n "$CALLED_RELEASE_TAG" ]; then mode=required; fi
+          published="$(./scripts/verify-public-release.sh \
+            "$mode" "$CALLED_RELEASE_TAG" "$CALLED_RELEASE_SHA")"
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          if [ "$published" = false ]; then
+            echo "The current product release is not public; leaving production marketing untouched."
           fi
 
   deploy:
     needs: released-version
     if: needs.released-version.outputs.published == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       deployments: write
@@ -160,36 +82,32 @@ jobs:
         with:
           ref: ${{ inputs.release_sha || github.sha }}
 
-      - name: Exercise installer OS, libc, and checksum failures
-        run: ./scripts/test-install.sh
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
 
       - name: Install film inspection dependency
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
+      - name: Build and verify release-bound marketing
+        if: inputs.release_tag != ''
+        run: ./scripts/verify-marketing-gate.sh source-bound /tmp/axocoatl-marketing
 
-      - name: Verify the complete recorded film portfolio
-        run: node demo/one-app/films/verify-film-set.mjs --source-bound
+      - name: Build and verify standalone marketing content
+        if: inputs.release_tag == ''
+        run: ./scripts/verify-marketing-gate.sh portable /tmp/axocoatl-marketing
 
-      - name: Sync brand assets into sites/marketing/assets/
+      - name: Reprove the public release and frozen tag immediately before deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CALLED_RELEASE_TAG: ${{ inputs.release_tag }}
+          CALLED_RELEASE_SHA: ${{ inputs.release_sha }}
         run: |
-          chmod +x sites/marketing/scripts/sync-assets.sh
-          sites/marketing/scripts/sync-assets.sh
-
-      - name: Validate and build the marketing site
-        run: |
-          node sites/marketing/scripts/validate.mjs --strict-films
-          node sites/marketing/scripts/build.mjs /tmp/axocoatl-marketing
-          node sites/marketing/scripts/validate.mjs /tmp/axocoatl-marketing --strict-films
-
-      # The homepage tells people to `curl https://axocoatl.ai/install.sh | sh`.
-      # Stage the canonical installer at the web root so that URL resolves
-      # (single source of truth — scripts/install.sh).
-      - name: Stage the installer at the web root
-        run: |
-          cp scripts/install.sh /tmp/axocoatl-marketing/install.sh
-          sh -n /tmp/axocoatl-marketing/install.sh
-          cmp -s scripts/install.sh /tmp/axocoatl-marketing/install.sh
+          mode=optional
+          if [ -n "$CALLED_RELEASE_TAG" ]; then mode=required; fi
+          test "$(./scripts/verify-public-release.sh \
+            "$mode" "$CALLED_RELEASE_TAG" "$CALLED_RELEASE_SHA")" = true
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3

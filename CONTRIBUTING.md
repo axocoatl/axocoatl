@@ -25,15 +25,38 @@ Fixes, features, docs, examples — all welcome. Before opening a PR:
 
 ## The quality gate
 
-Every PR has to pass these checks. CI runs them; please run them locally
-first to keep iteration tight.
+Every PR has to pass the repository preflight. CI runs the same underlying
+gates; run this command locally before pushing so GitHub is not the first place
+that finds a deterministic failure.
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
-cargo test --doc --workspace
+./scripts/preflight.sh
 ```
+
+The preflight deliberately checks the runtimes CI pins: Node 22, Python 3.13.7,
+Go 1.26.2, active Rust 1.95.0, installed Rust 1.88.0, `cargo-audit` 0.22.2,
+and `cargo-about` 0.9.1. It also requires `ffmpeg`/`ffprobe`, npm, Ruby, `jq`,
+and Playwright's pinned Chromium download. Install the Rust prerequisites with:
+
+```bash
+rustup toolchain install 1.88.0
+rustup toolchain install 1.95.0 --component clippy,rustfmt
+cargo install cargo-audit --locked --version 0.22.2
+cargo install cargo-about --locked --version '=0.9.1' --features cli
+```
+
+On Linux, the command performs the aarch64 link gate and therefore also needs
+the `aarch64-unknown-linux-gnu` Rust target and `aarch64-linux-gnu-gcc`. On
+macOS, it passes only when those cross-build inputs are unchanged from the
+comparison commit; if they changed, run the full preflight in the pinned Linux
+environment before opening the PR.
+
+The focused Cargo commands remain useful while iterating, but they are not the
+complete pre-PR gate.
+
+The native portion deliberately runs Cargo with one job. This removes
+host- and core-count-dependent rustdoc jobserver stalls so a local green result
+has the same deterministic meaning as CI.
 
 If you touch the browser app (`axocoatl-server/static/index.html` or
 `axocoatl-server/static/ui/*`):

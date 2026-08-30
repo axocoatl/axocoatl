@@ -47,9 +47,21 @@ debug binary for rehearsal.
 - [ ] Mark a portfolio entry `ready` only after its scenario, media, duration,
   poster beat, evidence, and provenance all pass.
 - [ ] Run `node demo/one-app/films/verify-film-set.mjs --source-bound`; all 12
-  source digests must match the checkout used by CI and deployment.
-- [ ] Before launch, run unflagged
-  `node demo/one-app/films/verify-film-set.mjs`; all 12 must pass release-strict.
+  source digests must match the checkout used for a new capture and release.
+- [ ] For every new capture and ordinary future release, run unflagged
+  `node demo/one-app/films/verify-film-set.mjs` before launch; all 12 must pass
+  release-strict against the preserved capture binary and source checkout.
+- [ ] Confirm all 12 provenance JSONs are byte-for-byte restored from their first
+  commit. The declared binary bytes are not preserved, so do not describe its
+  path/version/hash as independently authenticated capture-binary evidence.
+- [ ] For the `v1.0.1` incident only, substitute the reviewed compatibility
+  attestation for that ordinary unflagged launch gate. Run it
+  against a clean frozen Git checkout with `--release-compatibility <attestation>
+  --release-root <checkout>`. Require the reported split of 55 exact paths: 43
+  non-recording changes plus 12 audited source/binary-only provenance rewrites.
+- [ ] Treat compatibility as evidence only for the visible recorded film claims.
+  The films were not captured with the `v1.0.1` binary. For every future capture,
+  retain the strict ordinary source-bound contract and never rewrite provenance.
 
 ## Core 20-minute path
 

@@ -1,0 +1,714 @@
+{
+  "schema_version": 1,
+  "kind": "axocoatl-film-release-compatibility",
+  "release": {
+    "tag": "v1.0.1",
+    "tag_object": "4d5b32413c4f7b9b52a36f5cbbf5660d0c61428d",
+    "commit": "e82902bdfabb0541e466d5f98f0013cea36bdeab",
+    "tree": "c08457b3b5b01aa413cb39948dbd0eba1b43c63e",
+    "source_content_sha256": "a5644419d0f51bcf9a012ed8bccd4a57c6674f517700d0503858ddeaf814c023"
+  },
+  "first_committed_provenance": {
+    "disclosure": "These are the earliest committed provenance declarations. The capture binary bytes are not preserved, so its path, version, and hash remain declarations rather than an independently authenticated binary.",
+    "materialized_source": {
+      "commit": "60b1bce3d5293495409b0ef2c8f7fff1b4ba1e4b",
+      "tree": "9fdf15182256e33f33582db6a5217daa60f3035a",
+      "source_content_sha256": "27ceddcd7c6f177767025f7c15a2cf2f9bb95fde19df365f3a18b05afc07cfdf"
+    },
+    "source": {
+      "branch": "codex/session-capabilities",
+      "head": "e4bfd6042b0a54b06c898c58f7b04fb1b0ff4e29",
+      "dirty": true,
+      "patch_sha256": "9562ed1cea92c0d427fd91449ef09fdc9e2a3fc7a0fd2fb5d38c8f29183a737d",
+      "patch_excludes": [
+        "demo/one-app/films/source/",
+        "demo/one-app/films/staged/",
+        "demo/one-app/films/provenance/",
+        "sites/marketing/assets/films/"
+      ],
+      "content_sha256": "27ceddcd7c6f177767025f7c15a2cf2f9bb95fde19df365f3a18b05afc07cfdf"
+    },
+    "binary": {
+      "path": "target/release/axocoatl",
+      "version": "axocoatl 1.0.0",
+      "sha256": "11f47c97a6227b86eab53dd738bab408928e402397d2a46d7ea31d7aeb149488"
+    },
+    "files": [
+      {
+        "path": "demo/one-app/films/provenance/automation-hitl-recovery.json",
+        "first_blob": "20c6c2d341580d9ac4a2ad6e76cb66cc83c149c7",
+        "first_sha256": "b0eda6795a1be36b66b3db4b4366d53328afe491d6e8cf4f6d040280976d8dae",
+        "frozen_release_blob": "b4bfef606e18b31d6409336191b08f9488f48277",
+        "frozen_release_sha256": "de21656f1e823024bae0569f3ab18e642bd708a0b0dc64ece9596abfa67ae25a"
+      },
+      {
+        "path": "demo/one-app/films/provenance/durable-turn.json",
+        "first_blob": "2f4b578b3044647cae4b168cfdf6b9a9c1c00dc5",
+        "first_sha256": "6a993c421c1e6dbc68c240144415bb6521bb745134f443797c1e37088e8f74fb",
+        "frozen_release_blob": "859dd5fb8500b7665fe8d5ef8e9aeff72de8fc76",
+        "frozen_release_sha256": "89439cfc3f4e04e724f105822500d3fa5ffb4987c8b29b378cc3c2ca79a807d1"
+      },
+      {
+        "path": "demo/one-app/films/provenance/event-lattice-automation.json",
+        "first_blob": "618be0bdaa40f5e90e5a110e88013215c8587dad",
+        "first_sha256": "b536fada8661c95147e1228a32648553e71fda324e4aca498e066a1f0500b635",
+        "frozen_release_blob": "c76cef8bd0f79c70f5ebc15b71546554ffd1aad8",
+        "frozen_release_sha256": "bae3e9a021178b7703f0794fff3453587d8dd00d5bc48f01ec6662e10042fd3b"
+      },
+      {
+        "path": "demo/one-app/films/provenance/git-last-turn.json",
+        "first_blob": "8a809d8b4a9a7c289dfe7d75a9fa65ccc44253b3",
+        "first_sha256": "bcf93777d3514997628c19c29a5a3692741e729c4a98802ab52e0e506fd7a512",
+        "frozen_release_blob": "970da9376f4b805af674d2b091c22b847f9dee2f",
+        "frozen_release_sha256": "61496f22596c17e1c115d4cf91e0ac664aadc9f1426c62048520933c51ec10ed"
+      },
+      {
+        "path": "demo/one-app/films/provenance/mcp-approval.json",
+        "first_blob": "d69759fd74b88c3a82b688837681d6ea74880268",
+        "first_sha256": "def1ab2b6a087a0a4f0a018c193e1efc2340646a8c37e9b88ae6b2043fbc41f8",
+        "frozen_release_blob": "b3544b4e1f5a94eee3837d0ee27473d69b77d725",
+        "frozen_release_sha256": "f3b8dc44e008dd525ca92e48ef7b7afed5535e25892e18317e4e368c426d3817"
+      },
+      {
+        "path": "demo/one-app/films/provenance/multi-agent-handoff.json",
+        "first_blob": "b6b20c006d98b3801d22cf7849cad917de651f8e",
+        "first_sha256": "9492b26854182cd2d873c4b53913add4131d3322b1104896d19ac8602202f961",
+        "frozen_release_blob": "bb1eb3f114b3e89da4c05491c472c5ae2a8570d5",
+        "frozen_release_sha256": "ef47a12f8a07518663db29971200c1bcc287f015d00c6381c2c65de0040c088d"
+      },
+      {
+        "path": "demo/one-app/films/provenance/sandbox-terminal-preview.json",
+        "first_blob": "659847d2a9f9448cc420b5a318b17c2a3aeaa631",
+        "first_sha256": "2e6c10ed27c915313787f82835f13c81d857beeb0520f40d1e82eb4129c0ad2d",
+        "frozen_release_blob": "80a1055e51ad960d4126780c5f898aecd470c37e",
+        "frozen_release_sha256": "a57208db363cbb73898afd9f9660aa21ad4c28c8b007d4ffd38aeb47024f3007"
+      },
+      {
+        "path": "demo/one-app/films/provenance/session-workbench.json",
+        "first_blob": "01a8bb3ded963d4a9cf0c2ebc398dc1ba9ad4822",
+        "first_sha256": "8e318ec6fc56a0b9b65e3ee3c724665e799337b1882b30874837c22aabf2149d",
+        "frozen_release_blob": "7d87182f50aeac57a73be8b9abf853ffee8c0e8c",
+        "frozen_release_sha256": "0400dd2d71642bb2b82accf019d1805fb415799d9f9aaf2a8fb97a487dbdd80d"
+      },
+      {
+        "path": "demo/one-app/films/provenance/settings-runtime.json",
+        "first_blob": "65219a8d4bc21c3c8152a23a97be2dbbc0c1801b",
+        "first_sha256": "ebb7ced82d2dbc322dbc46b91e59616425b3e88a2ccceb8d39417c616fd8b183",
+        "frozen_release_blob": "48ea1e34e60e8ca8291de0f1bbde25c4dd2969fe",
+        "frozen_release_sha256": "fe40dabf4dc6da7ae994b80b399f959c937f518bf2343a2f1910dbb9d1e3db55"
+      },
+      {
+        "path": "demo/one-app/films/provenance/several-ways.json",
+        "first_blob": "dd08ab354e7e7bf761c2b2a44ea7b037fa538acd",
+        "first_sha256": "164f884ab1260096de2b911295b6df03bfd0fde141c2412260e7b8d67f3758e8",
+        "frozen_release_blob": "7edb7cc287a2654fce3315dfab0993bfdd7575d4",
+        "frozen_release_sha256": "f1cd44dbf9baf4abe0f326e9f7dfeb5ed805520c3302fc02245059eed1392ab3"
+      },
+      {
+        "path": "demo/one-app/films/provenance/shared-core-memory.json",
+        "first_blob": "0f6236631ce1ee7e3e56be9acc20750763375d12",
+        "first_sha256": "99451ca5169a95df6a0ba063a1d4e7b71849277c42a426226fec1dd8af2924f3",
+        "frozen_release_blob": "bd4d3a978a300a691e4ae769c60569f568cbdf24",
+        "frozen_release_sha256": "493389288e1b6526245b2164601858e4a93d22fd96fdab50a5192dc8f95cdbe2"
+      },
+      {
+        "path": "demo/one-app/films/provenance/workspace-sessions-turns.json",
+        "first_blob": "7f84dec4aa377fac3df1392ec642d799abb067e9",
+        "first_sha256": "ae58b8d3a52f54ac202931acd3f637b8c358063155d4afc6544621489e644f97",
+        "frozen_release_blob": "379d4824b437791826f5a442283c66b2cb79704e",
+        "frozen_release_sha256": "f79a6c989535ebb54c21168547696bfd0fcebca7c99332cd10907de94f6749f9"
+      }
+    ]
+  },
+  "frozen_release_provenance_rewrite": {
+    "disclosure": "The frozen v1.0.1 tree contains later source and binary field rewrites made without recapture. This incident attestation audits those twelve source/binary-only changes and does not treat them as capture identity or claim capture with v1.0.1.",
+    "source": {
+      "branch": "codex/v1-release-recovery",
+      "head": "f9214961efd0408b7fc312f19c6ea8a907cb3303",
+      "dirty": true,
+      "patch_sha256": "f19fe5eb519d3905a41b1d2a6b5d31d609d9e5546b2d022b09eda97b41651deb",
+      "patch_excludes": [
+        "demo/one-app/films/source/",
+        "demo/one-app/films/staged/",
+        "demo/one-app/films/provenance/",
+        "sites/marketing/assets/films/"
+      ],
+      "content_sha256": "de2de255a2bf6966417585bea9cf3f74360886a99ebea3cdecb374468bbbe154"
+    },
+    "binary": {
+      "path": "target/release/axocoatl",
+      "version": "axocoatl 1.0.0",
+      "sha256": "afcb51e75c5c64a6e1d1da36fa07110b5f9ba6031e3a2f3ce660de9879b045d1"
+    }
+  },
+  "portfolio": {
+    "path": "demo/one-app/films/portfolio.json",
+    "sha256": "fad346875a9eb626faea582675cebf2cb16bd6f8ddd45e77e46524d0f9865931",
+    "film_count": 12,
+    "artifact_count": 153,
+    "frozen_artifact_set_sha256": "48a3c2b403f78d53845fcc3b43e94d8fee80f63c8d5e06620364b126cd56f4f9",
+    "restored_artifact_set_sha256": "930903f781b916a89adb58b4e5d8bed019cc713888323ba391006319fc920e9e"
+  },
+  "delta": {
+    "entry_count": 55,
+    "non_recording_path_count": 43,
+    "provenance_rewrite_path_count": 12,
+    "entries_sha256": "17ae4bbd422129098e28ae49d2fe00fb2d05128073522f78012d4187d2ddd253",
+    "entries": [
+      {
+        "path": ".github/workflows/ci.yml",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "ffd2600832994184de3c6067eafe348c25fb0352",
+        "new_blob": "a9be9c89d329355beecbb978fb7a86bc730568a8",
+        "classification": "release-control"
+      },
+      {
+        "path": ".github/workflows/docs-deploy.yml",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "db2f02171ef6b5836a08a1c6206649346a107b90",
+        "new_blob": "9689b986708b90da51b3116e2deba65635b59d32",
+        "classification": "release-control"
+      },
+      {
+        "path": ".github/workflows/marketing-deploy.yml",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "b4572c13f46dae7c9b4a91dbd24550917ac08644",
+        "new_blob": "a330f210931f2e4ab6051d5b4d6aeae94099e1b3",
+        "classification": "release-control"
+      },
+      {
+        "path": ".github/workflows/recover-v1.0.0.yml",
+        "status": "A",
+        "old_mode": null,
+        "new_mode": "100644",
+        "old_blob": null,
+        "new_blob": "f8fec90d0879a1988109a4ddc445265060aebd99",
+        "classification": "release-control"
+      },
+      {
+        "path": ".github/workflows/release.yml",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "9569d59c0abeaafdb5469f1554c46d9d66f3f3d6",
+        "new_blob": "e5a5d015473d514c9b8d6c165023a16e03149691",
+        "classification": "release-control"
+      },
+      {
+        "path": ".github/workflows/security.yml",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "6e852cc17eb16c4ebdf190e38ca53f93806665b6",
+        "new_blob": "be3d48df380ea81dd58d9e993e5bcb134395fcb4",
+        "classification": "release-control"
+      },
+      {
+        "path": "AGENTS.md",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "ea3dd0b607c6ee111c379c561aaf34d7b605e72a",
+        "new_blob": "f411cc7bf675e6155b6adee13cf836643e4d6bd1",
+        "classification": "governance"
+      },
+      {
+        "path": "CHANGELOG.md",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "25b7eeee38666a5f3e0f9316df639a17b0dcf7e7",
+        "new_blob": "f0352ce8173c99ba8deb846eec4782de4c51c06d",
+        "classification": "release-metadata"
+      },
+      {
+        "path": "Cargo.lock",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "8888b40ede8321ea749ee355c0267c5e8708cd20",
+        "new_blob": "c7ee0810e151488bd2af8cccfda3fcc308677ffb",
+        "classification": "dependency-lock"
+      },
+      {
+        "path": "README.md",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "4b0ec0baf4504118a654f19b47c4f2d41f9b1c08",
+        "new_blob": "6a69abb0ac9fa5acee6d0e2916c08090fb32b98a",
+        "classification": "release-metadata"
+      },
+      {
+        "path": "axocoatl-cli/Cargo.toml",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "6187d5ed59bc96e9f19090b7d8a52d806d4cf06c",
+        "new_blob": "9c36326e525570f85ec2a952006e7531fc2781f2",
+        "classification": "onboarding-cli"
+      },
+      {
+        "path": "axocoatl-cli/src/main.rs",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "732cdf18fc43038210b231fb567ffdba071a6990",
+        "new_blob": "a6577e6a0159b85ce63eff573e979b2dd631c11b",
+        "classification": "onboarding-cli"
+      },
+      {
+        "path": "axocoatl-cli/src/user_paths.rs",
+        "status": "A",
+        "old_mode": null,
+        "new_mode": "100644",
+        "old_blob": null,
+        "new_blob": "7e4decd14c80dba0859aa44c195c54e4d41d6cc8",
+        "classification": "onboarding-cli"
+      },
+      {
+        "path": "axocoatl-server/THIRD_PARTY_LICENSES.txt",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "08973e1cc5c0eec45d019e81ab0173edd5864234",
+        "new_blob": "099d8961cb1d20e9ac63ecdc62e48b52a4eb23b4",
+        "classification": "generated-notice"
+      },
+      {
+        "path": "axocoatl-server/browser-tests/tests/workbench.test.mjs",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "c925aa06345f762dbd63503614c5c2f627fa80e7",
+        "new_blob": "dbd19294fa9bc64690df85bd75d3eb3fa176f324",
+        "classification": "test-coverage"
+      },
+      {
+        "path": "axocoatl-server/src/routes.rs",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "0e6772b0641ae12c43f8a17e58e2e00944c7dba1",
+        "new_blob": "558f3b7f991fd6fb66fa62035d0dc4e5fb38b8aa",
+        "classification": "runtime-build-test-fix"
+      },
+      {
+        "path": "crates/axocoatl-coordination/src/htn.rs",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "b2c5a603d22802580399701286a7ee5e2157876a",
+        "new_blob": "cb38d903767fcd29a28bb91167bc50ac02160198",
+        "classification": "runtime-build-test-fix"
+      },
+      {
+        "path": "crates/axocoatl-daemon/src/bootstrap.rs",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "dfcccef7a26dde128933cc2d3b3be89ba718d8c0",
+        "new_blob": "788aa3df5c3c86cecdcf34b6ea2539de61e30ccb",
+        "classification": "runtime-build-test-fix"
+      },
+      {
+        "path": "crates/axocoatl-daemon/src/error.rs",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "6e1033eee55b58ebce33dfd0ec103f957e454d1b",
+        "new_blob": "48372024b2a2aeb4753a93794011d725bc921dfa",
+        "classification": "runtime-build-test-fix"
+      },
+      {
+        "path": "crates/axocoatl-memory/src/checkpoint.rs",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "dd22df1638fe04764cfb05e3bf422ada2ab9948e",
+        "new_blob": "f5fe05f3229058c9981f87ac6bd3cad4702133d6",
+        "classification": "runtime-build-test-fix"
+      },
+      {
+        "path": "crates/axocoatl-memory/src/extract.rs",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "6b29e2166e8bcd92cd9ad7e7b7c242574f0a0714",
+        "new_blob": "3d01ed1796b47dde5ed7ccc2198451e28ab7ab4c",
+        "classification": "runtime-build-test-fix"
+      },
+      {
+        "path": "demo/one-app/films/provenance/automation-hitl-recovery.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "20c6c2d341580d9ac4a2ad6e76cb66cc83c149c7",
+        "new_blob": "b4bfef606e18b31d6409336191b08f9488f48277",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "demo/one-app/films/provenance/durable-turn.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "2f4b578b3044647cae4b168cfdf6b9a9c1c00dc5",
+        "new_blob": "859dd5fb8500b7665fe8d5ef8e9aeff72de8fc76",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "demo/one-app/films/provenance/event-lattice-automation.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "618be0bdaa40f5e90e5a110e88013215c8587dad",
+        "new_blob": "c76cef8bd0f79c70f5ebc15b71546554ffd1aad8",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "demo/one-app/films/provenance/git-last-turn.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "8a809d8b4a9a7c289dfe7d75a9fa65ccc44253b3",
+        "new_blob": "970da9376f4b805af674d2b091c22b847f9dee2f",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "demo/one-app/films/provenance/mcp-approval.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "d69759fd74b88c3a82b688837681d6ea74880268",
+        "new_blob": "b3544b4e1f5a94eee3837d0ee27473d69b77d725",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "demo/one-app/films/provenance/multi-agent-handoff.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "b6b20c006d98b3801d22cf7849cad917de651f8e",
+        "new_blob": "bb1eb3f114b3e89da4c05491c472c5ae2a8570d5",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "demo/one-app/films/provenance/sandbox-terminal-preview.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "659847d2a9f9448cc420b5a318b17c2a3aeaa631",
+        "new_blob": "80a1055e51ad960d4126780c5f898aecd470c37e",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "demo/one-app/films/provenance/session-workbench.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "01a8bb3ded963d4a9cf0c2ebc398dc1ba9ad4822",
+        "new_blob": "7d87182f50aeac57a73be8b9abf853ffee8c0e8c",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "demo/one-app/films/provenance/settings-runtime.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "65219a8d4bc21c3c8152a23a97be2dbbc0c1801b",
+        "new_blob": "48ea1e34e60e8ca8291de0f1bbde25c4dd2969fe",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "demo/one-app/films/provenance/several-ways.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "dd08ab354e7e7bf761c2b2a44ea7b037fa538acd",
+        "new_blob": "7edb7cc287a2654fce3315dfab0993bfdd7575d4",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "demo/one-app/films/provenance/shared-core-memory.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "0f6236631ce1ee7e3e56be9acc20750763375d12",
+        "new_blob": "bd4d3a978a300a691e4ae769c60569f568cbdf24",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "demo/one-app/films/provenance/workspace-sessions-turns.json",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "7f84dec4aa377fac3df1392ec642d799abb067e9",
+        "new_blob": "379d4824b437791826f5a442283c66b2cb79704e",
+        "classification": "historical-provenance-rewrite"
+      },
+      {
+        "path": "docs/ARCHITECTURE.md",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "6d137bdc33efc6a8902897fd7a7c6a55b7e4c38f",
+        "new_blob": "5b42b30072edbb591a5fe106c1949cff73105582",
+        "classification": "documentation"
+      },
+      {
+        "path": "docs/PRODUCT.md",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "414bb9dbcab2bedf80b77dd9f28f7b3ff290cdb6",
+        "new_blob": "52b82748c14b8bc083fa43965c6365710ad4b964",
+        "classification": "documentation"
+      },
+      {
+        "path": "docs/TROUBLESHOOTING.md",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "d60eba156ffc9a8da3a8a2e309e2cac2278c1b09",
+        "new_blob": "bbea7f57941ec034af567ff2cd7ade5f6557932c",
+        "classification": "documentation"
+      },
+      {
+        "path": "llms.txt",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "d9927e176a62f4287c4f5327460a82f9571707b4",
+        "new_blob": "b95fc6b48b189bb4225ef422752d4cd7b2d92d07",
+        "classification": "release-metadata"
+      },
+      {
+        "path": "scripts/install.sh",
+        "status": "M",
+        "old_mode": "100755",
+        "new_mode": "100755",
+        "old_blob": "261c3b06973785c1277c2e7ec18ac1790b482578",
+        "new_blob": "d2a48f736246911527abee53e8cb3c3800dbb31b",
+        "classification": "installer"
+      },
+      {
+        "path": "sites/AGENTS.md",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "6ef60721b31b0be2087ede7535feb61f4c3ddcbd",
+        "new_blob": "80b80bb91a1f9ffb400f2a87670d71b3aa095c13",
+        "classification": "governance"
+      },
+      {
+        "path": "sites/docs/src/content/docs/configure/providers.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "9e56c035e3bb4ae228b0eaf31681f8620a94ab98",
+        "new_blob": "315c48f84a4587b1b749a861129c5ab9ffe7d5b9",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/docs/src/content/docs/configure/settings.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "2b6038cf7560b7d8c02115a42f3103f290ec7580",
+        "new_blob": "902bebbb7bef1b9e1d6a7ef7264ef98e2eb66688",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/docs/src/content/docs/index.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "052b4bf320e6ee2006897827b355f31c184b8e6a",
+        "new_blob": "92e8f3b35d1f285c33eac2fcf2caabeba3d85d5c",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/docs/src/content/docs/operate/data-backup.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "0d6054fd6ca5cf497322f60e72672943560b6fdd",
+        "new_blob": "d845729aa0588a38d0fc88a1464b53da559eafd0",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/docs/src/content/docs/operate/security.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "5588a6bd5632de3dcbea9820ca5058b9612db66a",
+        "new_blob": "716d688d39050e14094f4ff0ff098e75d03edd48",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/docs/src/content/docs/operate/service.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "861261f475f81267026db9e9fcbc3865ea22fdf5",
+        "new_blob": "14a0f228b0a1290e8e41311c4a86f68589768367",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/docs/src/content/docs/operate/troubleshooting.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "0ba8084627990a83b9d20984f363ca35e4b2b82f",
+        "new_blob": "282326bc163ada79badc4ec69d2d1f84ff349735",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/docs/src/content/docs/reference/cli.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "a1bcb9ff1a2a811067953d150cf3e3911277414c",
+        "new_blob": "913784cb12c7a865f1b71815e85d8471cb44b445",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/docs/src/content/docs/reference/config.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "322c0e768593f64de45b0d88aaedfe6947d81888",
+        "new_blob": "147e84b61829e9d27b3f2153a173750e2f2e5e00",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/docs/src/content/docs/start/first-session.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "ae4f3e1b185740c2c94e1a202240ee6cb916566b",
+        "new_blob": "cad8d86839f54d73e44a65e4b8544ca7fe99159d",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/docs/src/content/docs/start/install.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "4fb50c7f0758db05dc05ebbb57829c967575bd06",
+        "new_blob": "d2f000f4bab02068de4d6f74faa00d10a51125fc",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/docs/src/content/docs/start/onboard.mdx",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "7284a6eb035f44d7ba1da7fd63f25fb465d2c1e7",
+        "new_blob": "5981f72ebd98259c630a4f620d73333cf05bf1b6",
+        "classification": "documentation"
+      },
+      {
+        "path": "sites/marketing/changelog/index.html",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "28a2ce15b3ba923a6a70447e5a541dad76d20654",
+        "new_blob": "cd06de4a5face916d8394da3cfa8aaed69e6d7c1",
+        "classification": "marketing"
+      },
+      {
+        "path": "sites/marketing/install/index.html",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "b6ff18490f8411cecf77ba6ffcd97bde41add894",
+        "new_blob": "f62c58251fdd6d9dcf6b82e35870b51e8cd76c3b",
+        "classification": "marketing"
+      },
+      {
+        "path": "sites/marketing/integrations/openrouter/index.html",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "c04023499a11b158f8b0812d1ab6c81f9a37a186",
+        "new_blob": "3bcdb5d35d914aa63e35c591b3e0a8fb4a3afc63",
+        "classification": "marketing"
+      },
+      {
+        "path": "sites/marketing/scripts/validate.mjs",
+        "status": "M",
+        "old_mode": "100644",
+        "new_mode": "100644",
+        "old_blob": "8a739af8daf763d5eea7c578ee8758c5879d54da",
+        "new_blob": "e7cd03b1a81dbb93d982f943d405ffcda82e6e73",
+        "classification": "marketing"
+      }
+    ]
+  },
+  "protected": {
+    "paths": [
+      "Cargo.toml",
+      "axocoatl-server/Cargo.toml",
+      "axocoatl-server/src",
+      "axocoatl-server/static",
+      "crates",
+      "demo/one-app",
+      "packages",
+      "sites/marketing/assets/films",
+      "sites/marketing/components/ax-product-film.js",
+      "sites/marketing/concepts",
+      "sites/marketing/index.html",
+      "sites/marketing/showcase",
+      "sites/marketing/why"
+    ],
+    "excluded_paths": [
+      "axocoatl-server/src/routes.rs",
+      "crates/axocoatl-coordination/src/htn.rs",
+      "crates/axocoatl-daemon/src/bootstrap.rs",
+      "crates/axocoatl-daemon/src/error.rs",
+      "crates/axocoatl-memory/src/checkpoint.rs",
+      "crates/axocoatl-memory/src/extract.rs",
+      "demo/one-app/films/provenance/automation-hitl-recovery.json",
+      "demo/one-app/films/provenance/durable-turn.json",
+      "demo/one-app/films/provenance/event-lattice-automation.json",
+      "demo/one-app/films/provenance/git-last-turn.json",
+      "demo/one-app/films/provenance/mcp-approval.json",
+      "demo/one-app/films/provenance/multi-agent-handoff.json",
+      "demo/one-app/films/provenance/sandbox-terminal-preview.json",
+      "demo/one-app/films/provenance/session-workbench.json",
+      "demo/one-app/films/provenance/settings-runtime.json",
+      "demo/one-app/films/provenance/several-ways.json",
+      "demo/one-app/films/provenance/shared-core-memory.json",
+      "demo/one-app/films/provenance/workspace-sessions-turns.json"
+    ],
+    "entry_count": 607,
+    "content_sha256": "5ce3468c450052ba40662df7446589cd19f6fa39d226f24b122c021882988637"
+  },
+  "runtime_changed_paths": [
+    "Cargo.lock",
+    "axocoatl-cli/Cargo.toml",
+    "axocoatl-cli/src/main.rs",
+    "axocoatl-cli/src/user_paths.rs",
+    "axocoatl-server/src/routes.rs",
+    "crates/axocoatl-coordination/src/htn.rs",
+    "crates/axocoatl-daemon/src/bootstrap.rs",
+    "crates/axocoatl-daemon/src/error.rs",
+    "crates/axocoatl-memory/src/checkpoint.rs",
+    "crates/axocoatl-memory/src/extract.rs"
+  ],
+  "semantics_preserving_runtime_fixes": [
+    "axocoatl-server/src/routes.rs",
+    "crates/axocoatl-coordination/src/htn.rs",
+    "crates/axocoatl-daemon/src/bootstrap.rs",
+    "crates/axocoatl-daemon/src/error.rs",
+    "crates/axocoatl-memory/src/checkpoint.rs",
+    "crates/axocoatl-memory/src/extract.rs"
+  ]
+}
