@@ -87,6 +87,42 @@ verification validates the recorded digest field without binding it to the
 current checkout. Source-bound and unflagged release verification also compare
 it with the current checkout.
 
+Provenance is a declaration made with a take; do not rewrite it merely to make a
+later checkout pass. A history audit found that these 12 files had been rewritten
+without recapture. They are now restored byte-for-byte from their earliest commit,
+`60b1bce`, including the declared dirty source identity and binary hash. The source
+content digest materializes exactly at that commit. The capture binary bytes were
+not preserved, however, so the binary path, version, and hash are first-committed
+declarations, not an independently authenticated binary artifact.
+
+The frozen `v1.0.1` tree still contains the later source/binary-only rewrite. Its
+one-time compatibility attestation first applies the complete portable media,
+keyframe, timeline, staged-sequence, and durable-evidence gate. It then proves the
+restored and frozen provenance bytes separately, verifies that their only semantic
+difference is `source` and `binary`, and binds the complete `60b1bce`→`e82902b`
+Git delta: 55 paths total, consisting of 43 non-recording changes and those 12
+audited rewrites. Six runtime build/test fixes are named by exact path and blob;
+all other required filmed-product content is protected by a verifier-owned,
+non-empty path set. This does not make the films captures of `v1.0.1` or weaken
+ordinary source-bound verification.
+
+Run a reviewed compatibility attestation from the control checkout against a
+separate clean frozen release checkout:
+
+```bash
+node /path/to/control/demo/one-app/films/verify-film-set.mjs \
+  --release-compatibility \
+  /path/to/control/demo/one-app/films/compatibility/v1.0.1.json \
+  --release-root /path/to/frozen-v1.0.1-checkout
+```
+
+The control checkout supplies the restored first-committed provenance files. The
+frozen checkout must retain Git history and tags; an extracted archive is
+insufficient because the verifier proves tag, commit, tree, first provenance
+commit, and all 55 diff object identities. The normal `--source-bound` command
+remains exact-source only and never discovers or falls back to a compatibility
+record. Use it unchanged for every future recapture.
+
 `evidence.json` uses schema version 1, the matching `film`, one ordered
 `passed` check per portfolio beat with a concrete `detail`, and a non-empty
 `identities` object containing the durable Session, Turn, attempt-set, run, or

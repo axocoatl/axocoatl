@@ -49,7 +49,10 @@ async function stopProcess(child) {
 }
 
 async function waitForHealth(baseUrl, child, logs) {
-  const deadline = Date.now() + 45_000;
+  // macOS bootstrap may run three sequential, individually bounded 15-second
+  // Podman readiness probes before HTTP binds. Keep a finite margin above
+  // that 45-second backend contract; a process exit still fails immediately.
+  const deadline = Date.now() + 75_000;
   let lastError = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
@@ -247,6 +250,9 @@ consolidation:
       },
       async listSessions() {
         return api(baseUrl, 'GET', '/api/sessions');
+      },
+      async listAutomations() {
+        return api(baseUrl, 'GET', '/api/automations');
       },
       async pathExists(target) {
         try { await access(target); return true; } catch { return false; }

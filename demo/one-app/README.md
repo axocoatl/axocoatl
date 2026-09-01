@@ -188,9 +188,13 @@ In another terminal, seed the advanced Automation:
 [`DEMO-CATALOG.md`](DEMO-CATALOG.md) defines the narrative portfolio and
 [`films/portfolio.json`](films/portfolio.json) is the machine-readable
 authority for its 12 slugs, complete Showcase order, placements, scenarios,
-beats, duration bounds, poster, and evidence. All 12 have been regenerated from
-the final 1.0 workbench and are accepted only with their exact capture, durable
-evidence, staged-frame, binary, and shipped-media provenance.
+beats, duration bounds, poster, and evidence. All 12 retain exact source-frame,
+capture-record, durable-evidence, staged-frame, and shipped-media hashes. A history
+audit restored every provenance JSON byte-for-byte from its earliest commit after
+later source and binary fields had been rewritten without recapture. Those restored
+fields are the first committed declarations. The capture binary bytes themselves
+were not preserved, so its declared path, version, and hash are not an independently
+authenticated binary artifact.
 
 Use [`films/SHOT-MANIFEST.md`](films/SHOT-MANIFEST.md) for the exact manual
 capture, timeline/holds, staging, encoding, and provenance workflow. Manual
@@ -212,11 +216,26 @@ The first command validates all 12 scenario and shot-contract references. The
 second is a work-in-progress gate that warns for each explicit
 `needs_recording` entry while strictly checking any entry marked `ready`. The
 portable gate checks recorded evidence and media without requiring the capture
-machine's binary. The source-bound CI/deployment gate additionally binds every
-film to the current checkout's canonical source-content digest. The unflagged
-local release gate also requires the exact capture binary: every film must be
-`ready`, meet the exact media/duration contract, and match its source-content,
-source-frame, binary, durable evidence, and shipped-media provenance.
+machine's binary. The source-bound gate additionally binds every film to the
+current checkout's canonical source-content digest. The unflagged local release
+gate requires a local binary whose version and hash match the first-committed
+declaration; that is a local equality check, not proof that the original binary
+bytes were preserved. Every film must still be `ready` and meet the exact media,
+duration, source-frame, durable-evidence, and shipped-media contract.
+
+Those exact-source gates do not silently accept patch releases. When a patch has
+an intentionally bounded source delta that does not change the filmed product
+surface, a separate reviewed compatibility record can be checked with
+`--release-compatibility <attestation> --release-root <frozen-checkout>`. That
+mode reruns the portable gate in the frozen checkout and compares its historical
+source/binary-only provenance rewrite with the byte-for-byte restored files in the
+control checkout. For `v1.0.1`, it proves the annotated tag/commit/tree, all 55
+changed paths from the first provenance commit (43 non-recording paths plus 12
+audited provenance rewrites), both 153-artifact aggregate digests, the complete
+runtime-changed path set, six reviewed runtime build/test fixes, and the remaining
+protected filmed-product content. It means the recordings remain evidence for
+their stated visible claims; it does not claim they were captured with the
+`v1.0.1` binary.
 
 ## Create the presenter Session
 

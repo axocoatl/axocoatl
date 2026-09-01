@@ -26,20 +26,20 @@ export function writeJsonAtomic(path, value) {
   renameSync(temporary, path);
 }
 
-export function resolveRepoPath(path) {
+export function resolveRepoPath(path, root = repoRoot) {
   if (typeof path !== 'string' || !path || path.startsWith('/') || path.includes('\\')) {
     fail(`Repository path must be a non-empty POSIX-relative path: ${path}`);
   }
-  const absolute = resolve(repoRoot, path);
-  const back = relative(repoRoot, absolute);
+  const absolute = resolve(root, path);
+  const back = relative(root, absolute);
   if (!back || back === '..' || back.startsWith(`..${sep}`)) {
     fail(`Repository path escapes the repository: ${path}`);
   }
   return absolute;
 }
 
-export function repoRelative(path) {
-  const back = relative(repoRoot, resolve(path));
+export function repoRelative(path, root = repoRoot) {
+  const back = relative(root, resolve(path));
   if (!back || back === '..' || back.startsWith(`..${sep}`)) {
     fail(`Path must stay inside the repository: ${path}`);
   }
@@ -280,8 +280,8 @@ export function validatePortfolio(portfolio) {
   return portfolio;
 }
 
-export function loadPortfolio() {
-  return validatePortfolio(readJson(portfolioPath));
+export function loadPortfolio(root = repoRoot) {
+  return validatePortfolio(readJson(resolve(root, 'demo/one-app/films/portfolio.json')));
 }
 
 export function findFilm(portfolio, slug) {

@@ -469,9 +469,14 @@ impl SessionSandbox {
         format!("{}-node-modules", Self::container_name(sandbox_id))
     }
 
-    fn resolve_effective_image(
+    /// Resolve and validate the exact image that a local Session may start.
+    ///
+    /// This is deliberately pure so callers can reject an untrusted or
+    /// malformed image before starting Podman or performing host cleanup. The
+    /// start path repeats the same check as a defense-in-depth boundary.
+    pub fn resolve_effective_image(
         requested: Option<&str>,
-        policy: &SandboxPolicy,
+        allow_untrusted_image: bool,
     ) -> Result<String, IsolationError> {
         match requested.map(str::trim).filter(|image| !image.is_empty()) {
             Some(image) => {
@@ -483,7 +488,7 @@ impl SessionSandbox {
                 if let Some(canonical) = curated_image_reference(image) {
                     return Ok(canonical.to_string());
                 }
-                if !policy.allow_untrusted_image {
+                if !allow_untrusted_image {
                     return Err(IsolationError::OciContainerFailed(format!(
                         "Session image '{image}' requires explicit trust; set \
                      sandbox.allow_untrusted_images = true or choose an Axocoatl-curated \
@@ -717,7 +722,7 @@ impl SessionSandbox {
         // A configured image and the image actually executing repository code
         // must never disagree. Reject an untrusted request with an actionable
         // error instead of persisting one image while silently running Alpine.
-        let mut image = Self::resolve_effective_image(image, policy)?;
+        let mut image = Self::resolve_effective_image(image, policy.allow_untrusted_image)?;
         if policy.passive_start && (!exposed_ports.is_empty() || !post_create_commands.is_empty()) {
             return Err(IsolationError::OciSetupFailed(
                 "passive recovery sandboxes cannot publish ports or run project setup commands"
@@ -3703,12 +3708,13 @@ mod tests {
     fn curated_images_are_trusted_and_arbitrary_images_are_never_substituted() {
         let policy = SandboxPolicy::default();
         assert_eq!(
-            SessionSandbox::resolve_effective_image(None, &policy).unwrap(),
+            SessionSandbox::resolve_effective_image(None, policy.allow_untrusted_image).unwrap(),
             DEFAULT_IMAGE
         );
         for image in CURATED_IMAGES {
             assert_eq!(
-                SessionSandbox::resolve_effective_image(Some(image), &policy).unwrap(),
+                SessionSandbox::resolve_effective_image(Some(image), policy.allow_untrusted_image)
+                    .unwrap(),
                 *image
             );
         }
@@ -3718,13 +3724,14 @@ mod tests {
             "docker.io/node:20-slim",
         ] {
             assert_eq!(
-                SessionSandbox::resolve_effective_image(Some(alias), &policy).unwrap(),
+                SessionSandbox::resolve_effective_image(Some(alias), policy.allow_untrusted_image)
+                    .unwrap(),
                 "docker.io/library/node:20-slim"
             );
         }
         let error = SessionSandbox::resolve_effective_image(
             Some("registry.example.invalid/project/runtime:latest"),
-            &policy,
+            policy.allow_untrusted_image,
         )
         .unwrap_err()
         .to_string();
@@ -3739,15 +3746,18 @@ mod tests {
         assert_eq!(
             SessionSandbox::resolve_effective_image(
                 Some("registry.example.invalid/project/runtime:latest"),
-                &trusted
+                trusted.allow_untrusted_image
             )
             .unwrap(),
             "registry.example.invalid/project/runtime:latest"
         );
         for invalid in ["--privileged", "node:20\n--volume=/host:/host"] {
-            let error = SessionSandbox::resolve_effective_image(Some(invalid), &trusted)
-                .unwrap_err()
-                .to_string();
+            let error = SessionSandbox::resolve_effective_image(
+                Some(invalid),
+                trusted.allow_untrusted_image,
+            )
+            .unwrap_err()
+            .to_string();
             assert!(error.contains("image reference"));
             assert!(error.contains("invalid"));
         }

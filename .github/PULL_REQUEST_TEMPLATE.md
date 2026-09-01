@@ -16,11 +16,8 @@ Closes #...
 
 ## How this was tested
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo test --workspace`
-- [ ] `cargo test --doc --workspace`
-- [ ] `cargo build -p axocoatl-cli`
+- [ ] `./scripts/preflight.sh` passed with the CI-pinned runtimes documented in
+  `CONTRIBUTING.md`.
 - [ ] If the browser app changed: rebuilt the CLI, restarted the daemon,
   exercised the affected journey in the one app, and checked the browser
   console plus relevant light, dark, narrow, and reduced-motion states.

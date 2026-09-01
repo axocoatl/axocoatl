@@ -38,18 +38,37 @@ case "$(uname -s):$(uname -m)" in
   *) fail "unsupported test host" ;;
 esac
 
+AXO_CURRENT_VERSION="$(awk '
+  $0 == "[package]" { package_section = 1; next }
+  package_section && /^\[/ { exit }
+  package_section && $1 == "version" {
+    gsub(/"/, "", $3)
+    print $3
+    exit
+  }
+' "$AXO_REPO_ROOT/axocoatl-cli/Cargo.toml")"
+[ -n "$AXO_CURRENT_VERSION" ] || fail "could not determine the current CLI version"
+AXO_CURRENT_TAG="v$AXO_CURRENT_VERSION"
+
 AXO_FIXTURE_BINARY="$AXO_WORK_DIR/axocoatl"
-cat > "$AXO_FIXTURE_BINARY" <<'EOF'
-#!/bin/sh
-echo 'axocoatl 1.0.0'
-EOF
+printf '%s\n' '#!/bin/sh' "echo 'axocoatl $AXO_CURRENT_VERSION'" > "$AXO_FIXTURE_BINARY"
 chmod 0755 "$AXO_FIXTURE_BINARY"
 
 AXO_DIST_DIR="$AXO_WORK_DIR/dist"
 "$AXO_RELEASE_SCRIPT" package \
-  v1.0.0 "$AXO_NATIVE_TARGET" "$AXO_FIXTURE_BINARY" "$AXO_DIST_DIR"
+  "$AXO_CURRENT_TAG" "$AXO_NATIVE_TARGET" "$AXO_FIXTURE_BINARY" "$AXO_DIST_DIR"
 
-AXO_NATIVE_ARCHIVE="$AXO_DIST_DIR/axocoatl-v1.0.0-$AXO_NATIVE_TARGET.tar.gz"
+AXO_NATIVE_ARCHIVE="$AXO_DIST_DIR/axocoatl-$AXO_CURRENT_TAG-$AXO_NATIVE_TARGET.tar.gz"
+AXO_SECOND_DIST_DIR="$AXO_WORK_DIR/dist-second"
+sleep 1
+"$AXO_RELEASE_SCRIPT" package \
+  "$AXO_CURRENT_TAG" "$AXO_NATIVE_TARGET" "$AXO_FIXTURE_BINARY" "$AXO_SECOND_DIST_DIR"
+AXO_SECOND_ARCHIVE="$AXO_SECOND_DIST_DIR/axocoatl-$AXO_CURRENT_TAG-$AXO_NATIVE_TARGET.tar.gz"
+cmp -s "$AXO_NATIVE_ARCHIVE" "$AXO_SECOND_ARCHIVE" \
+  || fail "packaging identical inputs twice did not produce a byte-identical archive"
+cmp -s "$AXO_NATIVE_ARCHIVE.sha256" "$AXO_SECOND_ARCHIVE.sha256" \
+  || fail "deterministic archive checksum manifests differ"
+
 AXO_EXTRACT_DIR="$AXO_WORK_DIR/extracted"
 mkdir -p "$AXO_EXTRACT_DIR"
 tar -xzf "$AXO_NATIVE_ARCHIVE" -C "$AXO_EXTRACT_DIR"
@@ -66,7 +85,7 @@ for AXO_TARGET in \
   x86_64-apple-darwin \
   aarch64-apple-darwin
 do
-  AXO_ARCHIVE="$AXO_DIST_DIR/axocoatl-v1.0.0-$AXO_TARGET.tar.gz"
+  AXO_ARCHIVE="$AXO_DIST_DIR/axocoatl-$AXO_CURRENT_TAG-$AXO_TARGET.tar.gz"
   if [ ! -f "$AXO_ARCHIVE" ]; then
     cp "$AXO_NATIVE_ARCHIVE" "$AXO_ARCHIVE"
   fi
@@ -78,7 +97,7 @@ AXO_RELEASE_FILE_COUNT="$(find "$AXO_DIST_DIR" -mindepth 1 -maxdepth 1 -print | 
 [ "$AXO_RELEASE_FILE_COUNT" = 8 ] \
   || fail "four-target release fixture should contain exactly eight files"
 
-"$AXO_RELEASE_SCRIPT" verify-set v1.0.0 "$AXO_DIST_DIR" \
+"$AXO_RELEASE_SCRIPT" verify-set "$AXO_CURRENT_TAG" "$AXO_DIST_DIR" \
   x86_64-unknown-linux-gnu \
   aarch64-unknown-linux-gnu \
   x86_64-apple-darwin \
@@ -88,14 +107,14 @@ AXO_BAD_DIR="$AXO_WORK_DIR/missing-notices"
 AXO_BAD_STAGE="$AXO_WORK_DIR/missing-notices-stage"
 mkdir -p "$AXO_BAD_DIR" "$AXO_BAD_STAGE"
 cp "$AXO_FIXTURE_BINARY" "$AXO_BAD_STAGE/axocoatl"
-AXO_BAD_ARCHIVE="$AXO_BAD_DIR/axocoatl-v1.0.0-$AXO_NATIVE_TARGET.tar.gz"
+AXO_BAD_ARCHIVE="$AXO_BAD_DIR/axocoatl-$AXO_CURRENT_TAG-$AXO_NATIVE_TARGET.tar.gz"
 tar -czf "$AXO_BAD_ARCHIVE" -C "$AXO_BAD_STAGE" axocoatl
 AXO_BAD_DIGEST="$(sha256_file "$AXO_BAD_ARCHIVE" | tr 'A-F' 'a-f')"
 printf '%s  %s\n' "$AXO_BAD_DIGEST" "${AXO_BAD_ARCHIVE##*/}" > "$AXO_BAD_ARCHIVE.sha256"
 
 set +e
 "$AXO_RELEASE_SCRIPT" verify-set \
-  v1.0.0 "$AXO_BAD_DIR" "$AXO_NATIVE_TARGET" \
+  "$AXO_CURRENT_TAG" "$AXO_BAD_DIR" "$AXO_NATIVE_TARGET" \
   > "$AXO_WORK_DIR/missing-notices.out" 2>&1
 AXO_EXIT_CODE=$?
 set -e

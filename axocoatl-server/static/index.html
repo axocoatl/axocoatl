@@ -1120,6 +1120,11 @@ let _liveSessionSnapshotEpoch = 0;
 // Unlike the initiating component's same-tab DOM event, this survives another
 // tab starting the change and is replaced atomically by every WS Snapshot.
 const _sessionEnvironmentTransitions = new Map();
+// A cross-tab Close must retire the exact cockpit that was Active when its
+// destructive transition began, even if a concurrent Session-list refresh
+// mutates that object to Closed before the settled edge arrives. Object
+// identity prevents that ownership from leaking to a later Closed review.
+const _sessionEnvironmentRetireOwners = new Map();
 // One unresolved Ways set suspends the primary runtime of every Session in
 // its Workspace, including sibling Sessions open in another tab.
 const _workspaceAttemptOwnerships = new Map();
@@ -7612,7 +7617,7 @@ async function reconcileSessionAfterRuntimeFailure(
 
 async function reconcileSessionEnvironmentLifecycle(
   sessionId,
-  { invalidatesRuntime = false } = {},
+  { invalidatesRuntime = false, retireCockpitState = null } = {},
 ) {
   if (!sessionId || S.session.id !== sessionId) {
     void sessionHome()?.refresh?.();
@@ -7620,6 +7625,8 @@ async function reconcileSessionEnvironmentLifecycle(
     return null;
   }
   const sessionState = S.session;
+  const wasClosed = sessionState.status === 'closed';
+  const retiresThisCockpit = retireCockpitState === sessionState;
   if (invalidatesRuntime) markSessionRuntimeActivationRequired(sessionId);
   const exact = await reconcileSessionAfterRuntimeFailure(sessionId, sessionState);
   if (S.session !== sessionState || S.session.id !== sessionId) return exact;
@@ -7633,7 +7640,12 @@ async function reconcileSessionEnvironmentLifecycle(
     return null;
   }
   if (exact.status === 'closed') {
-    closeCockpit();
+    // Selecting an already-Closed Session deliberately mounts its durable
+    // transcript and unresolved Attempt recovery read-only. Preserve that
+    // view across reconnect snapshots. A lifecycle edge that closes a Session
+    // which was active when reconciliation began still retires the cockpit,
+    // matching the explicit cross-tab Close contract.
+    if (retiresThisCockpit || !wasClosed) closeCockpit();
     return exact;
   }
   if (_sessionEnvironmentTransitions.has(sessionId)
@@ -8601,6 +8613,14 @@ function beginRemoteSessionEnvironmentChange(frame) {
     Number(frame.generation || 0),
   );
   if (S.session.id !== sessionId) return;
+  if (S.session.status !== 'closed') {
+    // A later Close can reuse the same environment generation after Reopen.
+    // Always bind a fresh changing edge to the cockpit that is mounted now;
+    // a stale object retained from an earlier edge must not own this one.
+    _sessionEnvironmentRetireOwners.set(sessionId, S.session);
+  } else if (_sessionEnvironmentRetireOwners.get(sessionId) !== S.session) {
+    _sessionEnvironmentRetireOwners.delete(sessionId);
+  }
   if (S.session.runtimeActivationPending && S.session.runtimeActivationInFlight) {
     // Cold reconstruction announces itself from inside the one request that
     // already owns activation. Keep that request alive; the transition map
@@ -8617,22 +8637,45 @@ function settleRemoteSessionEnvironmentChange(frame) {
   const sessionId = frame?.session;
   if (!sessionId) return;
   _sessionEnvironmentTransitions.delete(sessionId);
-  void reconcileSessionEnvironmentLifecycle(sessionId, { invalidatesRuntime: true });
+  const retireCockpitState = _sessionEnvironmentRetireOwners.get(sessionId) || null;
+  _sessionEnvironmentRetireOwners.delete(sessionId);
+  void reconcileSessionEnvironmentLifecycle(sessionId, {
+    invalidatesRuntime: true,
+    retireCockpitState,
+  });
 }
 
 function replaceSessionEnvironmentTransitions(items) {
+  const selectedSessionId = S.session.id;
+  const selectedRetireOwner = selectedSessionId
+    ? _sessionEnvironmentRetireOwners.get(selectedSessionId) || null : null;
   _sessionEnvironmentTransitions.clear();
   for (const item of (Array.isArray(items) ? items : [])) {
     if (!item?.session) continue;
     _sessionEnvironmentTransitions.set(item.session, Number(item.generation || 0));
   }
+  for (const sessionId of _sessionEnvironmentRetireOwners.keys()) {
+    if (!_sessionEnvironmentTransitions.has(sessionId)) {
+      _sessionEnvironmentRetireOwners.delete(sessionId);
+    }
+  }
   if (!S.session.id) return;
   if (_sessionEnvironmentTransitions.has(S.session.id)) {
+    if (S.session.status !== 'closed') {
+      // A Snapshot is a new authoritative observation point. Rebind even when
+      // its numeric environment generation matches an older Close/Reopen/Close
+      // cycle, because status-only lifecycle changes need not advance it.
+      _sessionEnvironmentRetireOwners.set(S.session.id, S.session);
+    } else if (_sessionEnvironmentRetireOwners.get(S.session.id) !== S.session) {
+      _sessionEnvironmentRetireOwners.delete(S.session.id);
+    }
     markSessionRuntimeActivationRequired(S.session.id);
   } else {
     // The socket may have been offline for the entire change. Re-read the
     // durable generation even when this snapshot contains no active owner.
-    void reconcileSessionEnvironmentLifecycle(S.session.id);
+    void reconcileSessionEnvironmentLifecycle(S.session.id, {
+      retireCockpitState: selectedRetireOwner,
+    });
   }
 }
 

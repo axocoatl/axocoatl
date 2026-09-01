@@ -15,6 +15,7 @@ concurrency:
   # Share the normal release lock. Crate publication and the repository's
   # latest release pointer must never be mutated by two workflows at once.
   group: axocoatl-production-release
+  queue: max
   cancel-in-progress: false
 
 env:
@@ -423,7 +424,7 @@ jobs:
                     echo "Cargo returned $publish_status; resolving the ambiguous upload by reading crates.io."
                   fi
                   visible=false
-                  for attempt in {1..18}; do
+                  for _attempt in {1..18}; do
                     status="$(fetch_crate "$crate" "$response")"
                     case "$status" in
                       200) verify_crate "$crate" "$response"; visible=true; break ;;

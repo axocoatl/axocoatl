@@ -34,6 +34,15 @@ and false-success takes before promoting the coherent Session Workbench,
 Workspace/Sessions/Turns, Several Ways, Git Last turn, and shared-core-memory
 recordings. Older pairs remain reference material only.
 
+The 12 provenance files are restored byte-for-byte from their earliest commit
+after a history audit found later source and binary rewrites made without
+recapture. Their source and binary fields are first-committed declarations; the
+capture binary bytes are not preserved for independent authentication. The
+`v1.0.1` incident attestation audits the frozen tag's source/binary-only rewrite,
+binds all 55 changed paths (43 non-recording plus 12 provenance rewrites), and
+proves both frozen and restored 153-artifact sets plus the remaining protected
+filmed-product content. It does not relabel any take as a `v1.0.1` capture.
+
 ### Product foundation
 
 | Showcase | Film | User question | Required proof | Additional placement |

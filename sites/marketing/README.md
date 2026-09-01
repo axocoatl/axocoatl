@@ -41,12 +41,17 @@ and reduced-motion states.
 the repository-root `llms.txt` as the AI-readable product narrative at `/llms.txt`. The
 validator keeps that file aligned with the visible 1.0 story and rejects the retired
 runtime-first narrative. The deployment expects twelve product-film MP4/JPEG pairs in
-`assets/films/`. The manifest contains twelve `ready` entries. Each MP4/JPEG pair comes
-from a current-browser capture against the exact release binary and has complete schema-v2
-capture, staged-frame, durable-evidence, binary, media, and source-bound provenance. The
-portable, source-bound, and full local release verifiers are the acceptance boundary for
-the complete set. Films may appear on more than one page when the same product evidence
-answers a different visitor question.
+`assets/films/`. The manifest contains twelve `ready` entries. Each MP4/JPEG pair has
+exact source-frame, capture-record, staged-frame, durable-evidence, and shipped-media
+hashes. A history audit restored all 12 provenance JSONs byte-for-byte from their first
+commit after later source and binary rewrites made without recapture. Those source and
+binary fields are first-committed declarations; the capture binary bytes are not
+preserved for independent authentication. The portable and exact-source verifiers are
+the normal acceptance boundary. The one-time `v1.0.1` incident attestation separately
+audits the frozen tag's source/binary-only rewrites and complete 55-path delta.
+Compatibility never relabels an existing take as a capture of the patch binary. Films
+may appear on more than one page when the same product evidence answers a different
+visitor question.
 The normal single-Agent Session remains the homepage proof, followed by Turn durability
 before optional Ways. Why pairs its Session and Git-control claims with visible evidence.
 Concepts explains the workbench and runtime mechanisms in depth. Showcase is the complete
@@ -74,8 +79,13 @@ Every slug requires both `assets/films/<slug>.mp4` and
 `assets/films/<slug>.jpg`. Do not satisfy the build with placeholder bytes: strict
 validation probes H.264/yuv420p, 1280×720, 24 fps, no audio, fast-start placement,
 duration, and the exact MJPEG poster. It also verifies page placement, distinct beat
-frames, capture and staged-sequence hashes, durable evidence, binary identity, the
-source-bound checkout digest, and the shipped-media provenance record.
+frames, capture and staged-sequence hashes, durable evidence, the first-committed
+binary declaration, the recorded source digest, and the shipped-media provenance
+record. Release-specific compatibility proves the immutable tag/tree, all 55 Git
+changes (43 non-recording plus 12 audited provenance rewrites), frozen and restored
+153-artifact aggregates, the exact runtime-changed paths, and a verifier-owned
+protected surface. It does not authenticate absent capture-binary bytes or claim the
+films were captured with `v1.0.1`; ordinary source-bound verification remains strict.
 
 `ax-product-film` pauses playback offscreen and exposes one Play, Pause, or Replay
 control. The homepage proof may start muted when it becomes visible; supporting films
