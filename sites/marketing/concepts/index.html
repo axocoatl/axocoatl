@@ -16,7 +16,7 @@
 
     <section class="container section section-rule" id="workspace-sessions-turns">
       <div class="split">
-        <div class="stack"><span class="eyebrow">One work surface</span><h2>Start with the work.</h2><p>Authorize a project directory, create or resume a Session, attach context for the next turn or the whole Session, and ask normally. The request is accepted into a durable Session ledger before execution begins.</p><p>Conversation is the resting canvas. Files and Source Control, Preview, comparison, and the agent graph open as focused tools. Ways opens only when several attempts need configuration or review. Terminal stays in its bottom dock.</p></div>
+        <div class="stack"><span class="eyebrow">One work surface</span><h2>Start with the work.</h2><p>Configure Axocoatl once for the current OS user, run <code>axocoatl dev</code>, and open the loopback workbench in your browser. Onboarding creates no project. Choose <strong>Open workspace…</strong> to authorize a repository, then create or resume a Session and ask normally.</p><p>The request is accepted into a durable Session ledger before execution begins. Conversation is the resting canvas. Files and Source Control, Preview, comparison, and the agent graph open as focused tools. Ways opens only when several attempts need configuration or review. Terminal stays in its bottom dock.</p></div>
         <ol class="step-list"><li><div><h3>Workspace</h3><p>An authorized project directory that groups Sessions.</p></div></li><li><div><h3>Session</h3><p>Persistent work and conversation anchored to that directory.</p></div></li><li><div><h3>Turn</h3><p>A durable request, context snapshot, execution facts, output, and final lifecycle state.</p></div></li></ol>
       </div>
       <ax-product-film
@@ -58,6 +58,7 @@
         <article class="card"><span class="card-kicker">Execution</span><h3>Terminal and Preview</h3><p>Use the docked Terminal for commands and bring the running application into Preview without leaving the Session.</p></article>
         <article class="card"><span class="card-kicker">Continuity</span><h3>Context and History</h3><p>Attach bounded context to one turn or the Session, then search or export the durable conversation. An autonomous single-Agent Session can also rewind at a turn boundary.</p></article>
       </div>
+      <div class="callout"><p><strong>Detection is not consent:</strong> before repository tools become Ready, Axocoatl shows the proposed runtime image and exact setup command for review. An unchecked detected command does not run merely because it was found.</p></div>
       <ax-product-film
         film="sandbox-terminal-preview"
         src="/assets/films/sandbox-terminal-preview.mp4"

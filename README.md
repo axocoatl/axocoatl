@@ -10,17 +10,23 @@
   <img src="sites/marketing/assets/og-home.png" alt="Axocoatl: the local-first workbench for coding agents" width="760">
 </p>
 
-<p align="center"><em>A durable Session for agent work: conversation, context, repository tools, history, and deliberate Git control.</em></p>
+<p align="center"><strong>Agent work you can inspect, compare, and keep.</strong></p>
 
-Axocoatl gives you one folder-anchored session where agents work against a real
-repository. Use the Agent or configured team that fits the work through files, terminal,
-Preview, tools, and Git. When the implementation is genuinely uncertain, explore several
-ways with different agents and models, compare outcome and route, and keep one result.
+Axocoatl v1 gives coding agents one durable, folder-anchored Session for real
+repository work. Conversation, Files, Terminal, Preview, tools, History, and Git
+stay together. Use one configured Agent or team for the direct path. When the
+implementation is genuinely uncertain, run the same task several Ways with
+different agents and models, compare the evidence, and Keep one result as
+uncommitted Git changes.
 
-The workbench is backed by a Rust runtime with persistent actors, memory,
-checkpointing, sandboxed repository file and shell tools, provider-neutral LLM access, explicit Automation
-DAGs, and a typed event lattice shared by Skills, triggers, webhooks, and API
-observers.
+Install one `axocoatl` executable and use the workbench in your existing browser.
+The CLI, Rust daemon, HTTP/WebSocket API, and workbench browser assets ship together,
+so using Axocoatl requires no separate frontend install or bundled browser runtime.
+Rootless Podman remains the required local backend for sandboxed Workspace Sessions.
+
+Under the workbench, persistent actors, scoped memory, canonical Session History,
+checkpointing, sandboxed tools, Automations, MCP, A2A, and provider-neutral model
+access keep the work durable and extensible.
 
 ---
 
@@ -58,133 +64,84 @@ become Workspaces only when you authorize them through **Open workspace…**.
 
 ---
 
-## One durable workbench
+## From request to reviewed change
 
-Axocoatl joins the repository work surface to the runtime underneath it:
+1. Open or resume a Workspace Session.
+2. Ask one Agent for a solution, or turn on **Explore several ways** and choose
+   an Agent and model for each attempt.
+3. Compare Outcome and Route, inspect changed paths and diffs, then run Checks
+   and an optional Judge.
+4. Choose **Keep this one** to apply one candidate to the primary checkout
+   without committing it.
+5. Open **Last turn** in Source Control, review the current attributed diff,
+   stage what you want, and commit deliberately.
 
-- **Conversation stays the spine.** Files/editor/Source Control, Preview, attempt review,
-  and agent graph open as focused tools from the Session header or **More**; the contextual
-  Ways inspector appears only while needed, and Terminal remains in its bottom dock.
-- **Session history is durable and usable.** Accepted turns have stable identities and
-  explicit running, completed, failed, cancelled, or interrupted state. Reopen the
-  session to read them, run case-insensitive text search in this session or all sessions,
-  export Markdown or JSON, or, in an autonomous single-Agent Session, rewind the visible
-  history at a turn boundary.
-- **Context belongs to the Session.** Attach a bounded file for the next normal turn or
-  retain it for later turns in that Session. Remove it to stop future selection; a historical
-  relation and blob pin remain so earlier turns can still open their exact context. There is no
-  separate cross-chat Files destination.
-- **Stop addresses the exact turn.** A stale Stop cannot cancel whichever work happens
-  to be visible. Cancellation is cooperative: provider streaming stops promptly, while
-  an already-started side-effecting tool is allowed to reach a safe boundary.
-- **Attempts are real and heterogeneous.** Choose a different agent and model for each
-  way, then inspect the work rather than trusting a single answer. While the Ways decision
-  is unresolved, lifecycle, output, Route, failure, usage, cost, and optional Judge evidence
-  rehydrate. Before Checks, changed paths and diffs are live-runtime evidence; after a restart
-  they remain unavailable until Checks protects the candidate identity. Completed Check
-  evidence then survives reload. The current attempt boundary requires a single
-  autonomous-Agent Session on local Podman. Ways use each Way's configured primary
-  provider/model directly; rate-limit fallback remains on the ordinary Session path until a
-  Way can persist and price its effective fallback route honestly.
-- **Repository truth stays visible.** Keep records the selected output and turn attribution
-  in durable Session History, applies its changes without committing, and cleans up the
-  attempt set. Candidate Routes, diffs, Checks, Judge ranking, and cost are not copied into
-  durable Session History. **Last turn** filters the current Git diff to paths attributed to the
-  latest durable turn; it is not a frozen per-turn diff.
-- **The runtime survives.** Supervised actors and checkpoints preserve model-facing
-  continuity beyond one request. Autonomous Agents and declared coordinator Workers own
-  scoped four-tier memory; a Coordinator owns Tier-1 conversation plus live orchestration
-  checkpoints within the non-terminal run boundary.
-- **The execution boundary is yours.** Rootless Podman is the local default; an
-  E2B Cloud remote sandbox and its template are explicit daemon-wide
-  configuration. The backend targets E2B Cloud; third-party E2B API
-  implementations are outside the 1.0 support scope. E2B rejects a per-Session
-  OCI image rather than silently substituting its template. Closing a Ready E2B
-  Session pauses and preserves its exact remote working tree; reopening reconnects to that
-  runtime. Failed or interrupted preparation is cleaned up instead. Deleting the Session or
-  changing its runtime is the destructive boundary.
-- **Control-plane state stays outside repository tools.** On supported Unix hosts,
-  the daemon retains its opened data-directory authority and rejects link-based
-  redirection of managed state. Local Podman masks the data and lease roots if either
-  sits below the Workspace, and rejects a Workspace at or beneath those roots. A
-  compatibility preflight cleans up only provably exposing, non-current reserved-name
-  containers before Session state is recovered.
-- **Repository setup is reviewed.** Detected setup such as `npm ci` is shown as
-  an exact, unchecked proposal. Conversation Send, Files, Source Control,
-  Terminal, Preview, Agent tools, and Ways actions that start work or inspect
-  a live checkout remain unavailable until the environment is durably Ready.
-  Durable History and the exact Keep/Discard recovery path remain reachable.
-  An operator may default only the exact devcontainer post-create command for
-  an unreviewed Session; a reviewed checked or unchecked choice wins, and
-  edited or lockfile-detected commands are outside that default.
-- **Readiness fails honestly.** The exact curated references—Alpine 3.20,
-  Debian bookworm slim, Ubuntu 24.04, Python 3.12 slim, Node 20 slim, and Rust
-  bookworm—are accepted without arbitrary-image trust, then local Podman
-  verifies the repository commands Axocoatl requires.
-  It may provision those commands inside the container, but it never installs
-  Podman or creates its VM; missing host prerequisites remain explicit. A root
-  Node project gets a Session-owned Linux `node_modules` volume, so the host's
-  native dependency tree is masked rather than executed in the container.
-- **No provider lock-in.** Axocoatl supports six provider IDs: Ollama, OpenAI, OpenRouter,
-  Anthropic, Gemini, and Mistral. The `openai` adapter targets either OpenAI or one
+## One workbench, from request to review
+
+- **One executable, one browser surface.** `axocoatl dev` starts the local daemon
+  and serves the embedded workbench at `http://localhost:8080`. Conversation stays
+  central while Files, Source Control, Preview, Terminal, History, and focused review
+  open around the active Session.
+- **The Session survives the process.** Accepted turns have stable identities and
+  explicit running, completed, failed, cancelled, or interrupted states. Reopen a
+  Session, search its History, export Markdown or JSON, and keep bounded context tied
+  to the work it informed.
+- **Explore several ways before you choose.** Give the same request and repository
+  snapshot to different Agent/model pairs. Each attempt gets an independent checkout
+  and sandbox. Compare Outcome and Route, inspect changed paths and diffs, run Checks
+  and an optional Judge, and see usage and known cost before you Keep one.
+- **Keep is a Git decision, not an automatic commit.** **Keep this one** applies the
+  selected candidate to the primary checkout, records its output and turn attribution
+  in durable Session History, and removes the unresolved attempt set. **Last turn**
+  filters the current Git diff to paths attributed to that turn so you can review,
+  stage, and commit deliberately.
+- **Execution and providers remain your choice.** Rootless Podman is the local
+  default; E2B Cloud is an explicit remote option for normal Session work. Axocoatl
+  supports Ollama, OpenAI, OpenRouter, Anthropic, Gemini, Mistral, and one
   OpenAI-compatible endpoint.
 
-Legacy `workflows:` YAML remains a first-boot seed for manual records in the
-canonical Automation store. Its `depends_on` declarations become explicit graph
-edges; the workflow CLI compatibility command runs that Automation DAG:
+## What the v1 contract covers
 
-```yaml
-agents:
-  - id: researcher
-    provider: ollama
-    model: llama3.2
-    depends_on: []
-  - id: summarizer
-    provider: ollama
-    model: llama3.2
-    depends_on: [researcher]   # becomes an explicit dependency edge
+- **Durable turn identity and lifecycle.** Axocoatl records a request and immutable
+  context references before execution. Exact Stop targets one active turn; cooperative
+  cancellation lets an already-started side-effecting tool reach a safe boundary.
+- **Reviewed repository setup.** Detected setup such as `npm ci` is an exact,
+  unchecked proposal, not consent. Repository tools remain unavailable until the
+  Session environment is durably Ready. Axocoatl can provision required commands in
+  an approved sandbox, but it does not install Podman or create its VM.
+- **Honest Ways recovery.** Unresolved lifecycle, output, Route, failure, usage, cost,
+  optional Judge, and protected Check evidence rehydrate. Before Checks protects a
+  candidate identity, a restart cannot restore its live changed-path or diff evidence.
+  In v1, Ways requires an autonomous single-Agent Session on local Podman; attachments,
+  Skills, MCP tools, and web search are withheld from candidate attempts.
+- **An explicit post-Keep boundary.** The kept task, output, and turn attribution join
+  canonical Session History. Candidate Routes, diffs, Checks, Judge ranking, and
+  cost do not. **Last turn** is a filter over the current working tree, not a frozen
+  per-turn patch.
+- **Local-first, not an offline guarantee.** Axocoatl adds no product telemetry,
+  hosted control plane, or Axocoatl account. Configured providers, MCP servers, web
+  search, webhooks, E2B Cloud, Podman image or package downloads, repository traffic,
+  and the embedding-model download can use the network.
 
-workflows:
-  - id: research-and-summarize
-    agents: [researcher, summarizer]
-    entry_point: researcher
-```
-
-```bash
-axocoatl workflow run research-and-summarize -i "What is photosynthesis?"
-```
+The exact storage, isolation, setup, recovery, and network contracts are documented
+in [`docs/PRODUCT.md`](docs/PRODUCT.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
+and [the security guide](https://docs.axocoatl.ai/operate/security/).
 
 ---
 
-## See it work
+## See v1 work
 
-The clips in this section demonstrate runtime behaviors in an earlier interface;
-they are not captures of the current session-centered workbench.
+**One Session, with the repository around it.**
 
-**Give it a goal — it builds the team.** A coordinator agent decomposes the goal
-into subtasks, spawns a worker to fit each one, and runs them in parallel. No
-orchestration code, no glue.
+[![An Axocoatl Session with conversation, Files, Source Control, Preview, and Terminal](sites/marketing/assets/films/session-workbench.jpg)](https://axocoatl.ai/assets/films/session-workbench.mp4)
 
-<p align="center"><img src="docs/img/coordinator.gif" alt="A coordinator agent decomposes a goal into five subtasks and spawns a worker for each, running in parallel" width="760"></p>
+**Several Ways, compared on evidence.**
 
-**Tell it once — the Session remembers.** Store a preference with an autonomous Agent,
-continue that durable Session after another turn or actor restart, and it still knows. A
-declared coordinator Worker has the same Session-scoped memory stack. A core block explicitly
-marked `shared: true` can carry selected knowledge across Agent and Session scopes.
+[![Several Axocoatl Ways compared by Outcome, Route, diff, Checks, cost, and Judge](sites/marketing/assets/films/several-ways.jpg)](https://axocoatl.ai/assets/films/several-ways.mp4)
 
-<p align="center"><img src="docs/img/memory.gif" alt="An agent stores a preference to core memory, then recalls it later in the same durable Session" width="760"></p>
+**One kept result, returned to normal Git review.**
 
-**It does not phone home.** There is no Axocoatl telemetry, analytics account, or
-vendor control plane collecting your work. Outbound paths include your configured
-model provider, the one-time Hugging Face embedding-model download, optional daemon-side
-integrations, the optional remote sandbox, and repository, image, or package traffic allowed
-by Podman's default bridge. Use a local model and set `sandbox.network: none` to block
-outbound traffic from repository code and commands inside local Podman. That setting does
-not block daemon-side providers, MCP, web search, webhooks, the remote sandbox, the embedding
-download, or Podman image-registry access. E2B cannot prove that container network policy and
-rejects the combination.
-
-<p align="center"><img src="docs/img/no-phone-home.gif" alt="A local-only demo inspected in steady state shows only loopback sockets" width="760"></p>
+[![A kept Axocoatl result shown as uncommitted paths and hunks in Source Control](sites/marketing/assets/films/git-last-turn.jpg)](https://axocoatl.ai/assets/films/git-last-turn.mp4)
 
 ---
 
