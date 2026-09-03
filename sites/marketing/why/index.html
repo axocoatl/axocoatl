@@ -2,17 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Why Axocoatl — agent work needs a workspace</title>
-  <meta name="description" content="Axocoatl gives coding agents a durable, local-first workspace with files, Terminal, Preview, history, tools, and Git review around one Session.">
+  <title>Why Axocoatl — agent work should hold up in Git</title>
+  <meta name="description" content="Axocoatl keeps durable Session evidence beside the current repository, with one Agent or several checked Ways and a deliberate Keep-to-Git boundary.">
   <meta name="theme-color" content="#3E7C5C"><link rel="canonical" href="https://axocoatl.ai/why">
-  <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/why"><meta property="og:title" content="Why Axocoatl — agent work needs a workspace"><meta property="og:description" content="Durable Sessions, real repository tools, inspectable history, and Git control in one local-first workbench."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Why Axocoatl"><meta name="twitter:description" content="Durable Sessions, real repository tools, inspectable history, and Git control in one local-first workbench."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
+  <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/why"><meta property="og:title" content="Why Axocoatl — agent work should hold up in Git"><meta property="og:description" content="Keep durable Session evidence beside the repository. Compare checked Ways when needed, then return one result to normal Git review."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Why Axocoatl"><meta name="twitter:description" content="Keep durable Session evidence beside the repository. Compare checked Ways when needed, then return one result to normal Git review."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
   <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20260818-narrative"><link rel="stylesheet" href="/styles/finder.css">
   <script type="module" src="/components/ax-site-nav.js?v=20260818-narrative"></script><script type="module" src="/components/ax-comparison-row.js"></script><script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script><script type="module" src="/components/ax-footer.js?v=20260818-narrative"></script><script type="module" src="/components/ax-theme-toggle.js"></script>
 </head>
 <body>
   <ax-site-nav active="why"></ax-site-nav>
   <main id="main-content">
-    <header class="container hero"><span class="eyebrow">Why Axocoatl</span><h1>Agent work needs a workspace.</h1><p class="lede">A conversation can produce code. Axocoatl makes the folder-anchored Session the durable unit: accepted requests, context, output, bounded tool activity, and final lifecycle state persist while repository changes remain ordinary Git.</p></header>
+    <header class="container hero"><span class="eyebrow">Why Axocoatl</span><h1>A final answer is not the job.</h1><p class="lede">Axocoatl makes the folder-anchored Session the durable unit of agent work: accepted requests, context, output, bounded tool activity, and final lifecycle state persist while repository changes remain ordinary Git decisions.</p></header>
 
     <section class="container-narrow section section-rule">
       <div class="stack"><span class="eyebrow">The problem</span><h2>A transcript is not the job.</h2><p>Repository work spans files, commands, previews, failures, restarts, and review. The Session record explains what was accepted and executed; the working tree says what exists now.</p><p>A final answer cannot replace either one. The product has to keep the execution record reviewable, expose current repository state, and make the handoff between them explicit.</p></div>
@@ -25,7 +25,7 @@
         <ax-comparison-row label="Accept" left="Request and immutable context snapshot" right="Authorized Workspace and reviewed environment"></ax-comparison-row>
         <ax-comparison-row label="Execute" left="Agent output, bounded tool Route, and final lifecycle state" right="Current working tree"></ax-comparison-row>
         <ax-comparison-row label="Review" left="Searchable History and export" right="Current paths and hunks in Source Control"></ax-comparison-row>
-        <ax-comparison-row label="Several Ways" left="Candidate evidence until the decision closes" right="Only the kept result returns to the Session checkout"></ax-comparison-row>
+        <ax-comparison-row label="Several Ways" left="Same task and snapshot, common Checks, compared evidence" right="Only the kept result returns as uncommitted changes"></ax-comparison-row>
       </div>
       <ax-product-film
         film="workspace-sessions-turns"
@@ -37,19 +37,19 @@
     </section>
 
     <section class="container-narrow section section-rule">
-      <div class="stack"><span class="eyebrow">What it is</span><h2>A workbench, not a framework kit.</h2><p>The browser app is the product surface. Files, editor, Source Control, Terminal, Preview, History, and focused review open around the active Session instead of competing as separate products.</p><p>Underneath, one Rust daemon supervises agent actors, connects providers and tools, owns durable Session history, manages checkpoints and memory, and creates sandboxes. You do not have to assemble those primitives into a usable coding product.</p></div>
+      <div class="stack"><span class="eyebrow">What it is</span><h2>A workbench, not a framework kit.</h2><p>One installed executable starts the local Rust daemon and serves the workbench in the browser you already use. Files, editor, Source Control, Terminal, Preview, History, and focused review open around the active Session instead of competing as separate products.</p><p>The daemon supervises agent actors, connects providers and tools, owns durable Session history, manages checkpoints and memory, and creates sandboxes. You do not have to assemble those primitives into a usable coding product or install a bundled browser runtime.</p></div>
     </section>
 
     <section class="container section section-rule">
       <div class="grid-3">
         <article class="card"><span class="card-kicker">Durable</span><h3>Keep the thread</h3><p>Accepted turns, context relations, bounded tool evidence, output, and final lifecycle state stay attached to the Session.</p></article>
         <article class="card"><span class="card-kicker">Inspectable</span><h3>Show the work</h3><p>Open Files, Preview, Terminal, and Source Control around the Session. History keeps accepted Turns and bounded tool evidence; Source Control shows current Git state.</p></article>
-        <article class="card"><span class="card-kicker">Extensible</span><h3>Bring the stack</h3><p>Configure Agents, Skills, MCP servers, and Automations in Settings. Agent rows expose their provider and model; provider endpoints and credentials remain explicit in <code>axocoatl.yaml</code>.</p></article>
+        <article class="card"><span class="card-kicker">Extensible</span><h3>Bring the stack</h3><p>Configure Agents, Skills, MCP servers, and Automations in Settings. Configure Axocoatl once for the current OS user; explicit project-local YAML remains an advanced operator path.</p></article>
       </div>
     </section>
 
     <section class="container-narrow section section-rule">
-      <div class="stack"><span class="eyebrow">When uncertainty matters</span><h2>One answer is the default.</h2><p>Most Sessions can stay on the direct path: use the Agent or configured team that fits the work, inspect the result, and review the Git changes. When implementation choices are genuinely ambiguous, turn on <strong>Explore several ways</strong> inside that same Session.</p><p>Each way starts from the same task and repository snapshot, with provider-safe prior Session context. Run repository Checks, compare Outcome and Route, and Keep one passing result. Ways strengthens a difficult decision; it does not redefine ordinary work.</p></div>
+      <div class="stack"><span class="eyebrow">When uncertainty matters</span><h2>One answer is the default.</h2><p>Most Sessions can stay on the direct path: use the Agent or configured team that fits the work, inspect the result, and review the Git changes. When implementation choices are genuinely ambiguous, turn on <strong>Explore several ways</strong> inside that same Session.</p><p>Each Way starts from the same task and repository snapshot. Run common repository Checks; compare Outcome, Route, available diff, cost, and an optional Judge; then Keep one passing result. Ways strengthens a difficult decision without redefining ordinary work.</p></div>
     </section>
 
     <section class="container section section-rule">
@@ -67,7 +67,7 @@
       <div class="stack"><span class="eyebrow">Open source on purpose</span><h2>The runtime is yours.</h2><p>Axocoatl is Apache-2.0 licensed. There is no Axocoatl account, hosted control plane, or product telemetry. The source is the product, and local-first is a permanent constraint rather than a temporary packaging choice.</p><p>This does not mean nothing ever reaches a network. Providers, MCP servers, web search, webhooks, the optional remote sandbox, Podman image or package downloads, and the one-time Hugging Face embedding download can use the network. <code>sandbox.network: none</code> blocks only code and commands inside the local Podman sandbox; daemon-side integrations remain separate paths.</p></div>
     </section>
 
-    <section class="container section section-rule"><div class="cta-strip"><div><h2>Give the work somewhere to live.</h2><p>Open a repository, keep a durable Session record, and review the working tree before you commit.</p></div><div class="cta-actions"><a class="btn btn-primary" href="/install">Install →</a><a class="btn btn-ghost" href="/concepts">How it works</a></div></div></section>
+    <section class="container section section-rule"><div class="cta-strip"><div><h2>Run v1 on a real repository.</h2><p>Open a Workspace, keep the Session record, and make the work hold up before you commit.</p></div><div class="cta-actions"><a class="btn btn-primary" href="/install">Install →</a><a class="btn btn-ghost" href="https://github.com/axocoatl/axocoatl">View the source →</a></div></div></section>
   </main>
   <ax-footer></ax-footer>
 </body>

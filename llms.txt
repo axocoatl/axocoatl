@@ -1,21 +1,30 @@
 # Axocoatl — the local-first workbench for coding agents
-> Open source, local first, and centered on one durable Session
+> Axocoatl v1: agent work you can inspect, compare, and keep
 
-Axocoatl is an Apache-2.0 coding-agent workbench. Open a repository and give one
-configured Agent—or a configured team—a durable, folder-anchored Session. The
-browser app keeps conversation at the center while Files, Source Control,
-Preview, Terminal, History, Agent activity, and Settings open around it.
+Axocoatl v1 is an Apache-2.0, local-first coding-agent workbench for real
+repositories. Open a repository and give one configured Agent—or a configured
+team—a durable, folder-anchored Session. The browser app keeps conversation at
+the center while Files, Source Control, Preview, Terminal, History, Agent
+activity, and Settings open around it.
+
+When implementation choices need independent evidence, the same Session can run
+one task and repository snapshot several Ways with different Agent/model pairs.
+Compare Outcome, Route, available diff, common Checks, known cost, and an optional
+Judge while the decision is open. Keep one passing result as ordinary uncommitted
+Git changes, or finish without keeping any candidate.
 
 Each accepted Turn records its request and context before execution, then keeps
 the Agent output, final lifecycle state, and bounded tool Route in durable
 History. Source Control separately shows the repository as it exists now;
 Axocoatl does not make a commit or push unless the user deliberately asks for
-that Git action.
+that Git action. Candidate comparison evidence remains durable while its Ways
+decision is unresolved. After Keep, v1 retains the selected task, output, and turn
+attribution; Finish without keeping removes the set without adding a selected result.
 
 ## Start
 
 ```bash
-# Install a checksum-verified native release on supported macOS or glibc Linux.
+# Install the checksum-verified axocoatl executable on supported macOS or glibc Linux.
 curl -fsSL https://axocoatl.ai/install.sh | sh
 
 # Configure Axocoatl once for this OS user, check host prerequisites, and run.
@@ -25,6 +34,11 @@ axocoatl dev
 ```
 
 Open http://localhost:8080. The default listener is loopback-only.
+
+The installed executable includes the CLI, Rust daemon, HTTP/WebSocket API, and
+workbench browser assets. Those assets are embedded, so using Axocoatl requires no
+separate frontend install or bundled browser runtime. Rootless Podman remains the
+local sandbox requirement for repository Sessions.
 
 Install from Cargo instead with `cargo install axocoatl-cli` and Rust 1.88 or
 newer. Native Windows is not a release target; Windows users run Axocoatl through

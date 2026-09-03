@@ -4,8 +4,9 @@ Vanilla HTML, Web Components, and CSS. The public site tells one product story:
 an open-source, local-first coding workbench built around one durable folder-anchored
 Session. Conversation, context, files, terminal, Preview, tools, history, and Git are
 the core work surface. Settings owns Agents, Skills, MCP servers, and Automations and
-shows each Agent's provider/model assignment; provider endpoints and credentials remain
-in `axocoatl.yaml`. Isolated Ways, Checks, comparison, and Keep are an optional decision mode
+shows each Agent's provider/model assignment. Normal onboarding writes one owner-only
+configuration for the current OS user; explicit project-local YAML remains an advanced
+operator path. Isolated Ways, Checks, comparison, and Keep are an optional decision mode
 when one answer is not enough.
 
 ## Local preview
