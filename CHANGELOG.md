@@ -236,6 +236,19 @@ model-facing `coordination_control` tool, the external harness adapter and the
   needs 36,864.") instead of `Token budget exceeded: used …` or `LLM provider error:
   Invalid request for ollama: provider admission failed: … authority budget or storage
   capacity exhausted`.
+- **An Agent remembers its earlier turns however much work they took.** Once an
+  Agent's conversation grew past 85% of its model's context window, the next turn kept
+  only the last 15 earlier messages and then skipped ahead to a person's message; a turn
+  with many tool rounds has none there, so everything before the new request was dropped,
+  with no summary. In the 1.1.0 live eval a lead's 33,510-token first turn on a
+  32,768-token model was cut to 5,860 tokens and it began turn 2 with no record of turn
+  1's request or answer, while a smaller first turn was carried whole. This dates from
+  1.0. Earlier turns now shrink only as far as needed, least useful first: long tool
+  output and arguments are elided, then tool rounds are left out (every request and
+  final answer stays, with a note of how many rounds were left out; files changed are
+  in the repository), and only then do the oldest turns go, never the most recent
+  completed one. Leaving tool rounds out to fit a request also keeps earlier turns'
+  answers.
 - **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
   longer copies host proxy variables into containers.** Any `sandbox.network` other
   than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was

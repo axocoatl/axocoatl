@@ -15,7 +15,9 @@ pub const COMPRESSION_TRIGGER_PCT: f32 = 0.85;
 /// Fraction of per_execution budget reserved for housekeeping (Stages 3-5 summarization).
 pub const HOUSEKEEPING_BUDGET_PCT: f32 = 0.10;
 
-/// Number of recent message pairs to always keep during history snipping (Stage 2).
+/// Context collapse (Stage 4) leaves a completed history of at most twice this
+/// many messages alone. History snipping (Stage 2) is measured against its
+/// target instead of a message count.
 pub const SNIP_KEEP_RECENT_PAIRS: usize = 5;
 
 /// Maximum messages to microcompact in a single pass (Stage 3).

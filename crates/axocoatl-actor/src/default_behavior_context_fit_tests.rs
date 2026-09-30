@@ -442,3 +442,95 @@ async fn an_exhausted_session_budget_fails_in_plain_words() {
     );
     assert!(!text.contains("LLM provider error") && !text.contains("Invalid request"));
 }
+/// Seed turn 1 of a Session as the eval's lead left it: the person's request,
+/// `rounds` tool rounds that each read `output_chars` of a file, and the
+/// final answer.
+fn seed_completed_turn(
+    behavior: &mut DefaultAgentBehavior,
+    request: &str,
+    answer: &str,
+    rounds: usize,
+    output_chars: usize,
+) {
+    behavior.session.append(MessageRole::User, request, 0);
+    for index in 0..rounds {
+        let id = format!("{request}-{index}");
+        let call = ToolCall {
+            id: id.clone(),
+            name: "echo".into(),
+            arguments: serde_json::json!({"text": format!("src/file_{index}.rs")}),
+            provider_metadata: Default::default(),
+        };
+        behavior.session.append_assistant_tool_calls("", &[call], 0);
+        behavior
+            .session
+            .append_tool_result("echo", id, prose(output_chars), 0);
+    }
+    behavior.session.append(MessageRole::Assistant, answer, 0);
+}
+
+/// N3 from the 1.1.0 live eval: turn 1 left the lead 33,510 tokens of
+/// history on a 32,768-token model. At the start of turn 2 the daemon logged
+/// "Compacted session context tokens_before=33510 tokens_after=5860" and the
+/// lead's first request held only its instructions and the new request — no
+/// trace of turn 1's request or answer. A smaller turn 1 was carried whole,
+/// so whether an Agent remembered depended on how much work it had done.
+#[tokio::test]
+async fn a_large_first_turn_is_remembered_at_the_start_of_the_next() {
+    let provider = Arc::new(LongLoopLlm::new(0, 0, 0, 32_768));
+    let captured = provider.captured.clone();
+    let mut behavior = DefaultAgentBehavior::new(provider, quarter_counter())
+        .with_tool_executor(echo_executor())
+        .with_stale_tool_result_masking(3, []);
+    behavior.on_start(&answer_limit(4_096)).await.unwrap();
+    seed_completed_turn(
+        &mut behavior,
+        "TURN_ONE_REQUEST fix the parser",
+        "TURN_ONE_ANSWER the parser is fixed in src/parser.rs",
+        39,
+        3_300,
+    );
+    let history = quarter_counter().count_messages(&behavior.session.as_chat_messages());
+    assert!((33_000..34_000).contains(&history), "{history}");
+
+    let output = behavior
+        .execute(AgentInput::text("TURN_TWO_REQUEST now add tests"))
+        .await
+        .unwrap();
+    assert_eq!(output.content, "final answer");
+
+    let requests = captured.lock().unwrap();
+    let first = &requests[0];
+    let has = |role: MessageRole, needle: &str| {
+        first.messages.iter().any(|message| {
+            message.role == role
+                && message
+                    .text_content()
+                    .is_some_and(|text| text.contains(needle))
+        })
+    };
+    assert!(
+        has(MessageRole::User, "TURN_ONE_REQUEST"),
+        "turn 1's request"
+    );
+    assert!(
+        has(MessageRole::Assistant, "TURN_ONE_ANSWER"),
+        "turn 1's answer"
+    );
+    assert!(has(MessageRole::User, "TURN_TWO_REQUEST"));
+    behavior.ensure_request_fits_context(first).unwrap();
+    // The Agent's own memory (what the next turn and a restart start from)
+    // was compacted, and keeps both too.
+    let session = behavior.session.as_chat_messages();
+    assert!(quarter_counter().count_messages(&session) < history / 2);
+    assert!(session
+        .iter()
+        .any(|message| message.role == MessageRole::User
+            && message.text_content() == Some("TURN_ONE_REQUEST fix the parser")));
+    assert!(session
+        .iter()
+        .any(|message| message.role == MessageRole::Assistant
+            && message.text_content().is_some_and(
+                |text| text.ends_with("TURN_ONE_ANSWER the parser is fixed in src/parser.rs")
+            )));
+}

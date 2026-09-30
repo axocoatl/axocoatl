@@ -731,9 +731,15 @@ and streams that sometimes end early.
   is elided too; as a last resort the Agent's oldest tool rounds (each call with its
   results) are left out of the request with a one-line note, enough to be back at that
   60%. They stay out for the rest of the activation, so later requests keep fitting with
-  the same prefix until new work overflows it. A person's messages in the turn always
-  stay, and Session History keeps the full content. `workspace_knowledge` results are
-  never masked; a helper's `delegate` answer stays whole until a request would not fit.
+  the same prefix until new work overflows it. A person's messages and the Agent's
+  answers to earlier turns always stay, and Session History keeps the full content.
+  `workspace_knowledge` results are never masked; a helper's `delegate` answer stays
+  whole until a request would not fit. When the Agent's own conversation (its checkpoint)
+  grows past 85% of the window, the next turn first shrinks the earlier turns only as far
+  as needed, least useful first: long tool output (`workspace_knowledge` results too) and
+  arguments are elided, then tool rounds are left out (each request and final answer
+  stays, with a note of how many rounds went), and only then do the oldest turns go,
+  never the most recent completed one.
 - **Answering at the end of a budget.** When what is left of the Agent's token guard (once
   it has spent some) or of its grant (tokens, invocations less the host's reserve, or
   spending) cannot pay for another tool round and an answer, its next request goes

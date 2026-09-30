@@ -2,7 +2,8 @@
 //!
 //! Progressive 5-stage compression strategy:
 //! 1. Tool result budgeting — truncate oversized tool results
-//! 2. History snipping — remove old conversation segments
+//! 2. History snipping — elide tool output, then leave out tool rounds, then
+//!    the oldest turns (never the most recent completed turn)
 //! 3. Microcompact — LLM-summarize individual tool results (async)
 //! 4. Context collapse — archive older sequences to DailyLogMemory (async)
 //! 5. AutoCompact — full-turn summarization when >180K tokens (async)
@@ -146,6 +147,21 @@ impl CompressionPipeline {
         guard: CompressionGuard,
         threshold: usize,
     ) -> Result<CompressionResult, CompressionError> {
+        self.compress_sync_toward(messages, guard, threshold, threshold)
+    }
+
+    /// `compress_sync_to` against `threshold`, except that once the context
+    /// must shrink it shrinks toward `aim` (at most `threshold`), so the
+    /// requests that follow keep fitting with the same prefix instead of each
+    /// giving up a little more. Only a result over `threshold` is an error.
+    pub fn compress_sync_toward(
+        &self,
+        messages: Vec<ChatMessage>,
+        guard: CompressionGuard,
+        threshold: usize,
+        aim: usize,
+    ) -> Result<CompressionResult, CompressionError> {
+        let aim = aim.min(threshold);
         self.validate_guard(&messages, guard, threshold)?;
         let tokens_before = self.total_tokens(&messages, guard.fixed_tokens);
 
@@ -162,7 +178,7 @@ impl CompressionPipeline {
 
         let messages = self.stage1_tool_result_budget(messages, guard.protected_suffix_start);
         let current = self.total_tokens(&messages, guard.fixed_tokens);
-        if current <= threshold {
+        if current <= aim {
             return Ok(CompressionResult {
                 messages,
                 stages_applied: vec!["tool_result_budget".to_string()],
@@ -173,8 +189,12 @@ impl CompressionPipeline {
             });
         }
 
-        let (messages, protected_suffix_start) =
-            self.stage2_history_snip(messages, guard.protected_suffix_start);
+        let (messages, protected_suffix_start) = self.stage2_history_snip(
+            messages,
+            guard.protected_suffix_start,
+            guard.fixed_tokens,
+            aim,
+        );
         let tokens_after = self.total_tokens(&messages, guard.fixed_tokens);
         if tokens_after > threshold {
             return Err(CompressionError::UnableToReachTarget {
@@ -300,8 +320,12 @@ impl CompressionPipeline {
         }
 
         // Stage 2: History snipping
-        let (messages, new_protected_suffix_start) =
-            self.stage2_history_snip(messages, protected_suffix_start);
+        let (messages, new_protected_suffix_start) = self.stage2_history_snip(
+            messages,
+            protected_suffix_start,
+            guard.fixed_tokens,
+            threshold,
+        );
         protected_suffix_start = new_protected_suffix_start;
         stages_applied.push("history_snip".to_string());
 
@@ -505,42 +529,80 @@ impl CompressionPipeline {
             .collect()
     }
 
-    /// Stage 2: Remove old conversation segments, keeping system + recent messages.
-    /// Preserves message boundaries: never splits a tool result from its preceding assistant message.
+    /// Stage 2: shrink the completed turns before the protected suffix until
+    /// the request counts at most `threshold`, giving up the least useful
+    /// context first:
+    /// 1. long tool output and tool-call arguments, oldest turn first;
+    /// 2. tool rounds, oldest turn first — every person's message and each
+    ///    final answer stay, with a note of how many rounds were left out;
+    /// 3. the oldest turns entirely, never the most recent completed one.
+    ///
+    /// A tool call always leaves with its results, and the active suffix is
+    /// appended verbatim. The same transcript and target give the same result.
     fn stage2_history_snip(
         &self,
         messages: Vec<ChatMessage>,
         protected_suffix_start: usize,
+        fixed_tokens: usize,
+        threshold: usize,
     ) -> (Vec<ChatMessage>, usize) {
         let (older_prefix, active_suffix) = messages.split_at(protected_suffix_start);
-        let mut system_msgs: Vec<ChatMessage> = older_prefix
+        let mut result: Vec<ChatMessage> = older_prefix
             .iter()
             .filter(|message| is_authoritative_system(message))
             .cloned()
             .collect();
-        let older_non_system: Vec<ChatMessage> = older_prefix
-            .iter()
-            .filter(|message| !is_authoritative_system(message))
-            .cloned()
-            .collect();
+        let mut turns = completed_turns(
+            older_prefix
+                .iter()
+                .filter(|message| !is_authoritative_system(message))
+                .cloned(),
+        );
 
-        // Keep recent *older* messages, then advance to an ordinary User
-        // boundary. The active suffix is appended verbatim regardless of its
-        // length (it can legitimately exceed twelve messages with parallel
-        // tool calls/results).
-        let keep_count = SNIP_KEEP_RECENT_PAIRS * 3; // allow for user+assistant+tool triples
-        let mut cut_point = older_non_system.len().saturating_sub(keep_count);
+        // Counts add up message by message, so each turn is measured once
+        // and again only when it changes.
+        let empty = self.counter.count_messages(&[]);
+        let tokens =
+            |messages: &[ChatMessage]| self.counter.count_messages(messages).saturating_sub(empty);
+        let mut sizes: Vec<usize> = turns.iter().map(|turn| tokens(turn)).collect();
+        let mut fixed = self
+            .total_tokens(&result, fixed_tokens)
+            .saturating_add(tokens(active_suffix));
+        let over = |fixed: usize, sizes: &[usize]| {
+            fixed.saturating_add(sizes.iter().sum::<usize>()) > threshold
+        };
 
-        while cut_point < older_non_system.len()
-            && older_non_system[cut_point].role != MessageRole::User
-        {
-            cut_point += 1;
+        let shrink_steps: [fn(&mut Vec<ChatMessage>); 2] =
+            [|turn| elide_tool_values(turn), leave_out_rounds];
+        for shrink in shrink_steps {
+            for (index, turn) in turns.iter_mut().enumerate() {
+                if !over(fixed, &sizes) {
+                    break;
+                }
+                shrink(turn);
+                sizes[index] = tokens(turn);
+            }
         }
 
-        let kept = &older_non_system[cut_point..];
-        let mut result = Vec::with_capacity(system_msgs.len() + kept.len() + active_suffix.len());
-        result.append(&mut system_msgs);
-        result.extend_from_slice(kept);
+        // Last resort: the oldest turns go whole, with one note saying so.
+        let note = synthetic_context_message(TURNS_LEFT_OUT_NOTE);
+        let mut left_out = 0;
+        let most_recent = turns.len().saturating_sub(1);
+        for (index, turn) in turns.iter_mut().enumerate().take(most_recent) {
+            if !over(fixed, &sizes) {
+                break;
+            }
+            if left_out == 0 {
+                fixed = fixed.saturating_add(tokens(std::slice::from_ref(&note)));
+            }
+            turn.clear();
+            sizes[index] = 0;
+            left_out += 1;
+        }
+        if left_out > 0 {
+            result.push(note);
+        }
+        result.extend(turns.into_iter().flatten());
         let new_protected_suffix_start = result.len();
         result.extend_from_slice(active_suffix);
         (result, new_protected_suffix_start)
@@ -707,6 +769,104 @@ impl CompressionPipeline {
     }
 }
 
+/// Stage 2 elides tool values of at least this many characters, as the
+/// request-side masking's normal pass does: shorter output saves little and
+/// is often the answer.
+const STAGE2_ELIDE_MIN_CHARS: usize = 400;
+
+/// Stands in for turns Stage 2 left out entirely. Without a count, so a
+/// later compaction replaces it instead of adding another.
+const TURNS_LEFT_OUT_NOTE: &str = "[Context note: earlier turns of this conversation were left \
+     out to save space; the most recent requests and answers follow]";
+
+/// Split completed history into turns. A turn starts at a person's message,
+/// except guidance sent while the Agent was using tools (right after a tool
+/// result), which stays with the turn it steered. Anything before the first
+/// person's message (such as an earlier compaction's note) is its own unit.
+fn completed_turns(messages: impl IntoIterator<Item = ChatMessage>) -> Vec<Vec<ChatMessage>> {
+    let mut turns: Vec<Vec<ChatMessage>> = Vec::new();
+    for message in messages {
+        let starts_turn = match turns.last().and_then(|turn| turn.last()) {
+            None => true,
+            Some(previous) => {
+                message.role == MessageRole::User && previous.role != MessageRole::Tool
+            }
+        };
+        match turns.last_mut() {
+            Some(turn) if !starts_turn => turn.push(message),
+            _ => turns.push(vec![message]),
+        }
+    }
+    turns
+}
+
+/// Stage 2, step 1: elide a turn's long tool output and call arguments.
+fn elide_tool_values(turn: &mut [ChatMessage]) {
+    for message in turn.iter_mut() {
+        crate::elide_tool_output(message, STAGE2_ELIDE_MIN_CHARS);
+        crate::elide_call_arguments(message, STAGE2_ELIDE_MIN_CHARS, |_| false);
+    }
+}
+
+/// Stage 2, step 2: leave a turn's tool rounds out (each call with its
+/// results), keeping every person's message and the Agent's answers. Each
+/// answer says how many rounds before it were left out; rounds with no
+/// answer after them (a person's guidance came next) get the note alone, so
+/// person and Agent still take turns.
+fn leave_out_rounds(turn: &mut Vec<ChatMessage>) {
+    let mut kept = Vec::with_capacity(turn.len());
+    let mut left_out = 0;
+    for message in std::mem::take(turn) {
+        match message.role {
+            MessageRole::Assistant if !message.tool_calls.is_empty() => left_out += 1,
+            MessageRole::Tool => {}
+            MessageRole::Assistant => {
+                kept.push(with_rounds_note(message, left_out));
+                left_out = 0;
+            }
+            MessageRole::User | MessageRole::System => {
+                if left_out > 0 {
+                    kept.push(ChatMessage::assistant(rounds_note(left_out)));
+                    left_out = 0;
+                }
+                kept.push(message);
+            }
+        }
+    }
+    if left_out > 0 {
+        kept.push(ChatMessage::assistant(rounds_note(left_out)));
+    }
+    *turn = kept;
+}
+
+fn rounds_note(left_out: usize) -> String {
+    let (rounds, were) = if left_out == 1 {
+        ("round", "was")
+    } else {
+        ("rounds", "were")
+    };
+    format!(
+        "[{left_out} earlier tool {rounds} for this request {were} left out to save context; \
+         files changed are in the repository]"
+    )
+}
+
+fn with_rounds_note(mut answer: ChatMessage, left_out: usize) -> ChatMessage {
+    if left_out == 0 {
+        return answer;
+    }
+    let note = rounds_note(left_out);
+    answer.content = match answer.content {
+        MessageContent::Text(text) if text.is_empty() => MessageContent::Text(note),
+        MessageContent::Text(text) => MessageContent::Text(format!("{note}\n\n{text}")),
+        MessageContent::Parts(mut parts) => {
+            parts.insert(0, axocoatl_core::ContentPart::Text(note));
+            MessageContent::Parts(parts)
+        }
+    };
+    answer
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -849,26 +1009,42 @@ mod tests {
         assert_eq!(compressed[1].text_content(), Some("small result"));
     }
 
+    /// Was `stage2_keeps_recent_messages`, which kept a fixed fifteen
+    /// messages whatever the target. Stage 2 now leaves out only as many of
+    /// the oldest turns as the target needs, says so once, and never leaves
+    /// out the most recent completed turn.
     #[test]
-    fn stage2_keeps_recent_messages() {
+    fn stage2_leaves_out_the_oldest_turns_until_the_rest_fits() {
         let pipeline = CompressionPipeline::new(counter(), 100_000);
         let mut messages = vec![ChatMessage::system("You are helpful.")];
         for i in 0..20 {
             messages.push(ChatMessage::user(format!("msg {i}")));
             messages.push(ChatMessage::assistant(format!("resp {i}")));
         }
-
         let message_count = messages.len();
-        let (snipped, _) = pipeline.stage2_history_snip(messages, message_count);
-        // Should keep system + recent messages (cut at user boundary)
-        assert!(
-            snipped.len() > 1,
-            "Should keep at least system + some messages"
-        );
-        assert!(snipped.len() <= 1 + SNIP_KEEP_RECENT_PAIRS * 3 + 1);
+        let threshold = pipeline.total_tokens(&messages[..11], 0) + 20;
+
+        let (snipped, start) =
+            pipeline.stage2_history_snip(messages.clone(), message_count, 0, threshold);
+        assert_eq!(start, snipped.len());
+        assert!(pipeline.total_tokens(&snipped, 0) <= threshold);
         assert_eq!(snipped[0].role, MessageRole::System);
-        // First non-system message should be a User message (safe boundary)
-        assert_eq!(snipped[1].role, MessageRole::User);
+        assert!(is_synthetic_context(&snipped[1]));
+        assert_eq!(snipped[1].text_content(), Some(TURNS_LEFT_OUT_NOTE));
+        assert_eq!(snipped[2].role, MessageRole::User, "a turn starts whole");
+        assert!(snipped.len() > 6, "only what the target needs goes");
+        assert_eq!(snipped.last().unwrap().text_content(), Some("resp 19"));
+
+        // Nothing fits: every turn but the most recent goes.
+        let (snipped, _) = pipeline.stage2_history_snip(messages, message_count, 0, 0);
+        let texts: Vec<_> = snipped
+            .iter()
+            .map(|message| message.text_content().unwrap())
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["You are helpful.", TURNS_LEFT_OUT_NOTE, "msg 19", "resp 19"]
+        );
     }
 
     #[test]
@@ -955,7 +1131,8 @@ mod tests {
         let active_bytes = serialized(&active);
         messages.extend(active);
 
-        let (snipped, new_start) = pipeline.stage2_history_snip(messages, protected_suffix_start);
+        let (snipped, new_start) =
+            pipeline.stage2_history_snip(messages, protected_suffix_start, 0, 0);
 
         assert_eq!(serialized(&snipped[new_start..]), active_bytes);
         assert_eq!(snipped[new_start].role, MessageRole::User);
@@ -975,7 +1152,8 @@ mod tests {
         let active_bytes = serialized(&active);
         messages.extend(active);
 
-        let (snipped, new_start) = pipeline.stage2_history_snip(messages, protected_suffix_start);
+        let (snipped, new_start) =
+            pipeline.stage2_history_snip(messages, protected_suffix_start, 0, 0);
 
         assert_eq!(serialized(&snipped[new_start..]), active_bytes);
         assert_valid_tool_transactions(&snipped);
@@ -1276,6 +1454,263 @@ mod tests {
             .unwrap();
         assert!(!result.stages_applied.is_empty());
         assert!(result.tokens_after <= result.tokens_before);
+    }
+
+    /// `chars` characters of ordinary words (a tokenizer's cheap case).
+    fn prose(chars: usize) -> String {
+        "the file reads ".repeat(chars / 15 + 1)[..chars].to_string()
+    }
+
+    /// One completed turn: the person's request, `rounds` tool rounds that
+    /// each read `output_chars` of a file, and the Agent's final answer.
+    fn long_completed_turn(
+        request: &str,
+        answer: &str,
+        rounds: usize,
+        output_chars: usize,
+    ) -> Vec<ChatMessage> {
+        let mut messages = vec![ChatMessage::user(request)];
+        for index in 0..rounds {
+            let id = format!("{request}-{index}");
+            let call = ToolCall {
+                id: id.clone(),
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"path": format!("src/file_{index}.rs")}),
+                provider_metadata: ProviderMetadata::new(),
+            };
+            messages.push(ChatMessage::assistant_with_tool_calls("", vec![call]));
+            messages.push(ChatMessage::tool_result(
+                prose(output_chars),
+                "read_file",
+                &id,
+            ));
+        }
+        messages.push(ChatMessage::assistant(answer));
+        messages
+    }
+
+    fn has_text(messages: &[ChatMessage], role: MessageRole, needle: &str) -> bool {
+        messages.iter().any(|message| {
+            message.role == role
+                && message
+                    .text_content()
+                    .is_some_and(|text| text.contains(needle))
+        })
+    }
+
+    /// The 1.1.0 live eval: turn 1 of a native Session left 33,510 tokens of
+    /// history (one request, 39 tool rounds, one answer). At the start of
+    /// turn 2 on a 32k model, history snipping kept "recent messages" and then
+    /// advanced to the next User boundary — there was none — so it dropped
+    /// the whole turn and the lead started turn 2 with no memory of turn 1.
+    #[test]
+    fn a_long_turn_keeps_its_request_and_answer_when_history_must_shrink() {
+        let pipeline = CompressionPipeline::new(counter(), 32_768);
+        let mut messages = vec![ChatMessage::system("You are the lead.")];
+        messages.extend(long_completed_turn(
+            "TURN_ONE_REQUEST fix the parser",
+            "TURN_ONE_ANSWER the parser is fixed in src/parser.rs",
+            39,
+            4_000,
+        ));
+        let protected_suffix_start = messages.len();
+        messages.push(ChatMessage::user("TURN_TWO_REQUEST now add tests"));
+        let threshold = (32_768.0 * COMPRESSION_TRIGGER_PCT) as usize;
+        let before = pipeline.total_tokens(&messages, 0);
+        assert!(before > threshold && before < 40_000, "{before}");
+
+        let result = pipeline
+            .compress_sync_to(
+                messages,
+                CompressionGuard::new(protected_suffix_start, 0),
+                threshold,
+            )
+            .unwrap();
+
+        assert!(result.tokens_after <= threshold);
+        assert!(has_text(
+            &result.messages,
+            MessageRole::User,
+            "TURN_ONE_REQUEST"
+        ));
+        assert!(has_text(
+            &result.messages,
+            MessageRole::Assistant,
+            "TURN_ONE_ANSWER"
+        ));
+        assert_eq!(
+            result.messages[result.protected_suffix_start].text_content(),
+            Some("TURN_TWO_REQUEST now add tests")
+        );
+        assert_valid_tool_transactions(&result.messages);
+    }
+
+    /// However small the target, Stage 2 never leaves out the most recent
+    /// completed turn's request or answer: it keeps them, with a note for
+    /// the rounds it left out, and reports the target unmet (Stages 3-5 or
+    /// the caller decide what happens next) rather than forget them.
+    #[test]
+    fn the_most_recent_completed_turn_is_always_kept() {
+        let pipeline = CompressionPipeline::new(counter(), 32_768);
+        let mut messages = vec![ChatMessage::system("sys")];
+        for turn in 0..4 {
+            messages.extend(long_completed_turn(
+                &format!("REQUEST_{turn}"),
+                &format!("ANSWER_{turn}"),
+                6,
+                2_000,
+            ));
+        }
+        let protected_suffix_start = messages.len();
+        messages.push(ChatMessage::user("CURRENT"));
+
+        for threshold in [0, 200, 2_000, 8_000] {
+            let (snipped, start) = pipeline.stage2_history_snip(
+                messages.clone(),
+                protected_suffix_start,
+                0,
+                threshold,
+            );
+            assert!(
+                has_text(&snipped, MessageRole::User, "REQUEST_3"),
+                "{threshold}"
+            );
+            assert!(
+                has_text(&snipped, MessageRole::Assistant, "ANSWER_3"),
+                "{threshold}"
+            );
+            assert_eq!(snipped[start].text_content(), Some("CURRENT"));
+            assert_valid_tool_transactions(&snipped);
+        }
+
+        // Room for little more than the most recent turn: its rounds are
+        // left out, its request and answer stay, and the older turns go.
+        let (snipped, _) =
+            pipeline.stage2_history_snip(messages.clone(), protected_suffix_start, 0, 0);
+        let texts: Vec<_> = snipped
+            .iter()
+            .map(|message| message.text_content().unwrap())
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                "sys",
+                TURNS_LEFT_OUT_NOTE,
+                "REQUEST_3",
+                "[6 earlier tool rounds for this request were left out to save context; files \
+                 changed are in the repository]\n\nANSWER_3",
+                "CURRENT",
+            ]
+        );
+        let smallest = pipeline.total_tokens(&snipped, 0);
+        let guard = CompressionGuard::new(protected_suffix_start, 0);
+        let error = pipeline
+            .compress_sync_to(messages.clone(), guard, smallest - 1)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            CompressionError::UnableToReachTarget { .. }
+        ));
+
+        // Aiming lower than the limit shrinks as far as the aim needs, but
+        // only a result over the limit fails.
+        let aimed = pipeline
+            .compress_sync_toward(messages, guard, smallest + 1_000, 0)
+            .unwrap();
+        assert_eq!(serialized(&aimed.messages), serialized(&snipped));
+    }
+
+    /// Stage 2 gives up the least useful context first and only as much as
+    /// the target needs: eliding the oldest turns' tool output comes before
+    /// eliding the most recent turn's, and eliding comes before leaving
+    /// rounds out. The result is the same every time, so a compacted
+    /// conversation stored in a checkpoint is reproducible.
+    #[test]
+    fn stage2_elides_before_leaving_rounds_out_and_is_deterministic() {
+        let pipeline = CompressionPipeline::new(counter(), 32_768);
+        let mut messages = vec![ChatMessage::system("sys")];
+        messages.extend(long_completed_turn("REQUEST_0", "ANSWER_0", 6, 2_000));
+        messages.extend(long_completed_turn("REQUEST_1", "ANSWER_1", 6, 2_000));
+        let protected_suffix_start = messages.len();
+        messages.push(ChatMessage::user("CURRENT"));
+        let turn_one_start = 1 + 6 * 2 + 2;
+        let whole = pipeline.total_tokens(&messages, 0);
+        let turn_zero = pipeline.total_tokens(&messages[1..turn_one_start], 0);
+
+        // Eliding turn 0's output is enough.
+        let threshold = whole - turn_zero / 2;
+        let (snipped, start) =
+            pipeline.stage2_history_snip(messages.clone(), protected_suffix_start, 0, threshold);
+        assert!(pipeline.total_tokens(&snipped, 0) <= threshold);
+        assert_eq!(snipped.len(), messages.len(), "no round was left out");
+        assert!(snipped[3]
+            .text_content()
+            .unwrap()
+            .starts_with("[earlier read_file output (2000 characters)"));
+        assert_eq!(snipped[3].tool_call_id.as_deref(), Some("REQUEST_0-0"));
+        assert_eq!(
+            snipped[turn_one_start + 2].text_content().unwrap().len(),
+            2_000,
+            "the most recent turn's output stays whole"
+        );
+        assert_eq!(snipped[start].text_content(), Some("CURRENT"));
+
+        // Once every turn's output is elided, rounds go, oldest turn first.
+        let elided = {
+            let mut elided = messages.clone();
+            elide_tool_values(&mut elided);
+            pipeline.total_tokens(&elided, 0)
+        };
+        let (snipped, _) =
+            pipeline.stage2_history_snip(messages.clone(), protected_suffix_start, 0, elided - 10);
+        let has_call = |id: &str| {
+            snipped
+                .iter()
+                .any(|message| message.tool_call_id.as_deref() == Some(id))
+        };
+        assert!(!has_call("REQUEST_0-0"));
+        assert!(has_call("REQUEST_1-0"));
+        assert!(has_text(&snipped, MessageRole::User, "REQUEST_0"));
+        assert!(has_text(&snipped, MessageRole::Assistant, "ANSWER_0"));
+        assert_valid_tool_transactions(&snipped);
+
+        let again = pipeline.stage2_history_snip(messages, protected_suffix_start, 0, elided - 10);
+        assert_eq!(serialized(&again.0), serialized(&snipped));
+    }
+
+    /// Guidance a person sent while the Agent was using tools belongs to the
+    /// turn it steered: the most recent turn keeps its original request too,
+    /// and leaving its rounds out keeps person and Agent taking turns.
+    #[test]
+    fn guidance_during_tool_use_stays_with_its_turn() {
+        let pipeline = CompressionPipeline::new(counter(), 32_768);
+        let mut messages = vec![ChatMessage::system("sys")];
+        messages.extend(long_completed_turn("OLD_REQUEST", "OLD_ANSWER", 3, 2_000));
+        let mut steered = long_completed_turn("LAST_REQUEST", "LAST_ANSWER", 4, 2_000);
+        steered.insert(5, ChatMessage::user("GUIDANCE"));
+        messages.extend(steered);
+        let protected_suffix_start = messages.len();
+        messages.push(ChatMessage::user("CURRENT"));
+
+        let (snipped, _) = pipeline.stage2_history_snip(messages, protected_suffix_start, 0, 0);
+        let texts: Vec<_> = snipped
+            .iter()
+            .map(|message| message.text_content().unwrap())
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                "sys",
+                TURNS_LEFT_OUT_NOTE,
+                "LAST_REQUEST",
+                "[2 earlier tool rounds for this request were left out to save context; files \
+                 changed are in the repository]",
+                "GUIDANCE",
+                "[2 earlier tool rounds for this request were left out to save context; files \
+                 changed are in the repository]\n\nLAST_ANSWER",
+                "CURRENT",
+            ]
+        );
     }
 
     struct MockSummarizer;
