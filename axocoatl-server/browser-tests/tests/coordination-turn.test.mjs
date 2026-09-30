@@ -547,7 +547,7 @@ test('control-plane fold preserves supported legacy rows and both versioned hist
   const {context, page, errors} = await componentPage();
   try {
     const result = await page.evaluate(async envelope => {
-      const {foldControlPlane} = await import('/ui/coordination-turn.js');
+      const {foldControlPlane} = await import('/ui/activation-inspector.js');
       const legacy = structuredClone(envelope); legacy.history_version = 'legacy_v1';
       legacy.turn_id = 'legacy café';
       for (const node of legacy.nodes) for (const activation of node.activations) {
@@ -575,7 +575,7 @@ test('unsupported or malformed control-plane data removes stale graphs and execu
   const {context, page, errors} = await componentPage();
   try {
     const cases = await page.evaluate(async envelope => {
-      const {foldControlPlane} = await import('/ui/coordination-turn.js');
+      const {foldControlPlane} = await import('/ui/activation-inspector.js');
       const card = document.createElement('ax-coordination-turn'); card.controlPlane = envelope;
       const inspector = document.createElement('ax-activation-inspector'); inspector.commandHandler = () => { throw new Error('must never dispatch'); };
       inspector.model = foldControlPlane(envelope); inspector.nodeId = 'builder'; document.body.append(card, inspector);
@@ -620,7 +620,7 @@ test('malformed scalar envelopes cannot restore a previously retained legacy car
   const {context, page, errors} = await componentPage();
   try {
     const results = await page.evaluate(async () => {
-      const {foldControlPlane} = await import('/ui/coordination-turn.js');
+      const {foldControlPlane} = await import('/ui/activation-inspector.js');
       const card = document.createElement('ax-coordination-turn');
       card.turn = {id: 'old-turn', agent_id: 'old-agent', status: 'completed', final_output: 'OLD_LEGACY_OUTPUT', execution_events: []};
       document.body.append(card);
@@ -643,7 +643,7 @@ test('the real graph consumer clears unsupported history before consulting curre
   const {context, page, errors} = await componentPage();
   try {
     const result = await page.evaluate(async envelope => {
-      const {foldControlPlane} = await import('/ui/coordination-turn.js'); window.foldControlPlane = foldControlPlane;
+      const {foldControlPlane} = await import('/ui/activation-inspector.js'); window.foldControlPlane = foldControlPlane;
       const source = await fetch('/fixture-app-source').then(response => response.text());
       const start = source.indexOf('async function sessionLatticeBuild(');
       const end = source.indexOf('\nfunction sessionLatticeStatus(', start);
@@ -694,7 +694,7 @@ test('accepted native work opens exact Turn controls before any output or transc
       grants:[], proposals:[{state:{state:'pending'},request:{reason:'Approve this bounded Worker before execution.'}}],
     }}));
     await page.evaluate(async ({source, envelope}) => {
-      const {foldControlPlane} = await import('/ui/coordination-turn.js'); window.foldControlPlane = foldControlPlane;
+      const {foldControlPlane} = await import('/ui/activation-inspector.js'); window.foldControlPlane = foldControlPlane;
       await import('/ui/session-guidance.js');
       document.body.innerHTML = '<ax-session-guidance id="session-guidance" hidden></ax-session-guidance><div id="session-lattice-host" style="height:600px"></div>';
       const S = {session:{id:envelope.session_id, currentTeam:{history_version:'execution_v2'}, activeTurnId:null,
@@ -760,7 +760,7 @@ for (const options of [{ theme: 'light', viewport: { width: 1100, height: 900 } 
     const {context, page, errors} = await componentPage(options);
     try {
       await page.evaluate(async ({source, envelope}) => {
-        const {foldControlPlane} = await import('/ui/coordination-turn.js');
+        const {foldControlPlane} = await import('/ui/activation-inspector.js');
         window.foldControlPlane = foldControlPlane;
         document.body.innerHTML = '<style>.session-graph-layout{display:flex;height:600px}ax-lattice{flex:1;min-width:200px}ax-activation-inspector{flex:0 1 360px}</style><div id="session-cockpit"><div id="session-lattice-host" style="height:600px"></div></div>';
         const S = {session:{id:envelope.session_id,name:'Retained QA',coordinationCards:new Map(),
@@ -813,7 +813,7 @@ for (const options of [{ theme: 'light', viewport: { width: 1100, height: 900 } 
     const { context, page, errors } = await componentPage(options);
     try {
       await page.evaluate(async (envelope) => {
-        const { foldControlPlane } = await import('/ui/coordination-turn.js');
+        const { foldControlPlane } = await import('/ui/activation-inspector.js');
         window.testEnvelope = envelope;
         window.testFold = foldControlPlane;
         const card = document.createElement('ax-coordination-turn'); card.controlPlane = envelope;
@@ -860,7 +860,7 @@ for (const options of [{ theme: 'light', viewport: { width: 1100, height: 900 } 
 
 test('an absent pinned activation never falls back to a newer recorded generation',async()=>{
  const {context,page,errors}=await componentPage();try{
-  const envelope=controlPlaneFixture();await page.evaluate(async envelope=>{const {foldControlPlane}=await import('/ui/coordination-turn.js');const inspector=document.createElement('ax-activation-inspector');inspector.model=foldControlPlane(envelope);inspector.nodeId='builder';document.body.append(inspector);},envelope);
+  const envelope=controlPlaneFixture();await page.evaluate(async envelope=>{const {foldControlPlane}=await import('/ui/activation-inspector.js');const inspector=document.createElement('ax-activation-inspector');inspector.model=foldControlPlane(envelope);inspector.nodeId='builder';document.body.append(inspector);},envelope);
   const inspector=page.locator('ax-activation-inspector');
   for(const patch of [{generation:99},{execution_epoch_id:'foreign-epoch'},{activation_id:'missing-activation'}]){
    await inspector.evaluate((element,{envelope,patch})=>{element.activationReference={kind:'exact',activation:{...envelope.nodes[0].activations[0].reference.activation,...patch}};element.model=element.model;},{envelope,patch});
@@ -877,7 +877,7 @@ test('settled Stop refreshes its still-running exact activation until Retry beco
   const after=structuredClone(before);after.nodes[0].activations[0].state='failed';after.nodes[0].activations[0].capabilities={inspect:true,stop:{enabled:false},retry:{enabled:true}};
   await page.route('**/api/sessions/session-inspect/turns/turn-inspect/control-plane',route=>{reads++;return route.fulfill({json:reads===1?before:after});});
   await page.evaluate(async({source,before})=>{
-   const {foldControlPlane}=await import('/ui/coordination-turn.js');const host=document.createElement('div');host.id='session-lattice-host';document.body.append(host);const inspector=document.createElement('ax-activation-inspector');inspector.commandHandler=async()=>{};inspector.model=foldControlPlane(before);inspector.nodeId='builder';host.append(inspector);
+   const {foldControlPlane}=await import('/ui/activation-inspector.js');const host=document.createElement('div');host.id='session-lattice-host';document.body.append(host);const inspector=document.createElement('ax-activation-inspector');inspector.commandHandler=async()=>{};inspector.model=foldControlPlane(before);inspector.nodeId='builder';host.append(inspector);
    const S={session:{id:before.session_id,coordinationGraphTurnId:before.turn_id,coordinationEvents:new Map(),coordinationCards:new Map()}};let api;window.visibleGraph=true;
    const build=async(session,events,turnId,envelope)=>{if(envelope)inspector.model=foldControlPlane(envelope);else await api.refresh(session.id,turnId);};
    const begin=source.indexOf('function scheduleCoordinationGraphRefresh('),end=source.indexOf('\nasync function sessionLatticeBuild(',begin);if(begin<0||end<0)throw Error('current graph refresh source unavailable');
@@ -893,7 +893,7 @@ test('legacy inspector never invents a generation, output, definition, usage or 
   const { context, page, errors } = await componentPage();
   try {
     await page.evaluate(async () => {
-      const { foldControlPlane } = await import('/ui/coordination-turn.js');
+      const { foldControlPlane } = await import('/ui/activation-inspector.js');
       const inspector = document.createElement('ax-activation-inspector');
       inspector.model = foldControlPlane({ id: 'legacy-turn', execution_events: [
         { operation_id: 'plan', kind: 'coordination_planned', metadata: { agents: ['legacy-agent'] } },
@@ -917,7 +917,7 @@ test('inspector keeps one bounded dialog across responsive transitions and label
     const envelope = controlPlaneFixture();
     envelope.nodes[0].activations.at(-1).output = available('');
     await page.evaluate(async (value) => {
-      const { foldControlPlane } = await import('/ui/coordination-turn.js');
+      const { foldControlPlane } = await import('/ui/activation-inspector.js');
       const inspector = document.createElement('ax-activation-inspector');
       inspector.model = foldControlPlane(value); inspector.nodeId = 'builder'; document.body.append(inspector);
     }, envelope);
@@ -953,7 +953,7 @@ test('inspector selection uses exact activation identity when epochs reuse a gen
     later.reference.activation.generation = 1;
     later.reference.activation.execution_epoch_id = 'epoch-two';
     await page.evaluate(async (value) => {
-      const { foldControlPlane } = await import('/ui/coordination-turn.js');
+      const { foldControlPlane } = await import('/ui/activation-inspector.js');
       window.epochEnvelope = value; window.epochFold = foldControlPlane;
       const inspector = document.createElement('ax-activation-inspector');
       inspector.model = foldControlPlane(value); inspector.nodeId = 'builder'; document.body.append(inspector);
@@ -974,7 +974,7 @@ test('normal direct-target turn exposes only its recorded Agent and attributed o
   const { context, page, errors } = await componentPage();
   try {
     await page.evaluate(async () => {
-      const { foldControlPlane } = await import('/ui/coordination-turn.js');
+      const { foldControlPlane } = await import('/ui/activation-inspector.js');
       const inspector = document.createElement('ax-activation-inspector');
       inspector.model = foldControlPlane({ id: 'direct-turn', session_id: 'direct-session',
         agent_id: 'reviewer', user_input: 'Review the client change', status: 'completed',
@@ -993,7 +993,7 @@ test('Add to chat emits only a typed exact retained reference, including the exe
   const { context, page, errors } = await componentPage();
   try {
     await page.evaluate(async (value) => {
-      const { foldControlPlane } = await import('/ui/coordination-turn.js');
+      const { foldControlPlane } = await import('/ui/activation-inspector.js');
       window.attachedCoordination = [];
       document.addEventListener('attach-coordination-reference', event => window.attachedCoordination.push(event.detail));
       const inspector = document.createElement('ax-activation-inspector');
@@ -1017,7 +1017,7 @@ test('legacy Add to chat requires a recorded operation identity, never the fold 
   const { context, page, errors } = await componentPage();
   try {
     await page.evaluate(async () => {
-      const { foldControlPlane } = await import('/ui/coordination-turn.js');
+      const { foldControlPlane } = await import('/ui/activation-inspector.js');
       window.legacyRefFold = foldControlPlane;
       window.legacyRefTurn = { id: 'legacy-reference', session_id: 'legacy-session', execution_events: [
         { kind: 'coordination_planned', metadata: { agents: ['reviewer'] } },
@@ -1051,7 +1051,7 @@ for (const options of [{theme: 'light', viewport: {width: 1100, height: 900}},
         continuation_choices: [{activation: restart, state: 'failed', capability: {enabled: true, reason: ''}}],
         check_choices: [{condition_id: 'repository-check', required_conditions: ['candidate-before', 'candidate-after', 'readiness'], capability: {enabled: false, reason: 'Recorded outcome is still unknown.'}}]};
       await page.evaluate(async value => {
-        const {foldControlPlane} = await import('/ui/coordination-turn.js');
+        const {foldControlPlane} = await import('/ui/activation-inspector.js');
         window.controlEnvelope = value; window.controlFold = foldControlPlane; window.humanCommands = [];
         const inspector = document.createElement('ax-activation-inspector');
         inspector.commandHandler = async command => window.humanCommands.push({kind: command.kind, reference: command.reference,
@@ -1117,7 +1117,7 @@ test('whole-turn Stop shows exact never-started node evidence without inventing 
     envelope.nodes.push({node_id:'unstarted-checker',definition_id:'checker',label:'Checker',definition:{status:'not_recorded'},dependencies:[],activations:[]});
     envelope.stop_requested={command_id:'human-stop',requested_revision:1,evidence:'retained-request',unrun_nodes:['unstarted-checker']};
     const result=await page.evaluate(async envelope=>{
-      const {foldControlPlane}=await import('/ui/coordination-turn.js');
+      const {foldControlPlane}=await import('/ui/activation-inspector.js');
       const model=foldControlPlane(envelope);window.stopModel=model;
       const inspector=document.createElement('ax-activation-inspector');inspector.model=model;inspector.nodeId='unstarted-checker';document.body.append(inspector);
       return {agent:model.agents.find(agent=>agent.id==='unstarted-checker'),node:model.nodes.find(node=>node.node_id==='unstarted-checker'),prior:model.agents.find(agent=>agent.id==='builder')};
@@ -1130,7 +1130,7 @@ test('whole-turn Stop shows exact never-started node evidence without inventing 
     assert.match(await inspector.locator('.content').textContent(),/No activation recorded/);
     assert.equal(await inspector.locator('select:visible,.stop:visible,.retry:visible,.revise:visible,.add-reference:visible').count(),0);
     const malformed=await page.evaluate(async envelope=>{
-      const {foldControlPlane}=await import('/ui/coordination-turn.js');
+      const {foldControlPlane}=await import('/ui/activation-inspector.js');
       return [null,{...envelope.stop_requested,unrun_nodes:['foreign']},{...envelope.stop_requested,unrun_nodes:['builder']},
         {...envelope.stop_requested,unrun_nodes:['unstarted-checker','unstarted-checker']},{...envelope.stop_requested,requested_revision:1e8}]
         .map(stop_requested=>{const model=foldControlPlane({...envelope,stop_requested});return {unsupported:model.unsupported,agents:model.agents.length,nodes:model.nodes.length};});
@@ -1159,7 +1159,7 @@ test('Guide uses the actual command consumer and retains an unacknowledged exact
   });
   await page.route('**/api/sessions/session-inspect/turns/turn-inspect/control-plane',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({...envelope,commands:retainedReceipt?available([retainedReceipt]):missing})}));
   const install=async()=>page.evaluate(async envelope=>{
-    const {foldControlPlane}=await import('/ui/coordination-turn.js');
+    const {foldControlPlane}=await import('/ui/activation-inspector.js');
     const source=await fetch('/fixture-app-source').then(response=>response.text());
     const start=source.indexOf('const _coordinationCommands = new Map();');
     const end=source.indexOf('\nfunction scheduleCoordinationGraphRefresh(',start);
@@ -1193,7 +1193,7 @@ test('Guide uses the actual command consumer and retains an unacknowledged exact
     assert.deepEqual(original.activation,activation.reference.activation);
     assert.equal(original.execution_epoch_id,'epoch-one');assert.equal(original.expected_turn_revision,9);assert.equal(original.expected_graph_revision,3);
     assert.equal(original.include_previous_output,undefined);assert.equal(original.continuation,undefined);
-    await page.reload();await page.addScriptTag({type:'module',url:`${runtime.baseUrl}/ui/coordination-turn.js`});await install();
+    await page.reload();await page.addScriptTag({type:'module',url:`${runtime.baseUrl}/ui/activation-inspector.js`});await install();
     inspector=page.locator('ax-activation-inspector');
     assert.match(await inspector.locator('.command-receipt').textContent(),/Guide · Outcome unknown/);
     assert.equal(await inspector.locator('.guide').isDisabled(),true);
@@ -1203,7 +1203,7 @@ test('Guide uses the actual command consumer and retains an unacknowledged exact
     assert.equal(requests.length,2);assert.deepEqual(requests[1],original,'transport retry keeps exact ID, revisions, target and bytes');
     // Canonical receipts also work with no browser cache or saved instruction.
     retainedReceipt=receipt(original,'settled');
-    await page.evaluate(()=>sessionStorage.clear());await page.reload();await page.addScriptTag({type:'module',url:`${runtime.baseUrl}/ui/coordination-turn.js`});await install();
+    await page.evaluate(()=>sessionStorage.clear());await page.reload();await page.addScriptTag({type:'module',url:`${runtime.baseUrl}/ui/activation-inspector.js`});await install();
     inspector=page.locator('ax-activation-inspector');
     assert.match(await inspector.locator('.command-receipt').textContent(),/Guide · Input received by the Agent/);
     assert.equal(requests.length,2,'receipt hydration never replays input');
@@ -1248,7 +1248,7 @@ for (const options of [{theme:'light',viewport:{width:1100,height:900}}, {theme:
     });
     await page.route('**/api/sessions/session-inspect/turns/turn-inspect/control-plane',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({...envelope,commands:retainedReceipt?available([retainedReceipt]):missing})}));
     const install=async()=>page.evaluate(async envelope=>{
-      const {foldControlPlane}=await import('/ui/coordination-turn.js');
+      const {foldControlPlane}=await import('/ui/activation-inspector.js');
       const source=await fetch('/fixture-app-source').then(response=>response.text());
       const start=source.indexOf('const _coordinationCommands = new Map();');const end=source.indexOf('\nfunction scheduleCoordinationGraphRefresh(',start);
       if(start<0||end<start)throw new Error('actual command consumer unavailable');
@@ -1279,13 +1279,13 @@ for (const options of [{theme:'light',viewport:{width:1100,height:900}}, {theme:
       assert.deepEqual(original.activation,activation.reference.activation);
       assert.deepEqual(original.human_response,options.theme==='dark'?{kind:'decline',reason:' Use the staging candidate first. '}:{kind:'approval'});
       assert.equal(original.instruction,undefined);assert.equal(original.expected_turn_revision,11);
-      await page.reload();await page.addScriptTag({type:'module',url:`${runtime.baseUrl}/ui/coordination-turn.js`});await install();inspector=page.locator('ax-activation-inspector');
+      await page.reload();await page.addScriptTag({type:'module',url:`${runtime.baseUrl}/ui/activation-inspector.js`});await install();inspector=page.locator('ax-activation-inspector');
       assert.equal(await inspector.locator('.resume-approve').isDisabled(),true);
       assert.deepEqual(await page.evaluate(()=>window.resumeConsumer.api.coordinationCommandHistory('session-inspect','turn-inspect')[0].request),original);
       await inspector.getByRole('button',{name:'Check command status'}).click();
       await inspector.locator('.command-receipt').filter({hasText:'Accepted'}).waitFor();assert.deepEqual(requests[1],original);
       retainedReceipt=receipt(original,'settled');await page.evaluate(()=>sessionStorage.clear());
-      await page.reload();await page.addScriptTag({type:'module',url:`${runtime.baseUrl}/ui/coordination-turn.js`});await install();inspector=page.locator('ax-activation-inspector');
+      await page.reload();await page.addScriptTag({type:'module',url:`${runtime.baseUrl}/ui/activation-inspector.js`});await install();inspector=page.locator('ax-activation-inspector');
       assert.match(await inspector.locator('.command-receipt').textContent(),/Response received by the Agent/);assert.equal(requests.length,2);
       await page.evaluate(()=>{
         const {inspector,foldControlPlane,envelope}=window.resumeConsumer;const response=envelope.nodes[0].activations.at(-1).capabilities.human_responses[0];
@@ -1357,7 +1357,7 @@ for (const options of [{theme:'light',viewport:{width:1100,height:900}}, {theme:
     });
     try {
       await page.evaluate(async envelope=>{
-        const {foldControlPlane}=await import('/ui/coordination-turn.js');
+        const {foldControlPlane}=await import('/ui/activation-inspector.js');
         const source=await fetch('/fixture-app-source').then(response=>response.text());
         const start=source.indexOf('const _coordinationCommands = new Map();');const end=source.indexOf('\nfunction scheduleCoordinationGraphRefresh(',start);
         if(start<0||end<start)throw new Error('actual command consumer unavailable');
@@ -1411,7 +1411,7 @@ for (const options of [{theme:'light',viewport:{width:1100,height:900}}, {theme:
       envelope.turn_controls={execution_epoch_id:'epoch-one',continue_turn:{enabled:false,reason:'No continuation selected'},finish:{enabled:false,reason:'Required check is unmet'},continuation_choices:[],check_choices:[],
         partial_finish:{capability:{enabled:true,reason:''},available_sinks:[selected.reference.activation],review}};
       await page.evaluate(async envelope=>{
-        const {foldControlPlane}=await import('/ui/coordination-turn.js');window.partialEnvelope=envelope;window.partialFold=foldControlPlane;window.partialCommands=[];
+        const {foldControlPlane}=await import('/ui/activation-inspector.js');window.partialEnvelope=envelope;window.partialFold=foldControlPlane;window.partialCommands=[];
         const inspector=document.createElement('ax-activation-inspector');inspector.model=foldControlPlane(envelope);inspector.commandHandler=async command=>window.partialCommands.push({kind:command.kind,partialFinish:command.partialFinish});document.body.append(inspector);inspector.showTurnControls();
       },envelope);
       const inspector=page.locator('ax-activation-inspector');
@@ -1444,7 +1444,7 @@ for (const options of [{theme:'light',viewport:{width:1100,height:900}}, {theme:
   });
 }
 
-test('never-started native descendants are blocked by the current failed generation and unblock after Retry',async()=>{const{context,page,errors}=await componentPage();try{const envelope=controlPlaneFixture();envelope.state='running';envelope.nodes[0].activations=envelope.nodes[0].activations.slice(0,1);envelope.nodes[0].activations[0].state='failed';envelope.nodes.push({node_id:'reviewer',definition_id:'reviewer-definition',label:'Reviewer',definition:missing,dependencies:['builder'],activations:[]},{node_id:'report',definition_id:'report-definition',label:'Report',definition:missing,dependencies:['reviewer'],activations:[]},{node_id:'peer',definition_id:'peer-definition',label:'Independent peer',definition:missing,dependencies:[],activations:[]});const result=await page.evaluate(async envelope=>{const{foldControlPlane}=await import('/ui/coordination-turn.js');const card=document.createElement('ax-coordination-turn');document.body.append(card);const inspect=()=>{const model=foldControlPlane(envelope);card.controlPlane=envelope;return{states:Object.fromEntries(model.agents.map(agent=>[agent.id,agent.state])),histories:model.nodes.map(node=>node.activations.length),text:card.shadowRoot.textContent}};const failed=inspect();const retry=structuredClone(envelope.nodes[0].activations[0]);retry.state='running';retry.reference.activation.generation=2;retry.reference.activation.activation_id='retry-generation';retry.generation={status:'available',value:2};envelope.nodes[0].activations.push(retry);const running=inspect();retry.state='accepted';const accepted=inspect();return{failed,running,accepted,originalState:envelope.nodes[0].activations[0].state};},envelope);assert.deepEqual(result.failed.states,{builder:'failed',reviewer:'blocked',report:'blocked',peer:'waiting'});assert.deepEqual(result.failed.histories,[1,0,0,0]);assert.match(result.failed.text,/Blocked by Builder/);assert.deepEqual(result.running.states,{builder:'working',reviewer:'waiting',report:'waiting',peer:'waiting'});assert.deepEqual(result.accepted.states,{builder:'completed',reviewer:'waiting',report:'waiting',peer:'waiting'});assert.equal(result.originalState,'failed');assert.deepEqual(result.accepted.histories,[2,0,0,0]);assert.deepEqual(errors,[]);}finally{await context.close();}});
+test('never-started native descendants are blocked by the current failed generation and unblock after Retry',async()=>{const{context,page,errors}=await componentPage();try{const envelope=controlPlaneFixture();envelope.state='running';envelope.nodes[0].activations=envelope.nodes[0].activations.slice(0,1);envelope.nodes[0].activations[0].state='failed';envelope.nodes.push({node_id:'reviewer',definition_id:'reviewer-definition',label:'Reviewer',definition:missing,dependencies:['builder'],activations:[]},{node_id:'report',definition_id:'report-definition',label:'Report',definition:missing,dependencies:['reviewer'],activations:[]},{node_id:'peer',definition_id:'peer-definition',label:'Independent peer',definition:missing,dependencies:[],activations:[]});const result=await page.evaluate(async envelope=>{const{foldControlPlane}=await import('/ui/activation-inspector.js');const card=document.createElement('ax-coordination-turn');document.body.append(card);const inspect=()=>{const model=foldControlPlane(envelope);card.controlPlane=envelope;return{states:Object.fromEntries(model.agents.map(agent=>[agent.id,agent.state])),histories:model.nodes.map(node=>node.activations.length),text:card.shadowRoot.textContent}};const failed=inspect();const retry=structuredClone(envelope.nodes[0].activations[0]);retry.state='running';retry.reference.activation.generation=2;retry.reference.activation.activation_id='retry-generation';retry.generation={status:'available',value:2};envelope.nodes[0].activations.push(retry);const running=inspect();retry.state='accepted';const accepted=inspect();return{failed,running,accepted,originalState:envelope.nodes[0].activations[0].state};},envelope);assert.deepEqual(result.failed.states,{builder:'failed',reviewer:'blocked',report:'blocked',peer:'waiting'});assert.deepEqual(result.failed.histories,[1,0,0,0]);assert.match(result.failed.text,/Blocked by Builder/);assert.deepEqual(result.running.states,{builder:'working',reviewer:'waiting',report:'waiting',peer:'waiting'});assert.deepEqual(result.accepted.states,{builder:'completed',reviewer:'waiting',report:'waiting',peer:'waiting'});assert.equal(result.originalState,'failed');assert.deepEqual(result.accepted.histories,[2,0,0,0]);assert.deepEqual(errors,[]);}finally{await context.close();}});
 
 for (const theme of ['light', 'dark']) test(`turn controls show each required check with its failed output and name the check to rerun (${theme})`, async () => {
   const {context, page, errors} = await componentPage(theme === 'dark' ? {theme, viewport: {width: 390, height: 844}} : {theme});
@@ -1470,7 +1470,7 @@ for (const theme of ['light', 'dark']) test(`turn controls show each required ch
         required_conditions: group.filter(id => id !== condition_id),
         capability: {enabled: true, reason: ''}}))};
     await page.evaluate(async value => {
-      const {foldControlPlane} = await import('/ui/coordination-turn.js');
+      const {foldControlPlane} = await import('/ui/activation-inspector.js');
       const inspector = document.createElement('ax-activation-inspector');
       inspector.commandHandler = async command => { window.continued = command.continuation; };
       inspector.model = foldControlPlane(value); document.body.append(inspector); inspector.showTurnControls();
@@ -1506,7 +1506,7 @@ for (const theme of ['light', 'dark']) test(`turn controls show each required ch
     // Once every check passed together on the current tree, the summary says
     // the turn is ready and gives no reason to act.
     await page.evaluate(async value => {
-      const {foldControlPlane} = await import('/ui/coordination-turn.js');
+      const {foldControlPlane} = await import('/ui/activation-inspector.js');
       value.required_check_readiness = {state: 'passed', candidate_sha256: 'tree', reason: 'Every check passed on the current tree and left it unchanged.'};
       const inspector = document.querySelector('ax-activation-inspector');
       inspector.model = foldControlPlane(value); inspector.showTurnControls();
