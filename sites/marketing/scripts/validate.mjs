@@ -53,7 +53,7 @@ function isSha256(value) { return typeof value === 'string' && /^[a-f0-9]{64}$/.
 function isGitHead(value) { return typeof value === 'string' && /^[a-f0-9]{40}$/.test(value); }
 function validateLlms(source, label) {
   for (const [contract, marker] of [
-    ['1.0 product category', '# Axocoatl — the local-first workbench for coding agents'],
+    ['1.1 product category', '# Axocoatl — a local-first harness for coding agents'],
     ['durable Session spine', 'durable, folder-anchored Session'],
     ['separate repository truth', 'Source Control separately shows the repository as it exists now'],
     ['honest network boundary', 'Local-first does not mean every configured path is offline'],
@@ -508,7 +508,7 @@ if (root === sourceRoot) {
   const readme = readRequired(join(repositoryRoot, readmeLabel), readmeLabel, 'utf8');
   if (readme) {
     for (const [contract, marker] of [
-      ['1.0 product category', 'The open-source, local-first workbench for coding agents.'],
+      ['1.1 product category', 'An open-source, local-first harness for coding agents.'],
       ['current HTTP reference', 'https://docs.axocoatl.ai/reference/http-api/'],
     ]) {
       if (!readme.includes(marker)) fail(readmeLabel, `missing ${contract}`);

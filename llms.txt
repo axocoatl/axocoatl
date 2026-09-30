@@ -1,25 +1,34 @@
-# Axocoatl — the local-first workbench for coding agents
-> Axocoatl v1.1: repository work with retained knowledge and inspectable evidence
+# Axocoatl — a local-first harness for coding agents
+> Axocoatl v1.1: a lead that writes, read-only helpers, optional required checks and review, and a durable record of every step
 
-Axocoatl v1.1 is an Apache-2.0, local-first coding-agent workbench for real
-repositories. Open a repository and give one configured Agent—or a configured
-team—a durable, folder-anchored Session. The browser app keeps conversation at
-the center while Files, Source Control, Preview, Terminal, History, Agent
-activity, and Settings open around it.
+Axocoatl v1.1 is an Apache-2.0, local-first harness for coding agents working in
+real repositories, on local models through Ollama or hosted models through
+OpenRouter. One Rust executable runs a daemon that executes the Agents and a
+browser workbench. Open a repository and work in a
+durable, folder-anchored Session: conversation stays at the center while Files,
+Source Control, Preview, Terminal, History, Agent activity, and Settings open
+around it.
 
-When implementation choices need independent evidence, the same Session can run
-one task and repository snapshot several Ways with different Agent/model pairs.
-Compare Outcome, Route, available diff, common Checks, known cost, and an optional
-Judge while the decision is open. Keep one passing result as ordinary uncommitted
-Git changes, or finish without keeping any candidate.
+The default team is Lead, an Agent that edits files, and two read-only helpers it
+can `delegate` to: Scout answers questions about the code and Reviewer reviews a
+change. Each helper starts in an empty conversation and returns its answer to the
+lead; several can run at once. A team can add required checks, commands the host
+runs after the Agents finish, and a required review, a read-only reviewer the host
+runs for a bounded number of rounds. The turn completes only when they pass on the
+exact final tree. Both are opt-in.
 
-Each accepted Turn records its request and context before execution, then keeps
-the Agent output, final lifecycle state, and bounded tool Route in durable
+Every Agent runs under a grant with limits a person approves. Each accepted Turn
+records its request and context before execution, then keeps every activation,
+tool call, budget decision, Agent output, and final lifecycle state in durable
 History. Source Control separately shows the repository as it exists now;
 Axocoatl does not make a commit or push unless the user deliberately asks for
-that Git action. Native Ways retain bounded comparison evidence and the human decision after
-cleanup, including a decision to keep nothing. Keep also retains the selected task,
-output, and turn attribution in Session History. Explicit storage limits govern retention.
+that Git action.
+
+When implementation choices need independent evidence, the same Session can run
+one task and repository snapshot several Ways with different Agent/model pairs,
+compare them, and Keep one passing result as ordinary uncommitted Git changes.
+Native Ways retain bounded comparison evidence and the human decision after
+cleanup, under explicit storage limits.
 
 ## Start
 
@@ -56,8 +65,8 @@ WSL2.
 - **Keep this one**: return one passing, non-empty Way to the primary Session
   checkout as an ordinary uncommitted Git change for review.
 
-The ordinary path is one Agent or configured team in one Session. Exploring
-several Ways is optional decision support, not the default interaction model.
+The ordinary path is the lead and its helpers, or one Agent, in one Session.
+Exploring several Ways is optional decision support, not the default interaction model.
 The current Ways boundary requires an autonomous single-Agent Session and local Podman; Session
 attachments, MCP tools, Skills, and web search are withheld from attempts.
 
@@ -85,10 +94,20 @@ events, Automations, and sandbox lifecycle.
   Checkpoints are execution-recovery caches; canonical History is the product record.
 - Automations: explicit durable graphs configured and reviewed in Settings,
   with manual, interval, event, or Skill triggers and separate run history.
-- Coordination: a configured coordinator Agent can decompose a goal, assign
-  work to configured workers, run them in parallel, and synthesize the result.
-  The event feed carries the events Skills publish; it is not the Session, Agent
-  graph, Ways model, or Automation graph.
+- Lead and helpers: in a native Session, an Agent approved to delegate hands a
+  self-contained task to a read-only helper template and waits for its answer.
+  The helper's limits are reserved from the lead's grant. Read-only helpers get no
+  file-writing tools; their shell runs under a Linux Landlock write restriction
+  where Linux 6.2 or later allows it, and otherwise they get no shell.
+- Write scopes: an Agent limited to some paths has file tools that refuse other
+  paths, and its changes are checked after it finishes. For an Agent with a shell,
+  that check is review evidence, not confinement.
+- Small local models: an Ollama stream that ends early is retried once, older
+  tool output is replaced by a placeholder in later requests, and a request that
+  would overflow the context window is trimmed instead of failing.
+- Events: the event feed carries the events Skills publish to Automation
+  triggers, webhooks, and observers; it is not the Session, Agent graph, Ways
+  model, or Automation graph.
 
 ## Isolation and network boundary
 
@@ -102,9 +121,10 @@ Axocoatl adds no product telemetry, hosted control plane, or Axocoatl account.
 Local-first does not mean every configured path is offline. Hosted model
 providers, MCP servers, web search, webhooks, the optional E2B Cloud sandbox,
 Podman image and package downloads, repository traffic, and the one-time Hugging
-Face embedding-model download can use the network. `sandbox.network: none`
-blocks only code and commands inside the local Podman sandbox; daemon-side
-integrations remain separate paths.
+Face embedding-model download can use the network. Container network access is
+on by default (`sandbox.network: bridge`); set `sandbox.network: none` for
+repositories you don't trust. `none` blocks only code and commands inside the
+local Podman sandbox; daemon-side integrations remain separate paths.
 
 ## Selected interfaces
 

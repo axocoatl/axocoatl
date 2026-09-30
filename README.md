@@ -1,6 +1,6 @@
 # Axocoatl
 
-**The open-source, local-first workbench for coding agents.**
+**An open-source, local-first harness for coding agents.**
 
 [![CI](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml/badge.svg)](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/axocoatl-cli.svg)](https://crates.io/crates/axocoatl-cli)
@@ -10,23 +10,45 @@
   <img src="sites/marketing/assets/og-home.png" alt="Axocoatl: the local-first workbench for coding agents" width="760">
 </p>
 
-<p align="center"><strong>Agent work you can inspect, compare, and keep.</strong></p>
+<p align="center"><strong>A lead that writes, helpers that only read, and a record of every step.</strong></p>
 
-Axocoatl v1 gives coding agents one durable, folder-anchored Session for real
-repository work. Conversation, Files, Terminal, Preview, tools, History, and Git
-stay together. Use one configured Agent or team for the direct path. When the
-implementation is genuinely uncertain, run the same task several Ways with
-different agents and models, compare the evidence, and Keep one result as
-uncommitted Git changes.
+Axocoatl runs coding agents against your repository, on local models through
+Ollama or hosted models through OpenRouter. It is one Rust executable: a daemon
+that runs the Agents and records their work, and a web workbench you open in
+your browser.
 
-Install one `axocoatl` executable and use the workbench in your existing browser.
-The CLI, Rust daemon, HTTP/WebSocket API, and workbench browser assets ship together,
-so using Axocoatl requires no separate frontend install or bundled browser runtime.
-Rootless Podman remains the required local backend for sandboxed Workspace Sessions.
+- **Lead and helpers.** The default team is a **Lead** that edits files and two
+  read-only helpers it can `delegate` to: **Scout** answers questions about the
+  code, **Reviewer** reviews a change. Each helper starts in an empty
+  conversation and hands its answer back to the lead. Several helpers can run
+  at once.
+- **Required checks and review, if you want them.** Required checks are
+  commands the host runs after the Agents finish; the turn completes only when
+  they pass on the exact final tree. Required review has the host run a
+  read-only reviewer; requested changes go back to the lead for a bounded
+  number of rounds. Both are off until you add them.
+- **Write scopes.** Read-only helpers get no file-writing tools, and their
+  shell runs under a Linux Landlock write restriction (Linux 6.2 or later);
+  where that is unavailable they get no shell. An Agent limited to some paths
+  has file tools that refuse other paths, and every change it made is checked
+  after it finishes. For an Agent with a shell, that check is review evidence,
+  not confinement.
+- **Budgets and a record.** Every Agent runs under a grant with limits you
+  approve. Grants and budgets survive restarts, and the Session records each
+  activation, tool call, and budget decision.
+- **Small local models.** An Ollama stream that ends early, including one that
+  fails on a tool call Ollama could not parse, is retried once. Older tool
+  output is replaced by a short placeholder in later requests, and a request
+  that would overflow a small context window is trimmed instead of failing.
 
-Under the workbench, persistent actors, scoped memory, canonical Session History,
-checkpointing, sandboxed tools, Automations, MCP, A2A, and provider-neutral model
-access keep the work durable and extensible.
+Tools run in a rootless Podman container. Network access is on by default;
+set `sandbox.network: none` for repositories you don't trust. Axocoatl adds no
+product telemetry and needs no Axocoatl account.
+
+The same Session keeps conversation, Files, Terminal, Preview, History, and
+Git together. When an implementation choice needs independent evidence, run
+the task several Ways with different Agents and models, compare them, and Keep
+one result as uncommitted Git changes.
 
 ---
 
@@ -83,21 +105,22 @@ request. To change the team, see
 ## From request to reviewed change
 
 1. Open or resume a Workspace Session.
-2. Ask one Agent for a solution, or use a Lattice or Custom team when the work
-   needs several cooperating roles. A native team's execution graph stays with the
-   Turn. A Coordinator can create bounded Workers
-   from approved templates inside the same recorded turn. In a native Session,
-   review and apply **Team & budget** before the first Send.
-3. When an implementation decision needs independent evidence, turn on
-   **Explore several ways** and choose an Agent and model for each attempt.
-4. Compare Outcome and Route, inspect changed paths and diffs, then run Checks
-   and an optional Judge.
-5. If you explored Ways, choose **Keep this one** to apply one candidate to the
-   primary checkout without committing it.
+2. In **Team & budget**, enter the limits for Lead and its helpers, and add any
+   required checks or a required reviewer. Choose **Apply** before the first Send.
+3. Ask for the change. Lead reads and edits the repository and delegates
+   questions or a review to its helpers. The Agent graph shows each helper it
+   started and what it returned.
+4. If the team has required checks, the host runs them after the Agents finish;
+   a required reviewer then reads the result, and requested changes go back to
+   Lead for another round. The turn completes only when both pass; otherwise it
+   needs attention and says why.
+5. When an implementation decision needs independent evidence, turn on
+   **Explore several ways** instead, compare Outcome and Route, run Checks and an
+   optional Judge, and choose **Keep this one**.
 6. Open **Last turn** in Source Control, review the current attributed diff,
    stage what you want, and commit deliberately.
 
-## One workbench, from request to review
+## What else the workbench does
 
 - **One executable, one browser surface.** `axocoatl dev` starts the local daemon
   and serves the embedded workbench at `http://localhost:8080`. Conversation stays
@@ -113,12 +136,13 @@ request. To change the team, see
   Native Agents can retrieve notes and propose updates; accepted publication remains
   separate from speculative work. A bounded code map exposes observed definitions
   and imports, with source changes and unavailable evidence kept visible.
-- **Teams retain their execution history.** Native turns bind each Agent activation
-  to an immutable definition, input, conversation, and approved budget. Dependencies
-  carry exact accepted handoffs. The Agent graph exposes generations, output, usage,
-  and causal evidence, with missing details labeled. **Team & budget** reviews future
-  turns; current-turn controls act on exact recorded generations. Coordinators use
-  explicitly approved Worker templates and bounded delegated authority.
+- **Every activation stays inspectable.** Native turns bind each Agent activation
+  to an immutable definition, input, conversation, and approved budget. The Agent
+  graph shows generations, output, usage, and causal evidence, including a
+  "delegated" edge from a lead to each helper, with missing details labeled.
+  **Team & budget** reviews future turns; current-turn controls act on exact
+  recorded generations. A lead delegates only to helper templates you approved,
+  within limits reserved from its own grant.
 - **Explore several ways before you choose.** Give the same request and repository
   snapshot to different Agent/model pairs. Each attempt gets an independent checkout
   and sandbox. Compare Outcome and Route, inspect changed paths and diffs, run Checks
@@ -230,6 +254,18 @@ Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
   separate execution-recovery cache.
 - **Attempt** — a candidate solution, optionally run in parallel with different
   agents and models, verified and resolved to one kept result.
+- **Lead and helpers** — in a native Session, an Agent whose Team & budget approval
+  names helper templates gets a `delegate` tool. Each call starts one read-only helper
+  in an empty conversation, reserves its limits from the lead's grant, and returns
+  its answer to the lead. A helper that could change files is refused.
+- **Grant** — the limits you approve in Team & budget for an Agent: activations,
+  invocations, tokens, cost, and expiry. Every provider and tool call is reserved
+  against it before it runs; raising a limit takes a human decision.
+- **Required checks and required review** — optional completion conditions for a
+  native team. Checks are commands the host runs between two captures of the
+  repository; review is a read-only reviewer the host runs, in a fresh conversation,
+  for 1 to 3 rounds. A turn completes only when every condition passes on the exact
+  final tree.
 - **Agents** — configured templates for a provider, model, tools, memory policy, role, and
   token budget. Native activations retain exact input, accepted conversation checkpoints,
   and usage; their execution path does not attach Tier 2–4 memory stores. On the legacy
@@ -253,18 +289,16 @@ Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
   write them or run core-memory consolidation during the turn.
 - **Event feed** — firing a Skill publishes each event in its `emits` list;
   Automation triggers, webhooks, and retained API/WebSocket observers consume
-  that feed, which starts no Agents on its own. Native Session turns use their
-  canonical dependency graph and accepted-generation evidence. On a 1.0 data root,
-  a Session turn that would run two or more Agents is refused until the operator
-  runs `axocoatl session upgrade --confirm`. Library users get the feed from
-  `axocoatl_core::event_feed`.
-- **Coordinator role** — for explicit hierarchical work, an agent with
-  `role: coordinator` decomposes a goal into subtasks with its model, assigns each
-  to the first declared worker that can call its required tools, runs them in
-  parallel, and synthesizes the results. Internal checkpoints protect the live
-  orchestration boundary. On the legacy path, once a Session turn is Completed,
-  Cancelled, Failed, or Interrupted, a later turn decomposes fresh rather than
-  silently resuming that terminal work.
+  that feed, which keeps no history and starts no Agents on its own. Library
+  users get the feed from `axocoatl_core::event_feed`.
+- **Coordinator role** — in a native Session, a template with `role: coordinator`
+  runs as a lead over its approved Worker templates. On a legacy Session, it
+  decomposes a goal into subtasks with its model, assigns each to the first
+  declared worker that can call its required tools, runs them in parallel, and
+  synthesizes the results; once that turn is Completed, Cancelled, Failed, or
+  Interrupted, a later turn decomposes fresh rather than silently resuming it.
+  On a 1.0 data root, a Session turn that would run two or more Agents is refused
+  until the operator runs `axocoatl session upgrade --confirm`.
 - **Workflow compatibility** — workflow commands and routes project manual
   Automation records; legacy YAML seeds those records only on first boot.
 - **Automations** — explicit DAGs created, inspected, edited, and run in
@@ -336,7 +370,7 @@ destinations; the app keeps conversation history and attached context inside a S
 Every example is runnable with a mock LLM — **no API keys needed** — unless
 noted. See [`examples/`](examples/).
 
-**Coordination & planning**
+**Recovery**
 - [`crash-recovery`](examples/crash-recovery) — a standalone example-owned behavior that resumes a multi-step workflow checkpoint without re-running completed steps; this is not the normal Session Coordinator terminal-recovery contract.
 
 **Memory & providers**
@@ -354,7 +388,7 @@ noted. See [`examples/`](examples/).
 - [`configs/`](examples/configs) — a gallery of minimal YAML configs for common recipes (research pipeline, feature dev, incident response, local-only, MCP, event webhooks). No Rust.
 
 **Foundations**
-- [`research-assistant`](examples/research-assistant), [`code-reviewer`](examples/code-reviewer), [`customer-support`](examples/customer-support) — agent coordination, token budgets, and session/checkpoint memory.
+- [`research-assistant`](examples/research-assistant), [`code-reviewer`](examples/code-reviewer), [`customer-support`](examples/customer-support) — library-level mock-provider examples: a two-Agent pipeline, a Coordinator that splits a review across Workers, token budgets, and session/checkpoint memory.
 
 ## Build from source
 

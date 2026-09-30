@@ -6,10 +6,17 @@ product speaks and looks; `ARCHITECTURE.md` explains the runtime beneath it.
 
 ## One product
 
-Axocoatl is a local-first coding workbench backed by a durable multi-agent runtime. It is
-not a collection of dashboards for runtime subsystems. The runtime, actor model, memory,
-lattice, isolation, tools, MCP, and automation machinery are the engine. The browser app
-at `/` is how a person uses that engine.
+Axocoatl is a local-first harness for coding agents: a Rust daemon that runs Agents
+against a repository and records their work, and the browser app at `/` through which a
+person uses it. It is not a collection of dashboards for runtime subsystems. The actors,
+Session ledger, grants, isolation, tools, MCP, and automation machinery are the engine.
+
+The default team is a lead Agent that writes and read-only helpers it can delegate to
+(Scout and Reviewer). A team can require checks and a review that the host runs before a
+turn completes. Per-Agent write scopes, grants, and budgets bound what each activation may
+do, and the Session records every activation, tool call, and budget decision. Small local
+models through Ollama are a first-class target, so the native path retries a stream that
+ends early, masks stale tool output, and fits requests to the model's context window.
 
 A folder-anchored session is the unit of work. Its conversation is the permanent spine.
 Files/editor/Source Control, Preview, comparison, and agent graph open as focused tools;
@@ -27,11 +34,12 @@ merely because it exists in the current working directory.
 1. Start Axocoatl and open the local app.
 2. Resume the last session or open a project directory as a named Workspace, then start a
    Session inside it.
-3. Add any files needed as **Once** or **Session** context, then ask the selected Agent or
-   configured team for one result. A native team turn keeps its execution graph with the
-   conversation. A Coordinator can create Workers from
-   explicitly approved templates and limits; their separate activations and parent ownership
-   remain in the same turn history.
+3. Add any files needed as **Once** or **Session** context, review **Team & budget**, then
+   ask for one result. The lead reads and edits the repository and may delegate read-only
+   tasks to approved helper templates; each helper's activation, grant, and answer remain
+   in the same turn history. If the team has required checks or a required review, the
+   host runs them after the Agents finish, and the turn completes only when they pass on
+   the exact final tree.
 4. When an implementation decision needs independent evidence, turn on **Explore several
    ways** and choose the Agent and model for each attempt. Attempts execute in isolated working
    copies, and their running, blocked, failed, cancelled, and complete states remain visible
@@ -61,8 +69,9 @@ failed, stopped, and interrupted work reachable for search and export. Native tu
 exact generation controls and explicit continuation; legacy single-Agent history retains its
 separate rewind behavior. These are Session actions, not alternate places to work.
 
-This loop is the product differentiator. A single answer remains the simple path; parallel
-attempts add confidence when the task merits them.
+The ordinary path is one turn of the lead and its helpers, or of one Agent, under approved
+grants and any required checks and review. Parallel attempts add independent evidence when
+the task merits them.
 
 ## Information architecture
 
@@ -175,8 +184,8 @@ returned ledger error removes the prepared checkpoint; if an uncatchable process
 between the writes, bootstrap converges the checkpoint from the authoritative ledger before
 serving again.
 
-Lattice and Custom Session turns, plus a single-Agent Session whose selected Agent is a
-Coordinator, use a different boundary. After the canonical Begin is durable, every
+Legacy Lattice and Custom Session turns, plus a single-Agent Session whose selected Agent
+is a Coordinator, use a different boundary. After the canonical Begin is durable, every
 Session-owned Agent checkpoint write stages beneath that exact turn, including Coordinator and
 declared Worker state. A durable Completed terminal promotes each Agent's own causal
 transcript. Failed, Cancelled, Interrupted, and restart-recovered turns restore the prior
@@ -261,6 +270,11 @@ model interpretations, accepted execution, and passing checks remain distinct fa
 | Outcome | What changed and whether the result passed checks. |
 | Route | The observable path an attempt took: tool calls, files, commands, failures, and normalized trajectory. |
 | Keep | Select one attempt and return its changes to the session checkout. |
+| Lead | The Agent in a native team that owns the change and may delegate. |
+| Helper | A read-only Agent a lead delegates one task to; it starts in an empty conversation. |
+| Grant | The activation, invocation, token, cost, and expiry limits a person applies in Team & budget. |
+| Required check | A command the host runs after the Agents finish; the turn completes only when it passes. |
+| Required review | A read-only reviewer the host runs after the checks pass; its verdict gates completion. |
 
 Use internal words such as variant, lane, fan-out, worktree, branch, adopt, and discard in
 code and APIs. On the product surface, prefer plain language. Git implementation details
@@ -276,14 +290,18 @@ The one app does not replace Axocoatl's runtime strengths. It makes them legible
   lifecycle independently of the actor checkpoint cache.
 - Session isolation bounds repository file, shell, and terminal tool execution to the chosen workspace.
 - Heterogeneous providers let each attempt use a different local or remote model.
-- An all-team turn with more than one autonomous Agent in a Lattice or Custom
-  Session owns a bounded coordination lattice: exact named dependencies activate
-  Agents, direct-parent handoffs become durable causal evidence, and one requested
-  revision can reactivate the affected downstream graph. A native lead, including a
-  Coordinator template, delegates tasks to distinct helper activations from approved
-  Worker templates in that same controller. The process-wide
-  event feed carries the events Skills publish to triggers, webhooks, and
-  retained API/WebSocket observers.
+- A native turn runs its approved team in the Session controller: exact named
+  dependencies activate Agents, direct-parent handoffs become durable causal evidence,
+  and one requested revision can reactivate the affected downstream graph. A lead,
+  including a Coordinator template, delegates tasks to read-only helper activations
+  from approved Worker templates; each helper's limits are reserved from the lead's grant.
+- Required checks and required review are completion conditions the host evaluates on
+  the exact final tree; the lead cannot skip or answer them.
+- Write scopes bound which paths an Agent's file tools may change. Read-only helpers run
+  their shell under a Linux Landlock write restriction where available and otherwise get
+  no shell; a path-scoped writer's changes are checked after it finishes.
+- The process-wide event feed carries the events Skills publish to triggers, webhooks,
+  and retained API/WebSocket observers.
 - MCP, Skills, and Automations extend what sessions and agents can do.
 
 These are capabilities of one product. They should not compete as peer navigation
@@ -311,7 +329,10 @@ runtime, state, and lifecycle fusion is not one product.
 
 - A generic consumer assistant or hosted account-first SaaS.
 - A collection of framework primitives that requires users to assemble their own product.
-- A second app for comparison, agents, automations, or the lattice.
+- A second app for comparison, agents, automations, or the Agent graph.
+- Pheromone/stigmergic coordination, evaluated and dropped 2026-09-29. It was the founding
+  thesis and was built and measured; a single self-reviewing Agent matched the best team
+  at 28–48% of the tokens.
 - Hiding failures, git state, cost, or model choice to make the interface look simpler.
 - Replacing the local-first default with a vendor-controlled runtime or data path.
 

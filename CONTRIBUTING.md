@@ -107,7 +107,8 @@ If you touch the browser app (`axocoatl-server/static/index.html` or
 ## Project orientation
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the mental model
-  (lattice, actors, memory tiers, isolation).
+  (the Session controller, leads and helpers, grants, actors, memory tiers,
+  isolation).
 - [`docs/PRODUCT.md`](docs/PRODUCT.md) — the one-app product model and terminology.
 - [`docs/LOCAL_TESTING_GUIDE.md`](docs/LOCAL_TESTING_GUIDE.md) — end-to-end
   walkthrough with Ollama.

@@ -6,7 +6,7 @@ page, doc, or post conflicts with current product fact, fix the fact source and 
 file together. The goal is consistency that compounds: every page reinforces every
 other page, and a year from now we still sound like ourselves.
 
-Last updated: 2026-08-10.
+Last updated: 2026-09-30.
 
 ---
 
@@ -15,41 +15,64 @@ Last updated: 2026-08-10.
 Axocoatl exists for one reason: **agent tooling has a theater problem, and
 engineers need the work to hold up in a repository.**
 
-Polished demos and final answers can hide the facts that matter: what was accepted,
-what executed, what failed, what changed, and what remains for the engineer to decide.
+Polished demos and final answers can hide the facts that matter: who changed what,
+what executed, what failed, what it cost, and what remains for the engineer to decide.
 
-We optimize for the unglamorous reality: agents that work against real files, use
-the terminal and preview, keep their context across restarts, expose what they changed,
-and leave the repository under the engineer's control. When a problem has several
-plausible solutions, the same workbench can compare real attempts without turning
-them into unrelated chats. Candidate Routes, diffs, failures, Checks, and Judge evidence stay together for
-comparison. Native Ways retain the bounded decision record after cleanup under explicit
-storage limits. After Keep, the selected output and turn attribution join durable Session
-History, and Git shows the current diff for the attributed paths. Real workflows. Not demos.
+We optimize for the unglamorous reality: agents that work against real files on
+models the engineer chooses, including small local ones; one Agent that writes
+while helpers only read; checks and review that the host runs instead of taking
+the model's word; limits a person approves; and a record of every activation,
+tool call and budget decision. The repository stays under the engineer's control,
+and Git shows what changed. When a problem has several plausible solutions, the
+same workbench can compare real attempts without turning them into unrelated chats.
+Real workflows. Not demos.
 
 If a piece of copy does not name a fact the code and reachable product can prove,
 the copy is wrong.
 
 ## 2 · Positioning statement
 
-> Axocoatl is the open-source, local-first coding workbench for engineers who want
-> agents to do real repository work inside one durable Session. Conversation, context,
-> files, terminal, preview, tools, history, and Git stay together. Start with the Agent
-> or configured team that fits the work; several Ways are available when the decision
-> merits them.
+> Axocoatl is an open-source, local-first harness for coding agents. A lead Agent
+> writes; read-only helpers answer its questions and review its work; the host can
+> require checks and review before a turn completes. Every activation, tool call
+> and budget decision is recorded in one durable Session, with the repository,
+> terminal, preview and Git around it.
 
 Three pillars. Every page should reinforce one or more:
 
-1. **One durable work surface.** A folder-anchored Session conversation is the spine.
-   Files, editor, Terminal, Preview, context, History, and Git open around it.
-2. **Inspectable execution.** Agents use real tools against the repository. Their
-   normal Turns retain bounded tool activity, output, lifecycle, and path attribution in
-   History. Native Ways retain bounded candidate Routes, failures, diffs, Checks,
-   cost, optional Judge, and the human decision beyond runtime cleanup. Several Ways are an
-   optional decision mode inside this surface, not the product category.
-3. **Yours and extensible.** Actor-supervised, checkpointed, sandboxed, local-first.
-   Bring providers, Agents, Skills, MCP servers, and Automations. No Axocoatl telemetry;
-   integration and remote-sandbox egress are explicit choices.
+1. **A lead and read-only helpers.** The lead owns the change. Helpers start in an
+   empty conversation, answer one task, and cannot change files. Several can run at
+   once; the benefit is a clean lead context, not speed.
+2. **The host decides, and records.** Required checks, required review, write scopes,
+   grants and budgets are applied by Axocoatl, not requested of the model. Every
+   activation, tool call and budget decision is retained in the Session. Several
+   Ways are an optional decision mode inside this surface, not the product category.
+3. **Yours and local-first.** One executable on your machine, local models through
+   Ollama, hosted models through OpenRouter. Bring Agents, Skills, MCP servers, and
+   Automations. No Axocoatl telemetry; integration and network paths are explicit.
+
+### Claims we do not make
+
+- **No result claims for the default team.** Do not say the lead-and-helpers team
+  produces better results, or beats a single Agent, until a comparative evaluation
+  is published. Then state its result and its scope, nothing wider.
+- **No speed claims for helpers.** Helpers share one checkout, so their tool
+  processes queue, and a local model server limits how many model calls run at once.
+- **Isolation is not the headline.** Say what runs where: "Tools run in a rootless
+  Podman container. Network access is on by default; set `network: none` for
+  repositories you don't trust." Do not call Axocoatl or its sandbox "secure",
+  "safe" or "hardened", and do not claim egress control, credential isolation or
+  zero trust.
+- **Write scopes, stated narrowly.** Read-only helpers get no file-writing tools, and
+  their shell runs under Landlock where Linux 6.2 or later allows it; otherwise they
+  get no shell. A path-scoped writer's file tools refuse other paths, and every change
+  it made is checked after it finishes. For a writer with a shell, that check is
+  review evidence, not confinement.
+- **Retired vocabulary.** The founding stigmergy thesis was built, measured and
+  removed in 1.1.0. Do not describe Axocoatl with "stigmergy", "pheromones", "signal
+  field", "swarm", "without a manager" or "no central orchestrator". Do not call it
+  "the go-to" anything. The marketing and docs validators reject these terms outside
+  the changelog.
 
 ## 3 · Voice
 
@@ -151,14 +174,17 @@ to the system concept, lowercase when they refer to instances of it.
 |---|---|---|---|
 | The product | Axocoatl | — | Always one word, capitalized A. Never "axocoatl" in body copy. |
 | The runtime | the daemon | — | Lowercase. It is the running process behind the app. |
-| Coordination fabric | the event lattice | — | An engine capability, not a destination. |
+| Event transport | the event feed | — | Carries the events Skills publish. An engine capability, not a destination. |
 | Unit of work | Workflow, Automation | a workflow, an automation | |
 | LLM-backed actor | Agent | an agent | |
 | Event-publishing capability | Skill | a skill | (Not "skill" as in "skills.")|
 | Authorized project directory | Workspace | a workspace | Groups sessions. |
 | Persistent work item | Session | a session | Anchored to a workspace; chat is its spine. |
 | Parallel candidate | Attempt | an attempt / a way | Do not expose lane or variant as the primary noun. |
-| Session execution mode | Lattice mode, Single-agent mode | — | Modes, not destinations. |
+| Team roles | Lead, helper | a lead, a helper | The lead writes; helpers are read-only. Scout and Reviewer are the default helpers. |
+| Completion conditions | required checks, required review | — | Opt-in. The host runs them, not the lead. |
+| Approved authority | grant, budget | a grant | The limits a person applies in Team & budget. |
+| Session team choice | Single agent, Lattice team, Custom team | — | Labels in the New session picker. A Lattice team is a team defined in configuration; do not use "lattice" for anything else in copy. |
 | Marks | Mark, wordmark | — | Lowercase in copy unless start of sentence. |
 | Marketplace integration | MCP server | — | MCP all caps; "server" lowercase. |
 
@@ -178,7 +204,7 @@ That's it.
 - **Bronze** (`#B5904A`) is secondary. Use sparingly — section
   dividers, the occasional warm flourish.
 - **Blue** (`#3FA9C8`) is the accent for "tech inside myth" moments —
-  hyperlinks in body, the lattice-edge highlight, code-block keywords.
+  hyperlinks in body, graph-edge highlights, code-block keywords.
 - **Neutrals** are 90% of any page. Ink for dark mode, parchment for
   light mode, white/black at the ends. Never use pure black or pure
   white as a page background.
@@ -232,8 +258,9 @@ No carousels. No sliders. No accordions. No tabs above the fold.
 
 Motion is restrained. The whole site has three motion patterns:
 
-- **The lattice illustration** pulses on a scripted loop to explain event and
-  coordination concepts. Label it as an illustration, not a live product run.
+- **Product films** are muted recordings of the product. Only a hero film may
+  autoplay, and never when the visitor prefers reduced motion. Caption each film
+  with what the recording actually shows.
 - **Hover lifts** on cards: 1px translateY, 120ms ease-out, border shifts
   from `--border` to `--accent`.
 - **Theme morph** when the toggle fires: 200ms cross-fade on every
@@ -252,7 +279,7 @@ already established:
 
 - `◉` watch / observe
 - `◇` skill / event
-- `⌬` lattice / cluster
+- `⌬` team / graph
 - `▣` session / contained workspace
 - `⟳` automation / cycle
 - `◫` docs / pages
@@ -274,13 +301,9 @@ parallelism the premise of a general product demonstration.
 A demonstration must match a reachable current workflow. Never label a mock 1:1 or
 exact unless it was compared to the current app in the same change.
 
-The interactive `<ax-lattice>` remains a supporting illustration for event and
-runtime-concept pages, including the `/concepts` lattice section. A homepage hero
-must show the current workbench rather than lead with Ways, the lattice, or another
-subsystem.
-
-Do not use the lattice canvas as a substitute for showing the workbench. It explains
-the engine; it is not the primary product shell.
+A homepage hero must show the current workbench rather than lead with Ways, the
+Agent graph, or another subsystem. Diagrams in code panes may explain the lead,
+helpers, checks and review, but they do not substitute for showing the workbench.
 
 ## 10 · Comparison frame
 
@@ -339,7 +362,7 @@ When we write blog posts, they follow the same voice. Title patterns:
   technical, specific. Example: "How Axocoatl persists agent state
   across restarts."
 - **Concept** (occasional): "On X." — short, essayistic, no clickbait.
-  Example: "On stigmergy." or "On theater in AI tooling."
+  Example: "On theater in AI tooling."
 - **Release notes** (every minor + major): "v0.X.0 — release notes." —
   no marketing prose, just what changed and why.
 

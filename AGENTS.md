@@ -15,25 +15,31 @@ Read `docs/PRODUCT.md` before changing product behavior or interface structure.
 Read `docs/ARCHITECTURE.md` before changing runtime behavior. `BRAND.md` governs
 voice and visual identity, not implementation facts.
 
-Axocoatl is one local-first coding workbench backed by a durable multi-agent
-runtime. The browser app at `/` is the product surface. A folder-anchored session
-and its chat are the permanent spine; files, editor, terminal, browser, activity,
-attempt state, comparison, git, and agent graph open around that session. Agents,
-Skills, MCP servers, and Automations belong in Settings rather than becoming peer
-destinations.
+Axocoatl is a local-first harness for coding agents: a Rust daemon that runs
+Agents and records their work, and one browser app at `/` that is the product
+surface. The default team is a lead that writes and read-only helpers it delegates
+to; a team can require checks and a review that the host runs before a turn
+completes. A folder-anchored session and its chat are the permanent spine; files,
+editor, terminal, browser, activity, attempt state, comparison, git, and agent graph
+open around that session. Agents, Skills, MCP servers, and Automations belong in
+Settings rather than becoming peer destinations.
 
 Installation and onboarding configure Axocoatl for the current OS user. Onboarding
 must not create a project, repository, Workspace, or Session folder. A repository
 becomes a Workspace only through **Open workspace…** in the app. Never select a cwd
 `axocoatl.yaml` implicitly; project-local configuration requires an explicit path.
 
-The signature loop is:
+The ordinary loop is:
 
-1. Open or resume a workspace session.
-2. Ask for one solution or explore several heterogeneous attempts.
-3. Watch each attempt, including blocked or failed states.
-4. Run repository checks and compare both outcome and route.
-5. Keep one attempt, review its git changes, and commit deliberately.
+1. Open or resume a workspace session and apply its Team & budget.
+2. Ask for the change; the lead works and delegates read-only tasks to helpers.
+3. Watch the lead and its helpers, including blocked or failed states.
+4. If the team requires checks or a review, the host runs them before the turn
+   completes.
+5. Review the git changes and commit deliberately.
+
+When one answer is not enough, explore several heterogeneous attempts instead,
+compare outcome and route, and keep one.
 
 Do not create another app shell, alternate dashboard, or feature-specific route.
 When consolidating an older surface into `/`, inventory every working capability
@@ -146,9 +152,9 @@ non-goal before turning it into roadmap pressure or a public caveat.
   request, resulting artifact, observed outcome, interventions and failures. Show
   the evidence in the response; a log directory, plan, screenshot, or test count
   alone does not establish task completion or useful agent behavior.
-- For Lattice comparisons, distinguish original signal accumulation/decay, native
-  dependency scheduling, and the complete workbench. State which actually ran.
-  Use capable single-agent and ordinary asynchronous-team controls where relevant,
+- For team comparisons, state exactly which configuration ran: one Agent, a lead
+  with helpers, required checks, required review, or several Ways. Use a capable
+  single-agent control, including one that reviews its own work, where relevant,
   with the same task information, tools, model, total resources and acceptance
   criteria. Attribute memory, retries and isolation separately from coordination.
 - Assess final artifacts against the task contract, not model agreement. Retain
