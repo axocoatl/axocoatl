@@ -17,17 +17,10 @@ use axocoatl_session::execution_content::{
 use axocoatl_token::TokenCounter;
 use axocoatl_tools::ToolExecutor;
 
-/// Tool-call rounds whose output a signal activation keeps verbatim; older
-/// output is replaced by a placeholder in the next request.
-const SIGNAL_KEPT_TOOL_ROUNDS: usize = 3;
-
-/// Only signal work masks stale tool output: a person's own turn and other
-/// standing work keep every result the model saw.
-fn masks_stale_tool_output(
-    work: Option<&crate::bootstrap::native_turn::NativeStandingWork>,
-) -> bool {
-    work.is_some_and(|work| !work.signal_routes.is_empty())
-}
+/// Tool-call rounds whose output an Agent's next request keeps verbatim;
+/// older output is replaced by a placeholder. Re-sending every earlier tool
+/// result each round is what exhausts a small local model's context.
+const KEPT_TOOL_ROUNDS: usize = 3;
 
 /// Host-resolved resources. This first port supports an autonomous in-process
 /// actor with retained text inputs. Repository runs use the separate opaque
@@ -299,9 +292,6 @@ impl SessionDispatchController {
         ));
         let host_control_tool = self.scoped_control_tool(&activation)?;
         let host_knowledge_tool = self.scoped_knowledge_tool(&activation)?;
-        // Signal activations run long read-and-check loops; re-sending every
-        // earlier tool result each round is what exhausted their budgets.
-        let signal_work = masks_stale_tool_output(self.lock()?.standing_work()?.as_ref());
         let behavior: Box<dyn AgentBehavior> =
             if let Some((workers, worker_tools, htn)) = coordinator_workers {
                 let mut behavior = axocoatl_actor::CoordinatorBehavior::new(provider, counter)
@@ -337,13 +327,11 @@ impl SessionDispatchController {
                     .with_tool_executor(tools)
                     .with_executor_tool_allowlist(config.tools.clone())
                     .with_activation_checkpoint_port(port.clone())
-                    .with_stream_observer(observer);
-                if signal_work {
-                    behavior = behavior.with_stale_tool_result_masking(
-                        SIGNAL_KEPT_TOOL_ROUNDS,
+                    .with_stream_observer(observer)
+                    .with_stale_tool_result_masking(
+                        KEPT_TOOL_ROUNDS,
                         [super::knowledge::NAME.to_string()],
                     );
-                }
                 if let Some(tool) = host_knowledge_tool {
                     behavior = behavior.with_host_knowledge_tool(tool);
                 }
@@ -836,39 +824,4 @@ fn merge_usage(total: &mut MeasuredTokenUsage, next: MeasuredTokenUsage) -> Resu
     };
     total.complete &= next.complete;
     Ok(())
-}
-
-#[cfg(test)]
-mod masking_tests {
-    use super::masks_stale_tool_output;
-    use crate::bootstrap::native_turn::{NativeStandingWork, SignalRouteBrief};
-
-    #[test]
-    fn only_signal_work_masks_stale_tool_output() {
-        let mut work: NativeStandingWork = serde_json::from_value(serde_json::json!({
-            "receipt_id": "receipt",
-            "binding": {
-                "binding_id": "binding", "binding_revision": 1, "workspace_id": "workspace",
-                "session_id": "session", "team_revision": 1, "grant_id": "grant",
-                "grant_revision": 1, "source_id": "signals", "event_kind": "signal"
-            },
-            "subject": {"kind": "manual", "reference_id": "r", "version": "v"},
-            "required_checks": []
-        }))
-        .unwrap();
-        assert!(
-            !masks_stale_tool_output(None),
-            "a person's turn keeps everything"
-        );
-        assert!(
-            !masks_stale_tool_output(Some(&work)),
-            "other standing work too"
-        );
-        work.signal_routes.push(SignalRouteBrief {
-            node_id: "reviewer".into(),
-            label: "Reviewer".into(),
-            watches: vec!["lib/".into()],
-        });
-        assert!(masks_stale_tool_output(Some(&work)));
-    }
 }
