@@ -203,6 +203,9 @@ impl AutonomousTurnDriver {
                 if self.controller.drive_turn_checks().await? {
                     continue;
                 }
+                if self.controller.drive_turn_review()? {
+                    continue;
+                }
                 if let Some(outcome) = self.finish_quiescent(inspected_revision)? {
                     return Ok(outcome);
                 }
@@ -268,6 +271,7 @@ impl AutonomousTurnDriver {
             return Ok((vec![], contract.revision()));
         }
         let accepted = contract.current_accepted_activations();
+        let reviewer = axocoatl_session::turn_review::review_node(graph).map(|node| &node.node_id);
         let mut ready = vec![];
         for node in &graph.nodes {
             let latest = contract
@@ -275,6 +279,13 @@ impl AutonomousTurnDriver {
                 .iter()
                 .rev()
                 .find(|activation| activation.activation.node_id == node.node_id);
+            // The host starts each review round itself, with the result it
+            // judges, once the required Agents and checks are done.
+            if reviewer == Some(&node.node_id)
+                && latest.is_none_or(|item| item.state == ActivationState::Superseded)
+            {
+                continue;
+            }
             if let Some(item) = latest {
                 if matches!(item.state, ActivationState::Accepted | ActivationState::Failed | ActivationState::Interrupted)
                     || (matches!(item.state, ActivationState::Running | ActivationState::Unstarted)

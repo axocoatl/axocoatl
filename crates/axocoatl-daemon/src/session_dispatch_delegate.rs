@@ -76,12 +76,19 @@ fn read_only(profile: &ExecutionProfile) -> bool {
 /// commands that can: every write tool, less those an empty write scope
 /// withholds or confines. A helper with any cannot take delegated work.
 fn write_tools(profile: &ExecutionProfile) -> Vec<&str> {
-    profile
-        .tools
+    changing_tools(&profile.tools, profile.write_scope.as_deref())
+}
+
+/// Of `tools`, those with which an Agent whose write scope is `writes` could
+/// change the workspace or run commands that can. Only an Agent with none is
+/// read-only: a `delegate` helper or a required reviewer.
+pub(crate) fn changing_tools<'a>(tools: &'a [String], writes: Option<&[String]>) -> Vec<&'a str> {
+    let read_only = writes.is_some_and(<[String]>::is_empty);
+    tools
         .iter()
         .map(String::as_str)
         .filter(|tool| {
-            WRITE_TOOLS.contains(tool) && !(read_only(profile) && READ_ONLY_CONFINED.contains(tool))
+            WRITE_TOOLS.contains(tool) && !(read_only && READ_ONLY_CONFINED.contains(tool))
         })
         .collect()
 }

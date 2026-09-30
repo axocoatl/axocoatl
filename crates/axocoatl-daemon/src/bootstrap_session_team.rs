@@ -120,6 +120,39 @@ pub struct SessionTeamEdit {
     /// and keeps the historical serialized shape.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_checks: Vec<Vec<String>>,
+    /// A read-only Worker template the host runs after the required Agents
+    /// finish and the required checks pass. The turn completes only when it
+    /// approves the exact result. Absent means no review, and keeps the
+    /// historical serialized shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_review: Option<ReviewSetting>,
+}
+fn default_review_rounds() -> u32 {
+    axocoatl_session::turn_review::DEFAULT_REVIEW_ROUNDS
+}
+/// Which reviewer the host runs on every turn's result, how many rounds of
+/// changes it sends back to the lead before the person decides, and the
+/// reviewer's budget for all rounds of one turn.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewSetting {
+    pub template_id: String,
+    #[serde(default = "default_review_rounds")]
+    pub max_rounds: u32,
+    pub limits: GrantLimits,
+    /// The reviewer's output bound per request; absent keeps the template's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<usize>,
+}
+/// The reviewer an Apply approved: its setting and the exact definition the
+/// host runs.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ApprovedReview {
+    pub template_id: String,
+    pub definition: DefinitionSnapshotRef,
+    pub max_rounds: u32,
+    pub limits: GrantLimits,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -149,6 +182,11 @@ pub struct SessionTeamView {
     pub approved: bool,
     /// The current applied team's required checks, as argv.
     pub required_checks: Vec<Vec<String>>,
+    /// The current applied team's required review, when it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_review: Option<ReviewSetting>,
+    /// Templates that may review: read-only Workers.
+    pub reviewers: Vec<String>,
     /// The Session's detected check command, offered as a check the person
     /// may add. It is only a suggestion: nothing runs it unless an Apply
     /// includes it.
@@ -179,6 +217,8 @@ pub(crate) struct SessionTeamApproval {
     templates: Vec<(String, Option<String>)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     coordinators: Vec<(String, ApprovedCoordinatorPolicy)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review: Option<ApprovedReview>,
 }
 fn approval_for_slot(
     content: &ExecutionContentStore,
@@ -212,6 +252,47 @@ pub(crate) fn approved_required_checks(
     Ok(approval_for_slot(content, slot)?
         .map(|approval| approval.edit.required_checks)
         .unwrap_or_default())
+}
+/// The required review of the Apply that approved this slot's grant. Its
+/// retained definition must be the setting the Apply names.
+pub(crate) fn approved_review(
+    content: &ExecutionContentStore,
+    slot: &SessionTeamSlot,
+) -> Result<Option<ApprovedReview>, DaemonError> {
+    let Some(approval) = approval_for_slot(content, slot)? else {
+        return Ok(None);
+    };
+    match (approval.review, approval.edit.required_review) {
+        (None, None) => Ok(None),
+        (Some(review), Some(setting))
+            if review.template_id == setting.template_id
+                && review.max_rounds == setting.max_rounds
+                && review.limits == setting.limits =>
+        {
+            Ok(Some(review))
+        }
+        _ => Err(team_error(
+            "The approved required review differs from its setting; apply the team again",
+        )),
+    }
+}
+/// Whether `config` may review: a Worker that cannot change files or run
+/// commands that could, the same rule `delegate` applies to helpers.
+fn review_refusal(template_id: &str, config: &AgentConfig) -> Option<String> {
+    if config.role != AgentRole::Worker {
+        return Some(format!(
+            "The reviewer {template_id} is not a Worker template. Choose a Worker template \
+             that cannot change files"
+        ));
+    }
+    let changing = crate::session_dispatch::changing_tools(&config.tools, config.writes.as_deref());
+    (!changing.is_empty()).then(|| {
+        format!(
+            "The reviewer {template_id} can change files or run commands ({}). Only a \
+             read-only Worker can review: set writes: [] on it, or choose another template",
+            changing.join(", ")
+        )
+    })
 }
 pub(crate) fn approved_template_for_slot(
     content: &ExecutionContentStore,
@@ -316,6 +397,40 @@ fn check_required_checks(edit: &SessionTeamEdit, conditions: usize) -> Result<()
     })?;
     Ok(())
 }
+/// A required review names 1 to 3 rounds and a reviewer budget that pays for
+/// every round: one activation each, and invocations for its answer and, when
+/// it has bash, the repository captures around it.
+fn check_required_review(edit: &SessionTeamEdit) -> Result<(), DaemonError> {
+    use axocoatl_session::turn_review::MAX_REVIEW_ROUNDS;
+    let Some(review) = &edit.required_review else {
+        return Ok(());
+    };
+    if !(1..=MAX_REVIEW_ROUNDS).contains(&review.max_rounds) {
+        return Err(team_error(format!(
+            "A required review runs 1 to {MAX_REVIEW_ROUNDS} rounds; choose how many"
+        )));
+    }
+    if review.limits.activations < review.max_rounds
+        || review.limits.invocations < review.max_rounds
+        || review.limits.tokens == 0
+    {
+        return Err(team_error(format!(
+            "The reviewer runs once per round, so its budget needs at least {} activations, \
+             {} invocations and some tokens",
+            review.max_rounds, review.max_rounds
+        )));
+    }
+    Ok(())
+}
+/// The invocations a reviewer spends per round: its answer, and the
+/// repository captures around it when it has bash.
+fn review_round_invocations(config: &AgentConfig) -> u32 {
+    if config.tools.iter().any(|tool| tool == "bash") {
+        3
+    } else {
+        1
+    }
+}
 /// How a write scope reads in a message to the person.
 fn describe_writes(writes: Option<&[String]>) -> String {
     match writes {
@@ -415,6 +530,8 @@ impl AxocoatlDaemon {
                 templates: vec![],
                 approved: false,
                 required_checks: vec![],
+                required_review: None,
+                reviewers: vec![],
                 suggested_check: None,
             });
         }
@@ -450,6 +567,13 @@ impl AxocoatlDaemon {
                 }
             })
             .collect();
+        let reviewers: Vec<String> = self
+            .config
+            .agents
+            .iter()
+            .filter(|agent| review_refusal(&agent.id, &agent.to_core()).is_none())
+            .map(|agent| agent.id.clone())
+            .collect();
         self.session_dispatch_lifecycles.with_session_team_stores(
             &token,
             |canonical, content, _| {
@@ -467,6 +591,11 @@ impl AxocoatlDaemon {
                         Some(slot) => approved_required_checks(content, slot)?,
                         None => vec![],
                     };
+                    let required_review = match current.graph.slots.first() {
+                        Some(slot) => approval_for_slot(content, slot)?
+                            .and_then(|approval| approval.edit.required_review),
+                        None => None,
+                    };
                     return Ok(SessionTeamView {
                         history_version: "execution_v2",
                         configuration_revision: current.configuration_revision,
@@ -481,6 +610,8 @@ impl AxocoatlDaemon {
                         templates,
                         approved: current.graph.slots.iter().all(|slot| slot.grant.is_some()),
                         required_checks,
+                        required_review,
+                        reviewers,
                         suggested_check,
                     });
                 }
@@ -536,6 +667,8 @@ impl AxocoatlDaemon {
                     templates,
                     approved: false,
                     required_checks: vec![],
+                    required_review: None,
+                    reviewers,
                     suggested_check,
                 })
             },
@@ -807,6 +940,71 @@ impl AxocoatlDaemon {
         Ok(approved)
     }
 
+    /// The exact definition of the reviewer an edit names, captured like a
+    /// helper template. Refused unless it is a read-only Worker whose budget
+    /// covers every round.
+    async fn prepare_review_approval(
+        &self,
+        session_id: &str,
+        edit: &SessionTeamEdit,
+        token: &super::session_dispatch::SessionTeamToken,
+    ) -> Result<Option<ApprovedReview>, DaemonError> {
+        let Some(review) = &edit.required_review else {
+            return Ok(None);
+        };
+        let mut config = self
+            .config
+            .agents
+            .iter()
+            .find(|agent| agent.id == review.template_id)
+            .ok_or_else(|| {
+                team_error(format!(
+                    "The reviewer template {} no longer exists",
+                    review.template_id
+                ))
+            })?
+            .to_core();
+        if let Some(refusal) = review_refusal(&review.template_id, &config) {
+            return Err(team_error(refusal));
+        }
+        let per_round = review_round_invocations(&config);
+        let needed = per_round.saturating_mul(review.max_rounds);
+        if review.limits.invocations < needed {
+            let each = if per_round > 1 {
+                "its answer and, because it has bash, the repository captures around it"
+            } else {
+                "its answer"
+            };
+            return Err(team_error(format!(
+                "The reviewer {} needs at least {needed} invocations for {} rounds: {each} each \
+                 round. Raise its invocation limit, or lower the review rounds",
+                review.template_id, review.max_rounds
+            )));
+        }
+        if review.max_output_tokens.is_some() {
+            config.sampling.max_tokens = review.max_output_tokens;
+        }
+        let identity = digest(&(session_id, &edit.command_id, "required-review", review))?;
+        config.id = AgentId::new(format!("approved-reviewer-{identity}"));
+        let definition = self
+            .prepare_native_session_team_definition(
+                token,
+                config,
+                AgentDefinitionId::new(format!("review-template-{identity}"))
+                    .map_err(team_error)?,
+                1,
+                review.limits.clone(),
+            )
+            .await?
+            .definition;
+        Ok(Some(ApprovedReview {
+            template_id: review.template_id.clone(),
+            definition,
+            max_rounds: review.max_rounds,
+            limits: review.limits.clone(),
+        }))
+    }
+
     async fn prepare_session_team_edit(
         &self,
         session_id: &str,
@@ -823,6 +1021,7 @@ impl AxocoatlDaemon {
             ));
         }
         check_required_checks(edit, 0)?;
+        check_required_review(edit)?;
         let token = self
             .session_dispatch_lifecycles
             .session_team_token(session_id)?;
@@ -973,11 +1172,15 @@ impl AxocoatlDaemon {
         let coordinators = self
             .prepare_coordinator_approvals(session_id, edit, previous.as_ref(), &token)
             .await?;
+        let review = self
+            .prepare_review_approval(session_id, edit, &token)
+            .await?;
         let approval = serde_json::to_string(&SessionTeamApproval {
             kind: "authenticated_session_team_apply".into(),
             edit: edit.clone(),
             templates,
             coordinators: coordinators.clone(),
+            review,
         })
         .map_err(team_error)?;
         let mut slots = Vec::new();
@@ -1237,7 +1440,21 @@ impl AxocoatlDaemon {
                 ));
             };
             let checks = edit.required_checks.len();
-            let minimum = axocoatl_session::turn_checks::payer_minimum_invocations(checks);
+            let rounds = edit
+                .required_review
+                .as_ref()
+                .map_or(1, |review| review.max_rounds);
+            let minimum = axocoatl_session::turn_review::payer_minimum_invocations(checks, rounds);
+            if *limit < minimum && rounds > 1 {
+                return Err(team_error(format!(
+                    "{name} runs the required checks on its budget, and the required review can \
+                     send its result back {} times, so its invocation limit must be at least \
+                     {minimum}: the checks and the repository captures around them for every \
+                     round, and its own captures and answer each time it runs. Raise its \
+                     invocation limit, lower the review rounds, or remove required checks",
+                    rounds - 1
+                )));
+            }
             if *limit < minimum {
                 return Err(team_error(format!(
                     "{name} runs the required checks on its budget, so its invocation limit must \
@@ -1247,6 +1464,32 @@ impl AxocoatlDaemon {
                      invocation limit, or remove required checks",
                     axocoatl_session::turn_checks::check_allowance(checks)
                 )));
+            }
+        }
+        if let Some(review) = &edit.required_review {
+            // Every round that asks for changes runs the lead again: each
+            // required Agent no other required Agent waits for.
+            let required = |id: &str| {
+                edit.slots
+                    .iter()
+                    .any(|slot| slot.slot_id == id && slot.required)
+            };
+            for slot in edit.slots.iter().filter(|slot| {
+                slot.required
+                    && !edit
+                        .dependencies
+                        .iter()
+                        .any(|edge| edge.parent == slot.slot_id && required(&edge.child))
+            }) {
+                let activations = slot.limits.as_ref().map_or(0, |limits| limits.activations);
+                if activations < review.max_rounds {
+                    return Err(team_error(format!(
+                        "The required review can run {} {} times in one turn, once per round, so \
+                         its activation limit must be at least {}. Raise it, or lower the \
+                         review rounds",
+                        slot.name, review.max_rounds, review.max_rounds
+                    )));
+                }
             }
         }
         let dependencies = edit
@@ -1371,6 +1614,44 @@ mod writes_tests {
             value["writes"] = writes;
         }
         serde_json::from_value(value).unwrap()
+    }
+
+    /// A team without a required review keeps the exact bytes of its edit
+    /// and of the approval every grant is issued from, so older Applies load
+    /// and digest as before. Rounds default to two and are checked with the
+    /// reviewer's budget before anything is prepared.
+    #[test]
+    fn edits_and_approvals_without_a_review_keep_their_exact_bytes() {
+        let edit = r#"{"command_id":"apply","expected_configuration_revision":1,"slots":[],"dependencies":[],"layout":[],"required_checks":[["cargo","test"]]}"#;
+        let parsed: SessionTeamEdit = serde_json::from_str(edit).unwrap();
+        assert_eq!(parsed.required_review, None);
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), edit);
+        check_required_review(&parsed).unwrap();
+        let approval = format!(
+            r#"{{"kind":"authenticated_session_team_apply","edit":{edit},"templates":[["slot","coder"]]}}"#
+        );
+        let parsed: SessionTeamApproval = serde_json::from_str(&approval).unwrap();
+        assert_eq!(parsed.review, None);
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), approval);
+
+        let setting: ReviewSetting = serde_json::from_str(
+            r#"{"template_id":"reviewer","limits":{"activations":2,"invocations":2,"tokens":1,"cost_microunits":0}}"#,
+        )
+        .unwrap();
+        assert_eq!(setting.max_rounds, 2);
+        let mut edit: SessionTeamEdit = serde_json::from_str(edit).unwrap();
+        edit.required_review = Some(setting.clone());
+        check_required_review(&edit).unwrap();
+        for (rounds, activations) in [(0, 2), (4, 4), (2, 1)] {
+            let mut refused = edit.clone();
+            let review = refused.required_review.as_mut().unwrap();
+            review.max_rounds = rounds;
+            review.limits.activations = activations;
+            assert!(
+                check_required_review(&refused).is_err(),
+                "{rounds} {activations}"
+            );
+        }
     }
 
     /// Leaving `writes` out keeps the scope the slot starts from; `null`

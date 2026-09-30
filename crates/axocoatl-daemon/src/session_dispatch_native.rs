@@ -396,10 +396,8 @@ impl NativeActivationFactory {
         };
         let mut config: AgentConfig = serde_json::from_str(&configuration).map_err(error)?;
         validate_native_config(&config)?;
-        if (config.id.0 != input.conversation_id.as_str()
-            && state
-                .native_child_origin(&input.activation.node_id)?
-                .is_none())
+        let instance = state.owns_instance_conversation(&input.activation.node_id)?;
+        if (config.id.0 != input.conversation_id.as_str() && !instance)
             || profile.definition != definition_id.as_str()
             || profile.provider != config.provider
             || profile.model != config.model
@@ -450,10 +448,7 @@ impl NativeActivationFactory {
         let runtime: NativeRuntimeConfiguration =
             serde_json::from_str(retained.configuration()).map_err(error)?;
         runtime.validate(&config)?;
-        if state
-            .native_child_origin(&input.activation.node_id)?
-            .is_some()
-        {
+        if instance {
             config.id = axocoatl_core::AgentId::new(input.conversation_id.as_str());
         }
         Ok(ResolvedNativeResources {
