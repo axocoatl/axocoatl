@@ -1446,3 +1446,48 @@ for (const options of [{theme:'light',viewport:{width:1100,height:900}}, {theme:
 }
 
 test('never-started native descendants are blocked by the current failed generation and unblock after Retry',async()=>{const{context,page,errors}=await componentPage();try{const envelope=controlPlaneFixture();envelope.state='running';envelope.nodes[0].activations=envelope.nodes[0].activations.slice(0,1);envelope.nodes[0].activations[0].state='failed';envelope.nodes.push({node_id:'reviewer',definition_id:'reviewer-definition',label:'Reviewer',definition:missing,dependencies:['builder'],activations:[]},{node_id:'report',definition_id:'report-definition',label:'Report',definition:missing,dependencies:['reviewer'],activations:[]},{node_id:'peer',definition_id:'peer-definition',label:'Independent peer',definition:missing,dependencies:[],activations:[]});const result=await page.evaluate(async envelope=>{const{foldControlPlane}=await import('/ui/coordination-turn.js');const card=document.createElement('ax-coordination-turn');document.body.append(card);const inspect=()=>{const model=foldControlPlane(envelope);card.controlPlane=envelope;return{states:Object.fromEntries(model.agents.map(agent=>[agent.id,agent.state])),histories:model.nodes.map(node=>node.activations.length),text:card.shadowRoot.textContent}};const failed=inspect();const retry=structuredClone(envelope.nodes[0].activations[0]);retry.state='running';retry.reference.activation.generation=2;retry.reference.activation.activation_id='retry-generation';retry.generation={status:'available',value:2};envelope.nodes[0].activations.push(retry);const running=inspect();retry.state='accepted';const accepted=inspect();return{failed,running,accepted,originalState:envelope.nodes[0].activations[0].state};},envelope);assert.deepEqual(result.failed.states,{builder:'failed',reviewer:'blocked',report:'blocked',peer:'waiting'});assert.deepEqual(result.failed.histories,[1,0,0,0]);assert.match(result.failed.text,/Blocked by Builder/);assert.deepEqual(result.running.states,{builder:'working',reviewer:'waiting',report:'waiting',peer:'waiting'});assert.deepEqual(result.accepted.states,{builder:'completed',reviewer:'waiting',report:'waiting',peer:'waiting'});assert.equal(result.originalState,'failed');assert.deepEqual(result.accepted.histories,[2,0,0,0]);assert.deepEqual(errors,[]);}finally{await context.close();}});
+
+test('turn controls show each required check with its failed output and name the check to rerun', async () => {
+  const {context, page, errors} = await componentPage();
+  try {
+    const envelope = controlPlaneFixture();
+    envelope.state = 'needs_attention';
+    envelope.nodes[0].activations.at(-1).state = 'accepted';
+    envelope.required_checks = [{argv: ['sh', '-c', 'npm test'], state: 'failed', run_id: 'required-check-run',
+      process_status: {kind: 'exited', code: 1}, effect_disposition: 'outcome_recorded', primary_exit: null, quiescent: true,
+      reason: null, evidence: 'check-result', candidate_sha256: null, exit_code: 1, stdout: '1 test failed\n',
+      stderr: 'AssertionError: expected 2 <b>\n', stdout_truncated: false, stderr_truncated: true},
+      {argv: ['cargo', 'test'], state: 'passed', run_id: 'required-check-two', process_status: {kind: 'exited', code: 0},
+        effect_disposition: 'outcome_recorded', primary_exit: null, quiescent: true, reason: null, evidence: 'check-two',
+        candidate_sha256: null, exit_code: 0, stdout: '', stderr: '', stdout_truncated: false, stderr_truncated: false}];
+    envelope.turn_controls = {execution_epoch_id: 'epoch-one', continue_turn: {enabled: true, reason: ''},
+      finish: {enabled: false, reason: 'A required check failed.'}, continuation_choices: [],
+      check_choices: ['required-check:0', 'required-check:1', 'required-check:3', 'required-check:ready'].map(condition_id => ({condition_id,
+        required_conditions: ['required-check:0', 'required-check:3', 'required-check:ready'].filter(id => id !== condition_id),
+        capability: {enabled: true, reason: ''}}))};
+    await page.evaluate(async value => {
+      const {foldControlPlane} = await import('/ui/coordination-turn.js');
+      const inspector = document.createElement('ax-activation-inspector');
+      inspector.commandHandler = async command => { window.continued = command.continuation; };
+      inspector.model = foldControlPlane(value); document.body.append(inspector); inspector.showTurnControls();
+    }, envelope);
+    const inspector = page.locator('ax-activation-inspector');
+    const checks = inspector.locator('.required-check');
+    assert.equal(await checks.count(), 2);
+    const failed = checks.nth(0);
+    assert.equal(await failed.locator('.check-command').textContent(), 'npm test');
+    assert.equal(await failed.locator('.check-state').textContent(), 'Failed · exit code 1');
+    assert.equal(await failed.locator('.check-stdout').textContent(), '1 test failed\n');
+    assert.equal(await failed.locator('.check-stderr').textContent(), 'AssertionError: expected 2 <b>\n', 'output is text, never markup');
+    assert.match(await failed.textContent(), /Errors \(truncated\)/);
+    assert.equal(await checks.nth(1).locator('.check-state').textContent(), 'Passed · exit code 0');
+    assert.equal(await checks.nth(1).locator('pre').count(), 1, 'an empty output adds no preview');
+    const content = await inspector.locator('.content').textContent();
+    for (const label of ['Repository capture before the required checks', 'Required check · npm test',
+      'Repository capture after the required checks', 'Readiness of the required checks']) assert.match(content, new RegExp(label));
+    await inspector.getByLabel('Required check · npm test').check();
+    await inspector.locator('.continue-turn').click();
+    assert.deepEqual(await page.evaluate(() => window.continued), {restart: [], checks: ['required-check:1']});
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});

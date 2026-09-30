@@ -132,6 +132,12 @@ pub struct SessionTeamView {
     pub layout: Vec<SessionTeamPosition>,
     pub templates: Vec<SessionTeamSlotEdit>,
     pub approved: bool,
+    /// The current applied team's required checks, as argv.
+    pub required_checks: Vec<Vec<String>>,
+    /// The Session's detected check command, offered as a check the person
+    /// may add. It is only a suggestion: nothing runs it unless an Apply
+    /// includes it.
+    pub suggested_check: Option<Vec<String>>,
 }
 #[derive(Serialize)]
 pub struct SessionTeamChange {
@@ -385,8 +391,14 @@ impl AxocoatlDaemon {
                 layout: vec![],
                 templates: vec![],
                 approved: false,
+                required_checks: vec![],
+                suggested_check: None,
             });
         }
+        let suggested_check = session
+            .check_command
+            .clone()
+            .map(|command| vec!["sh".into(), "-c".into(), command]);
         let token = self
             .session_dispatch_lifecycles
             .session_team_token(session_id)?;
@@ -428,6 +440,10 @@ impl AxocoatlDaemon {
                 )
                 .map_err(team_error)?;
                 if let Some(current) = store.current().map_err(team_error)? {
+                    let required_checks = match current.graph.slots.first() {
+                        Some(slot) => approved_required_checks(content, slot)?,
+                        None => vec![],
+                    };
                     return Ok(SessionTeamView {
                         history_version: "execution_v2",
                         configuration_revision: current.configuration_revision,
@@ -441,6 +457,8 @@ impl AxocoatlDaemon {
                         layout: current.layout.clone(),
                         templates,
                         approved: current.graph.slots.iter().all(|slot| slot.grant.is_some()),
+                        required_checks,
+                        suggested_check,
                     });
                 }
                 let selected: Vec<String> = match &session.mode {
@@ -494,6 +512,8 @@ impl AxocoatlDaemon {
                     layout: vec![],
                     templates,
                     approved: false,
+                    required_checks: vec![],
+                    suggested_check,
                 })
             },
         )

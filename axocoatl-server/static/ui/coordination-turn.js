@@ -1183,6 +1183,9 @@ pre { max-height: 230px; overflow: auto; white-space: pre-wrap; font: var(--fs-x
 .control-form label { display: flex; gap: 8px; align-items: start; }
 .control-form textarea { box-sizing: border-box; width: 100%; min-height: 90px; resize: vertical; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font: inherit; }
 .control-form button { justify-self: start; }
+.required-check { padding: 8px 0; border-top: 1px solid var(--border); }
+.required-check .check-state { font-weight: 600; }
+.required-check.failed .check-state,.required-check.timed_out .check-state,.required-check.signalled .check-state,.required-check.launch_failed .check-state { color: var(--err, var(--warn)); }
 dialog:modal { position: fixed; inset: 12px; width: calc(100% - 24px); max-height: calc(100dvh - 24px); margin: auto; overflow: auto; }
 dialog::backdrop { background: rgba(0,0,0,.55); }
 `;
@@ -1196,6 +1199,24 @@ function evidenceText(value) {
   if (value?.status === 'missing') return `Missing recorded evidence${value.reference ? ` · ${value.reference}` : ''}`;
   if (value?.status === 'unavailable') return `Unavailable${value.reason ? ` · ${value.reason}` : ''}`;
   return 'Not recorded';
+}
+
+function checkCommand(argv) {
+  return argv.length === 3 && argv[0] === 'sh' && argv[1] === '-c' ? argv[2] : argv.join(' ');
+}
+
+// Required-check conditions are `required-check:0` (capture before), `:1..n`
+// (the commands), `:n+1` (capture after) and `:ready`.
+function checkChoiceLabel(conditionId, requiredChecks) {
+  const match = /^required-check:(\d+|ready)$/.exec(conditionId || '');
+  const checks = Array.isArray(requiredChecks) ? requiredChecks : [];
+  if (!match || !checks.length) return `Check · ${conditionId}`;
+  if (match[1] === 'ready') return 'Readiness of the required checks';
+  const index = Number(match[1]);
+  if (index === 0) return 'Repository capture before the required checks';
+  if (index === checks.length + 1) return 'Repository capture after the required checks';
+  const argv = checks[index - 1]?.argv;
+  return Array.isArray(argv) ? `Required check · ${checkCommand(argv)}` : `Check · ${conditionId}`;
 }
 
 function activationSelectionKey(reference) {
@@ -1474,6 +1495,30 @@ export class AxActivationInspector extends HTMLElement {
     });
     this.#content.append(form);
   }
+  // What the latest run of each of the Session team's required checks shows.
+  // Recorded output is retained evidence, shown as bounded previews.
+  #renderRequiredChecks() {
+    const checks = this.#model?.controlPlane?.required_checks;
+    if (!Array.isArray(checks) || !checks.length) return;
+    this.#content.append(element('h3', '', 'Required checks'), element('p', 'label',
+      'The host runs these after the required Agents finish. A failure leaves the turn needing attention; select a check below to run it again.'));
+    const states = {pending: 'Not run yet', passed: 'Passed', failed: 'Failed', unverified: 'Exited 0, not yet counted as passing',
+      signalled: 'Stopped by a signal', timed_out: 'Timed out', interrupted: 'Interrupted', launch_failed: 'Could not start',
+      not_dispatched: 'Not started', outcome_unknown: 'Outcome unknown', skipped: 'Skipped'};
+    for (const check of checks) {
+      if (!Array.isArray(check?.argv)) continue;
+      const item = element('section', `required-check ${typeof check.state === 'string' ? check.state : ''}`);
+      item.append(element('pre', 'check-command', checkCommand(check.argv)));
+      const state = element('p', 'check-state', `${states[check.state] || String(check.state || 'Unknown')}${Number.isInteger(check.exit_code) ? ` · exit code ${check.exit_code}` : ''}`);
+      item.append(state);
+      if (typeof check.reason === 'string' && check.reason) item.append(element('p', 'label', check.reason));
+      for (const [key, label] of [['stdout', 'Output'], ['stderr', 'Errors']]) {
+        if (typeof check[key] !== 'string' || !check[key]) continue;
+        item.append(element('p', 'label', `${label}${check[`${key}_truncated`] ? ' (truncated)' : ''}`), element('pre', `check-${key}`, check[key]));
+      }
+      this.#content.append(item);
+    }
+  }
   #renderTurnControls() {
     const controls = this.#model?.controlPlane?.turn_controls;
     if (typeof this.commandHandler !== 'function' || !controls) {
@@ -1491,7 +1536,7 @@ export class AxActivationInspector extends HTMLElement {
         const key = kind === 'restart' ? activationSelectionKey({kind: 'exact', activation: item.activation}) : item.condition_id;
         const checkbox = element('input', kind === 'restart' ? 'continue-work' : 'continue-check'); checkbox.type = 'checkbox';
         checkbox.disabled = !controlRequestAvailable(item.capability); checkbox.checked = !checkbox.disabled && draft[kind].has(key);
-        const text = kind === 'restart' ? `${item.activation.node_id} · generation ${item.activation.generation} · ${item.state}` : `Check · ${item.condition_id}`;
+        const text = kind === 'restart' ? `${item.activation.node_id} · generation ${item.activation.generation} · ${item.state}` : checkChoiceLabel(item.condition_id, this.#model?.controlPlane?.required_checks);
         const label = element('label'); label.append(checkbox, document.createTextNode(text)); form.append(label);
         if (kind === 'checks' && item.required_conditions?.length) form.append(element('p', 'continuation-dependencies',
           `Also refreshes candidate captures and readiness: ${item.required_conditions.join(', ')}. Other check commands run only when selected.`));
@@ -1619,6 +1664,7 @@ export class AxActivationInspector extends HTMLElement {
       }
     }
     if (!node) {
+      this.#renderRequiredChecks();
       this.#renderTurnControls();
       this.#renderReceipts(this.#commandHistory);
       this.#syncPresentation(); this.#dialog.scrollTop = scroll;

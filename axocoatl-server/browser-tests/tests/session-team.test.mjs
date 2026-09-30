@@ -9,9 +9,9 @@ let runtime,browser,screenshots;
 before(async()=>{screenshots=await mkdtemp(join(tmpdir(),'axocoatl-session-team-'));runtime=process.env.AXOCOATL_COMPONENT_BASE_URL?{baseUrl:process.env.AXOCOATL_COMPONENT_BASE_URL,stop:async()=>{}}:await launchTestDaemon();const executablePath=await resolveChromiumExecutable();browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});});
 after(async()=>{try{await browser?.close();await runtime?.stop();}finally{if(screenshots)await rm(screenshots,{recursive:true,force:true});}});
 const template={slot_id:'slot-reviewer',template_id:'reviewer',source_slot_id:null,name:'QA reviewer <literal>',provider:'ollama',model:'local-model',instructions:'Inspect actual client changes.',max_output_tokens:128,required:true,reset_history:true,limits:null,expires_at_ms:null};
-async function fixture({theme='light',approved=false,reject=false,loseReply=false,coordinator=false,legacy=false}={}){
+async function fixture({theme='light',approved=false,reject=false,loseReply=false,coordinator=false,legacy=false,suggested=false}={}){
  const context=await browser.newContext({viewport:theme==='dark'?{width:390,height:840}:{width:1100,height:820},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),errors=[],calls=[];page.on('pageerror',error=>errors.push(error.message));
- const view={history_version:legacy?'legacy_v1':'execution_v2',configuration_revision:approved?1:0,slots:[{...structuredClone(template),template_id:approved?null:template.template_id,reset_history:!approved,...(approved?{limits:{activations:2,invocations:12,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000}:{})}],dependencies:[],layout:[],templates:[structuredClone(template)],approved};
+ const view={history_version:legacy?'legacy_v1':'execution_v2',configuration_revision:approved?1:0,slots:[{...structuredClone(template),template_id:approved?null:template.template_id,reset_history:!approved,...(approved?{limits:{activations:2,invocations:12,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000}:{})}],dependencies:[],layout:[],templates:[structuredClone(template)],approved,required_checks:[],suggested_check:suggested?['sh','-c','npm test']:null};
  if(coordinator){view.slots[0].role='coordinator';view.templates[0].role='coordinator';view.templates.push({...structuredClone(template),template_id:'worker',slot_id:'worker',name:'Worker reviewer',role:'worker'});}
  await page.route('**/team-fixture',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html data-theme="${theme}"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-session-team session="fixture-session"></ax-session-team><script type="module" src="/ui/session-team.js"></script></body></html>`}));
  await page.route('**/api/sessions/fixture-session/team**',async route=>{const suffix=new URL(route.request().url()).pathname.split('/team')[1],body=route.request().method()==='POST'?route.request().postDataJSON():null;calls.push({suffix,body});if(!suffix)return route.fulfill({json:view});if(suffix==='/cancel')return route.fulfill({json:{cancelled:true}});if(suffix==='/preview')return route.fulfill({json:{edit:body,review_digest:'exact-review',configuration_revision:body.expected_configuration_revision+1,applies_to:'future_turns',changes:body.slots.map(slot=>({slot_id:slot.slot_id,kind:'changed',history:'new conversation'})),profiles:body.slots.map(slot=>({definition:slot.slot_id,provider:slot.provider,model:slot.model,isolation:'in-process',tools:['read_file','write_file'],...(slot.writes==null?{}:{write_scope:slot.writes})}))}});if(suffix==='/apply'){if(reject)return route.fulfill({status:409,json:{error:'Session configuration changed; refresh'}});if(loseReply){loseReply=false;return route.abort('failed');}view.configuration_revision=body.edit.expected_configuration_revision+1;view.slots=body.edit.slots;view.approved=true;return route.fulfill({json:{configuration_revision:view.configuration_revision}});}});
@@ -75,5 +75,26 @@ test('Read-only toggle sends empty writes, and the review says what each Agent m
   await page.getByText('may change: lib/, docs/*.md.',{exact:false}).waitFor();
   await mode.selectOption('any');await review(page);preview=calls.filter(call=>call.suffix==='/preview').at(-1).body;assert.equal(preview.slots[0].writes,null);
   await page.getByText('may change: any file.',{exact:false}).waitFor();assert.deepEqual(errors,[]);
+ }finally{await context.close();}
+});
+
+test('The detected check is only offered: nothing runs it until the person adds it, and the review says what a failure means',async()=>{
+ const{page,context,calls,errors}=await fixture({suggested:true});try{
+  const team=page.locator('ax-session-team'),lines=page.getByLabel('Required checks, one command per line',{exact:true}),detected=page.getByRole('button',{name:'Add detected: npm test',exact:true});
+  await enterBudget(page);await team.locator('.checks summary').click();
+  assert.equal(await team.locator('.checks summary').textContent(),'Required checks: none');
+  assert.equal(await lines.inputValue(),'','the detected command is not prefilled as a check');assert.equal(await detected.isVisible(),true);
+  await review(page);let preview=calls.filter(call=>call.suffix==='/preview').at(-1).body;assert.deepEqual(preview.required_checks,[]);
+  assert.doesNotMatch(await team.locator('.review').textContent(),/Required check/);
+  await detected.click();assert.equal(await lines.inputValue(),'npm test');assert.equal(await detected.isVisible(),false);
+  assert.equal(await team.locator('.checks summary').textContent(),'Required checks (1)');
+  await lines.fill('npm test\n  cargo test --quiet \n\n');
+  await review(page);preview=calls.filter(call=>call.suffix==='/preview').at(-1).body;
+  assert.deepEqual(preview.required_checks,[['sh','-c','npm test'],['sh','-c','cargo test --quiet']]);
+  const listed=await team.locator('.review').textContent();
+  assert.match(listed,/Required check after each turn: npm test/);assert.match(listed,/Required check after each turn: cargo test --quiet/);
+  assert.match(listed,/A failure leaves the turn needing attention/);
+  await page.getByRole('button',{name:'Apply to this Session',exact:true}).click();await page.getByText('Saved Session configuration 1.',{exact:false}).waitFor();
+  assert.deepEqual(calls.find(call=>call.suffix==='/apply').body.edit.required_checks,preview.required_checks);assert.deepEqual(errors,[]);
  }finally{await context.close();}
 });
