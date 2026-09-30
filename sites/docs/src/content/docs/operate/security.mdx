@@ -1,6 +1,6 @@
 ---
 title: Security
-description: Define the local trust boundary, authenticate non-loopback access, constrain egress, and handle secrets and untrusted repositories.
+description: Define the local trust boundary, authenticate non-loopback access, limit container network access, and handle secrets and untrusted repositories.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -8,6 +8,21 @@ import { Aside } from '@astrojs/starlight/components';
 Local-first describes where Axocoatl can run and store its durable state. It
 does not mean every execution is offline or that an Agent, repository, package,
 provider, MCP server, webhook, or model response is trusted.
+
+## What Axocoatl controls, and what it does not
+
+Axocoatl decides who writes, what helpers may do, what a run may spend, and
+whether required checks and review pass. It records all of it in the Session:
+every grant, budget decision, activation, and tool invocation.
+
+It is not a sandbox runtime. Sandbox runtimes, for example NVIDIA OpenShell,
+control what a process can reach: files, network destinations, and credentials.
+Axocoatl runs repository tools in a rootless Podman container with the defaults
+described below, and it does not integrate with sandbox runtimes yet.
+
+With local Podman, model provider API keys stay in the Axocoatl daemon and are not
+passed into the container. Files in the Workspace, such as a `.env` file, are
+visible to tools, and on E2B the Git token is visible to every command in the VM.
 
 ## Keep the server local by default
 
@@ -84,7 +99,7 @@ that directory handle as its state authority. Managed reads, writes, replacement
 and cleanup stay relative to opened directories. Symlinked path components, final
 symlinks, and multiply linked managed files fail closed. Atomic replacement uses an
 unpredictable owner-only temporary file in the destination directory, then fsync and
-rename. This hardens path ownership; it does not encrypt state or erase it securely.
+rename. This protects path ownership; it does not encrypt state or erase it securely.
 
 One daemon or direct bootstrap owns a root through an external per-root lock, the
 retained 0.1-compatible `.axocoatl-daemon.lock`, and a lock on the opened directory

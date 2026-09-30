@@ -10,10 +10,10 @@ question and owns a different recovery boundary.
 
 | Mechanism | Use when | Ordering/choice |
 | --- | --- | --- |
-| Automation | The graph can be declared ahead of time | Explicit DAG nodes and edges |
+| Lead with helpers (the default team) | A native Agent needs a separate read-only look at part of its task | The lead picks an approved helper and writes its task; several calls in one response run their helpers at the same time |
 | Native multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
+| Automation | The graph can be declared ahead of time | Explicit DAG nodes and edges |
 | Event feed | A Skill should announce something that Automations and webhooks react to | Publish/subscribe notification of a Skill's declared events |
-| Lead with helpers | A native Agent needs a separate read-only look at part of its task | The lead picks an approved helper and writes its task; several calls in one response run their helpers at the same time |
 | Coordinator Agent (legacy Sessions) | Task shape and worker choice emerge at runtime | Decomposition, then the first declared worker that can call each subtask's tools |
 
 ## Automations

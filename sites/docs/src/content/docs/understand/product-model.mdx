@@ -3,9 +3,9 @@ title: Product model
 description: Understand the Workspace, Session, Attempt, Agent, and Automation boundaries behind the workbench.
 ---
 
-Axocoatl is one local-first coding workbench backed by a durable multi-Agent
-runtime. The browser page at `/` is the product surface. Everything else opens
-around work anchored to a folder.
+Axocoatl is a local-first harness for coding agents: a Rust daemon that runs
+Agents and records their work, and one browser page at `/` that is the product
+surface. Everything else opens around work anchored to a folder.
 
 ## The permanent spine
 
@@ -38,17 +38,23 @@ switches both identities together.
 Settings contains Agents, Skills, MCP servers, and Automations because they
 configure how work runs. They are not peer destinations beside Sessions.
 
-## The signature loop
+## The ordinary loop
 
-1. Open or resume a Workspace Session.
-2. Ask for one solution or explore several heterogeneous Ways.
-3. Watch each Attempt, including blocked and failed states.
-4. Run repository Checks and compare both Outcome and Route.
-5. Keep one Attempt, review the Git changes, and commit deliberately.
+1. Open or resume a Workspace Session and apply its **Team & budget**.
+2. Ask for the change. The lead reads and edits the repository and delegates
+   read-only questions or a review to its helpers.
+3. Watch the lead and each helper it starts in the Agent graph, including
+   blocked and failed states.
+4. If the team has required checks or a required review, the host runs them after
+   the Agents finish; the turn completes only when they pass.
+5. Review the Git changes and commit deliberately.
 
-Ordinary single-Agent work does not require Attempts. After its reviewed
-environment is Ready, Conversation, Files, Terminal, Preview, and Source
-Control remain available for direct iteration. Native execution additionally
+When an implementation decision needs independent evidence, explore several
+heterogeneous Ways instead: watch each Attempt, run repository Checks, compare
+Outcome and Route, and Keep one.
+
+After its reviewed environment is Ready, Conversation, Files, Terminal, Preview,
+and Source Control remain available for direct iteration. Native execution
 requires a reviewed **Team & budget** configuration with explicit allowances.
 
 ## State owners are intentionally distinct
@@ -56,6 +62,7 @@ requires a reviewed **Team & budget** configuration with explicit allowances.
 | State | Authority | Important boundary |
 | --- | --- | --- |
 | Session turn History | Durable Session ledger | Records accepted request, context, output, and terminal status |
+| Grants and budgets | Applied Team & budget revision and native grant records | Every provider and tool call is reserved against them before it runs; raising one needs a human decision |
 | Agent conversation | Accepted native activation state; legacy actor memory and checkpoint | Model-facing state; not the complete product transcript |
 | Session files | Ready sandbox working tree: local Workspace bind mount or E2B clone | Git represents file state, not every external effect; Files never bypasses the sandbox |
 | Attempt set | Attempt manifest, clones, and containers | One unresolved set per Session; requires explicit Keep or cleanup |

@@ -1,9 +1,9 @@
 ---
 title: Axocoatl documentation
-description: Install Axocoatl, run the workbench, configure the runtime, and operate its local data safely.
+description: Install Axocoatl, run the workbench, configure the runtime, and operate its local data.
 template: splash
 hero:
-  tagline: One durable Session. The whole workspace around it.
+  tagline: A lead that writes, helpers that only read, and a record of every step.
   actions:
     - text: Install Axocoatl
       link: /start/install/
@@ -16,11 +16,18 @@ hero:
 
 import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 
-Axocoatl is a local-first coding workbench backed by a durable Rust agent
-runtime. A folder-anchored Session keeps conversation, context, files, terminal,
-Preview, tools, history, and Git review together. Start with the Agent
-or configured team that fits the work. Explore several Ways only when the task
-warrants comparison.
+Axocoatl is a local-first harness for coding agents: a Rust daemon that runs
+Agents against your repository and records their work, and a browser workbench
+around one durable Session. It works with local models through Ollama and hosted
+models through OpenRouter.
+
+The [default team](/understand/coordination/#default-team) is a lead that edits
+files and read-only helpers it delegates questions and reviews to. A team can
+add [required checks](/configure/agents/#required-checks) and a
+[required review](/configure/agents/#required-review) that the host runs before
+a turn completes, and every Agent runs under limits you approve. The Session keeps
+conversation, context, files, terminal, Preview, history, and Git review together.
+Explore several Ways only when the task warrants comparison.
 
 [Workspace knowledge](/workbench/knowledge/) retains source-linked decisions and
 findings across Sessions. Inspect and edit the notes, follow their evidence, and
@@ -33,7 +40,7 @@ attach the relevant revision to the next request.
 1. [Install the binary](/start/install/).
 2. Run [`axocoatl onboard`](/start/onboard/) to configure Axocoatl for this user, then run [`axocoatl doctor`](/start/onboard/#run-doctor). Onboarding does not create a project or Workspace.
 3. Start `axocoatl dev`, open `http://localhost:8080`, choose **Open workspace…**, and [create a Session](/start/first-session/).
-4. Review **Team & budget** for native execution, then ask for a bounded change, run the repository checks, and inspect Git.
+4. Apply **Team & budget**: Lead's limits, its helpers' limits, and any required checks or review. Then ask for a bounded change and inspect Git.
 
 </Steps>
 
@@ -57,7 +64,7 @@ attach the relevant revision to the next request.
     [Operations guide →](/operate/service/)
   </Card>
   <Card title="Understand" icon="open-book">
-    Learn the ownership boundaries behind Sessions, attempts, memory, events, and protocols.
+    Learn how leads, helpers, checks, grants, Sessions, attempts, memory, and events fit together.
     [Read the model →](/understand/product-model/)
   </Card>
   <Card title="Reference" icon="document">
@@ -69,7 +76,9 @@ attach the relevant revision to the next request.
 ## What stays local—and what may not
 
 The daemon and default Podman sandbox run on your machine, and Axocoatl adds no
-product telemetry. That does not mean every configured path is offline. Hosted
+product telemetry. That does not mean every configured path is offline: the
+container's network is on by default, so set `network: none` for repositories
+you don't trust. Hosted
 model providers, remote MCP servers, web search, webhooks, bridged sandbox
 networking, embedding-model downloads, and an E2B Cloud remote sandbox can
 send data over the network. [Review the security boundary before using untrusted

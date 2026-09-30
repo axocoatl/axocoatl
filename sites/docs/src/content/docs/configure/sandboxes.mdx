@@ -23,9 +23,10 @@ sandbox:
   require_resource_limits: false
 ```
 
-Secure defaults prevent a newly opened repository from defaulting its own
-post-create command to approved or selecting an arbitrary image. Enable either
-exception only for repositories you trust.
+The two trust flags default to `false`, so a newly opened repository cannot
+default its own post-create command to approved or select an arbitrary image.
+The network defaults to `bridge`; set `network: none` for repositories you don't
+trust. Enable either trust flag only for repositories you trust.
 
 The Session setup review may select an exact curated image—Alpine 3.20, Debian slim,
 Ubuntu, Python slim, Node 20 slim, or Rust bookworm—without enabling arbitrary

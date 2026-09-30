@@ -35,7 +35,7 @@ New data roots use the native execution controller. The Session retains an expli
 reviewed team, provider profiles, limits, and authority before work starts. The daemon
 records the request and exact activation identities, then reserves provider and tool
 invocations against that authority. Each activation uses its own model-facing state;
-Coordinator children consume bounded allocations from their parent.
+a lead's helpers consume allocations reserved from the lead's grant.
 
 Provider observations, tool evidence, outputs, and control receipts remain attached
 to those exact generations. Only accepted current results become future conversation
@@ -44,8 +44,25 @@ requires an explicit command. The current native actor factory does not attach
 daily-log, core-memory, or semantic-recall stores. See [State and memory](/understand/state/) and
 [Coordination](/understand/coordination/).
 
+If the team has completion conditions, the host evaluates them on the exact final
+tree when the required Agents finish: each
+[required check](/configure/agents/#required-checks) runs between two captures of
+the repository, then a [required reviewer](/configure/agents/#required-review)
+reads the result in a fresh conversation. The turn completes only when they pass.
+
 Existing legacy roots keep compatibility execution until an explicit offline
 [upgrade](/operate/upgrade/). Its actor/checkpoint path is described below.
+
+### Reliability for small local models
+
+- An Ollama stream that ends early, including one ended by an error record such as
+  an unparseable tool call, is retried once. The retry is charged to the same grant.
+- Tool output older than the latest few tool rounds is replaced by a short
+  placeholder in later requests; Session History keeps the full content.
+- A request that would still overflow the model's context window is reduced to fit,
+  with a note, instead of failing.
+- A failed activation states its failure class, such as provider stream, budget,
+  context limit, write scope, or capture, and a suggested next step.
 
 ## One legacy Session turn
 
@@ -124,14 +141,16 @@ bounded.
 
 Do not collapse all multi-Agent behavior into one scheduler:
 
-- **Automations** execute explicit persisted DAGs manually or from triggers.
-- **Native multi-Agent Sessions** run selected configured Agents in dependency order
-  inside one foreground Session sandbox.
-- **The event feed** carries the events a Skill publishes when it fires to
-  triggers, webhooks, and observers; it never starts Agents on its own.
 - **Native leads**, including Coordinator templates, delegate tasks to distinct
   read-only helper activations from explicitly approved Worker templates and limits
-  in the Session controller.
+  in the Session controller. This is the default team's shape.
+- **Native multi-Agent Sessions** run selected configured Agents in dependency order
+  inside one foreground Session sandbox.
+- **Required checks and required review** are completion conditions the host runs
+  after the required Agents finish; the lead cannot skip or answer them.
+- **Automations** execute explicit persisted DAGs manually or from triggers.
+- **The event feed** carries the events a Skill publishes when it fires to
+  triggers, webhooks, and observers; it never starts Agents on its own.
 - **Legacy Coordinators** dynamically decompose a goal and assign each subtask
   to the first declared worker Agent that can call its tools during that Agent
   execution.
