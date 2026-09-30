@@ -293,7 +293,7 @@ impl AxocoatlDaemon {
             let request = ExecutionRequestContent {turn_id:turn_id.clone(), recorded_at_unix_ms,
                 display_input:source.display_input.clone().unwrap_or_else(||source.input.clone()),
                 effective_input:source.input.clone(), context:begin.context.clone(), target_definition:target.clone(), model:None};
-            Ok(NativeFirstTurnRequest {schema_version:1, standing_work:None, ingress:Some(ingress), session_id,
+            Ok(NativeFirstTurnRequest {schema_version:1, legacy_standing_work:None, ingress:Some(ingress), session_id,
                 command_id:CommandId::new(format!("send:{}", source.turn_id)).map_err(failed)?,
                 epoch_id:ExecutionEpochId::new(format!("epoch:{}", source.turn_id)).map_err(failed)?,
                 graph_snapshot_id:GraphSnapshotId::new(format!("graph:{}", source.turn_id)).map_err(failed)?,

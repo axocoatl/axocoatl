@@ -100,7 +100,6 @@ pub fn build_router(
         )
         .route("/api/sessions/{id}/execute", post(routes::execute_session))
         .route("/api/sessions/{id}/team", get(routes::session_team))
-        .route("/api/sessions/{id}/work", get(routes::session_work))
         .route(
             "/api/sessions/{id}/knowledge",
             get(routes::session_knowledge)
@@ -135,30 +134,6 @@ pub fn build_router(
         .route(
             "/api/sessions/{id}/knowledge/proposals/{proposal_id}/reject",
             post(routes::reject_session_knowledge),
-        )
-        .route(
-            "/api/sessions/{id}/work/bindings",
-            post(routes::configure_session_work).layer(DefaultBodyLimit::max(32 * 1024)),
-        )
-        .route(
-            "/api/sessions/{id}/work/bindings/{binding}/manual",
-            post(routes::admit_manual_session_work).layer(DefaultBodyLimit::max(32 * 1024)),
-        )
-        .route(
-            "/api/sessions/{id}/work/bindings/{binding}/webhook",
-            post(routes::admit_signed_session_work).layer(DefaultBodyLimit::max(32 * 1024)),
-        )
-        .route(
-            "/api/sessions/{id}/work/receipts/{receipt}/run",
-            post(routes::run_session_work),
-        )
-        .route(
-            "/api/sessions/{id}/work/receipts/{receipt}/dismiss",
-            post(routes::dismiss_session_work).layer(DefaultBodyLimit::max(8 * 1024)),
-        )
-        .route(
-            "/api/sessions/{id}/work/receipts/{receipt}/settle-at-ceiling",
-            post(routes::settle_session_work_at_ceiling),
         )
         .route(
             "/api/sessions/{id}/ways-history",
@@ -586,7 +561,6 @@ pub async fn serve_shared(state: AppState, host: &str, port: u16) -> std::io::Re
             });
         }
     };
-    let _standing_work_wakeups = routes::start_standing_work_wakeups(state.clone()).await;
     // Start draining connections as soon as OS or IPC shutdown is requested,
     // while checked runtime cleanup proceeds concurrently. A stuck WebSocket
     // or request gets a bounded grace period; aborting the server then drops

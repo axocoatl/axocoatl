@@ -13,12 +13,6 @@ use crate::turn_contract::TurnGraphSnapshot;
 #[path = "control_authority_checks_tests.rs"]
 mod tests;
 
-/// A permission derived through canonical replacement, and where it is kept.
-pub(super) enum DerivedPermission {
-    Standing(ConditionPermission),
-    HostCheck(ConditionPermission),
-}
-
 impl ControlAuthority {
     /// Retain the permission to run the admitted graph's required checks on
     /// the grant that pays for them. It is computed from the graph admitted
@@ -263,20 +257,6 @@ pub(super) fn replaced_condition_permission(
         return None;
     }
     replaced_permission(snapshot, record, &grant.host_checks, &grant.policy)
-}
-
-/// The permission this claim derives through canonical replacement, from the
-/// standing carry first and then the grant's required checks.
-pub(super) fn derived_permission(
-    snapshot: &DurableTurnSnapshot,
-    record: &ConditionCallRecord,
-    grant: &GrantRecord,
-) -> Option<DerivedPermission> {
-    standing::replaced_condition_permission(snapshot, record, grant)
-        .map(DerivedPermission::Standing)
-        .or_else(|| {
-            replaced_condition_permission(snapshot, record, grant).map(DerivedPermission::HostCheck)
-        })
 }
 
 /// Stored check permissions are bounded repository checks the original

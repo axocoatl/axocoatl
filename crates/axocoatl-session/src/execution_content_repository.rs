@@ -44,9 +44,11 @@ pub struct ActivationRepositorySnapshotView {
     pub content: ActivationRepositorySnapshot,
 }
 
+/// A check result recorded by the removed standing-work inbox. Stored records
+/// still load; nothing records a new one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StandingRepositoryCheck {
+pub(super) struct StandingRepositoryCheck {
     pub activation: ActivationRef,
     pub index: u32,
     pub argv: Vec<String>,
@@ -57,11 +59,6 @@ pub struct StandingRepositoryCheck {
     pub exit_code: Option<i32>,
     pub candidate_sha256: Option<String>,
     pub passed: bool,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct StandingRepositoryCheckView {
-    pub reference: EvidenceRef,
-    pub content: StandingRepositoryCheck,
 }
 
 impl ExecutionContentStore {
@@ -162,109 +159,6 @@ impl ExecutionContentStore {
             }));
         }
         Ok(None)
-    }
-    pub fn retain_standing_check(
-        &mut self,
-        snapshot: &DurableTurnSnapshot,
-        check: StandingRepositoryCheck,
-    ) -> Result<EvidenceRef, ExecutionContentError> {
-        self.require_activation(snapshot, &check.activation)?;
-        self.validate_standing_check(snapshot, &check)?;
-        self.append(Body::StandingRepositoryCheck(check))
-    }
-    pub fn standing_checks(
-        &self,
-        snapshot: &DurableTurnSnapshot,
-        activation: &ActivationRef,
-    ) -> Result<Vec<StandingRepositoryCheckView>, ExecutionContentError> {
-        self.require_activation(snapshot, activation)?;
-        let mut result = Vec::new();
-        for record in &self.data.records {
-            let Body::StandingRepositoryCheck(check) = &record.body else {
-                continue;
-            };
-            if &check.activation != activation {
-                continue;
-            }
-            self.validate_standing_check(snapshot, check)?;
-            result.push(StandingRepositoryCheckView {
-                reference: record.reference.clone(),
-                content: check.clone(),
-            });
-        }
-        Ok(result)
-    }
-    fn validate_standing_check(
-        &self,
-        snapshot: &DurableTurnSnapshot,
-        check: &StandingRepositoryCheck,
-    ) -> Result<(), ExecutionContentError> {
-        let arguments = self
-            .tool_arguments(snapshot, &check.activation, &check.invocation)?
-            .ok_or(ExecutionContentError::Invalid(
-                "check has no protected arguments",
-            ))?;
-        let actual: serde_json::Value =
-            serde_json::from_slice(&self.read_tool_arguments(&arguments)?)?;
-        if actual != serde_json::json!({"command":crate::turn_checks::check_command(&check.argv)?})
-        {
-            return Err(ExecutionContentError::Invalid(
-                "check arguments differ from the recorded command",
-            ));
-        }
-        let result = self
-            .tool_result(&arguments)?
-            .ok_or(ExecutionContentError::Invalid(
-                "check has no protected result",
-            ))?;
-        if result.is_truncated() || result.protected_result().evidence_ref != check.outcome {
-            return Err(ExecutionContentError::Invalid(
-                "check result is missing or incomplete",
-            ));
-        }
-        let actual: Result<serde_json::Value, String> =
-            serde_json::from_slice(&self.read_tool_result(&result)?)?;
-        let exit = actual
-            .ok()
-            .and_then(|value| value.get("exit_code").and_then(serde_json::Value::as_i64))
-            .and_then(|exit| i32::try_from(exit).ok());
-        if exit != check.exit_code {
-            return Err(ExecutionContentError::Invalid(
-                "check status differs from the actual process result",
-            ));
-        }
-        let observations = self.repository_snapshots(snapshot, &check.activation)?;
-        let before = observations
-            .iter()
-            .find(|item| {
-                item.reference == check.before
-                    && item.content.phase
-                        == (RepositorySnapshotPhase::BeforeCheck { index: check.index })
-            })
-            .ok_or(ExecutionContentError::Invalid(
-                "check lost its before snapshot",
-            ))?;
-        let after = observations
-            .iter()
-            .find(|item| {
-                item.reference == check.after
-                    && item.content.phase
-                        == (RepositorySnapshotPhase::AfterCheck { index: check.index })
-            })
-            .ok_or(ExecutionContentError::Invalid(
-                "check lost its after snapshot",
-            ))?;
-        if !snapshot.contract().invocations().iter().any(|item| item.invocation_id == check.invocation && item.activation == check.activation && matches!(&item.evidence, InvocationEvidence::Outcome {evidence,..} if evidence == &check.outcome)) { return Err(ExecutionContentError::Invalid("check lost its actual invocation result")); }
-        let stable = before.content.tree_sha256.is_some()
-            && before.content.tree_sha256 == after.content.tree_sha256;
-        if check.candidate_sha256 != after.content.tree_sha256
-            || check.passed != (stable && check.exit_code == Some(0))
-        {
-            return Err(ExecutionContentError::Invalid(
-                "check verdict differs from its actual candidate",
-            ));
-        }
-        Ok(())
     }
     pub fn retain_repository_snapshot(
         &mut self,

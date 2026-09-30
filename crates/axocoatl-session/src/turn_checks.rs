@@ -5,8 +5,7 @@
 //! captures the repository before, `{P}1..={P}n` run the n commands, `{P}n+1`
 //! captures it after, and the review `{P}ready` records whether every command
 //! passed on an unchanged tree. Required checks of a Session team use
-//! [`REQUIRED_CHECK_PREFIX`]; standing work keeps its own prefix until the
-//! inbox is removed.
+//! [`REQUIRED_CHECK_PREFIX`].
 use serde::Serialize;
 
 use crate::execution_content::{
@@ -23,8 +22,6 @@ use crate::turn_contract::{
 /// already scoped to their turn, so the prefix names no turn.
 pub const REQUIRED_CHECK_PREFIX: &str = "required-check:";
 
-const STANDING_PREFIX: &str = "standing:";
-
 /// One group of host-run checks in a turn graph, named by its prefix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckGroup {
@@ -36,12 +33,6 @@ impl CheckGroup {
     pub fn required() -> Self {
         Self {
             prefix: REQUIRED_CHECK_PREFIX.into(),
-        }
-    }
-    /// The checks armed on one standing-work receipt.
-    pub fn standing(receipt: &str) -> Self {
-        Self {
-            prefix: format!("{STANDING_PREFIX}{receipt}:"),
         }
     }
     pub fn prefix(&self) -> &str {
@@ -68,11 +59,7 @@ pub fn group_of(graph: &TurnGraphSnapshot) -> Option<(CheckGroup, usize)> {
             return None;
         }
         let prefix = condition.condition_id.as_str().strip_suffix("ready")?;
-        if prefix != REQUIRED_CHECK_PREFIX
-            && !(prefix.starts_with(STANDING_PREFIX)
-                && prefix.len() > STANDING_PREFIX.len() + 1
-                && prefix.ends_with(':'))
-        {
+        if prefix != REQUIRED_CHECK_PREFIX {
             return None;
         }
         let group = CheckGroup {
@@ -392,10 +379,7 @@ mod tests {
         };
         assert_eq!(group_of(&graph), Some((group.clone(), most)));
         assert!(group.contains(&ConditionId::new("required-check:ready").unwrap()));
-        assert!(!group.contains(&ConditionId::new("standing:r:ready").unwrap()));
-        let standing = CheckGroup::standing("receipt");
-        assert_eq!(standing.condition_id(0), "standing:receipt:0");
-        assert_eq!(standing.ready_id(), "standing:receipt:ready");
+        assert!(!group.contains(&ConditionId::new("other:ready").unwrap()));
         // A review alone, or captures without a command, is not a group.
         let mut partial = graph.clone();
         partial

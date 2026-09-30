@@ -518,8 +518,6 @@ impl PreparedActivation {
                 axocoatl_session::execution_content::RepositorySnapshotPhase::Before,
             )
             .await?;
-        self.controller
-            .validate_standing_candidate(&self.activation)?;
         let mut behavior = self
             .behavior
             .take()

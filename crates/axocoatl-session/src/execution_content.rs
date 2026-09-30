@@ -56,9 +56,10 @@ mod attachment;
 #[path = "execution_content_repository.rs"]
 mod repository_snapshot;
 pub use attachment::RetainedBinaryAttachment;
+use repository_snapshot::StandingRepositoryCheck;
 pub use repository_snapshot::{
     ActivationRepositorySnapshot, ActivationRepositorySnapshotView, RepositorySnapshotPhase,
-    StandingRepositoryCheck, StandingRepositoryCheckView, REPOSITORY_SNAPSHOT_COMMAND,
+    REPOSITORY_SNAPSHOT_COMMAND,
 };
 
 #[path = "execution_content_reattachment.rs"]
@@ -796,8 +797,6 @@ pub struct ExecutionActivationView {
     pub definition_name: ContentResolution<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub repository_snapshots: Vec<ActivationRepositorySnapshotView>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub standing_checks: Vec<StandingRepositoryCheckView>,
     pub currently_accepted: bool,
     pub output: ContentResolution<ActivationOutputContent>,
     /// Partial bodies are evidence of observed streaming output, never acceptance.
@@ -2157,7 +2156,6 @@ impl ExecutionContentStore {
                 },
                 repository_snapshots: self
                     .repository_snapshots(snapshot, &activation.activation)?,
-                standing_checks: self.standing_checks(snapshot, &activation.activation)?,
                 currently_accepted: accepted
                     .iter()
                     .any(|current| current.activation == activation.activation),
@@ -4678,6 +4676,57 @@ mod tests {
             Err(ExecutionContentError::Invalid(_))
         ));
         assert_eq!(std::fs::read(dir.path().join(FILE)).unwrap(), bytes);
+    }
+
+    #[test]
+    fn legacy_standing_check_record_still_loads() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical = canonical(&root);
+        let dir = tempfile::tempdir().unwrap();
+        let identity = canonical.identity().unwrap();
+        let limits = Limits {
+            bytes: 64 * 1024,
+            records: 100,
+        };
+        // A check result as the removed standing-work inbox recorded it.
+        let recorded = |activation: &ActivationRef| -> Body {
+            serde_json::from_value(serde_json::json!({
+                "record_kind": "standing_repository_check",
+                "activation": activation,
+                "index": 0,
+                "argv": ["npm", "test"],
+                "before": "before-capture",
+                "after": "after-capture",
+                "invocation": "tool-a",
+                "outcome": "check-outcome",
+                "exit_code": 0,
+                "candidate_sha256": null,
+                "passed": true,
+            }))
+            .unwrap()
+        };
+        let activation = reservation().activation;
+        let mut content = store(dir.path(), identity.clone(), limits);
+        content.append(recorded(&activation)).unwrap();
+        content.append(request("turn-after", 16)).unwrap();
+        let mut foreign = activation.clone();
+        foreign.session_id = SessionId::new("session-b").unwrap();
+        assert!(matches!(
+            content.append(recorded(&foreign)),
+            Err(ExecutionContentError::OwnerMismatch)
+        ));
+        drop(content);
+        let content = store(dir.path(), identity, limits);
+        assert!(content
+            .data
+            .records
+            .iter()
+            .any(|record| matches!(&record.body, Body::StandingRepositoryCheck(check) if check.activation == activation)));
+        assert!(content
+            .data
+            .records
+            .iter()
+            .any(|record| matches!(&record.body, Body::Request(request) if request.turn_id.as_str() == "turn-after")));
     }
 
     #[test]

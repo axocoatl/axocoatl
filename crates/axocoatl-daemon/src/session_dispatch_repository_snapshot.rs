@@ -492,8 +492,7 @@ impl DispatchState {
             return None;
         }
         let grant = bound.grant.grant_id.as_str();
-        let pays_checks = self.authority.grant_pays_standing_checks(grant).ok()?
-            || self.authority.grant_pays_required_checks(grant).ok()?;
+        let pays_checks = self.authority.grant_pays_required_checks(grant).ok()?;
         let snapshot = self.canonical.snapshot(&self.turn_id).ok()?;
         let group = snapshot
             .contract()

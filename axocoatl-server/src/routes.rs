@@ -1,7 +1,3 @@
-#[path = "routes_session_work.rs"]
-mod session_work_routes;
-pub use session_work_routes::*;
-
 #[path = "routes_session_knowledge.rs"]
 mod session_knowledge_routes;
 pub use session_knowledge_routes::*;

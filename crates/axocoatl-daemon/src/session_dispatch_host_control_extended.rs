@@ -756,31 +756,4 @@ mod check_continuation_tests {
             vec![selected]
         );
     }
-
-    #[test]
-    fn selected_check_adds_capture_and_readiness_without_other_commands() {
-        let selected = ConditionId::new("standing:receipt:2").unwrap();
-        let result = continue_conditions(
-            std::slice::from_ref(&selected),
-            Some((CheckGroup::standing("receipt"), 3)),
-        )
-        .unwrap();
-        assert_eq!(
-            result.iter().map(ConditionId::as_str).collect::<Vec<_>>(),
-            vec![
-                "standing:receipt:2",
-                "standing:receipt:0",
-                "standing:receipt:4",
-                "standing:receipt:ready"
-            ]
-        );
-        assert_eq!(
-            continue_conditions(
-                std::slice::from_ref(&selected),
-                Some((CheckGroup::standing("other"), 3))
-            )
-            .unwrap(),
-            vec![selected]
-        );
-    }
 }

@@ -215,7 +215,7 @@ async fn native_fixture_with(invocations: u32, issuer: &str, tools: [&[&str]; 2]
     let turn_id = LogicalTurnId::new("native-first").unwrap();
     let request = NativeFirstTurnRequest {
         model_selections: vec![],
-        standing_work: None,
+        legacy_standing_work: None,
         schema_version: 1,
         ingress: Some(serde_json::json!({"input":"Do the work","context":[]})),
         session_id,
@@ -465,8 +465,8 @@ async fn approved_required_checks_become_turn_conditions_and_survive_exact_retry
     // The first required Agent that may use bash pays: node-1, not node-0.
     let pays = |grant: &'static str| {
         controller
-            .with_team_work_authority(|_, _, authority| {
-                Ok(authority.grant_pays_required_checks(grant).unwrap())
+            .with_grant_stores(|_, _, held| {
+                Ok(held.unwrap().1.grant_pays_required_checks(grant).unwrap())
             })
             .unwrap()
     };
@@ -1080,149 +1080,6 @@ async fn late_stop_after_attention_releases_exact_owner_for_rewind_and_reacquisi
 }
 
 #[tokio::test]
-async fn standing_work_settles_closed_retained_controller_before_reserving_next_event() {
-    use axocoatl_session::team_work::*;
-    let mut f = native_fixture_with_invocations(4).await;
-    let directory = tempfile::tempdir().unwrap();
-    let mut inbox = TeamWorkInbox::open(directory.path()).unwrap();
-    let binding = TeamWorkBinding {
-        binding_id: "retained-owner".into(),
-        binding_revision: 1,
-        workspace_id: f.repository.owner.identity().owner().workspace_id.clone(),
-        session_id: f.request.session_id.as_str().into(),
-        team_revision: 1,
-        grant_id: f.request.grants[0].id.clone(),
-        grant_revision: f.request.grants[0].revision,
-        source_id: "manual".into(),
-        event_kind: "candidate_ready".into(),
-    };
-    inbox
-        .configure_binding(
-            0,
-            ArmedTeamWorkBinding {
-                binding: binding.clone(),
-                source: TeamWorkSource::Manual,
-                armed: true,
-                instruction: "Inspect this exact candidate".into(),
-                required_checks: vec![],
-                grants: f
-                    .request
-                    .grants
-                    .iter()
-                    .map(|grant| TeamWorkGrantReference {
-                        id: grant.id.clone(),
-                        revision: grant.revision,
-                        limits: grant.limits.clone(),
-                        expires_at_ms: grant.expires_at_ms,
-                    })
-                    .collect(),
-                authorized_at_ms: 1,
-                source_after_turn: None,
-            },
-        )
-        .unwrap();
-    let event = TeamWorkEvent {
-        source_id: "manual".into(),
-        event_id: "first".into(),
-        event_kind: "candidate_ready".into(),
-        content_sha256: "a".repeat(64),
-        correlation_id: "retained-owner".into(),
-        caused_by_turn_id: None,
-        subject: TeamWorkSubject {
-            kind: "tree".into(),
-            reference_id: "fixture".into(),
-            version: "a".repeat(64),
-        },
-        evidence_refs: vec![],
-    };
-    let first = inbox
-        .admit_bound(
-            TeamWorkRequest {
-                binding: binding.clone(),
-                event: event.clone(),
-            },
-            2,
-        )
-        .unwrap();
-    f.request.turn_id = LogicalTurnId::new(&first.turn_id).unwrap();
-    f.request.request.turn_id = f.request.turn_id.clone();
-    let source = f.request.source().unwrap();
-    inbox
-        .reserve_native_turn(&first.receipt_id, source)
-        .unwrap();
-    let allocations = inbox.native_allocations(&first.receipt_id).unwrap();
-    let (controller, repository) = begin(&f, &f.request);
-    controller
-        .install_team_work_allocations(&allocations, &repository)
-        .unwrap();
-    f.registry
-        .request_human_turn_stop(f.request.session_id.as_str(), f.request.turn_id.as_str())
-        .unwrap();
-    assert_eq!(
-        controller.snapshot().unwrap().contract().state(),
-        Some(LogicalTurnState::Cancelled)
-    );
-    let token = f
-        .registry
-        .session_team_token(f.request.session_id.as_str())
-        .unwrap();
-    let settled = f
-        .registry
-        .with_session_team_settlement_stores(&token, |canonical, held| {
-            assert!(
-                held.is_some(),
-                "the actual closed controller is still retained"
-            );
-            assert!(
-                canonical
-                    .existing_component_namespace(
-                        ExecutionComponent::ControlAuthority {
-                            turn_id: f.request.turn_id.clone()
-                        },
-                        std::path::Path::new("control-authority.v1.json"),
-                    )
-                    .is_err(),
-                "a second writer lease must remain forbidden"
-            );
-            crate::bootstrap::session_team_work::settle_work_allocations(
-                canonical,
-                held,
-                &f.request.turn_id,
-                &allocations,
-                false,
-            )
-        })
-        .unwrap()
-        .expect("settlement uses the already-held authority");
-    inbox
-        .settle_native_budget(&first.receipt_id, &settled)
-        .unwrap();
-    let mut second_event = event;
-    second_event.event_id = "second".into();
-    let second = inbox
-        .admit_bound(
-            TeamWorkRequest {
-                binding,
-                event: second_event,
-            },
-            3,
-        )
-        .unwrap();
-    let reserved = inbox
-        .reserve_native_turn(
-            &second.receipt_id,
-            serde_json::json!({"turn_id":second.turn_id,"source":"second reviewed event"})
-                .to_string(),
-        )
-        .unwrap();
-    assert!(reserved
-        .allocations
-        .iter()
-        .all(|allocation| allocation.consumed_before == Default::default()));
-    assert_eq!(controller.snapshot().unwrap().turn_id(), &f.request.turn_id);
-}
-
-#[tokio::test]
 async fn live_host_grant_review_uses_existing_authority_lease_before_activation() {
     let fixture = native_fixture().await;
     let (controller, repository) = begin(&fixture, &fixture.request);
@@ -1290,31 +1147,36 @@ async fn live_host_grant_review_uses_existing_authority_lease_before_activation(
     drop(prepared);
 }
 
-#[test]
-fn legacy_path_routed_work_fields_are_read_and_dropped() {
-    let stored = serde_json::json!({
+#[tokio::test]
+async fn legacy_standing_admission_source_still_parses() {
+    let f = native_fixture().await;
+    let mut stored = serde_json::to_value(&f.request).unwrap();
+    // What the removed standing-work inbox added to an admission.
+    let work = serde_json::json!({
         "receipt_id": "receipt",
         "binding": {
             "binding_id": "binding",
             "binding_revision": 1,
             "workspace_id": "workspace",
-            "session_id": "session",
+            "session_id": f.request.session_id.as_str(),
             "team_revision": 1,
-            "grant_id": "grant",
+            "grant_id": "grant-0",
             "grant_revision": 1,
-            "source_id": "signals",
-            "event_kind": "signal",
+            "source_id": "manual",
+            "event_kind": "build",
         },
-        "subject": {"kind": "signal_field", "reference_id": "coder", "version": "1"},
-        "required_checks": [],
-        "write_scope": ["lib/"],
-        "signal_routes": [{"node_id": "coder", "label": "Coder", "watches": ["lib/"]}],
+        "subject": {"kind": "build", "reference_id": "build-7", "version": "sha256:tree"},
+        "required_checks": [["npm", "test"]],
     });
-    let work: crate::bootstrap::native_turn::NativeStandingWork =
-        serde_json::from_value(stored).unwrap();
-    assert!(work.legacy_write_scope.is_some() && work.legacy_signal_routes.is_some());
-    let written = serde_json::to_value(&work).unwrap();
-    assert!(written.get("write_scope").is_none());
-    assert!(written.get("signal_routes").is_none());
-    assert_eq!(written["receipt_id"], "receipt");
+    stored["standing_work"] = work.clone();
+    let parsed: NativeFirstTurnRequest = serde_json::from_value(stored).unwrap();
+    assert_eq!(parsed.legacy_standing_work, Some(work));
+    let mut ordinary = parsed.clone();
+    ordinary.legacy_standing_work = None;
+    assert_eq!(ordinary, f.request);
+    // It is never written again, so no new admission can carry it.
+    assert!(serde_json::to_value(&parsed)
+        .unwrap()
+        .get("standing_work")
+        .is_none());
 }

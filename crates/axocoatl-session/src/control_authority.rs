@@ -37,8 +37,6 @@ use crate::turn_contract::{
 mod checks;
 #[path = "control_authority_delegation.rs"]
 mod delegation;
-#[path = "control_authority_standing.rs"]
-mod standing;
 pub use delegation::DelegatedGrantReservation;
 
 const FILE: &str = "control-authority.v1.json";
@@ -379,12 +377,26 @@ struct GrantRecord {
     native_delegation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     delegated_from: Option<DelegatedGrantReservation>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    standing: Option<standing::StandingGrantCarry>,
+    /// Allowance carried in by the removed standing-work inbox. Read so its
+    /// closed turns still balance; nothing writes a new one.
+    #[serde(default, rename = "standing", skip_serializing_if = "Option::is_none")]
+    legacy_standing: Option<LegacyStandingCarry>,
     /// Permission to run this turn's required checks, when this grant pays
     /// for them. Absent on every other grant and on older stores.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     host_checks: Vec<ConditionPermission>,
+}
+
+/// What a standing-work turn's grant carried: usage its shared allowance had
+/// already spent and the check permissions it was armed with. Only its usage
+/// and permissions are read; its other fields are kept as they were written.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct LegacyStandingCarry {
+    consumed_before: GrantUsage,
+    #[serde(default)]
+    conditions: Vec<ConditionPermission>,
+    #[serde(flatten)]
+    rest: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -676,7 +688,7 @@ impl ControlAuthority {
             usage: GrantUsage::default(),
             native_delegation: None,
             delegated_from: None,
-            standing: None,
+            legacy_standing: None,
             host_checks: vec![],
         });
         self.commit(&mut state, next)
@@ -1210,12 +1222,15 @@ impl ControlAuthority {
         };
         validate_condition_record(&record)?;
         let derived_permission = if !condition_allowed(&record, policy)
-            && !standing::condition_allowed(&record, &state.data.grants[index], policy)
             && !checks::condition_allowed(&record, &state.data.grants[index], policy)
         {
             Some(
-                checks::derived_permission(&snapshot, &record, &state.data.grants[index])
-                    .ok_or(AuthorityError::Denied)?,
+                checks::replaced_condition_permission(
+                    &snapshot,
+                    &record,
+                    &state.data.grants[index],
+                )
+                .ok_or(AuthorityError::Denied)?,
             )
         } else {
             None
@@ -1226,20 +1241,8 @@ impl ControlAuthority {
             return Err(AuthorityError::Capacity);
         }
         let mut next = state.data.clone();
-        if let Some(derived) = derived_permission {
-            let (permissions, permission) = match derived {
-                checks::DerivedPermission::Standing(permission) => (
-                    &mut next.grants[index]
-                        .standing
-                        .as_mut()
-                        .ok_or(AuthorityError::Denied)?
-                        .conditions,
-                    permission,
-                ),
-                checks::DerivedPermission::HostCheck(permission) => {
-                    (&mut next.grants[index].host_checks, permission)
-                }
-            };
+        if let Some(permission) = derived_permission {
+            let permissions = &mut next.grants[index].host_checks;
             if permissions.len() >= MAX_COMPLETION_CONDITIONS {
                 return Err(AuthorityError::Capacity);
             }
@@ -1282,7 +1285,6 @@ impl ControlAuthority {
             || grant.policy.revision != stored.grant.revision
             || now_ms >= grant.policy.expires_at_ms
             || (!condition_allowed(stored, &grant.policy)
-                && !standing::condition_allowed(stored, grant, &grant.policy)
                 && !checks::condition_allowed(stored, grant, &grant.policy))
         {
             return Err(AuthorityError::Denied);
@@ -2201,6 +2203,51 @@ fn condition_allowed(record: &ConditionCallRecord, grant: &AuthorityGrant) -> bo
         })
 }
 
+/// A check a standing-work turn ran under its carried permissions. Only a
+/// stored claim is judged this way; no new claim can use them.
+fn legacy_standing_condition_allowed(
+    record: &ConditionCallRecord,
+    grant: &GrantRecord,
+    policy: &AuthorityGrant,
+) -> bool {
+    checks::has_shell(policy)
+        && grant.legacy_standing.as_ref().is_some_and(|carry| {
+            carry
+                .conditions
+                .iter()
+                .any(|permission| checks::permission_covers(permission, record))
+        })
+}
+
+/// The usage a legacy standing carry adds to its grant, once it is checked
+/// against the grant's original approval.
+fn validate_legacy_standing(
+    data: &AuthorityData,
+    grant: &GrantRecord,
+) -> Result<GrantUsage, AuthorityError> {
+    let Some(carry) = &grant.legacy_standing else {
+        return Ok(GrantUsage::default());
+    };
+    let original = grant.previous_policies.first().unwrap_or(&grant.policy);
+    if grant.delegated_from.is_some()
+        || data.canonical_journal_id.is_none()
+        || carry.consumed_before.activations > original.limits.activations
+        || carry.consumed_before.invocations > original.limits.invocations
+        || carry.consumed_before.tokens > original.limits.tokens
+        || carry.consumed_before.cost_microunits > original.limits.cost_microunits
+    {
+        return Err(AuthorityError::Invalid(
+            "standing grant carry differs from approved allowance",
+        ));
+    }
+    checks::validate_permissions(
+        &carry.conditions,
+        original,
+        "invalid standing condition permission",
+    )?;
+    Ok(carry.consumed_before.clone())
+}
+
 fn same_condition_claim(left: &ConditionCallRecord, right: &ConditionCallRecord) -> bool {
     let mut left = left.clone();
     let mut right = right.clone();
@@ -2815,7 +2862,7 @@ fn validate_data(data: &AuthorityData) -> Result<(), AuthorityError> {
             .find(|policy| policy.revision == call.grant.revision)
             .ok_or(AuthorityError::Invalid("missing condition grant revision"))?;
         if (!condition_allowed(call, policy)
-            && !standing::condition_allowed(call, grant, policy)
+            && !legacy_standing_condition_allowed(call, grant, policy)
             && !checks::condition_allowed(call, grant, policy))
             || call.claimed_at_ms >= policy.expires_at_ms
         {
@@ -2826,7 +2873,7 @@ fn validate_data(data: &AuthorityData) -> Result<(), AuthorityError> {
     }
     for grant in &data.grants {
         checks::validate_host_checks(data, grant)?;
-        let mut expected = standing::validate_carry(data, grant)?;
+        let mut expected = validate_legacy_standing(data, grant)?;
         expected.activations = expected
             .activations
             .checked_add(
@@ -3005,10 +3052,7 @@ mod provider_tests {
     }
 
     #[test]
-    fn standing_allowance_carries_prior_usage_into_actual_dispatch_and_restart() {
-        use crate::team_work::{
-            DurableTeamWorkAllocation, TeamWorkGrantAllocation, TeamWorkGrantReference,
-        };
+    fn legacy_standing_carry_still_validates_on_reload() {
         let fixture = undispatched_fixture();
         let activation = fixture.snapshot.contract().activations()[0]
             .activation
@@ -3019,56 +3063,61 @@ mod provider_tests {
             .as_ref()
             .unwrap()
             .grant_id
-            .as_str();
-        let policy = fixture.gate.grant_policy(grant_id).unwrap();
-        let allocation = DurableTeamWorkAllocation {
-            required_checks: Vec::new(),
-            receipt_id: "work-prior".into(),
-            session_id: activation.session_id.as_str().into(),
-            turn_id: activation.turn_id.as_str().into(),
-            allocation: TeamWorkGrantAllocation {
-                grant: TeamWorkGrantReference {
-                    id: policy.id.clone(),
-                    revision: policy.revision,
-                    limits: policy.limits.clone(),
-                    expires_at_ms: policy.expires_at_ms,
-                },
-                consumed_before: GrantUsage {
-                    activations: 0,
-                    invocations: 1,
-                    tokens: 950,
-                    cost_microunits: 95,
-                },
-                settlement: None,
-            },
+            .as_str()
+            .to_owned();
+        let policy = fixture.gate.grant_policy(&grant_id).unwrap();
+        drop(fixture.gate);
+        let namespace = || {
+            fixture
+                .canonical
+                .component_namespace(ExecutionComponent::ControlAuthority {
+                    turn_id: fixture.snapshot.turn_id().clone(),
+                })
+                .unwrap()
         };
-        fixture
-            .gate
-            .apply_team_work_allocation(&allocation)
-            .unwrap();
-        let revision = fixture.gate.revision().unwrap();
-        fixture
-            .gate
-            .apply_team_work_allocation(&allocation)
-            .unwrap();
-        assert_eq!(fixture.gate.revision().unwrap(), revision);
-        let mut foreign = allocation.clone();
-        foreign.turn_id = "foreign".into();
-        assert!(fixture.gate.apply_team_work_allocation(&foreign).is_err());
-        let lease = fixture
-            .gate
+        // A grant as the removed standing-work inbox left it: usage its
+        // shared allowance had already spent was carried into this turn.
+        let consumed_before = serde_json::json!({
+            "activations": 0, "invocations": 1, "tokens": 950, "cost_microunits": 95,
+        });
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&namespace().read_limited(FILE, MAX_BYTES).unwrap()).unwrap();
+        for grant in stored["grants"].as_array_mut().unwrap() {
+            if grant["policy"]["id"] == grant_id.as_str() {
+                grant["standing"] = serde_json::json!({
+                    "receipt_id": "work-prior",
+                    "grant": {
+                        "id": policy.id,
+                        "revision": policy.revision,
+                        "limits": policy.limits,
+                        "expires_at_ms": policy.expires_at_ms,
+                    },
+                    "consumed_before": consumed_before,
+                    "conditions": [],
+                });
+                grant["usage"] = consumed_before.clone();
+            }
+        }
+        let write = |value: &serde_json::Value| {
+            namespace()
+                .atomic_write(FILE, &serde_json::to_vec(value).unwrap())
+                .unwrap()
+        };
+        write(&stored);
+        let reopened = ControlAuthority::open_owned(namespace()).unwrap();
+        assert_eq!(reopened.usage(&grant_id).unwrap().tokens, 950);
+        // The carried usage still counts against the grant.
+        let lease = reopened
             .register_provider_activation(
-                activation.clone(),
-                grant_id,
+                activation,
+                &grant_id,
                 fixture.profile.clone(),
-                revision,
+                reopened.revision().unwrap(),
                 100,
             )
             .unwrap();
         assert!(matches!(
-            fixture
-                .gate
-                .claim_provider_call(&lease, intent("over-remaining"), 100),
+            reopened.claim_provider_call(&lease, intent("over-remaining"), 100),
             Err(AuthorityError::Capacity)
         ));
         let mut bounded = intent("within-remaining");
@@ -3076,48 +3125,31 @@ mod provider_tests {
             tokens: 40,
             cost_microunits: 4,
         };
-        let claim = fixture
-            .gate
-            .claim_provider_call(&lease, bounded, 100)
-            .unwrap();
-        fixture
-            .gate
-            .settle_provider_call(&claim, &outcome())
-            .unwrap();
-        assert_eq!(
-            fixture.gate.usage(grant_id).unwrap(),
-            GrantUsage {
-                activations: 1,
-                invocations: 2,
-                tokens: 990,
-                cost_microunits: 99
-            }
-        );
-        assert!(
-            fixture
-                .gate
-                .settle_team_work_allocation(&fixture.snapshot, &allocation, false)
-                .is_err(),
-            "a running canonical turn cannot release its shared hold"
-        );
-        drop(fixture.gate);
-        let namespace = fixture
-            .canonical
-            .component_namespace(ExecutionComponent::ControlAuthority {
-                turn_id: fixture.snapshot.turn_id().clone(),
-            })
-            .unwrap();
-        let reopened = ControlAuthority::open_owned(namespace).unwrap();
-        assert_eq!(reopened.usage(grant_id).unwrap().tokens, 990);
-        assert!(reopened
-            .register_provider_activation(
-                activation,
-                grant_id,
-                fixture.profile,
-                reopened.revision().unwrap(),
-                100
-            )
-            .is_err());
+        let claim = reopened.claim_provider_call(&lease, bounded, 100).unwrap();
+        reopened.settle_provider_call(&claim, &outcome()).unwrap();
+        drop(reopened);
+        let again = ControlAuthority::open_owned(namespace()).unwrap();
+        assert_eq!(again.usage(&grant_id).unwrap().tokens, 990);
+        drop(again);
+        // Every field it was written with is kept when the store is rewritten.
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&namespace().read_limited(FILE, MAX_BYTES).unwrap()).unwrap();
+        let carry = rewritten["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|grant| grant["policy"]["id"] == grant_id.as_str())
+            .unwrap()["standing"]
+            .clone();
+        assert_eq!(carry["receipt_id"], "work-prior");
+        assert_eq!(carry["consumed_before"], consumed_before);
+        // Without the carry the same usage no longer balances.
+        let mut uncarried = rewritten.clone();
+        for grant in uncarried["grants"].as_array_mut().unwrap() {
+            grant.as_object_mut().unwrap().remove("standing");
+        }
+        write(&uncarried);
+        assert!(ControlAuthority::open_owned(namespace()).is_err());
     }
 
     #[test]

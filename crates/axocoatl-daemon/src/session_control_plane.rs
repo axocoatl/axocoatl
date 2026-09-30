@@ -880,7 +880,7 @@ fn delegated_by(
 }
 
 /// Each required check's latest run, from the definitions the admitted graph
-/// names. Other check groups, such as standing work's, are not shown here.
+/// names.
 fn required_checks(
     snapshot: &DurableTurnSnapshot,
     content: &ExecutionContentStore,

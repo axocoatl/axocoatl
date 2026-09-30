@@ -27,27 +27,14 @@ pub(crate) struct NativeNodeEvidence {
     pub guidance: Vec<EvidenceRef>,
     pub attachments: Vec<EvidenceRef>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct NativeStandingWork {
-    pub receipt_id: String,
-    pub binding: axocoatl_session::team_work::TeamWorkBinding,
-    pub subject: axocoatl_session::team_work::TeamWorkSubject,
-    pub required_checks: Vec<Vec<String>>,
-    /// Written by path-routed work, which no longer exists; read and ignored
-    /// so those admissions still load.
-    #[serde(default, rename = "write_scope", skip_serializing)]
-    pub legacy_write_scope: Option<serde_json::Value>,
-    #[serde(default, rename = "signal_routes", skip_serializing)]
-    pub legacy_signal_routes: Option<serde_json::Value>,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NativeFirstTurnRequest {
     pub schema_version: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub standing_work: Option<NativeStandingWork>,
+    /// What the removed standing-work inbox admitted this turn for. Read so
+    /// those turns' history still loads; such a turn cannot start again.
+    #[serde(default, rename = "standing_work", skip_serializing)]
+    pub legacy_standing_work: Option<serde_json::Value>,
     /// Complete original Send identity; retained only as protected input evidence.
     /// It is never Agent guidance and grants no execution authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -129,6 +116,12 @@ impl AxocoatlDaemon {
         request: NativeFirstTurnRequest,
     ) -> Result<NativeFirstTurnStart<'_>, DaemonError> {
         self.require_runtime_admission()?;
+        if request.legacy_standing_work.is_some() {
+            return Err(failure(
+                "This turn was admitted from a standing work source, which Axocoatl no longer \
+                 runs; it cannot be started again",
+            ));
+        }
         let source = request.source()?;
         match self
             .session_dispatch_lifecycles
@@ -212,7 +205,6 @@ impl AxocoatlDaemon {
             return Err(failure("native turn changed during repository admission"));
         }
         let expected_team_revision = request.expected_team_revision;
-        let standing_session = request.session_id.as_str().to_owned();
         let expected_graph = setup.content.graph.clone();
         let expected_turn = request.turn_id.clone();
         let target = request.target_definition.clone();
@@ -227,11 +219,6 @@ impl AxocoatlDaemon {
             |canonical: &axocoatl_session::execution_store::SessionExecutionStore,
              content: &axocoatl_session::execution_content::ExecutionContentStore,
              memory: &axocoatl_memory::activation_state::ActivationStateStore| {
-                self.validate_standing_work_admission(
-                    &standing_session,
-                    expected_turn.as_str(),
-                    &source,
-                )?;
                 verify_selected_team(
                     canonical,
                     content,
@@ -261,7 +248,6 @@ impl AxocoatlDaemon {
         repository: EvidenceRef,
         source: &str,
     ) -> Result<NativeFirstTurnStart<'a>, DaemonError> {
-        self.apply_standing_work_allocation(&controller, source, &repository)?;
         let factory = self.native_session_activation_factory(&controller)?;
         finish_owned_setup(
             &self.session_dispatch_lifecycles,
@@ -594,19 +580,7 @@ pub(super) fn prepare_admission(
         // Every slot's grant carries the same approved Apply.
         let required_checks = session_team::approved_required_checks(content, selected_slots[0])?;
         drop(team);
-        if let Some(work) = &request.standing_work {
-            inject_checks(
-                content,
-                &mut graph,
-                &CheckGroup::standing(&work.receipt_id),
-                &work.required_checks,
-                axocoatl_session::team_work::standing_readiness_text(
-                    &work.receipt_id,
-                    &work.required_checks,
-                ),
-            )?;
-            graph.validate(&request.session_id).map_err(failure)?;
-        } else if !required_checks.is_empty() {
+        if !required_checks.is_empty() {
             // The authority charges them to the first required Agent that
             // may use bash; without one the turn could never run them.
             if !graph.nodes.iter().filter(|node| node.required).any(|node| {
@@ -621,13 +595,7 @@ pub(super) fn prepare_admission(
                      with the bash tool",
                 ));
             }
-            inject_checks(
-                content,
-                &mut graph,
-                &CheckGroup::required(),
-                &required_checks,
-                axocoatl_session::turn_checks::readiness_text(&required_checks),
-            )?;
+            inject_checks(content, &mut graph, &required_checks)?;
             graph.validate(&request.session_id).map_err(failure)?;
         }
         let retained_request = content
@@ -752,16 +720,16 @@ pub(super) fn prepare_admission(
     })
 }
 
-/// Add one check group to an admitted graph: a repository capture, each
+/// Add the required checks to an admitted graph: a repository capture, each
 /// command and a capture, all over the graph's required nodes, then the
 /// readiness review. Retries retain the same definitions and criterion.
 fn inject_checks(
     content: &mut axocoatl_session::execution_content::ExecutionContentStore,
     graph: &mut TurnGraphSnapshot,
-    group: &CheckGroup,
     checks: &[Vec<String>],
-    readiness: String,
 ) -> Result<(), DaemonError> {
+    let group = CheckGroup::required();
+    let readiness = axocoatl_session::turn_checks::readiness_text(checks);
     let nodes: Vec<_> = graph
         .nodes
         .iter()

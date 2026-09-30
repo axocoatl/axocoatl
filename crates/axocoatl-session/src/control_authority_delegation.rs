@@ -154,7 +154,7 @@ impl ControlAuthority {
             usage: GrantUsage::default(),
             native_delegation: None,
             delegated_from: Some(reservation.clone()),
-            standing: None,
+            legacy_standing: None,
             host_checks: vec![],
         });
         Ok(next)
@@ -377,7 +377,7 @@ mod tests {
             usage: GrantUsage::default(),
             native_delegation,
             delegated_from,
-            standing: None,
+            legacy_standing: None,
             host_checks: vec![],
         };
         let mut parent = record(expanded, Some("journal".into()), None);
@@ -487,7 +487,7 @@ mod tests {
                 usage: GrantUsage::default(),
                 native_delegation: Some("journal".into()),
                 delegated_from: None,
-                standing: None,
+                legacy_standing: None,
                 host_checks: vec![],
             });
             state.data.activations.push(ActivationRecord {
@@ -552,7 +552,7 @@ mod tests {
                 usage: GrantUsage::default(),
                 native_delegation: None,
                 delegated_from: Some(reservation),
-                standing: None,
+                legacy_standing: None,
                 host_checks: vec![],
             });
             assert_eq!(

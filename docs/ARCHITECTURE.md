@@ -78,16 +78,12 @@ old execution, and prepares and completes source-bound conversion without starti
 or providers. Unknown historical roles retain raw checkpoint archives and accounting with
 empty future model context. Ordinary Send, dependent
 Agents, Coordinator children, and native Ways use canonical admission and the shared authority
-boundary. `team_work::TeamWorkInbox` persists bounded event receipts with
-immutable binding, Workspace, Session, team/grant revision, candidate, and evidence identity.
-Reservation names an exact turn; it neither starts execution nor establishes replay safety.
-The live host authenticates ingress, revalidates current authority and repository ownership,
-and routes admitted work through the ordinary Session driver. Explicitly armed bindings
-support manual events, configured signed webhooks, and verified same-Workspace Session
-completion. Required checks consume the shared grant and record the exact checked tree;
-producer-provided candidate labels alone cannot establish readiness. The inbox requires an existing durably provisioned private directory, holds a single-writer
-lock, repairs uncertain writes before acknowledging loaded receipts, and reserves disposition
-space before admitting more work. It has no silent eviction or automatic retry executor.
+boundary. A Session team's required checks are conditions of each admitted turn graph:
+after the turn's required Agents are accepted, the host runs each command between two
+repository captures of that exact candidate, charged to the grant of the first required
+Agent that may use `bash`, and records one readiness review. The turn completes only when
+every check passes and the captured tree did not change; a failure leaves it needing
+attention.
 
 `turn_contract` decodes and folds a bounded schema-2 logical-turn contract separately from
 the live schema-1 ledger. Immutable manifests bind definitions, conversations, starting

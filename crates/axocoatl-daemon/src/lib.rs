@@ -42,11 +42,6 @@ pub use bootstrap::ways_history::{WaysDecisionExport, WaysHistoryConfiguration, 
 
 pub use bootstrap::control_planner::{ControlPlannerRequest, ControlPlannerResult};
 
-pub use bootstrap::session_team_work::{
-    ArmedTeamWorkBinding, SessionWorkBindingEdit, SessionWorkEventInput, SessionWorkItem,
-    SessionWorkView, TeamWorkReceipt,
-};
-
 pub use bootstrap::session_knowledge::{
     SessionKnowledgeEdit, SessionKnowledgeNote, SessionKnowledgeView,
 };

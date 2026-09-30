@@ -77,7 +77,6 @@
   import '/ui/session-context.js';
   import '/ui/session-team.js';
   import '/ui/session-guidance.js';
-  import '/ui/session-work.js';
   import '/ui/session-knowledge.js';
   import '/ui/session-history.js';
   import '/ui/ways-history.js';
@@ -283,7 +282,6 @@
               <ax-session-context id="session-context"></ax-session-context>
               <div class="session-context-tools">
                 <ax-session-team id="session-team"></ax-session-team>
-                <ax-session-work id="session-work"></ax-session-work>
                 <ax-session-knowledge id="session-knowledge"></ax-session-knowledge>
               </div>
               <ax-session-guidance id="session-guidance" hidden></ax-session-guidance>
@@ -2748,7 +2746,6 @@ function bindSessionComponents(s) {
   $('#session-team')?.setAttribute('session', s.id);
   S.session.currentTeam = null;
   void refreshSessionTeamCapabilities(s.id);
-  $('#session-work')?.setAttribute('session', s.id);
   $('#session-knowledge')?.setAttribute('session', s.id);
   const bindings = ['compare', 'attempts'];
   for (const id of bindings) {
@@ -9032,8 +9029,6 @@ function sessionLatticeEvent(d) {
 
 if ($('#cockpit-back')) $('#cockpit-back').addEventListener('click', closeCockpit);
 if ($('#session-send')) $('#session-send').addEventListener('click', activateSessionComposer);
-document.addEventListener('open-session-work-source-turn', event => { $('#session-history')?.dispatchEvent(new CustomEvent('session-turn-open', {detail:event.detail})); });
-document.addEventListener('open-session-work-turn', async event => { if (event.detail.session_id !== S.session.id) return; openModule('trace'); await showCoordinationGraph(event.detail.turn_id); $('#session-lattice-host')?.querySelector('ax-activation-inspector')?.showTurnControls(); });
 customElements.whenDefined('ax-session-guidance').then(() => {
   const guidance = $('#session-guidance');
   guidance.commandHandler = submitCoordinationCommand;

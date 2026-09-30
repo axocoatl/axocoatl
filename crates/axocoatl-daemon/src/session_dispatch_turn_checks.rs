@@ -1,88 +1,36 @@
 //! Host-run checks after a turn's required Agents finish: a Session team's
-//! required checks, and standing work's armed checks until the inbox is
-//! removed. Each command runs between two repository captures of the exact
-//! accepted candidate, and one readiness review records whether all passed.
+//! required checks. Each command runs between two repository captures of the
+//! exact accepted candidate, and one readiness review records whether all
+//! passed.
 use super::*;
-use crate::bootstrap::native_turn::NativeStandingWork;
 use axocoatl_session::execution_content::{
     ActivationRepositorySnapshot, ConditionProcessStatus, RepositorySnapshotPhase,
 };
 use axocoatl_session::turn_checks::{check_definitions, group_of, CheckGroup};
 
-/// Where a turn's host-run checks come from.
-pub(super) enum CheckSource {
-    /// Checks armed on standing work, until the inbox is removed.
-    Standing(Box<NativeStandingWork>),
-    /// A Session team's required checks, as the admitted graph carries them.
-    Required { checks: Vec<Vec<String>> },
-}
-
-impl CheckSource {
-    fn group(&self) -> CheckGroup {
-        match self {
-            Self::Standing(work) => CheckGroup::standing(&work.receipt_id),
-            Self::Required { .. } => CheckGroup::required(),
-        }
-    }
-    fn checks(&self) -> &[Vec<String>] {
-        match self {
-            Self::Standing(work) => &work.required_checks,
-            Self::Required { checks } => checks,
-        }
-    }
-    /// One run per check, epoch and turn; an existing run is reconciled,
-    /// never replayed.
-    fn run_id(
-        &self,
-        turn: &LogicalTurnId,
-        epoch: &ExecutionEpochId,
-        index: usize,
-    ) -> Result<ConditionRunId> {
-        let id = match self {
-            Self::Standing(work) => format!(
-                "standing-{:x}",
-                Sha256::digest(
-                    serde_json::to_vec(&(&work.receipt_id, epoch, index)).map_err(error)?
-                )
-            ),
-            Self::Required { .. } => format!(
-                "required-check-{:x}",
-                Sha256::digest(serde_json::to_vec(&(turn, epoch, index)).map_err(error)?)
-            ),
-        };
-        ConditionRunId::new(id).map_err(error)
-    }
-    /// The grant whose check permission may run this definition now.
-    fn grant(
-        &self,
-        authority: &ControlAuthority,
-        definition: &EvidenceRef,
-        repository: &EvidenceRef,
-    ) -> Result<Option<String>> {
-        match self {
-            Self::Standing(_) => {
-                authority.team_work_condition_grant(definition, repository, now_ms()?)
-            }
-            Self::Required { .. } => {
-                authority.required_check_grant(definition, repository, now_ms()?)
-            }
-        }
-        .map_err(error)
-    }
+/// One run per check, epoch and turn; an existing run is reconciled, never
+/// replayed.
+fn check_run_id(
+    turn: &LogicalTurnId,
+    epoch: &ExecutionEpochId,
+    index: usize,
+) -> Result<ConditionRunId> {
+    ConditionRunId::new(format!(
+        "required-check-{:x}",
+        Sha256::digest(serde_json::to_vec(&(turn, epoch, index)).map_err(error)?)
+    ))
+    .map_err(error)
 }
 
 impl DispatchState {
-    /// The checks this turn runs, if any. Required checks are re-read from
-    /// the admitted graph.
-    pub(super) fn check_source(&self) -> Result<Option<CheckSource>> {
-        if let Some(work) = self.standing_work()? {
-            return Ok(Some(CheckSource::Standing(Box::new(work))));
-        }
+    /// The required checks this turn runs, if any, re-read from the admitted
+    /// graph.
+    pub(super) fn turn_required_checks(&self) -> Result<Option<Vec<Vec<String>>>> {
         let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
         let Some(graph) = snapshot.contract().graph() else {
             return Ok(None);
         };
-        Ok(required_checks(graph, &self.content)?.map(|checks| CheckSource::Required { checks }))
+        required_checks(graph, &self.content)
     }
 }
 
@@ -233,12 +181,11 @@ impl SessionDispatchController {
             {
                 return Ok(false);
             }
-            let Some(source) = state.check_source()? else {
+            let Some(checks) = state.turn_required_checks()? else {
                 return Ok(false);
             };
-            let group = source.group();
-            let checks = source.checks();
-            let definitions = check_definitions(checks).map_err(error)?;
+            let group = CheckGroup::required();
+            let definitions = check_definitions(&checks).map_err(error)?;
             if definitions.is_empty() {
                 return Ok(false);
             }
@@ -382,13 +329,15 @@ impl SessionDispatchController {
                 {
                     continue;
                 }
-                let run_id = source.run_id(snapshot.turn_id(), &epoch, index)?;
+                let run_id = check_run_id(snapshot.turn_id(), &epoch, index)?;
                 // Existing intent means reconcile its real result, never replay.
                 if contract.condition_run(&run_id).is_some() {
                     return Ok(false);
                 }
-                let Some(grant_id) =
-                    source.grant(&state.authority, &definition_ref, &repository)?
+                let Some(grant_id) = state
+                    .authority
+                    .required_check_grant(&definition_ref, &repository, now_ms()?)
+                    .map_err(error)?
                 else {
                     return Ok(false);
                 };
@@ -444,24 +393,17 @@ impl SessionDispatchController {
                     &before.content,
                     &after.content,
                 );
-                let (proof, command_prefix) = match &source {
-                    CheckSource::Standing(work) => (
-                        serde_json::json!({"kind":"standing_candidate_readiness","receipt_id":work.receipt_id,"subject":work.subject,"binding":work.binding,"required_checks":work.required_checks,"activations":activations,"before":before.reference,"after":after.reference,"candidate_sha256":after.content.tree_sha256,"checks":results,"check_candidates":command_candidates,"passed":passed}),
-                        "standing-ready",
-                    ),
-                    CheckSource::Required { checks } => (
-                        serde_json::json!({"kind":"required_check_readiness","turn_id":snapshot.turn_id(),"required_checks":checks,"activations":activations,"before":before.reference,"after":after.reference,"candidate_sha256":after.content.tree_sha256,"checks":results,"check_candidates":command_candidates,"passed":passed}),
-                        "required-check-ready",
-                    ),
-                };
-                let proof = proof.to_string();
+                let proof = serde_json::json!({"kind":"required_check_readiness","turn_id":snapshot.turn_id(),"required_checks":checks,"activations":activations,"before":before.reference,"after":after.reference,"candidate_sha256":after.content.tree_sha256,"checks":results,"check_candidates":command_candidates,"passed":passed}).to_string();
                 if let Some(existing) = contract.current_condition(&condition_id) {
                     if matches!(state.content.resolve_activation_evidence(&existing.evidence).map_err(error)?, ActivationEvidenceContent::Guidance {text} if text == &proof)
                     {
                         return Ok(false);
                     }
                 }
-                let command = format!("{command_prefix}-{:x}", Sha256::digest(proof.as_bytes()));
+                let command = format!(
+                    "required-check-ready-{:x}",
+                    Sha256::digest(proof.as_bytes())
+                );
                 let evidence = state
                     .content
                     .retain_activation_evidence(ActivationEvidenceContent::Guidance { text: proof })

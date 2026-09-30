@@ -1129,7 +1129,7 @@ fn superseded_accepted_generation_cannot_receive_a_recovered_old_pass() {
 }
 
 #[test]
-fn standing_check_read_projection_retains_distinct_process_outcomes_after_reopen() {
+fn check_read_projection_retains_distinct_process_outcomes_after_reopen() {
     let cases = [
         (ConditionProcessStatus::Exited { code: 0 }, "passed"),
         (ConditionProcessStatus::Exited { code: 7 }, "failed"),
@@ -1188,7 +1188,7 @@ fn standing_check_read_projection_retains_distinct_process_outcomes_after_reopen
 }
 
 #[test]
-fn standing_check_read_projection_distinguishes_no_dispatch_from_missing_outcome() {
+fn check_read_projection_distinguishes_no_dispatch_from_missing_outcome() {
     for dispatched in [false, true] {
         let fixture = fixture();
         let prepared = prepare(&fixture).unwrap();

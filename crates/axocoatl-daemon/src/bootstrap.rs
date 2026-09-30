@@ -23,8 +23,6 @@ pub(crate) mod session_graph;
 pub(crate) mod session_knowledge;
 #[path = "bootstrap_session_team.rs"]
 pub(crate) mod session_team;
-#[path = "bootstrap_session_team_work.rs"]
-pub(crate) mod session_team_work;
 #[path = "bootstrap_ways_history.rs"]
 pub(crate) mod ways_history;
 
@@ -3824,8 +3822,6 @@ pub struct AxocoatlDaemon {
     session_sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
     /// Retain canonical and process ownership beyond an external check waiter.
     session_dispatch_lifecycles: Arc<session_dispatch::SessionDispatchRegistry>,
-    session_team_work: StdMutex<axocoatl_session::team_work::TeamWorkInbox>,
-    session_team_work_runner: tokio::sync::Mutex<()>,
     /// Recovery-only primary handles used while resolving an Attempt set after
     /// restart. They must never enter the ordinary Ready fast path because
     /// they intentionally skip project setup.
@@ -5467,33 +5463,6 @@ impl AxocoatlDaemon {
             );
         }
 
-        let work_marker = "team-work.initialized.v1";
-        let work_dir = match secure_data_dir.read_limited(work_marker, 16) {
-            Ok(bytes) if bytes == b"1\n" => secure_data_dir.existing_child("team-work"),
-            Ok(_) => {
-                return Err(DaemonError::SessionConflict(
-                    "Invalid standing work initialization evidence".into(),
-                ))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                secure_data_dir.child("team-work")
-            }
-            Err(error) => return Err(DaemonError::SessionConflict(error.to_string())),
-        }
-        .map_err(|error| DaemonError::SessionConflict(error.to_string()))?;
-        work_dir
-            .restrict_owner_only()
-            .map_err(|error| DaemonError::SessionConflict(error.to_string()))?;
-        work_dir
-            .sync_all()
-            .and_then(|_| secure_data_dir.sync_all())
-            .map_err(|error| DaemonError::SessionConflict(error.to_string()))?;
-        let session_team_work = axocoatl_session::team_work::TeamWorkInbox::open(work_dir.path())
-            .map_err(|error| DaemonError::SessionConflict(error.to_string()))?;
-        secure_data_dir
-            .atomic_write(work_marker, b"1\n")
-            .map_err(|error| DaemonError::SessionConflict(error.to_string()))?;
-
         // 7. Spawn agents (deferred from earlier so the hook registry exists)
         let mut agent_handles = Vec::new();
         for agent_yaml in &config.agents {
@@ -5558,8 +5527,6 @@ impl AxocoatlDaemon {
             run_store,
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             session_dispatch_lifecycles,
-            session_team_work: StdMutex::new(session_team_work),
-            session_team_work_runner: tokio::sync::Mutex::new(()),
             attempt_recovery_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             sandbox_starts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             runtime_admission: Arc::new(tokio::sync::RwLock::new(())),

@@ -90,11 +90,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole-call budget reservations. Onboarding declares credit billing and supplies an
   explicit output limit. Missing final usage remains unknown. BYOK support is deferred;
   the supported account configuration has no connected provider keys.
-- **Standing Session work sources.** Manual events, configured signed webhooks, and
-  completion of a Session in the same Workspace can feed an explicitly armed team.
-  Receipts preserve the original source, candidate, and team/grant revisions. All work
-  shares the approved grant allowance. Required checks are explicit command argument
-  arrays; readiness requires their actual results against the recorded unchanged tree.
+- **Required checks for Session teams.** Team & budget can name commands the host runs
+  in the Session's repository after the required Agents of every native turn finish,
+  each between two repository captures of the accepted candidate and charged to the
+  first required Agent that may use `bash`. A turn completes only when every check
+  passes and the repository is unchanged; a failure leaves it needing attention. The
+  turn's controls show each check's command, state, exit code and output.
 - **Retained Ways decisions.** Native Ways retain bounded candidate Outcomes, Routes,
   diffs, Checks, usage, Judge evidence, the human choice, and cleanup state after Keep
   or finishing without keeping. History storage limits are explicit; capacity failure
@@ -145,9 +146,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   partial output marks where the abandoned attempt ended. A failed activation now
   states its failure class (provider stream, budget, context limit, scope, capture,
   admission) and a suggested next step.
-- **Closed work blocked only by unknown provider usage can be settled.** A person
-  can settle it at its reserved ceiling: every call with unknown usage is charged
-  its full reservation, and the receipt records that decision.
 - **Reviewed native tool iteration.** Native ordinary Agent turns now derive their
   tool-round limit from the reviewed invocation allowance, with a 128-round safety
   ceiling. They no longer stop at the compatibility default of ten rounds while

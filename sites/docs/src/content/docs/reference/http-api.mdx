@@ -104,7 +104,7 @@ Note edits include `id`, `title`, `body`, `kind`, `expected_revision`, `links`, 
 `path`, `sha256`, and optional `symbol`. Model provenance is assigned by the host;
 an API payload cannot claim an arbitrary accepted activation as its origin.
 
-## Native Session controls and standing work
+## Native Session controls
 
 These routes use the same authenticated Session owner as ordinary Send. A preview
 is read-only; Apply binds the reviewed request and exact revisions. Retrying an
@@ -125,36 +125,10 @@ not permission to choose another activation or team.
 | POST | `/api/sessions/{id}/turns/{turn_id}/grants/preview` | Explicit total limits, expiry, delegated operations, graph bounds, and reason |
 | POST | `/api/sessions/{id}/turns/{turn_id}/grants/decide` | `{request, review_digest, approve, reason}`; exact approval or decline |
 | POST | `/api/sessions/{id}/turns/{turn_id}/grants/revoke` | `{grant_id, expected_grant_revision}`; closes new dispatch without undoing started effects |
-| GET | `/api/sessions/{id}/work` | Source bindings and receipts with queued/terminal state, reasons, and checked-tree readiness |
-| POST | `/api/sessions/{id}/work/bindings` | `{binding_id, expected_binding_revision, expected_team_revision, armed, source, event_kind, instruction, required_checks}` |
-| POST | `/api/sessions/{id}/work/bindings/{binding}/manual` | Declared candidate event with exact event/correlation identities and optional expected binding revision |
-| POST | `/api/sessions/{id}/work/bindings/{binding}/webhook` | Exact raw signed event body; also requires ordinary server authentication |
-| POST | `/api/sessions/{id}/work/receipts/{receipt}/run` | Try admission through the ordinary native Session driver; unresolved work stays queued |
-| POST | `/api/sessions/{id}/work/receipts/{receipt}/dismiss` | `{reason}`; retain the dismissal against the exact receipt |
-| POST | `/api/sessions/{id}/work/receipts/{receipt}/settle-at-ceiling` | A person accepts charging closed work's provider calls with unknown usage at their full admitted reservation, releasing the rest of the shared budget. Refused while the turn is open, a tool effect or check outcome is unknown, usage is already measured, or the total would exceed the grant's reviewed limits; repeating it after it succeeded returns the settled view |
 | GET | `/api/sessions/{id}/ways-history` | Retention limits, retained decision records, and deletion tombstones |
 | POST | `/api/sessions/{id}/ways-history/configuration` | `{limits: {version, field_bytes, record_bytes, aggregate_bytes, records, candidates, items_per_field}}`; every numerical limit is explicit |
 | GET | `/api/sessions/{id}/ways-history/{decision}` | Export the retained record and protected patch bodies |
 | DELETE | `/api/sessions/{id}/ways-history/{decision}` | Explicit deletion after runtime cleanup; retains a tombstone |
-
-A work source is `{kind: "manual"}`, `{kind: "signed_webhook", configuration_name}`,
-or `{kind: "session_completion", session_id}`. Session completion sources must share
-the Workspace; the host resolves causation from canonical source history. Manual and
-webhook events carry `{event_id, correlation_id, subject: {kind, reference_id, version},
-evidence_refs, caused_by_turn_id, expected_binding_revision?}`. A payload cannot
-establish verified internal causation. `required_checks` is an array of explicit
-argument arrays, such as `[["npm", "test"]]`. Events and checks share the approved
-team's grant allowance; an event does not refill it.
-
-Each readiness check retains its exact `run_id`, typed `process_status`, effect
-disposition, and bounded output when recorded. Timeout, interruption, launch failure,
-no dispatch, and missing outcomes remain distinct. A stale candidate assessment does
-not change the recorded process result; an explicitly skipped check has no invented
-process result. A successful process exit alone is not a readiness verdict.
-
-Signed bodies are limited to 32 KiB. Supply `x-axocoatl-signature: sha256=<hex>`
-containing the HMAC-SHA256 of the exact body bytes using the named configured webhook
-secret. Do not reserialize a body after signing it.
 
 ## MCP, configured Skills, and event projections
 
@@ -344,7 +318,9 @@ A native turn whose team has required checks also carries `required_checks` in i
 control plane: for each check, in order, its `argv` and the `state` of its latest run
 (`pending`, `passed`, `failed`, `timed_out`, `outcome_unknown` and so on), with
 `exit_code`, `run_id`, `process_status` and bounded `stdout` and `stderr` previews when
-recorded. Its conditions are named `required-check:0` (the capture before),
+recorded. Timeout, interruption, launch failure, no dispatch and a missing outcome stay
+distinct, and a successful exit alone is not a readiness verdict. Its conditions are
+named `required-check:0` (the capture before),
 `required-check:1` to `required-check:n` (the checks), `required-check:n+1` (the capture
 after) and `required-check:ready`; selecting one check in a Continue request also reruns
 both captures and readiness.

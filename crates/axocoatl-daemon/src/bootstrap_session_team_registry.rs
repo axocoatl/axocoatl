@@ -78,30 +78,6 @@ impl SessionDispatchRegistry {
             }),
         }
     }
-    /// Settlement reads the retained current writer under its controller lock.
-    /// Reopening that same component would contend with our own exclusive lease.
-    pub(crate) fn with_session_team_settlement_stores<T>(
-        &self,
-        token: &SessionTeamToken,
-        use_stores: impl FnOnce(
-            &SessionExecutionStore,
-            Option<(
-                &LogicalTurnId,
-                &axocoatl_session::control_authority::ControlAuthority,
-            )>,
-        ) -> Result<T>,
-    ) -> Result<T> {
-        match &token.entry {
-            TeamEntry::Pending(_) => {
-                self.with_session_team_stores(token, |canonical, _, _| use_stores(canonical, None))
-            }
-            TeamEntry::Registered(_) => self.with_session_team_controller(token, |controller| {
-                controller.with_team_work_authority(|canonical, turn_id, authority| {
-                    use_stores(canonical, Some((turn_id, authority)))
-                })
-            }),
-        }
-    }
     pub(crate) fn repeated_session_human_action(
         &self,
         token: &SessionTeamToken,

@@ -100,25 +100,6 @@ already charged. Revocation closes new dispatch.
 Ways decisions appear in History after Keep or no-Keep when native retention was
 configured. See [Ways](/workbench/ways/) for storage, export, and deletion behavior.
 
-## Receive standing work
-
-Open **Work sources** beside **Team & budget** in the Session. Review a standing
-instruction, select a manual source, configured signed webhook, or completion of a
-Session in the same Workspace, and explicitly arm it. Enter required checks as one
-JSON argument array per line, for example `["npm", "test"]`. Without required
-checks, the source cannot establish readiness.
-
-Manual events declare a candidate identity and immutable version. A commit must be
-the full current commit ID from a clean checkout. Build, artifact, and release
-candidate versions must match the captured repository tree SHA-256. A producer's
-label alone is not verification. **Received work** retains event identity, original
-team/source revisions, queue state, and the exact checked-tree readiness evidence.
-
-Events and required checks consume the existing shared lifetime allowance. Review
-or renew authority deliberately when it is exhausted. Queued work can be retried or
-dismissed with a recorded reason; disarming a source prevents new admission without
-rewriting earlier receipts.
-
 ## Legacy request retry
 
 For legacy history, Retry re-sends the request that produced a prior response. It is disabled when

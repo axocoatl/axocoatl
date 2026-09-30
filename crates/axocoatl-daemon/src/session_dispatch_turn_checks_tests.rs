@@ -19,16 +19,6 @@ fn required_checks_follow_canonical_replacement_without_expanding_to_added_agent
     check_frontier(&CheckGroup::required(), true);
 }
 
-#[test]
-fn standing_checks_consume_the_complete_two_agent_accepted_frontier() {
-    check_frontier(&CheckGroup::standing("receipt"), false);
-}
-
-#[test]
-fn standing_checks_follow_canonical_replacement_without_expanding_to_added_agents() {
-    check_frontier(&CheckGroup::standing("receipt"), true);
-}
-
 fn check_frontier(group: &CheckGroup, dynamic: bool) {
     let fixture: serde_json::Value = serde_json::from_str(include_str!("../../axocoatl-session/tests/fixtures/turn_contract/check_only_recovery_preserves_accepted_generations.json")).unwrap();
     let mut begin: TurnContractEnvelope =
@@ -46,7 +36,7 @@ fn check_frontier(group: &CheckGroup, dynamic: bool) {
                 .unwrap(),
         ),
         ExecutionStoreOwner {
-            workspace_id: "standing-checks".into(),
+            workspace_id: "required-checks".into(),
             session_id: begin.session_id.clone(),
         },
     )
