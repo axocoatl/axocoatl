@@ -132,6 +132,7 @@ impl ControlAuthority {
                 .any(|permission| permission.operation == DelegatedOperation::AddAgent)
             || data.grants.iter().any(|item| item.policy.id == grant.id)
             || data.grants.len() >= MAX_GRANTS
+            || !child_within_parent_writes(data, reservation, &grant.profiles[0])
         {
             return Err(AuthorityError::Denied);
         }
@@ -166,6 +167,24 @@ impl ControlAuthority {
             .delegated_from
             .clone())
     }
+}
+
+/// A delegated child may change no path its parent activation could not. The
+/// parent's own durable registration decides, not the supervisor grant.
+fn child_within_parent_writes(
+    data: &AuthorityData,
+    reservation: &DelegatedGrantReservation,
+    child: &ExecutionProfile,
+) -> bool {
+    data.activations
+        .iter()
+        .find(|record| record.activation == reservation.parent_activation)
+        .is_some_and(|parent| {
+            crate::path_scope::write_scope_within(
+                child.write_scope.as_deref(),
+                parent.profile.write_scope.as_deref(),
+            )
+        })
 }
 
 pub(super) fn add_reserved_limits(
@@ -263,6 +282,7 @@ pub(super) fn validate_delegated_records(data: &AuthorityData) -> Result<(), Aut
             || original.expires_at_ms > policy.expires_at_ms
             || original.profiles.len() != 1
             || !policy.profiles.contains(&original.profiles[0])
+            || !child_within_parent_writes(data, reservation, &original.profiles[0])
             || original.profiles[0].definition != reservation.template.definition_id.as_str()
             || !policy
                 .delegation
@@ -403,5 +423,140 @@ mod tests {
             validate_delegated_records(&data).is_err(),
             "another activation cannot supply expansion lineage"
         );
+    }
+
+    #[test]
+    fn delegated_child_cannot_widen_parent_write_scope() {
+        let session = SessionId::new("session").unwrap();
+        let turn = LogicalTurnId::new("turn").unwrap();
+        let activation = ActivationRef {
+            session_id: session.clone(),
+            turn_id: turn.clone(),
+            execution_epoch_id: ExecutionEpochId::new("epoch").unwrap(),
+            node_id: TurnNodeId::new("parent").unwrap(),
+            generation: 1,
+            activation_id: ActivationId::new("parent-activation").unwrap(),
+        };
+        let template = DefinitionSnapshotRef {
+            definition_id: AgentDefinitionId::new("worker").unwrap(),
+            snapshot: EvidenceRef::new("template-evidence").unwrap(),
+        };
+        let scoped = |scope: Option<&[&str]>| ExecutionProfile {
+            definition: "worker".into(),
+            provider: "local".into(),
+            model: "finite".into(),
+            isolation: "in-process".into(),
+            tools: vec![],
+            write_scope: scope
+                .map(|scope| scope.iter().map(|pattern| (*pattern).to_owned()).collect()),
+        };
+        // The supervisor grant lists every child profile; only the parent
+        // activation's own registration limits which one a child may take.
+        let cases = [
+            (scoped(None), false),
+            (scoped(Some(&["src/"])), false),
+            (scoped(Some(&[])), true),
+            (scoped(Some(&["lib/"])), true),
+        ];
+        let mut policy: AuthorityGrant = serde_json::from_value(serde_json::json!({
+            "id":"parent-grant", "revision":1,"issuer_evidence":"human-approval",
+            "holder":"parent","descendants":[],"allow_stop_descendants":false,
+            "profiles":[],
+            "conditions":[],"limits":{"activations":8,"invocations":16,"tokens":1000,"cost_microunits":0},"expires_at_ms":1000,
+            "delegation":{
+                "schema_version":1,"scope":{"session_id":"session","turn_id":"turn","task":"task-evidence","approved_graph":"graph-evidence"},
+                "operations":[{"operation":"add_agent","targets":{"kind":"nodes","nodes":["parent"]}}],
+                "templates":[template],"resource_policy":"resource-evidence",
+                "graph_limits":{"max_nodes":8,"max_edges":8},"required_conditions":[],"completion_criteria":[],"machine_blockers":[],
+                "replay_policy":"require_proved_effect_safety"
+            }
+        })).unwrap();
+        policy.profiles = cases.iter().map(|(profile, _)| profile.clone()).collect();
+        let root = tempfile::tempdir().unwrap();
+        let gate = ControlAuthority::open(root.path(), session, turn).unwrap();
+        {
+            let mut state = gate.lock().unwrap();
+            state.data.canonical_journal_id = Some("journal".into());
+            state.data.grants.push(GrantRecord {
+                policy: policy.clone(),
+                previous_policies: vec![],
+                expansions: vec![],
+                revoked_at_revision: None,
+                usage: GrantUsage::default(),
+                native_delegation: Some("journal".into()),
+                delegated_from: None,
+                standing: None,
+            });
+            state.data.activations.push(ActivationRecord {
+                activation: activation.clone(),
+                grant_id: policy.id.clone(),
+                grant_revision: 1,
+                profile: scoped(Some(&["lib/"])),
+                stopped: false,
+                provider_gated: true,
+                never_dispatched: false,
+            });
+        }
+        let lease = ActivationLease {
+            scope: gate.scope.clone(),
+            activation: activation.clone(),
+            grant_id: policy.id.clone(),
+            grant_revision: 1,
+        };
+        let limits = GrantLimits {
+            activations: 1,
+            invocations: 2,
+            tokens: 200,
+            cost_microunits: 0,
+        };
+        for (index, (profile, allowed)) in cases.into_iter().enumerate() {
+            let reservation = DelegatedGrantReservation {
+                parent_grant_id: policy.id.clone(),
+                parent_grant_revision: 1,
+                parent_activation: activation.clone(),
+                command_id: CommandId::new(format!("add-child-{index}")).unwrap(),
+                template: template.clone(),
+                admission_evidence: EvidenceRef::new(format!("child-admission-{index}")).unwrap(),
+                limits: limits.clone(),
+            };
+            let child = AuthorityGrant {
+                id: format!("child-grant-{index}"),
+                revision: 1,
+                issuer_evidence: reservation.admission_evidence.clone(),
+                holder: TurnNodeId::new(format!("child-{index}")).unwrap(),
+                descendants: vec![],
+                allow_stop_descendants: false,
+                delegation: None,
+                profiles: vec![profile.clone()],
+                conditions: vec![],
+                limits: limits.clone(),
+                expires_at_ms: 1000,
+            };
+            assert_eq!(
+                gate.validate_child_grant(&lease, &child, &reservation, 100)
+                    .is_ok(),
+                allowed,
+                "{:?}",
+                profile.write_scope
+            );
+            // A widened child written by anything else still fails on reload.
+            let mut stored = gate.lock().unwrap().data.clone();
+            stored.grants.push(GrantRecord {
+                policy: child,
+                previous_policies: vec![],
+                expansions: vec![],
+                revoked_at_revision: None,
+                usage: GrantUsage::default(),
+                native_delegation: None,
+                delegated_from: Some(reservation),
+                standing: None,
+            });
+            assert_eq!(
+                validate_delegated_records(&stored).is_ok(),
+                allowed,
+                "{:?}",
+                profile.write_scope
+            );
+        }
     }
 }

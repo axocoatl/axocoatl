@@ -89,6 +89,7 @@ async fn native_fixture_with_invocations(invocations: u32) -> NativeFixture {
                     model: config.model.clone(),
                     isolation: "in-process".into(),
                     tools: vec![],
+                    write_scope: None,
                 };
                 let definition = content
                     .retain_activation_evidence(ActivationEvidenceContent::Definition {

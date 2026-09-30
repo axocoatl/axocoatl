@@ -331,6 +331,7 @@ mod tests {
                     model: "model".into(),
                     isolation: "in-process".into(),
                     tools: vec![],
+                    write_scope: None,
                 },
                 configuration: "{}".into(),
             })
@@ -434,6 +435,7 @@ mod tests {
                     model: "model".into(),
                     isolation: "in-process".into(),
                     tools: vec![],
+                    write_scope: None,
                 },
                 configuration: "{}".into(),
             })

@@ -220,6 +220,10 @@ pub struct AgentConfigYaml {
     pub system_prompt: Option<String>,
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Repository paths this Agent may change. Absent leaves every path open;
+    /// `[]` makes it a read-only helper.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writes: Option<Vec<String>>,
     pub token_budget: Option<TokenBudgetYaml>,
     #[serde(default)]
     pub memory: MemoryConfigYaml,

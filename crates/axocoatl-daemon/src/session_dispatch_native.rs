@@ -153,12 +153,22 @@ impl NativeDefinitionPreparation {
         if revision == 0 {
             return Err(error("definition revision must be positive"));
         }
+        if let Some(writes) = &config.writes {
+            axocoatl_session::path_scope::validate_write_scope(writes).map_err(|reason| {
+                error(format!(
+                    "Agent '{}' has an invalid writes list: {reason}. Use repository paths such \
+                     as lib/ or docs/*.md, or writes: [] for an Agent that changes nothing",
+                    config.id.0
+                ))
+            })?;
+        }
         let profile = ExecutionProfile {
             definition: definition_id.as_str().to_owned(),
             provider: config.provider.clone(),
             model: config.model.clone(),
             isolation: "in-process".into(),
             tools: config.tools.clone(),
+            write_scope: config.writes.clone(),
         };
         Ok(Self {
             config,
@@ -394,6 +404,7 @@ impl NativeActivationFactory {
             || profile.provider != config.provider
             || profile.model != config.model
             || profile.tools != config.tools
+            || profile.write_scope != config.writes
             || profile.isolation != "in-process"
             || serde_json::to_string(&config).map_err(error)? != configuration
         {

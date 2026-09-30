@@ -110,6 +110,7 @@ impl SessionDispatchController {
             || config.provider != profile.provider
             || config.model != profile.model
             || config.tools != profile.tools
+            || config.writes != profile.write_scope
             || provider.provider_id() != profile.provider
             || provider.model_id() != profile.model
         {

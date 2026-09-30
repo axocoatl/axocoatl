@@ -150,6 +150,50 @@ pub fn interpolate_env_vars(input: &str) -> String {
     .to_string()
 }
 
+/// Structural checks on an Agent's `writes:` list. The daemon checks the full
+/// pattern grammar again when it prepares the Agent for a Session.
+fn validate_writes(agent_id: &str, writes: &[String]) -> Result<(), ConfigError> {
+    const MAX_PATTERNS: usize = 64;
+    let field = format!("agents[{agent_id}].writes");
+    if writes.len() > MAX_PATTERNS {
+        return Err(ConfigError::InvalidField {
+            field,
+            value: format!("{} paths", writes.len()),
+            reason: format!("An Agent may name at most {MAX_PATTERNS} paths it can change"),
+            suggestion: "Name directories (lib/) or patterns (*.md) instead of single files"
+                .to_string(),
+        });
+    }
+    for (index, pattern) in writes.iter().enumerate() {
+        let trimmed = pattern.strip_suffix('/').unwrap_or(pattern);
+        let reason = if trimmed.is_empty() {
+            Some("An empty path names nothing")
+        } else if pattern.starts_with('/') || pattern.contains('\\') {
+            Some("Paths are relative to the repository root and use '/'")
+        } else if trimmed
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+        {
+            Some("Paths cannot contain '.', '..' or empty segments")
+        } else if writes[..index].contains(pattern) {
+            Some("This path is listed twice")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(ConfigError::InvalidField {
+                field,
+                value: format!("{pattern:?}"),
+                reason: reason.to_string(),
+                suggestion: "Use repository paths such as lib/, docs/*.md or src/**/*.rs; \
+                             use writes: [] for an Agent that changes nothing"
+                    .to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Validate a parsed config, returning actionable errors.
 ///
 /// Runtime configuration editors must call this before replacing the daemon's
@@ -245,6 +289,10 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
                     ),
                 });
             }
+        }
+
+        if let Some(writes) = &agent.writes {
+            validate_writes(&agent.id, writes)?;
         }
 
         if !seen_ids.insert(agent.id.to_ascii_lowercase()) {
@@ -650,6 +698,50 @@ agents:
         let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
         assert_eq!(config.agents.len(), 1);
         assert_eq!(config.agents[0].model, "llama3");
+    }
+
+    #[test]
+    fn parse_writes_scope() {
+        let yaml = r#"
+agents:
+  - id: open
+    name: "Open"
+    provider: ollama
+    model: llama3
+  - id: scoped
+    name: "Scoped"
+    provider: ollama
+    model: llama3
+    writes: [lib/, "docs/*.md"]
+  - id: helper
+    name: "Helper"
+    provider: ollama
+    model: llama3
+    writes: []
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        assert_eq!(config.agents[0].writes, None);
+        assert_eq!(
+            config.agents[1].writes,
+            Some(vec!["lib/".to_string(), "docs/*.md".to_string()])
+        );
+        assert_eq!(config.agents[2].writes, Some(vec![]));
+        assert_eq!(config.agents[1].to_core().writes, config.agents[1].writes);
+        assert_eq!(config.agents[2].to_core().writes, Some(vec![]));
+        // An Agent without the key writes back without it.
+        let written = serde_yaml::to_string(&config.agents[0]).unwrap();
+        assert!(!written.contains("writes"), "{written}");
+
+        for bad in ["[../outside]", "[/etc]", "[lib/, lib/]", "[\"\"]"] {
+            let yaml = format!(
+                "agents:\n  - id: bad\n    name: Bad\n    provider: ollama\n    model: llama3\n    writes: {bad}\n"
+            );
+            let err = parse_config(&yaml, &PathBuf::from("test.yaml")).unwrap_err();
+            assert!(
+                matches!(err, ConfigError::InvalidField { ref field, .. } if field == "agents[bad].writes"),
+                "{bad}: {err:?}"
+            );
+        }
     }
 
     #[test]

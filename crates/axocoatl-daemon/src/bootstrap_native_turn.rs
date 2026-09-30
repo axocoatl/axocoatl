@@ -484,6 +484,7 @@ pub(super) fn prepare_admission(
                 || config.provider != profile.provider
                 || config.model != profile.model
                 || config.tools != profile.tools
+                || config.writes != profile.write_scope
                 || profile.definition != definition_id.as_str()
                 || profile.isolation != "in-process"
             {

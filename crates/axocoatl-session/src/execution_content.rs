@@ -4419,6 +4419,7 @@ mod tests {
             model: "model".into(),
             isolation: "local".into(),
             tools: vec![],
+            write_scope: None,
         };
         let limits = GrantLimits {
             activations: 2,

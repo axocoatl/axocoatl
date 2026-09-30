@@ -22,6 +22,7 @@ fn profile() -> ExecutionProfile {
         model: "test-model".into(),
         isolation: "session-podman".into(),
         tools: vec!["shell".into(), "read_file".into()],
+        write_scope: None,
     }
 }
 

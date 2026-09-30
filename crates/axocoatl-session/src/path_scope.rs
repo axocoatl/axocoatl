@@ -35,6 +35,47 @@ pub fn validate_pattern(pattern: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Most patterns one write scope may name.
+pub const MAX_WRITE_SCOPE_PATTERNS: usize = 64;
+
+/// A write scope lists the repository paths an Agent may change. An empty
+/// list is a read-only Agent; no list at all (`None` where it is optional)
+/// leaves every path open.
+pub fn validate_write_scope(scope: &[String]) -> Result<(), String> {
+    if scope.len() > MAX_WRITE_SCOPE_PATTERNS {
+        return Err(format!(
+            "a write scope names at most {MAX_WRITE_SCOPE_PATTERNS} paths; this one names {}",
+            scope.len()
+        ));
+    }
+    for (index, pattern) in scope.iter().enumerate() {
+        validate_pattern(pattern)?;
+        if scope[..index].contains(pattern) {
+            return Err(format!("{pattern:?} is listed twice"));
+        }
+    }
+    Ok(())
+}
+
+/// Whether a scope stays inside the scope it is derived from. An unrestricted
+/// parent allows anything; an unrestricted child under a restricted parent is
+/// wider. Otherwise every child pattern must appear literally in the parent's
+/// list, so an empty (read-only) child fits under any parent. Literal
+/// containment is deliberately conservative: `lib/a/` does not fit under
+/// `lib/` even though it names less.
+pub fn write_scope_within(child: Option<&[String]>, parent: Option<&[String]>) -> bool {
+    match (child, parent) {
+        (_, None) => true,
+        (None, Some(_)) => false,
+        (Some(child), Some(parent)) => child.iter().all(|pattern| parent.contains(pattern)),
+    }
+}
+
+/// Whether a scope lets an Agent change the repository-relative `path`.
+pub fn scope_allows(scope: Option<&[String]>, path: &str) -> bool {
+    scope.is_none_or(|scope| scope.iter().any(|pattern| pattern_matches(pattern, path)))
+}
+
 /// Gitignore-flavoured matching. A pattern without `/` matches a file name at
 /// any depth; a pattern with `/` is anchored at the repository root. A trailing
 /// `/` names a directory and everything under it. `**` spans segments, `*` and
@@ -103,5 +144,48 @@ mod tests {
         for bad in ["", "/", "/lib", "../lib", "lib/../x", "a\\b"] {
             assert!(validate_pattern(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn write_scope_nesting_never_widens() {
+        let scope = |patterns: &[&str]| -> Vec<String> {
+            patterns
+                .iter()
+                .map(|pattern| (*pattern).to_owned())
+                .collect()
+        };
+        let lib = scope(&["lib/"]);
+        let lib_and_docs = scope(&["lib/", "docs/*.md"]);
+        let read_only = scope(&[]);
+        // Unrestricted parent: anything fits, including another unrestricted scope.
+        assert!(write_scope_within(None, None));
+        assert!(write_scope_within(Some(&lib), None));
+        // Restricted parent: an unrestricted child is wider.
+        assert!(!write_scope_within(None, Some(&lib)));
+        assert!(!write_scope_within(None, Some(&read_only)));
+        // Read-only fits under anything; nothing but read-only fits under read-only.
+        assert!(write_scope_within(Some(&read_only), Some(&lib)));
+        assert!(write_scope_within(Some(&read_only), Some(&read_only)));
+        assert!(!write_scope_within(Some(&lib), Some(&read_only)));
+        // Literal containment only.
+        assert!(write_scope_within(Some(&lib), Some(&lib_and_docs)));
+        assert!(!write_scope_within(Some(&lib_and_docs), Some(&lib)));
+        assert!(!write_scope_within(Some(&scope(&["src/"])), Some(&lib)));
+        assert!(!write_scope_within(Some(&scope(&["lib/a/"])), Some(&lib)));
+
+        assert!(scope_allows(None, "anything/at/all"));
+        assert!(scope_allows(Some(&lib), "lib/a.js"));
+        assert!(!scope_allows(Some(&lib), "src/a.js"));
+        assert!(!scope_allows(Some(&read_only), "lib/a.js"));
+
+        assert!(validate_write_scope(&read_only).is_ok());
+        assert!(validate_write_scope(&lib_and_docs).is_ok());
+        assert!(validate_write_scope(&scope(&["lib/", "lib/"])).is_err());
+        assert!(validate_write_scope(&scope(&["../x"])).is_err());
+        let wide: Vec<String> = (0..=MAX_WRITE_SCOPE_PATTERNS)
+            .map(|index| format!("dir{index}/"))
+            .collect();
+        assert!(validate_write_scope(&wide).is_err());
+        assert!(validate_write_scope(&wide[..MAX_WRITE_SCOPE_PATTERNS]).is_ok());
     }
 }

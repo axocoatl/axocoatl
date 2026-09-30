@@ -18,6 +18,7 @@ impl AgentConfigYaml {
             system_prompt: self.system_prompt.clone(),
             token_budget: self.token_budget.as_ref().map(|b| b.to_core()),
             tools: self.tools.clone(),
+            writes: self.writes.clone(),
             memory: self.memory.to_core(),
             role: self.role.to_core(),
             sampling: self.sampling.to_core(),
@@ -129,6 +130,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             system_prompt: Some("You are helpful.".to_string()),
             tools: vec!["web_search".to_string()],
+            writes: None,
             token_budget: Some(TokenBudgetYaml {
                 per_execution: 20000,
                 per_call: 8192,

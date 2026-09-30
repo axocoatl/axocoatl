@@ -105,6 +105,7 @@ fn standing_check_authority_follows_only_canonical_replacement_and_survives_reop
             model: "finite".into(),
             isolation: "owned-check".into(),
             tools: vec!["bash".into()],
+            write_scope: None,
         }],
         conditions: vec![],
         limits: GrantLimits {

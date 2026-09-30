@@ -301,7 +301,7 @@ mod execution {
         fn begin_started(&mut self, started: usize) {
             let definition = self.content.retain_activation_evidence(ActivationEvidenceContent::Definition {
                 definition_id: AgentDefinitionId::new("shared-coder").unwrap(), revision:8,
-                profile:ExecutionProfile { definition:"shared-coder".into(), provider:"ollama".into(), model:"local-model".into(), isolation:"podman".into(), tools:vec!["file_read".into()] },
+                profile:ExecutionProfile { definition:"shared-coder".into(), provider:"ollama".into(), model:"local-model".into(), isolation:"podman".into(), tools:vec!["file_read".into()], write_scope: None },
                 configuration:json!({"name":"Recorded coder", "role":"autonomous", "system_prompt":"Review exact inputs", "api_key":"DO-NOT-EXPOSE", "provider":{"token":"DO-NOT-EXPOSE-EITHER"}}).to_string(),
             }).unwrap();
             let nodes = ["a", "b"]

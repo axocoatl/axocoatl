@@ -160,6 +160,7 @@ fn run(f: &mut Fixture, tools: &[&str], repository_recorded: bool) -> Run {
         model: config.model.clone(),
         isolation: "in-process".into(),
         tools: config.tools.clone(),
+        write_scope: None,
     };
     let activation = ActivationRef {
         session_id: canonical.owner().session_id.clone(),

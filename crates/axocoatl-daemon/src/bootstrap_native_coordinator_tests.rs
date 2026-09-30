@@ -46,7 +46,7 @@ async fn coordinator_fixture_with_operations(
             let definition_id=AgentDefinitionId::new(format!("{name}-definition")).unwrap();
             let config=AgentConfig{id:AgentId::new(if role==AgentRole::Coordinator {conversation_id.as_str()}else{"immutable-worker-template"}),role,
                 provider:"ollama".into(),model:"test-model".into(),tools:vec![],sampling:SamplingConfig{max_tokens:Some(128),..Default::default()},..Default::default()};
-            let profile=ExecutionProfile{definition:definition_id.as_str().into(),provider:"ollama".into(),model:"test-model".into(),isolation:"in-process".into(),tools:vec![]};
+            let profile=ExecutionProfile{definition:definition_id.as_str().into(),provider:"ollama".into(),model:"test-model".into(),isolation:"in-process".into(),tools:vec![],write_scope:None};
             let snapshot=content.retain_activation_evidence(ActivationEvidenceContent::Definition{definition_id:definition_id.clone(),revision:1,profile:profile.clone(),configuration:serde_json::to_string(&config).unwrap()}).unwrap().reference().clone();
             content.retain_provider_profile(canonical,&snapshot,"ollama",serde_json::json!({"fixture":"finite local provider; no external model"}).to_string()).unwrap();
             retained.push((DefinitionSnapshotRef{definition_id,snapshot},profile));

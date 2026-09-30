@@ -913,6 +913,7 @@ fn resolved_input_fixture(
         model: "model-a".into(),
         isolation: "local-podman".into(),
         tools: vec!["read_file".into()],
+        write_scope: None,
     };
     let policy = AuthorityGrant {
         id: "supervisor-grant".into(),

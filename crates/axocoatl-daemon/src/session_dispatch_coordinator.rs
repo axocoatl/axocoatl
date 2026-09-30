@@ -170,6 +170,7 @@ impl DispatchState {
                 || config.provider != profile.provider
                 || config.model != profile.model
                 || config.tools != profile.tools
+                || config.writes != profile.write_scope
             {
                 return Err(error("approved Worker differs from its captured profile"));
             }

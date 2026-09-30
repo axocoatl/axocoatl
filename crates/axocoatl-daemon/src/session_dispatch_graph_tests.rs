@@ -7,7 +7,7 @@ fn graph_request(fixture:&InputFixture,id:&str,action:HumanGraphEditAction)->Hum
 }
 fn captured_definition(fixture:&InputFixture,request:&HumanGraphEditRequest)->(DefinitionSnapshotRef,AgentConfig,ExecutionProfile){
  let identity=request.identity().unwrap();let mut config=fixture.child.config.clone();config.id=AgentId::new(format!("dynamic-conversation-{identity}"));config.tools.clear();config.provider="ollama".into();config.sampling.max_tokens=Some(128);
- let definition_id=AgentDefinitionId::new(format!("dynamic-definition-{identity}")).unwrap();let profile=ExecutionProfile{definition:definition_id.as_str().into(),provider:config.provider.clone(),model:config.model.clone(),isolation:"in-process".into(),tools:vec![]};
+ let definition_id=AgentDefinitionId::new(format!("dynamic-definition-{identity}")).unwrap();let profile=ExecutionProfile{definition:definition_id.as_str().into(),provider:config.provider.clone(),model:config.model.clone(),isolation:"in-process".into(),tools:vec![],write_scope:None};
  let mut state=fixture.controller.lock().unwrap();let definition=state.content.retain_activation_evidence(ActivationEvidenceContent::Definition{definition_id:definition_id.clone(),revision:1,profile:profile.clone(),configuration:serde_json::to_string(&config).unwrap()}).unwrap().reference().clone();
  let DispatchState{canonical,content,..}=&mut *state;
  // Controlled provider has finite test bounds and performs no network work.

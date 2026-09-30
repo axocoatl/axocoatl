@@ -82,6 +82,11 @@ pub struct AgentConfig {
     pub token_budget: Option<TokenBudget>,
     /// Tools available to this agent (MCP tool names).
     pub tools: Vec<String>,
+    /// Repository paths this agent may change, as path patterns (`lib/`,
+    /// `*.md`, `docs/**/*.mdx`). `None` leaves every path open; an empty list
+    /// is a read-only helper that is never offered the file-writing tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writes: Option<Vec<String>>,
     /// Memory configuration.
     pub memory: MemoryConfig,
     /// Role in multi-agent orchestration.
@@ -102,6 +107,7 @@ impl Default for AgentConfig {
             system_prompt: None,
             token_budget: None,
             tools: Vec::new(),
+            writes: None,
             memory: MemoryConfig::default(),
             role: AgentRole::default(),
             sampling: SamplingConfig::default(),
@@ -283,6 +289,7 @@ mod tests {
                 overflow_policy: OverflowPolicy::Abort,
             }),
             tools: vec!["web_search".to_string(), "read_file".to_string()],
+            writes: None,
             memory: MemoryConfig {
                 max_session_messages: 50,
                 recall: RecallConfig::default(),
@@ -297,6 +304,28 @@ mod tests {
         assert_eq!(back.id, config.id);
         assert_eq!(back.provider, "anthropic");
         assert_eq!(back.tools.len(), 2);
+    }
+
+    #[test]
+    fn agent_config_without_writes_serializes_unchanged() {
+        let config = AgentConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("writes"), "{json}");
+        assert_eq!(
+            json,
+            r#"{"id":"default","name":"Default Agent","provider":"openai","model":"gpt-4o","system_prompt":null,"token_budget":null,"tools":[],"memory":{"max_session_messages":100,"recall":{"passive_inject":true,"top_k":5,"min_score":0.15},"core":{"blocks":[{"label":"persona","value":"","limit":2000,"shared":false,"description":"Who you are and how you behave."},{"label":"human","value":"","limit":2000,"shared":false,"description":"What you know about the user you serve."},{"label":"project","value":"","limit":3000,"shared":false,"description":"Durable project context, decisions, and conventions."}]}},"role":"Autonomous","sampling":{"temperature":null,"top_p":null,"max_tokens":null,"response_format":null}}"#
+        );
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.writes, None);
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+        let read_only = AgentConfig {
+            writes: Some(vec![]),
+            ..AgentConfig::default()
+        };
+        let json = serde_json::to_string(&read_only).unwrap();
+        assert!(json.contains(r#""writes":[]"#), "{json}");
+        let back: AgentConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.writes, Some(vec![]));
     }
 
     #[test]
