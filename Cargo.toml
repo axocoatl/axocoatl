@@ -17,7 +17,6 @@ members = [
     "examples/memory-recall",
     "examples/multi-provider",
     "examples/crash-recovery",
-    "examples/htn-planner",
     "examples/tool-hooks",
     "examples/mcp-bridge",
     "examples/a2a-server",

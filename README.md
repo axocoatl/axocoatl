@@ -252,7 +252,7 @@ Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
   Native turns use their canonical dependency graph and accepted-generation evidence.
   The coordination crate exposes both signal models to library users.
 - **Coordinator role** — for explicit hierarchical work, an agent with
-  `role: coordinator` decomposes a goal into subtasks (HTN or LLM), assigns each
+  `role: coordinator` decomposes a goal into subtasks with its model, assigns each
   to the first declared worker that can call its required tools, runs them in
   parallel, and synthesizes the results. Internal checkpoints protect the live
   orchestration boundary. On the legacy path, once a Session turn is Completed,
@@ -330,7 +330,6 @@ Every example is runnable with a mock LLM — **no API keys needed** — unless
 noted. See [`examples/`](examples/).
 
 **Coordination & planning**
-- [`htn-planner`](examples/htn-planner) — symbolic HTN decomposition; compound tasks expand via methods and only unresolved frontiers reach the LLM.
 - [`crash-recovery`](examples/crash-recovery) — a standalone example-owned behavior that resumes a multi-step workflow checkpoint without re-running completed steps; this is not the normal Session Coordinator terminal-recovery contract.
 
 **Memory & providers**

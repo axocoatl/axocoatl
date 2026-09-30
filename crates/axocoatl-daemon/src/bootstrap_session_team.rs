@@ -103,7 +103,10 @@ pub(crate) struct ApprovedCoordinatorPolicy {
     pub max_nodes: u32,
     pub max_edges: u32,
     pub resource: ApprovedCoordinatorResource,
-    pub htn_methods_yaml: Option<String>,
+    /// HTN methods, removed in 1.1.0. New approvals write `null`; a value in
+    /// an approval retained by an earlier build still parses and is ignored.
+    #[serde(rename = "htn_methods_yaml")]
+    pub legacy_htn_methods_yaml: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -741,45 +744,6 @@ impl AxocoatlDaemon {
                     adhoc_allowed: worker.adhoc_allowed,
                 });
             }
-            let htn_methods_yaml = if slot.template_id.is_none() && old_policy.is_some() {
-                old_policy.and_then(|old| old.htn_methods_yaml.clone())
-            } else {
-                let parent_template = slot.template_id.as_deref().or_else(|| {
-                    previous_approval.as_ref().and_then(|approval| {
-                        approval
-                            .templates
-                            .iter()
-                            .find(|(id, _)| prior.is_some_and(|entry| entry.slot_id.as_str() == id))
-                            .and_then(|(_, id)| id.as_deref())
-                    })
-                });
-                match parent_template
-                    .and_then(|id| {
-                        self.config
-                            .workflows
-                            .iter()
-                            .find(|workflow| workflow.entry_point.as_deref() == Some(id))
-                    })
-                    .and_then(|workflow| workflow.htn_methods_file.as_deref())
-                {
-                    Some(path) => {
-                        let source = std::fs::read_to_string(path).map_err(|failure| {
-                            team_error(format!(
-                                "Configured Coordinator methods cannot be reviewed: {failure}"
-                            ))
-                        })?;
-                        if source.len() > MAX_CONTRACT_ENVELOPE_BYTES {
-                            return Err(team_error(
-                                "Coordinator methods exceed the approval size bound",
-                            ));
-                        }
-                        axocoatl_coordination::HtnPlanner::from_methods_yaml(&source)
-                            .map_err(team_error)?;
-                        Some(source)
-                    }
-                    None => None,
-                }
-            };
             approved.push((
                 slot.slot_id.clone(),
                 ApprovedCoordinatorPolicy {
@@ -800,7 +764,7 @@ impl AxocoatlDaemon {
                         setup_approved: session.environment.setup_approved,
                         setup_reviewed: session.environment.setup_reviewed,
                     },
-                    htn_methods_yaml,
+                    legacy_htn_methods_yaml: None,
                 },
             ));
         }
@@ -1376,5 +1340,31 @@ mod writes_tests {
         assert!(written.get("writes").is_none(), "{written}");
         let written = serde_json::to_value(&any).unwrap();
         assert_eq!(written.get("writes"), Some(&serde_json::Value::Null));
+    }
+}
+
+#[cfg(test)]
+mod legacy_approval_tests {
+    use super::*;
+
+    /// A Coordinator approval retained by an earlier build may carry HTN
+    /// methods. It still parses, and approvals keep writing the key as null.
+    #[test]
+    fn approval_with_removed_htn_methods_still_parses() {
+        let mut value = serde_json::json!({
+            "workers": [], "operations": [], "max_nodes": 1, "max_edges": 0,
+            "resource": {
+                "session_id": "session", "workspace_id": "workspace",
+                "working_dir": "/work", "environment_generation": 1,
+                "backend": "podman", "network": "none",
+                "require_resource_limits": false, "image": null,
+                "setup_command": null, "setup_approved": false, "setup_reviewed": true
+            },
+            "htn_methods_yaml": "- task_pattern: \"Do the work\"\n  subtasks: []\n"
+        });
+        let mut policy: ApprovedCoordinatorPolicy = serde_json::from_value(value.clone()).unwrap();
+        policy.legacy_htn_methods_yaml = None;
+        value["htn_methods_yaml"] = serde_json::Value::Null;
+        assert_eq!(serde_json::to_value(&policy).unwrap(), value);
     }
 }

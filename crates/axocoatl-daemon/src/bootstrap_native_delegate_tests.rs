@@ -1,8 +1,8 @@
 //! Actual owned native Begin -> lead Agent -> `delegate` -> same-driver helper.
-//! A Coordinator template runs through the same lead path; its HTN methods are
-//! not used on the native path. The finite local test providers report only
-//! deterministic synthetic usage; this fixture is not a claim about an external
-//! model or repository execution.
+//! A Coordinator template runs through the same lead path; HTN methods retained
+//! in an earlier build's approval are ignored. The finite local test providers
+//! report only deterministic synthetic usage; this fixture is not a claim about
+//! an external model or repository execution.
 use super::*;
 use crate::bootstrap::session_team::{ApprovedCoordinatorPolicy, ApprovedCoordinatorResource};
 use crate::session_dispatch::NativeCoordinatorWorker;
@@ -50,7 +50,7 @@ struct LeadTemplate {
     tools: Vec<String>,
     invocations: u32,
     operations: Vec<DelegatedOperation>,
-    htn_methods_yaml: Option<String>,
+    legacy_htn_methods_yaml: Option<String>,
 }
 impl LeadTemplate {
     fn autonomous() -> Self {
@@ -59,7 +59,7 @@ impl LeadTemplate {
             tools: vec![],
             invocations: 20,
             operations: vec![DelegatedOperation::AddAgent],
-            htn_methods_yaml: None,
+            legacy_htn_methods_yaml: None,
         }
     }
     /// A lead that can read the repository but not change it or run
@@ -84,7 +84,7 @@ impl LeadTemplate {
                 DelegatedOperation::RetryActivation,
                 DelegatedOperation::FinishNormally,
             ],
-            htn_methods_yaml: Some(
+            legacy_htn_methods_yaml: Some(
                 r#"
 - task_pattern: "Do the work"
   preconditions: []
@@ -211,7 +211,7 @@ async fn lead_fixture_as(
                 operations: lead.operations.clone(),
                 max_nodes: 8,
                 max_edges: 0,
-                htn_methods_yaml: lead.htn_methods_yaml.clone(),
+                legacy_htn_methods_yaml: lead.legacy_htn_methods_yaml.clone(),
                 resource: ApprovedCoordinatorResource {
                     session_id: session_id.as_str().into(),
                     workspace_id: metadata.workspace_id.clone(),
@@ -1305,7 +1305,7 @@ async fn coordinator_slot_runs_as_a_lead_that_reuses_one_helper_template_for_dis
         "{:?}",
         outcome.snapshot.contract()
     );
-    // The approved HTN methods are not planned: the Coordinator template
+    // The retained HTN methods are ignored: the Coordinator template
     // streams as a lead, is offered delegate, and spends one round per task.
     {
         let requests = scenario.lead_requests.lock().unwrap();

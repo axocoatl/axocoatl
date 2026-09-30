@@ -783,6 +783,30 @@ agents:
     }
 
     #[test]
+    fn removed_htn_methods_file_still_parses_so_it_can_be_reported() {
+        let yaml = r#"
+agents:
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: llama3
+    role: coordinator
+workflows:
+  - id: wf
+    name: "WF"
+    agents: [lead]
+    entry_point: lead
+    htn_methods_file: methods.yaml
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        // A 1.0 config that still sets it keeps loading; the daemon warns.
+        assert_eq!(
+            config.workflows[0].htn_methods_file.as_deref(),
+            Some("methods.yaml")
+        );
+    }
+
+    #[test]
     fn worker_with_depends_on_rejected() {
         let yaml = r#"
 agents:

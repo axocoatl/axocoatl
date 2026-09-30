@@ -352,13 +352,17 @@ fn default_recall_min_score() -> f32 {
 }
 
 /// Workflow configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkflowConfigYaml {
     pub id: String,
     pub name: String,
     #[serde(default)]
     pub agents: Vec<String>,
     pub entry_point: Option<String>,
+    /// Removed in 1.1.0. Still read so the daemon can warn that it is ignored
+    /// instead of dropping a 1.0 key silently; a Coordinator decomposes with
+    /// its model.
+    #[serde(default)]
     pub htn_methods_file: Option<String>,
 }
 

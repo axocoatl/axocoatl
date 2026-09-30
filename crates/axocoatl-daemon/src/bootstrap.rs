@@ -5009,6 +5009,15 @@ impl AxocoatlDaemon {
                 "config `hooks:` is experimental and not yet active; only the built-in MCP approval hook runs"
             );
         }
+        for workflow in &config.workflows {
+            if workflow.htn_methods_file.is_some() {
+                tracing::warn!(
+                    workflow = %workflow.id,
+                    "htn_methods_file was removed in 1.1.0 and is ignored: a Coordinator \
+                     decomposes its task with its model"
+                );
+            }
+        }
 
         // 8. Set up the event feed used by Skills, Automation triggers,
         //    webhooks, the recent-events API, and compatibility event frames.
@@ -5844,7 +5853,6 @@ impl AxocoatlDaemon {
     #[allow(clippy::too_many_arguments)]
     fn build_coordinator_behavior(
         agent_yaml: &axocoatl_config::AgentConfigYaml,
-        runtime_id: &str,
         config: &AxocoatlConfig,
         provider_registry: &ProviderRegistry,
         provider: Arc<dyn axocoatl_llm::LlmProvider>,
@@ -5925,34 +5933,7 @@ impl AxocoatlDaemon {
                 worker.id.clone(),
             );
         }
-        coordinator = coordinator.with_shared_blocks(shared_blocks);
-
-        // Load HTN decomposition methods from this coordinator's workflow, if
-        // declared. A missing/invalid file remains a non-fatal LLM fallback.
-        if let Some(path) = config
-            .workflows
-            .iter()
-            .find(|workflow| workflow.entry_point.as_deref() == Some(agent_yaml.id.as_str()))
-            .and_then(|workflow| workflow.htn_methods_file.as_deref())
-        {
-            match std::fs::read_to_string(path)
-                .map_err(|error| error.to_string())
-                .and_then(|source| axocoatl_coordination::HtnPlanner::from_methods_yaml(&source))
-            {
-                Ok(planner) => {
-                    tracing::info!(agent = %runtime_id, file = %path, "Loaded HTN methods");
-                    coordinator = coordinator.with_htn_methods(planner);
-                }
-                Err(error) => tracing::warn!(
-                    agent = %runtime_id,
-                    file = %path,
-                    %error,
-                    "HTN methods unavailable; coordinator uses LLM decomposition"
-                ),
-            }
-        }
-
-        Ok(coordinator)
+        Ok(coordinator.with_shared_blocks(shared_blocks))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5991,7 +5972,6 @@ impl AxocoatlDaemon {
             if matches!(agent_config.role, AgentRole::Coordinator) {
                 Box::new(Self::build_coordinator_behavior(
                     agent_yaml,
-                    agent_yaml.id.as_str(),
                     config,
                     provider_registry,
                     provider,
@@ -23458,7 +23438,6 @@ trap - 0 1 2 15
             }
             Box::new(Self::build_coordinator_behavior(
                 agent_yaml,
-                scoped_id,
                 &self.config,
                 &self.provider_registry,
                 provider,

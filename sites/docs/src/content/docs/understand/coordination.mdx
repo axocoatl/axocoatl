@@ -36,8 +36,8 @@ it does not replace the future-team configuration.
 
 An Agent whose Team & budget approval names Worker templates as helpers gets a
 `delegate` tool. A Coordinator template must have helpers and runs the same way in a
-native Session; its HTN methods are not used there. Each call starts one helper in
-its own conversation with only the Session's request and the task the lead wrote, and
+native Session. Each call starts one helper in its own conversation with only the
+Session's request and the task the lead wrote, and
 reserves the helper's approved limits from the lead's shared allowance. A helper is not
 started when that reservation would leave the lead too little to read its answer. Helpers
 whose templates can write files or run commands are refused for now. The lead waits for the
@@ -115,10 +115,9 @@ In a legacy Session, an Agent with `role: coordinator` handles one execution hie
 3. spawn selected worker Agents and run independent work in parallel;
 4. join their outcomes and synthesize one result.
 
-If the configured workflow supplies `htn_methods_file`, a symbolic HTN planner
-handles covered decomposition and leaves unresolved frontiers to the model.
-Without that file, decomposition is model-driven. HTN is opt-in; worker
-assignment and execution are the coordinator behavior.
+The model decomposes the goal, and each subtask names the tools it needs. A
+workflow's `htn_methods_file` was removed in 1.1.0 with the symbolic HTN planner;
+the daemon warns and ignores it.
 
 Declared Workers resolve their own provider/model/fallback route, budget, sampling, exact tool
 policy, hooks, and Session-scoped Tier 1–4 memory/checkpoints beneath the Coordinator identity.
@@ -141,7 +140,7 @@ run semantic auto-store, daily-log archive writes, personal/shared core edits, o
 consolidation during the turn. That restriction also applies to Completed work until these durable
 tiers support causal transactional promotion.
 
-Decomposition, unresolved HTN frontiers, and synthesis are checked against the exact
+Decomposition and synthesis are checked against the exact
 configured model window before dispatch. If older context must be reduced, Axocoatl omits only
 completed User/plain-Assistant text at User boundaries. System messages, the current request
 suffix, attachments, and canonical Session History remain intact. This is bounded request-local

@@ -513,7 +513,7 @@ mod tests {
             name: id.into(),
             agents: agents.iter().map(|s| s.to_string()).collect(),
             entry_point: agents.first().map(|s| s.to_string()),
-            htn_methods_file: None,
+            ..Default::default()
         }
     }
 

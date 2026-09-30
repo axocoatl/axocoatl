@@ -297,7 +297,6 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axocoatl-config",
- "axocoatl-coordination",
  "axocoatl-core",
  "axocoatl-llm",
  "axocoatl-memory",
@@ -359,13 +358,10 @@ dependencies = [
 name = "axocoatl-coordination"
 version = "1.1.0"
 dependencies = [
- "async-trait",
  "serde",
  "serde_json",
- "serde_yaml",
  "thiserror 2.0.20",
  "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -2336,16 +2332,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest",
-]
-
-[[package]]
-name = "htn-planner"
-version = "0.1.1"
-dependencies = [
- "async-trait",
- "axocoatl-coordination",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

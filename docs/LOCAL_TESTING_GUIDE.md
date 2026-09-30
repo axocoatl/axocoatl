@@ -209,7 +209,7 @@ cargo test -p axocoatl-coordination
 cargo test -p axocoatl-isolation
 ```
 
-The coordination package tests its event feed and HTN primitives.
+The coordination package tests its event feed and turn scheduling.
 
 ## Quick reference
 

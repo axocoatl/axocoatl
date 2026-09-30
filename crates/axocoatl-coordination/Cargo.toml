@@ -10,17 +10,14 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
-description = "Event lattice, HTN planning and turn scheduling for Axocoatl multi-agent systems"
+description = "Event lattice and turn scheduling for Axocoatl multi-agent systems"
 
 [dependencies]
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
-tracing = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
-async-trait = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

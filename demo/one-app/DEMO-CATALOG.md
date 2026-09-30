@@ -78,7 +78,7 @@ speculative Showcase cards.
 
 ## Deliberate non-films
 
-A2A, raw webhooks, HTN primitives, and tool-hook internals are legitimate
+A2A, raw webhooks, and tool-hook internals are legitimate
 technical capabilities, but they do not yet have a clear first-party journey in
 the browser workbench. They should be demonstrated in documentation or runnable
 examples until a user can discover and complete them in `/`.

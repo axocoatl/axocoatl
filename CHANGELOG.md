@@ -70,10 +70,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   later requests until the context runs short. Helpers whose templates can write files or
   run commands are refused for now.
   A Coordinator template in a native Session team runs as such a lead over its approved
-  Worker templates; its HTN methods are not used there. Legacy Sessions keep the
-  Coordinator's own decomposition. The Agent graph draws a "delegated" edge from a
-  lead to each helper, animated while the helper runs, and the control-plane read
-  reports it as a `delegated_by` edge.
+  Worker templates. Legacy Sessions keep the Coordinator's own decomposition. The Agent
+  graph draws a "delegated" edge from a lead to each helper, animated while the helper
+  runs, and the control-plane read reports it as a `delegated_by` edge.
 - **Reviewed partial finish.** Native cooperative turns can be finished partially
   with explicit human confirmation of selected accepted results, work to stop,
   never-started work, and missing checks. Safe settlement and usage evidence remain
@@ -236,6 +235,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   human controls. Stored records from the tool still load: a call whose return was lost
   stays unknown, an accepted Agent revision that was never applied is marked failed, and
   retained grant proposals still appear with the turn's grants.
+- The Coordinator's symbolic HTN planner. A Coordinator always decomposes its
+  task with its model; a workflow's `htn_methods_file` is ignored with a
+  warning. The `HtnPlanner`, `FrontierResolver` and `LlmFrontierResolver`
+  library types and the `htn-planner` example are gone.
 
 ## [1.0.1] — unpublished draft
 

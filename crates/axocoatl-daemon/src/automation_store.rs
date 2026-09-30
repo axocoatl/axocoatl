@@ -799,7 +799,7 @@ mod tests {
             name: "Review from YAML".into(),
             agents: vec!["coder".into()],
             entry_point: Some("coder".into()),
-            htn_methods_file: None,
+            ..Default::default()
         });
         assert!(store.seed_from_legacy_if_empty(&first).unwrap());
 
@@ -815,8 +815,7 @@ mod tests {
                 id: "late".into(),
                 name: "Should not appear".into(),
                 agents: vec!["coder".into()],
-                entry_point: None,
-                htn_methods_file: None,
+                ..Default::default()
             });
         assert!(!store.seed_from_legacy_if_empty(&changed_yaml).unwrap());
         assert_eq!(store.get("review").unwrap().name, "Edited in Settings");
@@ -833,7 +832,7 @@ mod tests {
             name: "Review from YAML".into(),
             agents: vec!["coder".into()],
             entry_point: Some("coder".into()),
-            htn_methods_file: None,
+            ..Default::default()
         });
 
         let mut first_boot = AutomationStore::open(&p).unwrap();

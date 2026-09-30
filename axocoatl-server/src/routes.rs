@@ -7336,14 +7336,13 @@ mod tests {
                 name: "Z team".to_string(),
                 agents: vec!["reviewer".to_string()],
                 entry_point: Some("reviewer".to_string()),
-                htn_methods_file: None,
+                ..Default::default()
             },
             axocoatl_config::WorkflowConfigYaml {
                 id: "a-team".to_string(),
                 name: "A team".to_string(),
                 agents: vec!["planner".to_string(), "builder".to_string()],
-                entry_point: None,
-                htn_methods_file: None,
+                ..Default::default()
             },
         ];
 

@@ -319,7 +319,6 @@ workflows:
     name: Review
     agents: [reviewer, writer]
     entry_point: reviewer
-    htn_methods_file: null
 
 schedules:
   - id: review-interval
@@ -345,6 +344,7 @@ Proactive trigger types are `schedule` with `every`, or `on_event` with
 file does not exist. Once created, Settings/API records are authoritative for
 Automations. `workflows` still supplies config-owned Session team selections;
 editing an Automation does not edit that roster or a native Session's applied team.
+A workflow's `htn_methods_file` was removed in 1.1.0; the daemon warns and ignores it.
 
 ## Web search and consolidation
 

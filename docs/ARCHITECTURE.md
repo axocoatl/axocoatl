@@ -812,7 +812,7 @@ the process-wide threshold counter; the daemon warns when a config still sets th
 orders one turn's Agents by exact named dependencies and has no thresholds or decay.
 
 The remaining reads of legacy `workflows:` are intentional: Lattice-session
-membership, coordinator worker/HTN selection, validation, and first-boot
+membership, coordinator worker selection, validation, and first-boot
 Automation migration. Legacy `schedules:` and `proactive:` records are validation
 and first-boot migration inputs only. None of these sections forms a parallel
 manual, scheduled, or event-triggered runtime after `AutomationStore` exists.
@@ -822,14 +822,12 @@ manual, scheduled, or event-triggered runtime after `AutomationStore` exists.
 Separately, an agent can take the **coordinator** role (`role: coordinator`)
 for explicit hierarchical decomposition in a legacy Session. A native Session team
 runs a Coordinator template as a `DefaultAgentBehavior` lead instead: its approved
-Worker templates are reachable only through the `delegate` tool, and its HTN methods
-are not used. Each legacy coordination pass (`CoordinatorBehavior`):
+Worker templates are reachable only through the `delegate` tool. Each legacy
+coordination pass (`CoordinatorBehavior`):
 
-1. **Decompose** the goal into subtasks. With HTN methods configured, planning
-   is symbolic — an `HtnPlanner` expands compound tasks via its methods and an
-   `LlmFrontierResolver` resolves only the frontiers the methods don't cover.
-   Without methods, the LLM decomposes the whole goal. Each subtask carries the
-   tools it needs.
+1. **Decompose** the goal into subtasks with the model. Each subtask carries the
+   tools it needs. The symbolic HTN planner was removed in 1.1.0; the daemon
+   warns when a workflow still sets `htn_methods_file` and ignores it.
 2. **Assign** each subtask to the **first declared worker**, in declaration
    order, whose callable tools cover the subtask's required tools. If no pooled
    worker can cover a subtask's tools, an ad-hoc worker is spawned with exactly
@@ -856,8 +854,7 @@ marks an orphaned running turn Interrupted, and Completed, Cancelled, Failed, or
 Interrupted projection clears private orchestration state. The next user turn
 decomposes fresh. Workers are always torn down after a pass — on success and on
 every error path — so no actor or task leaks, and a fully failed worker set
-surfaces an error rather than a hollow result. The underlying primitives
-(`axocoatl-coordination`: lattice, HTN) are independently tested.
+surfaces an error rather than a hollow result.
 
 ## Workspace knowledge
 
@@ -1265,7 +1262,7 @@ Report security issues per [SECURITY.md](../SECURITY.md).
 
 `axocoatl-core` (types) · `axocoatl-token` (budgets) · `axocoatl-llm*`
 (providers) · `axocoatl-config` · `axocoatl-actor` (runtime) ·
-`axocoatl-memory` · `axocoatl-coordination` (lattice/HTN) ·
+`axocoatl-memory` · `axocoatl-coordination` (event lattice, turn scheduling) ·
 `axocoatl-graph` · `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` ·
 `axocoatl-isolation` (Podman sandbox) · `axocoatl-daemon` · `axocoatl-server` ·
 `axocoatl-cli`.
