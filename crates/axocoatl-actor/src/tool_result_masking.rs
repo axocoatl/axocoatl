@@ -9,6 +9,7 @@
 use std::collections::BTreeSet;
 
 use axocoatl_core::{ChatMessage, MessageContent, MessageRole};
+use axocoatl_token::TokenCounter;
 
 /// Results shorter than this stay as they are: masking them saves little and
 /// loses the answer.
@@ -43,13 +44,48 @@ impl StaleToolResultMasking {
     /// Mask tool results that come before the last `keep_rounds` assistant
     /// tool-call rounds. Returns how many results were masked.
     pub(crate) fn apply(&self, messages: &mut [ChatMessage]) -> usize {
-        // The cutoff moves in whole steps of `keep_rounds`, so the request
-        // prefix stays byte-identical for that many rounds and providers can
-        // reuse their prompt cache; between `keep_rounds` and twice that many
-        // latest rounds stay whole.
         let rounds = tool_rounds(messages);
+        let stale = self.most_stale(rounds.len());
+        self.mask_before(messages, &rounds, stale, MIN_MASKED_CHARS, false)
+    }
+
+    /// The normal pass's furthest cutoff. It moves in whole steps of
+    /// `keep_rounds`, so the request prefix stays byte-identical for that many
+    /// rounds and providers can reuse their prompt cache; between
+    /// `keep_rounds` and twice that many latest rounds stay whole.
+    fn most_stale(&self, rounds: usize) -> usize {
         let keep = self.keep_rounds;
-        let stale = (rounds.len().saturating_sub(keep) / keep) * keep;
+        (rounds.saturating_sub(keep) / keep) * keep
+    }
+
+    /// The normal pass for a model with a known context: mask only as many of
+    /// the oldest rounds as needed for `messages` to count at most `target`,
+    /// so a small model keeps what it just read while there is room. The
+    /// cutoff still moves in whole steps of `keep_rounds` (prefix-cache
+    /// reuse) and never beyond `apply`'s. Returns how many values were masked.
+    pub(crate) fn apply_by_pressure(
+        &self,
+        messages: &mut [ChatMessage],
+        counter: &dyn TokenCounter,
+        target: usize,
+    ) -> usize {
+        let rounds = tool_rounds(messages);
+        let most = self.most_stale(rounds.len());
+        let mut total = counter.count_messages(messages);
+        let mut stale = 0;
+        while stale < most && total > target {
+            let next = stale + self.keep_rounds;
+            let start = if stale == 0 { 0 } else { rounds[stale] };
+            for message in &messages[start..rounds[next]] {
+                let mut masked = message.clone();
+                if self.mask_message(&mut masked, MIN_MASKED_CHARS, false) > 0 {
+                    total = total
+                        .saturating_sub(message_tokens(counter, message))
+                        .saturating_add(message_tokens(counter, &masked));
+                }
+            }
+            stale = next;
+        }
         self.mask_before(messages, &rounds, stale, MIN_MASKED_CHARS, false)
     }
 
@@ -63,13 +99,17 @@ impl StaleToolResultMasking {
     }
 
     /// Last resort before a request would fail for its context: remove the
-    /// Agent's own earlier tool rounds (each call with its results, so the
-    /// conversation stays well formed) except the latest `keep` rounds, and
-    /// say so in one line. A person's messages within the turn are kept.
-    /// Returns how many rounds were removed.
-    pub(crate) fn drop_stale_rounds(&self, messages: &mut Vec<ChatMessage>, keep: usize) -> usize {
+    /// Agent's oldest `count` tool rounds (each call with its results, so the
+    /// conversation stays well formed; never the latest round) and say so in
+    /// one line. A person's messages within the span are kept. Returns how
+    /// many rounds were removed.
+    pub(crate) fn drop_oldest_rounds(
+        &self,
+        messages: &mut Vec<ChatMessage>,
+        count: usize,
+    ) -> usize {
         let rounds = tool_rounds(messages);
-        let dropped = rounds.len().saturating_sub(keep.max(1));
+        let dropped = count.min(rounds.len().saturating_sub(1));
         if dropped == 0 {
             return 0;
         }
@@ -91,6 +131,44 @@ impl StaleToolResultMasking {
         dropped
     }
 
+    /// How many more of the oldest tool rounds `drop_oldest_rounds` must
+    /// remove for `messages` to count at most `target`: every message a
+    /// round carries counts, including the Agent's own text, which masking
+    /// never shortens. Keeps at least the latest round.
+    pub(crate) fn rounds_to_drop(
+        &self,
+        messages: &[ChatMessage],
+        counter: &dyn TokenCounter,
+        target: usize,
+    ) -> usize {
+        let rounds = tool_rounds(messages);
+        if rounds.len() < 2 {
+            return 0;
+        }
+        // The dropped-rounds note replaces what is removed.
+        let note = message_tokens(
+            counter,
+            &ChatMessage::assistant(format!(
+                "[{} of my earlier tool rounds in this task were removed to fit the context. \
+                 Changes I made are still in the files; read again what I need.]",
+                rounds.len()
+            )),
+        );
+        let mut total = counter.count_messages(messages).saturating_add(note);
+        for count in 1..rounds.len() {
+            total = messages[rounds[count - 1]..rounds[count]]
+                .iter()
+                .filter(|message| message.role != MessageRole::User)
+                .fold(total, |total, message| {
+                    total.saturating_sub(message_tokens(counter, message))
+                });
+            if total <= target {
+                return count;
+            }
+        }
+        rounds.len() - 1
+    }
+
     /// Mask everything before `rounds[stale]` at least `min_chars` long.
     fn mask_before(
         &self,
@@ -103,55 +181,68 @@ impl StaleToolResultMasking {
         if stale == 0 {
             return 0;
         }
+        let cutoff = rounds[stale];
+        messages[..cutoff]
+            .iter_mut()
+            .map(|message| self.mask_message(message, min_chars, tight))
+            .sum()
+    }
+
+    /// Mask one message's tool output (or long call arguments) at least
+    /// `min_chars` long. Returns how many values were masked.
+    fn mask_message(&self, message: &mut ChatMessage, min_chars: usize, tight: bool) -> usize {
         let exempt = |name: &str| {
             self.exempt.contains(name) || (!tight && self.kept_until_tight.contains(name))
         };
-        let cutoff = rounds[stale];
-        let mut masked = 0;
-        for message in &mut messages[..cutoff] {
-            // The model's own earlier calls re-send their arguments too; a
-            // whole-file write repeats the file on every round. Long string
-            // arguments are elided the same way; the call's name, id and
-            // argument keys stay, so the replay remains a well-formed call.
-            // A provider that replays its own record of the turn (Anthropic
-            // content blocks, Gemini parts) checks the calls against it, so a
-            // message carrying such metadata keeps its arguments.
-            if message.role == MessageRole::Assistant {
-                if message
-                    .tool_calls
-                    .iter()
-                    .all(|call| call.provider_metadata.is_empty())
-                {
-                    for call in &mut message.tool_calls {
-                        if !exempt(&call.name) {
-                            masked += elide_long_strings(&mut call.arguments, min_chars);
-                        }
+        // The model's own earlier calls re-send their arguments too; a
+        // whole-file write repeats the file on every round. Long string
+        // arguments are elided the same way; the call's name, id and
+        // argument keys stay, so the replay remains a well-formed call.
+        // A provider that replays its own record of the turn (Anthropic
+        // content blocks, Gemini parts) checks the calls against it, so a
+        // message carrying such metadata keeps its arguments.
+        if message.role == MessageRole::Assistant {
+            let mut masked = 0;
+            if message
+                .tool_calls
+                .iter()
+                .all(|call| call.provider_metadata.is_empty())
+            {
+                for call in &mut message.tool_calls {
+                    if !exempt(&call.name) {
+                        masked += elide_long_strings(&mut call.arguments, min_chars);
                     }
                 }
-                continue;
             }
-            if message.role != MessageRole::Tool {
-                continue;
-            }
-            let name = message.name.as_deref().unwrap_or("tool");
-            if exempt(name) {
-                continue;
-            }
-            let MessageContent::Text(text) = &message.content else {
-                continue;
-            };
-            let chars = text.chars().count();
-            if chars < min_chars || text.starts_with("[earlier ") {
-                continue;
-            }
-            message.content = MessageContent::Text(format!(
-                "[earlier {name} output ({chars} characters) removed to save context; \
-                 run it again, narrower, if you still need it]"
-            ));
-            masked += 1;
+            return masked;
         }
-        masked
+        if message.role != MessageRole::Tool {
+            return 0;
+        }
+        let name = message.name.as_deref().unwrap_or("tool");
+        if exempt(name) {
+            return 0;
+        }
+        let MessageContent::Text(text) = &message.content else {
+            return 0;
+        };
+        let chars = text.chars().count();
+        if chars < min_chars || text.starts_with("[earlier ") {
+            return 0;
+        }
+        message.content = MessageContent::Text(format!(
+            "[earlier {name} output ({chars} characters) removed to save context; \
+             run it again, narrower, if you still need it]"
+        ));
+        1
     }
+}
+
+/// One message's share of a request count.
+fn message_tokens(counter: &dyn TokenCounter, message: &ChatMessage) -> usize {
+    counter
+        .count_messages(std::slice::from_ref(message))
+        .saturating_sub(counter.count_messages(&[]))
 }
 
 /// The assistant tool-call rounds, by message index.
@@ -366,7 +457,7 @@ mod tests {
         assert!((0..4).all(|index| text(&messages[2 + 2 * index])
             .starts_with("[earlier delegate output (800 characters)")));
         assert_eq!(text(&messages[10]), long, "exempt tools stay whole");
-        assert_eq!(masking.drop_stale_rounds(&mut messages, 2), 4);
+        assert_eq!(masking.drop_oldest_rounds(&mut messages, 4), 4);
         assert!(messages
             .iter()
             .all(|message| message.tool_call_id.as_deref() != Some("a")));
@@ -381,7 +472,7 @@ mod tests {
         messages.extend(round("c", "read_file", "three"));
         messages.extend(round("d", "read_file", "four"));
         let masking = StaleToolResultMasking::new(3, []);
-        assert_eq!(masking.drop_stale_rounds(&mut messages, 2), 2);
+        assert_eq!(masking.drop_oldest_rounds(&mut messages, 2), 2);
         let roles: Vec<_> = messages
             .iter()
             .map(|message| message.role.clone())
@@ -402,7 +493,108 @@ mod tests {
         assert!(text(&messages[2]).starts_with("[2 of my earlier tool rounds"));
         assert_eq!(messages[4].tool_calls[0].id, "c");
         assert_eq!(messages[5].tool_call_id.as_deref(), Some("c"));
-        assert_eq!(masking.drop_stale_rounds(&mut messages, 2), 0);
+        // The latest round always stays.
+        assert_eq!(masking.drop_oldest_rounds(&mut messages, 9), 1);
+        assert_eq!(masking.drop_oldest_rounds(&mut messages, 9), 0);
+        assert_eq!(messages.last().unwrap().tool_call_id.as_deref(), Some("d"));
+    }
+
+    /// A quarter token per character plus a small per-message overhead, with
+    /// tool calls counted like the real counter.
+    struct QuarterCounter;
+    impl TokenCounter for QuarterCounter {
+        fn count_text(&self, text: &str) -> usize {
+            text.chars().count() / 4
+        }
+        fn count_messages(&self, messages: &[ChatMessage]) -> usize {
+            3 + messages
+                .iter()
+                .map(|message| {
+                    4 + self.count_text(message.text_content().unwrap_or(""))
+                        + if message.tool_calls.is_empty() {
+                            0
+                        } else {
+                            self.count_text(&serde_json::to_string(&message.tool_calls).unwrap())
+                        }
+                })
+                .sum::<usize>()
+        }
+        fn count_tool_definition(&self, value: &serde_json::Value) -> usize {
+            self.count_text(&value.to_string())
+        }
+    }
+
+    #[test]
+    fn the_pressure_pass_masks_only_what_the_target_needs_in_whole_steps() {
+        let long = "x".repeat(4_000);
+        let messages_after = |rounds: usize| {
+            let mut messages = vec![ChatMessage::user("u")];
+            for index in 0..rounds {
+                messages.extend(round(&format!("c{index}"), "read_file", &long));
+            }
+            messages
+        };
+        let masking = StaleToolResultMasking::new(3, []);
+        let count = |messages: &[ChatMessage]| QuarterCounter.count_messages(messages);
+
+        // Room for everything: nothing is masked, unlike the normal pass.
+        let mut roomy = messages_after(9);
+        assert_eq!(
+            masking.apply_by_pressure(&mut roomy, &QuarterCounter, 100_000),
+            0
+        );
+        assert_eq!(masking.apply(&mut messages_after(9)), 6);
+
+        // Under pressure it masks the fewest whole steps that fit.
+        let mut pressed = messages_after(9);
+        let target = count(&pressed) - 2_000;
+        assert_eq!(
+            masking.apply_by_pressure(&mut pressed, &QuarterCounter, target),
+            3
+        );
+        assert!(count(&pressed) <= target);
+
+        // Never further than the normal pass, even when nothing fits.
+        let mut tight = messages_after(9);
+        assert_eq!(
+            masking.apply_by_pressure(&mut tight, &QuarterCounter, 10),
+            6
+        );
+
+        // With a fixed target the cutoff only moves forward, in steps of 3.
+        let target = 9_000;
+        let mut last = 0;
+        for rounds in 1..=20 {
+            let mut messages = messages_after(rounds);
+            let masked = masking.apply_by_pressure(&mut messages, &QuarterCounter, target);
+            assert_eq!(masked % 3, 0, "{rounds} rounds");
+            assert!(masked >= last, "{rounds} rounds");
+            last = masked;
+        }
+    }
+
+    #[test]
+    fn rounds_to_drop_counts_the_agent_s_own_text_and_keeps_the_latest_round() {
+        let text = "t".repeat(4_000);
+        let mut messages = vec![ChatMessage::system("s"), ChatMessage::user("task")];
+        for index in 0..6 {
+            let [mut call, result] = round(&format!("c{index}"), "read_file", "short");
+            call.content = MessageContent::Text(text.clone());
+            messages.extend([call, result]);
+        }
+        let masking = StaleToolResultMasking::new(3, []);
+        // Masking cannot shorten the Agent's text; each round is ~1,000.
+        let total = QuarterCounter.count_messages(&messages);
+        assert_eq!(masking.apply_tight(&mut messages.clone()), 0);
+        assert_eq!(masking.rounds_to_drop(&messages, &QuarterCounter, total), 1);
+        assert_eq!(
+            masking.rounds_to_drop(&messages, &QuarterCounter, total - 2_500),
+            3
+        );
+        assert_eq!(masking.rounds_to_drop(&messages, &QuarterCounter, 0), 5);
+        let mut dropped = messages.clone();
+        masking.drop_oldest_rounds(&mut dropped, 3);
+        assert!(QuarterCounter.count_messages(&dropped) <= total - 2_500);
     }
 
     #[test]

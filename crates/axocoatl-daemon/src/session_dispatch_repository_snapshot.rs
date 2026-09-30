@@ -257,6 +257,15 @@ impl SessionDispatchController {
             .map(reserve_message)
     }
 
+    /// What this activation's grant still allows its Agent (see
+    /// `DispatchState::agent_allowance`).
+    pub(crate) fn agent_allowance(
+        &self,
+        activation: &ActivationRef,
+    ) -> Option<axocoatl_llm::ProviderAllowance> {
+        self.lock().ok()?.agent_allowance(activation)
+    }
+
     /// Digests of every cited path, read in fixed observations of at most
     /// `MAX_DIGEST_PATHS` files each (at most four). Paths the host cannot read
     /// as regular repository files are absent.
@@ -580,7 +589,92 @@ pub(crate) fn reserve_message(reserve: u32) -> String {
     )
 }
 
+/// How a failure that the Session budget refused a model call begins.
+pub(crate) const BUDGET_USED_UP: &str = "The Session budget for this Agent is used up: ";
+
+/// The failure when the host's reserve refuses an Agent's next model call.
+pub(crate) fn held_back_message(reserve: u32) -> String {
+    format!(
+        "{BUDGET_USED_UP}its last {reserve} invocation(s) are held for the host to observe its \
+         changes and run required checks."
+    )
+}
+
+/// The failure when a grant's own limit refuses a model call that would
+/// reserve `reservation`, or `None` when no budget limit is the cause.
+pub(crate) fn grant_exhausted_message(
+    limits: &axocoatl_session::control_authority::GrantLimits,
+    usage: &axocoatl_session::control_authority::GrantUsage,
+    reservation: &axocoatl_session::control_authority::DispatchReservation,
+) -> Option<String> {
+    if usage.invocations >= limits.invocations {
+        return Some(format!(
+            "{BUDGET_USED_UP}it has made all {} model and tool calls its budget allows.",
+            group_digits(u64::from(limits.invocations))
+        ));
+    }
+    if usage.tokens.saturating_add(reservation.tokens) > limits.tokens {
+        return Some(format!(
+            "{BUDGET_USED_UP}{} of its {} tokens remain and the next model call needs {}.",
+            group_digits(limits.tokens.saturating_sub(usage.tokens)),
+            group_digits(limits.tokens),
+            group_digits(reservation.tokens)
+        ));
+    }
+    if usage
+        .cost_microunits
+        .saturating_add(reservation.cost_microunits)
+        > limits.cost_microunits
+    {
+        return Some(format!(
+            "{BUDGET_USED_UP}the next model call would pass its spending limit."
+        ));
+    }
+    None
+}
+
+/// `1457714` as `1,457,714`.
+fn group_digits(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
 impl DispatchState {
+    /// What this activation's grant still allows its Agent: the invocations
+    /// left less those the host holds back, and the tokens and spending
+    /// left. The Agent asks for its final answer, without tools, once this
+    /// cannot pay for another tool round.
+    pub(crate) fn agent_allowance(
+        &self,
+        activation: &ActivationRef,
+    ) -> Option<axocoatl_llm::ProviderAllowance> {
+        let bound = self
+            .bound
+            .get(&activation.activation_id)
+            .filter(|bound| bound.activation == *activation)?;
+        let grant = bound.grant.grant_id.as_str();
+        let limits = self.authority.grant_status(grant).ok()?.policy.limits;
+        let usage = self.authority.usage(grant).ok()?;
+        let reserve = self.host_observation_reserve(activation).unwrap_or(0);
+        Some(axocoatl_llm::ProviderAllowance {
+            invocations: Some(u64::from(
+                limits
+                    .invocations
+                    .saturating_sub(usage.invocations)
+                    .saturating_sub(reserve),
+            )),
+            tokens: Some(limits.tokens.saturating_sub(usage.tokens)),
+            cost_microunits: Some(limits.cost_microunits.saturating_sub(usage.cost_microunits)),
+        })
+    }
+
     /// Invocations the host holds back for this activation, when it can run
     /// commands in a repository: its After capture and, when required checks
     /// exist and this grant is the one that pays for them, what is left of

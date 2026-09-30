@@ -85,7 +85,9 @@ impl Respond for NativeReply {
             .unwrap()
             .iter()
             .any(|message| message["role"] == "tool");
-        let message = if self.tool && !has_tool_result {
+        // Like a real model, it cannot call a tool it was not offered.
+        let offered = body["tools"].as_array().is_some_and(|tools| !tools.is_empty());
+        let message = if self.tool && offered && !has_tool_result {
             serde_json::json!({"role":"assistant","content":"","tool_calls":[{"id":"call_native",
                 "function":{"index":0,"name":"effect","arguments":{"value":"actual"}}
             }]})
@@ -211,8 +213,12 @@ async fn native_ollama_tool_roundtrip_settles_zero_cost_and_reopens_actual_check
     );
 }
 
+/// A zero-cost local model is still limited by the grant's tokens. With
+/// room for one call only, that call cannot pay for a tool round and an
+/// answer, so it goes without tools and the Agent answers; no second
+/// inference is made.
 #[tokio::test]
-async fn native_ollama_budget_refuses_next_inference_even_with_zero_api_cost() {
+async fn native_ollama_budget_limits_inference_even_with_zero_api_cost() {
     let server = server(true, false).await;
     let provider = NativeOllamaProvider::connect(native_config(server.uri(), "test-local"))
         .await
@@ -233,9 +239,9 @@ async fn native_ollama_budget_refuses_next_inference_even_with_zero_api_cost() {
         .run()
         .await
         .unwrap();
-    assert!(!settled.accepted);
-    assert!(settled.failure.is_some());
-    assert_eq!(tool.count.load(Ordering::SeqCst), 1);
+    assert!(settled.accepted, "{:?}", settled.failure);
+    assert_eq!(settled.output.content().output.text, "done");
+    assert_eq!(tool.count.load(Ordering::SeqCst), 0);
     let usage = fixture
         .controller
         .activation_provider_usage(&fixture.activation)
@@ -243,16 +249,18 @@ async fn native_ollama_budget_refuses_next_inference_even_with_zero_api_cost() {
     assert_eq!(usage.calls, 1);
     assert!(usage.cost_known);
     assert_eq!(usage.cost_microunits, 0);
-    assert_eq!(
-        server
-            .received_requests()
-            .await
-            .unwrap()
-            .iter()
-            .filter(|request| request.url.path() == "/api/chat")
-            .count(),
-        1
-    );
+    let calls: Vec<serde_json::Value> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/api/chat")
+        .map(|request| request.body_json().unwrap())
+        .collect();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0]["tools"]
+        .as_array()
+        .is_none_or(|tools| tools.is_empty()));
 }
 
 #[tokio::test]

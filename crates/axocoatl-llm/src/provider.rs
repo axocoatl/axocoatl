@@ -307,6 +307,13 @@ pub trait LlmProvider: Send + Sync + 'static {
         None
     }
 
+    /// What a host that meters this caller still allows it to spend, when it
+    /// knows. Each call reserves its `execution_bounds`. Plain providers have
+    /// no such budget and return `None`.
+    fn remaining_allowance(&self) -> Option<ProviderAllowance> {
+        None
+    }
+
     /// Non-streaming chat completion.
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError>;
 
@@ -378,6 +385,19 @@ pub struct ProviderExecutionBounds {
     pub token_limit: u64,
     pub cost_microunits: u64,
     pub response_bytes: usize,
+}
+
+/// A host budget's remaining room for one caller. `None` means that dimension
+/// is not limited (or not known) by the host.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProviderAllowance {
+    /// Model and tool calls the caller may still make, after anything the
+    /// host holds back for itself.
+    pub invocations: Option<u64>,
+    /// Tokens left; every model call reserves its `token_limit`.
+    pub tokens: Option<u64>,
+    /// Monetary allowance left; every model call reserves `cost_microunits`.
+    pub cost_microunits: Option<u64>,
 }
 
 /// What a specific provider+model combination can do.

@@ -135,6 +135,17 @@ impl CompressionPipeline {
         guard: CompressionGuard,
     ) -> Result<CompressionResult, CompressionError> {
         let threshold = (self.model_context_limit as f32 * COMPRESSION_TRIGGER_PCT) as usize;
+        self.compress_sync_to(messages, guard, threshold)
+    }
+
+    /// `compress_sync` against an explicit target (messages plus
+    /// `guard.fixed_tokens`) instead of the trigger share of the window.
+    pub fn compress_sync_to(
+        &self,
+        messages: Vec<ChatMessage>,
+        guard: CompressionGuard,
+        threshold: usize,
+    ) -> Result<CompressionResult, CompressionError> {
         self.validate_guard(&messages, guard, threshold)?;
         let tokens_before = self.total_tokens(&messages, guard.fixed_tokens);
 

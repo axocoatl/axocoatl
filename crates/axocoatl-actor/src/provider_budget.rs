@@ -369,7 +369,7 @@ pub(crate) async fn chat(
             provider.chat(request).await
         }
     }
-    .map_err(|error| AgentError::Provider(error.to_string()))?;
+    .map_err(AgentError::from)?;
 
     let mut response = response;
     if response.usage.total() == 0 {
