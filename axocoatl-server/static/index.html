@@ -6182,9 +6182,11 @@ function syncSessionComposerState() {
     send.classList.remove('danger');
     send.title = S.session.historyError || 'Confirming canonical Session state';
   } else if (guidance?.mode === 'needs_attention') {
-    send.disabled = true;
-    send.textContent = 'Needs attention';
-    send.title = 'Open Turn controls to inspect blockers and choose Continue or Finish';
+    // Send offers the explicit choice; it never starts work by itself.
+    send.disabled = guidance.busy === true;
+    send.textContent = 'Send…';
+    send.classList.remove('danger');
+    send.title = 'This turn needs attention: continue it with your message, or finish it as it is and send your message as a new request';
   } else {
     send.disabled = false;
     send.textContent = 'Send';
@@ -6213,8 +6215,42 @@ async function activateSessionComposer() {
     if (await guidance.send(text, context) && S.session.id === sessionId && $('#session-text').value === text) { $('#session-text').value = ''; S.session.refs = []; renderChatRefs(); }
     return;
   }
-  if (guidance?.mode === 'needs_attention') { guidance.shadowRoot.querySelector('.controls').click(); return; }
+  if (guidance?.mode === 'needs_attention') {
+    if ($('#session-text').value.trim()) guidance.offerChoice();
+    else guidance.shadowRoot.querySelector('.controls').click();
+    return;
+  }
   sendSessionMessage();
+}
+
+// A message sent while the current turn needs attention goes where the person
+// chose: a Revise that continues that turn, or Finish as it is followed by a
+// new request. Neither happens without that choice.
+async function answerAttentionChoice({ choice, sessionId, turnId } = {}) {
+  const guidance = $('#session-guidance');
+  const text = $('#session-text').value;
+  if (!guidance || S.session.id !== sessionId || guidance.turnId !== turnId || !text.trim()) return false;
+  if (choice === 'continue') {
+    const context = {references: canonicalInlineReferences(ensureRefs()), attachment_ids: $('#session-context')?.selectedReferenceIds?.() || []};
+    if (!await guidance.continueWithMessage(text, context)) return false;
+    if (S.session.id === sessionId && $('#session-text').value === text) { $('#session-text').value = ''; S.session.refs = []; renderChatRefs(); }
+    return true;
+  }
+  if (choice !== 'finish' || !await guidance.finishAsItIs() || S.session.id !== sessionId) return false;
+  // Finish closed the turn before its receipt returned, but its terminal frame
+  // races this reply. Send only once History shows the turn closed, so the new
+  // request is not refused as a conflict.
+  await reloadSessionTranscript(sessionId);
+  for (let wait = 0; wait < 100 && S.session.id === sessionId && S.session.historyState === 'loading'; wait++) {
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  const closed = S.session.id === sessionId ? S.session.controlPlaneTurns?.get(turnId) : null;
+  if (!closed || ['running', 'needs_attention'].includes(closed.status) || S.session.historyState !== 'ready') {
+    if (S.session.id === sessionId) toast('Your message was not sent', 'The finished turn has not appeared in History yet. Your message is still in the composer; send it again.', 'warn');
+    return false;
+  }
+  sendSessionMessage();
+  return true;
 }
 
 // ── Variants in the thread ──────────────────────────────────────────────
@@ -8818,6 +8854,7 @@ customElements.whenDefined('ax-session-guidance').then(() => {
   const guidance = $('#session-guidance');
   guidance.commandHandler = submitCoordinationCommand;
   guidance.addEventListener('guidance-state-change', syncSessionComposerState);
+  guidance.addEventListener('attention-choice', event => void answerAttentionChoice(event.detail));
   guidance.addEventListener('open-current-turn-controls', async event => {
     if (event.detail.sessionId !== S.session.id) return;
     openModule('trace'); await showCoordinationGraph(event.detail.turnId);
@@ -9894,6 +9931,9 @@ function handleWsFrame(d) {
       }
       if (S.session.id === d.session) {
         if (d.turn_id && S.session.activeTurnId && d.turn_id !== S.session.activeTurnId) break;
+        // A late frame for an earlier turn (a Finish answered before a new
+        // request) cannot settle the new request that is still starting.
+        if (d.turn_id && !S.session.activeTurnId && S.session.pendingTurn?.id && d.turn_id !== S.session.pendingTurn.id) break;
         if (S.runView?.workflow === d.session) {
           S.runView.status = 'done';
           S.runView.tokens = (d.input_tokens || 0) + (d.output_tokens || 0)

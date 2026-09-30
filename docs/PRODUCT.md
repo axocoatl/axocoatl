@@ -167,6 +167,11 @@ declared work and checks. **Finish partial result** is a separate human confirma
 the accepted results to keep as context and review the work being stopped, work never started,
 and missing checks. It waits for safe settlement, retains incurred usage and evidence, and
 records a partial finish rather than a successful check or completed request.
+A message sent while a turn needs attention never starts work on its own: the person
+chooses to continue the turn with it (a Revise of an Agent with an accepted answer) or
+to finish the turn as it is, carrying every accepted final answer, and send it as a new
+request. Work of an Agent that failed or was interrupted is not accepted and does not
+carry forward.
 Existing legacy data can be converted explicitly with `axocoatl session upgrade --confirm`
 after stopping the daemon and making a cold backup. The command preserves history and usage.
 When the old Agent role was not recorded, its private state and conversation remain archived;

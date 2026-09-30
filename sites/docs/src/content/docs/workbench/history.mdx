@@ -88,6 +88,16 @@ and missing checks. Selecting no result explicitly finishes without an answer. I
 waits for safe settlement and retains partial evidence and charged usage; it does
 not report missing checks as passed. A later request starts a linked successor.
 
+When a turn needs attention, **Send…** asks where your message should go. **Continue
+this turn with your message** revises the selected Agent's accepted answer with your
+message; work that depends on it and the required checks run again. **Finish this turn
+as it is and send as a new request** finishes a partial result with every accepted
+final answer selected, so those answers carry into the new request's conversation as
+after a completed turn, and then sends your message. An Agent that failed or was
+interrupted has no accepted answer: its work in that turn does not carry forward, and
+continuing with a message is unavailable when no Agent has one. **Turn controls**
+still offers Continue, Retry, and the full partial-Finish review.
+
 **Team & budget** edits future turns. The current-turn inspector separately reviews
 adding an Agent or replacing work that has not started. **Review current authority**
 shows the current grant and any requested expansion; approval preserves usage

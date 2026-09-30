@@ -1,6 +1,6 @@
 ---
 title: WebSocket reference
-description: Commands, reconnect snapshots, live Session and Attempt frames, MCP approvals, compatibility streams, and Terminal PTYs.
+description: Commands, reconnect snapshots, live Session, native activation and Attempt frames, MCP approvals, compatibility streams, and Terminal PTYs.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -142,6 +142,9 @@ an unresolved Ways decision remains authoritative after a daemon restart.
 | `tool-call` | `workflow`, `agent`, `turn_id?`, `call_id`, `occurrence`, `coordination_generation?`, `name`, `phase`, `arguments?`, `result?`, `is_error` | Tool start/result pair |
 | `session-done` | `session`, `turn_id?`, input/output/reasoning tokens, `token_usage_known` | Successful terminal state; a false known flag marks the counts as a subtotal |
 | `session-cancelled` | `session`, `turn_id`, input/output/reasoning tokens, `token_usage_known` | Cooperative Stop terminal state; a false known flag marks the counts as a subtotal |
+| `session-needs-attention` | `session`, `turn_id`, `input_tokens`, `output_tokens`, `reasoning_tokens`, `token_usage_known` | Native turns only. The execution epoch ended but the turn stays open for an explicit intervention; not a terminal state. See [below](#native-session-frames) |
+| `activation-stream` | `event` | Native turns only. One retained observation of one exact Agent activation; replaces `token`, `reasoning`, and `tool-call` for native Sessions. See [below](#native-session-frames) |
+| `activation-control-changed` | `activation`, `blocker_id`, `canonical_command_id`, `turn_revision` | Native turns only. A durable blocker or control change for one activation; re-read the turn's `control-plane`. It grants nothing by itself |
 | `session-error` | `session`, `turn_id?`, `error`, input/output/reasoning tokens, `token_usage_known` | Failed terminal state; paid work completed before the failure remains visible as a complete tracked total or known subtotal |
 | `session-request-rejected` | `session`, `turn_id`, `error` | Nonterminal request rejection; the existing live run with that ID remains active |
 | `session-stop-rejected` | `session`, `turn_id`, `error` | Stop control response; not a terminal transition |
@@ -158,6 +161,63 @@ frames omit the generation and retain their run/Agent/turn/call/occurrence ident
 rather than assuming `call_id` is globally unique. For coordinator work, `agent` is the
 logical declared Worker that executed the tool; `workflow` and `turn_id` retain
 the outer Session/turn ownership.
+
+### Native Session frames
+
+A native Session turn publishes `activation-stream` instead of `token`,
+`reasoning`, and `tool-call`: the live output of each Agent is keyed by its exact
+activation, not by the run key and Agent name. `session-accepted`, `session-start`,
+`session-done`, `session-cancelled`, and `session-needs-attention` still frame the
+turn. A native Ways candidate additionally publishes the compatibility `token`,
+`reasoning`, and `tool-call` frames under its lane `run` key with
+`coordination_generation`, so the Ways view keeps working.
+
+`session-needs-attention` is sent when a native turn's execution ends without
+finishing it: an Agent failed or was interrupted, a required check failed, the
+required review did not approve, or a limit was reached. The turn stays open with
+its accepted work, and the token counts follow the same known/subtotal rule as
+`session-done`. Until the turn is continued (Continue, Retry, or Revise) or closed
+(Finish or Stop), a new request for that Session is refused with
+`session-request-rejected`, whose `error` names both ways out; see
+[a new request while a turn needs attention](/reference/http-api/#a-new-request-while-a-turn-needs-attention).
+Read the turn's `control-plane` for its blockers and available controls.
+
+An `activation-stream` frame is published only after the Session's content store
+has retained the observation, so a reconnecting client can read the same
+observations from History. Its `event` is:
+
+```json
+{
+  "kind": "activation-stream",
+  "event": {
+    "reference": "…",
+    "content": {
+      "schema_version": 1,
+      "activation": {
+        "session_id": "…", "turn_id": "…", "execution_epoch_id": "…",
+        "node_id": "lead", "generation": 1, "activation_id": "…"
+      },
+      "sequence": 0,
+      "recorded_at_unix_ms": 1790000000000,
+      "payload": { "kind": "text", "delta": "Reading the failing test" }
+    }
+  }
+}
+```
+
+`reference` identifies the retained record. `sequence` counts from `0` within one
+activation, without gaps. `payload.kind` is one of:
+
+| `kind` | Fields | Meaning |
+| --- | --- | --- |
+| `text` | `delta` | Answer text delta |
+| `reasoning_summary` | `delta` | Reasoning-channel delta when the provider supplies one |
+| `provider_retry` | `reason` | The provider response ended early and one retry started; text before this marker belongs to the abandoned attempt |
+| `tool_proposed` | `call_id`, `name`, `provider_response_group`, `provider_call_index`, `provider_call_count`, `arguments_sha256`, `arguments_bytes` | The Agent proposed a tool call; it still has to pass dispatch |
+| `tool_result` | `call_id`, `name`, `result_sha256`, `result_bytes`, `is_error` | The result the Agent saw |
+
+Tool arguments and results are not in the frame, only their SHA-256 and size.
+`call_id` is provider-local and can repeat within an activation.
 
 Environment lifecycle frames are broadcast to every connected client, not only
 the tab that issued an HTTP request. Suspend Files, Source Control, Preview, and

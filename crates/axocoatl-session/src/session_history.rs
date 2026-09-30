@@ -335,6 +335,12 @@ impl SessionHistory {
         require_legacy_entries(&self.entries)
     }
 
+    /// True exactly when the legacy readers refuse this History: it holds
+    /// native execution that legacy rows cannot represent.
+    pub fn requires_versioned_consumer(&self) -> bool {
+        self.require_legacy_consumer().is_err()
+    }
+
     /// Explicitly versioned export, distinct from the legacy JSON array API.
     pub fn export_json(
         &self,

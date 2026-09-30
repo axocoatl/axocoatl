@@ -1678,9 +1678,8 @@ pub async fn session_messages(
     Path(id): Path<String>,
     Query(query): Query<SessionHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let versioned = versioned_history(query.history_version)?;
     let daemon = state.read().await;
-    if versioned {
+    if history_version_for(&daemon, &id, query.history_version).await? {
         history_json(
             daemon
                 .versioned_session_transcript(&id)
@@ -1698,6 +1697,7 @@ pub async fn session_messages(
 }
 
 /// GET /api/sessions/{id}/turns — canonical user-visible Session turns.
+/// `history_version=1` asks for legacy rows and `2` for versioned entries.
 #[derive(Default, Deserialize)]
 pub struct SessionHistoryQuery {
     #[serde(default)]
@@ -1715,6 +1715,21 @@ fn versioned_history(version: Option<u32>) -> Result<bool, (StatusCode, Json<Err
     }
 }
 
+/// A Session History read that names no `history_version` answers in the
+/// versioned form when the Session's History holds native execution, which
+/// legacy rows cannot represent; a legacy Session keeps its exact legacy rows.
+/// An explicit version is always the one answered.
+async fn history_version_for(
+    daemon: &axocoatl_daemon::AxocoatlDaemon,
+    session_id: &str,
+    version: Option<u32>,
+) -> Result<bool, (StatusCode, Json<ErrorResponse>)> {
+    match version {
+        None => Ok(daemon.session_history_is_versioned(session_id).await),
+        explicit => versioned_history(explicit),
+    }
+}
+
 fn history_json(
     value: impl Serialize,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
@@ -1728,9 +1743,8 @@ pub async fn session_turns(
     Path(id): Path<String>,
     Query(query): Query<SessionHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let versioned = versioned_history(query.history_version)?;
     let daemon = state.read().await;
-    if versioned {
+    if history_version_for(&daemon, &id, query.history_version).await? {
         history_json(
             daemon
                 .list_versioned_session_turns(&id)
@@ -1770,9 +1784,8 @@ pub async fn session_turn(
     Path((id, turn_id)): Path<(String, String)>,
     Query(query): Query<SessionHistoryQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
-    let versioned = versioned_history(query.history_version)?;
     let daemon = state.read().await;
-    let value = if versioned {
+    let value = if history_version_for(&daemon, &id, query.history_version).await? {
         daemon
             .get_versioned_session_turn(&id, &turn_id)
             .await

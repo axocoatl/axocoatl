@@ -183,10 +183,10 @@ below.
 | POST | `/api/sessions/{id}/environment/confirm-runtime-cleanup` | High-friction E2B recovery acknowledgment. Send exactly one target: `{runtime_id, confirmed:true}` after manually deleting that retained runtime, or `{creation_token, confirmed_all_matching_sandboxes_deleted:true}` after manually deleting every sandbox whose metadata contains `axocoatl_creation_token=<exact token>` |
 | POST | `/api/sessions/{id}/reopen` | Explicitly reactivate a closed Session before any live runtime can be resumed or reconstructed |
 | POST | `/api/sessions/{id}/execute` | `{input}` synchronous compatibility execution with completeness-aware success/error usage; other execute override fields are ignored here |
-| GET | `/api/sessions/{id}/messages` | Older checkpoint-backed transcript projection |
-| GET | `/api/sessions/{id}/turns` | Canonical visible durable turns |
+| GET | `/api/sessions/{id}/messages` | Transcript projection; `history_version` selects its [form](#session-history-versions) |
+| GET | `/api/sessions/{id}/turns` | Canonical visible durable turns; `history_version` selects their [form](#session-history-versions) |
 | GET | `/api/sessions/{id}/active-turn` | Exact live run/turn ownership for Stop, or `null` |
-| GET | `/api/sessions/{id}/turns/{turn_id}` | One canonical turn owned by this Session |
+| GET | `/api/sessions/{id}/turns/{turn_id}` | One canonical turn owned by this Session, in the same [form](#session-history-versions) as the list |
 | GET | `/api/sessions/{id}/turns/{turn_id}/control-plane` | Versioned read-only execution evidence for the exact Session and turn |
 | GET | `/api/session-turns/search?q=…&session_id=…` | Literal case-insensitive search; omit Session ID for all |
 | GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json` |
@@ -250,6 +250,76 @@ starts. A single-Agent Session, a one-Agent team, a team whose entry point is a
 Coordinator, or a request targeted to one Agent runs directly. A turn that would run
 two or more Agents is refused before it starts; the error tells the operator to stop
 Axocoatl, make a cold backup, and run `axocoatl session upgrade --confirm`.
+
+### Session History versions
+
+`/turns`, `/turns/{turn_id}`, and `/messages` take an optional `history_version`
+query parameter:
+
+- `history_version=1` returns the legacy 1.0 shape: turn records with `id`,
+  `user_input`, `final_output`, `status`, and their execution events from `/turns`,
+  and `role`/`content` messages from `/messages`. A Session whose History holds
+  native execution refuses it with `400`, because legacy rows cannot represent that
+  work.
+- `history_version=2` returns versioned entries. Each names its source:
+  `{"history_version": "legacy_v1", "turn": {…}}` for a turn recorded by the
+  compatibility path, and `{"history_version": "execution_v2", "turn": {…}}` for a
+  native turn. `/messages` entries carry `content` in place of `turn`.
+- Without the parameter, a Session whose History holds native execution answers as
+  `history_version=2`, and every other Session answers exactly as `history_version=1`.
+  Read each entry's `history_version` rather than assuming one shape.
+
+```bash
+curl -s "http://127.0.0.1:8080/api/sessions/$SESSION/turns?history_version=2"
+```
+
+```json
+[
+  {
+    "history_version": "execution_v2",
+    "turn": {
+      "owner": { "workspace_id": "…", "session_id": "…" },
+      "turn_id": "turn-3f0c…",
+      "revision": 14,
+      "state": "needs_attention",
+      "superseded": false,
+      "epochs": [],
+      "legacy_predecessor": null,
+      "request": {
+        "status": "available",
+        "reference": "…",
+        "content": { "display_input": "Fix the failing test", "…": "…" }
+      },
+      "activations": []
+    }
+  }
+]
+```
+
+A native turn's `state` is `running`, `needs_attention`, `completed`, `cancelled`, or
+`finished`. Evidence such as `request` and each activation's output carries a
+`status` of `available`, `missing`, or `not_recorded`; only `available` has
+`content`. The `control-plane` endpoint below is the per-turn detail view.
+
+### A new request while a turn needs attention
+
+A native Session runs one turn at a time. While its current turn needs attention,
+a new request (`POST /api/sessions/{id}/execute` or the WebSocket `session`
+command) is refused with `409` or `session-request-rejected`, and nothing starts or
+closes. The error names the turn and the two ways out, both through
+`POST /api/sessions/{id}/turns/{turn_id}/control-commands`:
+
+- Continue that turn with the message: action `revise`, the exact activation of an
+  Agent with an accepted answer, and the message as `instruction`. `continue`
+  restarts stopped work without a message.
+- Finish it as it is, then send the request again as a new turn: action `finish`
+  with a confirmed `partial_finish` built from `turn_controls.partial_finish` in the
+  turn's `control-plane`. Only the accepted final answers it selects carry into the
+  next turn's conversation; an activation that failed or was interrupted has no
+  accepted answer, so its work does not carry forward.
+
+The app offers the same two choices when a message is sent while the turn needs
+attention.
 
 ### Turn control plane
 
