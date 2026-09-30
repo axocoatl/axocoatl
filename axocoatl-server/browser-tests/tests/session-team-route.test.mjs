@@ -134,8 +134,9 @@ test('actual Session team with a bash Agent applies required checks and reports 
     const post=async(suffix,body)=>{const response=await fetch(`${url}${suffix}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return{status:response.status,value:await response.json()};};
     // Two checks need 8 invocations for two passes, 2 captures and 1 answer.
     const tight=structuredClone(edit);tight.command_id='checks-tight';for(const slot of tight.slots)slot.limits.invocations=10;
-    const refused=await post('/preview',tight);assert.equal(refused.status,409,JSON.stringify(refused.value));
-    assert.match(refused.value.error,/runs the required checks on its budget, so its invocation limit must be at least 11/);
+    // A limit that cannot pay is an invalid edit, not a conflict, and says so plainly.
+    const refused=await post('/preview',tight);assert.equal(refused.status,422,JSON.stringify(refused.value));
+    assert.match(refused.value.error,/^Browser Test Coder runs the required checks on its budget, so its invocation limit must be at least 11/);
     const preview=await post('/preview',edit);assert.equal(preview.status,200,JSON.stringify(preview.value));assert.deepEqual(preview.value.edit.required_checks,checks);assert.deepEqual(preview.value.toolless_slots,[]);
     const applied=await post('/apply',{edit,review_digest:preview.value.review_digest});assert.equal(applied.status,200,JSON.stringify(applied.value));
     const saved=await (await fetch(url)).json();assert.deepEqual(saved.required_checks,checks);
@@ -184,17 +185,18 @@ test('actual Session team applies a required review only with a read-only Worker
     const post=async(suffix,body)=>{const response=await fetch(`${url}${suffix}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return{status:response.status,value:await response.json()};};
     const edit=(command_id,required_review,activations=2)=>({command_id,expected_configuration_revision:0,slots:current.slots.map(slot=>({...slot,max_output_tokens:128,limits:{activations,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),dependencies:current.dependencies,layout:current.layout,...(required_review?{required_review}:{})});
     const review={template_id:'browser-test-reviewer',max_rounds:2,limits:{activations:2,invocations:6,tokens:32768,cost_microunits:0},max_output_tokens:128};
+    // Rounds and limits that cannot pay are invalid edits (422, plain reason); a template that may not review is refused as before.
     const refusals=[
-      [{...review,max_rounds:4},/runs 1 to 3 rounds/],
-      [{...review,template_id:'browser-test-writer'},/can change files or run commands \(write_file\)/],
-      [{...review,template_id:'browser-test-coder'},/is not a Worker template/],
-      [{...review,limits:{...review.limits,invocations:5}},/needs at least 6 invocations for 2 rounds/],
+      [{...review,max_rounds:4},/^A required review runs 1 to 3 rounds/,422],
+      [{...review,template_id:'browser-test-writer'},/can change files or run commands \(write_file\)/,409],
+      [{...review,template_id:'browser-test-coder'},/is not a Worker template/,409],
+      [{...review,limits:{...review.limits,invocations:5}},/^The reviewer browser-test-reviewer needs at least 6 invocations for 2 rounds/,422],
     ];
-    for(const [index,[setting,message]] of refusals.entries()){
-      const refused=await post('/preview',edit(`review-refused-${index}`,setting));assert.equal(refused.status,409,JSON.stringify(refused.value));assert.match(refused.value.error,message);
+    for(const [index,[setting,message,status]] of refusals.entries()){
+      const refused=await post('/preview',edit(`review-refused-${index}`,setting));assert.equal(refused.status,status,JSON.stringify(refused.value));assert.match(refused.value.error,message);
     }
-    const lead=await post('/preview',edit('review-lead-too-small',review,1));assert.equal(lead.status,409,JSON.stringify(lead.value));
-    assert.match(lead.value.error,/its activation limit must be at least 2/);
+    const lead=await post('/preview',edit('review-lead-too-small',review,1));assert.equal(lead.status,422,JSON.stringify(lead.value));
+    assert.match(lead.value.error,/^The required review can run Browser Test Coder 2 times in one turn, once per round, so its activation limit must be at least 2/);
     // Rounds left out default to two.
     const {max_rounds,...defaulted}=review;
     const reviewed=edit('review-applied',defaulted);

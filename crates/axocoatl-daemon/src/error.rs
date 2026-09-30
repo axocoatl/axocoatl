@@ -61,6 +61,14 @@ pub enum DaemonError {
     /// flattening a safe concurrency guard into a generic bad request.
     #[error("Attempt conflict: {0}")]
     AttemptConflict(String),
+
+    /// A request that is well formed but asks for something the daemon
+    /// refuses, such as a Team and budget edit whose limits cannot pay for
+    /// what it names. Nothing conflicts: the person changes the request. The
+    /// message is for the person as it stands, and the HTTP boundary returns
+    /// 422.
+    #[error("{0}")]
+    InvalidRequest(String),
 }
 
 impl From<axocoatl_config::ConfigError> for DaemonError {

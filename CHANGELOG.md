@@ -64,7 +64,8 @@ model-facing `coordination_control` tool, the external harness adapter and the
   later Retry generations preserve the earlier failure evidence.
 - **Native Session execution and controls.** New data roots use one canonical turn
   controller for ordinary Send, dependent Agents, and the helpers a lead delegates to.
-  Team & budget reviews immutable definitions and explicit limits for future turns.
+  Team & budget reviews immutable definitions and explicit limits for future turns, and
+  refuses limits that cannot pay for what an edit names with `422` and the reason.
   The Session inspector exposes exact generation controls and reviewed Add/Replace
   edits. Guide and Revise retain the human instruction, selected context, and
   attachments. Existing legacy roots retain their compatibility path.
