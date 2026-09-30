@@ -1,4 +1,6 @@
-//! Child budgets are reservations from an already approved supervisor grant.
+//! Child budgets are reservations from an already approved supervisor grant,
+//! held in full while the child runs. Once none of its activations runs, the
+//! parent is charged only the child's usage; running again reserves it again.
 //! A distinct child grant never clones the supervisor's control capability.
 use super::*;
 use crate::turn_contract::CommandId;
@@ -156,6 +158,7 @@ impl ControlAuthority {
             delegated_from: Some(reservation.clone()),
             legacy_standing: None,
             host_checks: vec![],
+            returns_unused: true,
         });
         Ok(next)
     }
@@ -379,6 +382,7 @@ mod tests {
             delegated_from,
             legacy_standing: None,
             host_checks: vec![],
+            returns_unused: false,
         };
         let mut parent = record(expanded, Some("journal".into()), None);
         parent.previous_policies.push(original.clone());
@@ -489,6 +493,7 @@ mod tests {
                 delegated_from: None,
                 legacy_standing: None,
                 host_checks: vec![],
+                returns_unused: false,
             });
             state.data.activations.push(ActivationRecord {
                 activation: activation.clone(),
@@ -554,6 +559,7 @@ mod tests {
                 delegated_from: Some(reservation),
                 legacy_standing: None,
                 host_checks: vec![],
+                returns_unused: false,
             });
             assert_eq!(
                 validate_delegated_records(&stored).is_ok(),

@@ -940,20 +940,39 @@ async fn failed_helper_returns_a_tool_error_and_the_lead_completes() {
 }
 
 #[tokio::test]
-async fn delegated_helper_budget_is_reserved_from_the_lead_grant() {
+async fn delegated_helper_budget_is_reserved_from_the_lead_grant_and_its_unused_part_returned() {
     let fixture = lead_fixture(100000).await;
     let scenario = Arc::new(Scenario::new("pub fn run"));
     let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
     assert_eq!(
-        run.outcome.unwrap().snapshot.contract().state(),
+        outcome.snapshot.contract().state(),
         Some(LogicalTurnState::Completed)
     );
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let helper = helper_node(&outcome.snapshot, &lead).unwrap();
+    let helper_grant = outcome
+        .snapshot
+        .contract()
+        .activations()
+        .iter()
+        .find(|item| item.activation.node_id == helper)
+        .and_then(|item| item.input.grant.as_ref())
+        .unwrap()
+        .grant_id
+        .as_str()
+        .to_owned();
+    let helper_usage = run.controller.grant_usage_for_test(&helper_grant);
+    assert_eq!(helper_usage.activations, 1);
+    // Each call reserved 100 tokens and settled to the 10 it reported.
+    assert_eq!(helper_usage.tokens, 10);
     let usage = run.controller.grant_usage_for_test(LEAD_GRANT);
-    let limits = helper_limits();
-    // The lead's own activation plus the helper's full reserved limits.
-    assert_eq!(usage.activations, 1 + limits.activations);
-    assert!(usage.invocations > limits.invocations);
-    assert!(usage.tokens >= limits.tokens);
+    // The lead's own activation and two calls, plus what the finished helper
+    // used; the rest of the helper's reserved limits came back.
+    assert_eq!(usage.activations, 1 + helper_usage.activations);
+    assert_eq!(usage.tokens, 20 + helper_usage.tokens);
+    // Two provider calls and the delegate call.
+    assert_eq!(usage.invocations, 3 + helper_usage.invocations);
 }
 
 #[tokio::test]
@@ -1462,9 +1481,12 @@ async fn coordinator_slot_runs_as_a_lead_that_reuses_one_helper_template_for_dis
         .all(|receipt| receipt.state == ControlCommandState::Settled));
 }
 
+/// Room for the lead's own calls and one helper's reserved limits, not two.
+/// A finished helper gives back what it did not use, so the lead can
+/// delegate again; helpers running at the same time still cannot both fit
+/// (see `helpers_requested_together_cannot_exceed_the_lead_aggregate_budget`).
 #[tokio::test]
-async fn helper_reservations_cannot_exceed_the_lead_aggregate_budget() {
-    // Room for the lead's own calls and one helper's reserved limits, not two.
+async fn a_finished_helper_returns_its_unused_limits_so_the_lead_can_delegate_again() {
     let fixture = lead_fixture(15000).await;
     let lead = fixture.request.node_evidence[0].node_id.clone();
     let mut scenario = Scenario::new("pub fn run");
@@ -1475,34 +1497,33 @@ async fn helper_reservations_cannot_exceed_the_lead_aggregate_budget() {
     assert_eq!(
         outcome.snapshot.contract().state(),
         Some(LogicalTurnState::Completed),
-        "the lead continues after its second helper is refused"
+        "{:?}",
+        outcome.snapshot.contract()
     );
-    assert_eq!(
-        outcome.snapshot.contract().graph().unwrap().nodes.len(),
-        2,
-        "only one explicitly bounded helper can fit"
-    );
-    assert_eq!(scenario.helper_calls(), 1);
+    assert_eq!(outcome.snapshot.contract().graph().unwrap().nodes.len(), 3);
+    assert_eq!(scenario.helper_calls(), 2);
     let results = scenario.delegate_results();
     assert_eq!(results.len(), 2);
-    completed_result(&results[0]);
-    assert!(
-        results[1].contains("The helper 'scout' was not started")
-            && results[1].contains("do not fit in what is left of your budget"),
-        "{}",
-        results[1]
+    assert_ne!(
+        completed_result(&results[0])["node_id"],
+        completed_result(&results[1])["node_id"]
     );
     let commands = agent_commands(&run.controller);
     assert_eq!(commands.len(), 2);
-    assert_eq!(commands[0].state, ControlCommandState::Settled);
-    assert_eq!(commands[1].state, ControlCommandState::Rejected);
+    assert!(commands
+        .iter()
+        .all(|receipt| receipt.state == ControlCommandState::Settled));
     assert!(outcome
         .snapshot
         .contract()
         .current_accepted_activations()
         .iter()
         .any(|item| item.activation.node_id == lead));
-    assert!(run.controller.grant_usage_for_test(LEAD_GRANT).tokens <= 15000);
+    let usage = run.controller.grant_usage_for_test(LEAD_GRANT);
+    // Three lead calls and one call per helper, each settled to 10 tokens;
+    // one activation each for the lead and both helpers.
+    assert_eq!(usage.activations, 3);
+    assert_eq!(usage.tokens, 50);
 }
 
 #[tokio::test]
@@ -1982,9 +2003,10 @@ async fn helper_that_leaves_the_lead_too_few_invocations_is_refused() {
 
 #[tokio::test]
 async fn helper_that_leaves_the_lead_too_few_tokens_is_refused() {
-    // One provider call reserved 100 tokens; the helper's 10000 would leave
-    // 50, less than the lead's next call.
-    helper_that_leaves_the_lead_too_little_is_refused(10150, 20, "50 tokens").await;
+    // One provider call reserved 100 tokens and settled to the 10 it used;
+    // the helper's 10000 would leave 50, less than the lead's next call
+    // reserves.
+    helper_that_leaves_the_lead_too_little_is_refused(10060, 20, "50 tokens").await;
 }
 
 /// A lead that runs commands and pays for the team's required checks cannot
@@ -2091,8 +2113,8 @@ async fn identical_call_in_the_same_activation_returns_the_earlier_answer() {
     assert_eq!(outcome.snapshot.contract().graph().unwrap().nodes.len(), 2);
     assert_eq!(
         run.controller.grant_usage_for_test(LEAD_GRANT).activations,
-        1 + helper_limits().activations,
-        "the helper's limits are reserved once"
+        1 + 1,
+        "the helper runs once, and its unused activation came back"
     );
 }
 
@@ -2188,11 +2210,10 @@ async fn two_delegate_calls_in_one_round_run_their_helpers_at_the_same_time() {
         .all(|receipt| receipt.state == ControlCommandState::Settled));
 
     let usage = run.controller.grant_usage_for_test(LEAD_GRANT);
-    let limits = helper_limits();
-    // The lead's own activation plus both helpers' full reserved limits.
-    assert_eq!(usage.activations, 1 + 2 * limits.activations);
-    assert!(usage.invocations > 2 * limits.invocations);
-    assert!(usage.tokens >= 2 * limits.tokens);
+    // The lead's own activation and two calls, plus what both finished
+    // helpers used; the rest of their reserved limits came back.
+    assert_eq!(usage.activations, 1 + 2);
+    assert_eq!(usage.tokens, 20 + 2 * 10);
     assert!(fixture.registry.live_native_turns().unwrap().is_empty());
 }
 
@@ -2244,9 +2265,10 @@ async fn helpers_requested_together_cannot_exceed_the_lead_aggregate_budget() {
 /// reservation, so only one is started.
 #[tokio::test]
 async fn helpers_requested_together_keep_the_lead_able_to_read_their_answers() {
-    // One provider call reserved 100 tokens; after one helper's 10000, 10050
-    // are left, and a second helper would leave 50, less than the next call.
-    let fixture = lead_fixture_as(20150, &[("scout", &[])], LeadTemplate::reader(20)).await;
+    // One provider call settled to the 10 of its 100 reserved tokens it used;
+    // after one helper's 10000, 10050 are left, and a second helper would
+    // leave 50, less than the next call reserves.
+    let fixture = lead_fixture_as(20060, &[("scout", &[])], LeadTemplate::reader(20)).await;
     let mut scenario = Scenario::new("pub fn run");
     scenario.tasks = vec![TASK.into(), SECOND_TASK.into()];
     scenario.together = true;
@@ -2307,7 +2329,7 @@ async fn identical_calls_in_one_round_run_one_helper() {
     assert_eq!(outcome.snapshot.contract().graph().unwrap().nodes.len(), 2);
     assert_eq!(
         run.controller.grant_usage_for_test(LEAD_GRANT).activations,
-        1 + helper_limits().activations,
-        "the helper's limits are reserved once"
+        1 + 1,
+        "the helper runs once, and its unused activation came back"
     );
 }

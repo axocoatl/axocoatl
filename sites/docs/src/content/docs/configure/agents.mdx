@@ -132,8 +132,12 @@ Automation store; editing an Automation does not edit a Session team.
 
 In a native Session, **Team & budget** captures the selected Agent configuration
 and requires explicit activation, invocation, token, cost, and expiry limits.
-Those limits govern cumulative reservations before dispatch. A helper's allocation
-consumes its lead's approved aggregate allowance; events do not refill it.
+Each model call reserves its whole context and output against those limits before it is
+sent. When the provider reports what the call used, only that stays charged and the rest
+of the reservation is available again; a call whose usage is not reported, such as an
+interrupted one, keeps its whole reservation. A helper's limits are reserved from its
+lead's approved aggregate allowance while the helper runs; when it finishes or is stopped,
+the lead is charged only what the helper used. Events do not refill an allowance.
 Current authority and any retained expansion requests are reviewed from the Agent inspector.
 
 The enforced native provider boundary currently accepts reviewed local Ollama

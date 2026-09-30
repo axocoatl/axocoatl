@@ -612,7 +612,13 @@ async fn provider_zero_api_charge_is_known_independently_of_token_completion_and
         assert_eq!(usage.unsettled_calls, 0, "{ending}");
         let state = fixture.controller.lock().unwrap();
         let charged = state.authority.usage("grant").unwrap();
-        assert_eq!(charged.tokens, 100);
+        // Only a completed call settles to its 5 reported tokens, even after
+        // Stop; every other ending keeps the whole reservation.
+        assert_eq!(
+            charged.tokens,
+            if ending == "done" { 5 } else { 100 },
+            "{ending}"
+        );
         assert_eq!(charged.invocations, 1);
         assert_eq!(charged.cost_microunits, 0);
         assert_eq!(inner.calls.load(Ordering::SeqCst), 1, "{ending}");
@@ -710,8 +716,10 @@ async fn provider_authoritative_cost_settles_only_at_valid_terminal() {
             .authority
             .usage("grant")
             .unwrap();
-        // Original admission charges remain reserved; measured cost is separate.
-        assert_eq!(charged.cost_microunits, 10);
+        // A valid terminal settles the reservation to the measured tokens and
+        // cost; without one the whole reservation stays charged.
+        assert_eq!(charged.cost_microunits, if complete { 4 } else { 10 });
+        assert_eq!(charged.tokens, if complete { 10 } else { 100 });
         assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
     }
 }

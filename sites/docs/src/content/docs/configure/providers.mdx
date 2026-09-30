@@ -99,8 +99,9 @@ the exact model and retains its capabilities, context/output limits, and prices.
 Each request reserves the full input-context allowance plus bounded output, uses
 enforced output and price ceilings, and disables automatic retries and fallbacks.
 If the approved allowance cannot cover that reservation, the request does not start.
-Final measured usage and cost are retained; a missing final response stays unknown
-and does not release the reservation.
+Final measured usage and cost are retained and settle the reservation: only they stay
+charged, and the rest is available to later requests. A missing final response stays
+unknown and does not release the reservation.
 
 Currently eligible profiles require an exact endpoint variant, text output, tool
 calling, an enforced output limit, and complete bounded pricing. Reasoning models,
