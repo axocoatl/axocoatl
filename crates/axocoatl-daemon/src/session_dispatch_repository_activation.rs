@@ -359,7 +359,7 @@ impl InvocationTool {
         if relative.as_deref().is_some_and(|relative| {
             scope
                 .iter()
-                .any(|pattern| axocoatl_coordination::field::pattern_matches(pattern, relative))
+                .any(|pattern| axocoatl_session::path_scope::pattern_matches(pattern, relative))
         }) {
             return Ok(());
         }

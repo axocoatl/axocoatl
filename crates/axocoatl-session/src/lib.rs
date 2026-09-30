@@ -20,6 +20,7 @@ pub mod execution_ownership;
 pub mod execution_store;
 pub mod invocation_audit;
 pub mod native_history;
+pub mod path_scope;
 pub mod session_attachment;
 pub mod session_history;
 pub mod session_team;

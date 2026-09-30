@@ -337,7 +337,7 @@ impl SessionDispatchController {
             .filter(|path| {
                 !scope
                     .iter()
-                    .any(|pattern| axocoatl_coordination::field::pattern_matches(pattern, path))
+                    .any(|pattern| axocoatl_session::path_scope::pattern_matches(pattern, path))
             })
             .collect();
         Ok((!outside.is_empty()).then(|| {
