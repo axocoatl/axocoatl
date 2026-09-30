@@ -1289,3 +1289,32 @@ async fn live_host_grant_review_uses_existing_authority_lease_before_activation(
         .unwrap();
     drop(prepared);
 }
+
+#[test]
+fn legacy_path_routed_work_fields_are_read_and_dropped() {
+    let stored = serde_json::json!({
+        "receipt_id": "receipt",
+        "binding": {
+            "binding_id": "binding",
+            "binding_revision": 1,
+            "workspace_id": "workspace",
+            "session_id": "session",
+            "team_revision": 1,
+            "grant_id": "grant",
+            "grant_revision": 1,
+            "source_id": "signals",
+            "event_kind": "signal",
+        },
+        "subject": {"kind": "signal_field", "reference_id": "coder", "version": "1"},
+        "required_checks": [],
+        "write_scope": ["lib/"],
+        "signal_routes": [{"node_id": "coder", "label": "Coder", "watches": ["lib/"]}],
+    });
+    let work: crate::bootstrap::native_turn::NativeStandingWork =
+        serde_json::from_value(stored).unwrap();
+    assert!(work.legacy_write_scope.is_some() && work.legacy_signal_routes.is_some());
+    let written = serde_json::to_value(&work).unwrap();
+    assert!(written.get("write_scope").is_none());
+    assert!(written.get("signal_routes").is_none());
+    assert_eq!(written["receipt_id"], "receipt");
+}

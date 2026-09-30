@@ -47,13 +47,7 @@ pub struct SessionWorkEventInput {
 mod causal;
 #[path = "bootstrap_session_work_readiness.rs"]
 mod readiness;
-#[path = "bootstrap_session_work_signals.rs"]
-mod signals;
 pub use readiness::SessionWorkReadiness;
-pub use signals::{
-    SignalDepositView, SignalDispatchView, SignalFieldView, SignalFlagInput, SignalSensorView,
-    SignalWithdrawInput,
-};
 #[derive(Serialize)]
 pub struct SessionWorkItem {
     pub receipt: TeamWorkReceipt,
@@ -238,15 +232,7 @@ impl AxocoatlDaemon {
                     TeamWorkSource::SessionCompletion { session_id } => {
                         format!("session:{session_id}")
                     }
-                    TeamWorkSource::SignalField { .. } => signals::SIGNAL_SOURCE_ID.to_owned(),
                 };
-                let slots: Vec<String> = current
-                    .graph
-                    .slots
-                    .iter()
-                    .map(|slot| slot.slot_id.as_str().to_owned())
-                    .collect();
-                self.validate_signal_routes(session_id, &edit.source, &slots)?;
                 let binding = ArmedTeamWorkBinding {
                     binding: TeamWorkBinding {
                         binding_id: edit.binding_id,
@@ -275,8 +261,6 @@ impl AxocoatlDaemon {
                     .map_err(work_error)
             },
         )?;
-        // A newly armed field records what already exists before it can sense.
-        self.arm_signal_field(&binding).await?;
         Ok(binding)
     }
 
@@ -715,41 +699,15 @@ impl AxocoatlDaemon {
         let request = if let Some(source) = &receipt.execution_source {
             serde_json::from_str::<NativeFirstTurnRequest>(source).map_err(work_error)?
         } else {
-            // A signal is rechecked against current source before it starts and
-            // goes only to the Agent responsible for the signaled paths.
-            let (input, display_input, target_agent, write_scope, signal_routes) =
-                if matches!(binding.source, TeamWorkSource::SignalField { .. }) {
-                    match self.prepare_signal_execution(&binding, &receipt).await? {
-                        signals::SignalExecution::Run {
-                            target,
-                            input,
-                            display,
-                            write_scope,
-                            routes,
-                        } => (input, display, Some(target), Some(write_scope), routes),
-                        signals::SignalExecution::Superseded(reason) => {
-                            self.work_inbox()?
-                                .dismiss(receipt_id, reason)
-                                .map_err(work_error)?;
-                            return self.session_work(session_id).await;
-                        }
-                    }
-                } else {
-                    (
-                        format!(
-                            "{}\n\nDeclared work candidate (verify before claiming readiness):\n{}",
-                            binding.instruction,
-                            serde_json::to_string(&receipt.request.event).map_err(work_error)?
-                        ),
-                        format!(
-                            "{}: {}",
-                            binding.binding.event_kind, receipt.request.event.subject.reference_id
-                        ),
-                        None,
-                        None,
-                        Vec::new(),
-                    )
-                };
+            let input = format!(
+                "{}\n\nDeclared work candidate (verify before claiming readiness):\n{}",
+                binding.instruction,
+                serde_json::to_string(&receipt.request.event).map_err(work_error)?
+            );
+            let display_input = format!(
+                "{}: {}",
+                binding.binding.event_kind, receipt.request.event.subject.reference_id
+            );
             let mut request = self
                 .prepare_native_send_request(&NativeSessionSend {
                     session_id: session_id.to_owned(),
@@ -760,7 +718,7 @@ impl AxocoatlDaemon {
                     reference_ids: Vec::new(),
                     context_references: Vec::new(),
                     model_override: None,
-                    target_agent: target_agent.clone(),
+                    target_agent: None,
                 })
                 .await?;
             let requested: Vec<_> = request
@@ -773,15 +731,10 @@ impl AxocoatlDaemon {
                     expires_at_ms: grant.expires_at_ms,
                 })
                 .collect();
-            // Whole-team work uses every approved grant. Targeted signal work
-            // uses exactly its Agent's grant, unchanged from the binding.
-            let exact = if target_agent.is_some() {
-                !requested.is_empty()
-                    && requested.iter().all(|grant| binding.grants.contains(grant))
-            } else {
-                requested == binding.grants
-            };
-            if request.expected_team_revision != binding.binding.team_revision || !exact {
+            // Whole-team work uses every approved grant, unchanged from the binding.
+            if request.expected_team_revision != binding.binding.team_revision
+                || requested != binding.grants
+            {
                 return Err(work_error(
                     "The approved team or standing allowance changed",
                 ));
@@ -791,21 +744,13 @@ impl AxocoatlDaemon {
                 binding: binding.binding.clone(),
                 subject: receipt.request.event.subject.clone(),
                 required_checks: binding.required_checks.clone(),
-                write_scope: write_scope.clone(),
-                signal_routes: signal_routes.clone(),
+                legacy_write_scope: None,
+                legacy_signal_routes: None,
             });
-            receipt = if target_agent.is_some() {
-                let grants: Vec<String> = requested.iter().map(|grant| grant.id.clone()).collect();
-                self.work_inbox()?.reserve_native_turn_for_grants(
-                    receipt_id,
-                    request.source()?,
-                    &grants,
-                )
-            } else {
-                self.work_inbox()?
-                    .reserve_native_turn(receipt_id, request.source()?)
-            }
-            .map_err(work_error)?;
+            receipt = self
+                .work_inbox()?
+                .reserve_native_turn(receipt_id, request.source()?)
+                .map_err(work_error)?;
             request
         };
         self.validate_standing_work_admission(session_id, &receipt.turn_id, &request.source()?)?;

@@ -36,58 +36,9 @@ const INITIALIZED: &str = "team-work.initialized.v1";
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TeamWorkSource {
     Manual,
-    SignedWebhook {
-        configuration_name: String,
-    },
-    SessionCompletion {
-        session_id: String,
-    },
-    /// Stigmergic work inside this Session's own repository. The host leaves
-    /// deposits on paths (findings, changes, failed checks); a route's Agent
-    /// receives targeted work when the evaporated signal on the paths it
-    /// watches crosses its threshold. Work is still admitted, reserved and
-    /// executed through this inbox and the ordinary native controller.
-    SignalField {
-        routes: Vec<SignalRoute>,
-        /// Evaporation half-life. `None` keeps deposits at full strength.
-        #[serde(default)]
-        half_life_ms: Option<u64>,
-        /// Automatic dispatches allowed per episode: a stretch of work that
-        /// starts with a deposit after the field was last quiet.
-        max_dispatches: u32,
-        /// Measured tokens the signal turns of one episode may use before
-        /// further crossings are held for a person. `None` is no extra bound.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_episode_tokens: Option<u64>,
-    },
+    SignedWebhook { configuration_name: String },
+    SessionCompletion { session_id: String },
 }
-
-/// One Session team slot's responsibility in a signal field.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SignalRoute {
-    pub slot_id: String,
-    /// Repository path patterns whose signals this slot senses.
-    pub watches: Vec<String>,
-    /// Threshold in thousandths of one finding's deposit (1000 = one finding).
-    pub threshold_milli: u32,
-    /// Path patterns this slot may change during signal work. Absent means
-    /// its watched paths; empty makes it read-only, like a reviewer that
-    /// watches everything and reports findings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owns: Option<Vec<String>>,
-}
-
-impl SignalRoute {
-    /// The paths this slot may change during signal work.
-    pub fn owned(&self) -> &[String] {
-        self.owns.as_deref().unwrap_or(&self.watches)
-    }
-}
-
-pub const MAX_SIGNAL_ROUTES: usize = 32;
-pub const MAX_SIGNAL_WATCHES: usize = 32;
-pub const MAX_SIGNAL_DISPATCHES: u32 = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -518,26 +469,6 @@ impl TeamWorkInbox {
         receipt_id: &str,
         source: String,
     ) -> Result<TeamWorkReceipt, TeamWorkError> {
-        self.reserve_native_turn_scoped(receipt_id, source, None)
-    }
-
-    /// Reserve a turn that installs only the named grants, such as a turn
-    /// targeted at one Agent. The subset is fixed with the reservation.
-    pub fn reserve_native_turn_for_grants(
-        &mut self,
-        receipt_id: &str,
-        source: String,
-        grants: &[String],
-    ) -> Result<TeamWorkReceipt, TeamWorkError> {
-        self.reserve_native_turn_scoped(receipt_id, source, Some(grants))
-    }
-
-    fn reserve_native_turn_scoped(
-        &mut self,
-        receipt_id: &str,
-        source: String,
-        grants: Option<&[String]>,
-    ) -> Result<TeamWorkReceipt, TeamWorkError> {
         self.ensure_usable()?;
         if source.is_empty() || source.len() > crate::turn_contract::MAX_CONTRACT_ENVELOPE_BYTES {
             return Err(TeamWorkError::Invalid(
@@ -560,7 +491,7 @@ impl TeamWorkInbox {
         let mut next = self.data.clone();
         next.receipts[index].disposition = TeamWorkDisposition::Reserved;
         next.receipts[index].execution_source = Some(source);
-        next.receipts[index].allocations = self.allocate_native_budget(index, grants)?;
+        next.receipts[index].allocations = self.allocate_native_budget(index)?;
         let receipt = next.receipts[index].clone();
         self.commit(next)?;
         Ok(receipt)
@@ -816,72 +747,6 @@ fn bounded_text(name: &str, value: &str, max: usize) -> Result<(), TeamWorkError
     Ok(())
 }
 
-fn validate_signal_field(
-    routes: &[SignalRoute],
-    half_life_ms: Option<u64>,
-    max_dispatches: u32,
-) -> Result<(), TeamWorkError> {
-    if routes.is_empty() || routes.len() > MAX_SIGNAL_ROUTES {
-        return Err(TeamWorkError::Invalid(
-            "a signal field needs between 1 and 32 routes".into(),
-        ));
-    }
-    if half_life_ms.is_some_and(|half_life| half_life < 1000) {
-        return Err(TeamWorkError::Invalid(
-            "signal half-life must be at least one second".into(),
-        ));
-    }
-    if max_dispatches == 0 || max_dispatches > MAX_SIGNAL_DISPATCHES {
-        return Err(TeamWorkError::Invalid(
-            "signal dispatch limit must be between 1 and 64".into(),
-        ));
-    }
-    let mut slots = HashSet::new();
-    for route in routes {
-        bounded_text("signal slot", &route.slot_id, 512)?;
-        if !slots.insert(&route.slot_id) {
-            return Err(TeamWorkError::Invalid(
-                "each slot may appear in one signal route".into(),
-            ));
-        }
-        if route.watches.is_empty() || route.watches.len() > MAX_SIGNAL_WATCHES {
-            return Err(TeamWorkError::Invalid(
-                "each signal route needs between 1 and 32 watched patterns".into(),
-            ));
-        }
-        if route
-            .owns
-            .as_ref()
-            .is_some_and(|owns| owns.len() > MAX_SIGNAL_WATCHES)
-        {
-            return Err(TeamWorkError::Invalid(
-                "each signal route may own at most 32 path patterns".into(),
-            ));
-        }
-        for pattern in route.watches.iter().chain(route.owns.iter().flatten()) {
-            bounded_text("path pattern", pattern, 512)?;
-            let body = pattern.strip_suffix('/').unwrap_or(pattern);
-            if body.is_empty()
-                || pattern.starts_with('/')
-                || pattern.contains('\\')
-                || body
-                    .split('/')
-                    .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-            {
-                return Err(TeamWorkError::Invalid(format!(
-                    "{pattern:?} is not a repository path pattern"
-                )));
-            }
-        }
-        if route.threshold_milli == 0 || route.threshold_milli > 100_000 {
-            return Err(TeamWorkError::Invalid(
-                "signal thresholds must be between 0.001 and 100".into(),
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn validate_binding(entry: &ArmedTeamWorkBinding) -> Result<(), TeamWorkError> {
     standing_check_definitions(&entry.required_checks)?;
     for argv in &entry.required_checks {
@@ -959,19 +824,6 @@ fn validate_binding(entry: &ArmedTeamWorkBinding) -> Result<(), TeamWorkError> {
         TeamWorkSource::SessionCompletion { session_id } => {
             crate::turn_contract::SessionId::new(session_id.clone())
                 .map_err(|error| TeamWorkError::Invalid(error.to_string()))?;
-        }
-        TeamWorkSource::SignalField {
-            routes,
-            half_life_ms,
-            max_dispatches,
-            max_episode_tokens,
-        } => {
-            validate_signal_field(routes, *half_life_ms, *max_dispatches)?;
-            if *max_episode_tokens == Some(0) {
-                return Err(TeamWorkError::Invalid(
-                    "an episode token budget must be positive".into(),
-                ));
-            }
         }
         TeamWorkSource::Manual => {}
     }
@@ -1755,105 +1607,6 @@ mod tests {
     }
 
     #[test]
-    fn targeted_work_reserves_only_its_agent_grant_with_shared_lineage() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut inbox = TeamWorkInbox::open(dir.path()).unwrap();
-        let mut request = request();
-        request.binding.binding_revision = 1;
-        let limits = crate::control_authority::GrantLimits {
-            activations: 3,
-            invocations: 10,
-            tokens: 100,
-            cost_microunits: 0,
-        };
-        let owner = TeamWorkGrantReference {
-            id: request.binding.grant_id.clone(),
-            revision: request.binding.grant_revision,
-            limits: limits.clone(),
-            expires_at_ms: u64::MAX,
-        };
-        let reviewer = TeamWorkGrantReference {
-            id: "reviewer-grant".into(),
-            revision: 1,
-            limits,
-            expires_at_ms: u64::MAX,
-        };
-        inbox
-            .configure_binding(
-                0,
-                ArmedTeamWorkBinding {
-                    binding: request.binding.clone(),
-                    source: TeamWorkSource::Manual,
-                    armed: true,
-                    instruction: "Respond to signals".into(),
-                    required_checks: Vec::new(),
-                    grants: vec![owner.clone(), reviewer.clone()],
-                    authorized_at_ms: 1,
-                    source_after_turn: None,
-                },
-            )
-            .unwrap();
-        let first = inbox.admit_bound(request.clone(), 2).unwrap();
-        request.event.event_id = "second".into();
-        let second = inbox.admit_bound(request.clone(), 3).unwrap();
-        assert!(inbox
-            .reserve_native_turn_for_grants(&first.receipt_id, "{}".into(), &["invented".into()])
-            .is_err());
-        assert!(inbox
-            .reserve_native_turn_for_grants(&first.receipt_id, "{}".into(), &[])
-            .is_err());
-        let reserved = inbox
-            .reserve_native_turn_for_grants(
-                &first.receipt_id,
-                "{\"target\":\"reviewer\"}".into(),
-                &["reviewer-grant".into()],
-            )
-            .unwrap();
-        assert_eq!(reserved.allocations.len(), 1);
-        assert_eq!(reserved.allocations[0].grant, reviewer);
-        // The untouched owner grant has no unresolved allocation, but the
-        // reviewer grant must settle before it can be allocated again.
-        assert!(inbox
-            .reserve_native_turn(&second.receipt_id, "{\"whole\":true}".into())
-            .is_err());
-        let allocation = inbox
-            .native_allocations(&first.receipt_id)
-            .unwrap()
-            .remove(0);
-        inbox
-            .settle_native_budget(
-                &first.receipt_id,
-                &[TeamWorkGrantSettlement {
-                    receipt_id: first.receipt_id.clone(),
-                    session_id: first.request.binding.session_id.clone(),
-                    turn_id: first.turn_id.clone(),
-                    grant: reviewer.clone(),
-                    consumed_before: allocation.allocation.consumed_before,
-                    settled: budget::Settlement {
-                        total_consumed: crate::control_authority::GrantUsage {
-                            activations: 1,
-                            invocations: 3,
-                            tokens: 40,
-                            cost_microunits: 0,
-                        },
-                        revoked: false,
-                        basis: budget::SettlementBasis::Measured,
-                    },
-                }],
-            )
-            .unwrap();
-        let whole = inbox
-            .reserve_native_turn(&second.receipt_id, "{\"whole\":true}".into())
-            .unwrap();
-        assert_eq!(whole.allocations.len(), 2);
-        assert_eq!(whole.allocations[0].consumed_before.tokens, 0);
-        assert_eq!(whole.allocations[1].consumed_before.tokens, 40);
-        drop(inbox);
-        let reopened = TeamWorkInbox::open(dir.path()).unwrap();
-        assert_eq!(reopened.receipts().unwrap()[0].allocations.len(), 1);
-        assert_eq!(reopened.receipts().unwrap()[1].allocations.len(), 2);
-    }
-    #[test]
     fn causal_no_work_and_queue_failure_are_durable_dispositions() {
         let dir = tempfile::tempdir().unwrap();
         let mut inbox = TeamWorkInbox::open(dir.path()).unwrap();
@@ -1915,97 +1668,6 @@ mod tests {
         );
         reopened.record_blocked(&queued.receipt_id, None).unwrap();
         assert!(reopened.receipts().unwrap()[1].blocked_reason.is_none());
-    }
-
-    #[test]
-    fn signal_field_binding_is_durable_and_validated() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut inbox = TeamWorkInbox::open(dir.path()).unwrap();
-        let mut request = request();
-        request.binding.binding_revision = 1;
-        request.binding.source_id = "signals".into();
-        let route = |slot: &str, watches: &[&str], threshold_milli| SignalRoute {
-            slot_id: slot.into(),
-            watches: watches.iter().map(|w| (*w).into()).collect(),
-            threshold_milli,
-            owns: None,
-        };
-        let owning = |slot: &str, watches: &[&str], owns: &[&str]| SignalRoute {
-            owns: Some(owns.iter().map(|w| (*w).into()).collect()),
-            ..route(slot, watches, 500)
-        };
-        let binding = |source| ArmedTeamWorkBinding {
-            binding: request.binding.clone(),
-            source,
-            armed: true,
-            instruction: "Respond to signals on your area".into(),
-            required_checks: vec![vec!["npm".into(), "run".into(), "check".into()]],
-            grants: vec![TeamWorkGrantReference {
-                id: request.binding.grant_id.clone(),
-                revision: request.binding.grant_revision,
-                limits: crate::control_authority::GrantLimits {
-                    activations: 3,
-                    invocations: 10,
-                    tokens: 100,
-                    cost_microunits: 0,
-                },
-                expires_at_ms: u64::MAX,
-            }],
-            authorized_at_ms: 1,
-            source_after_turn: None,
-        };
-        let field = |routes, half_life_ms, max_dispatches| TeamWorkSource::SignalField {
-            routes,
-            half_life_ms,
-            max_dispatches,
-            max_episode_tokens: None,
-        };
-        for invalid in [
-            field(vec![], None, 4),
-            field(vec![route("coder", &["lib/"], 1000)], Some(10), 4),
-            field(vec![route("coder", &["lib/"], 1000)], None, 0),
-            field(vec![route("coder", &["lib/"], 0)], None, 4),
-            field(vec![route("coder", &["../lib"], 1000)], None, 4),
-            field(vec![route("coder", &["/etc"], 1000)], None, 4),
-            field(vec![route("coder", &[], 1000)], None, 4),
-            field(vec![owning("coder", &["lib/"], &["../x"])], None, 4),
-            field(
-                vec![
-                    route("coder", &["lib/"], 1000),
-                    route("coder", &["test/"], 1000),
-                ],
-                None,
-                4,
-            ),
-        ] {
-            assert!(inbox.configure_binding(0, binding(invalid)).is_err());
-        }
-        let valid = binding(field(
-            vec![
-                route("coder", &["lib/orders.js"], 1000),
-                owning("reviewer", &["lib/", "*.test.js"], &[]),
-            ],
-            Some(30 * 60 * 1000),
-            6,
-        ));
-        let TeamWorkSource::SignalField { routes, .. } = &valid.source else {
-            unreachable!()
-        };
-        assert_eq!(routes[0].owned(), ["lib/orders.js".to_string()]);
-        assert!(routes[1].owned().is_empty());
-        inbox.configure_binding(0, valid.clone()).unwrap();
-        drop(inbox);
-        let reopened = TeamWorkInbox::open(dir.path()).unwrap();
-        assert_eq!(
-            reopened
-                .current_binding(&valid.binding.binding_id)
-                .unwrap()
-                .unwrap(),
-            &valid
-        );
-        let json = serde_json::to_value(&valid.source).unwrap();
-        assert_eq!(json["kind"], "signal_field");
-        assert_eq!(json["routes"][1]["threshold_milli"], 500);
     }
 
     #[test]

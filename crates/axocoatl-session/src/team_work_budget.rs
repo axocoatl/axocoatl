@@ -121,7 +121,6 @@ impl TeamWorkInbox {
     pub(super) fn allocate_native_budget(
         &self,
         index: usize,
-        only: Option<&[String]>,
     ) -> Result<Vec<TeamWorkGrantAllocation>, TeamWorkError> {
         let receipt = &self.data.receipts[index];
         if !receipt.native_capacity_reserved {
@@ -133,23 +132,8 @@ impl TeamWorkInbox {
             .iter()
             .find(|binding| binding.binding == receipt.request.binding)
             .ok_or_else(|| TeamWorkError::Invalid("native work lost its binding budget".into()))?;
-        if let Some(only) = only {
-            if only.is_empty()
-                || only
-                    .iter()
-                    .any(|id| !binding.grants.iter().any(|grant| &grant.id == id))
-            {
-                return Err(TeamWorkError::Invalid(
-                    "targeted work must name grants from its binding".into(),
-                ));
-            }
-        }
         let mut allocated = Vec::new();
-        for grant in binding
-            .grants
-            .iter()
-            .filter(|grant| only.is_none_or(|only| only.contains(&grant.id)))
-        {
+        for grant in &binding.grants {
             let mut consumed = GrantUsage::default();
             for (prior_index, earlier) in self.data.receipts.iter().enumerate() {
                 if prior_index == index {

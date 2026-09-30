@@ -657,6 +657,36 @@ Settings projections. If a dispatched call ends without a terminal response and 
 `token_usage_known` remains false across later calls and checkpoint restart; displayed numbers
 are labeled as known subtotals rather than exact totals.
 
+## Reliability for local models
+
+Native activations are built to keep working on small local models with short contexts
+and streams that sometimes end early.
+
+- **Invocation reserve.** An activation that can run commands in a repository keeps a
+  reserve of invocations for the host's observations: its After capture and, on the grant
+  that pays for required checks, one shared Before capture, each check and one shared After
+  capture. A tool call must also leave room for the provider call that reads it and one
+  more, so a model whose next tool round is declined can still answer. Calls of one
+  response are counted together before any pre-hook runs, and a call that no longer fits
+  at admission is declined as a tool error rather than failing the activation. Before a
+  lead admits a helper, what the lead has left after the helper's reservation must still
+  cover reading the helper's answer.
+- **Bounded context.** Tool output, and long string arguments of the model's own earlier
+  calls (such as a whole-file write), older than the latest three to five tool rounds are
+  replaced with a placeholder in later requests, moving in steps of three so the request
+  prefix stays stable. If a request would still pass the context threshold, only the
+  latest round stays whole and shorter output is elided too; as a last resort the Agent's
+  earliest tool rounds (each call with its results) are left out of the request with a
+  one-line note. A person's messages in the turn always stay, and Session History keeps
+  the full content. `workspace_knowledge` results are never masked; a helper's `delegate`
+  answer stays whole until a request would not fit.
+- **One retry for a broken stream.** A provider stream that ends early (for Ollama also
+  one ended by an error record, such as an unparseable tool call) is retried once. Its
+  estimated input and the output it had already streamed are charged to the same grant
+  before the retry, and the retry is checked against what is left.
+- **Failure classes.** A failed activation states its failure class (provider stream,
+  budget, context limit, write scope, capture, admission) and a suggested next step.
+
 ## Multi-agent sessions and event lattice
 
 Native Sessions retain their approved whole-team revision and immutable definitions before
@@ -781,110 +811,6 @@ webhooks, the recent-events API, and WebSocket compatibility frames observe the
 same feed. It keeps no history and never starts Agents on its own. The Session
 scheduler is deliberately turn-scoped and predicate-based.
 
-### Session signal field
-
-A native Session's standing work can be armed with a `signal_field` source. This is the
-pheromone mechanism applied to a repository, and it replaces the global broadcast above
-for Session work. `axocoatl-coordination::field` holds the pure model; the daemon owns
-observation, admission and retention.
-
-- **Locations, not broadcast.** Each route names one Session team slot, the repository path
-  patterns it watches, optionally the patterns it owns (default: the watched ones; empty
-  makes a read-only slot such as a reviewer), and a threshold. A deposit is left on paths. A slot senses only deposits
-  on paths it watches, never deposits it produced itself, and only until it acts on them.
-- **Deposits come from recorded evidence.** A `finding` or `pitfall` proposal from a closed
-  Completed/Finished turn of the same Session deposits 1.0 on its cited paths. A person's
-  finding note or flag deposits 1.0. A watched file whose bytes changed after a settled turn
-  deposits 0.5, attributed to the latest newly settled turn whose own repository captures
-  show that path changed (its slot, when that turn was signal work); a change no settled turn
-  made is a workspace edit. A required
-  standing check that failed after signal work deposits 1.5 on the paths that turn changed.
-  Redelivery of the same cause is idempotent, not corroboration.
-- **Attribution.** Changes are observed only while no turn is running. A settled turn owns
-  the changes its own captures show; the observation mark moves only through closed turns, so
-  a turn paused for attention owns what it changed until then, but not edits a person makes
-  while it waits.
-- **Durable arithmetic.** Intensity is the sum of `strength × 2^(−age/half-life)` over
-  applicable deposits, computed from recorded wall-clock times, so a restart yields the same
-  field. A source-bound deposit stops counting once any file it recorded changes, is missing,
-  or a person withdraws it or rejects the proposal behind it.
-- **Crossing is a proposal, not authority.** When a slot's intensity reaches its threshold,
-  the host admits one receipt through the ordinary team-work inbox: subject kind
-  `signal_field`, evidence = the contributing deposits, and a deterministic dispatch id so a
-  crash between admission and the dispatch record finds the same receipt. The receipt runs
-  FIFO with other standing work, targets only that slot, reserves only that slot's grant, and
-  counts against the automatic dispatch limit of the current episode. A slot with pending
-  signal work is not dispatched again. A person can send a slot its current deposits below
-  threshold; that dispatch is recorded as manual and releases any hold.
-- **Episodes and holds.** An episode is the work since the field was last quiet; a deposit
-  after quiet starts the next one. Only started work counts toward the episode's dispatch
-  limit and optional token budget (`max_episode_tokens`, from the signal turns' recorded
-  usage). A crossing whose claims and watched file bytes match an earlier dispatch of that
-  slot is held as a repeat; one past the limit or budget is held too, each with its reason,
-  until a person sends it or the next episode starts. Quiet means nothing is crossing,
-  held or running, labelled "on visible checks" only when required checks exist; it is
-  never a claim that the work is correct. One source counts once: several deposits from
-  one turn, check run, note or unattributed observation share one vote.
-- **Recheck before start.** Immediately before a signal receipt begins, the host rehashes the
-  signaled sources. If every contributing deposit has been superseded, the receipt is
-  dismissed without a model call. The Agent receives each live deposit with its kind, paths,
-  cause and finding text as evidence to verify, plus the team's routes.
-- **Ownership.** During signal work the slot's `write_file` and `edit_file` refuse paths
-  outside its owned patterns before any effect, and also refuse `..` and any path through a
-  symbolic link, and tell the Agent to record a finding instead. A read-only slot (`owns:
-  []`) runs every process, its shell included, under a kernel write restriction (Landlock,
-  applied by the in-sandbox execution supervisor between fork and exec): only `/tmp`,
-  `/var/tmp`, `/dev` and the container home are writable, never the repository, and a
-  supervisor that cannot apply it refuses to launch the command. A writer's shell can still
-  write outside its owned paths, so the activation's own Before and After repository
-  captures decide: an equal
-  tree digest means no change; otherwise complete manifests are compared exactly, or the
-  retained patches against the same HEAD file by file. If any non-ignored file outside the
-  owned patterns changed, or the captures cannot establish the change set (an exhausted
-  invocation allowance, a HEAD moved by a commit, a patch over 512 KiB, a submodule or
-  nested checkout), the activation fails and its turn needs attention. The change is not
-  reverted; it stays for the person to keep or undo. Ignored files are not judged.
-- **Findings route by role.** A proposed finding cites sources as `must_change` (the default)
-  or `evidence`. Only must-change paths route the deposit; evidence paths are recorded so a
-  later change there is reported to whoever acts, without retiring the deposit. The propose
-  result names the slots the finding will signal, whether only the proposer watches it, or
-  that nobody does; a finding that names repository files it does not cite is asked once to
-  cite them. An omitted `expected_revision` creates a note and never replaces an existing one.
-  Only published proposals deposit: the exact activation was accepted when its turn closed
-  (and its Way kept), or a person accepted it. Unpublished findings that cite a file that must
-  change are listed for a person to accept or dismiss. A finding records the bytes it is
-  about: once a proposal has passed every check, the host reads each cited file with one fixed,
-  read-only digest observation (admitted on the activation's grant under the same lock as any
-  claim, only while the invocation reserve can spare it) that hashes a path only when it
-  resolves to exactly `<repository>/<path>` as a readable regular file, never through a
-  symbolic link or outside the repository. A digest the model gives is kept only for a file
-  the host could not read; the activation's starting capture is the last fallback. The
-  finding's deposit uses those recorded digests, so a fix made later in the same turn retires
-  it. A proposal whose note could never be published (over the document limit) is refused
-  when proposed.
-- **Bounded activations.** An activation keeps a reserve of invocations for the host's
-  observations: its After capture and, on the grant that pays for required checks, their
-  runs. A tool call must also leave room for the provider call that reads it and one more, so
-  a model whose next tool round is declined can still answer. Calls of one response are
-  counted together before any pre-hook runs, and a call that no longer fits at admission is
-  declined as a tool error rather than failing the activation. A signal activation's requests
-  replace tool output, and long string arguments of the model's own earlier calls (such as a
-  whole-file write), older than its latest three to five tool rounds with a placeholder,
-  moving in steps of three so the request prefix stays stable; if a request would still pass
-  the context threshold, only the latest round stays whole and shorter output is elided too,
-  and as a last resort the Agent's earliest tool rounds (each call with its results) are left
-  out of the request with a one-line note; a person's messages in the turn always stay. The Session history keeps the full content, and `workspace_knowledge` calls are never masked. A provider stream that ends
-  early (for Ollama also one ended by an error record, such as an unparseable tool call) is
-  retried once; its estimated input and the output it had already streamed are
-  charged before the retry.
-
-Observation runs only against an already-running Session runtime and never starts one.
-Required ready work never depends on a threshold: other standing sources, the chat, and
-manual dispatch are unaffected. The Work sources inspector shows each slot's intensity and
-threshold, every deposit with the reason it does or does not count for each slot, a cause
-chain that lists each dispatch with the deposits that caused it, how its work ended and the
-deposits its turn left, and a cause graph of the same links.
-
 The per-Agent `activation_threshold` / `activation_decay` keys were removed in 1.1.0 with
 the process-wide threshold counter; the daemon warns when a config still sets them. `TurnCoordinationScheduler`
 orders one turn's Agents by exact named dependencies and has no thresholds or decay.
@@ -956,6 +882,18 @@ successful unselected candidates remain pending. Knowledge cannot
 expand a grant, make repository writes, or mark a required check passed. The API
 and Session inspector expose provenance, source links, backlinks, proposal states,
 and explicit editing/export rather than trusting model confidence as evidence.
+
+A proposed finding or pitfall cites sources as `must_change` (the default: the file that
+must change to fix the problem) or `evidence` (a supporting file). Once a proposal has
+passed every check, the host reads each cited file with one fixed, read-only digest
+observation, admitted on the activation's grant only while the invocation reserve can
+spare it, that hashes a path only when it resolves to exactly `<repository>/<path>` as a
+readable regular file, never through a symbolic link or outside the repository. A digest
+the model gives is kept only for a file the host could not read; the activation's starting
+capture is the last fallback. A finding that names repository files it does not cite is
+asked once to cite them. An omitted `expected_revision` creates a note and never replaces
+an existing one, and a proposal whose note could never be published (over the document
+limit) is refused when proposed.
 
 `knowledge_index` builds a bounded, rebuildable index from caller-supplied source
 under a declared snapshot identity. Pinned Tree-sitter grammars parse Rust,
@@ -1241,6 +1179,32 @@ for an E2B clone or for container-local dependency volumes.
   outside our control.
 - **What you explicitly grant.** Bridged networking, mounted credentials, or a
   permissive tool policy widen the surface — by your choice.
+
+### File ownership inside one checkout
+
+The Agents of one native Session share one checkout. An Agent's `writes` list, or the
+**May change** choice in Team & budget, is recorded in the profile of every activation it
+runs, and enforcement reads it from that admitted record, never from live configuration.
+A scope that cannot be read refuses the write or process it was checking. A helper cannot
+be admitted with a wider scope than the lead that delegated to it.
+
+- `write_file` and `edit_file` refuse paths outside the scope before any effect, refuse
+  `..` and any path through a symbolic link, and tell the Agent to leave the file
+  unchanged and describe the needed change in its answer.
+- A read-only Agent (`writes: []`) is not offered `write_file` or `edit_file`. Its own
+  `bash` commands run under a kernel write restriction (Landlock, applied by the
+  in-sandbox execution supervisor between fork and exec): only `/tmp`, `/var/tmp`, `/dev`
+  and the container home are writable, never the repository. A supervisor that cannot
+  apply it refuses to launch that command. The read-only file tools and the host's own
+  repository captures run without the restriction.
+- A writer's shell can still write outside its paths, so the activation's own Before and
+  After repository captures decide: an equal tree digest means no change; otherwise
+  complete manifests are compared exactly, or the retained patches against the same HEAD
+  file by file. If any non-ignored file outside the scope changed, or the captures cannot
+  establish the change set (an exhausted invocation allowance, a HEAD moved by a commit, a
+  patch over 512 KiB, a submodule or nested checkout), the activation fails and its turn
+  needs attention. The change is not reverted; it stays for the person to keep or undo.
+  Ignored files are not judged. This is review evidence, not confinement.
 
 ### Isolation backends (local-first by default; you choose the sandbox)
 

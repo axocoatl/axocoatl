@@ -92,43 +92,35 @@ impl DispatchState {
     }
 }
 
-/// The write scopes an activation was admitted under, each a list of path
-/// patterns. A path may change only if every scope allows it, and any empty
-/// scope makes the activation read-only. No scope leaves every path open.
+/// The path patterns an activation was admitted to change. An empty list
+/// makes the activation read-only; no list leaves every path open.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct AdmittedWriteScope(Vec<Vec<String>>);
+pub(super) struct AdmittedWriteScope(Option<Vec<String>>);
 
 impl AdmittedWriteScope {
     pub(super) fn is_unrestricted(&self) -> bool {
-        self.0.is_empty()
+        self.0.is_none()
     }
     pub(super) fn is_read_only(&self) -> bool {
-        self.0.iter().any(Vec::is_empty)
+        self.0.as_ref().is_some_and(Vec::is_empty)
     }
     pub(super) fn allows(&self, path: &str) -> bool {
-        self.0
-            .iter()
-            .all(|scope| axocoatl_session::path_scope::scope_allows(Some(scope), path))
+        axocoatl_session::path_scope::scope_allows(self.0.as_deref(), path)
     }
     /// How the scope reads in messages to the Agent and the person.
     pub(super) fn describe(&self) -> String {
-        if self.is_read_only() {
-            "none; this Agent is read-only".to_owned()
-        } else {
-            self.0
-                .iter()
-                .map(|scope| scope.join(", "))
-                .collect::<Vec<_>>()
-                .join("; and only within ")
+        match &self.0 {
+            Some(scope) if !scope.is_empty() => scope.join(", "),
+            Some(_) => "none; this Agent is read-only".to_owned(),
+            None => "any file".to_owned(),
         }
     }
 }
 
 impl DispatchState {
     /// The write scope an activation was admitted with, read from its durable
-    /// authority record and never from a live copy. Standing work adds its
-    /// route's scope for every activation of its turn. A caller that cannot
-    /// read the scope must refuse the write or process it was checking.
+    /// authority record and never from a live copy. A caller that cannot read
+    /// the scope must refuse the write or process it was checking.
     pub(super) fn admitted_write_scope(
         &self,
         activation: &ActivationRef,
@@ -137,10 +129,7 @@ impl DispatchState {
             .authority
             .activation_profile(activation)
             .map_err(error)?;
-        let standing = self.standing_work()?.and_then(|work| work.write_scope);
-        Ok(AdmittedWriteScope(
-            profile.write_scope.into_iter().chain(standing).collect(),
-        ))
+        Ok(AdmittedWriteScope(profile.write_scope))
     }
 }
 
@@ -942,12 +931,9 @@ mod write_scope_tests {
     };
     use std::path::Path;
 
-    fn scope(scopes: &[&[&str]]) -> AdmittedWriteScope {
+    fn scope(scope: Option<&[&str]>) -> AdmittedWriteScope {
         AdmittedWriteScope(
-            scopes
-                .iter()
-                .map(|scope| scope.iter().map(|pattern| (*pattern).to_owned()).collect())
-                .collect(),
+            scope.map(|scope| scope.iter().map(|pattern| (*pattern).to_owned()).collect()),
         )
     }
 
@@ -982,30 +968,32 @@ mod write_scope_tests {
     }
 
     #[test]
-    fn scopes_combine_so_every_scope_must_allow_a_write() {
+    fn write_scope_refuses_paths_outside_it() {
         let root = Path::new("/workspace/repo");
-        assert_eq!(write_refusal(Ok(scope(&[])), root, "anything.js"), None);
+        assert_eq!(write_refusal(Ok(scope(None)), root, "anything.js"), None);
         assert_eq!(
-            write_refusal(Ok(scope(&[&["lib/"]])), root, "lib/a.js"),
+            write_refusal(Ok(scope(Some(&["lib/"]))), root, "lib/a.js"),
             None
         );
         assert_eq!(
-            write_refusal(Ok(scope(&[&["lib/"]])), root, "/workspace/repo/lib/a.js"),
+            write_refusal(Ok(scope(Some(&["lib/"]))), root, "/workspace/repo/lib/a.js"),
             None
         );
-        let outside = write_refusal(Ok(scope(&[&["lib/"]])), root, "src/a.js").unwrap();
+        let outside = write_refusal(Ok(scope(Some(&["lib/"]))), root, "src/a.js").unwrap();
         assert_eq!(
             outside,
             "src/a.js is outside the paths this Agent may change (lib/). Leave it unchanged and \
              describe the needed change in your answer."
         );
-        // A profile scope and a standing route scope both apply.
-        let both = scope(&[&["lib/"], &["lib/a.js"]]);
-        assert_eq!(write_refusal(Ok(both.clone()), root, "lib/a.js"), None);
-        assert!(write_refusal(Ok(both.clone()), root, "lib/b.js").is_some());
-        assert!(!both.is_read_only());
-        let read_only = scope(&[&["lib/"], &[]]);
+        let several = scope(Some(&["lib/", "*.md"]));
+        assert_eq!(write_refusal(Ok(several.clone()), root, "docs/a.md"), None);
+        assert!(write_refusal(Ok(several.clone()), root, "src/b.js")
+            .unwrap()
+            .contains("(lib/, *.md)"));
+        assert!(!several.is_read_only());
+        let read_only = scope(Some(&[]));
         assert!(read_only.is_read_only());
+        assert!(!read_only.is_unrestricted());
         assert!(write_refusal(Ok(read_only.clone()), root, "lib/a.js")
             .unwrap()
             .contains("(none; this Agent is read-only)"));
@@ -1017,9 +1005,6 @@ mod write_scope_tests {
             unreadable.contains("Leave lib/a.js unchanged"),
             "{unreadable}"
         );
-        for message in [outside, unreadable] {
-            assert!(!message.contains("signal"), "{message}");
-        }
     }
 
     #[test]

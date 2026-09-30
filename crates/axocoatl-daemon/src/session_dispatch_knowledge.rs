@@ -339,7 +339,6 @@ impl SessionDispatchController {
                 }
                 let (sources, recorded) =
                     resolve_proposed_sources(&state, activation, sources, digests)?;
-                let routing = signal_routing(&state, activation, kind, &sources)?;
                 let note = KnowledgeDraft {
                     id,
                     title,
@@ -357,7 +356,7 @@ impl SessionDispatchController {
                     .propose(note, expected_revision, activation, &journal_id)
                     .map_err(|failure| proposal_refusal(&note_id, failure))?;
                 Ok(
-                    serde_json::json!({"proposal":proposal,"publication":"pending accepted turn closure; Ways also require Keep. A human may explicitly accept a proposal.","source_digests":recorded,"signal_routing":routing}),
+                    serde_json::json!({"proposal":proposal,"publication":"pending accepted turn closure; Ways also require Keep. A human may explicitly accept a proposal.","source_digests":recorded}),
                 )
             }
         }
@@ -403,8 +402,8 @@ static CITATION_PROMPTS: std::sync::Mutex<std::collections::BTreeSet<String>> =
     std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 /// A repository file the finding's text names but its sources do not cite.
-/// Findings route by their cited files, so naming the broken file while citing
-/// another one would signal the wrong owner. Asks once per note.
+/// A finding is about the files it cites, so naming the broken file while
+/// citing another one records the wrong file. Asks once per note.
 fn uncited_mention(
     state: &DispatchState,
     activation: &ActivationRef,
@@ -437,9 +436,9 @@ fn uncited_mention(
     }
     prompts.insert(key);
     Ok(Some(format!(
-        "Your finding names {} but does not cite it. A finding reaches the Agent that watches \
-         its cited files, so cite the file that must change (role must_change) and cite \
-         supporting files with role evidence. Propose again; if the text is right as written, \
+        "Your finding names {} but does not cite it. A finding is about the files it cites, \
+         so cite the file that must change (role must_change) and cite supporting files with \
+         role evidence. Propose again; if the text is right as written, \
          repeat the same call.",
         uncited.join(", ")
     )))
@@ -466,75 +465,6 @@ fn uncited_paths<'a>(
                 || (name.contains('.') && basenames.get(name) == Some(&1) && text.contains(name))
         })
         .collect()
-}
-
-/// Who a finding will reach once its turn closes normally: the Agents that
-/// watch each file it says must change, from this signal work's routes.
-fn signal_routing(
-    state: &DispatchState,
-    activation: &ActivationRef,
-    kind: KnowledgeKind,
-    sources: &[KnowledgeSource],
-) -> Result<serde_json::Value> {
-    if !matches!(kind, KnowledgeKind::Finding | KnowledgeKind::Pitfall) {
-        return Ok(
-            serde_json::json!({"signals": false, "reason": "only findings and pitfalls leave signals"}),
-        );
-    }
-    if !sources.iter().any(|source| source.role.is_must_change()) {
-        return Ok(serde_json::json!({
-            "signals": false,
-            "reason": "no source has role must_change, so this finding will not signal anyone; cite the file that must change",
-        }));
-    }
-    let routes = state
-        .standing_work()?
-        .map(|work| work.signal_routes)
-        .unwrap_or_default();
-    if routes.is_empty() {
-        // Routes are known only to signal work; a finding from any turn that
-        // closes normally still deposits into an armed field.
-        return Ok(serde_json::json!({
-            "signals": "unknown",
-            "reason": "this turn is not signal work, so who watches is not known here; if the Session has an armed signal field, the finding reaches whoever watches its must_change files once this turn closes normally",
-        }));
-    }
-    let watches = |route: &crate::bootstrap::native_turn::SignalRouteBrief, path: &str| {
-        route
-            .watches
-            .iter()
-            .any(|pattern| axocoatl_coordination::field::pattern_matches(pattern, path))
-    };
-    let mut will_signal = Vec::new();
-    let mut yours = Vec::new();
-    let mut unrouted = Vec::new();
-    for source in sources.iter().filter(|source| source.role.is_must_change()) {
-        let watchers: Vec<&str> = routes
-            .iter()
-            .filter(|route| {
-                route.node_id != activation.node_id.as_str() && watches(route, &source.path)
-            })
-            .map(|route| route.label.as_str())
-            .collect();
-        if watchers.is_empty() {
-            if routes.iter().any(|route| {
-                route.node_id == activation.node_id.as_str() && watches(route, &source.path)
-            }) {
-                yours.push(source.path.clone());
-            } else {
-                unrouted.push(source.path.clone());
-            }
-        } else {
-            will_signal.push(serde_json::json!({"path": source.path, "agents": watchers}));
-        }
-    }
-    Ok(serde_json::json!({
-        "signals": true,
-        "will_signal": will_signal,
-        "only_you_watch": yours,
-        "nobody_watches": unrouted,
-        "note": "Signals are left only after this turn closes normally. A file only you watch will not wake anyone else; fix it if you may change it.",
-    }))
 }
 
 /// Findings and pitfalls one activation may stage. More than a handful from
@@ -732,7 +662,7 @@ impl BuiltinTool for KnowledgeTool {
             "expected_revision":{"type":"integer","minimum":0,"description":"Omit it (or pass 0) to create a new note. To revise an existing note, pass the revision you read."},"title":{"type":"string"},"body":{"type":"string"},
             "kind":{"enum":["decision","architecture","convention","finding","pitfall","note"]},
             "links":{"type":"array","items":{"type":"object","required":["kind","target"],"properties":{"kind":{"enum":["supports","depends_on","supersedes","related","used_by"]},"target":{"type":"string"}},"additionalProperties":false}},
-            "sources":{"type":"array","description":"For a finding, cite the file that must change to fix the problem, not a file you changed. A finding citing a file signals that file's owner when the Session has a signal field.","items":{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"Repository-relative path, e.g. lib/paths.js"},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Optional; leave it out. The host reads each cited file when you propose and records its digest."},"symbol":{"type":["string","null"]},"role":{"enum":["must_change","evidence"],"description":"must_change (default): the file that must change to fix the problem; this routes the finding to whoever watches it. evidence: a supporting file, shown but never routed."}},"additionalProperties":false}}
+            "sources":{"type":"array","description":"For a finding, cite the file that must change to fix the problem, not a file you changed.","items":{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"Repository-relative path, e.g. lib/paths.js"},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Optional; leave it out. The host reads each cited file when you propose and records its digest."},"symbol":{"type":["string","null"]},"role":{"enum":["must_change","evidence"],"description":"must_change (default): the file that must change to fix the problem. evidence: a supporting file, shown with the finding."}},"additionalProperties":false}}
         },"additionalProperties":false})
     }
     fn concurrency_policy(&self) -> axocoatl_llm::ConcurrencyPolicy {
@@ -781,7 +711,7 @@ impl BuiltinTool for KnowledgeTool {
 mod capture_digest_tests {
     #[test]
     fn capture_manifest_yields_regular_file_digests_only() {
-        // Lines copied from an actual Before capture of the signal fixture.
+        // Lines copied from an actual Before capture of a fixture repository.
         let manifest = "QVhPQ09BVEwubWQ=\t644\tfile\te2d7d831975ce84ce511dd9476562c03a1df91df72375cc4ddff010bf6d2d469\n\
 bGliL3BhdGhzLmpz\t644\tfile\t5cd0b0d34cf2df64f3f3b9e8a3a326ba92b3815c933f83430563f022139a8229\n\
 bGliL2xpbms=\t777\tlink\t0000000000000000000000000000000000000000000000000000000000000000\n\

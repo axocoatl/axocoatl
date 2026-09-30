@@ -34,23 +34,12 @@ pub(crate) struct NativeStandingWork {
     pub binding: axocoatl_session::team_work::TeamWorkBinding,
     pub subject: axocoatl_session::team_work::TeamWorkSubject,
     pub required_checks: Vec<Vec<String>>,
-    /// Repository path patterns the targeted Agent may change; empty is
-    /// read-only. File-writing tools refuse other paths, and an activation
-    /// whose captures show any other non-ignored change is not accepted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub write_scope: Option<Vec<String>>,
-    /// Who watches which paths in this signal field, so a finding can be told
-    /// before its turn closes which Agent it will reach.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub signal_routes: Vec<SignalRouteBrief>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SignalRouteBrief {
-    pub node_id: String,
-    pub label: String,
-    pub watches: Vec<String>,
+    /// Written by path-routed work, which no longer exists; read and ignored
+    /// so those admissions still load.
+    #[serde(default, rename = "write_scope", skip_serializing)]
+    pub legacy_write_scope: Option<serde_json::Value>,
+    #[serde(default, rename = "signal_routes", skip_serializing)]
+    pub legacy_signal_routes: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

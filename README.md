@@ -251,15 +251,6 @@ Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
   whose signals activate exact dependencies and are retained as Session evidence.
   Native turns use their canonical dependency graph and accepted-generation evidence.
   The coordination crate exposes both signal models to library users.
-- **Signal field** — stigmergic Session work: each team Agent watches repository path
-  patterns and owns some of them (or none, as a read-only reviewer); findings, source
-  changes, failed checks and flags leave evaporating deposits on paths, and the Agent
-  whose watched paths cross its threshold receives one targeted work item through the
-  ordinary inbox, grants and allowance. During signal work its file tools refuse paths
-  it does not own, a read-only reviewer's commands cannot write the repository at all,
-  and any other change outside owned paths fails that work for review, so problems
-  elsewhere become findings that signal their owners. Work sources shows each deposit, why it counts,
-  and the dispatched turns it caused.
 - **Coordinator role** — for explicit hierarchical work, an agent with
   `role: coordinator` decomposes a goal into subtasks (HTN or LLM), assigns each
   to the first declared worker that can call its required tools, runs them in

@@ -132,26 +132,13 @@ not permission to choose another activation or team.
 | POST | `/api/sessions/{id}/work/receipts/{receipt}/run` | Try admission through the ordinary native Session driver; unresolved work stays queued |
 | POST | `/api/sessions/{id}/work/receipts/{receipt}/dismiss` | `{reason}`; retain the dismissal against the exact receipt |
 | POST | `/api/sessions/{id}/work/receipts/{receipt}/settle-at-ceiling` | A person accepts charging closed work's provider calls with unknown usage at their full admitted reservation, releasing the rest of the shared budget. Refused while the turn is open, a tool effect or check outcome is unknown, usage is already measured, or the total would exceed the grant's reviewed limits; repeating it after it succeeded returns the settled view |
-| GET | `/api/sessions/{id}/work/signals` | Each signal field: per-route intensity, threshold and state; every deposit with per-route exclusion reasons; dispatches with receipt and turn. Uses the last observation; never starts a runtime |
-| POST | `/api/sessions/{id}/work/signals/{binding}/sense` | Observe the running runtime's watched sources, record new deposits, and dispatch crossed routes |
-| POST | `/api/sessions/{id}/work/signals/{binding}/flags` | `{paths, summary}`; a person's deposit of 1.0 on up to 32 repository paths |
-| POST | `/api/sessions/{id}/work/signals/{binding}/deposits/{deposit}/withdraw` | `{reason}`; the deposit stays retained and stops counting |
-| POST | `/api/sessions/{id}/work/signals/{binding}/routes/{slot}/dispatch` | Send one route its current deposits below threshold, recorded as a manual dispatch |
 | GET | `/api/sessions/{id}/ways-history` | Retention limits, retained decision records, and deletion tombstones |
 | POST | `/api/sessions/{id}/ways-history/configuration` | `{limits: {version, field_bytes, record_bytes, aggregate_bytes, records, candidates, items_per_field}}`; every numerical limit is explicit |
 | GET | `/api/sessions/{id}/ways-history/{decision}` | Export the retained record and protected patch bodies |
 | DELETE | `/api/sessions/{id}/ways-history/{decision}` | Explicit deletion after runtime cleanup; retains a tombstone |
 
 A work source is `{kind: "manual"}`, `{kind: "signed_webhook", configuration_name}`,
-`{kind: "session_completion", session_id}`, or `{kind: "signal_field", routes:
-[{slot_id, watches, threshold_milli, owns?}], half_life_ms, max_dispatches,
-max_episode_tokens?}`. `max_dispatches` and the optional `max_episode_tokens` apply per
-episode: the work since the field was last quiet. A signal
-route names one applied team slot, repository path patterns it watches (`lib/`,
-`*.test.js`, `src/**/*.rs`), and a threshold in thousandths of one finding's deposit.
-`owns` lists the patterns it may change during signal work; omitted means its watched
-patterns and `[]` makes it read-only;
-`half_life_ms` may be `null` to disable evaporation. Session completion sources must share
+or `{kind: "session_completion", session_id}`. Session completion sources must share
 the Workspace; the host resolves causation from canonical source history. Manual and
 webhook events carry `{event_id, correlation_id, subject: {kind, reference_id, version},
 evidence_refs, caused_by_turn_id, expected_binding_revision?}`. A payload cannot

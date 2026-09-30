@@ -3826,8 +3826,6 @@ pub struct AxocoatlDaemon {
     session_dispatch_lifecycles: Arc<session_dispatch::SessionDispatchRegistry>,
     session_team_work: StdMutex<axocoatl_session::team_work::TeamWorkInbox>,
     session_team_work_runner: tokio::sync::Mutex<()>,
-    /// Serializes signal-field observation, deposits and dispatch records.
-    session_signal_fields: tokio::sync::Mutex<()>,
     /// Recovery-only primary handles used while resolving an Attempt set after
     /// restart. They must never enter the ordinary Ready fast path because
     /// they intentionally skip project setup.
@@ -5562,7 +5560,6 @@ impl AxocoatlDaemon {
             session_dispatch_lifecycles,
             session_team_work: StdMutex::new(session_team_work),
             session_team_work_runner: tokio::sync::Mutex::new(()),
-            session_signal_fields: tokio::sync::Mutex::new(()),
             attempt_recovery_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             sandbox_starts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             runtime_admission: Arc::new(tokio::sync::RwLock::new(())),

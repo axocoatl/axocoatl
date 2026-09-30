@@ -161,26 +161,6 @@ pub fn build_router(
             post(routes::settle_session_work_at_ceiling),
         )
         .route(
-            "/api/sessions/{id}/work/signals",
-            get(routes::session_signals),
-        )
-        .route(
-            "/api/sessions/{id}/work/signals/{binding}/sense",
-            post(routes::sense_session_signals),
-        )
-        .route(
-            "/api/sessions/{id}/work/signals/{binding}/flags",
-            post(routes::flag_session_signal).layer(DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route(
-            "/api/sessions/{id}/work/signals/{binding}/deposits/{deposit}/withdraw",
-            post(routes::withdraw_session_signal).layer(DefaultBodyLimit::max(8 * 1024)),
-        )
-        .route(
-            "/api/sessions/{id}/work/signals/{binding}/routes/{slot}/dispatch",
-            post(routes::dispatch_session_signal),
-        )
-        .route(
             "/api/sessions/{id}/ways-history",
             get(routes::session_ways_history),
         )

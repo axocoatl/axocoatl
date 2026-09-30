@@ -24,29 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JavaScript, TypeScript/TSX, and Python definitions and import syntax. The observed
   code map supports targeted reads, and source references expose changed or unavailable
   evidence. This syntax index does not claim complete reference or call-graph resolution.
-- **Signal field for Session teams.** A Session work source that coordinates a team
-  through evidence left on the code. Each Agent watches repository path patterns, owns
-  some of them (or none, for a read-only reviewer), and has a threshold. Findings and pitfalls from completed turns, a person's flags, source
-  changes after a turn, and failed required checks deposit on paths; deposits evaporate
-  with a chosen half-life and stop counting once their cited source changes or a person
-  withdraws them. When the signal on an Agent's own paths crosses its threshold, one
-  targeted work item goes through the existing inbox, grants and allowance. Signaled
-  sources are rechecked before start, a crossing held by pending work dispatches when
-  that work clears, and during signal work file tools refuse paths the Agent does not
-  own; a read-only Agent's commands, its shell included, run under a kernel write
-  restriction and cannot change the repository; any other change outside an Agent's
-  owned paths fails that work and is kept for review. Work sources shows per-Agent intensity, why each deposit counts, and
-  a cause chain: each dispatch with the signals that caused it, how its work ended,
-  and the signals its turn left, beside a deposit → dispatch → turn → deposit graph.
-  A finding's cited files are either files that must change (they route the signal
-  to whoever watches them) or supporting evidence; proposing a finding reports which
-  Agent it will reach; the host reads each cited file when the finding is proposed and
-  records its digest, so a later fix retires it. Only published findings signal; a finding from a turn that
-  did not finish, or from work that was not accepted, waits for a person to accept
-  it. Signal work runs in episodes with a dispatch cap and
-  an optional token budget, holds when the same evidence repeats, and reports
-  "quiet on visible checks" rather than done. The field chooses who looks next;
-  it does not certify findings or results.
+- **Per-Agent write scopes.** An Agent's `writes` list, or its **May change** choice in
+  Team & budget, names the repository paths it may change in a native Session; `[]`
+  makes a read-only helper. `write_file` and `edit_file` refuse other paths before any
+  effect. A read-only Agent is not offered them, and its own `bash` commands run under a
+  kernel write restriction that keeps the repository unchanged. A change outside a
+  writer's paths made any other way, found by comparing its Before and After captures,
+  fails that activation and is kept for review. A helper cannot be given a wider scope
+  than its lead.
 - **Knowledge-directed investigation.** Investigate in chat prepares a source-checking
   request with the selected note revision. A stored note does not itself authorize
   execution or establish readiness.
@@ -142,12 +127,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at the same generation. Rebuilding the unchanged plan of a failed local environment
   while a paused turn waits prepares it again at that generation. A crash
   mid-preparation and every E2B preparation still end Failed as before.
-- **Signal work keeps its budget for the host's checks and its context bounded.**
+- **Native activations keep their budget for the host's checks and their context bounded.**
   An activation keeps enough invocations for the host to observe its changes and
   run required checks, and always leaves room for the model to answer after a tool
   round is declined; a declined call is a tool error, not a failed activation.
   Tool output, and long arguments of the model's own earlier calls, older than the
-  latest three to five tool rounds of a signal activation are replaced by a short
+  latest three to five tool rounds of an activation are replaced by a short
   placeholder in later requests (the Session history keeps them), so repeated file
   contents stop growing every request; a request that would still overflow a small
   local context keeps only the latest round whole, and then leaves out the earliest

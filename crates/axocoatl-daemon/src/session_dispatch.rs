@@ -96,7 +96,6 @@ mod repository;
 mod repository_activation;
 #[path = "session_dispatch_repository_snapshot.rs"]
 mod repository_snapshot;
-pub(crate) use repository_snapshot::activation_changed_paths;
 #[path = "session_dispatch_run.rs"]
 mod run;
 #[path = "session_dispatch_standing_checks.rs"]

@@ -284,11 +284,6 @@ The one app does not replace Axocoatl's runtime strengths. It makes them legible
   Worker templates in that same controller. The process-wide
   event lattice carries typed notifications for Skills, triggers, webhooks, and
   retained API/WebSocket observers.
-- A Session's standing work can be a signal field: each team Agent owns repository paths,
-  findings, changes, failed checks and flags leave evaporating deposits on paths, and an
-  Agent whose own paths cross its threshold receives targeted work through the same inbox,
-  grants and allowance. Work sources makes every deposit, crossing and dispatched turn
-  inspectable; signal strength never substitutes for checks or authority.
 - MCP, Skills, and Automations extend what sessions and agents can do.
 
 These are capabilities of one product. They should not compete as peer navigation

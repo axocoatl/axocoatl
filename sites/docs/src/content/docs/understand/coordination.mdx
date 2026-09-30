@@ -12,7 +12,6 @@ question and owns a different recovery boundary.
 | --- | --- | --- |
 | Automation | The graph can be declared ahead of time | Explicit DAG nodes and edges |
 | Multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
-| Signal field | Agents own parts of a repository and should react to each other's evidence | Deposits on paths; each Agent senses only the paths it watches |
 | Event lattice | Producers and consumers should be decoupled | Typed publish/subscribe notification |
 | Lead with helpers | A native Agent needs a separate read-only look at part of its task | The lead picks an approved helper and writes its task; one helper runs at a time |
 | Coordinator Agent (legacy Sessions) | Task shape and worker choice emerge at runtime | Decomposition, then the first declared worker that can call each subtask's tools |
@@ -47,52 +46,7 @@ source, lead activation, and result stay in the same canonical Session history.
 Increasing budget or authority requires human review; another model call cannot grant it.
 
 Standing work sources feed that same Session controller. Manual events, signed
-webhooks, verified Session completion, and a signal field preserve source and
-candidate identity. See [Receive standing work](/workbench/history/#receive-standing-work).
-
-## Signal field
-
-A signal field is stigmergic coordination for one Session's repository: Agents
-coordinate through evidence left on the code rather than through a manager. Arm it
-from **Work sources** by giving each team Agent the path patterns it owns and a
-threshold.
-
-- A `finding` or `pitfall` an Agent records with `workspace_knowledge` deposits 1.0 on
-  the files it cites as needing a change, once its turn completes. Files cited only as
-  supporting evidence don't route it. When the Agent records the finding, Axocoatl
-  tells it which Agent the finding will reach. A person's flag or finding note also
-  deposits 1.0. A finding counts once it is published with its turn. One from a turn that
-  failed or stopped, or from work that was not accepted, leaves no signal until you accept
-  it in **Work sources**.
-- When a watched file changes after a turn, that change deposits 0.5, attributed to
-  the Agent whose signal work made it. A required check that fails after signal work
-  deposits 1.5 on the files that work changed.
-- Deposits evaporate with the half-life you choose. An Agent never senses its own
-  deposits, stops sensing a deposit once it has acted on it, and ignores a finding
-  whose cited file has since changed.
-- When the signal on an Agent's paths reaches its threshold, Axocoatl queues one
-  work item for that Agent through the same inbox, grants and allowance as any
-  standing work. The Agent receives the deposits as evidence to verify. During that
-  work its file tools can change only the paths it owns; a problem elsewhere is
-  recorded as a finding, which signals whoever watches that file. A change outside its
-  owned paths made any other way, such as a shell command, fails that work and is kept
-  for you to review; ignored files are not checked.
-- An Agent owns the paths it watches unless you name other owned paths, or mark it
-  read-only. A read-only reviewer can watch the whole repository and only report: the
-  sandbox's kernel write restriction stops every command it runs, its shell included,
-  from changing the repository. Where that restriction is unavailable, its commands do
-  not run.
-
-Nothing is dispatched when no Agent watches a path; that deposit stays visible.
-The field never blocks other work, and you can flag paths, withdraw a deposit, or
-send an Agent its current signals below threshold. Work runs in episodes: after the
-field goes quiet, the next deposit starts a new one with a fresh dispatch limit and
-token budget. The same evidence at the same code is held rather than sent again.
-Quiet means the signals stopped, not that the work is correct. **Work sources** shows each
-Agent's signal against its threshold, why each deposit does or does not count, and a
-cause chain: each dispatch, the signals that caused it, how its work ended and the
-signals its turn left. A cause graph shows the same links. Signal strength decides who looks next; it does not
-certify that a finding is true or that work is correct.
+webhooks, and verified Session completion preserve source and candidate identity. See [Receive standing work](/workbench/history/#receive-standing-work).
 
 ## Legacy multi-Agent Sessions
 

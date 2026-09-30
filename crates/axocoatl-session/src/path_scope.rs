@@ -1,22 +1,6 @@
 //! Repository path patterns: what a write scope names and what a changed path
 //! is checked against.
 
-/// Repository-relative, normalized, no traversal.
-pub fn validate_path(path: &str) -> Result<(), String> {
-    if path.is_empty()
-        || path.len() > 1024
-        || path.starts_with('/')
-        || path.contains('\\')
-        || path.contains('\0')
-        || path
-            .split('/')
-            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-    {
-        return Err(format!("{path:?} is not a normalized repository path"));
-    }
-    Ok(())
-}
-
 /// A pattern is a repository-relative path that may end in `/` and may use
 /// `*`, `?` and `**`; it never escapes the repository.
 pub fn validate_pattern(pattern: &str) -> Result<(), String> {
@@ -134,11 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn paths_and_patterns_stay_inside_the_repository() {
-        assert!(validate_path("lib/orders.js").is_ok());
-        for bad in ["", "/etc/passwd", "lib/../x", "./lib", "lib//x", "a\\b"] {
-            assert!(validate_path(bad).is_err(), "{bad:?}");
-        }
+    fn patterns_stay_inside_the_repository() {
         assert!(validate_pattern("lib/").is_ok());
         assert!(validate_pattern("**/*.rs").is_ok());
         for bad in ["", "/", "/lib", "../lib", "lib/../x", "a\\b"] {

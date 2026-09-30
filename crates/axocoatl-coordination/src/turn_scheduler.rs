@@ -379,9 +379,8 @@ pub enum TurnCoordinationError {
 /// A deterministic scheduler for one Session turn.
 ///
 /// It runs a route's Agents in the order of their exact named dependencies;
-/// its "signals" are causal records, not pheromones, and nothing here decays
-/// or crosses a threshold. Work that starts because evidence accumulated on
-/// repository paths comes from the signal field in [`crate::field`].
+/// its "signals" are causal records, and nothing here decays or crosses a
+/// threshold.
 pub struct TurnCoordinationScheduler {
     graph: TurnAgentGraph,
     agents: Vec<AgentRuntime>,

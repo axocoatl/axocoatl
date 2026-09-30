@@ -10,7 +10,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
-description = "Adaptive stigmergic task lattice coordination for Axocoatl multi-agent systems"
+description = "Event lattice, HTN planning and turn scheduling for Axocoatl multi-agent systems"
 
 [dependencies]
 tokio = { workspace = true }

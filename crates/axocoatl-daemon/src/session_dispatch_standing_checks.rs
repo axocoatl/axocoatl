@@ -59,10 +59,6 @@ impl SessionDispatchController {
                     "tree" | "tree_sha256" | "build" | "artifact" | "release_candidate" => {
                         before.tree_sha256.as_deref() == Some(work.subject.version.as_str())
                     }
-                    // A signal names no producer candidate. The host rechecked
-                    // the signaled source bytes immediately before admission;
-                    // this execution's own Before capture is its starting tree.
-                    "signal_field" => true,
                     _ => false,
                 }
             });
