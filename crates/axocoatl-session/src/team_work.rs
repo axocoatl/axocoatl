@@ -231,7 +231,11 @@ pub enum TeamWorkError {
     NotFound(String),
     #[error("team-work disposition conflicts with this operation")]
     DispositionConflict,
-    #[error("team-work inbox is full; the event has not been acknowledged")]
+    #[error(
+        "team-work inbox is full; the event has not been acknowledged. Queued work keeps its \
+         space until it runs or is dismissed: continue, finish or stop turns that need \
+         attention, or dismiss queued work you no longer want"
+    )]
     Capacity,
     #[error("a storage write failed; reopen the inbox to reconcile its durable state")]
     RecoveryRequired,
@@ -694,6 +698,14 @@ impl TeamWorkInbox {
     }
 }
 
+/// The largest a validated JSON text of `len` bytes becomes when stored as a
+/// JSON string. Valid JSON holds no raw control characters except the
+/// whitespace tab, newline and carriage return, so every byte escapes to at
+/// most two (`\"`, `\\`, `\t`, `\n`, `\r`), plus the two quotes.
+fn escaped_json_bound(len: usize) -> usize {
+    2 * len + 2
+}
+
 // Admission reserves enough space to dismiss every queued item with the largest
 // permitted JSON-escaped reason. A full inbox cannot strand acknowledged work.
 fn reserved_size(data: &InboxData, serialized_size: usize) -> Result<usize, TeamWorkError> {
@@ -711,7 +723,7 @@ fn reserved_size(data: &InboxData, serialized_size: usize) -> Result<usize, Team
                 && receipt.disposition == TeamWorkDisposition::Queued
         })
         .count()
-        * (6 * crate::turn_contract::MAX_CONTRACT_ENVELOPE_BYTES
+        * (escaped_json_bound(crate::turn_contract::MAX_CONTRACT_ENVELOPE_BYTES)
             + crate::turn_contract::MAX_CONTRACT_NODES * 1024);
     let blocked = data
         .receipts
@@ -1520,6 +1532,20 @@ mod tests {
             reopened.receipts().unwrap()[0].request.binding,
             first.binding
         );
+    }
+
+    #[test]
+    fn a_validated_json_source_escapes_to_at_most_twice_its_size() {
+        // The worst valid JSON: a string of quotes and backslashes wrapped in
+        // whitespace, the only raw control characters JSON allows.
+        let inner = "\\\"".repeat(1000);
+        let source = format!("\n\t\r{{\"k\":\"{inner}\"}}\r\t\n");
+        serde_json::from_str::<serde_json::Value>(&source).unwrap();
+        let stored = serde_json::to_string(&source).unwrap();
+        assert!(stored.len() <= escaped_json_bound(source.len()));
+        // A realistic source stays far below the bound.
+        let typical = serde_json::json!({"turn_id": "t", "source": "x".repeat(9000)}).to_string();
+        assert!(serde_json::to_string(&typical).unwrap().len() < escaped_json_bound(typical.len()));
     }
 
     #[test]
