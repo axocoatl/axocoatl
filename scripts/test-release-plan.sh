@@ -86,7 +86,7 @@ expected_all=$(printf '%s\n' \
   axocoatl-memory \
   axocoatl-graph axocoatl-exec axocoatl-isolation axocoatl-a2a axocoatl-llm-openai \
   axocoatl-llm-anthropic axocoatl-llm-ollama axocoatl-llm-mistral \
-  axocoatl-llm-gemini axocoatl-mcp axocoatl-tools axocoatl-coordination \
+  axocoatl-llm-gemini axocoatl-mcp axocoatl-tools \
   axocoatl-actor axocoatl-service axocoatl-daemon \
   axocoatl-server axocoatl-cli)
 expect_pass coordinated "$expected_all" v1.0.0 1.0.0 "$coordinated" "$empty_changes"

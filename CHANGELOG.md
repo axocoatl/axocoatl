@@ -241,6 +241,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   v1.0.1 binary.
 
 ### Removed
+- The `axocoatl-coordination` crate. Its event feed moved to `axocoatl_core::event_feed`;
+  the rest (pheromone activation, auction, HTN, the signal field and the legacy turn
+  scheduler) was removed. Version 1.0.0 stays on crates.io.
 - Pheromone threshold activation. The event lattice is now a plain event feed:
   it no longer registers Agents, accumulates signal or keeps every event in
   memory for the life of the process. Per-Agent `activation_threshold` and

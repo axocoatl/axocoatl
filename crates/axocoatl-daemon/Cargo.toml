@@ -27,7 +27,6 @@ axocoatl-actor = { version = "1.1.0", path = "../axocoatl-actor" }
 axocoatl-token = { version = "1.1.0", path = "../axocoatl-token" }
 axocoatl-memory = { version = "1.1.0", path = "../axocoatl-memory" }
 axocoatl-tools = { version = "1.1.0", path = "../axocoatl-tools" }
-axocoatl-coordination = { version = "1.1.0", path = "../axocoatl-coordination" }
 axocoatl-mcp = { version = "1.1.0", path = "../axocoatl-mcp" }
 axocoatl-session = { version = "1.1.0", path = "../axocoatl-session" }
 axocoatl-isolation = { version = "1.1.0", path = "../axocoatl-isolation" }

@@ -1257,8 +1257,7 @@ Report security issues per [SECURITY.md](../SECURITY.md).
 
 `axocoatl-core` (types, event feed) · `axocoatl-token` (budgets) · `axocoatl-llm*`
 (providers) · `axocoatl-config` · `axocoatl-actor` (runtime) ·
-`axocoatl-memory` · `axocoatl-coordination` (turn scheduling) ·
-`axocoatl-graph` · `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` ·
+`axocoatl-memory` · `axocoatl-graph` · `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` ·
 `axocoatl-isolation` (Podman and E2B sandboxes) · `axocoatl-exec` (in-sandbox
 command supervisor; applies the Landlock write restriction) · `axocoatl-session`
 (durable Workspace, Session and turn storage) · `axocoatl-daemon` ·

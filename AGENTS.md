@@ -57,7 +57,6 @@ mechanics, but plumbing is not the primary interface.
 - `crates/axocoatl-actor/`: actor turn execution and conversation state.
 - `crates/axocoatl-session/`: persistent folder-session model.
 - `crates/axocoatl-isolation/`: local Podman and optional remote sandbox backends.
-- `crates/axocoatl-coordination/`: turn scheduling for coordinated multi-Agent Session turns.
 - `crates/axocoatl-memory/`: durable memory tiers and recall.
 - `packages/lattice/`: native web-component library for graph rendering.
 - `sites/docs/` and `sites/marketing/`: public claims and onboarding.
