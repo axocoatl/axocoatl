@@ -69,6 +69,15 @@ data root. Compatibility Session transcripts are not native authority. A daemon
 restart must be coordinated with other active rehearsals; never interrupt another
 Session merely to obtain a restart shot.
 
+## Films pending for a released version
+
+`demo/one-app/films/PENDING` names a product version that shipped before its films
+were recorded (1.1.0 did). While it matches the CLI version, CI, preflight and the
+release pass the film and marketing gates on the manifest alone and say so, a
+source-bound proof fails, and the release does not build or deploy the marketing
+site. Delete the file in the same commit that adds the recordings; the gate refuses
+new captures while it still declares the version.
+
 ## Freeze and accept recordings
 
 Keep every current portfolio entry at the stable `required` status. Freeze the

@@ -171,7 +171,7 @@ expected_needs = {
   "prepare-release" => %w[prove-artifacts],
   "publish-crates" => %w[prepare-release],
   "release" => %w[prepare-release publish-crates],
-  "deploy-marketing" => %w[release],
+  "deploy-marketing" => %w[release marketing-site],
   "deploy-docs" => %w[release],
 }
 expected_needs.each do |job, expected|

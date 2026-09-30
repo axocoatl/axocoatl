@@ -12,6 +12,7 @@ usage() {
 Usage:
   verify-film-gate.sh portable
   verify-film-gate.sh source-bound
+  verify-film-gate.sh pending
   verify-film-gate.sh candidate <base-commit> <head-commit>
   verify-film-gate.sh candidate-worktree <base-commit>
   verify-film-gate.sh release-compatibility <record.json> <frozen-release-root>
@@ -26,6 +27,35 @@ verifier=${AXO_FILM_VERIFIER:-$repo_root/demo/one-app/films/verify-film-set.mjs}
 
 run_verifier() {
   node "$verifier" "$@"
+}
+
+# A product version may ship before its films are recorded. The committed
+# file demo/one-app/films/PENDING names that version; while it matches, code
+# gates pass on the manifest alone and a marketing deploy is refused.
+pending_path=demo/one-app/films/PENDING
+
+pending_version() {
+  local revision=${1:-} content
+  if [[ -n "$revision" ]]; then
+    content=$(git -C "$repo_root" show "$revision:$pending_path" 2>/dev/null) || return 1
+  else
+    [[ -f "$repo_root/$pending_path" && ! -L "$repo_root/$pending_path" ]] || return 1
+    content=$(cat "$repo_root/$pending_path")
+  fi
+  content=$(printf '%s' "$content" | tr -d '[:space:]')
+  [[ -n "$content" ]] || return 1
+  printf '%s\n' "$content"
+}
+
+films_pending_for() {
+  local version=$1 revision=${2:-} pending
+  pending=$(pending_version "$revision") || return 1
+  [[ "$pending" == "$version" ]]
+}
+
+pending_notice() {
+  echo "film-gate: films for $1 are pending ($pending_path); the code may ship," \
+    "the marketing site may not deploy until they are recorded"
 }
 
 manifest_version() {
@@ -135,6 +165,15 @@ verify_candidate() {
     fi
   done < <(candidate_changed_paths "$kind" "$base" "$head")
 
+  local pending_revision=
+  [[ "$kind" == commit ]] && pending_revision=$head
+  if films_pending_for "$head_version" "$pending_revision"; then
+    (( new_count == 0 )) || fail \
+      "$pending_path declares $head_version films pending, but recording artifacts were added; remove it with the recordings"
+    run_verifier --manifest-only
+    pending_notice "$head_version"
+    return 0
+  fi
   run_verifier --portable
   if [[ "$base_version" != "$head_version" ]]; then
     require_source_bound=true
@@ -157,11 +196,23 @@ mode=${1:-}
 case "$mode" in
   portable)
     [[ $# -eq 1 ]] || usage
-    run_verifier --portable
+    if films_pending_for "$(working_manifest_version)"; then
+      run_verifier --manifest-only
+      pending_notice "$(working_manifest_version)"
+    else
+      run_verifier --portable
+    fi
     ;;
   source-bound)
     [[ $# -eq 1 ]] || usage
+    if films_pending_for "$(working_manifest_version)"; then
+      fail "films for $(working_manifest_version) are pending ($pending_path); record them before a source-bound proof or a marketing deploy"
+    fi
     run_verifier --source-bound
+    ;;
+  pending)
+    [[ $# -eq 1 ]] || usage
+    films_pending_for "$(working_manifest_version)"
     ;;
   candidate)
     [[ $# -eq 3 ]] || usage

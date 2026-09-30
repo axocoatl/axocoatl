@@ -19,6 +19,10 @@ cd "$repo_root"
 
 ./scripts/test-install.sh
 ./scripts/verify-film-gate.sh "$film_mode"
+if [[ "$film_mode" == portable ]] && ./scripts/verify-film-gate.sh pending; then
+  echo "Marketing gate: films pending (demo/one-app/films/PENDING); the site was not built"
+  exit 0
+fi
 ./sites/marketing/scripts/sync-assets.sh
 node sites/marketing/scripts/validate.mjs --strict-films
 node sites/marketing/scripts/build.mjs "$output"

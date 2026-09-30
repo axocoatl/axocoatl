@@ -104,4 +104,37 @@ if run_gate candidate-worktree "$capture_head" >"$work_dir/worktree-rewrite.out"
   fail "an uncommitted first-seen provenance rewrite unexpectedly passed"
 fi
 
-echo 'Film gate routing contract: PASS (version bumps and new captures bind source; first-seen artifacts are immutable)'
+git -C "$fixture_repo" checkout -q -- demo/one-app/films/provenance/example.json
+
+# A version whose films are declared pending passes code gates on the manifest
+# alone, refuses a source-bound proof, and refuses new captures until the
+# declaration is removed with them.
+git -C "$fixture_repo" add axocoatl-cli/Cargo.toml
+git -C "$fixture_repo" commit -qm version-bump-1.0.2
+bump_head=$(git -C "$fixture_repo" rev-parse HEAD)
+printf '%s\n' '1.0.3' > "$fixture_repo/demo/one-app/films/PENDING"
+printf '%s\n' '[package]' 'name = "axocoatl-cli"' 'version = "1.0.3"' \
+  > "$fixture_repo/axocoatl-cli/Cargo.toml"
+git -C "$fixture_repo" add demo/one-app/films/PENDING axocoatl-cli/Cargo.toml
+git -C "$fixture_repo" commit -qm pending-films
+pending_head=$(git -C "$fixture_repo" rev-parse HEAD)
+: > "$log"
+run_gate candidate "$bump_head" "$pending_head"
+[[ "$(cat "$log")" == '--manifest-only' ]] \
+  || fail "a version with pending films did not pass on the manifest alone"
+: > "$log"
+run_gate portable
+[[ "$(cat "$log")" == '--manifest-only' ]] \
+  || fail "portable mode did not honour pending films"
+run_gate pending || fail "pending mode did not report the declared version"
+if run_gate source-bound >"$work_dir/pending-source.out" 2>&1; then
+  fail "a source-bound proof unexpectedly passed while films are pending"
+fi
+printf '%s\n' 'pending capture' > "$fixture_repo/demo/one-app/films/source/example-v3.json"
+git -C "$fixture_repo" add demo/one-app/films/source/example-v3.json
+git -C "$fixture_repo" commit -qm capture-while-pending
+if run_gate candidate "$pending_head" "$(git -C "$fixture_repo" rev-parse HEAD)" >"$work_dir/pending-capture.out" 2>&1; then
+  fail "new captures unexpectedly passed while PENDING still declares the version"
+fi
+
+echo 'Film gate routing contract: PASS (version bumps and new captures bind source; first-seen artifacts are immutable; pending films pass code gates only)'

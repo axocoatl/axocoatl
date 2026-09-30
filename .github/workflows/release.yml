@@ -95,16 +95,30 @@ jobs:
     name: Release gate — marketing site
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    outputs:
+      films_pending: ${{ steps.films.outputs.pending }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check whether this version's films are still pending
+        id: films
+        run: |
+          if ./scripts/verify-film-gate.sh pending; then
+            echo "pending=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Films for this version are pending (demo/one-app/films/PENDING); this release does not build or deploy the marketing site."
+          else
+            echo "pending=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.films.outputs.pending != 'true'
         with:
           node-version: '22'
       - name: Install film inspection dependency
+        if: steps.films.outputs.pending != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
       - name: Build and verify the exact marketing payload
+        if: steps.films.outputs.pending != 'true'
         run: ./scripts/verify-marketing-gate.sh source-bound /tmp/axocoatl-marketing
 
   docs-site:
@@ -1143,7 +1157,8 @@ jobs:
 
   deploy-marketing:
     name: Deploy marketing after the product release is public
-    needs: release
+    needs: [release, marketing-site]
+    if: needs.marketing-site.outputs.films_pending != 'true'
     permissions:
       contents: read
       deployments: write
