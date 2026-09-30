@@ -54,8 +54,14 @@ Three pillars. Every page should reinforce one or more:
 ### Claims we do not make
 
 - **No result claims for the default team.** Do not say the lead-and-helpers team
-  produces better results, or beats a single Agent, until a comparative evaluation
-  is published. Then state its result and its scope, nothing wider.
+  produces better results, costs less, or beats a single Agent. Our evaluation before
+  1.1.0 (one small test task, a local qwen3-coder 30B-class model, single runs) showed
+  no such advantage; there a single Agent was as accurate and used the fewest tokens.
+  What may be said, with that scope: the mechanisms work (the lead delegates to
+  read-only helpers and gets their answers; required checks and a required review run
+  on the final result and decide whether a turn completes), and a reviewer helper found
+  real defects when the lead asked it for a review. Say plainly that helpers and review
+  cost extra tokens and that one Agent is the cheaper choice for small tasks.
 - **No speed claims for helpers.** Helpers share one checkout, so their tool
   processes queue, and a local model server limits how many model calls run at once.
 - **Isolation is not the headline.** Say what runs where: "Tools run in a rootless

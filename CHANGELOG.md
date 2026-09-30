@@ -5,7 +5,7 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] - 2026-09-28
+## [1.1.0] - 2026-09-30
 
 Axocoatl's founding thesis was stigmergy: Agents coordinating through signals left
 on shared work, with no Agent in charge. It was built during 1.1.0 development and
@@ -13,12 +13,13 @@ measured, and a single Agent that reviewed its own work matched the best team's 
 at 28–48% of the tokens. 1.1.0 therefore moves to a lead that writes and read-only
 helpers it delegates to, opt-in required checks and review that the host runs on the
 exact final tree, per-Agent write scopes, and durable grants and budgets, with every
-activation, tool call and budget decision recorded in the Session. Removed with the
-thesis: pheromone activation, the signal field, the standing-work inbox, the legacy
-coordinated-turn path (multi-Agent turns on a 1.0 data root now require
-`axocoatl session upgrade --confirm`), the Coordinator's auction and HTN planner, the
-model-facing `coordination_control` tool, the external harness adapter and the
-`axocoatl-coordination` crate.
+activation, tool call and budget decision recorded in the Session. The default team is
+offered, not proven better than one Agent, and a single Agent remains the cheapest
+choice for small tasks. Removed with the thesis: pheromone activation, the signal
+field, the standing-work inbox, the legacy coordinated-turn path (multi-Agent turns on
+a 1.0 data root now require `axocoatl session upgrade --confirm`), the Coordinator's
+auction and HTN planner, the model-facing `coordination_control` tool, the external
+harness adapter and the `axocoatl-coordination` crate.
 
 ### Security
 - Update rustls to 0.23.45 for RUSTSEC-2026-0285, which fixes TLS 1.3 handshake

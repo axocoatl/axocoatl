@@ -90,6 +90,17 @@ when to ask for it and what to do with the answer. To make the review decide whe
 turn completes, choose Reviewer under **Required review** in Team & budget. To make a
 command decide, add a [required check](/configure/agents/#required-checks).
 
+### What helpers cost
+
+Helpers and a required review spend extra tokens. Each helper and each review round is
+its own model conversation that reads the files it needs again, and a helper's answer is
+added to the lead's conversation. On one small test task (two short modules with documented
+contracts; a local qwen3-coder 30B-class model; single runs), a single Agent was as
+accurate as the lead with helpers and used the fewest tokens. When the lead asked the
+reviewer helper to check its change, the reviewer found real defects that the tests did
+not catch, though not every time. For small tasks, clear **Let this Agent delegate to
+helpers** in Team & budget and work with one Agent.
+
 ## Sessions on a 1.0 data root
 
 A data root that still uses the 1.0 format runs one Agent per Session turn. A
