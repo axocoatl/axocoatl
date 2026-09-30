@@ -342,7 +342,9 @@ pub struct DefaultAgentBehavior {
     shared_blocks: std::collections::HashMap<String, axocoatl_memory::SharedBlock>,
     /// Agent-scoped core-memory edit tools (append / replace / set), built in `on_start`.
     core_memory_tools: Vec<(String, Arc<dyn axocoatl_tools::BuiltinTool>)>,
-    host_control_tools: Vec<(String, Arc<dyn axocoatl_tools::BuiltinTool>)>,
+    /// Activation-bound tools the host attaches by name (workspace knowledge,
+    /// delegation). They bypass the configured allowlist.
+    host_tools: Vec<(String, Arc<dyn axocoatl_tools::BuiltinTool>)>,
     /// Standing system-prompt line telling the agent its core-memory blocks exist
     /// and to keep them current. Set when a core-memory store is attached.
     core_capability_hint: Option<String>,
@@ -424,7 +426,7 @@ impl DefaultAgentBehavior {
             core_memory: None,
             shared_blocks: std::collections::HashMap::new(),
             core_memory_tools: Vec::new(),
-            host_control_tools: Vec::new(),
+            host_tools: Vec::new(),
             core_capability_hint: None,
             semantic_memory: None,
             semantic_context: String::new(),
@@ -1263,17 +1265,28 @@ impl DefaultAgentBehavior {
         axocoatl_memory::render_blocks(blocks.iter())
     }
 
-    /// Attach the exact activation-bound workspace memory port.
-    pub fn with_host_knowledge_tool(mut self, tool: Arc<dyn axocoatl_tools::BuiltinTool>) -> Self {
-        self.host_control_tools
-            .push(("workspace_knowledge".into(), tool));
+    /// Attach a host-owned tool under `name`, replacing any earlier host tool
+    /// with the same name. Host tools are bound to one activation by the caller
+    /// and bypass the configured tool allowlist; the tool's own advertisement
+    /// and execution checks stay authoritative.
+    pub fn with_host_tool(
+        mut self,
+        name: impl Into<String>,
+        tool: Arc<dyn axocoatl_tools::BuiltinTool>,
+    ) -> Self {
+        let name = name.into();
+        self.host_tools.retain(|(key, _)| *key != name);
+        self.host_tools.push((name, tool));
         self
     }
 
-    pub fn with_host_control_tool(mut self, tool: Arc<dyn axocoatl_tools::BuiltinTool>) -> Self {
-        self.host_control_tools
-            .push(("coordination_control".into(), tool));
-        self
+    /// Attach the exact activation-bound workspace memory port.
+    pub fn with_host_knowledge_tool(self, tool: Arc<dyn axocoatl_tools::BuiltinTool>) -> Self {
+        self.with_host_tool("workspace_knowledge", tool)
+    }
+
+    pub fn with_host_control_tool(self, tool: Arc<dyn axocoatl_tools::BuiltinTool>) -> Self {
+        self.with_host_tool("coordination_control", tool)
     }
 
     fn tool_definitions(&self) -> Vec<axocoatl_llm::ToolDefinition> {
@@ -1303,11 +1316,7 @@ impl DefaultAgentBehavior {
             });
         }
         // Core-memory edit tools — mutating, so advertised Exclusive.
-        for (name, tool) in self
-            .core_memory_tools
-            .iter()
-            .chain(self.host_control_tools.iter())
-        {
+        for (name, tool) in self.core_memory_tools.iter().chain(self.host_tools.iter()) {
             if !self.tool_allowed(name) {
                 continue;
             }
@@ -1325,7 +1334,7 @@ impl DefaultAgentBehavior {
     }
 
     fn tool_allowed(&self, name: &str) -> bool {
-        if self.host_control_tools.iter().any(|(key, _)| key == name) {
+        if self.host_tools.iter().any(|(key, _)| key == name) {
             return true;
         }
         self.canonical_tool_allowlist
@@ -1348,14 +1357,14 @@ impl DefaultAgentBehavior {
     fn is_behavior_tool(&self, name: &str) -> bool {
         self.is_recall_tool(name)
             || self.is_core_memory_tool(name)
-            || self.host_control_tools.iter().any(|(key, _)| key == name)
+            || self.host_tools.iter().any(|(key, _)| key == name)
     }
 
     fn behavior_tool(&self, name: &str) -> Option<Arc<dyn axocoatl_tools::BuiltinTool>> {
         self.recall_tools
             .iter()
             .chain(self.core_memory_tools.iter())
-            .chain(self.host_control_tools.iter())
+            .chain(self.host_tools.iter())
             .find(|(tool_name, _)| tool_name == name)
             .map(|(_, tool)| tool.clone())
     }
@@ -8168,6 +8177,89 @@ mod tests {
                 )
                 .await,
             Err(axocoatl_tools::ToolError::NotFound(name)) if name == "recall_search"
+        ));
+    }
+
+    #[tokio::test]
+    async fn host_tools_bypass_the_allowlist_and_replace_by_name() {
+        struct NamedHostTool {
+            label: &'static str,
+            policy: axocoatl_llm::ConcurrencyPolicy,
+        }
+
+        #[async_trait::async_trait]
+        impl axocoatl_tools::BuiltinTool for NamedHostTool {
+            fn description(&self) -> &str {
+                self.label
+            }
+
+            fn parameters_schema(&self) -> serde_json::Value {
+                serde_json::json!({"type": "object"})
+            }
+
+            fn concurrency_policy(&self) -> axocoatl_llm::ConcurrencyPolicy {
+                self.policy
+            }
+
+            async fn execute(
+                &self,
+                _arguments: serde_json::Value,
+            ) -> Result<serde_json::Value, axocoatl_tools::ToolError> {
+                Ok(serde_json::json!({"label": self.label}))
+            }
+        }
+
+        let mut behavior =
+            DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter())
+                .with_executor_tool_allowlist(Vec::new())
+                .with_host_tool(
+                    "delegate",
+                    Arc::new(NamedHostTool {
+                        label: "first",
+                        policy: axocoatl_llm::ConcurrencyPolicy::Safe,
+                    }),
+                )
+                .with_host_knowledge_tool(Arc::new(NamedHostTool {
+                    label: "knowledge",
+                    policy: axocoatl_llm::ConcurrencyPolicy::Exclusive,
+                }))
+                .with_host_tool(
+                    "delegate",
+                    Arc::new(NamedHostTool {
+                        label: "second",
+                        policy: axocoatl_llm::ConcurrencyPolicy::Exclusive,
+                    }),
+                );
+        behavior.on_start(&AgentConfig::default()).await.unwrap();
+
+        let definitions = behavior.tool_definitions();
+        let mut names = definitions
+            .iter()
+            .map(|definition| definition.name.as_str())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["delegate", "workspace_knowledge"]);
+        let delegate = definitions
+            .iter()
+            .find(|definition| definition.name == "delegate")
+            .unwrap();
+        assert_eq!(delegate.description, "second");
+        assert_eq!(
+            delegate.concurrency,
+            axocoatl_llm::ConcurrencyPolicy::Exclusive
+        );
+        assert_eq!(
+            behavior
+                .execute_behavior_tool("delegate", serde_json::json!({}))
+                .await
+                .unwrap(),
+            serde_json::json!({"label": "second"})
+        );
+        assert!(matches!(
+            behavior
+                .execute_behavior_tool("coordination_control", serde_json::json!({}))
+                .await,
+            Err(axocoatl_tools::ToolError::NotFound(name)) if name == "coordination_control"
         ));
     }
 
