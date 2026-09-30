@@ -1193,7 +1193,10 @@ The Agents of one native Session share one checkout. An Agent's `writes` list, o
 **May change** choice in Team & budget, is recorded in the profile of every activation it
 runs, and enforcement reads it from that admitted record, never from live configuration.
 A scope that cannot be read refuses the write or process it was checking. A helper cannot
-be admitted with a wider scope than the lead that delegated to it.
+be admitted with a wider scope than the lead that delegated to it, and `delegate` admits
+only a read-only helper: one whose template has no tool that writes files or runs
+commands, or whose scope is empty (`writes: []`), so its `bash` runs under the write
+restriction below and `write_file` and `edit_file` are withheld.
 
 - `write_file` and `edit_file` refuse paths outside the scope before any effect, refuse
   `..` and any path through a symbolic link, and tell the Agent to leave the file

@@ -22,8 +22,10 @@ const MAX_ANSWER_BYTES: usize = 8192;
 /// are reserved: one reads the answer, and one more lets it answer after a
 /// declined tool round.
 const FOLLOW_UP_CALLS: u32 = 2;
-/// Tools that change the workspace or run commands. Until each helper has its
-/// own write scope, only helpers without them can take delegated work.
+/// Tools that change the workspace or run commands. A helper takes delegated
+/// work only when it is read-only: none of these, or a write scope that allows
+/// no path (`writes: []`), which withholds the file-writing tools and runs its
+/// `bash` where it cannot change the repository.
 const WRITE_TOOLS: [&str; 5] = [
     "write_file",
     "edit_file",
@@ -31,6 +33,9 @@ const WRITE_TOOLS: [&str; 5] = [
     "bash_background",
     "spawn_terminal",
 ];
+/// The write tools an empty write scope withholds (`write_file`, `edit_file`)
+/// or confines (`bash`).
+const READ_ONLY_CONFINED: [&str; 3] = ["write_file", "edit_file", "bash"];
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,12 +67,33 @@ struct DelegateTool {
     helpers: Vec<String>,
 }
 
+/// Whether a helper's profile allows no repository path to change.
+fn read_only(profile: &ExecutionProfile) -> bool {
+    profile.write_scope.as_ref().is_some_and(Vec::is_empty)
+}
+
+/// The tools with which a helper could still change the workspace or run
+/// commands that can: every write tool, less those an empty write scope
+/// withholds or confines. A helper with any cannot take delegated work.
 fn write_tools(profile: &ExecutionProfile) -> Vec<&str> {
     profile
         .tools
         .iter()
         .map(String::as_str)
-        .filter(|tool| WRITE_TOOLS.contains(tool))
+        .filter(|tool| {
+            WRITE_TOOLS.contains(tool) && !(read_only(profile) && READ_ONLY_CONFINED.contains(tool))
+        })
+        .collect()
+}
+
+/// The tools a helper is offered, as the lead is told: an empty write scope
+/// withholds the file-writing tools.
+fn offered_tools(profile: &ExecutionProfile) -> Vec<&str> {
+    profile
+        .tools
+        .iter()
+        .map(String::as_str)
+        .filter(|tool| !(read_only(profile) && ["write_file", "edit_file"].contains(tool)))
         .collect()
 }
 
@@ -231,8 +257,9 @@ impl DispatchState {
         if !writes.is_empty() {
             return Ok(Err(format!(
                 "The helper '{}' can change files or run commands ({}), and only read-only \
-                 helpers can take delegated work for now. Choose a read-only helper or do this \
-                 part yourself.",
+                 helpers can take delegated work. A person can make it read-only by setting \
+                 `writes: []` on it (May change: Nothing in Team and budget). Choose a \
+                 read-only helper or do this part yourself.",
                 call.helper,
                 writes.join(", ")
             )));
@@ -612,10 +639,16 @@ impl SessionDispatchController {
             if !write_tools(&profile).is_empty() {
                 continue;
             }
-            let tools = if profile.tools.is_empty() {
+            let offered = offered_tools(&profile);
+            let tools = if offered.is_empty() {
                 "no tools".to_owned()
             } else {
-                format!("tools {}", profile.tools.join(", "))
+                format!("tools {}", offered.join(", "))
+            };
+            let tools = if read_only(&profile) && offered.contains(&"bash") {
+                format!("{tools} (its bash cannot change the repository)")
+            } else {
+                tools
             };
             lines.push(format!(
                 "- {}: {tools}; up to {} tool calls and {} tokens.",

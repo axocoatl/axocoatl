@@ -53,6 +53,8 @@ struct LeadTemplate {
     htn_methods_yaml: Option<String>,
     /// The team's required checks, which the lead pays for when it has bash.
     required_checks: Vec<Vec<String>>,
+    /// Helper templates approved with `writes: []`.
+    read_only_helpers: Vec<String>,
 }
 impl LeadTemplate {
     fn autonomous() -> Self {
@@ -63,6 +65,7 @@ impl LeadTemplate {
             operations: vec![DelegatedOperation::AddAgent],
             htn_methods_yaml: None,
             required_checks: vec![],
+            read_only_helpers: vec![],
         }
     }
     /// A lead with bash on a team with one required check, which it pays
@@ -112,6 +115,7 @@ impl LeadTemplate {
                 .into(),
             ),
             required_checks: vec![],
+            read_only_helpers: vec![],
         }
     }
 }
@@ -153,6 +157,11 @@ async fn lead_fixture_as(
             }
             let mut retained = vec![];
             for (name, role, tools) in agents {
+                let writes = lead
+                    .read_only_helpers
+                    .iter()
+                    .any(|helper| helper == name)
+                    .then(Vec::new);
                 let definition_id = AgentDefinitionId::new(format!("{name}-definition")).unwrap();
                 let config = AgentConfig {
                     id: AgentId::new(if role == AgentRole::Worker {
@@ -164,6 +173,7 @@ async fn lead_fixture_as(
                     provider: "ollama".into(),
                     model: "test-model".into(),
                     tools: tools.clone(),
+                    writes: writes.clone(),
                     sampling: SamplingConfig {
                         max_tokens: Some(128),
                         ..Default::default()
@@ -176,7 +186,7 @@ async fn lead_fixture_as(
                     model: "test-model".into(),
                     isolation: "in-process".into(),
                     tools,
-                    write_scope: None,
+                    write_scope: writes,
                 };
                 let snapshot = content
                     .retain_activation_evidence(ActivationEvidenceContent::Definition {
@@ -991,6 +1001,80 @@ async fn delegate_refuses_a_helper_that_can_change_files() {
     assert_eq!(scenario.helper_calls(), 0);
     assert!(helper_node(&outcome.snapshot, &lead).is_none());
     assert!(agent_commands(&run.controller).is_empty());
+}
+
+/// A helper with bash whose writes are `[]` is read-only: it is not offered
+/// the file-writing tools and its shell cannot change the repository, so it
+/// takes delegated work. The same template without `writes: []` is refused,
+/// and the refusal says how to make it read-only.
+#[tokio::test]
+async fn a_helper_with_bash_takes_delegated_work_only_when_its_writes_are_empty() {
+    for read_only in [true, false] {
+        let mut template = LeadTemplate::autonomous();
+        if read_only {
+            template.read_only_helpers = vec!["shell".into()];
+        }
+        let fixture = lead_fixture_as(
+            100000,
+            &[
+                ("scout", &[]),
+                ("shell", &["read_file", "write_file", "bash"]),
+            ],
+            template,
+        )
+        .await;
+        let lead = fixture.request.node_evidence[0].node_id.clone();
+        let mut scenario = Scenario::new("pub fn run");
+        scenario.helper = "shell".into();
+        let scenario = Arc::new(scenario);
+        let run = run_lead(&fixture, scenario.clone(), false).await;
+        let snapshot = run.controller.snapshot().unwrap();
+        let first_request = scenario.lead_requests.lock().unwrap()[0].1.clone();
+        let tool = first_request
+            .tools
+            .iter()
+            .find(|tool| tool.name == "delegate")
+            .unwrap();
+        if read_only {
+            assert_eq!(
+                tool.parameters["properties"]["helper"]["enum"],
+                serde_json::json!(["scout", "shell"])
+            );
+            assert!(
+                tool.description.contains(
+                    "- shell: tools read_file, bash (its bash cannot change the repository)"
+                ),
+                "{}",
+                tool.description
+            );
+            assert!(
+                helper_node(&snapshot, &lead).is_some(),
+                "the read-only helper is admitted"
+            );
+            let commands = agent_commands(&run.controller);
+            assert_eq!(commands.len(), 1);
+            assert!(matches!(
+                commands[0].state,
+                ControlCommandState::Applied | ControlCommandState::Settled
+            ));
+        } else {
+            assert_eq!(
+                tool.parameters["properties"]["helper"]["enum"],
+                serde_json::json!(["scout"])
+            );
+            assert!(!tool.description.contains("shell"));
+            let error = scenario.last_delegate_result();
+            assert!(
+                error.contains(
+                    "The helper 'shell' can change files or run commands (write_file, bash)"
+                ) && error.contains("setting `writes: []` on it"),
+                "{error}"
+            );
+            assert_eq!(scenario.helper_calls(), 0);
+            assert!(helper_node(&snapshot, &lead).is_none());
+            assert!(agent_commands(&run.controller).is_empty());
+        }
+    }
 }
 
 #[tokio::test]
