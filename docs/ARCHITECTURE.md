@@ -1051,16 +1051,23 @@ agent:**
   `NET_RAW`, `DAC_READ_SEARCH`, …), so a setuid binary can't escalate and the
   classic namespace/mount escape levers are gone.
 - **Network.** The default is bridged networking so installs and development
-  servers work. Set `sandbox.network: none` when repository code and commands in
-  the local container must have no outbound connection; this also disables
-  network-dependent setup and commands in that container. It does not govern
+  servers work. Set `sandbox.network: none` for repositories you do not trust, or
+  whenever repository code and commands in the local container must have no
+  outbound connection; this also disables
+  network-dependent setup and commands in that container. Only `bridge` and `none`
+  are accepted; any other value fails config validation, `axocoatl doctor` and daemon
+  start rather than falling back to bridge. Every `podman run` passes
+  `--http-proxy=false`, so the host's proxy variables (which can hold a proxy user
+  name and password) are not copied into the container. It does not govern
   daemon-side model providers, MCP, web search, webhooks, remote sandboxes, the
   embedding-model download, or image-registry access. Configured Preview ports
   remain logical container-port identities; local Podman assigns each Session its
   own loopback host mapping, and the Session-aware proxy resolves that mapping
   without exposing arbitrary host services.
 - **Resources.** Memory, CPU, and PID caps (2 GB / 2 CPUs / 512 pids) bound a
-  runaway loop or fork bomb, where the host's cgroup delegation allows it.
+  runaway loop or fork bomb, where the host's cgroup delegation allows it. With the
+  default `require_resource_limits: false`, a host that cannot apply them starts the
+  container without them and logs a warning; set it to `true` to refuse instead.
 
 **Environment readiness and consent.** A Session persists an environment generation and one
 of `unprepared`, `awaiting_approval`, `preparing`, `ready`, or `failed`. Repository detection
@@ -1211,8 +1218,10 @@ restriction below and `write_file` and `edit_file` are withheld.
   unchanged and describe the needed change in its answer.
 - A read-only Agent (`writes: []`) is not offered `write_file` or `edit_file`. Its own
   `bash` commands run under a kernel write restriction (Landlock, applied by the
-  in-sandbox execution supervisor between fork and exec): only `/tmp`, `/var/tmp`, `/dev`
-  and the container home are writable, never the repository. A supervisor that cannot
+  in-sandbox execution supervisor between fork and exec): only `/tmp`, `/var/tmp` and
+  `/dev` are writable, never the repository. `HOME` (and the XDG directories) point at a
+  scratch directory under `/tmp`, created for that command and removed when it ends, so
+  the Session's shared home stays unchanged. A supervisor that cannot
   apply it refuses to launch that command. The read-only file tools and the host's own
   repository captures run without the restriction.
 - A writer's shell can still write outside its paths, so the activation's own Before and
@@ -1250,7 +1259,9 @@ The sandbox is pluggable behind one trait, selected for this daemon configuratio
   A **git-repo** Session clones a clean, pushed branch over HTTPS. The git token
   (`sandbox.e2b.git_token`, e.g. `${GITHUB_TOKEN}`) is injected as a sandbox
   secret and read by an in-VM credential helper at fill-time — it is never
-  written into the repo's Git config, remote URL, or a command line. Changes remain
+  written into the repo's Git config, remote URL, or a command line. It is an
+  environment variable of the VM, so every command in the VM can read it, including
+  repository scripts and Agent commands. Changes remain
   ordinary working-tree state in the remote sandbox. Axocoatl does not automatically
   commit or push; review, commit, and push deliberately through the Session's repository
   tools. A scratch Session (no repository) gets a fresh remote workspace.
@@ -1289,5 +1300,7 @@ Report security issues per [SECURITY.md](../SECURITY.md).
 (providers) · `axocoatl-config` · `axocoatl-actor` (runtime) ·
 `axocoatl-memory` · `axocoatl-coordination` (lattice/HTN) ·
 `axocoatl-graph` · `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` ·
-`axocoatl-isolation` (Podman sandbox) · `axocoatl-daemon` · `axocoatl-server` ·
-`axocoatl-cli`.
+`axocoatl-isolation` (Podman and E2B sandboxes) · `axocoatl-exec` (in-sandbox
+command supervisor; applies the Landlock write restriction) · `axocoatl-session`
+(durable Workspace, Session and turn storage) · `axocoatl-daemon` ·
+`axocoatl-server` · `axocoatl-service` (systemd / launchd) · `axocoatl-cli`.

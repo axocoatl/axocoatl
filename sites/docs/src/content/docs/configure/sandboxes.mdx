@@ -64,9 +64,17 @@ manual setup guidance. It may start an existing stopped VM.
 
 `network` accepts:
 
-- `bridge` — outbound access and explicitly published Preview ports;
+- `bridge` (the default) — outbound access and explicitly published Preview ports;
 - `none` — no container network, which also disables package downloads,
   remote tools called from the container, and port publication.
+
+Set `network: none` for repositories you do not trust. Any other value, such as
+`None`, `off` or `disabled`, is a configuration error that `axocoatl validate`,
+`axocoatl doctor` and daemon start report; it never falls back to `bridge`.
+
+Axocoatl starts every Podman container with `--http-proxy=false`, so the host's
+`HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY` and `NO_PROXY` variables (in either case)
+are not copied into it, and a proxy's user name and password stay on the host.
 
 With `network: none`, choose an image that already contains Axocoatl's required
 repository commands. Readiness provisioning cannot download missing commands
@@ -99,7 +107,10 @@ implementations are not part of the 1.0 support scope.
 GitHub-compatible token authentication when the
 remote VM must clone or push a private repository. The runtime injects it as a
 sandbox secret for an origin-scoped Git credential helper rather than writing
-it into repository Git configuration. Other Git hosts may require a different
+it into repository Git configuration. The secret is an environment variable of
+the VM, so every command in the VM can read it, including repository scripts,
+setup commands and Agent commands. Use a token limited to the repositories and
+permissions the Session needs. Other Git hosts may require a different
 username or credential flow and are not implied by this field.
 
 The selected template is daemon-global. E2B does not accept a per-Session OCI
