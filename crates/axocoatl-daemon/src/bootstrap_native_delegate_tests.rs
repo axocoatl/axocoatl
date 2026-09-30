@@ -590,6 +590,24 @@ async fn lead_delegates_to_read_only_helper_and_receives_bounded_result() {
     let node = helper_node(&outcome.snapshot, &lead).expect("one helper node");
     let accepted = outcome.snapshot.contract().current_accepted_activations();
     assert_eq!(accepted.len(), 2);
+    let graph = outcome.snapshot.contract().graph().unwrap();
+    assert!(
+        !graph
+            .nodes
+            .iter()
+            .find(|item| item.node_id == node)
+            .unwrap()
+            .required,
+        "a delegated helper is optional work"
+    );
+    assert!(
+        graph
+            .nodes
+            .iter()
+            .find(|item| item.node_id == lead)
+            .unwrap()
+            .required
+    );
 
     let first_request = scenario.lead_requests.lock().unwrap()[0].1.clone();
     let tool = first_request
@@ -676,6 +694,43 @@ async fn delegated_helper_starts_in_a_fresh_conversation() {
             .unwrap()
             .contains(LEAD_MARKER)
     );
+}
+
+#[tokio::test]
+async fn failed_helper_returns_a_tool_error_and_the_lead_completes() {
+    let fixture = lead_fixture(100000).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let mut scenario = Scenario::new("never produced");
+    scenario.helper_fails = true;
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:?}",
+        outcome.snapshot.contract()
+    );
+    let node = helper_node(&outcome.snapshot, &lead).unwrap();
+    let helper = outcome
+        .snapshot
+        .contract()
+        .activations()
+        .iter()
+        .rev()
+        .find(|item| item.activation.node_id == node)
+        .unwrap();
+    assert_eq!(helper.state, ActivationState::Failed);
+    let error = scenario.last_delegate_result();
+    assert!(
+        error.contains("The helper 'scout' did not finish")
+            && error.contains(node.as_str())
+            && error.contains("Continue without its answer"),
+        "{error}"
+    );
+    let accepted = outcome.snapshot.contract().current_accepted_activations();
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(accepted[0].activation.node_id, lead);
 }
 
 #[tokio::test]

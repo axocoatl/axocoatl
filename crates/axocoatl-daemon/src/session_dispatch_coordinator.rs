@@ -15,6 +15,13 @@ use serde::{Deserialize, Serialize};
 
 type CoordinatorWorkerPreparation = (Vec<(WorkerConfig, String)>, Vec<String>, Option<String>);
 
+/// A child from a Coordinator's plan. Its node is required work of the turn.
+pub(super) const COORDINATOR_CHILD: &str = "native_coordinator_child_v1";
+/// A helper admitted through `delegate`. Its node is optional: a failed or
+/// stopped helper is reported to the lead as a tool error and does not hold
+/// the turn open. Children retained under the older kind stay required.
+pub(super) const DELEGATE_CHILD: &str = "native_delegate_child_v1";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NativeCoordinatorWorker {
@@ -114,7 +121,8 @@ impl DispatchState {
             return Err(error("child proposal is missing"));
         };
         let proposal: NativeChildProposal = serde_json::from_str(text).map_err(error)?;
-        if proposal.kind != "native_coordinator_child_v1"
+        if !(proposal.kind == COORDINATOR_CHILD
+            || (proposal.kind == DELEGATE_CHILD && replacement.is_none()))
             || proposal.parent != *activation
             || proposal.node_id != input.activation.node_id
             || proposal.conversation_id != input.conversation_id
@@ -128,6 +136,14 @@ impl DispatchState {
             ));
         }
         Ok(proposal)
+    }
+    /// Whether an Agent graph command admits a `delegate` helper. Anything that
+    /// does not resolve to that exact kind keeps the required default.
+    pub(super) fn is_delegate_child(&self, view: &CommandReceiptView) -> bool {
+        matches!(view.source, CommandSourceRecord::Agent { .. })
+            && self
+                .child_proposal(view)
+                .is_ok_and(|proposal| proposal.kind == DELEGATE_CHILD)
     }
     pub(super) fn coordinator_workers(
         &self,
@@ -408,7 +424,7 @@ impl SessionDispatchController {
         request: &ChildExecutionRequest,
         control: AgentRunControl,
     ) -> Result<Box<dyn AdmittedChildExecution>> {
-        self.admit_coordinator_child(parent, request, control, None)
+        self.admit_coordinator_child(parent, request, control, None, COORDINATOR_CHILD)
     }
     pub(super) fn replace_coordinator_future(
         &self,
@@ -424,7 +440,13 @@ impl SessionDispatchController {
             .ok_or_else(|| error("source is missing"))?
             .control
             .clone();
-        self.admit_coordinator_child(parent, request, control, Some((target, rewire)))?;
+        self.admit_coordinator_child(
+            parent,
+            request,
+            control,
+            Some((target, rewire)),
+            COORDINATOR_CHILD,
+        )?;
         Ok(())
     }
     pub(super) fn admit_coordinator_child(
@@ -433,6 +455,7 @@ impl SessionDispatchController {
         request: &ChildExecutionRequest,
         control: AgentRunControl,
         replacement: Option<(TurnNodeId, Vec<TurnNodeId>)>,
+        kind: &'static str,
     ) -> Result<Box<dyn AdmittedChildExecution>> {
         let mut state = self.lock()?;
         state.execution_admission()?;
@@ -505,7 +528,7 @@ impl SessionDispatchController {
         let conversation_id =
             NodeConversationId::new(format!("child-conversation-{digest}")).map_err(error)?;
         let proposal = NativeChildProposal {
-            kind: "native_coordinator_child_v1".into(),
+            kind: kind.into(),
             parent: parent.clone(),
             request: request.clone(),
             worker: worker.clone(),

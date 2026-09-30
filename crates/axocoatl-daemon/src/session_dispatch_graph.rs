@@ -19,11 +19,18 @@ impl DispatchState {
             _ => None,
         }
     }
+    /// The graph revision a command makes. Replays re-derive it, so a node's
+    /// `required` flag follows the retained proposal kind, never current state.
     pub(super) fn graph_control_event(
         &self,
         view: &CommandReceiptView,
     ) -> Result<Option<TurnContractEvent>> {
-        graph_event(&self.canonical, &self.turn_id, view)
+        graph_event(
+            &self.canonical,
+            &self.turn_id,
+            view,
+            !self.is_delegate_child(view),
+        )
     }
     pub(super) fn validate_graph_control(&self, view: &CommandReceiptView) -> Result<()> {
         if self.is_isolated_ways()? {
@@ -583,6 +590,7 @@ fn graph_event(
     canonical: &SessionExecutionStore,
     turn: &LogicalTurnId,
     view: &CommandReceiptView,
+    required: bool,
 ) -> Result<Option<TurnContractEvent>> {
     let Some(input) = graph_input(view) else {
         return Ok(None);
@@ -634,7 +642,7 @@ fn graph_event(
         .map_err(error)?,
         definition: input.definition.clone(),
         conversation_id: input.conversation_id.clone(),
-        required: true,
+        required,
         starting_savepoint: ConversationSavepoint::Empty,
     };
     let mutation = match &view.request.parameters {
@@ -742,7 +750,7 @@ pub(crate) fn pending_human_graph_receipt(
         return Err(error("graph command already has a different body"));
     }
     let TurnContractEvent::ReviseGraph { graph, .. } =
-        graph_event(canonical, &request.turn_id, view)?
+        graph_event(canonical, &request.turn_id, view, true)?
             .ok_or_else(|| error("saved command is not a graph edit"))?
     else {
         return Err(error("saved graph proposal differs"));

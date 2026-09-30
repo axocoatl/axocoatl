@@ -586,7 +586,13 @@ impl SessionDispatchController {
             }
             (worker, request, node_id, command_id, bound.control.clone())
         };
-        match self.admit_coordinator_child(lead, &request, control, None) {
+        match self.admit_coordinator_child(
+            lead,
+            &request,
+            control,
+            None,
+            super::coordinator::DELEGATE_CHILD,
+        ) {
             Ok(wait) => Ok((node_id, wait)),
             Err(failure) => {
                 let state = self.lock().map_err(|failure| failure.to_string())?;
