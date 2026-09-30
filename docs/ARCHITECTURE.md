@@ -882,10 +882,9 @@ observation, admitted on the activation's grant only while the invocation reserv
 spare it, that hashes a path only when it resolves to exactly `<repository>/<path>` as a
 readable regular file, never through a symbolic link or outside the repository. A digest
 the model gives is kept only for a file the host could not read; the activation's starting
-capture is the last fallback. A finding that names repository files it does not cite is
-asked once to cite them. An omitted `expected_revision` creates a note and never replaces
-an existing one, and a proposal whose note could never be published (over the document
-limit) is refused when proposed.
+capture is the last fallback. An omitted `expected_revision` creates a note and never
+replaces an existing one, and a proposal whose note could never be published (over the
+document limit) is refused when proposed.
 
 `knowledge_index` builds a bounded, rebuildable index from caller-supplied source
 under a declared snapshot identity. Pinned Tree-sitter grammars parse Rust,
