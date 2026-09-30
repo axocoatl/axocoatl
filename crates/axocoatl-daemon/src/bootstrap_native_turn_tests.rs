@@ -659,6 +659,37 @@ async fn exact_native_retry_cannot_create_a_second_driver_or_replay_after_stop_a
         Some(LogicalTurnState::NeedsAttention)
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // A new request while this turn needs attention is refused with both
+    // ways out and their exact endpoints; nothing starts or closes.
+    let session = f.request.session_id.as_str();
+    let turn = f.request.turn_id.as_str();
+    let Err(refused) = f.registry.native_first_turn_existing(
+        session,
+        &LogicalTurnId::new("native-while-attention").unwrap(),
+        "a new request",
+    ) else {
+        panic!("a new request cannot start while the turn needs attention")
+    };
+    let refused = refused.to_string();
+    let controls = format!("POST /api/sessions/{session}/turns/{turn}/control-commands");
+    for expected in [
+        format!("turn '{turn}' needs attention"),
+        "continue that turn with your message".into(),
+        format!("{controls} with action \"revise\""),
+        "finish it as it is and send this request again as a new turn".into(),
+        format!("{controls} with action \"finish\" and a confirmed \"partial_finish\""),
+        format!("GET /api/sessions/{session}/turns/{turn}/control-plane"),
+    ] {
+        assert!(
+            refused.contains(&expected),
+            "{expected:?} missing from {refused}"
+        );
+    }
+    assert_eq!(
+        controller.snapshot().unwrap().contract().state(),
+        Some(LogicalTurnState::NeedsAttention)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     f.registry
         .request_human_turn_stop(f.request.session_id.as_str(), f.request.turn_id.as_str())
         .unwrap();

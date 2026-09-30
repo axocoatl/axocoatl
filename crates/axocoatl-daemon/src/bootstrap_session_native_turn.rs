@@ -68,14 +68,13 @@ impl SessionDispatchRegistry {
             .snapshot()
             .map_err(|error| failure(error.to_string()))?;
         if !existing {
-            if !snapshot
-                .contract()
-                .state()
-                .is_some_and(LogicalTurnState::is_closed)
-            {
-                return Err(failure(
-                    "resolve the current unfinished turn before sending a new request",
-                ));
+            let state = snapshot.contract().state();
+            if !state.is_some_and(LogicalTurnState::is_closed) {
+                return Err(failure(unfinished_turn_refusal(
+                    session_id,
+                    snapshot.turn_id().as_str(),
+                    state,
+                )));
             }
             return Ok(NativeFirstTurnExisting::Unstarted);
         }
@@ -315,5 +314,33 @@ impl SessionDispatchRegistry {
                 "Session canonical history is unavailable for runtime replacement",
             ))
         }
+    }
+}
+
+/// Why a new request cannot start while `turn` is unfinished, naming what the
+/// person can do instead and the exact endpoints. Refusing keeps the open turn
+/// and its authority unchanged; nothing is finished or continued implicitly.
+fn unfinished_turn_refusal(session: &str, turn: &str, state: Option<LogicalTurnState>) -> String {
+    let controls = format!("/api/sessions/{session}/turns/{turn}/control-commands");
+    match state {
+        Some(LogicalTurnState::NeedsAttention) => format!(
+            "turn '{turn}' needs attention, so this request was not started. Either continue \
+             that turn with your message: POST {controls} with action \"revise\", the exact \
+             activation of an Agent with an accepted answer and your message as \"instruction\" \
+             (action \"continue\" restarts stopped work without a message). Or finish it as it \
+             is and send this request again as a new turn: POST {controls} with action \
+             \"finish\" and a confirmed \"partial_finish\" built from turn_controls.partial_finish \
+             in GET /api/sessions/{session}/turns/{turn}/control-plane; only the accepted \
+             answers it selects carry into the next turn"
+        ),
+        Some(LogicalTurnState::Running) => format!(
+            "turn '{turn}' is still running, so this request was not started. Guide it with \
+             POST {controls} and action \"guide\", or stop it and send this request again"
+        ),
+        _ => format!(
+            "turn '{turn}' is unfinished, so this request was not started. Resolve it through \
+             GET /api/sessions/{session}/turns/{turn}/control-plane and POST {controls} before \
+             sending a new request"
+        ),
     }
 }
