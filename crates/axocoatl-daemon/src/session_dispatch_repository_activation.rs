@@ -12,6 +12,7 @@ use axocoatl_isolation::supervisor_transport::{
     RunningSupervisedCommand, SupervisedExecution, SupervisorCancellation,
 };
 use axocoatl_isolation::{BgTask, ExecResult, IsolationError, Sandbox};
+use axocoatl_session::control_authority::REPOSITORY_CAPTURE_PORT;
 use axocoatl_tools::{BuiltinTool, ToolError, ToolExecutor};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -223,7 +224,8 @@ impl RepositoryInvocation {
         let Some(resource) = &bound.repository else {
             return Ok(None);
         };
-        if !SUPPORTED_TOOLS.contains(&intent.tool_name.as_str()) {
+        let capture_port = intent.tool_name == REPOSITORY_CAPTURE_PORT;
+        if !SUPPORTED_TOOLS.contains(&intent.tool_name.as_str()) && !capture_port {
             return Err(error(
                 "invocation has no owned repository tool implementation",
             ));
@@ -240,6 +242,13 @@ impl RepositoryInvocation {
             process_index: AtomicU64::new(0),
             require_complete_capture: AtomicBool::new(false),
         });
+        if capture_port {
+            // The port runs only the host's fixed capture and offers no tool.
+            return Ok(Some(Self {
+                scope,
+                executor: Arc::new(ToolExecutor::new()),
+            }));
+        }
         let backend = session_tools(Arc::new(RepositorySandbox {
             resource: resource.clone(),
             invocation: Some(scope.clone()),
@@ -267,7 +276,11 @@ impl RepositoryInvocation {
     /// The fixed host capture uses the existing supervisor stream ceiling;
     /// ordinary BashTool retains its smaller user-facing presentation prefix.
     pub(super) async fn capture_snapshot(&self, command: &str) -> Result<serde_json::Value> {
-        if self.scope.intent.tool_name != "bash" || command != super::repository_snapshot::CAPTURE {
+        if !matches!(
+            self.scope.intent.tool_name.as_str(),
+            "bash" | REPOSITORY_CAPTURE_PORT
+        ) || command != super::repository_snapshot::CAPTURE
+        {
             return Err(error(
                 "repository capture is not the fixed approved invocation",
             ));

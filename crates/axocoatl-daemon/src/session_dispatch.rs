@@ -569,6 +569,14 @@ impl SessionDispatchController {
         let mut state = self.lock()?;
         state.execution_admission()?;
         let group = request.provider_response_group;
+        if request.tool_call.name == axocoatl_session::control_authority::REPOSITORY_CAPTURE_PORT
+            && (!repository_snapshot::is_host_observation(group)
+                || repository_snapshot::is_digest_group(group))
+        {
+            return Err(error(
+                "the repository capture port belongs to the host; an Agent cannot call it",
+            ));
+        }
         if !repository_snapshot::is_host_observation(group)
             || repository_snapshot::is_digest_group(group)
         {

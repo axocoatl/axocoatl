@@ -568,14 +568,21 @@ async fn scoped_write_file_is_refused_before_any_effect() {
     assert!(!f._workspace.path().join("config").exists());
     assert!(f.owner.execution_is_idle().unwrap());
     let snapshot = r.controller.snapshot().unwrap();
-    assert_eq!(snapshot.contract().invocations().len(), 2);
+    // Both refused calls, and the host's Before and After captures.
+    assert_eq!(snapshot.contract().invocations().len(), 4);
     assert!(snapshot
         .contract()
         .invocations()
         .iter()
         .all(|invocation| invocation.evidence.disposition() == EffectDisposition::OutcomeRecorded));
-    // Without a shell nothing outside the file tools could change the tree.
-    assert!(settled.accepted, "{:?}", settled.failure);
+    // Even without a shell its captures decide, and this fixture has no
+    // supervisor to take them: nothing establishes that only lib/ changed.
+    assert!(!settled.accepted);
+    let failure = settled.failure.unwrap();
+    assert!(
+        failure.starts_with("its repository captures cannot establish"),
+        "{failure}"
+    );
 }
 
 #[tokio::test]
@@ -974,6 +981,100 @@ async fn actual_home_configuration_cannot_hide_a_change_or_run_in_the_capture() 
     let failure = settled.failure.unwrap();
     assert!(failure.starts_with("it changed "), "{failure}");
     assert!(failure.contains("config/secret.txt"), "{failure}");
+}
+
+/// A file-tool-only writer limited to lib/ writes a file there that an
+/// earlier shell hard-linked to config/x. The write passes the path check,
+/// but the host's captures see config/x change and fail the activation.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_file_tool_writer_through_a_hard_link_is_judged() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    let root = f._workspace.path().to_owned();
+    git_init(&root);
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::write(root.join("config/x"), "original\n").unwrap();
+    std::fs::hard_link(root.join("config/x"), root.join("lib/h")).unwrap();
+    let r = run_scoped(&mut f, &["write_file", "read_file"], &["lib/"]);
+    let provider = Provider::new(vec![(
+        "write_file",
+        serde_json::json!({"path":"lib/h", "content":"changed through the link\n"}),
+    )]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let outside = std::fs::read_to_string(root.join("config/x"));
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert!(idle.unwrap());
+    assert_eq!(outside.unwrap(), "changed through the link\n");
+    assert!(!settled.accepted);
+    let failure = settled.failure.unwrap();
+    assert!(failure.starts_with("it changed config/x"), "{failure}");
+    assert!(failure.contains("(lib/)"), "{failure}");
+    // The write, and the host's Before and After captures.
+    let snapshot = r.controller.snapshot().unwrap();
+    assert_eq!(snapshot.contract().invocations().len(), 3);
+}
+
+/// The host's capture port runs only in the host's own observation groups;
+/// an Agent's tool call naming it is refused before anything is recorded.
+#[tokio::test]
+async fn an_agent_cannot_call_the_host_capture_port() {
+    use axocoatl_actor::ToolInvocationRequest;
+    use axocoatl_llm::ToolCall;
+    let mut f = fixture().await;
+    let r = run_scoped(&mut f, &["write_file"], &["lib/"]);
+    let prepared = r
+        .controller
+        .prepare_repository_activation(
+            r.activation.clone(),
+            r.resources(Provider::new(vec![])),
+            r.resource.clone(),
+        )
+        .unwrap();
+    let request = ToolInvocationRequest {
+        actor_id: "conversation".into(),
+        provider_id: "controlled".into(),
+        model_id: "controlled-model".into(),
+        provider_response_group: 1,
+        provider_call_index: 0,
+        provider_call_count: 1,
+        tool_call: ToolCall {
+            id: "agent-capture".into(),
+            name: axocoatl_session::control_authority::REPOSITORY_CAPTURE_PORT.into(),
+            arguments: serde_json::json!({
+                "command": axocoatl_session::execution_content::REPOSITORY_SNAPSHOT_COMMAND
+            }),
+            provider_metadata: Default::default(),
+        },
+    };
+    let refused = prepared
+        .execution_boundary_for_test()
+        .admit(&request)
+        .await
+        .err()
+        .unwrap();
+    assert!(refused.contains("belongs to the host"), "{refused}");
+    assert!(r
+        .controller
+        .snapshot()
+        .unwrap()
+        .contract()
+        .invocations()
+        .is_empty());
 }
 
 #[tokio::test]

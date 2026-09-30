@@ -68,7 +68,7 @@ impl SessionDispatchController {
                     "Execution was stopped, revoked, or expired before this repository observation"
                         .into(),
                 );
-            } else if !bound.profile.tools.iter().any(|tool| tool == "bash") {
+            } else if capture_tool(&bound.profile).is_none() {
                 observation.unavailable =
                     Some("The approved Agent profile does not permit repository capture".into());
             } else if usage.invocations >= grant.policy.limits.invocations {
@@ -97,7 +97,9 @@ impl SessionDispatchController {
                 provider_call_count: 1,
                 tool_call: axocoatl_llm::ToolCall {
                     id: format!("repository-{phase:?}"),
-                    name: "bash".into(),
+                    name: capture_tool(&bound.profile)
+                        .ok_or_else(|| error("Repository capture has no admitted tool"))?
+                        .into(),
                     arguments: serde_json::json!({"command":CAPTURE}),
                     provider_metadata: Default::default(),
                 },
@@ -299,11 +301,14 @@ impl SessionDispatchController {
     }
 
     /// An activation with a write scope may change only those paths. File
-    /// tools refuse other paths before any effect; a shell can still write
-    /// anywhere, so the exact Before and After captures of the activation
-    /// decide. Returns why the activation must not be accepted, or `None` when
-    /// every change stayed in scope. A scope that cannot be read is itself a
-    /// reason. Ignored files are outside the captures and are not judged.
+    /// tools refuse other paths before any effect, but a write through a
+    /// hard link, or to a path swapped while it runs, can still reach another
+    /// file, and a shell can write anywhere, so the exact Before and After
+    /// captures of every such activation decide. A read-only activation
+    /// without a shell is the exception: it can write nothing. Returns why
+    /// the activation must not be accepted, or `None` when every change stayed
+    /// in scope. A scope that cannot be read is itself a reason. Ignored files
+    /// are outside the captures and are not judged.
     pub(crate) fn write_scope_violation(
         &self,
         activation: &ActivationRef,
@@ -326,7 +331,7 @@ impl SessionDispatchController {
                     .into(),
             ));
         };
-        if scope.is_unrestricted() || !shell {
+        if scope.is_unrestricted() || (scope.is_read_only() && !shell) {
             return Ok(None);
         }
         let snapshot = state.canonical.snapshot(&state.turn_id).map_err(error)?;
@@ -354,6 +359,23 @@ impl SessionDispatchController {
                 scope.describe()
             )
         }))
+    }
+}
+
+/// The tool the host's repository captures of an activation run as: its own
+/// `bash`, or, for an activation limited to named paths without a shell, the
+/// host's capture port. `None` when the activation has neither.
+pub(crate) fn capture_tool(profile: &ExecutionProfile) -> Option<&'static str> {
+    if profile.tools.iter().any(|tool| tool == "bash") {
+        Some("bash")
+    } else if profile
+        .write_scope
+        .as_ref()
+        .is_some_and(|scope| !scope.is_empty())
+    {
+        Some(axocoatl_session::control_authority::REPOSITORY_CAPTURE_PORT)
+    } else {
+        None
     }
 }
 
@@ -493,7 +515,7 @@ impl DispatchState {
             .bound
             .get(&activation.activation_id)
             .filter(|bound| bound.activation == *activation)?;
-        if bound.repository.is_none() || !bound.profile.tools.iter().any(|tool| tool == "bash") {
+        if bound.repository.is_none() || capture_tool(&bound.profile).is_none() {
             return None;
         }
         let grant = bound.grant.grant_id.as_str();
@@ -718,6 +740,30 @@ mod reserve_tests {
         assert!(provider(5));
         // Only a model that ignores the refusal again runs out.
         assert!(!provider(6));
+    }
+
+    /// Every activation limited to named paths is captured, with its own
+    /// shell or through the host's port; one that can write nothing, or may
+    /// write anything, without a shell is not.
+    #[test]
+    fn captures_run_for_every_path_scoped_writer() {
+        let profile = |tools: &[&str], scope: Option<&[&str]>| ExecutionProfile {
+            definition: "d".into(),
+            provider: "p".into(),
+            model: "m".into(),
+            isolation: "in-process".into(),
+            tools: tools.iter().map(|tool| (*tool).into()).collect(),
+            write_scope: scope.map(|scope| scope.iter().map(|path| (*path).into()).collect()),
+        };
+        let port = axocoatl_session::control_authority::REPOSITORY_CAPTURE_PORT;
+        assert_eq!(capture_tool(&profile(&["bash"], None)), Some("bash"));
+        assert_eq!(capture_tool(&profile(&["bash"], Some(&[]))), Some("bash"));
+        assert_eq!(
+            capture_tool(&profile(&["write_file"], Some(&["lib/"]))),
+            Some(port)
+        );
+        assert_eq!(capture_tool(&profile(&["write_file"], Some(&[]))), None);
+        assert_eq!(capture_tool(&profile(&["write_file"], None)), None);
     }
 
     #[test]
