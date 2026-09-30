@@ -21,12 +21,6 @@ The wizard offers two starting providers for native Sessions:
 - Ollama;
 - OpenRouter.
 
-OpenRouter onboarding keeps a direct **Assistant** and also
-creates an autonomous **Plan and Build** team with a Planner → Builder dependency.
-That starter team is configuration only: onboarding still creates no project,
-Workspace, or Session. Choose it later when creating a Lattice Session, or keep
-using the Assistant for a direct single-Agent Session.
-
 For a new installation, choose Ollama or OpenRouter for Session work. New data
 roots use native execution, which currently accepts only reviewed local Ollama
 profiles and eligible OpenRouter-credit profiles. Anthropic, OpenAI, Gemini, and
@@ -54,6 +48,31 @@ with owner-only permissions (`0600` on supported Unix systems). Axocoatl does
 not encrypt that file. Protect it and its backups. The wizard does not create a
 `.env.example` file, and Axocoatl does not load dotenv files automatically.
 </Aside>
+
+## Default team
+
+Both choices write the same Agents, on the provider and model you choose:
+
+| Agent | Role | Tools | May change |
+| --- | --- | --- | --- |
+| **Lead** (`lead`) | Autonomous | `read_file`, `list_dir`, `grep`, `glob`, `write_file`, `edit_file`, `bash` | Any file |
+| **Scout** (`scout`) | Worker | `read_file`, `list_dir`, `grep`, `glob`, `bash` | Nothing (`writes: []`) |
+| **Reviewer** (`reviewer`) | Worker | `read_file`, `list_dir`, `grep`, `glob`, `bash` | Nothing (`writes: []`) |
+| **Assistant** (`assistant`) | Autonomous | none | Not used in Sessions by default |
+
+Lead owns the change. Its instructions say to send a focused read-only question to
+Scout, to ask Reviewer for an independent review before finishing, and to verify with
+the tests. Scout answers with file paths, line numbers and short evidence. Reviewer
+reports concrete defects with `file:line`, or says it found none. Neither changes files.
+Assistant is the plain chat Agent for `axocoatl chat`.
+
+This is configuration only: onboarding still creates no project, Workspace, or
+Session. A new Session selects Lead unless you choose another Agent. Its **Team &
+budget** then proposes Scout and Reviewer as Lead's helpers. You enter the limits for
+Lead and for each helper and choose **Apply** before the first request; clear **Let
+this Agent delegate to helpers** to run Lead alone. Required checks stay off until you
+add them. [Default team](/understand/coordination/#default-team) describes how the
+helpers run, and [Agents](/configure/agents/#the-default-team) how to change them.
 
 ## User-level locations
 

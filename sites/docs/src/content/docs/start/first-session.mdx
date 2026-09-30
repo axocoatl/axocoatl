@@ -37,7 +37,8 @@ metadata, but the repository remains the authority.
    secondary context; renaming the Workspace never renames the folder.
 4. With that Workspace selected, choose **New session** beside **Sessions** and
    give the Session its own work-item name.
-5. Keep **Single agent** for the first run and select a configured Agent.
+5. Keep **Single agent** for the first run and select a configured Agent. With
+   the [default team](/start/onboard/#default-team), keep **Lead**.
 6. Leave **Exposed ports** empty unless the task needs Preview. A root
    `package-lock.json` can suggest the curated Node 20 image. A devcontainer's
    exact image is shown as repository input and may require arbitrary-image
@@ -50,7 +51,10 @@ metadata, but the repository remains the authority.
 8. Wait for the Session environment to report **Ready**.
 9. For a native Session, open **Team & budget**, switch to **Edit**, and select
    the Agent. Enter its activation, invocation, token, cost, output, and expiry
-   limits. Preview the configuration, review it, and choose **Apply**.
+   limits. With the default team, Lead's panel also lists Scout and Reviewer as
+   proposed helpers: enter their limits, which must fit within Lead's, or clear
+   **Let this Agent delegate to helpers**. Preview the configuration, review it,
+   and choose **Apply**.
 10. Send a bounded first request from Conversation.
 
 </Steps>

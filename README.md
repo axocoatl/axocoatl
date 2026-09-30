@@ -67,6 +67,13 @@ are included in this repository.
 writes one owner-only user configuration and platform data directory. Repositories
 become Workspaces only when you authorize them through **Open workspace…**.
 
+The configuration starts with a default team: **Lead**, which owns the change and
+edits files, and **Scout** and **Reviewer**, read-only helpers Lead can delegate a
+question or a review to. A new Session selects Lead, and its **Team & budget**
+proposes both helpers; you enter every limit and choose **Apply** before the first
+request. To change the team, see
+[Default team](https://docs.axocoatl.ai/understand/coordination/#default-team).
+
 > **Advanced project-local configuration:** `axocoatl init <name>` scaffolds an
 > explicit local `axocoatl.yaml`. Pass it with `--config`; Axocoatl never selects
 > a repository's configuration merely because it is the current directory.

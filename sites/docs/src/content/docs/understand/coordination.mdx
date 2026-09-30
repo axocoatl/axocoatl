@@ -48,6 +48,34 @@ answer; a failed or refused helper reaches it as a tool error. The helper's comm
 source, lead activation, and result stay in the same canonical Session history.
 Increasing budget or authority requires human review; another model call cannot grant it.
 
+## Default team
+
+The configurations written by `axocoatl onboard` and `axocoatl init`, and the
+repository's example configurations, define one lead and two helpers:
+
+- **Lead** (`lead`, autonomous) owns the change and is the only one of the three that
+  edits files. Its instructions say to delegate focused questions to Scout, ask Reviewer
+  for a review before finishing, and verify with the tests.
+- **Scout** (`scout`, Worker, `writes: []`) answers the lead's question with file
+  paths, line numbers and short evidence.
+- **Reviewer** (`reviewer`, Worker, `writes: []`) reviews the change it is given against
+  the code, docs and tests, and reports defects with `file:line` or says it found none.
+
+When a new native Session's team is one Agent that may delegate, Team & budget drafts
+an approval for it that lists every Worker template with `writes: []` as a helper, with
+room for 6 Agents and 5 connections in a turn. The draft approves nothing:
+you enter the lead's limits and each helper's limits and choose Apply, and you can
+remove a helper or clear delegation first. A configuration without such Worker
+templates gets no draft, and an applied team is never changed by one.
+
+In the Agent graph, the lead appears alone until it delegates. Each helper it starts
+then appears with a "delegated" edge from the lead; a helper is not a dependency and
+does not gate the turn's answer.
+
+Review by the Reviewer is advice to the lead, not a gate: the lead decides when to ask
+for it and what to do with the answer. To make a command decide whether a turn
+completes, add a [required check](/configure/agents/#required-checks).
+
 ## Legacy multi-Agent Sessions
 
 A lattice-mode Session stores the selected config-owned team ID; Custom mode stores

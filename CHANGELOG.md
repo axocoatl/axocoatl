@@ -124,12 +124,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   History and rendered inline with the request as a reload-safe Coordination card
   connected to the existing Agent graph. This legacy coordination path remains
   available alongside native turn graphs.
-- **Hosted-provider starter team configuration.** OpenRouter onboarding
-  retains the direct Assistant and also defines a small
-  autonomous Planner → Builder `plan-and-build` team. Native Sessions require supported
-  OpenRouter profiles and explicit Team & budget approval; direct Anthropic and OpenAI
-  templates currently execute only on compatibility paths. Onboarding remains user-level
-  and creates no project, Workspace, or Session.
+- **Default team.** The configurations `axocoatl onboard` and `axocoatl init` write, and
+  the repository's example configurations, define Lead, an autonomous Agent that edits
+  files, and Scout and Reviewer, Workers with `writes: []` that Lead can delegate to;
+  onboarding also keeps the plain Assistant for `axocoatl chat`. `init` now writes a local
+  Ollama configuration instead of an OpenAI one. A Worker no longer has to belong to a
+  coordinator-led workflow: outside every workflow it is a helper template. When a new
+  native Session's team is one Agent that may delegate, Team & budget drafts every Worker
+  template with `writes: []` as its helpers; every limit is still entered and applied by
+  the person. **Add Agent** adds the template chosen beside it. A configuration without
+  such Workers behaves as before.
 
 ### Fixed
 - **Paused turns no longer deadlock on a cancelled re-preparation.** Opening Files or
