@@ -290,7 +290,6 @@ impl SessionDispatchController {
             self.clone(),
             activation.clone(),
         ));
-        let host_control_tool = self.scoped_control_tool(&activation)?;
         let host_delegate_tool = self.scoped_delegate_tool(&activation)?;
         let host_knowledge_tool = self.scoped_knowledge_tool(&activation)?;
         let behavior: Box<dyn AgentBehavior> =
@@ -305,9 +304,6 @@ impl SessionDispatchController {
                     );
                 if let Some(tool) = host_knowledge_tool {
                     behavior = behavior.with_host_knowledge_tool(tool);
-                }
-                if let Some(tool) = host_control_tool {
-                    behavior = behavior.with_host_control_tool(tool);
                 }
                 for (worker, logical_id) in workers {
                     behavior = behavior.add_worker_config_with_logical_id(worker, logical_id);

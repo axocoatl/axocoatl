@@ -545,14 +545,5 @@ async fn stopped_child_continues_once_without_replaying_accepted_sibling_or_fork
         .is_none());
 }
 
-#[path = "bootstrap_native_control_tests.rs"]
-mod control_tests;
-
-#[path = "bootstrap_native_knowledge_followup_tests.rs"]
-mod knowledge_followup_tests;
-
-#[path = "bootstrap_native_revision_tests.rs"]
-mod revision_tests;
-
 #[path = "bootstrap_native_revocation_tests.rs"]
 mod revocation_tests;

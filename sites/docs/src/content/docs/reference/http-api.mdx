@@ -331,11 +331,11 @@ Captured inline context has its own `reference_id` in the receiving turn. For a
 alongside its exact source Session, turn, epoch, activation, and generation; for a
 `ways_decision`, `metadata.decision_id` identifies the retained decision.
 
-A native `coordination_control` `submit` or `canonical` call whose raw return was
-lost can retain a labeled reconciliation result from its exact accepted invocation
-binding and command receipt. The receipt's actual state stays explicit: a successful
-lookup does not mean the command was Applied or Settled. Recovery does not repeat
-the command or provider request. Rejected or mismatched bindings remain unknown;
+A native lead's `delegate` call whose raw return was lost retains a labeled
+reconciliation result read from the command that admitted the helper and the
+helper's canonical outcome: its accepted answer, or the error for a refused, failed,
+or stopped helper. Recovery does not run the helper again or repeat a provider
+request. An admitting command that was accepted but not applied stays unknown;
 ordinary shell/tool effects are not automatically replayed.
 
 For native cooperative turns, `turn_controls.partial_finish` supplies the exact

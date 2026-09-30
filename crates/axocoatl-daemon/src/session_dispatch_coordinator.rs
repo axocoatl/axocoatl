@@ -426,29 +426,6 @@ impl SessionDispatchController {
     ) -> Result<Box<dyn AdmittedChildExecution>> {
         self.admit_coordinator_child(parent, request, control, None, COORDINATOR_CHILD)
     }
-    pub(super) fn replace_coordinator_future(
-        &self,
-        parent: &ActivationRef,
-        request: &ChildExecutionRequest,
-        target: TurnNodeId,
-        rewire: Vec<TurnNodeId>,
-    ) -> Result<()> {
-        let control = self
-            .lock()?
-            .bound
-            .get(&parent.activation_id)
-            .ok_or_else(|| error("source is missing"))?
-            .control
-            .clone();
-        self.admit_coordinator_child(
-            parent,
-            request,
-            control,
-            Some((target, rewire)),
-            COORDINATOR_CHILD,
-        )?;
-        Ok(())
-    }
     pub(super) fn admit_coordinator_child(
         &self,
         parent: &ActivationRef,

@@ -80,15 +80,6 @@ impl DispatchState {
         request: ControlCommandRequest,
         source: TrustedCommandSource,
     ) -> Result<DurableCommandReceipt> {
-        self.submit_control_command_from_tool(request, source, None)
-    }
-
-    pub(super) fn submit_control_command_from_tool(
-        &mut self,
-        request: ControlCommandRequest,
-        source: TrustedCommandSource,
-        own_admission: Option<&super::control_tool::ControlInvocationAdmission>,
-    ) -> Result<DurableCommandReceipt> {
         self.command_owner(&request, source.record())?;
         // A current permission/revision check must not turn an exact repeat into
         // another operation. Attribution is retained from its original request.
@@ -101,7 +92,7 @@ impl DispatchState {
             .map_err(error);
         let requested = self.fail_closed(result)?;
         let view = requested.view().clone();
-        if let Err(reason) = self.validate_control_projection(&view, false, own_admission) {
+        if let Err(reason) = self.validate_control_projection(&view, false) {
             return self.command_update(
                 &view,
                 ControlTransition::Rejected {
@@ -121,8 +112,6 @@ impl DispatchState {
             "graph_revision": snapshot.contract().graph().unwrap().revision,
             "source": view.source,
             "parameters": view.request.parameters,
-            "invocation_admission": own_admission.map(|proof| proof.invocation()),
-            "inspect_offer": own_admission.and_then(|proof| proof.inspect_offer()),
         });
         let result = self
             .content
@@ -450,7 +439,7 @@ impl DispatchState {
     }
 
     pub(super) fn validate_control(&self, view: &CommandReceiptView) -> Result<()> {
-        self.validate_control_projection(view, false, None)
+        self.validate_control_projection(view, false)
     }
 
     /// Read-only capability assessment. The future instruction has no retained
@@ -461,24 +450,18 @@ impl DispatchState {
                 "capability preview requires authenticated human attribution",
             ));
         }
-        self.validate_control_projection(view, true, None)
-    }
-
-    pub(super) fn preview_agent_control(&self, view: &CommandReceiptView) -> Result<()> {
-        self.validate_control_projection(view, true, None)
+        self.validate_control_projection(view, true)
     }
 
     fn validate_control_projection(
         &self,
         view: &CommandReceiptView,
         instruction_preview: bool,
-        own_admission: Option<&super::control_tool::ControlInvocationAdmission>,
     ) -> Result<()> {
         let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
         let contract = snapshot.contract();
         if contract.stop_requested().is_some()
-            || (contract.revision() != view.request.expected_turn_revision
-                && !own_admission.is_some_and(|proof| proof.matches(view, contract.revision())))
+            || contract.revision() != view.request.expected_turn_revision
             || contract
                 .graph()
                 .is_none_or(|graph| graph.revision != view.request.expected_graph_revision)
@@ -640,15 +623,7 @@ impl DispatchState {
             turn_id: view.request.turn_id.clone(),
             event,
         };
-        if let Some(invocation) =
-            self.revision_pending_invocation(view, instruction_preview, own_admission)?
-        {
-            contract
-                .preview_revision_after_invocation_settles(&envelope, &invocation)
-                .map_err(error)?;
-        } else {
-            preview.apply(&envelope).map_err(error)?;
-        }
+        preview.apply(&envelope).map_err(error)?;
         Ok(())
     }
 
@@ -764,11 +739,6 @@ impl DispatchState {
     }
 
     fn apply_control(&mut self, view: &CommandReceiptView) -> Result<()> {
-        if self.deferred_revision_invocation(view)?.is_some() {
-            // The tool must return its actual Accepted receipt before this
-            // revision can cross the ordinary settled-effects boundary.
-            return Ok(());
-        }
         if matches!(
             view.request.parameters,
             ControlParameters::ResumeBlocked { .. }
@@ -866,8 +836,8 @@ impl DispatchState {
                     }
                 }
             }
-            // Return Accepted immediately; a model control tool cannot await
-            // settlement of the actor whose return allows that settlement.
+            // Return Accepted immediately; the receipt settles once the
+            // stopped actor returns and its terminal record is appended.
             bound.control.cancel();
             self.changed.notify_waiters();
             return Ok(());
@@ -1089,9 +1059,6 @@ impl DispatchState {
                 }
             ) {
                 self.finish_control(view)?;
-            } else if self.reconcile_deferred_revision(view)? {
-                // Exact accepted control-tool revision: only a live source and
-                // its actual settled tool result can apply the retained input.
             } else if !matches!(
                 view.request.parameters,
                 ControlParameters::StopActivation { .. }

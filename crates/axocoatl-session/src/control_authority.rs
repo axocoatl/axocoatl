@@ -2202,9 +2202,6 @@ fn validate_dispatch(
         .find(|a| a.activation == lease.activation)
         .ok_or(AuthorityError::StaleLease)?;
     let grant = &data.grants[grant_index(data, &lease.grant_id)?];
-    let control_port = tool == "coordination_control"
-        && grant.policy.delegation.is_some()
-        && activation.activation.node_id == grant.policy.holder;
     // Delegation admits a helper through the same child-grant reservation as
     // any AddAgent command, so only the holder of a policy that can add an
     // Agent from at least one template may reach the port.
@@ -2226,11 +2223,7 @@ fn validate_dispatch(
                 .policy
                 .descendants
                 .contains(&activation.activation.node_id));
-    if !control_port
-        && !delegate_port
-        && !knowledge_port
-        && !activation.profile.tools.iter().any(|t| t == tool)
-    {
+    if !delegate_port && !knowledge_port && !activation.profile.tools.iter().any(|t| t == tool) {
         return Err(AuthorityError::Denied);
     }
     if grant.usage.invocations >= grant.policy.limits.invocations
@@ -3785,6 +3778,22 @@ mod provider_tests {
                 Err(AuthorityError::Denied)
             ),
             "only the delegation holder may delegate"
+        );
+        assert!(
+            matches!(
+                gate.prepare_dispatch(
+                    &holder,
+                    InvocationId::new("removed-control-port").unwrap(),
+                    "coordination_control".into(),
+                    DispatchReservation {
+                        tokens: 0,
+                        cost_microunits: 0,
+                    },
+                    100,
+                ),
+                Err(AuthorityError::Denied)
+            ),
+            "the removed model control port stays closed for a delegation holder"
         );
 
         let (_root, gate, holder, _) =

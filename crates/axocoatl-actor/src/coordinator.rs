@@ -910,12 +910,6 @@ impl CoordinatorBehavior {
         self
     }
 
-    pub fn with_host_control_tool(mut self, tool: Arc<dyn axocoatl_tools::BuiltinTool>) -> Self {
-        self.host_control_tools
-            .push(("coordination_control".into(), tool));
-        self
-    }
-
     pub fn with_host_worker_tools(mut self, tools: Vec<String>) -> Self {
         self.host_worker_tools = Some(tools);
         self

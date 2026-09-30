@@ -163,10 +163,7 @@ impl RepositoryInvocation {
             .get(&intent.activation.activation_id)
             .filter(|bound| bound.activation == intent.activation)
             .ok_or_else(|| error("invocation has no exact bound executor"))?;
-        if intent.tool_name == super::control_tool::NAME
-            || intent.tool_name == super::delegate::NAME
-            || intent.tool_name == super::knowledge::NAME
-        {
+        if intent.tool_name == super::delegate::NAME || intent.tool_name == super::knowledge::NAME {
             return Ok(None);
         }
         let Some(resource) = &bound.repository else {

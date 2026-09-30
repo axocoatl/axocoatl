@@ -61,12 +61,6 @@ pub use grant_review::{
 mod commands;
 #[path = "session_dispatch_conditions.rs"]
 mod conditions;
-#[path = "session_dispatch_control_reconciliation.rs"]
-mod control_reconciliation;
-#[path = "session_dispatch_control_revision.rs"]
-mod control_revision;
-#[path = "session_dispatch_control_tool.rs"]
-mod control_tool;
 #[path = "session_dispatch_coordinator.rs"]
 mod coordinator;
 #[path = "session_dispatch_delegate.rs"]
@@ -627,12 +621,6 @@ impl AdmittedToolInvocation for InvocationAdmission {
         state
             .fail_closed(result)
             .map_err(|error| error.to_string())?;
-        if self.intent.tool_name == control_tool::NAME {
-            let result = state.reconcile_control_commands();
-            state
-                .fail_closed(result)
-                .map_err(|error| error.to_string())?;
-        }
         Ok(())
     }
 }
@@ -750,7 +738,6 @@ impl DispatchState {
                     .tool_result(&arguments)
                     .map_err(error)?
                     .is_none()
-                    && !self.reconcile_control_tool_outcome(&snapshot, intent, &arguments)?
                 {
                     self.reconcile_delegate_outcome(&snapshot, intent, &arguments)?;
                 }
@@ -1154,7 +1141,7 @@ impl DispatchState {
             let replay_policy = if request.tool_call.name == delegate::NAME {
                 self.delegate_replay_policy(activation, &invocation_id, request, &arguments)?
             } else {
-                self.control_lookup_policy(activation, &invocation_id, request, &arguments)?
+                InvocationReplayPolicy::ManualOnly
             };
             let provider_run_ref = if request.tool_call.provider_metadata.is_empty() {
                 None
@@ -1236,10 +1223,6 @@ impl DispatchState {
         authority_ref: &EvidenceRef,
         outcome: &ToolInvocationOutcome,
     ) -> Result<()> {
-        #[cfg(test)]
-        if intent.tool_name == control_tool::NAME {
-            self.trip(TestFailure::ControlOutcome)?;
-        }
         #[cfg(test)]
         if intent.tool_name == delegate::NAME {
             self.trip(TestFailure::DelegateOutcome)?;
@@ -1326,7 +1309,6 @@ enum TestFailure {
     AuditIntent,
     AuthorityClaim,
     ContentResult,
-    ControlOutcome,
     DelegateOutcome,
     StreamObservation,
     AuditOutcome,
@@ -1349,10 +1331,6 @@ impl DispatchState {
 
 #[cfg(test)]
 impl SessionDispatchController {
-    pub(crate) fn lose_control_tool_outcome_for_test(&self) {
-        self.lock().unwrap().fail_at = Some(TestFailure::ControlOutcome);
-    }
-
     pub(crate) fn lose_delegate_outcome_for_test(&self) {
         self.lock().unwrap().fail_at = Some(TestFailure::DelegateOutcome);
     }

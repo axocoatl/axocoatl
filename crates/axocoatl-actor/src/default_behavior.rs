@@ -1285,10 +1285,6 @@ impl DefaultAgentBehavior {
         self.with_host_tool("workspace_knowledge", tool)
     }
 
-    pub fn with_host_control_tool(self, tool: Arc<dyn axocoatl_tools::BuiltinTool>) -> Self {
-        self.with_host_tool("coordination_control", tool)
-    }
-
     fn tool_definitions(&self) -> Vec<axocoatl_llm::ToolDefinition> {
         let mut defs = self
             .tool_executor
@@ -8257,9 +8253,9 @@ mod tests {
         );
         assert!(matches!(
             behavior
-                .execute_behavior_tool("coordination_control", serde_json::json!({}))
+                .execute_behavior_tool("unattached_host_tool", serde_json::json!({}))
                 .await,
-            Err(axocoatl_tools::ToolError::NotFound(name)) if name == "coordination_control"
+            Err(axocoatl_tools::ToolError::NotFound(name)) if name == "unattached_host_tool"
         ));
     }
 

@@ -235,13 +235,12 @@ content; persists canonical intent then audit intent; and claims authority befor
 Stop closes authority before cooperative cancellation. Late outcomes survive closed turns in
 the audit, and reopening reconciles known evidence without automatically replaying effects.
 
-The native `coordination_control` adapter can reconcile a missing raw return for `submit` or
-`canonical` by reading the retained command receipt. It requires the exact protected request,
-accepted invocation binding, source activation, grant, dispatch scope, and full parameters.
-The resulting evidence is labeled reconciliation and preserves the command's actual receipt
-state; a successful lookup does not imply Applied or Settled. No command or provider call is
-repeated. A rejected or mismatched admission remains unknown, and ordinary shell/tool effects
-remain `ManualOnly`.
+A native lead's `delegate` call retains a replay policy that names the helper node and the
+command that admits it. If the raw return is lost, reopening reads it back from the command
+journal and the helper's canonical outcome: an accepted helper yields its answer, and a
+refused, failed, or stopped one yields a tool error. The evidence is labeled reconciliation.
+No helper or provider call is repeated. An admitting command that was accepted but never
+applied remains unknown, and ordinary shell/tool effects remain `ManualOnly`.
 
 Its one-shot autonomous actor port additionally reserves the actual candidate checkpoint and
 terminal output before any provider dispatch. The optional `ActivationCheckpointPort` restores

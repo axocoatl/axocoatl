@@ -48,9 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "quiet on visible checks" rather than done. The field chooses who looks next;
   it does not certify findings or results.
 - **Knowledge-directed investigation.** Investigate in chat prepares a source-checking
-  request with the selected note revision. Native Agents can use existing delegated
-  graph controls to request follow-up within the same authority and budget; a stored
-  note does not itself authorize execution or establish readiness.
+  request with the selected note revision. A stored note does not itself authorize
+  execution or establish readiness.
 - **Explicit Session storage upgrade.** `axocoatl session upgrade --confirm`
   converts a stopped legacy data root while retaining its writer fence, history,
   checkpoint archives, and cumulative usage. Unrecorded historical roles produce
@@ -72,6 +71,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edits. A bounded request-local planner proposes controls for human review; it cannot
   execute them. Guide and Revise retain the human instruction, selected context, and
   attachments. Existing legacy roots retain their compatibility path.
+- **Lead `delegate` tool.** In a native Session, an Agent whose Team & budget approval
+  names helper templates gets a `delegate` tool. It hands one self-contained task to a
+  read-only helper, which starts in its own empty conversation, and waits for the answer.
+  Answers over 8192 bytes are cut for the lead; the full answer stays in Session History.
+  Each helper is an Add Agent command from the lead, an optional node in the turn graph,
+  and a child grant whose limits are reserved from the lead's budget. A failed or refused
+  helper reaches the lead as a tool error. The same helper and task in one turn return the
+  earlier result, and a return lost to a restart is read back without running the helper
+  again. Helpers whose templates can write files or run commands are refused for now.
 - **Reviewed partial finish.** Native cooperative turns can be finished partially
   with explicit human confirmation of selected accepted results, work to stop,
   never-started work, and missing checks. Safe settlement and usage evidence remain
@@ -229,6 +237,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subtask the first one gets it (the auction picked the last), and a Worker's
   token budget no longer affects the choice. The `coordinator-plan` stream frame
   drops its `score` and `bids` fields, and the run view no longer shows bids.
+- The model-facing `coordination_control` tool. A native Agent with a delegated grant
+  could use it to inspect and submit graph controls, replace future Agents, attach
+  knowledge to follow-ups, and propose grant expansions. A lead now adds helpers only
+  through `delegate`; Stop, Guide, Revise, Retry, Add Agent, and grant changes remain
+  human controls. Stored records from the tool still load: a call whose return was lost
+  stays unknown, an accepted Agent revision that was never applied is marked failed, and
+  retained grant proposals still appear with the turn's grants.
 
 ## [1.0.1] — unpublished draft
 

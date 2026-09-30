@@ -1,4 +1,4 @@
-//! Authenticated review of exact delegated grant revisions and model proposals.
+//! Authenticated review of exact delegated grant revisions and retained model proposals.
 use super::*;
 use axocoatl_session::control_authority::{AuthorityGrantStatus, GrantLimits};
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,8 @@ pub struct SessionGrantView {
     pub grants: Vec<AuthorityGrantStatus>,
     pub proposals: Vec<SessionGrantProposal>,
 }
+/// A grant expansion an Agent proposed through the former model control tool.
+/// Nothing writes new ones; retained waits stay reviewable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Proposal {
@@ -428,111 +430,6 @@ impl SessionDispatchController {
         state.changed.notify_waiters();
         drop(state);
         self.session_grants()
-    }
-    pub(super) async fn propose_grant_change(
-        &self,
-        activation: &ActivationRef,
-        request: SessionGrantChange,
-    ) -> Result<serde_json::Value> {
-        if request.activation != *activation {
-            return Err(error("proposal belongs to another source"));
-        }
-        let (blocker_id, changed, control) = {
-            let mut state = self.lock()?;
-            let bound = state
-                .bound
-                .get(&activation.activation_id)
-                .filter(|bound| bound.activation == *activation)
-                .cloned()
-                .ok_or_else(|| error("proposal has no live owner"))?;
-            state
-                .authority
-                .attest_control_source(&bound.lease, now_ms()?)
-                .map_err(error)?;
-            state.grant_preview(&request)?;
-            let text = serde_json::to_string(&Proposal {
-                kind: "delegated_grant_expansion_v1".into(),
-                request: request.clone(),
-                grant: bound.grant.clone(),
-            })
-            .map_err(error)?;
-            let reference = state
-                .content
-                .retain_activation_evidence(ActivationEvidenceContent::Guidance { text })
-                .map_err(error)?
-                .reference()
-                .clone();
-            let blocker_id =
-                BlockerId::new(format!("grant-proposal-{}", request.request_id)).map_err(error)?;
-            let snapshot = state.current(activation)?;
-            if snapshot
-                .contract()
-                .blockers()
-                .iter()
-                .any(|item| item.blocker.blocker_id == blocker_id)
-            {
-                return Err(error("proposal already exists; inspect its exact receipt"));
-            }
-            let command_id =
-                CommandId::new(format!("open-{}", blocker_id.as_str())).map_err(error)?;
-            let blocker = TypedTurnBlocker {
-                schema_version: 1,
-                blocker_id: blocker_id.clone(),
-                activation: activation.clone(),
-                kind: TurnBlockerKind::HumanApproval {
-                    approval_request: reference.clone(),
-                },
-                command_id: command_id.clone(),
-                invocation_id: None,
-                grant: snapshot
-                    .contract()
-                    .activations()
-                    .iter()
-                    .find(|record| record.activation == *activation)
-                    .ok_or_else(|| error("grant proposal activation disappeared"))?
-                    .input
-                    .grant
-                    .clone(),
-                parameters: reference.clone(),
-                safe_boundary: reference.clone(),
-                evidence: reference,
-            };
-            state.append(
-                command_id.as_str(),
-                TurnContractEvent::OpenBlocker { blocker },
-            )?;
-            state.changed.notify_waiters();
-            (blocker_id, state.changed.clone(), bound.control)
-        };
-        loop {
-            let notified = changed.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            {
-                let state = self.lock()?;
-                let snapshot = state.canonical.snapshot(&state.turn_id).map_err(error)?;
-                let item = snapshot
-                    .contract()
-                    .blockers()
-                    .iter()
-                    .find(|item| item.blocker.blocker_id == blocker_id)
-                    .ok_or_else(|| error("proposal disappeared"))?;
-                if item.state != TurnBlockerState::Pending {
-                    return Ok(serde_json::json!({"blocker_id":blocker_id,"state":item.state}));
-                }
-                if control.is_cancelled()
-                    || state
-                        .authority
-                        .grant_status(&request.grant_id)
-                        .map_err(error)?
-                        .revoked_at_revision
-                        .is_some()
-                {
-                    return Ok(serde_json::json!({"blocker_id":blocker_id,"state":"interrupted"}));
-                }
-            }
-            tokio::select! {_=notified=>{},_=control.cancelled()=>{},_=tokio::time::sleep(std::time::Duration::from_millis(request.expires_at_ms.saturating_sub(now_ms()?).min(60000)))=>{if now_ms()?>=request.expires_at_ms{return Ok(serde_json::json!({"blocker_id":blocker_id,"state":"expired"}));}}}
-        }
     }
 }
 pub(crate) fn retained_grant_view(
