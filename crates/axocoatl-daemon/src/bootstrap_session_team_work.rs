@@ -49,8 +49,6 @@ mod causal;
 mod readiness;
 #[path = "bootstrap_session_work_signals.rs"]
 mod signals;
-#[cfg(test)]
-pub(crate) use readiness::project_check;
 pub use readiness::SessionWorkReadiness;
 pub use signals::{
     SignalDepositView, SignalDispatchView, SignalFieldView, SignalFlagInput, SignalSensorView,

@@ -177,11 +177,14 @@ impl SessionDispatchController {
                         command_candidates.push(
                             state
                                 .content
-                                .standing_check_candidate(
+                                .check_candidate(
                                     &snapshot,
                                     &recorded.run,
-                                    &work.receipt_id,
-                                    work.required_checks.len(),
+                                    &standing_condition_id(&work.receipt_id, 0),
+                                    &standing_condition_id(
+                                        &work.receipt_id,
+                                        work.required_checks.len() + 1,
+                                    ),
                                 )
                                 .map_err(error)?,
                         );

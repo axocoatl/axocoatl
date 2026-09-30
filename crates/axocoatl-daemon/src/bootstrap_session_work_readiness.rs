@@ -1,38 +1,17 @@
 use super::*;
 use axocoatl_session::execution_content::{
-    ConditionProcessStatus, ExecutionContentStore, RepositoryCheckDefinition,
-    RepositorySnapshotPhase,
+    ConditionProcessStatus, ExecutionContentStore, RepositorySnapshotPhase,
 };
 use axocoatl_session::execution_store::DurableTurnSnapshot;
-use axocoatl_session::turn_contract::{
-    ConditionEffectResolution, ConditionId, ConditionOutcome, ConditionRunId, EffectDisposition,
-    EvidenceRef,
-};
+use axocoatl_session::turn_checks::{project_check, CheckGroup, TurnCheckView};
+use axocoatl_session::turn_contract::{ConditionId, ConditionOutcome, EvidenceRef};
 
-#[derive(Serialize)]
-pub struct SessionWorkCheck {
-    pub argv: Vec<String>,
-    pub state: String,
-    pub run_id: Option<ConditionRunId>,
-    pub process_status: Option<ConditionProcessStatus>,
-    pub effect_disposition: Option<EffectDisposition>,
-    pub primary_exit: Option<ConditionProcessStatus>,
-    pub quiescent: Option<bool>,
-    pub reason: Option<String>,
-    pub evidence: Option<EvidenceRef>,
-    pub candidate_sha256: Option<String>,
-    pub exit_code: Option<i32>,
-    pub stdout: String,
-    pub stderr: String,
-    pub stdout_truncated: bool,
-    pub stderr_truncated: bool,
-}
 #[derive(Serialize)]
 pub struct SessionWorkReadiness {
     pub state: String,
     pub candidate_sha256: Option<String>,
     pub evidence: Option<EvidenceRef>,
-    pub checks: Vec<SessionWorkCheck>,
+    pub checks: Vec<TurnCheckView>,
     pub reason: Option<String>,
 }
 
@@ -52,23 +31,7 @@ impl AxocoatlDaemon {
                     binding
                         .required_checks
                         .iter()
-                        .map(|argv| SessionWorkCheck {
-                            argv: argv.clone(),
-                            state: "pending".into(),
-                            run_id: None,
-                            process_status: None,
-                            effect_disposition: None,
-                            primary_exit: None,
-                            quiescent: None,
-                            reason: None,
-                            evidence: None,
-                            candidate_sha256: None,
-                            exit_code: None,
-                            stdout: String::new(),
-                            stderr: String::new(),
-                            stdout_truncated: false,
-                            stderr_truncated: false,
-                        })
+                        .map(|argv| TurnCheckView::pending(argv.clone()))
                         .collect()
                 })
                 .unwrap_or_default(),
@@ -127,7 +90,8 @@ fn project(
         ))
         .map_err(work_error)?;
         if index > 0 && index + 1 < definitions.len() {
-            view.checks[index - 1] = project_check(snapshot, content, &id, definition)?;
+            view.checks[index - 1] =
+                project_check(snapshot, content, &id, definition).map_err(work_error)?;
         }
         let Some(observation) = contract.current_condition(&id) else {
             actual_runs.push(None);
@@ -163,12 +127,13 @@ fn project(
                 actual_runs.push(None);
                 continue;
             }
+            let group = CheckGroup::standing(&receipt.receipt_id);
             let candidate = content
-                .standing_check_candidate(
+                .check_candidate(
                     snapshot,
                     &actual.run,
-                    &receipt.receipt_id,
-                    binding.required_checks.len(),
+                    &group.condition_id(0),
+                    &group.condition_id(binding.required_checks.len() + 1),
                 )
                 .map_err(work_error)?;
             check.candidate_sha256 = candidate.as_ref().map(|(tree, _)| tree.clone());
@@ -247,134 +212,4 @@ fn project(
         );
     }
     Ok(())
-}
-
-/// Read the latest exact run even when it has no readiness observation. A retained
-/// process outcome and permission to declare the candidate ready are separate facts.
-pub(crate) fn project_check(
-    snapshot: &DurableTurnSnapshot,
-    content: &ExecutionContentStore,
-    id: &ConditionId,
-    definition: &RepositoryCheckDefinition,
-) -> Result<SessionWorkCheck, DaemonError> {
-    let mut check = SessionWorkCheck {
-        argv: definition.argv.clone(),
-        state: "pending".into(),
-        run_id: None,
-        process_status: None,
-        effect_disposition: None,
-        primary_exit: None,
-        quiescent: None,
-        reason: None,
-        evidence: None,
-        candidate_sha256: None,
-        exit_code: None,
-        stdout: String::new(),
-        stderr: String::new(),
-        stdout_truncated: false,
-        stderr_truncated: false,
-    };
-    let contract = snapshot.contract();
-    let Some(actual) = contract
-        .condition_runs()
-        .iter()
-        .rev()
-        .find(|run| &run.run.condition_id == id)
-    else {
-        if contract.state() == Some(LogicalTurnState::Finished)
-            && contract
-                .stop_requested()
-                .and_then(|intent| intent.partial_finish.as_ref())
-                .is_some_and(|selection| selection.missing_condition_ids.contains(id))
-        {
-            check.state = "skipped".into();
-            check.reason =
-                Some("Not run; explicitly left unmet by the recorded partial Finish".into());
-        }
-        return Ok(check);
-    };
-    check.run_id = Some(actual.run.run_id.clone());
-    check.effect_disposition = Some(actual.disposition());
-    check.state = "outcome_unknown".into();
-    check.reason = Some("No durable process outcome is recorded. The check may still be running; its effects are not safe to replay automatically".into());
-    let Some(arguments) = content
-        .condition_arguments(snapshot, &actual.run.run_id)
-        .map_err(work_error)?
-    else {
-        return Ok(check);
-    };
-    if arguments.definition() != definition {
-        return Err(work_error(
-            "Recorded work check differs from its original binding",
-        ));
-    }
-    let Some(result) = content.condition_result(&arguments).map_err(work_error)? else {
-        return Ok(check);
-    };
-    let current_pass = contract.current_condition(id).is_some_and(|observation|
-        observation.outcome == ConditionOutcome::Passed && observation.evidence == *result.reference()
-        && matches!(&actual.resolution, Some(ConditionEffectResolution::OutcomeRecorded { evidence }) if evidence == result.reference()));
-    check.state = match result.status() {
-        ConditionProcessStatus::NotDispatched => "not_dispatched",
-        ConditionProcessStatus::Exited { code: 0 } if current_pass => "passed",
-        ConditionProcessStatus::Exited { code: 0 } => "unverified",
-        ConditionProcessStatus::Exited { .. } => "failed",
-        ConditionProcessStatus::Signalled { .. } => "signalled",
-        ConditionProcessStatus::TimedOut => "timed_out",
-        ConditionProcessStatus::Interrupted => "interrupted",
-        ConditionProcessStatus::LaunchFailed { .. } => "launch_failed",
-        ConditionProcessStatus::Uncertain { .. } => "outcome_unknown",
-    }
-    .into();
-    check.reason = match result.status() {
-        ConditionProcessStatus::LaunchFailed { message }
-        | ConditionProcessStatus::Uncertain { message } => Some(message.clone()),
-        ConditionProcessStatus::Exited { code: 0 } if !current_pass => Some(
-            "The process exited successfully, but has no current passing readiness observation"
-                .into(),
-        ),
-        _ => None,
-    };
-    check.process_status = Some(result.status().clone());
-    check.primary_exit = result
-        .supervision()
-        .and_then(|evidence| evidence.primary_exit.clone());
-    check.quiescent = result.supervision().map(|evidence| evidence.quiescent);
-    check.evidence = Some(result.reference().clone());
-    check.exit_code = match result.status() {
-        ConditionProcessStatus::Exited { code } => Some(*code),
-        _ => None,
-    };
-    (check.stdout, check.stdout_truncated) = output_preview(
-        &result.stdout().retained_bytes().map_err(work_error)?,
-        result.stdout().is_truncated(),
-    );
-    (check.stderr, check.stderr_truncated) = output_preview(
-        &result.stderr().retained_bytes().map_err(work_error)?,
-        result.stderr().is_truncated(),
-    );
-    Ok(check)
-}
-
-fn output_preview(bytes: &[u8], truncated: bool) -> (String, bool) {
-    const LIMIT: usize = 4096;
-    let text = String::from_utf8_lossy(bytes);
-    let mut end = text.len().min(LIMIT);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    (text[..end].to_owned(), truncated || end < text.len())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn command_output_preview_is_bounded_and_preserves_truncation() {
-        let text = "é".repeat(3000);
-        let (preview, truncated) = output_preview(text.as_bytes(), false);
-        assert_eq!(preview.len(), 4096);
-        assert!(truncated);
-        assert_eq!(output_preview(b"ok", true), ("ok".into(), true));
-    }
 }

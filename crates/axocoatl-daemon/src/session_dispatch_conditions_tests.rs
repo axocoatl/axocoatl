@@ -496,7 +496,7 @@ fn dropped_check_late_reconciliation_allows_continue_and_new_authorized_check() 
     {
         let state = fixture.controller.lock().unwrap();
         let snapshot = state.canonical.snapshot(&fixture.run.turn_id).unwrap();
-        let check = crate::bootstrap::session_team_work::project_check(
+        let check = axocoatl_session::turn_checks::project_check(
             &snapshot,
             &state.content,
             &next_run.condition_id,
@@ -1170,7 +1170,7 @@ fn standing_check_read_projection_retains_distinct_process_outcomes_after_reopen
         let fixture = reopen(fixture);
         let state = fixture.controller.lock().unwrap();
         let snapshot = state.canonical.snapshot(&fixture.run.turn_id).unwrap();
-        let check = crate::bootstrap::session_team_work::project_check(
+        let check = axocoatl_session::turn_checks::project_check(
             &snapshot,
             &state.content,
             &fixture.run.condition_id,
@@ -1201,7 +1201,7 @@ fn standing_check_read_projection_distinguishes_no_dispatch_from_missing_outcome
         let fixture = reopen(fixture);
         let state = fixture.controller.lock().unwrap();
         let snapshot = state.canonical.snapshot(&fixture.run.turn_id).unwrap();
-        let check = crate::bootstrap::session_team_work::project_check(
+        let check = axocoatl_session::turn_checks::project_check(
             &snapshot,
             &state.content,
             &fixture.run.condition_id,
