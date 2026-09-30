@@ -802,6 +802,23 @@ async fn lead_delegates_to_read_only_helper_and_receives_bounded_result() {
         .find(|tool| tool.name == "delegate")
         .expect("the lead is offered delegate");
     assert!(tool.description.contains("- scout: no tools"));
+    assert!(
+        tool.description
+            .contains("find the relevant code and tests")
+            && tool
+                .description
+                .contains("review your change against the task"),
+        "the lead is told when a helper helps: {}",
+        tool.description
+    );
+    assert!(
+        tool.description.contains("steps and")
+            && tool
+                .description
+                .contains("a step is one model call or one tool call"),
+        "{}",
+        tool.description
+    );
     assert_eq!(
         tool.parameters["properties"]["helper"]["enum"],
         serde_json::json!(["scout"])
@@ -899,6 +916,41 @@ async fn delegated_helper_starts_in_a_fresh_conversation() {
         serde_json::to_string(&lead_requests.last().unwrap().1.messages)
             .unwrap()
             .contains(LEAD_MARKER)
+    );
+}
+
+#[tokio::test]
+async fn lead_and_helper_are_given_the_checkout_project_instructions() {
+    let fixture = lead_fixture(100000).await;
+    std::fs::write(
+        fixture.repository._workspace.path().join("AXOCOATL.md"),
+        "Check your change with `npm run check`.\n",
+    )
+    .unwrap();
+    let scenario = Arc::new(Scenario::new("pub fn run"));
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    assert_eq!(
+        run.outcome.unwrap().snapshot.contract().state(),
+        Some(LogicalTurnState::Completed)
+    );
+    let system = |messages: &[ChatMessage]| {
+        messages
+            .iter()
+            .find(|message| message.role == axocoatl_core::MessageRole::System)
+            .and_then(ChatMessage::text_content)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let lead = system(&scenario.lead_requests.lock().unwrap()[0].1.messages);
+    assert!(
+        lead.contains("Check your change with `npm run check`."),
+        "{lead}"
+    );
+    assert!(lead.contains("--- from `AXOCOATL.md` ---"), "{lead}");
+    let helper = system(&scenario.helper_requests.lock().unwrap()[0].messages);
+    assert!(
+        helper.contains("Check your change with `npm run check`."),
+        "{helper}"
     );
 }
 
@@ -1998,7 +2050,7 @@ async fn helper_that_leaves_the_lead_too_little_is_refused(
 async fn helper_that_leaves_the_lead_too_few_invocations_is_refused() {
     // One provider call and the delegate call are spent; the helper's 4
     // would use the rest, leaving no call to read its answer.
-    helper_that_leaves_the_lead_too_little_is_refused(100000, 6, "0 tool calls").await;
+    helper_that_leaves_the_lead_too_little_is_refused(100000, 6, "0 steps").await;
 }
 
 #[tokio::test]

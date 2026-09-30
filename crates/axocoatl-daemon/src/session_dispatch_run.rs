@@ -22,6 +22,9 @@ use axocoatl_tools::ToolExecutor;
 /// result each round is what exhausts a small local model's context.
 const KEPT_TOOL_ROUNDS: usize = 3;
 
+/// The repository's instructions for its Agents, at the root of a checkout.
+const PROJECT_INSTRUCTIONS_FILE: &str = "AXOCOATL.md";
+
 /// Host-resolved resources. This first port supports an autonomous in-process
 /// actor with retained text inputs. Repository runs use the separate opaque
 /// RepositoryActivationResource; binary attachment projection still requires
@@ -41,7 +44,7 @@ pub struct PreparedActivation {
     activation: ActivationRef,
     config: AgentConfig,
     input: AgentInput,
-    behavior: Option<Box<dyn AgentBehavior>>,
+    behavior: Option<Box<DefaultAgentBehavior>>,
     control: AgentRunControl,
     port: Arc<CheckpointPort>,
     output: DurableActivationOutputReservation,
@@ -318,19 +321,69 @@ impl SessionDispatchController {
         if let Some(hooks) = hooks {
             behavior = behavior.with_hook_registry(hooks);
         }
-        let behavior: Box<dyn AgentBehavior> = Box::new(behavior);
         Ok(PreparedActivation {
             controller: self.clone(),
             activation,
             config,
             input,
-            behavior: Some(behavior),
+            behavior: Some(Box::new(behavior)),
             control,
             port,
             output,
             settled: false,
             _execution: execution,
         })
+    }
+
+    /// The `AXOCOATL.md` at the root of this activation's checkout, read by
+    /// the host after the activation's starting capture and before its first
+    /// request. When that capture recorded the file, only those exact bytes
+    /// are used, so what the Agent is told never differs from the retained
+    /// capture. Nothing without a repository, the file, or valid UTF-8.
+    fn repository_instructions(&self, activation: &ActivationRef) -> Result<Option<String>> {
+        let (checkout, recorded) = {
+            let state = self.lock()?;
+            let Some(checkout) = state
+                .bound
+                .get(&activation.activation_id)
+                .filter(|bound| bound.activation == *activation)
+                .and_then(|bound| bound.repository.as_ref())
+                .map(RepositoryActivationResource::host_checkout)
+            else {
+                return Ok(None);
+            };
+            let snapshot = state.canonical.snapshot(&state.turn_id).map_err(error)?;
+            let recorded = state
+                .content
+                .repository_snapshots(&snapshot, activation)
+                .map_err(error)?
+                .into_iter()
+                .find(|capture| {
+                    capture.content.phase
+                        == axocoatl_session::execution_content::RepositorySnapshotPhase::Before
+                })
+                .and_then(|before| {
+                    super::knowledge::capture_file_digests(&before.content.manifest_prefix)
+                        .remove(PROJECT_INSTRUCTIONS_FILE)
+                });
+            (checkout, recorded)
+        };
+        let Ok(bytes) = checkout.read_limited(
+            PROJECT_INSTRUCTIONS_FILE,
+            axocoatl_actor::PROJECT_INSTRUCTION_FILE_MAX_BYTES,
+        ) else {
+            return Ok(None);
+        };
+        if let Some(recorded) = recorded {
+            if format!("{:x}", Sha256::digest(&bytes)) != recorded {
+                tracing::warn!(
+                    activation = %activation.activation_id.as_str(),
+                    "AXOCOATL.md changed after the starting capture; its instructions are left out"
+                );
+                return Ok(None);
+            }
+        }
+        Ok(String::from_utf8(bytes).ok())
     }
 
     pub(super) fn admit_provider(
@@ -523,6 +576,10 @@ impl PreparedActivation {
             .behavior
             .take()
             .ok_or_else(|| error("activation already consumed"))?;
+        // Read after the starting capture, so the capture can vouch for it.
+        if let Some(instructions) = self.controller.repository_instructions(&self.activation)? {
+            *behavior = behavior.with_repository_instructions(&instructions);
+        }
         let mut outcome = match behavior.on_start(&self.config).await {
             Ok(()) => {
                 behavior

@@ -627,6 +627,48 @@ pub fn validate_sandbox_network(value: &str) -> Result<(), ConfigError> {
     })
 }
 
+/// An Autonomous Agent or Coordinator whose `tools` list is empty. In a native
+/// Session the list is exact, so such an Agent gets no repository tools; only
+/// a legacy (1.0-format) Session still inherits the baseline for an empty
+/// list. A warning, not an error: an Agent that only answers is valid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoToolsWarning {
+    pub agent_id: String,
+}
+
+impl NoToolsWarning {
+    /// What to do about it, shown after the problem.
+    pub const HINT: &'static str = "List the tools it needs, for example [read_file, list_dir, \
+                                    grep, glob, write_file, edit_file, bash].";
+
+    /// The problem, without the hint.
+    pub fn problem(&self) -> String {
+        format!(
+            "{} lists no tools: in native Sessions it cannot read or change files.",
+            self.agent_id
+        )
+    }
+}
+
+impl std::fmt::Display for NoToolsWarning {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{} {}", self.problem(), Self::HINT)
+    }
+}
+
+/// One warning for each Agent that is not a Worker and lists no tools, in
+/// configuration order. `validate`, `doctor` and daemon startup report them.
+pub fn no_tools_warnings(config: &AxocoatlConfig) -> Vec<NoToolsWarning> {
+    config
+        .agents
+        .iter()
+        .filter(|agent| !matches!(agent.role, AgentRoleYaml::Worker) && agent.tools.is_empty())
+        .map(|agent| NoToolsWarning {
+            agent_id: agent.id.clone(),
+        })
+        .collect()
+}
+
 /// Lightweight check that a string is an `http`/`https` URL with a host — used
 /// to reject scheme confusion (`file://`, …) and hostless URLs in MCP config
 /// without pulling in a full URL parser.
@@ -790,6 +832,49 @@ agents:
         assert_eq!(config.agents[0].activation_decay, Some(0.05));
         assert_eq!(config.agents[1].activation_threshold, None);
         assert_eq!(config.agents[1].activation_decay, None);
+    }
+
+    #[test]
+    fn agents_that_are_not_workers_and_list_no_tools_are_reported() {
+        let yaml = r#"
+agents:
+  - id: chat
+    name: "Chat"
+    provider: ollama
+    model: llama3
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: llama3
+    role: coordinator
+    tools: []
+  - id: coder
+    name: "Coder"
+    provider: ollama
+    model: llama3
+    tools: [read_file, bash]
+  - id: helper
+    name: "Helper"
+    provider: ollama
+    model: llama3
+    role: worker
+workflows:
+  - id: wf
+    name: "WF"
+    agents: [lead, helper]
+    entry_point: lead
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        let warnings = no_tools_warnings(&config);
+        let ids: Vec<&str> = warnings.iter().map(|w| w.agent_id.as_str()).collect();
+        // A Worker with no tools and an Agent that lists tools are not reported.
+        assert_eq!(ids, vec!["chat", "lead"]);
+        assert_eq!(
+            warnings[0].to_string(),
+            "chat lists no tools: in native Sessions it cannot read or change files. List the \
+             tools it needs, for example [read_file, list_dir, grep, glob, write_file, \
+             edit_file, bash]."
+        );
     }
 
     #[test]

@@ -2389,8 +2389,11 @@ fn validate_dispatch(
         });
     // Workspace knowledge only reads the bound workspace or stages a private
     // proposal. Publication is a separate accepted-closure/human operation. It
-    // consumes the same live lease and invocation budget as other host ports.
+    // consumes the same live lease and invocation budget as other host ports,
+    // and like any tool it needs the activation's profile to list it. Only new
+    // claims are checked: a reloaded claim admitted before that rule stays.
     let knowledge_port = tool == KNOWLEDGE_TOOL
+        && activation.profile.tools.iter().any(|t| t == KNOWLEDGE_TOOL)
         && (activation.activation.node_id == grant.policy.holder
             || grant
                 .policy
@@ -2405,7 +2408,7 @@ fn validate_dispatch(
     if !delegate_port
         && !knowledge_port
         && !capture_port
-        && !activation.profile.tools.iter().any(|t| t == tool)
+        && (tool == KNOWLEDGE_TOOL || !activation.profile.tools.iter().any(|t| t == tool))
     {
         return Err(AuthorityError::Denied);
     }
@@ -5046,6 +5049,110 @@ mod provider_tests {
                 assert!(matches!(prepared, Err(AuthorityError::Denied)));
             }
         }
+    }
+
+    /// A new `workspace_knowledge` claim needs the activation's profile to
+    /// list the tool. A data root that recorded one before that rule, for an
+    /// activation that does not list it, still loads with its charge.
+    #[test]
+    fn workspace_knowledge_claims_need_a_listed_tool_but_old_claims_still_reload() {
+        use crate::invocation_audit::{
+            InvocationAuthority, InvocationReplayPolicy, ProviderReplayIdentity,
+        };
+        let knowledge = |tools: &[&str]| ExecutionProfile {
+            tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
+            ..profile()
+        };
+        let (root, gate) = scoped_gate(knowledge(&["read_file", KNOWLEDGE_TOOL]));
+        let unlisted = gate
+            .register_activation(
+                activation("a"),
+                "grant",
+                knowledge(&["read_file"]),
+                gate.revision().unwrap(),
+                100,
+            )
+            .unwrap();
+        let listed = gate
+            .register_activation(
+                activation("b"),
+                "grant",
+                knowledge(&["read_file", KNOWLEDGE_TOOL]),
+                gate.revision().unwrap(),
+                100,
+            )
+            .unwrap();
+        let reservation = DispatchReservation {
+            tokens: 0,
+            cost_microunits: 0,
+        };
+        let prepare = |lease: &ActivationLease, id: &str| {
+            gate.prepare_dispatch(
+                lease,
+                InvocationId::new(id).unwrap(),
+                KNOWLEDGE_TOOL.into(),
+                reservation.clone(),
+                100,
+            )
+        };
+        assert!(matches!(
+            prepare(&unlisted, "unlisted"),
+            Err(AuthorityError::Denied)
+        ));
+        prepare(&listed, "listed").unwrap();
+
+        // Write the claim an earlier build admitted for the unlisted holder.
+        let invocation = InvocationId::new("recorded-knowledge").unwrap();
+        {
+            let mut state = gate.lock().unwrap();
+            let mut next = state.data.clone();
+            next.grants[0].usage.invocations += 1;
+            next.claims.push(ClaimRecord {
+                audit_id: "audit".into(),
+                intent: InvocationIntent {
+                    invocation_id: invocation.clone(),
+                    activation: activation("a"),
+                    dispatch_scope: gate.scope.clone(),
+                    tool_name: KNOWLEDGE_TOOL.into(),
+                    arguments: ProtectedArguments {
+                        evidence_ref: EvidenceRef::new("knowledge-arguments").unwrap(),
+                        sha256: "a".repeat(64),
+                        byte_len: 32,
+                    },
+                    redacted_preview: "search notes".into(),
+                    authority: InvocationAuthority {
+                        grant_id: "grant".into(),
+                        grant_revision: 1,
+                        approval_ref: None,
+                    },
+                    replay_policy: InvocationReplayPolicy::ManualOnly,
+                    provider_replay: ProviderReplayIdentity {
+                        adapter_id: "native".into(),
+                        adapter_version: "test-1".into(),
+                        provider_run_ref: None,
+                        native_call_id: None,
+                        response_group_id: None,
+                    },
+                },
+                invocation,
+                activation: activation("a"),
+                grant_id: "grant".into(),
+                grant_revision: 1,
+                dispatch_scope: gate.scope.clone(),
+                reservation,
+                settled: true,
+            });
+            gate.commit(&mut state, next).unwrap();
+        }
+        drop(gate);
+        let reopened = ControlAuthority::open(
+            root.path(),
+            activation("a").session_id,
+            activation("a").turn_id,
+        )
+        .unwrap();
+        assert_eq!(reopened.usage("grant").unwrap().invocations, 1);
+        assert_eq!(reopened.lock().unwrap().data.claims.len(), 1);
     }
 }
 

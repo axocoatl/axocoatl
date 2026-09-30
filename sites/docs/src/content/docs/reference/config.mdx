@@ -91,7 +91,7 @@ agents:
     provider: ollama
     model: qwen2.5-coder:14b
     system_prompt: Work in the selected repository and verify changes.
-    tools: []
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
     writes: [src/, "*.md"]
     depends_on: []
     role: autonomous
@@ -117,6 +117,11 @@ agents:
 Required Agent fields are `id`, `name`, `provider`, and `model`.
 `system_prompt` and `token_budget` are optional. `role` defaults to
 `autonomous`; other values are `coordinator` and `worker`.
+
+`tools` is exact in a native Session: an Agent is offered only the tools it lists, and an
+empty or missing list gives it none. `validate`, `doctor` and daemon startup warn about an
+Agent that is not a Worker and lists no tools. A legacy (1.0-format) Session still gives an
+Agent with an empty list the baseline tools. See [Agents and budgets](/configure/agents/).
 
 `writes` is optional: up to 64 repository path patterns the Agent may change in a
 native Session. Omit it to allow any file; `[]` makes a read-only helper. Absolute paths,

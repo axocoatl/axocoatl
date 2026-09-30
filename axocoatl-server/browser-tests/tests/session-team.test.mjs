@@ -9,14 +9,14 @@ let runtime,browser,screenshots;
 before(async()=>{screenshots=await mkdtemp(join(tmpdir(),'axocoatl-session-team-'));runtime=process.env.AXOCOATL_COMPONENT_BASE_URL?{baseUrl:process.env.AXOCOATL_COMPONENT_BASE_URL,stop:async()=>{}}:await launchTestDaemon();const executablePath=await resolveChromiumExecutable();browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});});
 after(async()=>{try{await browser?.close();await runtime?.stop();}finally{if(screenshots)await rm(screenshots,{recursive:true,force:true});}});
 const template={slot_id:'slot-reviewer',template_id:'reviewer',source_slot_id:null,name:'QA reviewer <literal>',provider:'ollama',model:'local-model',instructions:'Inspect actual client changes.',max_output_tokens:128,required:true,reset_history:true,limits:null,expires_at_ms:null};
-async function fixture({theme='light',approved=false,reject=false,loseReply=false,coordinator=false,role=coordinator?'coordinator':null,helper=coordinator,legacy=false,suggested=false,checks=[],proposal=false,reviewers=[],requiredReview=null}={}){
+async function fixture({theme='light',approved=false,reject=false,loseReply=false,coordinator=false,role=coordinator?'coordinator':null,helper=coordinator,legacy=false,suggested=false,checks=[],proposal=false,reviewers=[],requiredReview=null,toolless=false}={}){
  const context=await browser.newContext({viewport:theme==='dark'?{width:390,height:840}:{width:1100,height:820},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),errors=[],calls=[];page.on('pageerror',error=>errors.push(error.message));
  const view={history_version:legacy?'legacy_v1':'execution_v2',configuration_revision:approved?1:0,slots:[{...structuredClone(template),template_id:approved?null:template.template_id,reset_history:!approved,...(approved?{limits:{activations:2,invocations:12,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000}:{})}],dependencies:[],layout:[],templates:[structuredClone(template)],approved,required_checks:structuredClone(checks),suggested_check:suggested?['sh','-c','npm test']:null,reviewers,...(requiredReview?{required_review:structuredClone(requiredReview)}:{})};
  if(role){view.slots[0].role=role;view.templates[0].role=role;}
  if(helper)view.templates.push({...structuredClone(template),template_id:'worker',slot_id:'worker',name:'Worker reviewer',role:'worker'});
  if(proposal){for(const[id,name]of[['scout','Scout'],['critic','Critic']])view.templates.push({...structuredClone(template),template_id:id,slot_id:`slot-${id}`,name,role:'worker',writes:[],max_output_tokens:256});view.proposed_delegation={slot_id:'slot-reviewer',helpers:['scout','critic'],operations:['add_agent'],max_nodes:6,max_edges:5};}
  await page.route('**/team-fixture',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html data-theme="${theme}"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-session-team session="fixture-session"></ax-session-team><script type="module" src="/ui/session-team.js"></script></body></html>`}));
- await page.route('**/api/sessions/fixture-session/team**',async route=>{const suffix=new URL(route.request().url()).pathname.split('/team')[1],body=route.request().method()==='POST'?route.request().postDataJSON():null;calls.push({suffix,body});if(!suffix)return route.fulfill({json:view});if(suffix==='/cancel')return route.fulfill({json:{cancelled:true}});if(suffix==='/preview')return route.fulfill({json:{edit:body,review_digest:'exact-review',configuration_revision:body.expected_configuration_revision+1,applies_to:'future_turns',changes:body.slots.map(slot=>({slot_id:slot.slot_id,kind:'changed',history:'new conversation'})),coordinators:body.slots.filter(slot=>slot.delegation).map(slot=>[slot.slot_id,{...slot.delegation,resource:{environment_generation:1,backend:'podman',network:'none',setup_command:null}}]),profiles:body.slots.map(slot=>({definition:slot.slot_id,provider:slot.provider,model:slot.model,isolation:'in-process',tools:['read_file','write_file'],...(slot.writes==null?{}:{write_scope:slot.writes})}))}});if(suffix==='/apply'){if(reject)return route.fulfill({status:409,json:{error:'Session configuration changed; refresh'}});if(loseReply){loseReply=false;return route.abort('failed');}view.configuration_revision=body.edit.expected_configuration_revision+1;view.slots=body.edit.slots;view.approved=true;return route.fulfill({json:{configuration_revision:view.configuration_revision}});}});
+ await page.route('**/api/sessions/fixture-session/team**',async route=>{const suffix=new URL(route.request().url()).pathname.split('/team')[1],body=route.request().method()==='POST'?route.request().postDataJSON():null;calls.push({suffix,body});if(!suffix)return route.fulfill({json:view});if(suffix==='/cancel')return route.fulfill({json:{cancelled:true}});if(suffix==='/preview')return route.fulfill({json:{edit:body,review_digest:'exact-review',configuration_revision:body.expected_configuration_revision+1,applies_to:'future_turns',changes:body.slots.map(slot=>({slot_id:slot.slot_id,kind:'changed',history:'new conversation'})),coordinators:body.slots.filter(slot=>slot.delegation).map(slot=>[slot.slot_id,{...slot.delegation,resource:{environment_generation:1,backend:'podman',network:'none',setup_command:null}}]),profiles:body.slots.map(slot=>({definition:slot.slot_id,provider:slot.provider,model:slot.model,isolation:'in-process',tools:toolless?[]:['read_file','write_file'],...(slot.writes==null?{}:{write_scope:slot.writes})})),toolless_slots:toolless?body.slots.map(slot=>slot.slot_id):[]}});if(suffix==='/apply'){if(reject)return route.fulfill({status:409,json:{error:'Session configuration changed; refresh'}});if(loseReply){loseReply=false;return route.abort('failed');}view.configuration_revision=body.edit.expected_configuration_revision+1;view.slots=body.edit.slots;view.approved=true;return route.fulfill({json:{configuration_revision:view.configuration_revision}});}});
  await page.goto(`${runtime.baseUrl}/team-fixture`);await page.getByRole('button',{name:'Team and budget',exact:true}).click();await page.getByText(legacy?'This Session uses legacy history.':approved?'Saved Session configuration 1.':'Approve explicit budgets before sending',{exact:false}).waitFor();return{context,page,calls,view,errors};
 }
 async function enterBudget(page){await page.getByRole('button',{name:'Edit',exact:true}).click();for(const[label,value]of[['Activation limit','2'],['Provider and tool invocation limit','12'],['Total token limit','32768'],['Cost limit (USD)','0'],['Budget expires (your local time)','2099-10-10T10:00']])await page.getByLabel(label,{exact:true}).fill(value);}
@@ -53,13 +53,14 @@ test('Coordinator helper approval requires explicit helper limits and graph boun
  }finally{await context.close();}});
 
 test('An Autonomous Agent may approve helpers and a Worker slot is not offered delegation',async()=>{
- {const{page,context,calls,errors}=await fixture({helper:true});try{
+ {const{page,context,calls,errors}=await fixture({helper:true,toolless:true});try{
   await enterBudget(page);await page.getByRole('heading',{name:'Helpers this Agent may delegate to',exact:true}).waitFor();
   await page.getByLabel('Let this Agent delegate to helpers',{exact:true}).check();
   await page.getByLabel('Maximum Agents in the turn, helpers included',{exact:true}).fill('3');await page.getByLabel('Maximum connections in the turn graph',{exact:true}).fill('0');
   await page.getByLabel('Use helper: Worker reviewer',{exact:true}).check();
   for(const[label,value]of [['Activation limit','1'],['Invocation limit','2'],['Token limit','4000'],['Cost limit (USD)','0'],['Maximum output tokens per request','64']])await page.getByLabel(`Worker reviewer: ${label}`,{exact:true}).fill(value);
   await review(page);const slot=calls.find(call=>call.suffix==='/preview').body.slots[0];assert.equal(slot.role,undefined);
+  assert.doesNotMatch(await page.locator('ax-session-team').locator('.review').textContent(),/has no tools/,'an Agent that delegates is not only answering');
   assert.deepEqual(slot.delegation,{max_nodes:3,max_edges:0,operations:['add_agent'],workers:[{template_id:'worker',limits:{activations:1,invocations:2,tokens:4000,cost_microunits:0},max_output_tokens:64,adhoc_allowed:false}]});assert.deepEqual(errors,[]);
  }finally{await context.close();}}
  {const{page,context,errors}=await fixture({role:'worker'});try{
@@ -97,6 +98,17 @@ test('Read-only toggle sends empty writes, and the review says what each Agent m
   await mode.selectOption('any');await review(page);preview=calls.filter(call=>call.suffix==='/preview').at(-1).body;assert.equal(preview.slots[0].writes,null);
   await page.getByText('may change: any file.',{exact:false}).waitFor();assert.deepEqual(errors,[]);
  }finally{await context.close();}
+});
+
+test('The review says an Agent with no tools can only answer from the conversation',async()=>{
+ {const{page,context,errors}=await fixture({toolless:true});try{
+  await enterBudget(page);await review(page);
+  assert.equal(await page.locator('ax-session-team').locator('.review li').first().textContent(),'QA reviewer <literal> has no tools: it can only answer from the conversation.');
+  await page.getByText('tools: none;',{exact:false}).waitFor();assert.deepEqual(errors,[]);
+ }finally{await context.close();}}
+ {const{page,context,errors}=await fixture();try{
+  await enterBudget(page);await review(page);assert.doesNotMatch(await page.locator('ax-session-team').locator('.review').textContent(),/has no tools/);assert.deepEqual(errors,[]);
+ }finally{await context.close();}}
 });
 
 test('The detected check is only offered: nothing runs it until the person adds it, and the review says what a failure means',async()=>{

@@ -63,9 +63,10 @@ context. **Investigate in chat** also prepares a request to check its sources an
 propose an evidence-backed update. Review and send the request through ordinary
 chat; opening or attaching a note does not launch an investigation by itself.
 
-Native Agents can use the `workspace_knowledge` tool to search and read notes,
-search indexed symbols and imports, inspect the bounded observed code map, and
-propose a note revision. The tool is scoped to
+A native Agent whose `tools` list includes `workspace_knowledge` can use that tool to
+search and read notes, search indexed symbols and imports, inspect the bounded observed
+code map, and propose a note revision. `tools` is an exact list, so other Agents are not
+offered it; the default team does not list it. The tool is scoped to
 the Workspace and exact activation. Repository access, follow-up work, and usage
 remain subject to the Session's grant and normal execution controls.
 

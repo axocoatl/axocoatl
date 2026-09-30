@@ -34,14 +34,15 @@ const FOREGROUND_STREAM_BYTES: usize = 1024 * 1024;
 
 /// Definition admission and activation preparation share the exact foreground
 /// capability boundary. Reject unsupported names before provider observation.
+/// `workspace_knowledge` is the host's own port, offered only when listed.
 pub(crate) fn validate_repository_tools(tools: &[String]) -> Result<()> {
-    if let Some(tool) = tools
-        .iter()
-        .find(|tool| !SUPPORTED_TOOLS.contains(&tool.as_str()))
-    {
+    if let Some(tool) = tools.iter().find(|tool| {
+        !SUPPORTED_TOOLS.contains(&tool.as_str()) && tool.as_str() != super::knowledge::NAME
+    }) {
         return Err(error(format!(
-            "native Session repository tool '{tool}' has no owned foreground implementation; supported tools: {}. Background and PTY ownership is not integrated",
-            SUPPORTED_TOOLS.join(", ")
+            "native Session repository tool '{tool}' has no owned foreground implementation; supported tools: {}, {}. Background and PTY ownership is not integrated",
+            SUPPORTED_TOOLS.join(", "),
+            super::knowledge::NAME
         )));
     }
     Ok(())
@@ -164,6 +165,11 @@ impl RepositoryActivationResource {
         self.owner.validate_dispatch_resource().map_err(error)?;
         self.owner.validate_current().await.map_err(error)?;
         self.owner.validate_dispatch_resource().map_err(error)
+    }
+
+    /// The host directory holding this checkout's files.
+    pub(super) fn host_checkout(&self) -> axocoatl_core::SecureDir {
+        self.owner.host_checkout().clone()
     }
 
     pub(super) fn description(&self) -> Result<ActivationEvidenceContent> {

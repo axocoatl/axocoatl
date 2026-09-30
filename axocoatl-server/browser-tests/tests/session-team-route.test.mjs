@@ -33,6 +33,7 @@ test('actual Session team routes authenticate whole-graph Apply, retain exact re
   const edit={command_id:'team-route-approved',expected_configuration_revision:0,slots:current.value.slots.map(slot=>({...slot,max_output_tokens:128,limits:{activations:2,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),dependencies:current.value.dependencies,layout:current.value.layout};
   const forbidden=await call(id,'/preview',edit,{origin:'https://foreign.invalid'});assert.ok(forbidden.status>=400);
   const preview=await call(id,'/preview',edit);assert.equal(preview.status,200,JSON.stringify(preview.value));assert.equal(preview.value.applies_to,'future_turns');assert.equal((await call(id)).value.configuration_revision,0,'Preview cannot authorize a future turn');
+  assert.deepEqual(preview.value.toolless_slots,[edit.slots[0].slot_id],'an Agent configured without tools has none in a native Session, and the review names it');
   const apply={edit,review_digest:preview.value.review_digest};const foreign=await call(peer,'/apply',apply);assert.ok(foreign.status>=400);assert.equal((await call(peer)).value.configuration_revision,0);
   const applied=await call(id,'/apply',apply);assert.equal(applied.status,200,JSON.stringify(applied.value));assert.equal(applied.value.configuration_revision,1);
   const saved=await call(id);assert.equal(saved.value.approved,true);assert.equal(saved.value.slots[0].template_id,null,'current slot preserves its captured definition rather than re-reading a template');
@@ -135,7 +136,7 @@ test('actual Session team with a bash Agent applies required checks and reports 
     const tight=structuredClone(edit);tight.command_id='checks-tight';for(const slot of tight.slots)slot.limits.invocations=10;
     const refused=await post('/preview',tight);assert.equal(refused.status,409,JSON.stringify(refused.value));
     assert.match(refused.value.error,/runs the required checks on its budget, so its invocation limit must be at least 11/);
-    const preview=await post('/preview',edit);assert.equal(preview.status,200,JSON.stringify(preview.value));assert.deepEqual(preview.value.edit.required_checks,checks);
+    const preview=await post('/preview',edit);assert.equal(preview.status,200,JSON.stringify(preview.value));assert.deepEqual(preview.value.edit.required_checks,checks);assert.deepEqual(preview.value.toolless_slots,[]);
     const applied=await post('/apply',{edit,review_digest:preview.value.review_digest});assert.equal(applied.status,200,JSON.stringify(applied.value));
     const saved=await (await fetch(url)).json();assert.deepEqual(saved.required_checks,checks);
   }finally{await daemon.stop();}

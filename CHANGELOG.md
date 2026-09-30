@@ -151,6 +151,25 @@ model-facing `coordination_control` tool, the external harness adapter and the
   such Workers behaves as before.
 
 ### Changed
+- **`workspace_knowledge` follows the `tools` allowlist.** A native Agent is offered the
+  tool, and the host admits a new call, only when its `tools` list includes
+  `workspace_knowledge`; calls already recorded still load. The default team does not list
+  it; the one-app demo's `coder` does. Its description no longer suggests that an Agent may not change code, and it
+  tells the Agent not to report its work or final answer through it.
+- **An Agent that lists no tools is reported.** In a native Session an Agent's `tools`
+  list is exact, so an Agent that lists none cannot read or change files; only a legacy
+  (1.0-format) Session still gives it the baseline tools. `axocoatl validate`,
+  `axocoatl doctor` and daemon startup warn about each Agent that is not a Worker and
+  lists no tools, and the Team & budget review says such an Agent can only answer from
+  the conversation. The one-app demo's coding Agents and the E2B example list their tools.
+- **Default team prompts and `delegate` guide the lead to use its helpers.** The `delegate`
+  description tells the lead to ask a helper to find the relevant code and tests before a
+  change and to review the change against the task, documented contracts and tests before
+  it finishes. Helper limits are stated in steps, where a step is one model call or one
+  tool call, instead of "tool calls". The default Lead prompt says to look first, make the
+  change, run the check command from `AXOCOATL.md` and have reviewer review the diff; the
+  Reviewer prompt and the required review ask for every documented contract and edge case
+  to be checked one by one.
 - **Multi-Agent turns on a 1.0 data root require the Session upgrade.** On a data root
   that still uses the 1.0 format, a Session turn that would run two or more Agents is
   refused before it starts, with a message to stop Axocoatl, make a cold backup, and run
@@ -185,6 +204,14 @@ model-facing `coordination_control` tool, the external harness adapter and the
   finishes or is stopped the lead is charged only what it used and can delegate again,
   and running it again reserves its limits again. Turns recorded before this keep their
   exact totals.
+- **Native Agents get the repository's `AXOCOATL.md`.** Native activations never received
+  project instructions, so an Agent ran `npm test` where the file said `npm run check`.
+  A lead, its helpers and the required reviewer are now given the `AXOCOATL.md` at the
+  root of their checkout (up to 64 KiB) in the system prompt, as the compatibility path
+  does. When the activation's starting capture lists the file, only the exact bytes it
+  recorded are used.
+- **`list_dir` with an empty path lists the repository root** instead of failing with
+  `ls: cannot access ''`.
 - **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
   longer copies host proxy variables into containers.** Any `sandbox.network` other
   than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was

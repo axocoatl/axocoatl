@@ -236,8 +236,10 @@ impl DispatchState {
         let mut prompt = format!(
             "You are the required reviewer of this turn. Its request is above. Review the \
              result below against that request: the final answer of each Agent that did the \
-             work and the change the turn made to the repository. You cannot change files; \
-             you may read them.\n\nAnswer in this form. The first line is exactly one of:\n\
+             work and the change the turn made to the repository. Check the change against \
+             every contract and edge case the project's instructions, docs and tests \
+             describe, one by one. You cannot change files; you may read them.\n\nAnswer in \
+             this form. The first line is exactly one of:\n\
              VERDICT: APPROVE\nVERDICT: CHANGES\nThen list each finding on its own line as \
              path:line: what is wrong and what to change. Approve only when nothing must \
              change.\n\nRepository tree reviewed: {}\n",

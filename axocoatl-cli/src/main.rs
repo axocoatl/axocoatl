@@ -586,14 +586,16 @@ fn default_team_agents(provider_id: &str, model: &str, max_tokens: Option<u32>) 
     )
 }
 
-const LEAD_PROMPT: &str = "You own this change. Read the relevant code before you edit it. \
-    Delegate a focused read-only question to scout. Before you finish, ask reviewer for an \
-    independent review of your change and fix what it finds. Verify with the tests, then \
-    summarize what you changed.";
+const LEAD_PROMPT: &str = "You own this change. 1. Look first: for code you do not know, ask \
+    scout to find the relevant files and tests. 2. Make the change. 3. Run the check command \
+    from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Ask \
+    reviewer to review your diff against the task and fix what it finds. Then summarize what \
+    you changed.";
 const SCOUT_PROMPT: &str = "Answer the lead's question with file paths, line numbers and short \
     evidence. Change nothing.";
-const REVIEWER_PROMPT: &str = "Review the described change against the code, docs and tests. \
-    Report each concrete defect with file:line, or say you found none. Change nothing.";
+const REVIEWER_PROMPT: &str = "Review the described change. Check it against the task and \
+    against every contract and edge case the docs, comments and tests describe, one by one. \
+    Report each defect with file:line, or say you found none. Change nothing.";
 
 /// The Ollama model `init` configures and `onboard` offers first.
 const DEFAULT_OLLAMA_MODEL: &str = "llama3.2";
@@ -613,6 +615,7 @@ agents:
     provider: ollama
     model: {DEFAULT_OLLAMA_MODEL}
     system_prompt: "You are a helpful assistant."
+    tools: [read_file, list_dir, grep, glob]
     token_budget:
       per_execution: 16000
       per_call: 8192
@@ -845,6 +848,9 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
     let config = match load_cli_config(config_path).await {
         Ok(c) => {
             pass(&format!("Config valid: {}", config_path.display()));
+            for warning in axocoatl_config::no_tools_warnings(&c) {
+                warn(&warning.problem(), axocoatl_config::NoToolsWarning::HINT);
+            }
             Some(c)
         }
         Err(e) => {
@@ -1089,6 +1095,7 @@ fn hosted_onboarding_configuration(
     provider: {provider_id}
     model: {model_yaml}
     system_prompt: "You are a helpful assistant."
+    tools: [read_file, list_dir, grep, glob]
 {sampling}    token_budget:
       per_execution: {per_execution}
       per_call: 8192
@@ -1160,6 +1167,7 @@ agents:
     provider: ollama
     model: {model_yaml}
     system_prompt: "You are a helpful assistant powered by Axocoatl."
+    tools: [read_file, list_dir, grep, glob]
     token_budget:
       per_execution: 16000
       per_call: 8192
@@ -1357,12 +1365,24 @@ async fn cmd_validate(config_path: &std::path::Path) {
             }
             println!("  Workflows: {}", config.workflows.len());
             println!("  MCP servers: {}", config.mcp_servers.len());
+            for warning in no_tools_warning_lines(&config) {
+                eprintln!("{warning}");
+            }
         }
         Err(e) => {
             eprintln!("Configuration error:\n{e}");
             std::process::exit(1);
         }
     }
+}
+
+/// `validate` warns, without failing, about each Agent that is not a Worker
+/// and lists no tools: in a native Session it has none.
+fn no_tools_warning_lines(config: &axocoatl_config::AxocoatlConfig) -> Vec<String> {
+    axocoatl_config::no_tools_warnings(config)
+        .iter()
+        .map(|warning| format!("warning: {warning}"))
+        .collect()
 }
 
 /// Singleton reservation acquired before daemon bootstrap. Development and
@@ -2925,6 +2945,35 @@ mod tests {
     }
 
     #[test]
+    fn validate_warns_about_an_agent_that_lists_no_tools() {
+        let config = axocoatl_config::parse_config(
+            "agents:\n  - id: coder\n    name: Coder\n    provider: ollama\n    model: llama3\n",
+            std::path::Path::new("config.yaml"),
+        )
+        .unwrap();
+        assert_eq!(
+            no_tools_warning_lines(&config),
+            vec![
+                "warning: coder lists no tools: in native Sessions it cannot read or change \
+                 files. List the tools it needs, for example [read_file, list_dir, grep, glob, \
+                 write_file, edit_file, bash]."
+                    .to_string()
+            ]
+        );
+        // The generated default team lists its tools.
+        let generated =
+            axocoatl_config::parse_config(&init_configuration(), std::path::Path::new("a.yaml"))
+                .unwrap();
+        let reported: Vec<String> = axocoatl_config::no_tools_warnings(&generated)
+            .into_iter()
+            .map(|warning| warning.agent_id)
+            .collect();
+        for member in ["lead", "scout", "reviewer"] {
+            assert!(!reported.iter().any(|id| id == member), "{reported:?}");
+        }
+    }
+
+    #[test]
     fn legacy_chat_session_flag_is_only_a_display_label() {
         let cli = Cli::try_parse_from(["axocoatl", "chat", "--session", "legacy-label"])
             .expect("legacy flag should remain parseable");
@@ -3077,7 +3126,12 @@ mod tests {
         );
         assert_eq!(lead.writes, None, "the lead may change any file");
         let prompt = lead.system_prompt.as_deref().unwrap();
-        assert!(prompt.contains("to scout") && prompt.contains("ask reviewer"));
+        assert!(
+            prompt.contains("ask scout")
+                && prompt.contains("AXOCOATL.md")
+                && prompt.contains("Ask reviewer"),
+            "{prompt}"
+        );
         for helper in &config.agents[1..3] {
             assert!(matches!(
                 helper.role,
@@ -3102,7 +3156,11 @@ mod tests {
             config.agents[3].role,
             axocoatl_config::AgentRoleYaml::Autonomous
         ));
-        assert!(config.agents[3].tools.is_empty());
+        assert_eq!(
+            config.agents[3].tools,
+            ["read_file", "list_dir", "grep", "glob"],
+            "the assistant can read the repository"
+        );
         assert!(config.workflows.is_empty());
     }
 

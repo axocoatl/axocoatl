@@ -426,6 +426,15 @@ impl SessionRepositoryOwner {
     pub fn root(&self) -> &Path {
         &self.inner.metadata.runtime_root
     }
+    /// The host directory holding this checkout's files: an isolated Way's
+    /// own clone, or the Session's Workspace, which a local runtime works on
+    /// directly and a remote one was cloned from.
+    pub(crate) fn host_checkout(&self) -> &SecureDir {
+        match &self.inner.attempt {
+            Some(attempt) => attempt.lane_root(),
+            None => &self.inner.workspace_root,
+        }
+    }
     pub fn execution_identity(&self) -> &str {
         &self.inner.metadata.execution_identity
     }

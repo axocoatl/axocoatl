@@ -20,7 +20,7 @@ agents:
     model: qwen3:8b
     role: autonomous
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
-    system_prompt: "You own this change. Read the relevant code before you edit it. Delegate a focused read-only question to scout. Before you finish, ask reviewer for an independent review of your change and fix what it finds. Verify with the tests, then summarize what you changed."
+    system_prompt: "You own this change. 1. Look first: for code you do not know, ask scout to find the relevant files and tests. 2. Make the change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Ask reviewer to review your diff against the task and fix what it finds. Then summarize what you changed."
     sampling: { max_tokens: 4096 }
 
   - id: scout
@@ -40,7 +40,7 @@ agents:
     role: worker
     tools: [read_file, list_dir, grep, glob, bash]
     writes: []
-    system_prompt: "Review the described change against the code, docs and tests. Report each concrete defect with file:line, or say you found none. Change nothing."
+    system_prompt: "Review the described change. Check it against the task and against every contract and edge case the docs, comments and tests describe, one by one. Report each defect with file:line, or say you found none. Change nothing."
     sampling: { max_tokens: 4096 }
 
   # ── Research team ────────────────────────────────────────
