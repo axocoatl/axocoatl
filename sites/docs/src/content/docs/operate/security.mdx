@@ -180,6 +180,16 @@ as review evidence. An Agent held to its paths with file tools only, without `ba
 cannot do either. See
 [Limit which files an Agent may change](/configure/agents/#limit-which-files-an-agent-may-change).
 
+A team's required reviewer must be read-only in the same sense: Apply and turn
+admission refuse a reviewer template that could change files or run commands that can.
+The host, not the lead, starts it after the required Agents and checks finish, on its
+own approved budget, and the turn completes only when it approves the exact answers and
+repository tree it was shown. It fails closed: an answer without a readable verdict, a
+reviewer that did not finish, or a tree that changed while it read approves nothing.
+The review is a model's judgement, not verification; a reviewer can miss a defect or be
+misled by what it reads in the repository. See
+[Required review](/configure/agents/#required-review).
+
 `network: none` blocks container egress and Preview ports, but does not block
 the host daemon itself from reaching model providers, MCP servers, web search,
 webhooks, a remote sandbox service, or a registry for a Podman image pull. It

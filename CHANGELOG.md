@@ -109,6 +109,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Team & budget shows each check's arguments as a shell reads them and keeps a check's
   exact argument list unless you change its line. Required checks do not run on
   Explore several ways attempts, and Team & budget and Explore several ways say so.
+- **Required review for Session teams.** Team & budget can name a read-only Worker
+  template as the team's required reviewer, with 1 to 3 rounds and its own budget.
+  The host, not the lead, runs it after the required Agents finish and the required
+  checks pass, in a fresh conversation shown the request, each required Agent's final
+  answer and the turn's change against the tree it began with, bounded. The turn
+  completes only when it answers `VERDICT: APPROVE` about that exact result; the verdict
+  is bound to the answers and tree it judged, and an unreadable answer fails closed.
+  `VERDICT: CHANGES` sends the findings to the lead as a revision in a new epoch, and
+  the checks and review run again, until the rounds run out and the turn needs
+  attention with the findings. Apply refuses a reviewer that could change files, a
+  budget that cannot pay for every round, and a lead that cannot run once per round.
+  The turn controls show the verdict, findings and round.
 - **Retained Ways decisions.** Native Ways retain bounded candidate Outcomes, Routes,
   diffs, Checks, usage, Judge evidence, the human choice, and cleanup state after Keep
   or finishing without keeping. History storage limits are explicit; capacity failure

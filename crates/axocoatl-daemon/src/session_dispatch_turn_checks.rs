@@ -127,7 +127,7 @@ impl DispatchState {
 
 /// Whether the latest epoch runs condition `id`: a first epoch runs every
 /// condition, a continuation only those it selected.
-fn epoch_runs(contract: &TurnContract, id: &ConditionId) -> bool {
+pub(super) fn epoch_runs(contract: &TurnContract, id: &ConditionId) -> bool {
     contract
         .epochs()
         .last()
@@ -145,7 +145,7 @@ fn invocations(count: u32) -> String {
 }
 
 /// The name the person gave the Agent of `node`, or its node id.
-fn agent_name(
+pub(super) fn agent_name(
     content: &ExecutionContentStore,
     graph: Option<&TurnGraphSnapshot>,
     node: &TurnNodeId,

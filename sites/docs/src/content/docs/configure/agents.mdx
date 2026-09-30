@@ -185,6 +185,45 @@ invocations." Continue then does not offer to run them again. Use **Finish parti
 result** to finish without them, or raise the limit: **Review current authority** can
 raise a lead's limits for the running turn, and Team & budget changes later turns.
 
+## Required review
+
+A native Session team can also name a required reviewer: a Worker template that
+cannot change files, because it has no tool that writes files or runs commands or it
+has `writes: []`. In **Team & budget**, open **Required review**, choose the reviewer,
+how many rounds the host runs (1 to 3, two by default), its maximum output per request
+and its budget for all rounds of one turn. Apply is refused when the template is not a read-only Worker,
+when its budget cannot pay for every round (one activation and one invocation per
+round, three with `bash` for the repository captures around it), or when the lead's
+activation limit is smaller than the rounds. When the team also has required checks
+and more than one round, the Agent that pays for them needs a pass of the checks for
+every round, never fewer than two, and its own two captures and one answer for every
+round: 12 invocations for one check and two rounds.
+
+After the required Agents finish and the required checks pass, Axocoatl, not the lead,
+starts the reviewer in a fresh conversation. It is shown the request, each required
+Agent's final answer (up to 16 KiB each) and the change the turn made: every file
+whose patch against HEAD differs from the one captured when the turn began, up to 48
+KiB, with a note when it was cut. Its answer must start with `VERDICT: APPROVE` or
+`VERDICT: CHANGES`, followed by findings as `path:line: what to change`. The turn
+completes only when the reviewer approves the exact result it was shown. An answer
+without a readable verdict approves nothing. The verdict is bound to the answers and
+the repository tree it judged: a later revision of the lead makes it stale, and when the
+reviewer can capture the repository, a tree that changed before or while it read fails
+the verdict.
+
+When the reviewer asks for changes, Axocoatl sends its findings to the lead as a
+revision in a new epoch, the way **Revise** does, then runs the required checks and the
+review again on the new result. After the last round, or when more than one required
+Agent's result was reviewed, the turn needs your attention with the findings: Revise
+the lead with them, change the files yourself and **Continue** the review, or
+**Finish**. The turn controls show the verdict, the findings and the round. Continuing
+restarted work or rerun checks also runs the review again. The reviewer does not run on
+attempts made with **Explore several ways**.
+
+The review is another model's judgement of the result, not a proof that it is correct.
+What Axocoatl enforces is that the reviewer runs, cannot change the repository, and
+approves this exact result before the turn completes.
+
 ## Actor token guards
 
 The YAML `token_budget` is a local guard on actor calls. It also applies when a

@@ -210,6 +210,10 @@ pub struct SessionTurnControlPlane {
     /// when the turn has none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required_check_readiness: Option<TurnCheckReadiness>,
+    /// The required review's verdict, findings and round. Absent when the
+    /// turn has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_review: Option<axocoatl_session::turn_review::TurnReviewView>,
     pub decisions: EvidenceValue<Vec<Value>>,
     pub warnings: Vec<String>,
 }
@@ -230,6 +234,7 @@ impl SessionTurnControlPlane {
             turn_controls: None,
             required_checks: vec![],
             required_check_readiness: None,
+            required_review: None,
             history_version: "legacy_v1".into(),
             superseded_conversation: false,
             stop_requested: None,
@@ -683,6 +688,7 @@ impl SessionTurnControlPlane {
             turn_controls: None,
             required_checks: required_checks(snapshot, content),
             required_check_readiness: required_check_readiness(snapshot, content),
+            required_review: required_review(snapshot, content),
             history_version: "execution_v2".into(),
             superseded_conversation: false,
             stop_requested: contract.stop_requested().cloned(),
@@ -824,6 +830,29 @@ fn required_check_readiness(
             ))
         }),
     )
+}
+
+/// The required review of the turn, when it has one. A review that cannot
+/// be read is shown as unavailable.
+fn required_review(
+    snapshot: &DurableTurnSnapshot,
+    content: &ExecutionContentStore,
+) -> Option<axocoatl_session::turn_review::TurnReviewView> {
+    use axocoatl_session::turn_review::{project_review, review_node, TurnReviewView};
+    review_node(snapshot.contract().graph()?)?;
+    project_review(snapshot, content).unwrap_or_else(|failure| {
+        Some(TurnReviewView {
+            reviewer: String::new(),
+            state: "unavailable".into(),
+            reason: format!("The review cannot be read: {failure}"),
+            verdict: None,
+            findings: String::new(),
+            round: None,
+            max_rounds: 0,
+            current: false,
+            candidate_sha256: None,
+        })
+    })
 }
 
 fn bounded_json(value: Value) -> EvidenceValue<Value> {

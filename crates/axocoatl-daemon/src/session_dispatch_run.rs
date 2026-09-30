@@ -121,10 +121,11 @@ impl SessionDispatchController {
         let mut state = self.lock()?;
         state.execution_admission()?;
         if config.role == AgentRole::Worker
-            && state.native_child_origin(&activation.node_id)?.is_none()
+            && !state.owns_instance_conversation(&activation.node_id)?
         {
             return Err(error(
-                "a Worker runs only as a helper admitted by its lead's delegate call",
+                "a Worker runs only as a helper admitted by its lead's delegate call, or as \
+                 the required reviewer",
             ));
         }
         if state.bound.contains_key(&activation.activation_id) {

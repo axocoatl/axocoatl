@@ -92,6 +92,20 @@ starts only when the paying grant can pay for all of it; otherwise the readiness
 records, in words, why the checks could not run, and a check-only Continue that could
 not be paid is refused.
 
+A Session team's required review adds one optional reviewer node, `required-review`,
+with its own grant from the same Apply and a fresh conversation per turn, and one review
+condition, `required-review:verdict`, over the required Agents. The one turn driver
+starts each round itself after the required Agents are accepted and the check readiness
+passed: a reviewer activation whose input is the request, a bounded prompt with each
+required Agent's accepted answer and the change between the turn's first Before capture
+and the candidate tree, and the round. It records the verdict only from a reviewer
+accepted in the current epoch whose input names that exact prompt, and only an
+`APPROVE` whose own captures, when it has them, saw the same tree passes. `CHANGES`
+with rounds left pauses the epoch and continues in a new one whose plan revises the
+single required sink with the findings, as a person's Revise does, and reruns every
+condition; the preview of those events must apply first, or the turn needs attention
+with the reason.
+
 `turn_contract` decodes and folds a bounded schema-2 logical-turn contract separately from
 the live schema-1 ledger. Immutable manifests bind definitions, conversations, starting
 savepoints, exact accepted parents, repository references, budgets, and grant revisions.

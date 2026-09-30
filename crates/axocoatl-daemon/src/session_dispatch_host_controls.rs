@@ -564,4 +564,5 @@ impl DispatchState {
 
 #[path = "session_dispatch_host_control_extended.rs"]
 mod extended;
+pub(super) use extended::revision_selections;
 pub use extended::{HumanCheckChoice, HumanContinuationChoice, HumanTurnControls};
