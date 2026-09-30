@@ -112,25 +112,35 @@ agents:
 Each entry is a repository path pattern. A trailing `/` covers everything below that
 directory. A pattern without `/`, such as `*.md`, matches that file name in any
 directory; a pattern with `/` starts at the repository root. `*` and `?` stay within one
-path segment and `**` spans segments. Patterns cannot start with `/` or contain `..`, and
-an Agent can name at most 64.
+path segment and `**` spans segments. Patterns cannot start with `/`, contain `..` or
+name a `.git` directory, and an Agent can name at most 64.
 
 In a native Session:
 
-- `write_file` and `edit_file` refuse any other path before writing and never write
-  through a symbolic link. The Agent is told to leave that file unchanged and describe
+- `write_file` and `edit_file` refuse any other path, and any path inside `.git`,
+  before writing, and never write through a symbolic link. A `.gitignore` decides which
+  files are checked, so the Agent may change one only inside a directory it may change
+  whole, such as `docs/`. The Agent is told to leave the file unchanged and describe
   the change in its answer.
-- A shell can still write anywhere. When the Agent has `bash`, Axocoatl compares the
-  repository before and after its work; a change outside its paths fails that work and
-  is kept for you to review. Ignored files are not checked.
+- Every change the Agent makes is checked after its work, whether or not it has
+  `bash`. Axocoatl compares complete manifests of the repository from before and after,
+  including Git's own settings and hooks and whatever the Git index says; a change
+  outside its paths fails that work and is kept for you to review. The check does not
+  undo a change. Files your ignore rules exclude, and anything outside the repository,
+  are not checked.
+- A shell can still write anywhere in the sandbox, so for an Agent with `bash` the check
+  is review evidence rather than confinement. Give an Agent that must stay within its
+  paths the file tools without `bash`.
 - With `writes: []` the Agent is not offered `write_file` or `edit_file`. Its own `bash`
-  commands run under the sandbox's kernel write restriction, so they cannot change the
-  repository. Where the runtime cannot apply that restriction, its `bash` commands do
-  not run and the read-only file tools still work.
+  commands run under a Linux Landlock write restriction (Landlock ABI 3, Linux 6.2 or
+  later), so they cannot change the repository, and each command gets a fresh home
+  directory instead of the Session's. Where the runtime cannot apply that restriction,
+  its `bash` commands do not run and the read-only file tools still work.
 
 **Team & budget** offers the same choice for each Agent under **May change**: Any file,
 Only these paths, or Nothing – read-only helper. The review lists what each approved
-profile may change. A Worker cannot change more than its Coordinator: when the
+profile may change. Work added to a running turn starts from one of the Session team's
+Agents and keeps what that Agent may change. A Worker cannot change more than its Coordinator: when the
 Coordinator has a list, each of its Workers needs one too, and every path in it must
 appear in the Coordinator's list exactly as written.
 

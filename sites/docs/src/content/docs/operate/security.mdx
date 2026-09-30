@@ -140,14 +140,32 @@ host bind. Protected Axocoatl data and lease directories below that bind are
 automatically masked as described above. Keep all other secrets and unrelated data
 outside the Workspace.
 
-An Agent configured with `writes: []` runs its own `bash` commands under a kernel write
-restriction that keeps the repository unchanged while `/tmp` and its home directory stay
-writable. The restriction applies to that Agent's shell only. The host refuses its file
-tools write access before they run, and Axocoatl's own before-and-after repository
-observations run without it. Where the kernel or runtime cannot apply the restriction,
-the shell command does not run. An Agent that may change some paths gets no kernel
-restriction: its shell changes are compared with its paths after the work, which is
-review evidence rather than confinement. See
+An Agent configured with `writes: []` is a read-only helper. It is not offered
+`write_file` or `edit_file`, and the host refuses them if it asks. Its own `bash`
+commands run under a Linux Landlock write restriction: nothing in the repository,
+including `.git`, can change. Only `/tmp`, `/var/tmp`, `/dev` and a fresh home
+directory for each command are writable, so the helper cannot leave configuration in
+the Session's shared home for later commands. The restriction needs Landlock ABI 3
+(Linux 6.2 or later) and a container runtime that allows it. Where it cannot be
+applied, the helper's `bash` commands do not run and its read-only file tools still
+work. Axocoatl's own before-and-after repository captures run without the restriction;
+they read no Git configuration, attributes or ignore file from outside the repository
+and run no program that the repository's configuration names.
+
+An Agent that may change only some paths gets no kernel restriction. Its `write_file`
+and `edit_file` refuse other paths, and any path inside `.git`, before writing. Every
+change it makes is then checked after it finishes, whether or not it has `bash`:
+Axocoatl compares a complete manifest of the repository from before its work, kept in
+the sandbox and verified by its digest, with one from after. The manifest covers each
+tracked and untracked file's actual content whatever the Git index says, the index
+entries, every `.gitignore` Git reads, and `.git/config`, hooks and `info`. A change
+outside the Agent's paths, or captures that cannot establish every change, fail that
+work and keep the change for you to review. The check does not undo a change, and it
+does not cover files your ignore rules exclude or anything outside the repository. A
+shell can still write anywhere in the sandbox, and in a sandbox that runs as root it
+can replace the tools the check itself runs, so treat the check of an Agent with `bash`
+as review evidence. An Agent held to its paths with file tools only, without `bash`,
+cannot do either. See
 [Limit which files an Agent may change](/configure/agents/#limit-which-files-an-agent-may-change).
 
 `network: none` blocks container egress and Preview ports, but does not block
