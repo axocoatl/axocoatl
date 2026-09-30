@@ -483,7 +483,7 @@ fn readiness_names_why_the_checks_are_not_ready() {
 
 /// Readiness does not count an Agent whose result was accepted after the
 /// checks' Before capture began; one accepted before it, or no longer
-/// current, does not invalidate it.
+/// current, does not invalidate it, and neither does the required reviewer.
 #[test]
 fn an_agent_accepted_after_the_capture_invalidates_readiness() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!("../../axocoatl-session/tests/fixtures/turn_contract/check_only_recovery_preserves_accepted_generations.json")).unwrap();
@@ -512,10 +512,40 @@ fn an_agent_accepted_after_the_capture_invalidates_readiness() {
     let turn = accept.turn_id.clone();
     let current = std::slice::from_ref(&activation);
     let late = [intent.clone(), accept.clone()];
-    assert!(accepted_after_capture(&late, &turn, &before, current));
+    let after = |records: &[TurnContractEnvelope], turn, current| {
+        accepted_after_capture(records, turn, &before, current, None)
+    };
+    assert!(after(&late, &turn, current));
     let early = [accept.clone(), intent.clone()];
-    assert!(!accepted_after_capture(&early, &turn, &before, current));
-    assert!(!accepted_after_capture(&late, &turn, &before, &[]));
+    assert!(!after(&early, &turn, current));
+    assert!(!after(&late, &turn, &[]));
     let other = LogicalTurnId::new("another-turn").unwrap();
-    assert!(!accepted_after_capture(&late, &other, &before, current));
+    assert!(!after(&late, &other, current));
+
+    // The required reviewer is read-only and runs only once the checks
+    // pass: its acceptance after the capture leaves readiness current. A
+    // writing Agent accepted after the capture still invalidates it.
+    let reviewer_node = TurnNodeId::new(axocoatl_session::turn_review::REVIEW_NODE_ID).unwrap();
+    let reviewer = ActivationRef {
+        node_id: reviewer_node.clone(),
+        activation_id: ActivationId::new("review-activation").unwrap(),
+        ..activation.clone()
+    };
+    let accepted = |item: &ActivationRef| {
+        let mut record = accept.clone();
+        if let TurnContractEvent::AcceptActivation { activation, .. } = &mut record.event {
+            *activation = item.clone();
+        }
+        record
+    };
+    let current = [activation.clone(), reviewer.clone()];
+    let reviewed = [accept.clone(), intent.clone(), accepted(&reviewer)];
+    let with_review = |records: &[TurnContractEnvelope]| {
+        accepted_after_capture(records, &turn, &before, &current, Some(&reviewer_node))
+    };
+    assert!(!with_review(&reviewed));
+    assert!(accepted_after_capture(
+        &reviewed, &turn, &before, &current, None
+    ));
+    assert!(with_review(&[intent.clone(), accepted(&reviewer), accept]));
 }

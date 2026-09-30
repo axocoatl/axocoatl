@@ -7,6 +7,7 @@ use axocoatl_session::execution_content::{
     ActivationRepositorySnapshot, ConditionProcessStatus, RepositorySnapshotPhase,
 };
 use axocoatl_session::turn_checks::{admitted_check_definitions, group_of, CheckGroup};
+use axocoatl_session::turn_review::review_node;
 
 /// One run per check, epoch and turn; an existing run is reconciled, never
 /// replayed.
@@ -571,6 +572,10 @@ impl SessionDispatchController {
                     .iter()
                     .map(|item| item.activation.clone())
                     .collect();
+                let reviewer = contract
+                    .graph()
+                    .and_then(review_node)
+                    .map(|node| &node.node_id);
                 let failure = readiness_failure(
                     definitions.len(),
                     &outcomes,
@@ -589,6 +594,7 @@ impl SessionDispatchController {
                                 snapshot.turn_id(),
                                 before_run,
                                 &current,
+                                reviewer,
                             )
                         })
                         .then_some(ACCEPTED_AFTER_CAPTURE)
@@ -692,12 +698,16 @@ fn readiness_passed(
 
 /// Whether one of the `current` accepted activations was accepted after the
 /// intent of the checks' Before capture `before` in this turn's `records`:
-/// its changes may be missing from what the checks ran on.
+/// its changes may be missing from what the checks ran on. The turn's
+/// required `reviewer` never counts: it is read-only, the host starts it only
+/// once the checks pass, and its verdict binds only when its own captures saw
+/// the tree the checks passed on, so accepting it changes nothing they ran on.
 fn accepted_after_capture(
     records: &[TurnContractEnvelope],
     turn: &LogicalTurnId,
     before: &ConditionRunId,
     current: &[ActivationRef],
+    reviewer: Option<&TurnNodeId>,
 ) -> bool {
     let mut captured = false;
     for record in records.iter().filter(|record| record.turn_id == *turn) {
@@ -706,7 +716,9 @@ fn accepted_after_capture(
                 captured = true;
             }
             TurnContractEvent::AcceptActivation { activation, .. }
-                if captured && current.contains(activation) =>
+                if captured
+                    && current.contains(activation)
+                    && reviewer != Some(&activation.node_id) =>
             {
                 return true;
             }

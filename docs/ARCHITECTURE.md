@@ -86,6 +86,9 @@ records one readiness review. The turn completes only when every check passes an
 captured tree did not change; a failure leaves it needing attention. The review records
 why it failed in words, and it also fails when an accepted activation was accepted after
 the Before capture's intent, so work admitted during a pass cannot complete unchecked.
+The required reviewer's activation is the exception: it is read-only, starts only after
+readiness passed, and its verdict binds only to the tree its own captures saw, so
+accepting it leaves readiness current.
 A Continue that selects any condition of the group, or restarts any Agent, reruns the
 whole group: readiness needs every command on the one tree its captures saw. A pass
 starts only when the paying grant can pay for all of it; otherwise the readiness review

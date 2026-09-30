@@ -2421,16 +2421,14 @@ fn export_content_disposition(name: &str, extension: &str) -> HeaderValue {
 }
 
 /// Attempt and Session lifecycle conflicts are safe concurrency guards, not
-/// malformed requests. Keep all other failures on the existing 400 contract.
+/// malformed requests, and a well-formed request the daemon refuses as
+/// invalid is 422. Keep all other failures on the existing 400 contract.
 fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorResponse>) {
-    let status = if matches!(
-        &error,
+    let status = match &error {
         axocoatl_daemon::DaemonError::AttemptConflict(_)
-            | axocoatl_daemon::DaemonError::SessionConflict(_)
-    ) {
-        StatusCode::CONFLICT
-    } else {
-        StatusCode::BAD_REQUEST
+        | axocoatl_daemon::DaemonError::SessionConflict(_) => StatusCode::CONFLICT,
+        axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        _ => StatusCode::BAD_REQUEST,
     };
     (
         status,
@@ -9382,6 +9380,13 @@ workflows:
         ));
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(body.error.contains("durable history"));
+
+        // A request refused as invalid is not a conflict, and says why plainly.
+        let (status, Json(body)) = attempt_err(axocoatl_daemon::DaemonError::InvalidRequest(
+            "Raise its invocation limit".to_string(),
+        ));
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body.error, "Raise its invocation limit");
 
         let (status, Json(body)) = attempt_err(axocoatl_daemon::DaemonError::Session(
             "unknown attempt".to_string(),

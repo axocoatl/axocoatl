@@ -689,7 +689,7 @@ async fn write_scope_lookup_fails_closed() {
     );
 }
 
-async fn actual_sandbox(f: &mut Fixture) -> Arc<axocoatl_isolation::SessionSandbox> {
+pub(super) async fn actual_sandbox(f: &mut Fixture) -> Arc<axocoatl_isolation::SessionSandbox> {
     use axocoatl_isolation::{SandboxNetwork, SandboxPolicy, SessionSandbox};
     use sha2::{Digest, Sha256};
     let image =
@@ -793,7 +793,7 @@ async fn actual_native_repository_tools_write_edit_full_source_and_keep_owned_se
         .all(|invocation| invocation.evidence.disposition() == EffectDisposition::OutcomeRecorded));
 }
 
-fn git_init(path: &std::path::Path) {
+pub(super) fn git_init(path: &std::path::Path) {
     assert!(std::process::Command::new("git")
         .args(["init", "--quiet"])
         .current_dir(path)

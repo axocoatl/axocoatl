@@ -25,6 +25,11 @@ where
 fn team_error(value: impl std::fmt::Display) -> DaemonError {
     DaemonError::SessionConflict(value.to_string())
 }
+/// An edit whose limits cannot pay for what it names. Nothing conflicts; the
+/// person changes the numbers.
+fn limit_error(value: impl std::fmt::Display) -> DaemonError {
+    DaemonError::InvalidRequest(value.to_string())
+}
 fn digest(value: &impl Serialize) -> Result<String, DaemonError> {
     Ok(format!(
         "{:x}",
@@ -263,7 +268,24 @@ pub struct SessionTeamPreview {
     /// Slots whose definition lists no tools. In a native Session the list is
     /// exact, so the review says each can only answer from the conversation.
     pub toolless_slots: Vec<String>,
+    #[serde(serialize_with = "coordinators_view")]
     coordinators: Vec<(String, ApprovedCoordinatorPolicy)>,
+}
+/// Each delegation approval as the review shows it: without the removed HTN
+/// methods, which the stored approval still writes as `null`.
+fn coordinators_view<S: serde::Serializer>(
+    coordinators: &[(String, ApprovedCoordinatorPolicy)],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let mut shown = Vec::with_capacity(coordinators.len());
+    for (slot, policy) in coordinators {
+        let mut value = serde_json::to_value(policy).map_err(serde::ser::Error::custom)?;
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove("htn_methods_yaml");
+        }
+        shown.push((slot, value));
+    }
+    shown.serialize(serializer)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -475,7 +497,7 @@ fn check_required_review(edit: &SessionTeamEdit) -> Result<(), DaemonError> {
         return Ok(());
     };
     if !(1..=MAX_REVIEW_ROUNDS).contains(&review.max_rounds) {
-        return Err(team_error(format!(
+        return Err(limit_error(format!(
             "A required review runs 1 to {MAX_REVIEW_ROUNDS} rounds; choose how many"
         )));
     }
@@ -483,7 +505,7 @@ fn check_required_review(edit: &SessionTeamEdit) -> Result<(), DaemonError> {
         || review.limits.invocations < review.max_rounds
         || review.limits.tokens == 0
     {
-        return Err(team_error(format!(
+        return Err(limit_error(format!(
             "The reviewer runs once per round, so its budget needs at least {} activations, \
              {} invocations and some tokens",
             review.max_rounds, review.max_rounds
@@ -837,7 +859,7 @@ impl AxocoatlDaemon {
                 return Err(team_error("Delegated operations must be unique"));
             }
             let aggregate = slot.limits.as_ref().ok_or_else(|| {
-                team_error("An Agent that delegates needs explicit aggregate limits")
+                limit_error("An Agent that delegates needs explicit aggregate limits")
             })?;
             let old_policy = previous_approval.as_ref().and_then(|approval| {
                 approval
@@ -866,7 +888,7 @@ impl AxocoatlDaemon {
                     || worker.limits.tokens > aggregate.tokens
                     || worker.limits.cost_microunits > aggregate.cost_microunits
                 {
-                    return Err(team_error("Each helper needs a unique Worker template and explicit limits within the delegating Agent's aggregate"));
+                    return Err(limit_error("Each helper needs a unique Worker template and explicit limits within the delegating Agent's aggregate"));
                 }
                 let preserved = if slot.template_id.is_none()
                     && old_edit.is_some_and(|old| {
@@ -1009,7 +1031,7 @@ impl AxocoatlDaemon {
             } else {
                 "its answer"
             };
-            return Err(team_error(format!(
+            return Err(limit_error(format!(
                 "The reviewer {} needs at least {needed} invocations for {} rounds: {each} each \
                  round. Raise its invocation limit, or lower the review rounds",
                 review.template_id, review.max_rounds
@@ -1232,7 +1254,7 @@ impl AxocoatlDaemon {
                 return Err(team_error("Team slot identities must be unique"));
             }
             let limits = proposed.limits.clone().ok_or_else(|| {
-                team_error(
+                limit_error(
                     "Enter explicit activation, invocation, token and cost limits for every Agent",
                 )
             })?;
@@ -1245,9 +1267,9 @@ impl AxocoatlDaemon {
                             .map(|time| time.as_millis() as u64)
                             .unwrap_or(u64::MAX)
                 })
-                .ok_or_else(|| team_error("Enter an explicit budget expiry for every Agent"))?;
+                .ok_or_else(|| limit_error("Enter an explicit budget expiry for every Agent"))?;
             if limits.activations == 0 || limits.invocations == 0 || limits.tokens == 0 {
-                return Err(team_error(
+                return Err(limit_error(
                     "Activation, invocation and token limits must be positive",
                 ));
             }
@@ -1482,7 +1504,7 @@ impl AxocoatlDaemon {
                 .map_or(1, |review| review.max_rounds);
             let minimum = axocoatl_session::turn_review::payer_minimum_invocations(checks, rounds);
             if *limit < minimum && rounds > 1 {
-                return Err(team_error(format!(
+                return Err(limit_error(format!(
                     "{name} runs the required checks on its budget, and the required review can \
                      send its result back {} times, so its invocation limit must be at least \
                      {minimum}: the checks and the repository captures around them for every \
@@ -1492,7 +1514,7 @@ impl AxocoatlDaemon {
                 )));
             }
             if *limit < minimum {
-                return Err(team_error(format!(
+                return Err(limit_error(format!(
                     "{name} runs the required checks on its budget, so its invocation limit must \
                      be at least {minimum}: {} to run the checks and the repository captures \
                      around them twice (after the Agents finish, and once more if you \
@@ -1519,7 +1541,7 @@ impl AxocoatlDaemon {
             }) {
                 let activations = slot.limits.as_ref().map_or(0, |limits| limits.activations);
                 if activations < review.max_rounds {
-                    return Err(team_error(format!(
+                    return Err(limit_error(format!(
                         "The required review can run {} {} times in one turn, once per round, so \
                          its activation limit must be at least {}. Raise it, or lower the \
                          review rounds",
@@ -1790,5 +1812,16 @@ mod legacy_approval_tests {
         policy.legacy_htn_methods_yaml = None;
         value["htn_methods_yaml"] = serde_json::Value::Null;
         assert_eq!(serde_json::to_value(&policy).unwrap(), value);
+        // The team review leaves the removed key out; only the view changes.
+        let mut bytes = Vec::new();
+        coordinators_view(
+            &[("slot".into(), policy)],
+            &mut serde_json::Serializer::new(&mut bytes),
+        )
+        .unwrap();
+        let shown: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let mut expected = value.clone();
+        expected.as_object_mut().unwrap().remove("htn_methods_yaml");
+        assert_eq!(shown, serde_json::json!([["slot", expected]]));
     }
 }
