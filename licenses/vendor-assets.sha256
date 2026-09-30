@@ -4,7 +4,7 @@
 0640890476fc1198ab4de571fb658de443c4d85b66466ec09534a8737ab1ce9d  axocoatl-server/static/vendor/fonts/space-grotesk-var.woff2
 9f208d022102b1d0c7aebfecd8e42ca7997d5de636649d2b31ea63093d809019  axocoatl-server/static/vendor/highlight.css
 471ef9ae90c407af440fcdc48edfeeb562106b3267bd12d99071c162fb52ed32  axocoatl-server/static/vendor/highlight.min.js
-70fe17bd06c7fa819f03a1ed10957904318103624198845dc893b309bf495e28  axocoatl-server/static/vendor/markdown-it.min.js
+e32488403e2e565ac12a9669bfdf2b1b876eb0a5c84f8e0699884b562d18eb52  axocoatl-server/static/vendor/markdown-it.min.js
 80e43a53268d6a4c632ff9985bee1e7d0c6910cceadde464aa234bf36d0a6737  axocoatl-server/static/vendor/monaco/vs/abap-D-t0cyap.js
 f65a5a9a27d2b6c2a2ec55a670486073ca76203fc63d5a3ef91a889fe3c6bda8  axocoatl-server/static/vendor/monaco/vs/apex-CcIm7xu6.js
 7d3cfe5eb15cbfcb74cd50d29ebd9cf02dbf85078f076e6bab5fb8bdf6866ff1  axocoatl-server/static/vendor/monaco/vs/assets/css.worker-URu8fCFR.js

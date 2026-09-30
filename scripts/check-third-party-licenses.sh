@@ -144,8 +144,8 @@ AXO_LOCK_DOMPURIFY_VERSION="$(jq -r '.packages["node_modules/dompurify"].version
 [ "$AXO_LOCK_DOMPURIFY_VERSION" = "3.4.13" ] \
   || fail "expected audited DOMPurify 3.4.13, found '$AXO_LOCK_DOMPURIFY_VERSION'"
 AXO_LOCK_MARKDOWN_IT_VERSION="$(jq -r '.packages["node_modules/markdown-it"].version // empty' "$AXO_VENDOR_WEB_LOCK")"
-[ "$AXO_LOCK_MARKDOWN_IT_VERSION" = "14.3.0" ] \
-  || fail "expected audited markdown-it 14.3.0, found '$AXO_LOCK_MARKDOWN_IT_VERSION'"
+[ "$AXO_LOCK_MARKDOWN_IT_VERSION" = "14.3.2" ] \
+  || fail "expected audited markdown-it 14.3.2, found '$AXO_LOCK_MARKDOWN_IT_VERSION'"
 AXO_OVERRIDE_DOMPURIFY_VERSION="$(jq -r '.overrides["monaco-editor"].dompurify // empty' "$AXO_VENDOR_WEB_DIR/package.json")"
 [ "$AXO_OVERRIDE_DOMPURIFY_VERSION" = "3.4.13" ] \
   || fail "Monaco must remain overridden to audited DOMPurify 3.4.13"

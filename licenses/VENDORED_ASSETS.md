@@ -16,7 +16,7 @@ asset until that inventory and this review are updated together.
 | `fonts/space-grotesk-var.woff2` | 1 | `@fontsource-variable/space-grotesk@5.3.0`, `package/files/space-grotesk-latin-wght-normal.woff2`, [npm tarball](https://registry.npmjs.org/@fontsource-variable/space-grotesk/-/space-grotesk-5.3.0.tgz) | `vendor/space-grotesk-OFL-1.1.txt` |
 | `highlight.min.js` | 1 | `@highlightjs/cdn-assets@11.10.0`, `package/highlight.min.js`, [npm tarball](https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.10.0.tgz) | `vendor/highlight-js-BSD-3-Clause.txt` |
 | `highlight.css` | 1 | `@highlightjs/cdn-assets@11.10.0`, `package/styles/github-dark.min.css`, [npm tarball](https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.10.0.tgz) | `vendor/highlight-js-BSD-3-Clause.txt` |
-| `markdown-it.min.js` | 1 | `markdown-it@14.3.0`, `package/dist/markdown-it.min.js`, [npm tarball](https://registry.npmjs.org/markdown-it/-/markdown-it-14.3.0.tgz) | `vendor/markdown-it-MIT.txt` |
+| `markdown-it.min.js` | 1 | `markdown-it@14.3.2`, `package/dist/markdown-it.min.js`, [npm tarball](https://registry.npmjs.org/markdown-it/-/markdown-it-14.3.2.tgz) | `vendor/markdown-it-MIT.txt` |
 | `xterm.js` | 1 | `xterm@5.3.0`, [jsDelivr `lib/xterm.min.js`](https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js) | `vendor/xterm-MIT.txt` |
 | `xterm.css` | 1 | `xterm@5.3.0`, [jsDelivr `css/xterm.min.css`](https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css) | `vendor/xterm-MIT.txt` |
 | `xterm-addon-fit.js` | 1 | `xterm-addon-fit@0.8.0`, [jsDelivr `lib/xterm-addon-fit.min.js`](https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js) | `vendor/xterm-addon-fit-MIT.txt` |
