@@ -51,6 +51,11 @@ pub const MAX_PROVIDER_RESPONSE_BYTES: u64 = 1024 * 1024;
 const PROVIDER_OUTCOME_RESERVE: usize = 1024;
 const CONDITION_OUTCOME_RESERVE: usize = 1024;
 
+/// Host port through which a delegation holder admits one fresh helper Agent.
+pub const DELEGATE_TOOL: &str = "delegate";
+/// Host port for reading the bound workspace and staging knowledge proposals.
+pub const KNOWLEDGE_TOOL: &str = "workspace_knowledge";
+
 #[derive(Debug, thiserror::Error)]
 pub enum AuthorityError {
     #[error("authority storage: {0}")]
@@ -2200,16 +2205,32 @@ fn validate_dispatch(
     let control_port = tool == "coordination_control"
         && grant.policy.delegation.is_some()
         && activation.activation.node_id == grant.policy.holder;
+    // Delegation admits a helper through the same child-grant reservation as
+    // any AddAgent command, so only the holder of a policy that can add an
+    // Agent from at least one template may reach the port.
+    let delegate_port = tool == DELEGATE_TOOL
+        && activation.activation.node_id == grant.policy.holder
+        && grant.policy.delegation.as_deref().is_some_and(|policy| {
+            !policy.templates.is_empty()
+                && policy
+                    .operations
+                    .iter()
+                    .any(|permission| permission.operation == DelegatedOperation::AddAgent)
+        });
     // Workspace knowledge only reads the bound workspace or stages a private
     // proposal. Publication is a separate accepted-closure/human operation. It
     // consumes the same live lease and invocation budget as other host ports.
-    let knowledge_port = tool == "workspace_knowledge"
+    let knowledge_port = tool == KNOWLEDGE_TOOL
         && (activation.activation.node_id == grant.policy.holder
             || grant
                 .policy
                 .descendants
                 .contains(&activation.activation.node_id));
-    if !control_port && !knowledge_port && !activation.profile.tools.iter().any(|t| t == tool) {
+    if !control_port
+        && !delegate_port
+        && !knowledge_port
+        && !activation.profile.tools.iter().any(|t| t == tool)
+    {
         return Err(AuthorityError::Denied);
     }
     if grant.usage.invocations >= grant.policy.limits.invocations
@@ -2806,7 +2827,8 @@ mod provider_tests {
     use crate::execution_ownership::{LegacyFormatOwnership, UpgradedFormatOwnership};
     use crate::execution_store::{ExecutionStoreOwner, SessionExecutionStore};
     use crate::turn_contract::{
-        ActivationId, CommandId, ExecutionEpochId, TurnContractEnvelope, TurnContractEvent,
+        ActivationId, AgentDefinitionId, CommandId, ExecutionEpochId, TurnContractEnvelope,
+        TurnContractEvent,
     };
     use std::sync::Arc;
 
@@ -3638,6 +3660,151 @@ mod provider_tests {
             cost_microunits: Some(2),
             cost_known: true,
         }
+    }
+
+    fn delegation_fixture(
+        operation: DelegatedOperation,
+        templates: Vec<DefinitionSnapshotRef>,
+    ) -> (
+        tempfile::TempDir,
+        ControlAuthority,
+        ActivationLease,
+        ActivationLease,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let holder = activation("a");
+        let gate = ControlAuthority::open(
+            root.path(),
+            holder.session_id.clone(),
+            holder.turn_id.clone(),
+        )
+        .unwrap();
+        gate.install_grant(
+            AuthorityGrant {
+                id: "grant".into(),
+                revision: 1,
+                issuer_evidence: EvidenceRef::new("issuer").unwrap(),
+                holder: holder.node_id.clone(),
+                descendants: vec![TurnNodeId::new("b").unwrap()],
+                allow_stop_descendants: false,
+                delegation: Some(Box::new(DelegationPolicy {
+                    schema_version: 1,
+                    scope: DelegationScope {
+                        session_id: holder.session_id.clone(),
+                        turn_id: holder.turn_id.clone(),
+                        task: EvidenceRef::new("task").unwrap(),
+                        approved_graph: EvidenceRef::new("graph").unwrap(),
+                    },
+                    operations: vec![DelegatedOperationPermission {
+                        operation,
+                        targets: DelegatedTargetScope::Subtree {
+                            root: holder.node_id.clone(),
+                            include_future_descendants: true,
+                        },
+                    }],
+                    templates,
+                    resource_policy: EvidenceRef::new("resources").unwrap(),
+                    graph_limits: DelegatedGraphLimits {
+                        max_nodes: 4,
+                        max_edges: 4,
+                    },
+                    required_conditions: vec![],
+                    completion_criteria: vec![],
+                    machine_blockers: vec![],
+                    replay_policy: DelegatedReplayPolicy::RequireProvedEffectSafety,
+                })),
+                profiles: vec![profile()],
+                conditions: vec![],
+                limits: GrantLimits {
+                    activations: 10,
+                    invocations: 10,
+                    tokens: 1000,
+                    cost_microunits: 100,
+                },
+                expires_at_ms: 1000,
+            },
+            0,
+        )
+        .unwrap();
+        // Stand in for acknowledge_native_delegation, which needs a running
+        // canonical turn; the gate only checks that the journal ids match.
+        {
+            let mut state = gate.lock().unwrap();
+            state.data.canonical_journal_id = Some("journal".into());
+            state.data.grants[0].native_delegation = Some("journal".into());
+        }
+        let holder_lease = gate
+            .register_provider_activation(holder, "grant", profile(), gate.revision().unwrap(), 100)
+            .unwrap();
+        let descendant_lease = gate
+            .register_provider_activation(
+                activation("b"),
+                "grant",
+                profile(),
+                gate.revision().unwrap(),
+                100,
+            )
+            .unwrap();
+        (root, gate, holder_lease, descendant_lease)
+    }
+
+    #[test]
+    fn delegate_port_opens_only_for_a_holder_that_may_add_agents_from_templates() {
+        let dispatch = |gate: &ControlAuthority, lease: &ActivationLease, id: &str| {
+            gate.prepare_dispatch(
+                lease,
+                InvocationId::new(id).unwrap(),
+                DELEGATE_TOOL.into(),
+                DispatchReservation {
+                    tokens: 0,
+                    cost_microunits: 0,
+                },
+                100,
+            )
+        };
+        let template = || DefinitionSnapshotRef {
+            definition_id: AgentDefinitionId::new("definition").unwrap(),
+            snapshot: EvidenceRef::new("template").unwrap(),
+        };
+
+        let (_root, gate, lease) = fixture();
+        assert!(
+            matches!(
+                dispatch(&gate, &lease, "no-policy"),
+                Err(AuthorityError::Denied)
+            ),
+            "a grant without delegation never exposes the port"
+        );
+
+        let (_root, gate, holder, descendant) =
+            delegation_fixture(DelegatedOperation::AddAgent, vec![template()]);
+        dispatch(&gate, &holder, "holder").unwrap();
+        assert!(
+            matches!(
+                dispatch(&gate, &descendant, "descendant"),
+                Err(AuthorityError::Denied)
+            ),
+            "only the delegation holder may delegate"
+        );
+
+        let (_root, gate, holder, _) =
+            delegation_fixture(DelegatedOperation::Inspect, vec![template()]);
+        assert!(
+            matches!(
+                dispatch(&gate, &holder, "inspect-only"),
+                Err(AuthorityError::Denied)
+            ),
+            "a policy that cannot add an Agent keeps the port closed"
+        );
+
+        let (_root, gate, holder, _) = delegation_fixture(DelegatedOperation::AddAgent, vec![]);
+        assert!(
+            matches!(
+                dispatch(&gate, &holder, "no-templates"),
+                Err(AuthorityError::Denied)
+            ),
+            "a policy without helper templates keeps the port closed"
+        );
     }
 
     #[test]
