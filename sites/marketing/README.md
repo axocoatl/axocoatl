@@ -66,11 +66,11 @@ repository but do not ship to the public site.
 | `workspace-sessions-turns` | `/concepts`, `/why`, `/showcase` | One Workspace groups multiple Sessions; returning to one restores its accepted Turn. |
 | `durable-turn` | `/`, `/concepts`, `/showcase` | An active Turn reconnects after reload and Stop leaves an honest History state. |
 | `sandbox-terminal-preview` | `/concepts`, `/showcase` | The Terminal identifies the Session's local Podman sandbox and checkout, runs the repository check, and serves the application opened in Preview through a published port. |
-| `multi-agent-handoff` | `/showcase` | Systems Architect → Critical Reviewer run in configured dependency order in one Custom Session; two distinct Agent outputs remain after reload. This recording does not prove the newer inline Coordination card or revision generations. |
+| `multi-agent-handoff` | `/showcase` | The default Lead delegates to read-only Scout and Reviewer helpers approved in Team and budget, is the only Agent that changes files, and completes after the required check passes; both helper answers remain after reload. This recording does not prove required review. |
 | `several-ways` | `/showcase` | Independent attempts retain Outcome, Route, diffs, Checks, and optional Judge while unresolved; Keep selects one uncommitted result. This recording does not prove the newer native retained-decision History flow. |
 | `git-last-turn` | `/why`, `/showcase` | Keep returns an uncommitted result to the primary checkout; Source Control → Last turn filters the current Git diff to paths attributed to that Turn before optional staging. |
 | `settings-runtime` | `/concepts`, `/showcase` | Agents, providers, Skills, MCP servers, and Automations remain configuration inside one product. |
-| `event-lattice-automation` | `/concepts`, `/showcase` | A Skill publishes `ReleaseCandidateReady`; its matching trigger starts an inspectable Automation run. |
+| `event-lattice-automation` | `/concepts`, `/showcase` | A Skill publishes `ReleaseCandidateReady`; an `on_event` trigger for that event starts an inspectable Automation run. |
 | `mcp-approval` | `/concepts`, `/showcase` | A compatibility Session Turn pauses for approval before a deterministic local MCP call, then retains bounded tool evidence and the final answer in History. |
 | `workspace-knowledge` | `/concepts`, `/showcase` | A source-linked note and typed backlink survive restart, and a separate native Session retrieves the exact accepted note revision. |
 | `automation-hitl-recovery` | `/showcase` | A blocking review waits at a top-level Interrupt and resumes with operator guidance from recorded node state. |

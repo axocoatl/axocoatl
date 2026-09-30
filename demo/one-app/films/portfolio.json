@@ -389,21 +389,21 @@
           "id": "skill",
           "label": "Fire the configured Skill",
           "evidence": [
-            "Release candidate ready declares ReleaseCandidateReady"
+            "Release candidate ready declares ReleaseCandidateReady under By event and fires once"
           ]
         },
         {
           "id": "event",
           "label": "Confirm the typed Skill dispatch",
           "evidence": [
-            "The Skills list retains the declared event type while the downstream waiting state appears"
+            "The Skills list, filtered to ReleaseCandidateReady, retains the declared event while the downstream waiting state appears"
           ]
         },
         {
           "id": "trigger",
-          "label": "Open the matching Automation run",
+          "label": "Open the matching event-triggered run",
           "evidence": [
-            "The run identifies the Skill trigger and reaches a terminal state"
+            "The Automation's on ReleaseCandidateReady trigger starts one run without a manual Run, and the run parks at its operator Interrupt"
           ]
         },
         {
@@ -415,9 +415,9 @@
         }
       ],
       "evidence": [
-        "One Skill event creates exactly one matching Automation run.",
+        "One ReleaseCandidateReady event creates exactly one matching on_event Automation run.",
         "The run and final content survive reload.",
-        "The film does not present the event lattice as the Agent graph or Automation graph.",
+        "The film does not present the event feed as the Agent graph or Automation graph.",
         "Configured Automation execution is identified separately from native Session turns; the same release binary serves both surfaces."
       ]
     },
@@ -567,10 +567,10 @@
     },
     {
       "slug": "multi-agent-handoff",
-      "title": "Multi-agent dependency handoff",
+      "title": "Lead with read-only helpers",
       "status": "required",
       "scenario": "demo/one-app/scenarios/multi-agent.md",
-      "fixture": "harbor-catalog (design-only prompt)",
+      "fixture": "harbor-catalog + local Ollama Qwen",
       "placements": [
         {
           "page": "sites/marketing/showcase/index.html",
@@ -584,44 +584,49 @@
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#multi-agent-handoff",
       "provenance": "demo/one-app/films/provenance/v1.1.0/multi-agent-handoff.json",
       "duration_seconds": {
-        "min": 25,
-        "max": 35
+        "min": 35,
+        "max": 50
       },
-      "poster_beat": "dependency-edge",
+      "poster_beat": "checked-result",
       "beats": [
         {
-          "id": "dependency-edge",
-          "label": "Show architect to reviewer before execution",
+          "id": "team-review",
+          "label": "Review the Lead and its read-only helpers",
           "evidence": [
-            "The graph contains exactly one dependency edge"
+            "Team and budget shows the Lead may change files while Scout and Reviewer are read-only helpers",
+            "Helper limits, maximum output, and the required check npm run check are approved before the Turn"
           ]
         },
         {
-          "id": "architect",
-          "label": "Show the architect active first",
+          "id": "scout",
+          "label": "Show the Lead delegating to Scout",
           "evidence": [
-            "The architect returns one non-empty sentence"
+            "A delegated_by edge joins the Scout helper run to the Lead",
+            "Scout answers with repository file paths"
           ]
         },
         {
-          "id": "reviewer",
-          "label": "Show the reviewer active second",
+          "id": "review",
+          "label": "Show the Lead's edit and its delegated review",
           "evidence": [
-            "The reviewer receives the architect output and returns one non-empty decision"
+            "The Lead edits lib/catalog.js",
+            "A delegated_by edge joins the Reviewer helper run to the Lead, and Reviewer reports its findings"
           ]
         },
         {
-          "id": "durable-outputs",
-          "label": "Reload the completed Turn",
+          "id": "checked-result",
+          "label": "Reload the completed, checked Turn",
           "evidence": [
-            "Both outputs remain separate and labeled"
+            "The Turn is completed and the required check npm run check passed",
+            "Both helper answers remain in History after reload"
           ]
         }
       ],
       "evidence": [
-        "The reviewer dependency is present even when agents load after the Session record.",
-        "A blank scheduled Agent output fails the Turn instead of producing false success.",
-        "The film makes no repository-edit or parallel-Ways claim."
+        "The control plane records Scout and Reviewer helper runs, each with a delegated_by edge to the Lead, in that order.",
+        "Only the Lead changes files: the working tree changes only lib/catalog.js, and the helpers are approved read-only.",
+        "The required check npm run check passes and its record belongs to the same Turn.",
+        "The film makes no parallel-Ways, required-review, or Coordinator-decomposition claim."
       ]
     },
     {
