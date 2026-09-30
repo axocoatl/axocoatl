@@ -673,7 +673,8 @@ impl SessionDispatchController {
              earlier result instead of running it again; a call whose helper was not started \
              is tried again. Several delegate calls in one response run their helpers at the \
              same time. Answers longer than {MAX_ANSWER_BYTES} bytes are cut. Each helper's \
-             limits come out of your own budget, so delegate only work that needs a separate \
+             limits are held from your own budget while it runs, and what it does not use \
+             comes back when it finishes, so delegate only work that needs a separate \
              look.\nHelpers:\n{}",
             lines.join("\n")
         );

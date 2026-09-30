@@ -1065,8 +1065,225 @@ fn lost_provider_claim_ack_is_unknown_after_reopen_and_never_reauthorizes_dispat
     assert_eq!(gate.usage("grant-qa").unwrap().cost_microunits, 10);
 }
 
+fn known_usage(input: usize, output: usize) -> ProviderCallOutcome {
+    ProviderCallOutcome {
+        kind: ProviderCallTerminal::Completed,
+        usage: axocoatl_core::MeasuredTokenUsage::known(axocoatl_core::TokenUsageStats::new(
+            input, output,
+        )),
+        cost_microunits: Some(0),
+        cost_known: true,
+    }
+}
+
+/// A local model's call reserves its whole context plus output before it is
+/// sent. Once the provider reports what the call used, only that stays
+/// charged and the rest of the reservation is available again.
 #[test]
-fn provider_and_tool_claims_charge_the_same_grant_without_refunding_measured_usage() {
+fn completed_provider_call_charges_its_reported_usage_and_returns_the_rest() {
+    let root = TempDir::new().unwrap();
+    let gate = authority(&root);
+    let mut budget = grant();
+    budget.limits = GrantLimits {
+        activations: 1,
+        invocations: 100,
+        tokens: 1_457_714,
+        cost_microunits: 0,
+    };
+    gate.install_grant(budget, gate.revision().unwrap())
+        .unwrap();
+    let lease = gate
+        .register_provider_activation(
+            activation("tester", 1, "epoch-1"),
+            "grant-qa",
+            profile(),
+            gate.revision().unwrap(),
+            100,
+        )
+        .unwrap();
+    let call = |id: String| {
+        let mut call = provider_intent(&id);
+        call.reservation = DispatchReservation {
+            tokens: 36_864,
+            cost_microunits: 0,
+        };
+        call
+    };
+    let first = gate
+        .claim_provider_call(&lease, call("call-0".into()), 100)
+        .unwrap();
+    assert_eq!(gate.usage("grant-qa").unwrap().tokens, 36_864);
+    gate.settle_provider_call(&first, &known_usage(2_500, 500))
+        .unwrap();
+    assert_eq!(
+        gate.usage("grant-qa").unwrap(),
+        GrantUsage {
+            activations: 1,
+            invocations: 1,
+            tokens: 3_000,
+            cost_microunits: 0,
+        },
+        "the unused 33,864 reserved tokens are available again"
+    );
+    // Reservations alone admit 39 such calls; settled usage admits far more.
+    for index in 1..60 {
+        let claim = gate
+            .claim_provider_call(&lease, call(format!("call-{index}")), 100)
+            .unwrap();
+        gate.settle_provider_call(&claim, &known_usage(2_500, 500))
+            .unwrap();
+    }
+    let settled = gate.usage("grant-qa").unwrap();
+    assert_eq!(settled.invocations, 60);
+    assert_eq!(settled.tokens, 60 * 3_000);
+    // An exact repeat of a settlement returns nothing twice.
+    gate.settle_provider_call(&first, &known_usage(2_500, 500))
+        .unwrap();
+    assert_eq!(gate.usage("grant-qa").unwrap(), settled);
+    drop(gate);
+    let reopened = authority(&root);
+    assert_eq!(reopened.usage("grant-qa").unwrap(), settled);
+}
+
+/// Only reported usage settles a reservation. An interrupted call, a lower
+/// bound, an unknown cost and a lost claim keep what they reserved.
+#[test]
+fn provider_call_with_unknown_usage_or_outcome_stays_fully_charged() {
+    let root = TempDir::new().unwrap();
+    let gate = authority(&root);
+    let lease = ready_provider(&gate, "tester");
+    let charged = |gate: &ControlAuthority| {
+        let usage = gate.usage("grant-qa").unwrap();
+        (usage.tokens, usage.cost_microunits)
+    };
+
+    // Interrupted: the provider may have used more than it reported.
+    let claim = gate
+        .claim_provider_call(&lease, provider_intent("interrupted"), 100)
+        .unwrap();
+    let mut interrupted = provider_outcome();
+    interrupted.kind = ProviderCallTerminal::Interrupted;
+    gate.settle_provider_call(&claim, &interrupted).unwrap();
+    assert_eq!(charged(&gate), (100, 10));
+    assert_eq!(
+        gate.provider_call("interrupted").unwrap().unwrap().charged,
+        None
+    );
+
+    // A lower bound keeps the tokens; its known cost still settles.
+    let claim = gate
+        .claim_provider_call(&lease, provider_intent("lower-bound"), 100)
+        .unwrap();
+    let mut lower_bound = provider_outcome();
+    lower_bound.usage.complete = false;
+    gate.settle_provider_call(&claim, &lower_bound).unwrap();
+    assert_eq!(charged(&gate), (200, 12));
+
+    // An unknown cost keeps the cost reservation; complete tokens settle.
+    let claim = gate
+        .claim_provider_call(&lease, provider_intent("unknown-cost"), 100)
+        .unwrap();
+    let mut unknown_cost = provider_outcome();
+    unknown_cost.cost_known = false;
+    gate.settle_provider_call(&claim, &unknown_cost).unwrap();
+    assert_eq!(charged(&gate), (223, 22));
+    assert_eq!(
+        gate.provider_call("unknown-cost").unwrap().unwrap().charged,
+        Some(DispatchReservation {
+            tokens: 23,
+            cost_microunits: 10,
+        })
+    );
+
+    // A claim whose outcome was never recorded stays charged across a crash.
+    let _lost = gate
+        .claim_provider_call(&lease, provider_intent("lost"), 100)
+        .unwrap();
+    assert_eq!(charged(&gate), (323, 32));
+    drop(gate);
+    let gate = authority(&root);
+    assert_eq!(charged(&gate), (323, 32));
+    assert_eq!(gate.provider_call("lost").unwrap().unwrap().outcome, None);
+    assert_eq!(gate.usage("grant-qa").unwrap().invocations, 4);
+    // Recovery that observes only an interruption returns nothing.
+    let receipt = gate.provider_settlement_receipt("lost").unwrap();
+    gate.reconcile_provider_call(&receipt, &interrupted)
+        .unwrap();
+    assert_eq!(charged(&gate), (323, 32));
+}
+
+/// A store written before settlement returned unused reservations reloads
+/// with exactly the bytes and totals it was written with.
+#[test]
+fn settled_calls_recorded_before_returns_reload_fully_charged() {
+    let root = TempDir::new().unwrap();
+    let gate = authority(&root);
+    let lease = ready_provider(&gate, "tester");
+    let claim = gate
+        .claim_provider_call(&lease, provider_intent("old"), 100)
+        .unwrap();
+    gate.settle_provider_call(&claim, &provider_outcome())
+        .unwrap();
+    gate.stop_activation(claim.activation(), gate.revision().unwrap())
+        .unwrap();
+    assert_eq!(gate.usage("grant-qa").unwrap().tokens, 23);
+    drop(gate);
+    // The same call as an earlier build wrote it: its outcome, no
+    // settlement, and the whole reservation charged.
+    let path = root.path().join("control-authority.v1.json");
+    let current = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    let replace_once = |text: &str, from: &str, to: &str| {
+        assert_eq!(text.matches(from).count(), 1, "{from}");
+        text.replace(from, to)
+    };
+    let old = replace_once(
+        &replace_once(
+            &current,
+            r#","charged":{"tokens":23,"cost_microunits":2}"#,
+            "",
+        ),
+        r#""usage":{"activations":1,"invocations":1,"tokens":23,"cost_microunits":2}"#,
+        r#""usage":{"activations":1,"invocations":1,"tokens":100,"cost_microunits":10}"#,
+    );
+    std::fs::write(&path, &old).unwrap();
+    let reopened = authority(&root);
+    assert_eq!(
+        reopened.usage("grant-qa").unwrap(),
+        GrantUsage {
+            activations: 1,
+            invocations: 1,
+            tokens: 100,
+            cost_microunits: 10,
+        }
+    );
+    drop(reopened);
+    assert_eq!(
+        String::from_utf8(std::fs::read(&path).unwrap()).unwrap(),
+        old,
+        "reopening rewrites it byte for byte"
+    );
+    // A settlement its own outcome does not support cannot load.
+    let forged = replace_once(
+        &current,
+        r#","charged":{"tokens":23,"cost_microunits":2}"#,
+        r#","charged":{"tokens":1,"cost_microunits":2}"#,
+    );
+    let forged = replace_once(
+        &forged,
+        r#""usage":{"activations":1,"invocations":1,"tokens":23,"cost_microunits":2}"#,
+        r#""usage":{"activations":1,"invocations":1,"tokens":1,"cost_microunits":2}"#,
+    );
+    std::fs::write(&path, forged).unwrap();
+    assert!(ControlAuthority::open(
+        root.path(),
+        SessionId::new("session-qa").unwrap(),
+        LogicalTurnId::new("turn-build-184").unwrap(),
+    )
+    .is_err());
+}
+
+#[test]
+fn provider_and_tool_claims_charge_the_same_grant_and_only_provider_calls_settle() {
     let root = TempDir::new().unwrap();
     let audit_root = TempDir::new().unwrap();
     let gate = authority(&root);
@@ -1096,24 +1313,47 @@ fn provider_and_tool_claims_charge_the_same_grant_without_refunding_measured_usa
     let claim = gate.claim_provider_call(&lease, exact, 100).unwrap();
     assert_eq!(claim.activation(), &activation("tester", 1, "epoch-1"));
     assert_eq!(claim.intent().request_sha256, "b".repeat(64));
+    assert_eq!(gate.usage("grant-qa").unwrap().tokens, 1000);
     gate.settle_provider_call(&claim, &provider_outcome())
         .unwrap();
+    // The tool keeps its reservation; the provider call settled to the 23
+    // tokens and 2 microunits it reported.
     assert_eq!(
         gate.usage("grant-qa").unwrap(),
         GrantUsage {
             activations: 1,
             invocations: 2,
+            tokens: 623,
+            cost_microunits: 62
+        }
+    );
+    let usage = gate.provider_usage(claim.activation()).unwrap();
+    assert_eq!(usage.tokens, provider_outcome().usage);
+    assert_eq!(usage.cost_microunits, 2);
+    let mut beyond = provider_intent("beyond-returned");
+    beyond.reservation = DispatchReservation {
+        tokens: 378,
+        cost_microunits: 38,
+    };
+    assert!(matches!(
+        gate.claim_provider_call(&lease, beyond, 100),
+        Err(AuthorityError::Capacity)
+    ));
+    let mut returned = provider_intent("within-returned");
+    returned.reservation = DispatchReservation {
+        tokens: 377,
+        cost_microunits: 38,
+    };
+    gate.claim_provider_call(&lease, returned, 100).unwrap();
+    assert_eq!(
+        gate.usage("grant-qa").unwrap(),
+        GrantUsage {
+            activations: 1,
+            invocations: 3,
             tokens: 1000,
             cost_microunits: 100
         }
     );
-    assert!(matches!(
-        gate.claim_provider_call(&lease, provider_intent("provider-2"), 100),
-        Err(AuthorityError::Capacity)
-    ));
-    let usage = gate.provider_usage(claim.activation()).unwrap();
-    assert_eq!(usage.tokens, provider_outcome().usage);
-    assert_eq!(usage.cost_microunits, 2);
 }
 
 #[test]
@@ -1155,7 +1395,8 @@ fn provider_stop_race_has_one_durable_order_and_all_late_observations_are_retain
                     .outcome,
                 Some(outcome)
             );
-            assert_eq!(gate.usage("grant-qa").unwrap().tokens, 100);
+            // A late terminal report still settles after Stop and closure.
+            assert_eq!(gate.usage("grant-qa").unwrap().tokens, 23);
         } else {
             assert_eq!(gate.usage("grant-qa").unwrap().invocations, 0);
             assert!(gate.provider_call("race").unwrap().is_none());

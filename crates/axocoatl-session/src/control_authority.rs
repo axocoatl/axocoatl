@@ -316,6 +316,8 @@ pub enum ProviderCallTerminal {
 
 /// Observed accounting, independent of accepted conversation state. An observed
 /// overrun remains evidence even though the entire reservation stays charged.
+/// A terminal response with complete usage (and, for cost, a known cost)
+/// settles its reservation to what it reports; see `ProviderCallRecord::charged`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderCallOutcome {
@@ -343,6 +345,13 @@ pub struct ProviderCallRecord {
     pub grant_revision: u64,
     pub dispatch_scope: String,
     pub outcome: Option<ProviderCallOutcome>,
+    /// What stays charged once the provider reported this call's complete
+    /// usage at its terminal response, and its cost when that is known; the
+    /// rest of the reservation went back to the grant. Absent keeps the whole
+    /// reservation charged: a call still running, one interrupted or whose
+    /// usage or cost is unknown, and every call settled by an earlier build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charged: Option<DispatchReservation>,
 }
 
 /// A single durable provider claim. No duplicate call id can mint another
@@ -393,6 +402,13 @@ struct GrantRecord {
     /// for them. Absent on every other grant and on older stores.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     host_checks: Vec<ConditionPermission>,
+    /// A delegated grant that gives its parent back what it did not use: once
+    /// every activation under it has stopped, the parent is charged the
+    /// child's usage instead of its reserved limits, and a later activation
+    /// reserves them in full again. Absent on every other grant and on
+    /// children reserved by an earlier build, which stay reserved in full.
+    #[serde(default, skip_serializing_if = "is_false")]
+    returns_unused: bool,
 }
 
 /// What a standing-work turn's grant carried: usage its shared allowance had
@@ -635,15 +651,7 @@ impl ControlAuthority {
         {
             return Err(AuthorityError::Invalid("store belongs to another turn"));
         }
-        if data.activations.iter().any(|a| !a.stopped) {
-            data.revision = data
-                .revision
-                .checked_add(1)
-                .ok_or(AuthorityError::Capacity)?;
-            for activation in &mut data.activations {
-                activation.stopped = true;
-            }
-        }
+        stop_reopened_generations(&mut data)?;
         // Reading an uncertain prior rename is not a durability barrier.
         if let Some(namespace) = &namespace {
             namespace.mark_journal_initialized(FILE)?;
@@ -698,6 +706,7 @@ impl ControlAuthority {
             delegated_from: None,
             legacy_standing: None,
             host_checks: vec![],
+            returns_unused: false,
         });
         self.commit(&mut state, next)
     }
@@ -944,6 +953,7 @@ impl ControlAuthority {
             provider_gated: true,
             never_dispatched: true,
         });
+        refresh_usage(&mut next)?;
         self.commit(&mut state, next)
     }
 
@@ -1129,6 +1139,7 @@ impl ControlAuthority {
             grant_revision: lease.grant_revision,
             dispatch_scope: self.scope.clone(),
             outcome: None,
+            charged: None,
         };
         let mut next = state.data.clone();
         let usage = &mut next.grants[index].usage;
@@ -1458,8 +1469,11 @@ impl ControlAuthority {
     }
 
     /// Retain terminal observation before it becomes controller/actor input.
-    /// Stop, revocation and restart do not discard already-incurred usage. No
-    /// budget is refunded, and an exact recorded outcome cannot be replaced.
+    /// Stop, revocation and restart do not discard already-incurred usage. A
+    /// terminal response that reports its complete usage settles the call's
+    /// reservation to it and returns the rest to the grant (and, through a
+    /// finished helper, to its parent); anything unknown stays charged in full.
+    /// An exact recorded outcome cannot be replaced or settled twice.
     pub fn settle_provider_call(
         &self,
         claim: &ProviderCallClaim,
@@ -1526,7 +1540,12 @@ impl ControlAuthority {
             };
         }
         let mut next = state.data.clone();
-        next.provider_calls[index].outcome = Some(outcome.clone());
+        let call = &mut next.provider_calls[index];
+        call.outcome = Some(outcome.clone());
+        call.charged = settled_charge(&call.intent.reservation, outcome);
+        if call.charged.is_some() {
+            refresh_usage(&mut next)?;
+        }
         self.commit(&mut state, next)
     }
 
@@ -1671,8 +1690,9 @@ impl ControlAuthority {
     }
 
     /// Late audit evidence can settle a claimed effect after Stop/turn closure.
-    /// Reservations are retained conservatively; settlement never refunds budget
-    /// or reopens dispatch. A failed tool still has a recorded external outcome.
+    /// A tool's reservation is retained conservatively; its settlement never
+    /// refunds budget or reopens dispatch. A failed tool still has a recorded
+    /// external outcome.
     pub fn settle_dispatch(
         &self,
         invocation: &InvocationId,
@@ -1843,6 +1863,9 @@ impl ControlAuthority {
         check_revision(&state.data, expected_revision)?;
         let mut next = state.data.clone();
         next.activations[index].stopped = true;
+        // A helper with no activation left running gives its parent back
+        // what it did not use.
+        refresh_usage(&mut next)?;
         self.commit(state, next)
     }
 
@@ -1930,6 +1953,24 @@ impl ControlAuthority {
         state.data = next;
         Ok(())
     }
+}
+
+/// Reopening closes every earlier generation's gate. A helper whose activation
+/// ended with the process gives back what it did not use, exactly as a live
+/// Stop would have; its calls without an outcome stay charged in full. A second
+/// reopen finds nothing left to stop or return.
+fn stop_reopened_generations(data: &mut AuthorityData) -> Result<(), AuthorityError> {
+    if data.activations.iter().any(|a| !a.stopped) {
+        data.revision = data
+            .revision
+            .checked_add(1)
+            .ok_or(AuthorityError::Capacity)?;
+        for activation in &mut data.activations {
+            activation.stopped = true;
+        }
+        refresh_usage(data)?;
+    }
+    Ok(())
 }
 
 fn check_revision(data: &AuthorityData, expected: u64) -> Result<(), AuthorityError> {
@@ -2036,6 +2077,7 @@ fn activation_registration_candidate(
 ) -> Result<(AuthorityData, u64), AuthorityError> {
     let index = validate_activation_registration(data, activation, grant_id, profile, now_ms)?;
     let grant_revision = data.grants[index].policy.revision;
+    let reserves_again = returned_to_parent(data, &data.grants[index]);
     let mut next = data.clone();
     next.grants[index].usage.activations += 1;
     next.activations.push(ActivationRecord {
@@ -2047,6 +2089,19 @@ fn activation_registration_candidate(
         provider_gated,
         never_dispatched: false,
     });
+    if reserves_again {
+        // A helper that gave back its unused limits reserves them in full
+        // again before it runs, so it can never spend more than its parent
+        // still holds for it.
+        refresh_usage(&mut next)?;
+        let mut cursor = &next.grants[index];
+        while let Some(reservation) = &cursor.delegated_from {
+            cursor = &next.grants[grant_index(&next, &reservation.parent_grant_id)?];
+            if !within_limits(&cursor.usage, &cursor.policy.limits) {
+                return Err(AuthorityError::Capacity);
+            }
+        }
+    }
     Ok((next, grant_revision))
 }
 
@@ -2457,6 +2512,148 @@ fn provider_bound_violation(record: &ProviderCallRecord) -> bool {
     })
 }
 
+/// What a settled provider call stays charged, or `None` when its whole
+/// reservation stays charged. Only a call that reached its terminal response
+/// settles: its tokens to the complete usage the provider reported, its cost
+/// to a known observed cost. A dimension reported incompletely, or beyond
+/// what was reserved, keeps its reservation; so does an interrupted call.
+fn settled_charge(
+    reserved: &DispatchReservation,
+    outcome: &ProviderCallOutcome,
+) -> Option<DispatchReservation> {
+    if outcome.kind == ProviderCallTerminal::Interrupted {
+        return None;
+    }
+    let usage = &outcome.usage.usage;
+    let tokens = usage
+        .input_tokens
+        .checked_add(usage.output_tokens)
+        .and_then(|total| total.checked_add(usage.reasoning_tokens.unwrap_or(0)))
+        .and_then(|total| u64::try_from(total).ok())
+        .filter(|tokens| outcome.usage.complete && *tokens <= reserved.tokens)
+        .unwrap_or(reserved.tokens);
+    let cost_microunits = outcome
+        .cost_microunits
+        .filter(|cost| outcome.cost_known && *cost <= reserved.cost_microunits)
+        .unwrap_or(reserved.cost_microunits);
+    let charged = DispatchReservation {
+        tokens,
+        cost_microunits,
+    };
+    (charged != *reserved).then_some(charged)
+}
+
+/// Whether a delegated grant has given back what it did not use: it returns
+/// unused limits, at least one activation ran under it, and none still runs.
+fn returned_to_parent(data: &AuthorityData, grant: &GrantRecord) -> bool {
+    let mut activations = data
+        .activations
+        .iter()
+        .filter(|activation| activation.grant_id == grant.policy.id)
+        .peekable();
+    grant.returns_unused
+        && grant.delegated_from.is_some()
+        && activations.peek().is_some()
+        && activations.all(|activation| activation.stopped)
+}
+
+fn within_limits(usage: &GrantUsage, limits: &GrantLimits) -> bool {
+    usage.activations <= limits.activations
+        && usage.invocations <= limits.invocations
+        && usage.tokens <= limits.tokens
+        && usage.cost_microunits <= limits.cost_microunits
+}
+
+/// A grant's usage re-derived from its durable records: activations, tool
+/// claims at their reservations, provider calls at what they stay charged,
+/// check runs, and each delegated child at its reserved limits, or at its own
+/// usage once it has returned the rest. Reload compares this exactly.
+fn derived_usage(data: &AuthorityData, grant: &GrantRecord) -> Result<GrantUsage, AuthorityError> {
+    let mut expected = validate_legacy_standing(data, grant)?;
+    expected.activations = expected
+        .activations
+        .checked_add(
+            data.activations
+                .iter()
+                .filter(|a| a.grant_id == grant.policy.id && !a.never_dispatched)
+                .count() as u32,
+        )
+        .ok_or(AuthorityError::Capacity)?;
+    let claims = data
+        .claims
+        .iter()
+        .filter(|claim| claim.grant_id == grant.policy.id)
+        .map(|claim| &claim.reservation);
+    let provider_calls = data
+        .provider_calls
+        .iter()
+        .filter(|call| call.grant_id == grant.policy.id)
+        .map(|call| call.charged.as_ref().unwrap_or(&call.intent.reservation));
+    for charged in claims.chain(provider_calls) {
+        expected.invocations = expected
+            .invocations
+            .checked_add(1)
+            .ok_or(AuthorityError::Capacity)?;
+        expected.tokens = expected
+            .tokens
+            .checked_add(charged.tokens)
+            .ok_or(AuthorityError::Capacity)?;
+        expected.cost_microunits = expected
+            .cost_microunits
+            .checked_add(charged.cost_microunits)
+            .ok_or(AuthorityError::Capacity)?;
+    }
+    let checks = data
+        .condition_calls
+        .iter()
+        .filter(|call| call.grant.grant_id.as_str() == grant.policy.id)
+        .count();
+    expected.invocations = u32::try_from(checks)
+        .ok()
+        .and_then(|checks| expected.invocations.checked_add(checks))
+        .ok_or(AuthorityError::Capacity)?;
+    for child in &data.grants {
+        let Some(reservation) = child
+            .delegated_from
+            .as_ref()
+            .filter(|reservation| reservation.parent_grant_id == grant.policy.id)
+        else {
+            continue;
+        };
+        let charged = if returned_to_parent(data, child) {
+            GrantLimits {
+                activations: child.usage.activations,
+                invocations: child.usage.invocations,
+                tokens: child.usage.tokens,
+                cost_microunits: child.usage.cost_microunits,
+            }
+        } else {
+            reservation.limits.clone()
+        };
+        expected = delegation::add_reserved_limits(&expected, &charged)?;
+    }
+    Ok(expected)
+}
+
+/// Bring every grant's stored usage to what its records now derive, children
+/// before the parents that are charged their usage.
+fn refresh_usage(data: &mut AuthorityData) -> Result<(), AuthorityError> {
+    for _ in 0..=MAX_GRANTS {
+        let mut changed = false;
+        for index in 0..data.grants.len() {
+            let usage = derived_usage(data, &data.grants[index])?;
+            if usage != data.grants[index].usage {
+                data.grants[index].usage = usage;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(());
+        }
+    }
+    Err(AuthorityError::Invalid("delegated usage does not settle"))
+}
+
 // Shared with the existing-only historical reader. Callers must first verify
 // the owned journal/turn and validate_data; an absent authority is never zero.
 fn provider_usage_for(
@@ -2861,6 +3058,18 @@ fn validate_data(data: &AuthorityData) -> Result<(), AuthorityError> {
         if let Some(outcome) = &call.outcome {
             validate_provider_outcome(outcome)?;
         }
+        // A returned reservation must be exactly what its own outcome settles.
+        if call.charged.is_some()
+            && call
+                .outcome
+                .as_ref()
+                .and_then(|outcome| settled_charge(&call.intent.reservation, outcome))
+                != call.charged
+        {
+            return Err(AuthorityError::Invalid(
+                "provider settlement differs from its observed outcome",
+            ));
+        }
     }
     let mut condition_ids = HashSet::new();
     for call in &data.condition_calls {
@@ -2891,64 +3100,18 @@ fn validate_data(data: &AuthorityData) -> Result<(), AuthorityError> {
     }
     for grant in &data.grants {
         checks::validate_host_checks(data, grant)?;
-        let mut expected = validate_legacy_standing(data, grant)?;
-        expected.activations = expected
-            .activations
-            .checked_add(
-                data.activations
-                    .iter()
-                    .filter(|a| a.grant_id == grant.policy.id && !a.never_dispatched)
-                    .count() as u32,
-            )
-            .ok_or(AuthorityError::Capacity)?;
-        for claim in data.claims.iter().filter(|c| c.grant_id == grant.policy.id) {
-            expected.invocations += 1;
-            expected.tokens = expected
-                .tokens
-                .checked_add(claim.reservation.tokens)
-                .ok_or(AuthorityError::Capacity)?;
-            expected.cost_microunits = expected
-                .cost_microunits
-                .checked_add(claim.reservation.cost_microunits)
-                .ok_or(AuthorityError::Capacity)?;
-        }
-        for call in data
-            .provider_calls
-            .iter()
-            .filter(|call| call.grant_id == grant.policy.id)
+        if grant.returns_unused
+            && (grant.delegated_from.is_none()
+                || (returned_to_parent(data, grant)
+                    && !grant.delegated_from.as_ref().is_some_and(|reservation| {
+                        within_limits(&grant.usage, &reservation.limits)
+                    })))
         {
-            expected.invocations = expected
-                .invocations
-                .checked_add(1)
-                .ok_or(AuthorityError::Capacity)?;
-            expected.tokens = expected
-                .tokens
-                .checked_add(call.intent.reservation.tokens)
-                .ok_or(AuthorityError::Capacity)?;
-            expected.cost_microunits = expected
-                .cost_microunits
-                .checked_add(call.intent.reservation.cost_microunits)
-                .ok_or(AuthorityError::Capacity)?;
+            return Err(AuthorityError::Invalid(
+                "returned delegated usage exceeds its reservation",
+            ));
         }
-        for _ in data
-            .condition_calls
-            .iter()
-            .filter(|call| call.grant.grant_id.as_str() == grant.policy.id)
-        {
-            expected.invocations = expected
-                .invocations
-                .checked_add(1)
-                .ok_or(AuthorityError::Capacity)?;
-        }
-        for child in data
-            .grants
-            .iter()
-            .filter_map(|child| child.delegated_from.as_ref())
-            .filter(|reservation| reservation.parent_grant_id == grant.policy.id)
-        {
-            expected = delegation::add_reserved_limits(&expected, &child.limits)?;
-        }
-        if expected != grant.usage {
+        if derived_usage(data, grant)? != grant.usage {
             return Err(AuthorityError::Invalid(
                 "usage does not match retained reservations",
             ));
@@ -3147,7 +3310,8 @@ mod provider_tests {
         reopened.settle_provider_call(&claim, &outcome()).unwrap();
         drop(reopened);
         let again = ControlAuthority::open_owned(namespace()).unwrap();
-        assert_eq!(again.usage(&grant_id).unwrap().tokens, 990);
+        // The call settled to the 20 tokens it reported.
+        assert_eq!(again.usage(&grant_id).unwrap().tokens, 970);
         drop(again);
         // Every field it was written with is kept when the store is rewritten.
         let rewritten: serde_json::Value =
@@ -3687,6 +3851,7 @@ mod provider_tests {
                     grant_revision: 1,
                     dispatch_scope: "historical".into(),
                     outcome: None,
+                    charged: None,
                 }),
                 _ => panic!("unknown case"),
             }
@@ -4153,6 +4318,22 @@ mod provider_tests {
             cost_known: false,
         };
         assert!(serde_json::to_vec(&maximal).unwrap().len() < PROVIDER_OUTCOME_RESERVE);
+        // A settled report also records what stays charged; both fit.
+        let settled = ProviderCallOutcome {
+            kind: ProviderCallTerminal::Completed,
+            cost_known: true,
+            ..maximal.clone()
+        };
+        let charge = DispatchReservation {
+            tokens: u64::MAX,
+            cost_microunits: u64::MAX,
+        };
+        assert!(
+            serde_json::to_vec(&settled).unwrap().len()
+                + r#","charged":"#.len()
+                + serde_json::to_vec(&charge).unwrap().len()
+                < PROVIDER_OUTCOME_RESERVE
+        );
         gate.settle_provider_call(&claim, &maximal).unwrap();
         assert!(std::fs::read(root.path().join(FILE)).unwrap().len() <= gate.capacity_bytes);
         drop(gate);
@@ -4204,7 +4385,9 @@ mod provider_tests {
         assert_eq!(usage.calls, 2);
         assert_eq!(usage.cost_microunits, 2);
         assert!(!usage.cost_known);
-        assert_eq!(gate.usage("grant").unwrap().tokens, 200);
+        // The completed call settled to its 20 reported tokens; the
+        // interrupted one keeps its whole reservation.
+        assert_eq!(gate.usage("grant").unwrap().tokens, 120);
     }
 
     #[test]
@@ -4311,6 +4494,324 @@ mod provider_tests {
         assert!(!aggregate.cost_known);
         assert_eq!(aggregate.unsettled_calls, 1);
         assert!(!aggregate.tokens.complete);
+    }
+
+    fn helper_template() -> DefinitionSnapshotRef {
+        DefinitionSnapshotRef {
+            definition_id: AgentDefinitionId::new("definition").unwrap(),
+            snapshot: EvidenceRef::new("template").unwrap(),
+        }
+    }
+
+    fn helper_limits() -> GrantLimits {
+        GrantLimits {
+            activations: 2,
+            invocations: 4,
+            tokens: 600,
+            cost_microunits: 60,
+        }
+    }
+
+    /// Helper `index`'s grant and its reservation from the lead's grant.
+    fn helper_grant(
+        index: u32,
+        lead: &ActivationLease,
+    ) -> (AuthorityGrant, DelegatedGrantReservation) {
+        let reservation = DelegatedGrantReservation {
+            parent_grant_id: "grant".into(),
+            parent_grant_revision: 1,
+            parent_activation: lead.activation.clone(),
+            command_id: CommandId::new(format!("add-helper-{index}")).unwrap(),
+            template: helper_template(),
+            admission_evidence: EvidenceRef::new(format!("helper-admission-{index}")).unwrap(),
+            limits: helper_limits(),
+        };
+        let grant = AuthorityGrant {
+            id: format!("helper-grant-{index}"),
+            revision: 1,
+            issuer_evidence: reservation.admission_evidence.clone(),
+            holder: TurnNodeId::new(format!("helper-{index}")).unwrap(),
+            descendants: vec![],
+            allow_stop_descendants: false,
+            delegation: None,
+            profiles: vec![profile()],
+            conditions: vec![],
+            limits: helper_limits(),
+            expires_at_ms: 1000,
+        };
+        (grant, reservation)
+    }
+
+    fn helper_activation(index: u32, generation: u32) -> ActivationRef {
+        ActivationRef {
+            generation,
+            node_id: TurnNodeId::new(format!("helper-{index}")).unwrap(),
+            activation_id: ActivationId::new(format!("helper-{index}-{generation}")).unwrap(),
+            ..activation("a")
+        }
+    }
+
+    fn usage(activations: u32, invocations: u32, tokens: u64, cost: u64) -> GrantUsage {
+        GrantUsage {
+            activations,
+            invocations,
+            tokens,
+            cost_microunits: cost,
+        }
+    }
+
+    /// The stored authority as a reload reads it: every grant's usage must
+    /// re-derive exactly from its records.
+    fn reloaded(gate: &ControlAuthority) -> AuthorityData {
+        let bytes = serde_json::to_vec(&gate.lock().unwrap().data).unwrap();
+        let data: AuthorityData = serde_json::from_slice(&bytes).unwrap();
+        validate_data(&data).unwrap();
+        data
+    }
+
+    fn grant_usage(data: &AuthorityData, id: &str) -> GrantUsage {
+        data.grants[grant_index(data, id).unwrap()].usage.clone()
+    }
+
+    /// A helper's limits are held in full while it runs. When its activation
+    /// ends the lead is charged only what the helper used, so the lead can
+    /// admit another helper; running the helper again reserves them again.
+    #[test]
+    fn finished_helper_returns_its_unused_limits_to_the_lead() {
+        let (_root, gate, lead, _) =
+            delegation_fixture(DelegatedOperation::AddAgent, vec![helper_template()]);
+        // The lead grant holds 1000 tokens; two activations are registered.
+        let (first, first_reservation) = helper_grant(1, &lead);
+        let (second, second_reservation) = helper_grant(2, &lead);
+        gate.reserve_child_grant(
+            &lead,
+            first,
+            first_reservation,
+            gate.revision().unwrap(),
+            100,
+        )
+        .unwrap();
+        assert_eq!(gate.usage("grant").unwrap(), usage(4, 4, 600, 60));
+        assert!(
+            matches!(
+                gate.validate_child_grant(&lead, &second, &second_reservation, 100),
+                Err(AuthorityError::Capacity)
+            ),
+            "a second helper does not fit while the first holds its limits"
+        );
+        let helper = gate
+            .register_provider_activation(
+                helper_activation(1, 1),
+                "helper-grant-1",
+                profile(),
+                gate.revision().unwrap(),
+                100,
+            )
+            .unwrap();
+        let claim = gate
+            .claim_provider_call(&helper, intent("helper-call"), 100)
+            .unwrap();
+        gate.settle_provider_call(&claim, &outcome()).unwrap();
+        assert_eq!(gate.usage("helper-grant-1").unwrap(), usage(1, 1, 20, 2));
+        assert_eq!(
+            gate.usage("grant").unwrap(),
+            usage(4, 4, 600, 60),
+            "a running helper keeps its whole reservation"
+        );
+        gate.stop_activation(&helper_activation(1, 1), gate.revision().unwrap())
+            .unwrap();
+        assert_eq!(
+            gate.usage("grant").unwrap(),
+            usage(3, 1, 20, 2),
+            "the lead is charged what the helper used"
+        );
+        let revision = gate.revision().unwrap();
+        gate.stop_activation(&helper_activation(1, 1), revision)
+            .unwrap();
+        assert_eq!(
+            gate.revision().unwrap(),
+            revision,
+            "a repeated Stop returns nothing"
+        );
+        assert_eq!(gate.usage("grant").unwrap(), usage(3, 1, 20, 2));
+
+        gate.reserve_child_grant(
+            &lead,
+            second,
+            second_reservation,
+            gate.revision().unwrap(),
+            100,
+        )
+        .unwrap();
+        assert_eq!(gate.usage("grant").unwrap(), usage(5, 5, 620, 62));
+        let data = reloaded(&gate);
+        for id in ["grant", "helper-grant-1", "helper-grant-2"] {
+            assert_eq!(grant_usage(&data, id), gate.usage(id).unwrap(), "{id}");
+        }
+
+        // Running the first helper again needs its limits back in full,
+        // which do not fit beside the second helper's.
+        assert!(matches!(
+            gate.register_provider_activation(
+                helper_activation(1, 2),
+                "helper-grant-1",
+                profile(),
+                gate.revision().unwrap(),
+                100,
+            ),
+            Err(AuthorityError::Capacity)
+        ));
+        let second_helper = helper_activation(2, 1);
+        gate.register_provider_activation(
+            second_helper.clone(),
+            "helper-grant-2",
+            profile(),
+            gate.revision().unwrap(),
+            100,
+        )
+        .unwrap();
+        gate.stop_activation(&second_helper, gate.revision().unwrap())
+            .unwrap();
+        assert_eq!(gate.usage("grant").unwrap(), usage(4, 1, 20, 2));
+        let again = gate
+            .register_provider_activation(
+                helper_activation(1, 2),
+                "helper-grant-1",
+                profile(),
+                gate.revision().unwrap(),
+                100,
+            )
+            .unwrap();
+        assert_eq!(
+            gate.usage("grant").unwrap(),
+            usage(5, 4, 600, 60),
+            "running again reserves the helper's limits in full"
+        );
+        assert_eq!(gate.usage("helper-grant-1").unwrap(), usage(2, 1, 20, 2));
+        // It can spend only what its own reservation still holds.
+        let mut too_large = intent("beyond-helper");
+        too_large.reservation.tokens = 581;
+        assert!(matches!(
+            gate.claim_provider_call(&again, too_large, 100),
+            Err(AuthorityError::Capacity)
+        ));
+        reloaded(&gate);
+    }
+
+    /// A helper's late provider report after its activation ended still
+    /// settles, and the lead gets the returned part too. A helper that ended
+    /// with the process returns what it did not use exactly once, and a call
+    /// it never settled stays charged in full.
+    #[test]
+    fn helper_returns_survive_late_settlement_and_a_crash_without_double_release() {
+        let (_root, gate, lead, _) =
+            delegation_fixture(DelegatedOperation::AddAgent, vec![helper_template()]);
+        let (first, reservation) = helper_grant(1, &lead);
+        gate.reserve_child_grant(&lead, first, reservation, gate.revision().unwrap(), 100)
+            .unwrap();
+        let helper = gate
+            .register_provider_activation(
+                helper_activation(1, 1),
+                "helper-grant-1",
+                profile(),
+                gate.revision().unwrap(),
+                100,
+            )
+            .unwrap();
+        let late = gate
+            .claim_provider_call(&helper, intent("late"), 100)
+            .unwrap();
+        gate.stop_activation(&helper_activation(1, 1), gate.revision().unwrap())
+            .unwrap();
+        assert_eq!(
+            gate.usage("grant").unwrap(),
+            usage(3, 1, 100, 10),
+            "a call without an outcome stays charged in full"
+        );
+        gate.settle_provider_call(&late, &outcome()).unwrap();
+        assert_eq!(gate.usage("helper-grant-1").unwrap(), usage(1, 1, 20, 2));
+        assert_eq!(gate.usage("grant").unwrap(), usage(3, 1, 20, 2));
+        reloaded(&gate);
+
+        // A crash between a helper's claim and its settlement.
+        let (_root, gate, lead, _) =
+            delegation_fixture(DelegatedOperation::AddAgent, vec![helper_template()]);
+        let (first, reservation) = helper_grant(1, &lead);
+        gate.reserve_child_grant(&lead, first, reservation, gate.revision().unwrap(), 100)
+            .unwrap();
+        let helper = gate
+            .register_provider_activation(
+                helper_activation(1, 1),
+                "helper-grant-1",
+                profile(),
+                gate.revision().unwrap(),
+                100,
+            )
+            .unwrap();
+        let _lost = gate
+            .claim_provider_call(&helper, intent("lost"), 100)
+            .unwrap();
+        let mut data = reloaded(&gate);
+        assert_eq!(grant_usage(&data, "grant"), usage(4, 4, 600, 60));
+        stop_reopened_generations(&mut data).unwrap();
+        validate_data(&data).unwrap();
+        assert_eq!(grant_usage(&data, "helper-grant-1"), usage(1, 1, 100, 10));
+        assert_eq!(grant_usage(&data, "grant"), usage(3, 1, 100, 10));
+        let reopened = serde_json::to_vec(&data).unwrap();
+        stop_reopened_generations(&mut data).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&data).unwrap(),
+            reopened,
+            "a second reopen neither stops nor returns anything"
+        );
+        let reloaded: AuthorityData = serde_json::from_slice(&reopened).unwrap();
+        validate_data(&reloaded).unwrap();
+        assert_eq!(grant_usage(&reloaded, "grant"), usage(3, 1, 100, 10));
+    }
+
+    /// A helper reserved before unused limits were returned keeps its whole
+    /// reservation, and its store reloads byte for byte.
+    #[test]
+    fn helper_reserved_by_an_earlier_build_stays_reserved_in_full() {
+        let (_root, gate, lead, _) =
+            delegation_fixture(DelegatedOperation::AddAgent, vec![helper_template()]);
+        let (first, reservation) = helper_grant(1, &lead);
+        gate.reserve_child_grant(&lead, first, reservation, gate.revision().unwrap(), 100)
+            .unwrap();
+        let index = grant_index(&gate.lock().unwrap().data, "helper-grant-1").unwrap();
+        let bytes = serde_json::to_vec(&gate.lock().unwrap().data).unwrap();
+        assert_eq!(
+            String::from_utf8(bytes.clone())
+                .unwrap()
+                .matches(r#""returns_unused":true"#)
+                .count(),
+            1
+        );
+        // As an earlier build wrote it.
+        gate.lock().unwrap().data.grants[index].returns_unused = false;
+        let old = serde_json::to_vec(&gate.lock().unwrap().data).unwrap();
+        assert!(!String::from_utf8(old.clone())
+            .unwrap()
+            .contains("returns_unused"));
+        let data: AuthorityData = serde_json::from_slice(&old).unwrap();
+        validate_data(&data).unwrap();
+        assert_eq!(serde_json::to_vec(&data).unwrap(), old);
+        gate.register_provider_activation(
+            helper_activation(1, 1),
+            "helper-grant-1",
+            profile(),
+            gate.revision().unwrap(),
+            100,
+        )
+        .unwrap();
+        gate.stop_activation(&helper_activation(1, 1), gate.revision().unwrap())
+            .unwrap();
+        assert_eq!(gate.usage("grant").unwrap(), usage(4, 4, 600, 60));
+        reloaded(&gate);
+        // A grant that is not a helper cannot claim to return anything.
+        let mut forged = reloaded(&gate);
+        forged.grants[0].returns_unused = true;
+        assert!(validate_data(&forged).is_err());
     }
 
     fn scoped_profile(write_scope: Option<&[&str]>) -> ExecutionProfile {
