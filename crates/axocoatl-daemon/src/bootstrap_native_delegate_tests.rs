@@ -802,6 +802,23 @@ async fn lead_delegates_to_read_only_helper_and_receives_bounded_result() {
         .find(|tool| tool.name == "delegate")
         .expect("the lead is offered delegate");
     assert!(tool.description.contains("- scout: no tools"));
+    assert!(
+        tool.description
+            .contains("find the relevant code and tests")
+            && tool
+                .description
+                .contains("review your change against the task"),
+        "the lead is told when a helper helps: {}",
+        tool.description
+    );
+    assert!(
+        tool.description.contains("steps and")
+            && tool
+                .description
+                .contains("a step is one model call or one tool call"),
+        "{}",
+        tool.description
+    );
     assert_eq!(
         tool.parameters["properties"]["helper"]["enum"],
         serde_json::json!(["scout"])
@@ -2012,7 +2029,7 @@ async fn helper_that_leaves_the_lead_too_little_is_refused(
 async fn helper_that_leaves_the_lead_too_few_invocations_is_refused() {
     // One provider call and the delegate call are spent; the helper's 4
     // would use the rest, leaving no call to read its answer.
-    helper_that_leaves_the_lead_too_little_is_refused(100000, 6, "0 tool calls").await;
+    helper_that_leaves_the_lead_too_little_is_refused(100000, 6, "0 steps").await;
 }
 
 #[tokio::test]

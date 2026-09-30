@@ -142,6 +142,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tool only when its `tools` list includes `workspace_knowledge`; the default team does not
   list it. Its description no longer suggests that an Agent may not change code, and it
   tells the Agent not to report its work or final answer through it.
+- **Default team prompts and `delegate` guide the lead to use its helpers.** The `delegate`
+  description tells the lead to ask a helper to find the relevant code and tests before a
+  change and to review the change against the task, documented contracts and tests before
+  it finishes. Helper limits are stated in steps, where a step is one model call or one
+  tool call, instead of "tool calls". The default Lead prompt says to look first, make the
+  change, run the check command from `AXOCOATL.md` and have reviewer review the diff; the
+  Reviewer prompt and the required review ask for every documented contract and edge case
+  to be checked one by one.
 - **Multi-Agent turns on a 1.0 data root require the Session upgrade.** On a data root
   that still uses the 1.0 format, a Session turn that would run two or more Agents is
   refused before it starts, with a message to stop Axocoatl, make a cold backup, and run

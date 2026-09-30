@@ -181,12 +181,7 @@ fn refusal(helper: &str, limits: Option<&GrantLimits>, failure: &CommandFailure)
         .unwrap_or(&failure.message);
     if reason == AuthorityError::Capacity.to_string() {
         let limits = limits
-            .map(|limits| {
-                format!(
-                    " ({} tool calls, {} tokens)",
-                    limits.invocations, limits.tokens
-                )
-            })
+            .map(|limits| format!(" ({} steps, {} tokens)", limits.invocations, limits.tokens))
             .unwrap_or_default();
         return format!(
             "The helper '{helper}' was not started: its limits{limits} do not fit in what is left \
@@ -367,9 +362,9 @@ impl DispatchState {
             ""
         };
         Ok(Some(format!(
-            "The helper '{helper}' was not started: after reserving its limits ({} tool calls, \
-             {} tokens) you would have {invocations} tool calls and {tokens} tokens left, not \
-             enough to read its answer; that needs at least {needed} tool calls{held} and {} \
+            "The helper '{helper}' was not started: after reserving its limits ({} steps, \
+             {} tokens) you would have {invocations} steps and {tokens} tokens left, not \
+             enough to read its answer; that needs at least {needed} steps{held} and {} \
              tokens.{cost} Do this part yourself, or write your final answer now.",
             limits.invocations, limits.tokens, call.tokens
         )))
@@ -660,21 +655,22 @@ impl SessionDispatchController {
                 tools
             };
             lines.push(format!(
-                "- {}: {tools}; up to {} tool calls and {} tokens.",
+                "- {}: {tools}; up to {} steps and {} tokens.",
                 worker.template_id, worker.limits.invocations, worker.limits.tokens
             ));
             helpers.push(worker.template_id);
         }
         let description = format!(
-            "Hand one self-contained task to a read-only helper Agent and wait for its answer. \
-             The helper starts fresh: it sees the Session's request and your task, not this \
-             conversation, so put every detail it needs in the task and say what to report \
-             back. Calling the same helper with the same task again in this turn returns the \
-             earlier result instead of running it again; a call whose helper was not started \
-             is tried again. Several delegate calls in one response run their helpers at the \
-             same time. Answers longer than {MAX_ANSWER_BYTES} bytes are cut. Each helper's \
-             limits come out of your own budget, so delegate only work that needs a separate \
-             look.\nHelpers:\n{}",
+            "Give one task to a read-only helper Agent and wait for its answer. Use helpers \
+             to do better work: before you change code, ask one to find the relevant code \
+             and tests; before you finish, ask one to review your change against the task, \
+             the documented contracts and edge cases, and the tests, then fix what it \
+             reports. A helper starts fresh: it sees the Session's request and your task, \
+             not this conversation, so put in the task every detail it needs (files, what \
+             you changed, what to report). Its limits come out of your budget; a step is one \
+             model call or one tool call. The same task to the same helper again returns the \
+             earlier answer. Several delegate calls in one response run at the same time. \
+             Answers over {MAX_ANSWER_BYTES} bytes are cut.\nHelpers:\n{}",
             lines.join("\n")
         );
         Ok(Some(Arc::new(DelegateTool {

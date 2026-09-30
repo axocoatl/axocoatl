@@ -586,14 +586,16 @@ fn default_team_agents(provider_id: &str, model: &str, max_tokens: Option<u32>) 
     )
 }
 
-const LEAD_PROMPT: &str = "You own this change. Read the relevant code before you edit it. \
-    Delegate a focused read-only question to scout. Before you finish, ask reviewer for an \
-    independent review of your change and fix what it finds. Verify with the tests, then \
-    summarize what you changed.";
+const LEAD_PROMPT: &str = "You own this change. 1. Look first: for code you do not know, ask \
+    scout to find the relevant files and tests. 2. Make the change. 3. Run the check command \
+    from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Ask \
+    reviewer to review your diff against the task and fix what it finds. Then summarize what \
+    you changed.";
 const SCOUT_PROMPT: &str = "Answer the lead's question with file paths, line numbers and short \
     evidence. Change nothing.";
-const REVIEWER_PROMPT: &str = "Review the described change against the code, docs and tests. \
-    Report each concrete defect with file:line, or say you found none. Change nothing.";
+const REVIEWER_PROMPT: &str = "Review the described change. Check it against the task and \
+    against every contract and edge case the docs, comments and tests describe, one by one. \
+    Report each defect with file:line, or say you found none. Change nothing.";
 
 /// The Ollama model `init` configures and `onboard` offers first.
 const DEFAULT_OLLAMA_MODEL: &str = "llama3.2";
@@ -3077,7 +3079,12 @@ mod tests {
         );
         assert_eq!(lead.writes, None, "the lead may change any file");
         let prompt = lead.system_prompt.as_deref().unwrap();
-        assert!(prompt.contains("to scout") && prompt.contains("ask reviewer"));
+        assert!(
+            prompt.contains("ask scout")
+                && prompt.contains("AXOCOATL.md")
+                && prompt.contains("Ask reviewer"),
+            "{prompt}"
+        );
         for helper in &config.agents[1..3] {
             assert!(matches!(
                 helper.role,
