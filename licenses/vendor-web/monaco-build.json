@@ -3,16 +3,16 @@
   "source_archive": "https://github.com/microsoft/monaco-editor/archive/refs/tags/v0.56.0.tar.gz",
   "source_archive_sha256": "7282491a7552982e7038a8c0149688dfb7b332e42aa1e8764081b006c01aeae4",
   "monaco_editor_core": "0.56.0-dev-20260625",
-  "dompurify": "3.4.13",
+  "dompurify": "3.4.16",
   "upstream_bundled_dompurify_issue": "https://github.com/microsoft/monaco-editor/issues/5454",
-  "dompurify_security_advisory": "https://github.com/cure53/DOMPurify/security/advisories/GHSA-55q2-fjhq-7xh7",
-  "dompurify_advisory_affected": "<=3.4.12",
-  "dompurify_advisory_fixed": "3.4.13",
+  "dompurify_security_advisory": "https://github.com/cure53/DOMPurify/security/advisories/GHSA-p98j-92pf-mc4p",
+  "dompurify_advisory_affected": ">=3.4.13 <=3.4.15",
+  "dompurify_advisory_fixed": "3.4.16",
   "dompurify_source": "node_modules/dompurify/dist/purify.es.mjs",
-  "dompurify_source_sha256": "1939de7b9b248a4ffdf7f8065af45116a1babb96362eaf84d8f9fc3756c26fad",
+  "dompurify_source_sha256": "c44274a7959cfdd4da871fa78a5d5fbbef55db68d118c5c0833bc4b5cf9633ad",
   "patched_core_path": "node_modules/monaco-editor-core/esm/vs/base/browser/dompurify/dompurify.js",
   "build_steps": [
-    "npm pkg set overrides.dompurify=3.4.13",
+    "npm pkg set overrides.dompurify=3.4.16",
     "npm install --ignore-scripts",
     "npm run build-lsp",
     "npm pkg set module=out/index.js --prefix monaco-lsp-client",
@@ -20,7 +20,7 @@
     "run npx vite build from build/amd"
   ],
   "payload_files": 151,
-  "entry_chunk": "editor-DlouNB45.js",
-  "entry_chunk_sha256": "f2bae23fb513e630633113ba529f5131bbe2da121a11a6d2856393752f47ddee",
-  "editor_main_sha256": "ccc9e0db3ba344596d29c4739f940e329c970af6e72755fac04faf8f1886c3b2"
+  "entry_chunk": "editor-BwtqAkxV.js",
+  "entry_chunk_sha256": "203277dfaf4d54f3c431a3d8a1a1466d813636e8a538e9c7d602efeb58ef91ab",
+  "editor_main_sha256": "b576a1722253787f19d3075c8265994a8c3aa7e36908827e2165505ca03d2614"
 }

@@ -141,14 +141,14 @@ AXO_LOCK_MONACO_VERSION="$(jq -r '.packages["node_modules/monaco-editor"].versio
 [ "$AXO_LOCK_MONACO_VERSION" = "0.56.0" ] \
   || fail "expected audited Monaco 0.56.0, found '$AXO_LOCK_MONACO_VERSION'"
 AXO_LOCK_DOMPURIFY_VERSION="$(jq -r '.packages["node_modules/dompurify"].version // empty' "$AXO_VENDOR_WEB_LOCK")"
-[ "$AXO_LOCK_DOMPURIFY_VERSION" = "3.4.13" ] \
-  || fail "expected audited DOMPurify 3.4.13, found '$AXO_LOCK_DOMPURIFY_VERSION'"
+[ "$AXO_LOCK_DOMPURIFY_VERSION" = "3.4.16" ] \
+  || fail "expected audited DOMPurify 3.4.16, found '$AXO_LOCK_DOMPURIFY_VERSION'"
 AXO_LOCK_MARKDOWN_IT_VERSION="$(jq -r '.packages["node_modules/markdown-it"].version // empty' "$AXO_VENDOR_WEB_LOCK")"
 [ "$AXO_LOCK_MARKDOWN_IT_VERSION" = "14.3.2" ] \
   || fail "expected audited markdown-it 14.3.2, found '$AXO_LOCK_MARKDOWN_IT_VERSION'"
 AXO_OVERRIDE_DOMPURIFY_VERSION="$(jq -r '.overrides["monaco-editor"].dompurify // empty' "$AXO_VENDOR_WEB_DIR/package.json")"
-[ "$AXO_OVERRIDE_DOMPURIFY_VERSION" = "3.4.13" ] \
-  || fail "Monaco must remain overridden to audited DOMPurify 3.4.13"
+[ "$AXO_OVERRIDE_DOMPURIFY_VERSION" = "3.4.16" ] \
+  || fail "Monaco must remain overridden to audited DOMPurify 3.4.16"
 
 AXO_BUILD_MONACO_VERSION="$(jq -r '.monaco_editor // empty' "$AXO_MONACO_BUILD")"
 [ "$AXO_BUILD_MONACO_VERSION" = "$AXO_LOCK_MONACO_VERSION" ] \
@@ -160,11 +160,11 @@ AXO_BUILD_DOMPURIFY_FIXED="$(jq -r '.dompurify_advisory_fixed // empty' "$AXO_MO
 [ "$AXO_BUILD_DOMPURIFY_FIXED" = "$AXO_LOCK_DOMPURIFY_VERSION" ] \
   || fail "DOMPurify advisory floor and audit lock disagree"
 AXO_BUILD_DOMPURIFY_AFFECTED="$(jq -r '.dompurify_advisory_affected // empty' "$AXO_MONACO_BUILD")"
-[ "$AXO_BUILD_DOMPURIFY_AFFECTED" = '<=3.4.12' ] \
+[ "$AXO_BUILD_DOMPURIFY_AFFECTED" = '>=3.4.13 <=3.4.15' ] \
   || fail "DOMPurify reviewed advisory range is missing from build metadata"
 AXO_BUILD_DOMPURIFY_ADVISORY="$(jq -r '.dompurify_security_advisory // empty' "$AXO_MONACO_BUILD")"
 [ "$AXO_BUILD_DOMPURIFY_ADVISORY" = \
-  'https://github.com/cure53/DOMPurify/security/advisories/GHSA-55q2-fjhq-7xh7' ] \
+  'https://github.com/cure53/DOMPurify/security/advisories/GHSA-p98j-92pf-mc4p' ] \
   || fail "DOMPurify reviewed advisory provenance is missing from build metadata"
 AXO_BUILD_MONACO_ISSUE="$(jq -r '.upstream_bundled_dompurify_issue // empty' "$AXO_MONACO_BUILD")"
 [ "$AXO_BUILD_MONACO_ISSUE" = \
@@ -183,7 +183,7 @@ AXO_MONACO_ENTRY_FILE="$AXO_REPO_ROOT/axocoatl-server/static/vendor/monaco/vs/$A
 AXO_MONACO_ENTRY_EXPECTED="$(jq -r '.entry_chunk_sha256 // empty' "$AXO_MONACO_BUILD")"
 AXO_MONACO_ENTRY_ACTUAL="$(sha256_file "$AXO_MONACO_ENTRY_FILE")"
 [ "$AXO_MONACO_ENTRY_ACTUAL" = "$AXO_MONACO_ENTRY_EXPECTED" ] \
-  || fail "Monaco entry chunk does not match the reviewed DOMPurify 3.4.13 build"
+  || fail "Monaco entry chunk does not match the reviewed DOMPurify 3.4.16 build"
 AXO_EDITOR_MAIN_FILE="$AXO_REPO_ROOT/axocoatl-server/static/vendor/monaco/vs/editor/editor.main.js"
 [ -f "$AXO_EDITOR_MAIN_FILE" ] || fail "Monaco editor.main.js is missing"
 AXO_EDITOR_MAIN_EXPECTED="$(jq -r '.editor_main_sha256 // empty' "$AXO_MONACO_BUILD")"
@@ -199,10 +199,10 @@ for AXO_MONACO_NOTICE_MARKER in \
     || fail "Monaco upstream third-party notice is incomplete: $AXO_MONACO_NOTICE_MARKER"
 done
 grep -Fq 'Mozilla Public License Version 2.0' \
-  "$AXO_REPO_ROOT/licenses/vendor/dompurify-3.4.13-MPL-2.0.txt" \
+  "$AXO_REPO_ROOT/licenses/vendor/dompurify-3.4.16-MPL-2.0.txt" \
   || fail "DOMPurify MPL-2.0 text is missing"
 grep -Fq 'Copyright (c) Cure53 and other contributors.' \
-  "$AXO_REPO_ROOT/licenses/vendor/dompurify-3.4.13-NOTICE.txt" \
+  "$AXO_REPO_ROOT/licenses/vendor/dompurify-3.4.16-NOTICE.txt" \
   || fail "DOMPurify copyright attribution is missing"
 
 (cd "$AXO_VENDOR_WEB_DIR" && npm audit --package-lock-only --omit=dev --audit-level=low)
