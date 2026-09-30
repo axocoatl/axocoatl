@@ -217,7 +217,7 @@ model-facing `coordination_control` tool, the external harness adapter and the
   `**/manifest*.js`) silently found no files. Patterns now follow the same rules as
   write scopes: `*` and `?` stay within one path segment, `**` spans directories, a
   pattern without `/` matches a file name at any depth, and one with `/` is matched
-  from the repository root. Results are sorted, relative to the root (no leading
+  from the repository root (so `./*.js` names only the root's). Results are sorted, relative to the root (no leading
   `./`), and skip `.git`, `node_modules`, `target` and similar directories unless the
   pattern names them; when nothing matches, the result says so and how patterns are
   read. Patterns are limited to 1 KiB, and path matching (write scopes included) no

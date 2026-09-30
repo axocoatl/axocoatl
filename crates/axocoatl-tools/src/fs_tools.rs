@@ -789,6 +789,9 @@ const GLOB_SKIPPED_DIRECTORIES: &[&str] = &[
 #[derive(Debug, PartialEq, Eq)]
 struct GlobPlan {
     pattern: String,
+    /// `./*.js` or `/project/*.js`: a single name the caller anchored at the
+    /// root, which the matcher alone would look for at any depth.
+    root_only: bool,
     argv: Vec<String>,
     skipped: Vec<&'static str>,
 }
@@ -823,6 +826,7 @@ fn glob_plan(pattern: &str, root: &Path) -> Result<GlobPlan, ToolError> {
             }
         }
     }
+    let explicit_root = pattern.starts_with("./") || pattern.starts_with('/');
     let directory = pattern.ends_with('/');
     let segments: Vec<&str> = pattern
         .split('/')
@@ -851,6 +855,7 @@ fn glob_plan(pattern: &str, root: &Path) -> Result<GlobPlan, ToolError> {
         effective.push("**");
     }
     let anchored = directory || segments.len() > 1;
+    let root_only = explicit_root && !anchored;
     let wildcard = |segment: &str| segment.contains(['*', '?']);
     let prefix: Vec<&str> = if anchored {
         effective[..effective.len() - 1]
@@ -899,6 +904,7 @@ fn glob_plan(pattern: &str, root: &Path) -> Result<GlobPlan, ToolError> {
     argv.push("-print".to_string());
     Ok(GlobPlan {
         pattern,
+        root_only,
         argv,
         skipped,
     })
@@ -906,11 +912,13 @@ fn glob_plan(pattern: &str, root: &Path) -> Result<GlobPlan, ToolError> {
 
 /// Keep the listed paths that match, sorted and without `./`, within the
 /// output cap. Returns the kept paths and the bytes all matches would need.
-fn glob_matches(listing: &str, pattern: &str) -> (Vec<String>, usize) {
+fn glob_matches(listing: &str, plan: &GlobPlan) -> (Vec<String>, usize) {
+    let pattern = plan.pattern.as_str();
     let mut matches: Vec<&str> = listing
         .lines()
         .map(|line| line.strip_prefix("./").unwrap_or(line))
         .filter(|path| !path.is_empty() && *path != ".")
+        .filter(|path| !plan.root_only || !path.contains('/'))
         .filter(|path| axocoatl_session::path_scope::pattern_matches(pattern, path))
         .collect();
     matches.sort_unstable();
@@ -980,7 +988,7 @@ impl BuiltinTool for GlobTool {
                 None => candidates.clear(),
             }
         }
-        let (files, needed) = glob_matches(&candidates, &plan.pattern);
+        let (files, needed) = glob_matches(&candidates, &plan);
         let count = files.len();
         let returned_bytes: usize = files.iter().map(|path| path.len() + 1).sum();
         let output_truncated = returned_bytes < needed;
@@ -1893,6 +1901,11 @@ mod tests {
         assert_eq!(plan("./lib/deep/**/*.js").argv[1], "./lib/deep");
         assert_eq!(plan("./lib/deep/**/*.js").pattern, "lib/deep/**/*.js");
         assert_eq!(plan("*.js").argv[1], ".");
+        assert!(!plan("*.js").root_only);
+        // `./` or the project path anchors a bare name at the root.
+        assert!(plan("./*.js").root_only);
+        assert!(plan("/workspace/repo/*.js").root_only);
+        assert!(!plan("./lib/*.js").root_only);
         // A directory names everything under it, with no name filter.
         let directory = plan("lib/");
         assert_eq!(directory.argv[1], "./lib");
@@ -2040,7 +2053,7 @@ mod tests {
             }
         };
 
-        let cases: [(&str, &[&str]); 7] = [
+        let cases: [(&str, &[&str]); 8] = [
             (
                 "**/*.test.js",
                 &["lib/b.test.js", "lib/deep/d.test.js", "test/e.test.js"],
@@ -2066,6 +2079,7 @@ mod tests {
             ("lib/**/*.test.js", &["lib/b.test.js", "lib/deep/d.test.js"]),
             ("src/", &["src/manifest-builder.js", "src/notes.md"]),
             ("node_modules/**/*.test.js", &["node_modules/pkg/f.test.js"]),
+            ("./*.js", &["manifest.js", "x.js"]),
         ];
         let mut outputs = Vec::new();
         for (pattern, _) in &cases {
