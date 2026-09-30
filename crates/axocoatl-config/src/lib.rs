@@ -594,6 +594,8 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
         }
     }
 
+    validate_sandbox_network(&config.sandbox.network)?;
+
     for webhook in &config.webhooks {
         if webhook.name.trim().is_empty() {
             return Err(ConfigError::InvalidField {
@@ -615,6 +617,26 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     }
 
     Ok(())
+}
+
+/// The only values `sandbox.network` accepts.
+pub const SANDBOX_NETWORK_VALUES: [&str; 2] = ["bridge", "none"];
+
+/// Refuse any `sandbox.network` other than exactly `bridge` or `none`. Any
+/// other spelling (`None`, `off`, `disabled`, ...) is an error rather than a
+/// silent bridge network.
+pub fn validate_sandbox_network(value: &str) -> Result<(), ConfigError> {
+    if SANDBOX_NETWORK_VALUES.contains(&value) {
+        return Ok(());
+    }
+    Err(ConfigError::InvalidField {
+        field: "sandbox.network".to_string(),
+        value: format!("{value:?}"),
+        reason: "sandbox.network accepts only \"bridge\" or \"none\", in lowercase".to_string(),
+        suggestion: "Set network: none for no container network, or network: bridge to allow \
+                     outbound connections"
+            .to_string(),
+    })
 }
 
 /// Lightweight check that a string is an `http`/`https` URL with a host — used
@@ -1517,6 +1539,39 @@ mcp_servers:
 "#;
         let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
         assert!(err.to_string().contains("unknown MCP transport"));
+    }
+
+    #[test]
+    fn sandbox_network_accepts_only_bridge_or_none() {
+        for accepted in ["bridge", "none"] {
+            let yaml = format!("sandbox:\n  network: {accepted}\n");
+            let config = parse_config(&yaml, &PathBuf::from("test.yaml")).unwrap();
+            assert_eq!(config.sandbox.network, accepted);
+        }
+        let default = parse_config("agents: []\n", &PathBuf::from("test.yaml")).unwrap();
+        assert_eq!(default.sandbox.network, "bridge");
+
+        for refused in [
+            "None",
+            "NONE",
+            "off",
+            "disabled",
+            "host",
+            "\"\"",
+            "\" none\"",
+        ] {
+            let yaml = format!("sandbox:\n  network: {refused}\n");
+            let err = parse_config(&yaml, &PathBuf::from("test.yaml")).unwrap_err();
+            let message = err.to_string();
+            assert!(
+                message.contains("sandbox.network") && message.contains("\"bridge\" or \"none\""),
+                "{refused}: {message}"
+            );
+        }
+
+        let mut config = parse_config("agents: []\n", &PathBuf::from("test.yaml")).unwrap();
+        config.sandbox.network = "off".to_string();
+        assert!(validate_config(&config).is_err());
     }
 
     #[test]

@@ -249,6 +249,12 @@ const DROPPED_CAPS: &[&str] = &[
 /// cgroup-backed limits (see `with_limits`).
 const PIDS_LIMIT: &str = "512";
 
+/// Every `podman run` passes this. Without it Podman copies the host's
+/// `http_proxy`, `https_proxy`, `ftp_proxy` and `no_proxy` variables (either
+/// case) into the container, where any command can read them, including a
+/// proxy URL's user name and password.
+const NO_HOST_PROXY_ENV: &str = "--http-proxy=false";
+
 /// Network posture for a session container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SandboxNetwork {
@@ -1511,6 +1517,7 @@ impl SessionSandbox {
             "run",
             "--name",
             &probe_name,
+            NO_HOST_PROXY_ENV,
             "--network",
             "none",
             "--entrypoint",
@@ -1539,6 +1546,9 @@ impl SessionSandbox {
 
     fn passive_recovery_provision_args(container: &str) -> Vec<String> {
         let mut args = vec!["run".into(), "--name".into(), container.into()];
+        // This container is committed as an image; keep the host's proxy
+        // variables out of it.
+        args.push(NO_HOST_PROXY_ENV.into());
         args.push("--security-opt=no-new-privileges".into());
         for cap in DROPPED_CAPS {
             args.push("--cap-drop".into());
@@ -2299,6 +2309,9 @@ impl SessionSandbox {
             args.push("--cap-drop".into());
             args.push((*cap).into());
         }
+        // Podman copies the host's proxy variables (`HTTP_PROXY`, ...) into
+        // the container by default, and they can carry credentials.
+        args.push(NO_HOST_PROXY_ENV.into());
 
         // Network posture. Bridge is podman's default (no flag needed); `none`
         // cuts off all networking for untrusted code. Publishing ports requires
@@ -4805,6 +4818,49 @@ mod tests {
                 || argument == "-v"
                 || argument.contains("/workspace")
         }));
+        assert!(args.iter().any(|argument| argument == "--http-proxy=false"));
+    }
+
+    #[test]
+    fn host_proxy_variables_are_never_copied_into_a_container() {
+        let passive = SandboxPolicy {
+            passive_start: true,
+            ..SandboxPolicy::default()
+        };
+        let isolated = SandboxPolicy {
+            network: SandboxNetwork::None,
+            ..SandboxPolicy::default()
+        };
+        for policy in [&SandboxPolicy::default(), &passive, &isolated] {
+            for with_limits in [true, false] {
+                let args = SessionSandbox::build_run_args(
+                    "axo-ses-proxy",
+                    "/workspace",
+                    DEFAULT_IMAGE,
+                    None,
+                    with_limits,
+                    &[3000],
+                    policy,
+                );
+                let image = args
+                    .iter()
+                    .position(|argument| argument == DEFAULT_IMAGE)
+                    .expect("the image must remain explicit");
+                // A Podman option, so it must come before the image.
+                assert_eq!(
+                    args[..image]
+                        .iter()
+                        .filter(|argument| *argument == "--http-proxy=false")
+                        .count(),
+                    1,
+                    "{args:?}"
+                );
+                assert!(!args
+                    .iter()
+                    .any(|argument| argument.starts_with("--http-proxy")
+                        && argument != "--http-proxy=false"));
+            }
+        }
     }
 
     #[test]

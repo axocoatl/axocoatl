@@ -551,7 +551,8 @@ pub struct SandboxConfigYaml {
     pub allow_untrusted_images: bool,
     /// Container networking: `"bridge"` (default, outbound + published ports)
     /// or `"none"` (no network — blocks exfiltration for untrusted code, but
-    /// also package installs and dev servers).
+    /// also package installs and dev servers). Any other value fails
+    /// validation instead of falling back to bridge.
     #[serde(default = "default_sandbox_network")]
     pub network: String,
     /// Refuse to start a session if memory/CPU/pid limits can't be applied,

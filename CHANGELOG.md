@@ -134,6 +134,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and creates no project, Workspace, or Session.
 
 ### Fixed
+- **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
+  longer copies host proxy variables into containers.** Any `sandbox.network` other
+  than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was
+  treated as `bridge`; `axocoatl validate`, `axocoatl doctor` and daemon start now
+  refuse it with an error naming the two accepted values, and `doctor` prints the
+  configured network. Every `podman run` now passes `--http-proxy=false`, so the
+  host's `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY` and `NO_PROXY` values, which can
+  include a proxy user name and password, no longer reach commands in the container.
 - **Paused turns no longer deadlock on a cancelled re-preparation.** Opening Files or
   Terminal after a restart re-prepares a Ready local environment; if that request was
   dropped (for example by navigating away) or the daemon shut down, the environment
