@@ -437,7 +437,7 @@ async fn required_checks_that_cannot_be_paid_say_why_and_are_not_offered_again()
         .unwrap();
     assert!(!choice.capability.enabled);
     assert!(
-        choice.capability.reason.contains(
+        choice.capability.reason.starts_with(
             "The required checks cannot run again: Repository actor's authority for this \
              turn was revoked"
         ),
@@ -783,7 +783,7 @@ async fn actual_required_checks_that_exhaust_the_budget_stop_being_offered() {
     assert_eq!(outcome.snapshot.contract().condition_runs().len(), 9);
     let (reason, receipt, before, after) = refused.unwrap();
     assert!(
-        reason.contains(
+        reason.starts_with(
             "The required checks cannot run again: Repository actor's budget has 0 \
              invocations left; they need 3 invocations. You can use Finish partial result to \
              finish without them"

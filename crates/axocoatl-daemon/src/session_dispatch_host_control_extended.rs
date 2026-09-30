@@ -43,10 +43,15 @@ fn capability(result: Result<()>) -> ControlPlaneCapability {
             enabled: true,
             reason: String::new(),
         },
+        // The person reads the reason itself, not which component refused.
         Err(reason) => ControlPlaneCapability {
             requires_revalidation: false,
             enabled: false,
-            reason: reason.to_string(),
+            reason: reason
+                .to_string()
+                .strip_prefix("Session dispatch: ")
+                .map(str::to_owned)
+                .unwrap_or_else(|| reason.to_string()),
         },
     }
 }
