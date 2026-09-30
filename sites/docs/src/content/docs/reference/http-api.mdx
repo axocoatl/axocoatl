@@ -114,7 +114,7 @@ not permission to choose another activation or team.
 | Method | Path | Request / behavior |
 | --- | --- | --- |
 | GET | `/api/sessions/{id}/team` | Current team revision, selected templates, explicit limits, and expiry |
-| POST | `/api/sessions/{id}/team/preview` | Typed whole-team edit; resolves and reviews future-turn definitions and authority |
+| POST | `/api/sessions/{id}/team/preview` | Typed whole-team edit; resolves and reviews future-turn definitions and authority. A slot's optional `writes` is the whole list of paths that Agent may change: absent allows any file, `[]` is read-only |
 | POST | `/api/sessions/{id}/team/apply` | `{edit, review_digest}`; exact reviewed future-turn edit |
 | POST | `/api/sessions/{id}/team/cancel` | Cancel the referenced team draft without changing current authority |
 | POST | `/api/sessions/{id}/turns/{turn_id}/control-commands` | Typed human action with exact command/activation/revision identities; returns the canonical receipt |

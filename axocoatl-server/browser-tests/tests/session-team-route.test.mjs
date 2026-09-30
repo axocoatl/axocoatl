@@ -67,3 +67,21 @@ test('native Team preview rejects unsupported repository tools before provider o
     assert.deepEqual(await (await fetch(`${invalid.baseUrl}/api/sessions/${id}/turns?history_version=2`)).json(),[]);
   } finally { await invalid.stop(); }
 });
+
+test('actual Session team carries what each Agent may change into its reviewed profile',async()=>{
+  unavailable=false;
+  const id=runtime.fixtures.alpha.sessions[1].id,current=await call(id);assert.equal(current.status,200,JSON.stringify(current.value));
+  assert.equal(current.value.slots[0].writes,undefined,'an Agent configured without writes: may change any file');
+  const edit=(command_id,writes)=>({command_id,expected_configuration_revision:current.value.configuration_revision,slots:current.value.slots.map(slot=>({...slot,...(writes===undefined?{}:{writes}),max_output_tokens:128,limits:{activations:2,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),dependencies:current.value.dependencies,layout:current.value.layout});
+  for(const [command,writes] of [['writes-open',undefined],['writes-read-only',[]],['writes-scoped',['lib/','docs/*.md']]]){
+    const preview=await call(id,'/preview',edit(command,writes));assert.equal(preview.status,200,JSON.stringify(preview.value));
+    assert.deepEqual(preview.value.profiles.map(profile=>profile.write_scope),[writes],command);
+  }
+  for(const [index,writes] of [['../x'],['/etc'],['lib/','lib/']].entries()){
+    const refused=await call(id,'/preview',edit(`writes-refused-${index}`,writes));assert.equal(refused.status,409,JSON.stringify(refused.value));
+    assert.match(refused.value.error,/invalid list of paths it may change/);assert.match(refused.value.error,/Nothing for a read-only helper/);
+  }
+  const scoped=edit('writes-applied',['lib/']),preview=await call(id,'/preview',scoped);assert.equal(preview.status,200,JSON.stringify(preview.value));
+  const applied=await call(id,'/apply',{edit:scoped,review_digest:preview.value.review_digest});assert.equal(applied.status,200,JSON.stringify(applied.value));
+  const saved=await call(id);assert.deepEqual(saved.value.slots[0].writes,['lib/'],'the saved definition keeps its scope for the next edit');
+});

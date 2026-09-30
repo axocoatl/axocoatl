@@ -40,6 +40,10 @@ pub struct SessionTeamSlotEdit {
     pub model: String,
     pub instructions: Option<String>,
     pub max_output_tokens: Option<usize>,
+    /// Repository paths this Agent may change. The edit carries the whole
+    /// value: absent lets it change any file, empty makes it read-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writes: Option<Vec<String>>,
     pub required: bool,
     pub reset_history: bool,
     pub limits: Option<GrantLimits>,
@@ -238,6 +242,27 @@ fn review_profiles(
     }
     Ok(profiles)
 }
+/// The slot's `writes` after checking the pattern grammar.
+fn checked_writes(slot: &SessionTeamSlotEdit) -> Result<Option<Vec<String>>, DaemonError> {
+    if let Some(writes) = &slot.writes {
+        axocoatl_session::path_scope::validate_write_scope(writes).map_err(|reason| {
+            team_error(format!(
+                "{} has an invalid list of paths it may change: {reason}. Use repository paths \
+                 such as lib/ or docs/*.md, or choose Nothing for a read-only helper",
+                slot.name
+            ))
+        })?;
+    }
+    Ok(slot.writes.clone())
+}
+/// How a write scope reads in a message to the person.
+fn describe_writes(writes: Option<&[String]>) -> String {
+    match writes {
+        None => "any file".into(),
+        Some([]) => "nothing".into(),
+        Some(paths) => paths.join(", "),
+    }
+}
 fn slot_edit(
     slot: &SessionTeamSlot,
     content: &ExecutionContentStore,
@@ -283,6 +308,7 @@ fn slot_edit(
         model: config.model,
         instructions: config.system_prompt,
         max_output_tokens: config.sampling.max_tokens,
+        writes: config.writes,
         required: slot.required,
         reset_history: false,
         limits: Some(limits.clone()),
@@ -349,6 +375,7 @@ impl AxocoatlDaemon {
                     model: config.model,
                     instructions: config.system_prompt,
                     max_output_tokens: config.sampling.max_tokens,
+                    writes: config.writes,
                     required: true,
                     reset_history: true,
                     limits: None,
@@ -607,6 +634,34 @@ impl AxocoatlDaemon {
                     .await?
                     .definition
                 };
+                let worker_writes = self.session_dispatch_lifecycles.with_session_team_stores(
+                    token,
+                    |_, content, _| match content
+                        .resolve_activation_evidence(&definition.snapshot)
+                        .map_err(team_error)?
+                    {
+                        ActivationEvidenceContent::Definition { profile, .. } => {
+                            Ok(profile.write_scope.clone())
+                        }
+                        _ => Err(team_error("Approved Worker profile is missing")),
+                    },
+                )?;
+                let coordinator_writes = checked_writes(slot)?;
+                if !axocoatl_session::path_scope::write_scope_within(
+                    worker_writes.as_deref(),
+                    coordinator_writes.as_deref(),
+                ) {
+                    return Err(team_error(format!(
+                        "Worker {} may change {}, but {} may change only {}. A Worker cannot \
+                         change more than its Coordinator: narrow the Worker's writes: in its \
+                         configuration, or widen what {} may change",
+                        worker.template_id,
+                        describe_writes(worker_writes.as_deref()),
+                        slot.name,
+                        describe_writes(coordinator_writes.as_deref()),
+                        slot.name
+                    )));
+                }
                 workers.push(NativeCoordinatorWorker {
                     template_id: worker.template_id.clone(),
                     definition,
@@ -932,6 +987,7 @@ impl AxocoatlDaemon {
             config.model = proposed.model.clone();
             config.system_prompt = proposed.instructions.clone();
             config.sampling.max_tokens = proposed.max_output_tokens;
+            config.writes = checked_writes(proposed)?;
             if let Some(old) = &old_config {
                 config.id = old.id.clone();
             }
