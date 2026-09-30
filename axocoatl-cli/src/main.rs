@@ -529,14 +529,17 @@ fn with_manager(
     }
 }
 
-/// Scaffold a project directory: `dir/`, `dir/data/`, `axocoatl.yaml`, `.env.example`.
+/// Scaffold a project directory: `dir/`, `axocoatl.yaml`, `.env.example`.
+///
+/// `data/` is left for the daemon to create on first start: only a data root
+/// the daemon creates itself gets the native Session format, and an existing
+/// empty directory would be opened as a 1.0 root.
 fn scaffold_project(
     dir: &std::path::Path,
     config_yaml: &str,
     env_example: &str,
 ) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    std::fs::create_dir_all(dir.join("data"))?;
     std::fs::write(dir.join("axocoatl.yaml"), config_yaml)?;
     std::fs::write(dir.join(".env.example"), env_example)?;
     Ok(())
@@ -575,7 +578,7 @@ fn next_steps_text(project_name: &str) -> String {
 Created Axocoatl project: {project_name}/
   axocoatl.yaml    — Agent configuration
   .env.example     — process-environment template
-  data/            — runtime data directory
+  data/            — runtime data, created on first start
 
 Next steps — copy/paste:
 

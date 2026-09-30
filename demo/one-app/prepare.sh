@@ -168,8 +168,9 @@ if [ -e "$DEMO_ROOT" ]; then
   echo "Previous demo moved to $BACKUP"
 fi
 
-mkdir -p "$WORKSPACE" "$DEMO_ROOT/data" "$DEMO_ROOT/run"
-chmod 700 "$DEMO_ROOT" "$DEMO_ROOT/data" "$DEMO_ROOT/run"
+# The daemon creates data/ itself on first start so it gets the native format.
+mkdir -p "$WORKSPACE" "$DEMO_ROOT/run"
+chmod 700 "$DEMO_ROOT" "$DEMO_ROOT/run"
 touch "$MARKER"
 printf '%s\n' "$SCENARIO" >"$SCENARIO_MARKER"
 cp -R "$SCENARIO_FIXTURE/." "$WORKSPACE/"
