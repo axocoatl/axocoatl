@@ -151,11 +151,11 @@ an unresolved Ways decision remains authoritative after a daemon restart.
 | `workspace-attempt-settled` | `workspace`, `attempt_set_id` | The exact set's durable current pointer is gone; re-read and reconstruct the primary runtime before exposing it |
 
 `occurrence` distinguishes repeated provider-local call IDs inside one Agent
-activation. `coordination_generation` is present for autonomous coordinated
-Session activations, so correlate those live tool pairs with the run, Agent,
-turn, generation, call ID, and occurrence. Direct and legacy frames omit the
-generation and retain their existing run/Agent/turn/call/occurrence identity rather than
-assuming `call_id` is globally unique. For coordinator work, `agent` is the
+activation. `coordination_generation` is present on native Ways candidate
+activations and carries the native activation generation, so correlate those live
+tool pairs with the run, Agent, turn, generation, call ID, and occurrence. Other
+frames omit the generation and retain their run/Agent/turn/call/occurrence identity
+rather than assuming `call_id` is globally unique. For coordinator work, `agent` is the
 logical declared Worker that executed the tool; `workflow` and `turn_id` retain
 the outer Session/turn ownership.
 
@@ -175,97 +175,16 @@ an exact settlement also re-reads durable Results, canonical History, and curren
 Git state before restoring the primary runtime; this clears a completed comparison
 and hydrates the kept Turn without trusting the event as the result itself.
 
-## Attempt, coordinator, and Session coordination frames
+## Attempt and coordinator frames
 
 | `kind` | Important fields | Meaning |
 | --- | --- | --- |
 | `lane-started` | `run`, `attempt_set_id`, `session`, `index`, `model?`, `agent` | Durable identity for one Way's live stream |
 | `lane-verified` | `attempt_set_id`, `session`, `index`, `passed`, `changed_files`, `touched_tests` | One Check result arrived |
 | `coordinator-plan` | `workflow`, `coordinator`, `goal`, `subtasks` | Coordinator decomposition and the worker assigned to each subtask |
-| `coordination` | `session`, `turn_id`, `operation_id`, `recorded_at`, `event` | One already-persisted transition in a multi-Agent Session turn's causal map |
 
 Other Agent stream frames for an Attempt use the lane `run` key. Reject frames
 whose set ID belongs to a previous exploration.
-
-The frame keeps the durable event identity outside the event body:
-
-```json
-{
-  "kind": "coordination",
-  "session": "session-id",
-  "turn_id": "turn-id",
-  "operation_id": "coordination:turn-id:4:agent-completed",
-  "recorded_at": 1788800000000,
-  "event": {
-    "kind": "coordination_agent_completed",
-    "execution_id": "turn-id",
-    "metadata": {
-      "session_id": "session-id",
-      "turn_id": "turn-id",
-      "agent_id": "builder",
-      "generation": 1,
-      "signal_id": "coordination-signal:turn-id:builder:g1:completed",
-      "cause_signal_ids": ["coordination-signal:turn-id:planner:g1:completed"],
-      "summary": "Implemented the requested change and ran the focused check.",
-      "usage": {
-        "input_tokens": 900,
-        "output_tokens": 240,
-        "reasoning_tokens": null,
-        "total_tokens": 1140,
-        "known": true
-      }
-    }
-  }
-}
-```
-
-In `GET /api/sessions/{id}/turns`, `operation_id` and `recorded_at` are
-flattened into each `execution_events` item beside the event's `kind`, optional
-`execution_id`, and `metadata`. Preserve ledger order. `recorded_at` values can
-tie and are not a replacement for that ordering.
-
-### Coordination event metadata
-
-All `coordination_*` records below also include `metadata.session_id` and
-`metadata.turn_id`; their `execution_id` is the turn ID. Generations are
-one-based activations unless a row says otherwise. A `usage` object contains
-`input_tokens`, `output_tokens`, nullable `reasoning_tokens`, `total_tokens`,
-and `known`. When `known` is false, the numbers are a known subtotal.
-
-| Event `kind` | Metadata | Meaning |
-| --- | --- | --- |
-| `coordination_planned` | `agents`, `roots`, `sinks`, `max_generations` | Immutable turn graph. Each `agents` item is `{id,name,depends_on}`; roots and sinks are Agent ID arrays. `max_generations` is the per-Agent activation bound, currently `2`. |
-| `coordination_agent_activated` | `agent_id`, `generation`, `cause_signal_ids`, `parents` | The Agent started this generation. `parents` is its immutable direct-dependency list; `cause_signal_ids` names the exact completion or feedback facts supplied to this activation. |
-| `coordination_signal` | `from_agent`, `to_agent`, `summary`, `generation`, `signal_id`, `applied`, `reason?`, `usage?` | One downstream Agent requested changes from an eligible completed ancestor. `generation` identifies the requester's activation. An applied signal carries that activation's usage; an unapplied signal carries `reason` instead. |
-| `agent_output_superseded` | `agent_id`, `activation_generation`, `superseded_by_generation`, `cause_signal_id` | Append-only invalidation of an earlier recorded output after an accepted revision request. This ledger-generated event has no `execution_id` and does not duplicate Session/turn IDs inside `metadata`; use the enclosing frame or turn. |
-| `coordination_agent_reactivated` | `agent_id`, `generation`, `cause_signal_ids`, `summary`, `signal_id` | An accepted revision reset this Agent to waiting; any earlier current output is now stale. Here `generation` is the next generation that must run; the event is not itself an activation. |
-| `coordination_agent_completed` | `agent_id`, `generation`, `signal_id`, `cause_signal_ids`, `summary`, `usage` | This generation produced a usable handoff. |
-| `coordination_agent_failed` | `agent_id`, `generation`, `signal_id`, `cause_signal_ids`, `summary`, `usage` | This activated Agent failed or returned no usable handoff. |
-| `coordination_agent_blocked` | `agent_id`, `generation`, `signal_id`, `cause_signal_ids`, `summary`, `usage` | A required dependency failed. `generation` is the most recently started generation, or `0` if the Agent never ran; usage is known zero for the blocked Agent. |
-| `coordination_agent_cancelled` | `agent_id`, `generation`, `cause_signal_ids`, `reason`, `usage?` | Stop or restart recovery cancelled a running or waiting Agent. `generation` is the most recently started generation, or `0`; a reactivation alone does not advance it. Restart recovery uses reason `daemon_restart_interrupted` and unknown zero usage. |
-| `coordination_recovery_partial` | `attribution`, `source`, `byte_len` | Restart recovery retained turn-wide streamed text whose exact Agent boundary cannot be reconstructed. `attribution` is `unattributed` and `source` is `turn.partial_output`; the text remains in that canonical turn field and must not be presented as an Agent answer. |
-| `coordination_completed` | `status`, `agents`, `sinks`, `usage` | Terminal fold for the graph. `status` is `completed`, `failed`, or `cancelled`; each Agent item is `{agent_id,state,generation}`. |
-
-The server publishes each `coordination` frame only after the matching ledger
-append succeeds. On reconnect, replace any partial live fold with the canonical
-turn returned by `GET /api/sessions/{id}/turns`; WebSocket delivery is not a
-second authority.
-
-These events exist only for an all-team Lattice or Custom turn whose resolved
-roster contains more than one autonomous Agent. Single-agent Sessions, a request with
-`target_agent`, a one-Agent team, and a Lattice team whose entry point is a
-Coordinator execute directly and do not emit a synthetic Coordination map. A
-Lattice team ID or Custom roster is resolved against current configuration when
-each all-team turn starts. `coordination_planned` then preserves the exact graph
-used by that turn, so later configuration edits affect future turns only.
-
-`coordination_signal` is a durable result of the internal Agent tool; it is not
-a client WebSocket command. The tool is advertised to the model only while the exact
-activation is active, its one request is unspent, and at least one upstream target is
-eligible. Its request-local schema enumerates the exact eligible Agent IDs. Execution
-rechecks that active, unspent, eligible-target authority even for a stale or fabricated call.
-The request requires a non-empty summary of at most 2,048 UTF-8 bytes. When it is applied,
-the durable event's `usage` object records the requesting activation's usage and completeness.
 
 ## Events and Automation compatibility frames
 

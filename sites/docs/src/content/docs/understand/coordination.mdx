@@ -11,7 +11,7 @@ question and owns a different recovery boundary.
 | Mechanism | Use when | Ordering/choice |
 | --- | --- | --- |
 | Automation | The graph can be declared ahead of time | Explicit DAG nodes and edges |
-| Multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
+| Native multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
 | Event lattice | Producers and consumers should be decoupled | Typed publish/subscribe notification |
 | Lead with helpers | A native Agent needs a separate read-only look at part of its task | The lead picks an approved helper and writes its task; one helper runs at a time |
 | Coordinator Agent (legacy Sessions) | Task shape and worker choice emerge at runtime | Decomposition, then the first declared worker that can call each subtask's tools |
@@ -48,48 +48,21 @@ answer; a failed or refused helper reaches it as a tool error. The helper's comm
 source, lead activation, and result stay in the same canonical Session history.
 Increasing budget or authority requires human review; another model call cannot grant it.
 
-## Legacy multi-Agent Sessions
+## Sessions on a 1.0 data root
 
-A lattice-mode Session stores the selected config-owned team ID; Custom mode stores
-the selected Agent IDs. Each all-team request resolves that selection against current
-Agent configuration. When the result contains more than one autonomous Agent, Axocoatl
-snapshots its exact membership and dependencies. Later configuration changes affect
-future turns, never retained maps. Removing or renaming a referenced Agent or team does
-not remove the Session or its History; a new turn stops before durable acceptance and
-tells you to restore the reference or create a new Session with an available selection.
-Each autonomous multi-Agent request owns a validated Coordination map in canonical
-Session History:
+A data root that still uses the 1.0 format runs one Agent per Session turn. A
+single-Agent Session, a one-Agent team, a team whose entry point is a Coordinator,
+and a request targeted at one Agent keep working. A turn that would run two or more
+Agents is refused before it starts. The message tells you to stop Axocoatl, make a
+cold backup, and run `axocoatl session upgrade --confirm`. The upgrade converts 1.0 Sessions, including
+multi-Agent Sessions, to native Sessions, where **Team & budget** runs the team.
+History recorded before the upgrade still loads and shows each Agent's output.
+Removing or renaming a referenced Agent or team does not remove the Session or its
+History; a new turn stops before it starts and tells you to restore the reference or
+create a new Session with an available selection.
 
-1. Agents without dependencies activate from the accepted request.
-2. A downstream Agent activates only after every named direct dependency has
-   completed.
-3. Its input contains the request and those direct-parent contributions, not
-   every earlier Agent's output.
-4. A failed branch blocks only descendants that can no longer satisfy their
-   dependency predicate; independent ready work may continue.
-5. A reviewer can request one bounded revision from an ancestor. The target and
-   every completed downstream result derived from it run again before the reviewer
-   verifies the newest direct-parent result.
-
-The internal `coordination_signal` tool is advertised only while that exact activation is
-active, has not spent its one revision request, and has eligible upstream targets. Its
-request-local schema enumerates those exact Agent IDs. Execution still rechecks the active
-activation, unspent allowance, and eligible target, so a stale or fabricated call cannot rely
-on an earlier advertisement. The activation prompt names the same eligible IDs without
-including a transitive ancestor's output.
-
-When a request is accepted and applied, the requester's `changes_requested` output, the
-signal with that activation's usage and completeness, affected-output supersessions, and
-reactivations are recorded as one durable batch before matching live frames publish. A
-Coordinator-led team instead runs through the Coordinator's separate live hierarchy and does
-not fabricate this peer map.
-
-Agents in a Session share one checkout, so ready work is executed serially in a
-stable order until parallel repository writers have explicit isolation and merge
-authority. This is bounded foreground work, not an Automation trigger.
-When a workflow enters a Coordinator, the Session executes that entry once and the
-Coordinator owns its declared Workers; the roster is not looped again. A Worker cannot be
-selected or targeted directly.
+When a team's entry point is a Coordinator, the Session runs only that Coordinator, and
+the Coordinator owns its declared Workers. A Worker cannot be selected or targeted directly.
 
 Explore several ways is a separate comparison mechanism and currently requires
 a single autonomous-Agent Session. Coordinator and worker roles remain on the normal Session
@@ -157,12 +130,9 @@ coordinator execution; Automation ordering happens in the DAG executor.
 
 ## Observe coordination
 
-Conversation places a durable **Coordination** card beneath each coordinated
-request. It shows request → Agents → answer, node state, dependencies, handoff
-summaries, and the causal event timeline. **Open Agent graph** reveals the same
-turn state in the focused graph surface. Reloading rebuilds both from the turn
-ledger; live `coordination` frames are published only after their matching
-record is durable.
+**Open Agent graph** shows a turn's Agents and activations in the focused graph
+surface. Reloading rebuilds it from canonical Session History. A legacy turn recorded
+with several Agents shows each Agent's output; it has no coordination graph.
 
 The Agent graph opens in View mode. Select an Agent to open its
 inspector, then choose a recorded activation to review input, output, partial
@@ -171,13 +141,13 @@ which details are unknown, missing, or not recorded. The graph also supports
 ordinary and directly targeted turns using their recorded membership. Historical
 inspection alone grants no command authority. Native current work exposes exact
 Guide, Stop, Retry, and other controls only when the host reports that capability.
-Legacy graphs remain read-only, with whole-turn Stop in Conversation. See
+Legacy turns remain read-only, with whole-turn Stop in Conversation. See
 [native controls](/workbench/history/#control-native-work).
 
 Integrations can read the Session turn endpoint for the canonical record.
 `GET /api/events/recent` and `event` WebSocket frames remain the separate
 process-wide notification feed; there is no global event-feed browser destination.
-The [WebSocket reference](/reference/websocket/#coordination-event-metadata)
-defines the exact turn-coordination event fields.
+The [HTTP API reference](/reference/http-api/#turn-control-plane) defines the
+turn control-plane fields.
 
 Next: [Protocols →](/understand/protocols/)

@@ -140,7 +140,9 @@ auto-resumed on a later turn.
 A legacy Custom Session keeps the Agent IDs selected at creation; create a new Session to
 change that composition. A legacy Lattice Session instead stores its config-owned team ID
 and resolves that team's current roster when each all-team turn begins, so a valid
-team edit affects future turns after configuration reload while earlier turn maps
-remain unchanged. Create a new Session when the sandbox boundary needs to change.
+team edit affects future turns after configuration reload. On a 1.0 data root, a turn
+that would run two or more Agents is refused until you stop Axocoatl, make a cold backup,
+and run `axocoatl session upgrade --confirm`; single-Agent turns keep working. Create a
+new Session when the sandbox boundary needs to change.
 
 Continue with [Files, Preview, and Terminal →](/workbench/tools/)

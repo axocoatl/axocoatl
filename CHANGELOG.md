@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Recorded Agent execution inspector.** The Session's existing Agent graph now
   opens in View mode. Select an Agent and activation to inspect its retained input,
   output, partial output, usage, and causal evidence. Ordinary and directly targeted
-  turns remain inspectable alongside coordinated turns; missing or unknown evidence
+  turns remain inspectable alongside native team turns; missing or unknown evidence
   is labeled explicitly. Historical evidence does not itself authorize controls;
   native actions require the host's exact current capability or explicit revalidation.
   Saved evidence references reopen their original activation after reload. Unstarted
@@ -114,22 +114,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or finishing without keeping. History storage limits are explicit; capacity failure
   preserves recovery evidence. History supports search, export, context attachment,
   and a separate explicit deletion action. Keep remains an uncommitted Git decision.
-- **Durable Session coordination maps.** Autonomous multi-Agent Lattice and Custom turns now
-  activate from exact named dependencies, pass only the direct contributions that
-  caused each activation, continue independent work when one branch fails, and mark
-  unreachable descendants blocked. A downstream Agent can request one bounded
-  revision from an ancestor through an internal coordination signal; every completed
-  downstream result derived from that ancestor runs again before verification. The immutable graph, signals,
-  generations, lifecycle, summaries, and usage are retained in canonical Session
-  History and rendered inline with the request as a reload-safe Coordination card
-  connected to the existing Agent graph. This legacy coordination path remains
-  available alongside native turn graphs.
 - **Hosted-provider starter team configuration.** OpenRouter onboarding
   retains the direct Assistant and also defines a small
   autonomous Planner → Builder `plan-and-build` team. Native Sessions require supported
   OpenRouter profiles and explicit Team & budget approval; direct Anthropic and OpenAI
   templates currently execute only on compatibility paths. Onboarding remains user-level
   and creates no project, Workspace, or Session.
+
+### Changed
+- **Multi-Agent turns on a 1.0 data root require the Session upgrade.** On a data root
+  that still uses the 1.0 format, a Session turn that would run two or more Agents is
+  refused before it starts, with a message to stop Axocoatl, make a cold backup, and run
+  `axocoatl session upgrade --confirm`. Single-Agent turns and a request targeted at one
+  Agent keep working.
 
 ### Fixed
 - **Paused turns no longer deadlock on a cancelled re-preparation.** Opening Files or
@@ -184,15 +181,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   autonomous dependency graphs that are not closed acyclic DAGs. Persisted
   Sessions and History survive later team renames or removal; a new turn fails
   before mutation until the named team is restored or a new Session is created.
-- **Exact coordination-feedback authority.** The internal `coordination_signal` tool is
-  now advertised only for an active activation with an unspent revision request and eligible
-  upstream targets, and its request schema enumerates those exact Agent IDs. Execution still
-  rechecks the active activation lease, allowance, and target against stale or fabricated calls.
-  An applied `changes_requested` transition atomically retains the requesting activation's
-  usage and completeness with the durable signal and rerun boundary. Non-empty Agent tool
-  allowlists now apply uniformly to executor, recall, and core-memory tools, so a coordinated
-  role cannot receive an undeclared memory capability alongside its internal signal.
-- **Crash-safe coordinated Session continuity.** Lattice and Custom actors, plus
+- **Agent tool allowlists cover memory tools.** Non-empty Agent tool allowlists now apply
+  uniformly to executor, recall, and core-memory tools, so an Agent cannot receive an
+  undeclared memory capability.
+- **Crash-safe team Session continuity.** Lattice and Custom actors, plus
   a Coordinator selected by a single-Agent Session, now stage checkpoints behind
   the canonical Session turn. A completed turn
   promotes each Agent's own causal transcript; failed, cancelled, interrupted,
@@ -209,9 +201,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   then rebuild completed conversation without reviving private plans or Worker state.
   Transaction-scoped Agents can still read Tier 2–4 memory, but semantic auto-store,
   daily-log archive writes, core edits, and core consolidation now fail closed for
-  the whole turn until those stores gain transactional promotion. Restart recovery
-  now closes every still-live coordination node and preserves any aggregate stream
-  only as explicitly unattributed evidence rather than inventing an Agent answer. Ordinary
+  the whole turn until those stores gain transactional promotion. Ordinary
   single-Agent failed, cancelled, or interrupted boundaries likewise retain stop ownership and
   block cached retries or new turns until the actor is proven stopped and rebuilt from History.
 - **Fail-closed release retries.** Normal releases and the incident-locked v1.0.1

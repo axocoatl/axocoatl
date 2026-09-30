@@ -77,8 +77,8 @@ become Workspaces only when you authorize them through **Open workspace…**.
 
 1. Open or resume a Workspace Session.
 2. Ask one Agent for a solution, or use a Lattice or Custom team when the work
-   needs several cooperating roles. An autonomous multi-Agent team's causal
-   Coordination map stays with the Turn. A Coordinator can create bounded Workers
+   needs several cooperating roles. A native team's execution graph stays with the
+   Turn. A Coordinator can create bounded Workers
    from approved templates inside the same recorded turn. In a native Session,
    review and apply **Team & budget** before the first Send.
 3. When an implementation decision needs independent evidence, turn on
@@ -242,15 +242,15 @@ Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
   Session scopes. A
   configured background "sleep-time" pass consolidates registered idle autonomous
   Agents' memory. Declared Coordinator Workers are not polled by that loop.
-  Legacy coordinated turns can read these stores, but their speculative execution
-  cannot write them or run core-memory consolidation.
+  Legacy Lattice, Custom, and Coordinator turns can read these stores, but cannot
+  write them or run core-memory consolidation during the turn.
 - **Event lattice** — Skills and runtime components publish typed events;
   Automation triggers, webhooks, and retained API/WebSocket observers consume
-  the shared notification feed. Separately, each legacy all-team turn with more than one
-  autonomous Agent in a Lattice or Custom Session owns a scoped predicate lattice
-  whose signals activate exact dependencies and are retained as Session evidence.
-  Native turns use their canonical dependency graph and accepted-generation evidence.
-  The coordination crate exposes both signal models to library users.
+  the shared notification feed. Native Session turns use their canonical dependency
+  graph and accepted-generation evidence. On a 1.0 data root, a Session turn that would
+  run two or more Agents is refused until the operator runs
+  `axocoatl session upgrade --confirm`. The coordination crate exposes the signal
+  lattice and HTN planner to library users.
 - **Coordinator role** — for explicit hierarchical work, an agent with
   `role: coordinator` decomposes a goal into subtasks (HTN or LLM), assigns each
   to the first declared worker that can call its required tools, runs them in

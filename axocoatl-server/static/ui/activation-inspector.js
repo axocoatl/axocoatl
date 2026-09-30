@@ -1,9 +1,5 @@
 import { adopt } from './sheets.js';
 import { stopIntentProblem } from './execution-history.js';
-import {
-  element, eventAgent, eventSummary, firstText, foldCoordinationEvents, isObject,
-  normalizedAgentState, normalizedRunState, normalizeEvent, short,
-} from './coordination-turn.js';
 import './session-graph-edit.js';
 import './session-grants.js';
 
@@ -12,18 +8,90 @@ import './session-grants.js';
  * the execution graph.
  */
 
-const notRecorded = () => ({ status: 'not_recorded' });
+function isObject(value) {
+  return value != null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return '';
+}
+
+function short(value, length = 180) {
+  const text = firstText(value).replace(/\s+/g, ' ');
+  return text.length > length ? `${text.slice(0, Math.max(0, length - 1)).trimEnd()}…` : text;
+}
+
+function element(tag, className = '', text = '') {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text) node.textContent = text;
+  return node;
+}
+
+function normalizedAgentState(value, fallback = 'waiting') {
+  switch (String(value || '').toLowerCase()) {
+    case 'active':
+    case 'activated':
+    case 'running':
+    case 'working': return 'working';
+    case 'accepted':
+    case 'complete':
+    case 'completed':
+    case 'done':
+    case 'success': return 'completed';
+    case 'error':
+    case 'failed': return 'failed';
+    case 'blocked':
+    case 'waiting_for_input': return 'blocked';
+    case 'cancelled':
+    case 'canceled':
+    case 'stopped': return 'stopped';
+    case 'unstarted':
+    case 'planned':
+    case 'queued':
+    case 'pending':
+    case 'waiting': return 'waiting';
+    default: return fallback;
+  }
+}
+
+function normalizedRunState(value, fallback = '') {
+  switch (String(value || '').toLowerCase()) {
+    case 'complete':
+    case 'completed':
+    case 'done':
+    case 'success': return 'completed';
+    case 'active':
+    case 'running':
+    case 'working':
+    case 'synthesizing': return 'working';
+    case 'blocked':
+    case 'waiting_for_input': return 'blocked';
+    case 'error':
+    case 'failed': return 'failed';
+    case 'cancelled':
+    case 'canceled':
+    case 'stopped': return 'stopped';
+    case 'interrupted': return 'interrupted';
+    case 'planned':
+    case 'queued':
+    case 'pending': return 'planned';
+    default: return fallback;
+  }
+}
+
 const recorded = (value) => ({ status: 'available', value });
 const evidenceValue = (entry, fallback = null) => (
   ['available', 'truncated'].includes(entry?.status) ? entry.value : fallback
 );
 const controlRequestAvailable = capability => capability?.enabled === true || capability?.requires_revalidation === true;
-const unavailableControls = () => Object.fromEntries(['stop', 'retry', 'guide', 'revise']
-  .map((kind) => [kind, { enabled: false, reason: 'This execution has no active command controller.' }]));
 
-// Versioned responses never fall through to legacy event inference. This
-// display validation protects the fold from unsupported/malformed shapes; the
-// daemon still owns command authorization and exact runtime legality.
+// This display validation protects the fold from unsupported/malformed shapes;
+// the daemon still owns command authorization and exact runtime legality.
 function controlPlaneFormatProblem(source) {
   if (source.schema_version !== 1 || !['legacy_v1', 'execution_v2'].includes(source.history_version)) {
     return 'This execution evidence format is unsupported. Refresh with a compatible Axocoatl version.';
@@ -98,85 +166,22 @@ function unsupportedControlPlane(source, reason) {
     sessionId: typeof source?.session_id === 'string' ? source.session_id : '',
     schemaVersion: null, historyVersion: null, status: 'unavailable', unsupported: true,
     request: '', agents: [], nodes: [], agentCount: 0, answers: [], answer: '', handoffs: [], timeline: [],
-    recoveryEvidence: '', hasCoordination: false, warnings: [reason], controlPlane: null };
+    warnings: [reason], controlPlane: null };
 }
 
 /**
- * The card, execution graph, and inspector share this transport-free projection.
- * Accepts the versioned GET control-plane envelope or a retained v1 Session turn.
- * A missing generation stays unknown; a current Settings definition is never
- * substituted for the definition actually used by historical work.
+ * The execution graph and inspector share this transport-free projection of
+ * the versioned GET control-plane envelope: `execution_v2`, or `legacy_v1` for
+ * a retained 1.0-format turn. A missing generation stays unknown; a current
+ * Settings definition is never substituted for the definition actually used by
+ * historical work.
  */
-export function foldControlPlane(source = null, events = null) {
-  if (source != null && !isObject(source)) {
+export function foldControlPlane(source = null) {
+  if (!isObject(source)) {
     return unsupportedControlPlane(source, 'Execution evidence is malformed and cannot be displayed. Refresh this turn.');
   }
-  const isEnvelope = isObject(source) && ['schema_version', 'history_version', 'nodes']
-    .some(key => Object.hasOwn(source, key));
-  if (isEnvelope) {
-    const problem = controlPlaneFormatProblem(source);
-    if (problem) return unsupportedControlPlane(source, problem);
-  }
-  if (!isEnvelope) {
-    const turn = isObject(source) ? source : {};
-    const entries = events ?? turn.execution_events ?? [];
-    const legacy = foldCoordinationEvents(entries, turn);
-    const normalized = entries.map(normalizeEvent).filter(Boolean);
-    if (!legacy.agents.length && typeof turn.agent_id === 'string' && turn.agent_id) {
-      legacy.agents = [{ id: turn.agent_id, label: turn.agent_id, dependsOn: [],
-        state: normalizedAgentState(turn.status, turn.status || 'unknown'), summary: turn.error || '' }];
-      legacy.agentCount = 1;
-    }
-    const nodes = legacy.agents.map((agent) => {
-      const own = normalized.filter((event) => eventAgent(event.metadata) === agent.id);
-      const outputs = (turn.agent_outputs || []).filter((output) => output.agent_id === agent.id);
-      const generations = [...new Set([
-        ...own.map((event) => event.metadata.generation ?? event.metadata.activation_generation ?? null),
-        ...outputs.map((output) => output.activation_generation ?? null),
-      ])].sort((a, b) => (a ?? -1) - (b ?? -1));
-      if (!generations.length) generations.push(null);
-      return {
-        node_id: agent.id, definition_id: agent.id, label: agent.label,
-        definition: notRecorded(), dependencies: agent.dependsOn,
-        activations: generations.map((generation) => {
-          const related = own.filter((event) =>
-            (event.metadata.generation ?? event.metadata.activation_generation ?? null) === generation);
-          const output = outputs.filter((item) => (item.activation_generation ?? null) === generation).at(-1);
-          const last = related.at(-1);
-          const started = related.find((event) => event.kind === 'coordination_agent_activated');
-          const completed = related.findLast((event) => /agent_(completed|failed|cancelled)$/.test(event.kind));
-          const state = last?.kind === 'coordination_agent_completed' ? 'completed'
-            : last?.kind === 'coordination_agent_failed' ? 'failed'
-              : last?.kind === 'coordination_agent_cancelled' ? 'stopped'
-                : last?.kind === 'coordination_agent_blocked' ? 'blocked'
-                  : last?.kind === 'coordination_agent_activated' ? 'working'
-                    : last?.kind === 'agent_output_superseded' ? 'superseded' : agent.state;
-          const time = (event) => event && Number.isFinite(event.recordedAt)
-            && event.recordedAt > 100000000000 ? recorded(event.recordedAt) : notRecorded();
-          return {
-            reference: { kind: 'legacy', session_id: turn.session_id || '', turn_id: legacy.turnId, node_id: agent.id, generation },
-            generation: generation === null ? notRecorded() : recorded(generation),
-            state: output?.superseded ? 'superseded' : turn.status === 'interrupted'
-              && ['working', 'waiting'].includes(state) ? 'interrupted' : state,
-            reason: last ? recorded(eventSummary(last.metadata, last.kind))
-              : turn.agent_id === agent.id && turn.error ? recorded(turn.error) : notRecorded(),
-            started_at: time(started), completed_at: time(completed), input: notRecorded(),
-            output: output ? recorded(firstText(output.output, output.content))
-              : turn.agent_id === agent.id && typeof turn.final_output === 'string' ? recorded(turn.final_output) : notRecorded(),
-            partial_outputs: turn.agent_id === agent.id && turn.partial_output
-              ? [{ text: turn.partial_output, truncated: false }] : [], usage: notRecorded(), capabilities: { inspect: true, ...unavailableControls() },
-            evidence: related.map((event) => ({
-              kind: event.kind, reference: event.recordedOperationId ? recorded(event.recordedOperationId) : notRecorded(),
-              summary: recorded(eventSummary(event.metadata, event.kind)),
-              recorded_at: time(event), details: recorded(event.metadata),
-            })),
-          };
-        }),
-      };
-    });
-    return { ...legacy, nodes, sessionId: turn.session_id || '', historyVersion: 'legacy_v1',
-      schemaVersion: 1, warnings: [], controlPlane: null };
-  }
+  const problem = controlPlaneFormatProblem(source);
+  if (problem) return unsupportedControlPlane(source, problem);
   const nodes = source.nodes;
   const stopRequested = source.stop_requested ?? null;
   const unrunNodes = new Set(stopRequested?.unrun_nodes || []);
@@ -235,7 +240,6 @@ export function foldControlPlane(source = null, events = null) {
       kind: event.kind, label: `${node.label || node.node_id} · ${event.kind.replaceAll('_', ' ')}`,
       summary: evidenceValue(event.summary, ''), recordedAt: evidenceValue(event.recorded_at), state: activation.state,
     })))).sort((a, b) => (a.recordedAt ?? 0) - (b.recordedAt ?? 0)),
-    recoveryEvidence: '', hasCoordination: nodes.length > 0,
     warnings: source.warnings || [], controlPlane: source,
   };
 }

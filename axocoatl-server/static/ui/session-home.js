@@ -329,7 +329,7 @@ function customTeamSelectionState(agents, selectedAgents) {
       return {
         valid: false,
         message: role === 'coordinator'
-          ? `${labelFor(id)} is a Coordinator. Select it alone, or choose only autonomous Agents for a coordinated Custom team.`
+          ? `${labelFor(id)} is a Coordinator. Select it alone, or choose only autonomous Agents for a multi-Agent Custom team.`
           : `${labelFor(id)} is not an autonomous Agent. Multi-Agent Custom teams can contain only autonomous Agents.`,
       };
     }
@@ -1438,7 +1438,7 @@ export class AxSessionHome extends HTMLElement {
       workflow.disabled = !this.#teams.length;
       const teamHelp = element('span', 'config-help');
       if (this.#teams.length) {
-        teamHelp.textContent = 'Multi-Agent autonomous teams snapshot membership and dependencies into each coordinated turn; one-Agent and coordinator-led teams run directly.';
+        teamHelp.textContent = 'Multi-Agent autonomous teams snapshot membership and dependencies into each turn; one-Agent and coordinator-led teams run directly.';
       } else {
         teamHelp.append(document.createTextNode(
           'Add a team to your user configuration, run axocoatl validate, then restart Axocoatl. ',
