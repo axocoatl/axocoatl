@@ -1077,8 +1077,7 @@ for (const options of [{theme: 'light', viewport: {width: 1100, height: 900}},
       assert.equal(await inspector.locator('.continue-turn').isDisabled(), true, 'no restart policy is preselected');
       assert.equal(await inspector.locator('.continue-check').isDisabled(), true);
       assert.match(await inspector.locator('.content').textContent(), /Recorded outcome is still unknown/);
-      assert.match(await inspector.locator('.continuation-dependencies').textContent(), /candidate-before, candidate-after, readiness/);
-      assert.match(await inspector.locator('.continuation-dependencies').textContent(), /Other check commands run only when selected/);
+      assert.match(await inspector.locator('.continuation-dependencies').textContent(), /Also runs again: candidate-before, candidate-after, readiness\./);
       await inspector.locator('.continue-work').check();
       await page.evaluate(() => document.querySelector('ax-activation-inspector').model = window.controlFold(window.controlEnvelope));
       assert.equal(await inspector.locator('.continue-work').isChecked(), true);
@@ -1460,10 +1459,15 @@ test('turn controls show each required check with its failed output and name the
       {argv: ['cargo', 'test'], state: 'passed', run_id: 'required-check-two', process_status: {kind: 'exited', code: 0},
         effect_disposition: 'outcome_recorded', primary_exit: null, quiescent: true, reason: null, evidence: 'check-two',
         candidate_sha256: null, exit_code: 0, stdout: '', stderr: '', stdout_truncated: false, stderr_truncated: false}];
+    // The second check passed on its own, but not together with the first on
+    // the current tree: the summary says so above the per-check results.
+    envelope.required_check_readiness = {state: 'failed', candidate_sha256: 'tree',
+      reason: 'Some checks ran on an older tree than the current one. Continue runs them all again.'};
+    const group = ['required-check:0', 'required-check:1', 'required-check:2', 'required-check:3', 'required-check:ready'];
     envelope.turn_controls = {execution_epoch_id: 'epoch-one', continue_turn: {enabled: true, reason: ''},
       finish: {enabled: false, reason: 'A required check failed.'}, continuation_choices: [],
-      check_choices: ['required-check:0', 'required-check:1', 'required-check:3', 'required-check:ready'].map(condition_id => ({condition_id,
-        required_conditions: ['required-check:0', 'required-check:3', 'required-check:ready'].filter(id => id !== condition_id),
+      check_choices: group.map(condition_id => ({condition_id,
+        required_conditions: group.filter(id => id !== condition_id),
         capability: {enabled: true, reason: ''}}))};
     await page.evaluate(async value => {
       const {foldControlPlane} = await import('/ui/coordination-turn.js');
@@ -1472,6 +1476,10 @@ test('turn controls show each required check with its failed output and name the
       inspector.model = foldControlPlane(value); document.body.append(inspector); inspector.showTurnControls();
     }, envelope);
     const inspector = page.locator('ax-activation-inspector');
+    const readiness = inspector.locator('.check-readiness');
+    assert.equal(await readiness.locator('.check-readiness-state').textContent(), 'Not ready');
+    assert.equal(await readiness.locator('.check-readiness-reason').textContent(),
+      'Some checks ran on an older tree than the current one. Continue runs them all again.');
     const checks = inspector.locator('.required-check');
     assert.equal(await checks.count(), 2);
     const failed = checks.nth(0);
@@ -1484,10 +1492,22 @@ test('turn controls show each required check with its failed output and name the
     assert.equal(await checks.nth(1).locator('pre').count(), 1, 'an empty output adds no preview');
     const content = await inspector.locator('.content').textContent();
     for (const label of ['Repository capture before the required checks', 'Required check · npm test',
-      'Repository capture after the required checks', 'Readiness of the required checks']) assert.match(content, new RegExp(label));
+      'Required check · cargo test', 'Repository capture after the required checks', 'Readiness of the required checks']) assert.match(content, new RegExp(label));
+    assert.match(await inspector.locator('.continuation-dependencies').first().textContent(),
+      /^Runs every required check again between fresh repository captures, then records readiness\.$/);
     await inspector.getByLabel('Required check · npm test').check();
     await inspector.locator('.continue-turn').click();
     assert.deepEqual(await page.evaluate(() => window.continued), {restart: [], checks: ['required-check:1']});
+    // Once every check passed together on the current tree, the summary says
+    // the turn is ready and gives no reason to act.
+    await page.evaluate(async value => {
+      const {foldControlPlane} = await import('/ui/coordination-turn.js');
+      value.required_check_readiness = {state: 'passed', candidate_sha256: 'tree', reason: 'Every check passed on the current tree and left it unchanged.'};
+      const inspector = document.querySelector('ax-activation-inspector');
+      inspector.model = foldControlPlane(value); inspector.showTurnControls();
+    }, envelope);
+    assert.equal(await readiness.locator('.check-readiness-state').textContent(), 'Ready · every check passed on the current tree');
+    assert.equal(await readiness.locator('.check-readiness-reason').count(), 0);
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });

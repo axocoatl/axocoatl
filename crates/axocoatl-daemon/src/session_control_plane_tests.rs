@@ -299,6 +299,12 @@ mod execution {
         }
 
         fn begin_started(&mut self, started: usize) {
+            self.begin_started_with(started, vec![]);
+        }
+
+        /// Two required nodes whose graph carries `conditions`; the first
+        /// `started` of them start.
+        fn begin_started_with(&mut self, started: usize, conditions: Vec<CompletionCondition>) {
             let definition = self.content.retain_activation_evidence(ActivationEvidenceContent::Definition {
                 definition_id: AgentDefinitionId::new("shared-coder").unwrap(), revision:8,
                 profile:ExecutionProfile { definition:"shared-coder".into(), provider:"ollama".into(), model:"local-model".into(), isolation:"podman".into(), tools:vec!["file_read".into()], write_scope: None },
@@ -346,7 +352,7 @@ mod execution {
                                 revision: 1,
                                 nodes,
                                 dependencies: vec![],
-                                conditions: vec![],
+                                conditions,
                             },
                         },
                     },
@@ -404,6 +410,69 @@ mod execution {
                 .snapshot(&LogicalTurnId::new("turn-a").unwrap())
                 .unwrap()
         }
+    }
+
+    /// A required check whose record cannot be read is shown as unavailable;
+    /// the other checks, their readiness and the rest of the turn still show.
+    #[test]
+    fn an_unreadable_required_check_does_not_hide_the_turn() {
+        use axocoatl_session::turn_checks::{check_definitions, CheckGroup};
+        let mut fixture = Fixture::new();
+        let checks = vec![
+            vec!["cargo".to_string(), "test".to_string()],
+            vec!["npm".to_string(), "test".to_string()],
+        ];
+        let group = CheckGroup::required();
+        let nodes = vec![
+            TurnNodeId::new("node-a").unwrap(),
+            TurnNodeId::new("node-b").unwrap(),
+        ];
+        let mut conditions: Vec<_> = check_definitions(&checks)
+            .unwrap()
+            .into_iter()
+            .enumerate()
+            .map(|(index, definition)| CompletionCondition {
+                condition_id: ConditionId::new(group.condition_id(index)).unwrap(),
+                kind: ConditionKind::RepositoryCheck {
+                    definition: if index == 1 {
+                        EvidenceRef::new("unreadable-check-definition").unwrap()
+                    } else {
+                        fixture
+                            .content
+                            .retain_repository_check_definition(definition)
+                            .unwrap()
+                            .reference()
+                            .clone()
+                    },
+                },
+                nodes: nodes.clone(),
+            })
+            .collect();
+        conditions.push(CompletionCondition {
+            condition_id: ConditionId::new(group.ready_id()).unwrap(),
+            kind: ConditionKind::Review {
+                criterion: EvidenceRef::new("readiness-criterion").unwrap(),
+            },
+            nodes,
+        });
+        fixture.begin_started_with(2, conditions);
+        let view =
+            SessionTurnControlPlane::from_execution(&fixture.snapshot(), &fixture.content).unwrap();
+        assert_eq!(view.nodes.len(), 2);
+        assert_eq!(view.required_checks.len(), 2);
+        let unreadable = &view.required_checks[0];
+        assert_eq!(unreadable.state, "unavailable");
+        assert!(unreadable
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("This check's command cannot be read")));
+        assert_eq!(view.required_checks[1].argv, checks[1]);
+        assert_eq!(view.required_checks[1].state, "pending");
+        let readiness = view.required_check_readiness.unwrap();
+        assert_eq!(readiness.state, "not_run");
+        assert!(readiness
+            .reason
+            .contains("have not run on the current result"));
     }
 
     #[test]

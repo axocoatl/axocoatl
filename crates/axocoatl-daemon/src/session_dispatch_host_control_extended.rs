@@ -52,9 +52,17 @@ fn capability(result: Result<()>) -> ControlPlaneCapability {
 }
 
 impl DispatchState {
-    fn check_continue_conditions(&self, selected: &[ConditionId]) -> Result<Vec<ConditionId>> {
+    fn check_continue_conditions(
+        &self,
+        selected: &[ConditionId],
+        restarts: bool,
+    ) -> Result<Vec<ConditionId>> {
         let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
-        continue_conditions(selected, snapshot.contract().graph().and_then(group_of))
+        continue_conditions(
+            selected,
+            restarts,
+            snapshot.contract().graph().and_then(group_of),
+        )
     }
     fn human_successor_input(
         &self,
@@ -351,7 +359,8 @@ impl DispatchState {
                 if seen.len() != selected.restart.len() {
                     return Err(error("Continue selects an undeclared node"));
                 }
-                let condition_runs = self.check_continue_conditions(&selected.checks)?;
+                let condition_runs =
+                    self.check_continue_conditions(&selected.checks, !selected.restart.is_empty())?;
                 // Rerunning only checks that cannot be paid for would pause the
                 // turn again with nothing done.
                 if let Some((group, count)) = group_of(graph) {
@@ -492,23 +501,27 @@ impl DispatchState {
     }
 }
 
-/// Selecting any condition of the graph's check group reruns it between
-/// fresh captures and records readiness again; other commands keep their
-/// results. `group` is the group and its command count.
+/// Selecting any condition of the graph's check group, or restarting any
+/// Agent (`restarts`), reruns the whole group: both captures, every command
+/// and readiness. Readiness needs every command to have run on the one tree
+/// the captures around them saw, and whatever changed the tree since the last
+/// pass, a person's fix or restarted work, leaves every earlier command on an
+/// older tree; rerunning only the selected command could never make the
+/// group ready. `group` is the group and its command count.
 fn continue_conditions(
     selected: &[ConditionId],
+    restarts: bool,
     group: Option<(CheckGroup, usize)>,
 ) -> Result<Vec<ConditionId>> {
     let mut conditions = selected.to_vec();
     let Some((group, count)) = group else {
         return Ok(conditions);
     };
-    if selected.iter().any(|id| group.contains(id)) {
-        for id in [
-            group.condition_id(0),
-            group.condition_id(count + 1),
-            group.ready_id(),
-        ] {
+    if restarts || selected.iter().any(|id| group.contains(id)) {
+        for id in (0..count + 2)
+            .map(|index| group.condition_id(index))
+            .chain(std::iter::once(group.ready_id()))
+        {
             let id = ConditionId::new(id).map_err(error)?;
             if !conditions.contains(&id) {
                 conditions.push(id);
@@ -618,6 +631,7 @@ fn human_turn_control_choices(
                 condition_id: condition.condition_id.clone(),
                 required_conditions: continue_conditions(
                     std::slice::from_ref(&condition.condition_id),
+                    false,
                     group.clone(),
                 )?
                 .into_iter()
@@ -748,28 +762,49 @@ impl SessionTurnControlPlane {
 mod check_continuation_tests {
     use super::*;
     #[test]
-    fn selecting_one_required_check_refreshes_captures_and_readiness() {
+    fn selecting_one_required_check_reruns_every_check_between_fresh_captures() {
         let group = || Some((CheckGroup::required(), 3));
         let selected = ConditionId::new("required-check:2").unwrap();
-        let result = continue_conditions(std::slice::from_ref(&selected), group()).unwrap();
+        let every = vec![
+            "required-check:2",
+            "required-check:0",
+            "required-check:1",
+            "required-check:3",
+            "required-check:4",
+            "required-check:ready",
+        ];
+        let result = continue_conditions(std::slice::from_ref(&selected), false, group()).unwrap();
         assert_eq!(
             result.iter().map(ConditionId::as_str).collect::<Vec<_>>(),
-            vec![
-                "required-check:2",
-                "required-check:0",
-                "required-check:4",
-                "required-check:ready"
-            ]
+            every
         );
         // Another condition, or a turn without checks, selects only itself.
         let other = ConditionId::new("review").unwrap();
         assert_eq!(
-            continue_conditions(std::slice::from_ref(&other), group()).unwrap(),
-            vec![other]
+            continue_conditions(std::slice::from_ref(&other), false, group()).unwrap(),
+            vec![other.clone()]
         );
         assert_eq!(
-            continue_conditions(std::slice::from_ref(&selected), None).unwrap(),
+            continue_conditions(std::slice::from_ref(&selected), false, None).unwrap(),
             vec![selected]
         );
+        // Restarting an Agent runs the whole group again after it, as Revise
+        // does; without checks it selects nothing more.
+        let restarted = continue_conditions(&[], true, group()).unwrap();
+        assert_eq!(
+            restarted
+                .iter()
+                .map(ConditionId::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "required-check:0",
+                "required-check:1",
+                "required-check:2",
+                "required-check:3",
+                "required-check:4",
+                "required-check:ready",
+            ]
+        );
+        assert!(continue_conditions(&[], true, None).unwrap().is_empty());
     }
 }

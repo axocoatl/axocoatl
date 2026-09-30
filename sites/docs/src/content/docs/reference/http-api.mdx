@@ -316,14 +316,18 @@ waits for safe settlement; it does not grant an Agent permission to bypass check
 
 A native turn whose team has required checks also carries `required_checks` in its
 control plane: for each check, in order, its `argv` and the `state` of its latest run
-(`pending`, `passed`, `failed`, `timed_out`, `outcome_unknown` and so on), with
-`exit_code`, `run_id`, `process_status` and bounded `stdout` and `stderr` previews when
-recorded. Timeout, interruption, launch failure, no dispatch and a missing outcome stay
-distinct, and a successful exit alone is not a readiness verdict. Its conditions are
-named `required-check:0` (the capture before),
+(`pending`, `passed`, `failed`, `timed_out`, `outcome_unknown`, `unavailable` and so on),
+with `exit_code`, `run_id`, `process_status` and bounded `stdout` and `stderr` previews
+when recorded. Timeout, interruption, launch failure, no dispatch and a missing outcome
+stay distinct, and a successful exit alone is not a readiness verdict. A check whose
+record cannot be read is `unavailable` with a `reason`; it does not hide the rest of the
+turn. `required_check_readiness` carries that verdict: `state` (`passed`, `failed`,
+`not_run`, `skipped` or `unavailable`), a `reason` in words, and the `candidate_sha256`
+tree it judged. Its conditions are named `required-check:0` (the capture before),
 `required-check:1` to `required-check:n` (the checks), `required-check:n+1` (the capture
-after) and `required-check:ready`; selecting one check in a Continue request also reruns
-both captures and readiness.
+after) and `required-check:ready`. Selecting any of them in a Continue request, or
+restarting any Agent, reruns both captures, every check and readiness. A check-only
+Continue that the paying Agent's budget cannot cover is refused with the reason.
 
 The `execution_events` array is the canonical ordered record. A live
 `coordination` WebSocket frame nests the `RecordTurnExecution` body under

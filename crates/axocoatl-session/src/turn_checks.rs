@@ -250,6 +250,15 @@ impl TurnCheckView {
             stderr_truncated: false,
         }
     }
+
+    /// A check whose recorded run cannot be read, and why.
+    pub fn unavailable(argv: Vec<String>, reason: String) -> Self {
+        Self {
+            state: "unavailable".into(),
+            reason: Some(reason),
+            ..Self::pending(argv)
+        }
+    }
 }
 
 /// Read the latest exact run even when it has no readiness observation. A retained
@@ -329,15 +338,118 @@ pub fn project_check(
         ConditionProcessStatus::Exited { code } => Some(*code),
         _ => None,
     };
-    (check.stdout, check.stdout_truncated) = output_preview(
-        &result.stdout().retained_bytes()?,
-        result.stdout().is_truncated(),
-    );
-    (check.stderr, check.stderr_truncated) = output_preview(
-        &result.stderr().retained_bytes()?,
-        result.stderr().is_truncated(),
-    );
+    // Unreadable output loses the preview, not the recorded outcome.
+    let mut unreadable = Vec::new();
+    match result.stdout().retained_bytes() {
+        Ok(bytes) => {
+            (check.stdout, check.stdout_truncated) =
+                output_preview(&bytes, result.stdout().is_truncated());
+        }
+        Err(_) => unreadable.push("output"),
+    }
+    match result.stderr().retained_bytes() {
+        Ok(bytes) => {
+            (check.stderr, check.stderr_truncated) =
+                output_preview(&bytes, result.stderr().is_truncated());
+        }
+        Err(_) => unreadable.push("errors"),
+    }
+    if !unreadable.is_empty() {
+        let note = format!("Its recorded {} cannot be read.", unreadable.join(" and "));
+        check.reason = Some(match check.reason.take() {
+            Some(reason) => format!("{reason}. {note}"),
+            None => note,
+        });
+    }
     Ok(check)
+}
+
+/// Whether a turn's required checks are ready, read from the current
+/// readiness review, and why not.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TurnCheckReadiness {
+    /// `passed`, `failed`, `not_run`, `skipped` or `unavailable`.
+    pub state: String,
+    /// What the state means, in words for the person.
+    pub reason: String,
+    /// The repository tree the review judged, when it captured one.
+    pub candidate_sha256: Option<String>,
+}
+
+impl TurnCheckReadiness {
+    /// A readiness review that cannot be read, and why.
+    pub fn unavailable(reason: String) -> Self {
+        Self {
+            state: "unavailable".into(),
+            reason,
+            candidate_sha256: None,
+        }
+    }
+}
+
+/// The readiness of `group` in `snapshot`: its current review, or why there
+/// is none. A failed review recorded before reviews named their reason gets
+/// a general one.
+pub fn project_readiness(
+    snapshot: &DurableTurnSnapshot,
+    content: &ExecutionContentStore,
+    group: &CheckGroup,
+) -> Result<TurnCheckReadiness, ExecutionContentError> {
+    let contract = snapshot.contract();
+    let id = ConditionId::new(group.ready_id())
+        .map_err(|_| ExecutionContentError::Invalid("invalid readiness identity"))?;
+    let Some(observation) = contract.current_condition(&id) else {
+        let skipped = contract.state() == Some(LogicalTurnState::Finished)
+            && contract
+                .stop_requested()
+                .and_then(|intent| intent.partial_finish.as_ref())
+                .is_some_and(|selection| selection.missing_condition_ids.contains(&id));
+        return Ok(if skipped {
+            TurnCheckReadiness {
+                state: "skipped".into(),
+                reason: "Not run; the turn was finished without them.".into(),
+                candidate_sha256: None,
+            }
+        } else {
+            TurnCheckReadiness {
+                state: "not_run".into(),
+                reason: "The checks have not run on the current result yet. They run after the \
+                         required Agents finish."
+                    .into(),
+                candidate_sha256: None,
+            }
+        });
+    };
+    let proof = match content.resolve_activation_evidence(&observation.evidence)? {
+        crate::execution_content::ActivationEvidenceContent::Guidance { text } => {
+            serde_json::from_str::<serde_json::Value>(text).unwrap_or_default()
+        }
+        _ => serde_json::Value::Null,
+    };
+    let candidate_sha256 = proof
+        .get("candidate_sha256")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    Ok(if observation.outcome == ConditionOutcome::Passed {
+        TurnCheckReadiness {
+            state: "passed".into(),
+            reason: "Every check passed on the current tree and left it unchanged.".into(),
+            candidate_sha256,
+        }
+    } else {
+        TurnCheckReadiness {
+            state: "failed".into(),
+            reason: proof
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(
+                    "The checks did not all pass on the current tree. Continue runs them all \
+                     again.",
+                )
+                .into(),
+            candidate_sha256,
+        }
+    })
 }
 
 fn output_preview(bytes: &[u8], truncated: bool) -> (String, bool) {

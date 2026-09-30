@@ -9,7 +9,9 @@ use axocoatl_session::execution_content::{
     ActivationEvidenceContent, ContentResolution, ExecutionContentError, ExecutionContentStore,
 };
 use axocoatl_session::execution_store::DurableTurnSnapshot;
-use axocoatl_session::turn_checks::{group_of, project_check, CheckGroup, TurnCheckView};
+use axocoatl_session::turn_checks::{
+    group_of, project_check, project_readiness, CheckGroup, TurnCheckReadiness, TurnCheckView,
+};
 use axocoatl_session::turn_contract::{
     ActivationRef, ActivationState, ConditionKind, EvidenceRef, GraphMutation, LogicalTurnState,
     TurnNodeId,
@@ -206,6 +208,10 @@ pub struct SessionTurnControlPlane {
     /// order. Empty when the turn has none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub required_checks: Vec<TurnCheckView>,
+    /// Whether those checks passed on the current tree, and why not. Absent
+    /// when the turn has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_check_readiness: Option<TurnCheckReadiness>,
     pub decisions: EvidenceValue<Vec<Value>>,
     pub warnings: Vec<String>,
 }
@@ -225,6 +231,7 @@ impl SessionTurnControlPlane {
             schema_version: 1,
             turn_controls: None,
             required_checks: vec![],
+            required_check_readiness: None,
             history_version: "legacy_v1".into(),
             superseded_conversation: false,
             stop_requested: None,
@@ -807,7 +814,8 @@ impl SessionTurnControlPlane {
         Ok(Self {
             schema_version: 1,
             turn_controls: None,
-            required_checks: required_checks(snapshot, content)?,
+            required_checks: required_checks(snapshot, content),
+            required_check_readiness: required_check_readiness(snapshot, content),
             history_version: "execution_v2".into(),
             superseded_conversation: false,
             stop_requested: contract.stop_requested().cloned(),
@@ -880,19 +888,20 @@ fn delegated_by(
 }
 
 /// Each required check's latest run, from the definitions the admitted graph
-/// names.
-fn required_checks(
+/// names. A check whose record cannot be read is shown as unavailable; it
+/// never hides the rest of the turn.
+pub(crate) fn required_checks(
     snapshot: &DurableTurnSnapshot,
     content: &ExecutionContentStore,
-) -> Result<Vec<TurnCheckView>, ExecutionContentError> {
+) -> Vec<TurnCheckView> {
     let Some(graph) = snapshot.contract().graph() else {
-        return Ok(vec![]);
+        return vec![];
     };
     let Some((group, count)) = group_of(graph) else {
-        return Ok(vec![]);
+        return vec![];
     };
     if group != CheckGroup::required() {
-        return Ok(vec![]);
+        return vec![];
     }
     let mut checks = Vec::with_capacity(count);
     for index in 1..=count {
@@ -907,15 +916,47 @@ fn required_checks(
         let ConditionKind::RepositoryCheck { definition } = &condition.kind else {
             continue;
         };
-        let definition = content.resolve_repository_check_definition(definition)?;
-        checks.push(project_check(
-            snapshot,
-            content,
-            &condition.condition_id,
-            definition,
-        )?);
+        let definition = match content.resolve_repository_check_definition(definition) {
+            Ok(definition) => definition,
+            Err(failure) => {
+                checks.push(TurnCheckView::unavailable(
+                    vec![],
+                    format!("This check's command cannot be read: {failure}"),
+                ));
+                continue;
+            }
+        };
+        checks.push(
+            project_check(snapshot, content, &condition.condition_id, definition).unwrap_or_else(
+                |failure| {
+                    TurnCheckView::unavailable(
+                        definition.argv.clone(),
+                        format!("This check's recorded run cannot be read: {failure}"),
+                    )
+                },
+            ),
+        );
     }
-    Ok(checks)
+    checks
+}
+
+/// Whether the required checks passed on the current tree, when the turn has
+/// them. A review that cannot be read is shown as unavailable.
+fn required_check_readiness(
+    snapshot: &DurableTurnSnapshot,
+    content: &ExecutionContentStore,
+) -> Option<TurnCheckReadiness> {
+    let (group, _) = snapshot.contract().graph().and_then(group_of)?;
+    if group != CheckGroup::required() {
+        return None;
+    }
+    Some(
+        project_readiness(snapshot, content, &group).unwrap_or_else(|failure| {
+            TurnCheckReadiness::unavailable(format!(
+                "The readiness of the checks cannot be read: {failure}"
+            ))
+        }),
+    )
 }
 
 fn bounded_json(value: Value) -> EvidenceValue<Value> {

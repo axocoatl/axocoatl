@@ -429,4 +429,93 @@ fn a_check_that_changes_the_tree_is_not_ready() {
         &before,
         &after
     ));
+    // The changed tree alone is enough: every command's candidate matches
+    // the After capture, but the Before capture saw another tree.
+    let before = capture(Some("tree"), Some("head"));
+    let after = capture(Some("changed"), Some("head"));
+    let candidate = Some(("changed".to_string(), Some("head".to_string())));
+    let commands = [candidate.clone(), candidate];
+    assert_eq!(
+        readiness_failure(4, &[Passed; 4], &commands, 2, &before, &after),
+        Some(CHANGED_FILES)
+    );
+    let same = capture(Some("changed"), Some("head"));
+    assert_eq!(
+        readiness_failure(4, &[Passed; 4], &commands, 2, &same, &after),
+        None,
+        "the same candidates on an unchanged tree are ready"
+    );
+}
+
+/// Each way the checks are not ready says why in words.
+#[test]
+fn readiness_names_why_the_checks_are_not_ready() {
+    use ConditionOutcome::{Failed, Passed};
+    let tree = capture(Some("tree"), Some("head"));
+    let current = Some(("tree".to_string(), Some("head".to_string())));
+    let commands = [current.clone(), current.clone()];
+    let failure = |outcomes: &[ConditionOutcome],
+                   commands: &[Candidate],
+                   before: &ActivationRepositorySnapshot| {
+        readiness_failure(4, outcomes, commands, 2, before, &tree)
+    };
+    assert_eq!(failure(&[Passed; 4], &commands, &tree), None);
+    assert_eq!(
+        failure(&[Passed, Failed, Passed, Passed], &commands, &tree),
+        Some(CHECK_FAILED)
+    );
+    assert_eq!(
+        failure(&[Passed, Passed, Passed, Failed], &commands, &tree),
+        Some(NOT_CAPTURED)
+    );
+    assert_eq!(
+        failure(&[Passed; 4], &commands, &capture(None, Some("head"))),
+        Some(NOT_CAPTURED)
+    );
+    assert_eq!(failure(&[Passed; 3], &commands, &tree), Some(NOT_ALL_RUN));
+    // One command's result is from a pass on another tree.
+    let older = [
+        current,
+        Some(("older".to_string(), Some("head".to_string()))),
+    ];
+    assert_eq!(failure(&[Passed; 4], &older, &tree), Some(OLDER_TREE));
+}
+
+/// Readiness does not count an Agent whose result was accepted after the
+/// checks' Before capture began; one accepted before it, or no longer
+/// current, does not invalidate it.
+#[test]
+fn an_agent_accepted_after_the_capture_invalidates_readiness() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("../../axocoatl-session/tests/fixtures/turn_contract/check_only_recovery_preserves_accepted_generations.json")).unwrap();
+    let accept: TurnContractEnvelope =
+        serde_json::from_value(fixture["steps"][2]["envelope"].clone()).unwrap();
+    let TurnContractEvent::AcceptActivation { activation, .. } = &accept.event else {
+        panic!()
+    };
+    let activation = activation.clone();
+    let before = ConditionRunId::new("before-capture").unwrap();
+    let intent = TurnContractEnvelope {
+        command_id: CommandId::new("before-intent").unwrap(),
+        event: TurnContractEvent::RecordConditionIntent {
+            run: ConditionRunRef {
+                session_id: accept.session_id.clone(),
+                turn_id: accept.turn_id.clone(),
+                epoch_id: activation.execution_epoch_id.clone(),
+                condition_id: ConditionId::new("required-check:0").unwrap(),
+                run_id: before.clone(),
+                activations: vec![],
+            },
+            intent: EvidenceRef::new("before-intent").unwrap(),
+        },
+        ..accept.clone()
+    };
+    let turn = accept.turn_id.clone();
+    let current = std::slice::from_ref(&activation);
+    let late = [intent.clone(), accept.clone()];
+    assert!(accepted_after_capture(&late, &turn, &before, current));
+    let early = [accept.clone(), intent.clone()];
+    assert!(!accepted_after_capture(&early, &turn, &before, current));
+    assert!(!accepted_after_capture(&late, &turn, &before, &[]));
+    let other = LogicalTurnId::new("another-turn").unwrap();
+    assert!(!accepted_after_capture(&late, &other, &before, current));
 }

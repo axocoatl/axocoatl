@@ -83,10 +83,14 @@ after the turn's required Agents are accepted, the host runs each command betwee
 repository captures of that exact candidate, charged to the grant of the first required
 Agent whose own profile may use `bash` (a lead's helper profiles never count), and
 records one readiness review. The turn completes only when every check passes and the
-captured tree did not change; a failure leaves it needing attention. A pass starts only
-when the paying grant can pay for all of it; otherwise the readiness review records, in
-words, why the checks could not run, and a check-only Continue that could not be paid
-is refused.
+captured tree did not change; a failure leaves it needing attention. The review records
+why it failed in words, and it also fails when an accepted activation was accepted after
+the Before capture's intent, so work admitted during a pass cannot complete unchecked.
+A Continue that selects any condition of the group, or restarts any Agent, reruns the
+whole group: readiness needs every command on the one tree its captures saw. A pass
+starts only when the paying grant can pay for all of it; otherwise the readiness review
+records, in words, why the checks could not run, and a check-only Continue that could
+not be paid is refused.
 
 `turn_contract` decodes and folds a bounded schema-2 logical-turn contract separately from
 the live schema-1 ledger. Immutable manifests bind definitions, conversations, starting

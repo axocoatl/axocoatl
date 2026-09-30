@@ -99,7 +99,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes only when every check passes and the repository is unchanged; a failure
   leaves it needing attention. When the checks cannot be paid for, the turn says why and
   Continue does not offer to rerun them. The turn's controls show each check's command,
-  state, exit code and output.
+  state, exit code and output, and above them whether the checks passed together on the
+  current tree and, if not, why. Continue on any check, or on restarted work, runs every
+  check again between fresh captures; an Agent that finishes after the checks captured
+  the repository makes them not ready. A check whose record cannot be read shows as
+  unavailable instead of hiding the turn.
 - **Retained Ways decisions.** Native Ways retain bounded candidate Outcomes, Routes,
   diffs, Checks, usage, Judge evidence, the human choice, and cleanup state after Keep
   or finishing without keeping. History storage limits are explicit; capacity failure

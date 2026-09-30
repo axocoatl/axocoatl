@@ -226,6 +226,93 @@ fn rerun_check(
     }
 }
 
+/// Holds every activation's resources until the driver is dropped.
+struct WaitingFactory(Arc<Notify>);
+#[async_trait::async_trait]
+impl AutonomousActivationFactory for WaitingFactory {
+    async fn resources(
+        &self,
+        _: &ActivationInputManifest,
+    ) -> std::result::Result<AutonomousActivationResources, String> {
+        self.0.notify_one();
+        std::future::pending().await
+    }
+}
+
+/// Restarting interrupted work also runs the required checks again after
+/// it, as Revise does: the new epoch selects the whole check group, so no
+/// earlier result stands for the restarted Agent's tree.
+#[tokio::test]
+async fn continuing_restarted_work_runs_the_required_checks_again() {
+    let mut f = fixture().await;
+    let checks = vec![
+        vec!["sh".into(), "-c".into(), "true".into()],
+        vec!["true".into()],
+    ];
+    let r = run_checked(&mut f, &["bash"], &checks);
+    r.controller
+        .authorize_required_checks(r.resource.reference())
+        .unwrap();
+    let started = Arc::new(Notify::new());
+    let driver = r
+        .controller
+        .autonomous_turn_driver(vec![seed(&r)], Arc::new(WaitingFactory(started.clone())))
+        .unwrap();
+    let run = tokio::spawn(driver.run());
+    tokio::time::timeout(Duration::from_secs(5), started.notified())
+        .await
+        .unwrap();
+    run.abort();
+    assert!(run.await.err().expect("aborted driver task").is_cancelled());
+    let snapshot = r.controller.snapshot().unwrap();
+    let contract = snapshot.contract();
+    assert_eq!(contract.state(), Some(LogicalTurnState::NeedsAttention));
+    let interrupted = contract.activations().last().unwrap().activation.clone();
+    let mut request = rerun_check(&r.controller, "required-check:1");
+    request.command_id = CommandId::new("restart-interrupted-work").unwrap();
+    request.continuation = Some(crate::session_dispatch::HumanContinuationSelection {
+        restart: vec![interrupted],
+        checks: vec![],
+    });
+    let receipt = r
+        .controller
+        .submit_human_action(
+            request,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.state,
+        axocoatl_session::control_command::ControlCommandState::Settled,
+        "{receipt:?}"
+    );
+    let snapshot = r.controller.snapshot().unwrap();
+    let plan = snapshot
+        .contract()
+        .epochs()
+        .last()
+        .unwrap()
+        .continuation
+        .clone()
+        .unwrap();
+    assert_eq!(
+        plan.condition_runs
+            .iter()
+            .map(ConditionId::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "required-check:0",
+            "required-check:1",
+            "required-check:2",
+            "required-check:3",
+            "required-check:ready"
+        ]
+    );
+}
+
 /// The readiness proof the turn records for its required checks, when current.
 fn readiness_proof(controller: &SessionDispatchController) -> Option<serde_json::Value> {
     let snapshot = controller.snapshot().unwrap();
@@ -483,7 +570,7 @@ async fn actual_failing_required_check_needs_attention_and_passing_check_complet
     assert!(contract
         .current_condition(&ConditionId::new("required-check:ready").unwrap())
         .is_some_and(|observation| observation.outcome == ConditionOutcome::Passed));
-    // The rerun repeated both captures and the selected check, nothing else.
+    // The rerun repeated both captures and the check.
     assert_eq!(contract.condition_runs().len(), 6);
     let passed = passed.unwrap();
     let check = &passed.required_checks[0];
@@ -493,4 +580,122 @@ async fn actual_failing_required_check_needs_attention_and_passing_check_complet
     // The Agent answered once; the host ran every check.
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
     assert!(idle.unwrap());
+}
+
+/// Two required checks: the first fails and the second passes on the first
+/// tree, so the turn is not ready and says why. The person fixes the tree and
+/// continues only the failing check. Continue runs both checks again between
+/// fresh captures, so they pass together on the fixed tree and the turn
+/// completes; rerunning only the selected one would leave the other on the
+/// older tree.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_two_check_continue_after_the_tree_changed_reruns_every_check() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    git_init(f._workspace.path());
+    std::fs::write(f._workspace.path().join("notes.txt"), "draft\n").unwrap();
+    let checks = vec![
+        vec![
+            "sh".into(),
+            "-c".into(),
+            "test -f approved.txt || { echo missing approval >&2; exit 3; }".into(),
+        ],
+        vec!["test".into(), "-f".into(), "notes.txt".into()],
+    ];
+    let r = run_checked(&mut f, &["bash"], &checks);
+    let authorized = r
+        .controller
+        .authorize_required_checks(r.resource.reference());
+    let provider = Provider::new(vec![]);
+    let factory = Arc::new(Factory {
+        config: r.config.clone(),
+        profile: r.profile.clone(),
+        provider: provider.clone(),
+    });
+    let first = tokio::time::timeout(Duration::from_secs(180), async {
+        r.controller
+            .autonomous_turn_driver(vec![seed(&r)], factory.clone())?
+            .run()
+            .await
+    })
+    .await;
+    let failed = r.controller.control_plane();
+    std::fs::write(f._workspace.path().join("approved.txt"), "yes\n").unwrap();
+    let receipt = r.controller.submit_human_action(
+        rerun_check(&r.controller, "required-check:1"),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+    );
+    let second = tokio::time::timeout(Duration::from_secs(180), async {
+        r.controller
+            .autonomous_turn_driver(vec![seed(&r)], factory.clone())?
+            .run()
+            .await
+    })
+    .await;
+    let passed = r.controller.control_plane();
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+
+    authorized.unwrap();
+    let first = first.unwrap().unwrap();
+    assert_eq!(
+        first.snapshot.contract().state(),
+        Some(LogicalTurnState::NeedsAttention)
+    );
+    let failed = failed.unwrap();
+    assert_eq!(
+        failed
+            .required_checks
+            .iter()
+            .map(|check| check.state.as_str())
+            .collect::<Vec<_>>(),
+        ["failed", "passed"]
+    );
+    let readiness = failed.required_check_readiness.unwrap();
+    assert_eq!(readiness.state, "failed");
+    assert_eq!(
+        readiness.reason,
+        "A check failed. Fix the cause, then Continue to run the checks again."
+    );
+    let receipt = receipt.unwrap();
+    assert_eq!(
+        receipt.state,
+        axocoatl_session::control_command::ControlCommandState::Settled,
+        "{receipt:?}"
+    );
+    let second = second.unwrap().unwrap();
+    let contract = second.snapshot.contract();
+    assert_eq!(contract.state(), Some(LogicalTurnState::Completed));
+    assert!(second.finalized.is_some());
+    // Both passes ran both captures and both checks.
+    assert_eq!(contract.condition_runs().len(), 8);
+    let passed = passed.unwrap();
+    assert_eq!(
+        passed
+            .required_checks
+            .iter()
+            .map(|check| check.state.as_str())
+            .collect::<Vec<_>>(),
+        ["passed", "passed"]
+    );
+    assert_eq!(passed.required_check_readiness.unwrap().state, "passed");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert!(idle.unwrap());
+    // Selecting the failing check also selects the other one.
+    let choice = failed
+        .turn_controls
+        .unwrap()
+        .check_choices
+        .into_iter()
+        .find(|choice| choice.condition_id.as_str() == "required-check:1")
+        .unwrap();
+    assert!(choice.capability.enabled, "{}", choice.capability.reason);
+    assert!(choice
+        .required_conditions
+        .iter()
+        .any(|id| id.as_str() == "required-check:2"));
 }
