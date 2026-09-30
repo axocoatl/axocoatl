@@ -2268,11 +2268,14 @@ impl DefaultAgentBehavior {
                 self.counter.clone(),
                 capabilities.max_context_tokens,
             );
+            // Earlier turns shrink until the rest is comfortable, as rounds
+            // are left out above, so the next requests keep this prefix.
             request.messages = pipeline
-                .compress_sync_to(
+                .compress_sync_toward(
                     request.messages,
                     axocoatl_token::CompressionGuard::new(protected_suffix_start, tool_tokens),
                     budget,
+                    comfortable.saturating_add(tool_tokens),
                 )
                 .map_err(Self::compression_error)?
                 .messages;

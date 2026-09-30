@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use axocoatl_core::{ChatMessage, MessageContent, MessageRole};
+use axocoatl_core::{ChatMessage, MessageRole};
 use axocoatl_token::TokenCounter;
 
 /// Results shorter than this stay as they are: masking them saves little and
@@ -101,8 +101,8 @@ impl StaleToolResultMasking {
     /// Last resort before a request would fail for its context: remove the
     /// Agent's oldest `count` tool rounds (each call with its results, so the
     /// conversation stays well formed; never the latest round) and say so in
-    /// one line. A person's messages within the span are kept. Returns how
-    /// many rounds were removed.
+    /// one line. A person's messages and the Agent's answers to earlier
+    /// turns within the span are kept. Returns how many rounds were removed.
     pub(crate) fn drop_oldest_rounds(
         &self,
         messages: &mut Vec<ChatMessage>,
@@ -123,7 +123,7 @@ impl StaleToolResultMasking {
                      context. Changes I made are still in the files; read again what I need.]"
                 )));
             }
-            if !in_span || message.role == MessageRole::User {
+            if !in_span || kept_across_rounds(&message) {
                 kept.push(message);
             }
         }
@@ -158,7 +158,7 @@ impl StaleToolResultMasking {
         for count in 1..rounds.len() {
             total = messages[rounds[count - 1]..rounds[count]]
                 .iter()
-                .filter(|message| message.role != MessageRole::User)
+                .filter(|message| !kept_across_rounds(message))
                 .fold(total, |total, message| {
                     total.saturating_sub(message_tokens(counter, message))
                 });
@@ -194,47 +194,26 @@ impl StaleToolResultMasking {
         let exempt = |name: &str| {
             self.exempt.contains(name) || (!tight && self.kept_until_tight.contains(name))
         };
-        // The model's own earlier calls re-send their arguments too; a
-        // whole-file write repeats the file on every round. Long string
-        // arguments are elided the same way; the call's name, id and
-        // argument keys stay, so the replay remains a well-formed call.
-        // A provider that replays its own record of the turn (Anthropic
-        // content blocks, Gemini parts) checks the calls against it, so a
-        // message carrying such metadata keeps its arguments.
+        // The model's own earlier calls re-send their arguments too; they are
+        // elided the same way, and the call stays well formed.
         if message.role == MessageRole::Assistant {
-            let mut masked = 0;
-            if message
-                .tool_calls
-                .iter()
-                .all(|call| call.provider_metadata.is_empty())
-            {
-                for call in &mut message.tool_calls {
-                    if !exempt(&call.name) {
-                        masked += elide_long_strings(&mut call.arguments, min_chars);
-                    }
-                }
-            }
-            return masked;
+            return axocoatl_token::elide_call_arguments(message, min_chars, exempt);
         }
-        if message.role != MessageRole::Tool {
+        if message.role != MessageRole::Tool || exempt(message.name.as_deref().unwrap_or("tool")) {
             return 0;
         }
-        let name = message.name.as_deref().unwrap_or("tool");
-        if exempt(name) {
-            return 0;
-        }
-        let MessageContent::Text(text) = &message.content else {
-            return 0;
-        };
-        let chars = text.chars().count();
-        if chars < min_chars || text.starts_with("[earlier ") {
-            return 0;
-        }
-        message.content = MessageContent::Text(format!(
-            "[earlier {name} output ({chars} characters) removed to save context; \
-             run it again, narrower, if you still need it]"
-        ));
-        1
+        usize::from(axocoatl_token::elide_tool_output(message, min_chars))
+    }
+}
+
+/// What `drop_oldest_rounds` keeps within the rounds it removes: a person's
+/// messages, and the Agent's answers (an earlier turn's final answer sits
+/// between that turn's rounds and the next turn's).
+fn kept_across_rounds(message: &ChatMessage) -> bool {
+    match message.role {
+        MessageRole::User | MessageRole::System => true,
+        MessageRole::Assistant => message.tool_calls.is_empty(),
+        MessageRole::Tool => false,
     }
 }
 
@@ -257,37 +236,10 @@ fn tool_rounds(messages: &[ChatMessage]) -> Vec<usize> {
         .collect()
 }
 
-/// Replace string values of at least `min_chars` characters, at any depth,
-/// with a placeholder. Returns how many were replaced.
-fn elide_long_strings(value: &mut serde_json::Value, min_chars: usize) -> usize {
-    match value {
-        serde_json::Value::String(text) => {
-            let chars = text.chars().count();
-            if chars < min_chars || text.starts_with("[earlier ") {
-                return 0;
-            }
-            *text = format!(
-                "[earlier argument ({chars} characters) removed to save context; the call ran \
-                 with the full value]"
-            );
-            1
-        }
-        serde_json::Value::Array(items) => items
-            .iter_mut()
-            .map(|item| elide_long_strings(item, min_chars))
-            .sum(),
-        serde_json::Value::Object(fields) => fields
-            .values_mut()
-            .map(|field| elide_long_strings(field, min_chars))
-            .sum(),
-        _ => 0,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axocoatl_core::ToolCall;
+    use axocoatl_core::{MessageContent, ToolCall};
 
     fn round(id: &str, name: &str, output: &str) -> [ChatMessage; 2] {
         let call = ToolCall {
@@ -497,6 +449,33 @@ mod tests {
         assert_eq!(masking.drop_oldest_rounds(&mut messages, 9), 1);
         assert_eq!(masking.drop_oldest_rounds(&mut messages, 9), 0);
         assert_eq!(messages.last().unwrap().tool_call_id.as_deref(), Some("d"));
+    }
+
+    /// Rounds removed across a turn boundary take their calls and results
+    /// only: the earlier turn's request and final answer stay.
+    #[test]
+    fn dropping_rounds_across_turns_keeps_the_earlier_turn_s_answer() {
+        let mut messages = vec![ChatMessage::system("s"), ChatMessage::user("turn 1")];
+        messages.extend(round("a", "read_file", "one"));
+        messages.push(ChatMessage::assistant("turn 1 answer"));
+        messages.push(ChatMessage::user("turn 2"));
+        messages.extend(round("b", "read_file", "two"));
+        messages.extend(round("c", "read_file", "three"));
+        let masking = StaleToolResultMasking::new(3, []);
+        let original = messages.clone();
+
+        assert_eq!(masking.drop_oldest_rounds(&mut messages, 2), 2);
+        // The estimate counts the kept answer as kept.
+        let after = QuarterCounter.count_messages(&messages);
+        assert_eq!(masking.rounds_to_drop(&original, &QuarterCounter, after), 2);
+        let texts: Vec<_> = messages.iter().map(text).collect();
+        assert_eq!(
+            texts[..5],
+            ["s", "turn 1", texts[2], "turn 1 answer", "turn 2"]
+        );
+        assert!(texts[2].starts_with("[2 of my earlier tool rounds"));
+        assert_eq!(messages[5].tool_calls[0].id, "c");
+        assert_eq!(messages.len(), 7);
     }
 
     /// A quarter token per character plus a small per-message overhead, with
