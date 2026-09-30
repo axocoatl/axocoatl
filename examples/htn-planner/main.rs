@@ -55,7 +55,7 @@ fn primitive(name: &str, tools: &[&str]) -> HtnTask {
     let mut parameters = HashMap::new();
     if !tools.is_empty() {
         // `HtnTask::required_tools()` reads parameters["tools"] as a JSON string
-        // array — the same convention the auction uses to match workers.
+        // array — the same convention the Coordinator uses to match workers.
         parameters.insert("tools".to_string(), serde_json::json!(tools));
     }
     HtnTask {
@@ -310,8 +310,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -----------------------------------------------------------------------
     // 3. ASSIGN TO WORKERS — `OrchestrationPlan::from_plan` round-robins the
     //    primitives across available workers. This is the hand-off point to the
-    //    coordinator/auction: every primitive carries its required tools, so a
-    //    capability auction can route each to the worker that declares them.
+    //    Coordinator: every primitive carries its required tools, so it can
+    //    assign each to the first declared worker that can call them.
     // -----------------------------------------------------------------------
     println!("\n{}", "─".repeat(78));
     let workers = vec![

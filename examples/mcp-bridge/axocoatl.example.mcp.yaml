@@ -56,8 +56,8 @@ agents:
     system_prompt: "You answer weather questions. Use the available tools to look up conditions, then reply in one sentence."
     depends_on: []
     # `tools` declares the capabilities this agent advertises — used for
-    # capability-based task routing (the auction matcher checks an agent has the
-    # required tools before assigning work). Names use the qualified
+    # capability-based task routing (a Coordinator assigns work only to an agent
+    # that has the required tools). Names use the qualified
     # `mcp__<server>__<tool>` form. Per-call authorization of MCP tools is a
     # separate, runtime concern handled by the human-in-the-loop approval gate
     # and the persisted permission store (see crates/axocoatl-mcp).

@@ -13,7 +13,6 @@ readme.workspace = true
 description = "Adaptive stigmergic task lattice coordination for Axocoatl multi-agent systems"
 
 [dependencies]
-axocoatl-core = { version = "1.1.0", path = "../axocoatl-core" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

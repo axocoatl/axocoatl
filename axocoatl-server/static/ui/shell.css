@@ -1140,7 +1140,7 @@
 
   /* ═══════════════════════════════════════════════════════════════════
      COORDINATOR RUN VIEW — the Layer-2 live process tree. A vertical
-     spine (goal → decompose/auction → workers → synthesis); each phase a
+     spine (goal → decompose/assign → workers → synthesis); each phase a
      node on the spine, lit while active, filled when done.
      ═══════════════════════════════════════════════════════════════════ */
   .modal.run-view { width: 760px; max-width: 94vw; }
@@ -1202,14 +1202,6 @@
     color: #d6a338; border: 1px solid currentColor; border-radius: var(--r-sm);
     padding: 0 4px; margin-left: 6px;
   }
-  .rv-bids { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
-  .rv-bid {
-    font-size: var(--fs-xs); font-family: ui-monospace, monospace; color: var(--muted-2);
-    background: var(--bg-3); border: 1px solid var(--border);
-    border-radius: var(--r-sm); padding: 1px 6px;
-  }
-  .rv-bid.win  { color: var(--axo-jade-glow); border-color: var(--axo-jade-glow); }
-  .rv-bid.zero { opacity: .5; }
   .rv-out {
     margin-top: 9px; font-size: var(--fs-sm); font-family: ui-monospace, monospace;
     color: var(--text); background: var(--bg-3); border: 1px solid var(--border);

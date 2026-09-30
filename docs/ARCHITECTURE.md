@@ -904,11 +904,10 @@ for explicit hierarchical decomposition. Each coordination pass
    `LlmFrontierResolver` resolves only the frontiers the methods don't cover.
    Without methods, the LLM decomposes the whole goal. Each subtask carries the
    tools it needs.
-2. **Assign** each subtask to a worker by **auction** (`compute_bid` /
-   `run_auction`) — best fit by tool-capability match and remaining token
-   budget. If no pooled worker can cover a subtask's tools, an ad-hoc worker is
-   spawned with exactly those tools, so a subtask is never forced onto an unfit
-   worker.
+2. **Assign** each subtask to the **first declared worker**, in declaration
+   order, whose callable tools cover the subtask's required tools. If no pooled
+   worker can cover a subtask's tools, an ad-hoc worker is spawned with exactly
+   those tools, so a subtask is never forced onto an unfit worker.
 3. **Delegate** the pending subtasks to workers **in parallel**. Each worker is
    a first-class agent with its own configured provider, model, tools, budget,
    sampling, hooks, and (for a normal actor-owned Session turn) scoped
@@ -932,7 +931,7 @@ Interrupted projection clears private orchestration state. The next user turn
 decomposes fresh. Workers are always torn down after a pass — on success and on
 every error path — so no actor or task leaks, and a fully failed worker set
 surfaces an error rather than a hollow result. The underlying primitives
-(`axocoatl-coordination`: lattice, HTN, auction) are independently tested.
+(`axocoatl-coordination`: lattice, HTN) are independently tested.
 
 ## Workspace knowledge
 
@@ -1302,7 +1301,7 @@ Report security issues per [SECURITY.md](../SECURITY.md).
 
 `axocoatl-core` (types) · `axocoatl-token` (budgets) · `axocoatl-llm*`
 (providers) · `axocoatl-config` · `axocoatl-actor` (runtime) ·
-`axocoatl-memory` · `axocoatl-coordination` (lattice/HTN/auction) ·
+`axocoatl-memory` · `axocoatl-coordination` (lattice/HTN) ·
 `axocoatl-graph` · `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` ·
 `axocoatl-isolation` (Podman sandbox) · `axocoatl-daemon` · `axocoatl-server` ·
 `axocoatl-cli`.

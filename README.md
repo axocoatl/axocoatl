@@ -261,11 +261,12 @@ Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
   elsewhere become findings that signal their owners. Work sources shows each deposit, why it counts,
   and the dispatched turns it caused.
 - **Coordinator role** — for explicit hierarchical work, an agent with
-  `role: coordinator` decomposes a goal into subtasks (HTN or LLM), auctions them
-  to worker agents, runs them in parallel, and synthesizes the results. Internal
-  checkpoints protect the live orchestration boundary. On the legacy path, once a Session
-  turn is Completed, Cancelled, Failed, or Interrupted, a later turn decomposes fresh
-  rather than silently resuming that terminal work.
+  `role: coordinator` decomposes a goal into subtasks (HTN or LLM), assigns each
+  to the first declared worker that can call its required tools, runs them in
+  parallel, and synthesizes the results. Internal checkpoints protect the live
+  orchestration boundary. On the legacy path, once a Session turn is Completed,
+  Cancelled, Failed, or Interrupted, a later turn decomposes fresh rather than
+  silently resuming that terminal work.
 - **Workflow compatibility** — workflow commands and routes project manual
   Automation records; legacy YAML seeds those records only on first boot.
 - **Automations** — explicit DAGs created, inspected, edited, and run in

@@ -425,9 +425,10 @@
 <div class="toasts" id="toasts"></div>
 
 <!-- Coordinator run view — the Layer-2 live process tree. A coordinator
-     decomposes a goal, auctions each subtask to its workers, runs them in
-     parallel, then synthesizes. This surface renders that whole run live
-     (goal → decompose → auction → workers → synthesis) from the stream bus.
+     decomposes a goal, assigns each subtask to the first worker that can call
+     its tools, runs them in parallel, then synthesizes. This surface renders
+     that whole run live (goal → decompose → assign → workers → synthesis) from
+     the stream bus.
      Auto-opens when a coordinator plan lands; also re-openable from a
      coordinator node. Top-level so it overlays from any tab. -->
 <div class="modal-backdrop hide" id="run-view-modal" aria-hidden="true">
@@ -10066,7 +10067,7 @@ function handleWsFrame(d) {
       break;
     }
 
-    // A coordinator decomposed a goal and auctioned its subtasks — open the
+    // A coordinator decomposed a goal and assigned its subtasks — open the
     // Layer-2 run view and follow it live (workers arrive as run-scoped events).
     case 'coordinator-plan':
       onCoordinatorPlan(d);
@@ -10328,8 +10329,8 @@ function onWorkflowError(d) {
 
 // ╔══════════════════ Coordinator run view (Layer-2) ══════════════════╗
 // The live process tree for one coordinator run: goal → decompose →
-// auction → workers → synthesis. Built entirely from the stream bus:
-//   coordinator-plan  → the goal + subtasks + per-subtask auction outcome
+// assign → workers → synthesis. Built entirely from the stream bus:
+//   coordinator-plan  → the goal + subtasks + the worker assigned to each
 //   event (run-scoped)→ each winning worker's running / done / error + output
 //   workflow-done     → the coordinator's synthesis
 // One run is held at a time and kept after it finishes, so a coordinator
@@ -10513,7 +10514,7 @@ function renderRunView() {
   gp.appendChild(el('div', 'rv-goal', rv.goal || '—'));
   body.appendChild(gp);
 
-  // ── Decompose · auction · workers
+  // ── Decompose · assign · workers
   const tasksDone = rv.subtasks.length > 0 && rv.subtasks.every(s => {
     const w = rv.workers[s.winner];
     return w && (w.status === 'done' || w.status === 'error' || w.status === 'cancelled');
@@ -10521,8 +10522,8 @@ function renderRunView() {
   const pp = el('div', 'rv-phase ' + (rv.status === 'idle' ? '' : tasksDone ? 'done' : 'active'));
   pp.appendChild(el('div', 'rv-phase-label',
     rv.subtasks.length
-      ? `Decompose · auction · ${rv.subtasks.length} subtask${rv.subtasks.length === 1 ? '' : 's'}`
-      : 'Decompose · auction'));
+      ? `Decompose · assign · ${rv.subtasks.length} subtask${rv.subtasks.length === 1 ? '' : 's'}`
+      : 'Decompose · assign'));
 
   if (!rv.subtasks.length) {
     pp.appendChild(el('div', 'rv-out empty',
@@ -10537,22 +10538,12 @@ function renderRunView() {
     head.appendChild(el('span', 'rv-dot ' + (w.status === 'queued' ? '' : w.status)));
     head.appendChild(el('span', 'rv-task-name', s.name || 'subtask'));
     const win = el('span', 'rv-winner');
-    win.innerHTML = 'won by <span class="nm">' + escHtml(s.winner || '—') + '</span>'
-      + (s.score ? ' · ' + Number(s.score).toFixed(2) : '');
+    win.innerHTML = 'assigned to <span class="nm">' + escHtml(s.winner || '—') + '</span>';
     head.appendChild(win);
     if (s.adhoc) head.appendChild(el('span', 'rv-adhoc', 'ad-hoc'));
     card.appendChild(head);
 
     if (s.description) card.appendChild(el('div', 'rv-task-desc', s.description));
-
-    if (s.bids && s.bids.length) {
-      const bids = el('div', 'rv-bids');
-      s.bids.forEach(b => {
-        const cls = 'rv-bid' + (b.worker === s.winner ? ' win' : '') + (Number(b.score) === 0 ? ' zero' : '');
-        bids.appendChild(el('span', cls, b.worker + ' ' + Number(b.score).toFixed(2)));
-      });
-      card.appendChild(bids);
-    }
 
     const out = el('div', 'rv-out' + (w.output ? '' : ' empty'));
     out.textContent = w.output

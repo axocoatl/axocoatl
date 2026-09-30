@@ -223,6 +223,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memory for the life of the process. Per-Agent `activation_threshold` and
   `activation_decay` are ignored with a warning. The `stigmergic-workflow` and
   `skills-lattice` examples and the routing benchmark are gone.
+- The Coordinator's worker auction. Each subtask now goes to the first declared
+  Worker, in declaration order, whose callable tools cover its required tools,
+  and falls back to an ad-hoc Worker as before. When several Workers can do a
+  subtask the first one gets it (the auction picked the last), and a Worker's
+  token budget no longer affects the choice. The `coordinator-plan` stream frame
+  drops its `score` and `bids` fields, and the run view no longer shows bids.
 
 ## [1.0.1] — unpublished draft
 

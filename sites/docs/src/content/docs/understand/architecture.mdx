@@ -130,8 +130,9 @@ Do not collapse all multi-Agent behavior into one scheduler:
   product daemon.
 - **Native Coordinators** create distinct Worker activations from explicitly
   approved templates and delegated limits in the Session controller.
-- **Legacy Coordinators** dynamically decompose a goal and auction subtasks to
-  worker Agents during that Agent execution.
+- **Legacy Coordinators** dynamically decompose a goal and assign each subtask
+  to the first declared worker Agent that can call its tools during that Agent
+  execution.
 
 ## Failure and recovery seams
 
@@ -164,7 +165,7 @@ daemon and copy the whole data root plus Workspace repositories and config.
 - `axocoatl-memory` — memory stores, embeddings, and checkpoints;
 - `axocoatl-isolation` — local Podman and the optional E2B Cloud backend;
 - `axocoatl-exec` — the embedded Linux supervisor for bounded repository commands;
-- `axocoatl-coordination` — lattice, HTN, and auction primitives;
+- `axocoatl-coordination` — lattice and HTN primitives;
 - `axocoatl-mcp` and `axocoatl-a2a` — interoperability;
 - `packages/lattice` — browser graph web components.
 

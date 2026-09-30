@@ -189,7 +189,7 @@ pub struct SkillConfigYaml {
     /// Lattice events this Skill reacts to (auto-activation).
     #[serde(default)]
     pub reacts_to: Vec<String>,
-    /// Agents that hold this Skill (any of them can win an auction for it).
+    /// Agents listed as holding this Skill; metadata only.
     #[serde(default)]
     pub agents: Vec<String>,
     /// Inline prompt template (rendered when the Skill fires).

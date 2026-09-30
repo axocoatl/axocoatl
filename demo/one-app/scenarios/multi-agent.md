@@ -19,7 +19,7 @@ Agent, and retain separate labeled outputs on one durable Turn.
 - The reviewer's `SHIP` or `BLOCK` applies only to the architect's one-sentence
   proposal. It is not a release gate for working software.
 - The Agent graph is not the event lattice.
-- This fixed handoff is not the dynamic Coordinator auction/decomposition path.
+- This fixed handoff is not the dynamic Coordinator decomposition path.
 
 ## Start or reset
 

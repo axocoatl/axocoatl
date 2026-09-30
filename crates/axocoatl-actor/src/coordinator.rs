@@ -5,8 +5,9 @@
 //! - Decomposition prefers the symbolic HTN planner (resolving any LLM frontiers
 //!   task-by-task) and falls back to whole-goal LLM decomposition only when no
 //!   planner is configured.
-//! - Workers are chosen by a capability/budget auction and declared workers are
-//!   spawned with their configured checkpoint, daily/core/semantic memory,
+//! - Each subtask goes to the first declared worker whose callable tools cover
+//!   the subtask's required tools (an ad-hoc worker otherwise); declared workers
+//!   are spawned with their configured checkpoint, daily/core/semantic memory,
 //!   hooks, and exact tool capabilities.
 //! - Nonterminal actor-internal checkpoints retain the plan and completed worker
 //!   outcomes for crash recovery. Normal terminal cancellation/failure clears
@@ -17,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use axocoatl_coordination::{compute_bid, run_auction, AgentBid, HtnPlanner, HtnTask, HtnTaskType};
+use axocoatl_coordination::{HtnPlanner, HtnTask, HtnTaskType};
 use axocoatl_core::{
     secure_fs::SecureDir, AgentAttachment, AgentConfig, AgentId, AgentInput, AgentOutput,
     ChatMessage, ConversationMode, MemoryConfig, MessageRole, OverflowPolicy, SamplingConfig,
@@ -44,10 +45,6 @@ use crate::error::AgentError;
 use crate::frontier_resolver::LlmFrontierResolver;
 use crate::provider_budget::ControlledChat;
 use crate::run_control::{AgentRunControl, AgentRunOutcome};
-
-/// Auction scalar for a worker with no enforced token budget. Execution is also
-/// unbounded in that case, so the bid must not invent a finite enforcement cap.
-pub const DEFAULT_WORKER_BUDGET: usize = usize::MAX;
 
 #[cfg(not(test))]
 const WORKER_GRACEFUL_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -170,8 +167,7 @@ pub struct WorkerConfig {
     /// Exact provider capability for a declared heterogeneous worker. `None`
     /// means an ad-hoc worker inherits the coordinator provider.
     pub provider: Option<Arc<dyn LlmProvider>>,
-    /// The worker's enforced token budget. Its execution cap is also the budget
-    /// signal used in the assignment auction.
+    /// The worker's enforced token budget.
     pub token_budget: Option<TokenBudget>,
     pub sampling: SamplingConfig,
     pub memory: MemoryConfig,
@@ -207,7 +203,7 @@ impl std::fmt::Debug for WorkerConfig {
 }
 
 /// A unit of work the coordinator assigns to a worker: a name, a description,
-/// and the tool names it requires (used by the auction to match workers).
+/// and the tool names it requires (used to match the subtask to a worker).
 #[derive(Debug, Clone)]
 pub struct Subtask {
     pub name: String,
@@ -612,31 +608,23 @@ enum OrchestrationOutcome {
     },
 }
 
-/// A subtask as reported to an observer: what it is, which worker won the
-/// capability+budget auction, and the runner-up bids. Plain data so the actor
-/// crate stays decoupled from the daemon's wire types.
+/// A subtask as reported to an observer: what it is, which worker it was
+/// assigned to (`winner`), and whether that is an ad-hoc worker because no
+/// declared worker could call its required tools. Plain data so the actor crate
+/// stays decoupled from the daemon's wire types.
 #[derive(Debug, Clone, Default)]
 pub struct ReportedSubtask {
     pub name: String,
     pub description: String,
     pub winner: String,
-    pub score: f32,
     pub adhoc: bool,
-    pub bids: Vec<ReportedBid>,
-}
-
-/// One worker's bid on a subtask.
-#[derive(Debug, Clone, Default)]
-pub struct ReportedBid {
-    pub worker: String,
-    pub score: f32,
 }
 
 /// Observer of a coordinator's run, so a UI can render Layer-2 progress. The
 /// daemon implements this and forwards to the dashboard stream. Every method
 /// takes the run id (`workflow`) — one coordinator can run many workflows.
 pub trait CoordinatorReporter: Send + Sync {
-    /// The decomposition + auction outcome, emitted once before the workers run.
+    /// The decomposition + worker assignments, emitted once before the workers run.
     fn plan(&self, workflow: &str, coordinator: &str, goal: &str, subtasks: &[ReportedSubtask]);
     /// A worker began its subtask.
     fn worker_started(&self, workflow: &str, worker: &str);
@@ -682,8 +670,9 @@ pub struct CoordinatorBehavior {
     system_prompt: Option<String>,
     agent_id: String,
     /// The coordinator's own model, inherited by ad-hoc workers (those spawned
-    /// when no pooled worker bids) so they run on the same provider/model rather
-    /// than the `gpt-4o` default, which fails on a local Ollama setup.
+    /// when no pooled worker can call the required tools) so they run on the
+    /// same provider/model rather than the `gpt-4o` default, which fails on a
+    /// local Ollama setup.
     model: String,
     sampling: SamplingConfig,
     token_budget: Option<TokenBudget>,
@@ -731,7 +720,7 @@ pub struct CoordinatorBehavior {
     /// Orchestration state restored from a checkpoint in `on_start`; consumed by
     /// the next run if its goal matches (resume), else discarded (fresh run).
     resumed_state: Option<OrchestrationState>,
-    /// Optional observer of run progress (decompose, auction, workers). The
+    /// Optional observer of run progress (decompose, assignment, workers). The
     /// daemon sets this to forward Layer-2 progress to the dashboard stream.
     reporter: Option<Arc<dyn CoordinatorReporter>>,
     /// Parent execution sink. Worker text remains isolated, while tool
@@ -1947,8 +1936,8 @@ impl CoordinatorBehavior {
         Ok(CoordinatorRunOutcome::Cancelled(partial_output))
     }
 
-    /// One coordination pass: decompose, assign each subtask to a worker by
-    /// auction, run the workers in parallel, and synthesize their results.
+    /// One coordination pass: decompose, assign each subtask to the first
+    /// capable worker, run the workers in parallel, and synthesize their results.
     /// Worker teardown is the caller's responsibility — [`execute`] always tears
     /// down afterward, on success and on every error path.
     async fn run_once(
@@ -1956,8 +1945,8 @@ impl CoordinatorBehavior {
         input: AgentInput,
         control: Option<&AgentRunControl>,
     ) -> Result<CoordinatorRunOutcome, AgentError> {
-        // A configured worker is removed from the per-run auction pool after it
-        // wins once, so parallel assignments are unique. Reject duplicate
+        // A configured worker is removed from the per-run pool after its first
+        // assignment, so parallel assignments are unique. Reject duplicate
         // runtime/logical configuration up front as those would otherwise
         // collide in the actor registry or collapse reporter/UI state.
         self.validate_worker_identities()?;
@@ -2145,8 +2134,9 @@ impl CoordinatorBehavior {
             self.checkpoint_orchestration(&state).await?;
         }
 
-        // 2. Assign each PENDING subtask to a worker by auction (best fit by tool
-        //    match and budget); already-completed items are skipped entirely.
+        // 2. Assign each PENDING subtask to the first declared worker (in
+        //    declaration order) whose callable tools cover its required tools;
+        //    already-completed items are skipped entirely.
         let pending: Vec<usize> = items
             .iter()
             .enumerate()
@@ -2201,8 +2191,8 @@ impl CoordinatorBehavior {
         let mut assigned_controls: Vec<Option<AgentRunControl>> = vec![None; items.len()];
         let mut assigned_executions: Vec<Option<Box<dyn crate::AdmittedChildExecution>>> =
             (0..items.len()).map(|_| None).collect();
-        // The auction outcome per subtask, reported to observers (the dashboard
-        // run view) once the whole plan is assigned.
+        // The assignment per subtask, reported to observers (the dashboard run
+        // view) once the whole plan is assigned.
         let mut plan: Vec<ReportedSubtask> = Vec::new();
 
         for &idx in &pending {
@@ -2253,45 +2243,23 @@ impl CoordinatorBehavior {
                     project_instructions_root: coord_project_root.clone(),
                 })
             };
-            let mut reported_bids: Vec<ReportedBid> = Vec::new();
             let mut adhoc = false;
             let worker_config = if available.is_empty() {
                 adhoc = true;
                 make_adhoc()?
             } else {
-                let bids: Vec<AgentBid> = available
-                    .iter()
-                    .map(|wc| {
-                        let effective_tools = callable_tools_for_declared_worker(
-                            &wc.tools,
-                            &inherited_executor_tools,
-                            declared_workers_have_memory,
-                            durable_memory_read_only,
-                        );
-                        let ac = AgentConfig {
-                            id: wc.id.clone(),
-                            tools: effective_tools,
-                            ..AgentConfig::default()
-                        };
-                        let bid_budget = wc
-                            .token_budget
-                            .as_ref()
-                            .map(|budget| budget.per_execution)
-                            .unwrap_or(DEFAULT_WORKER_BUDGET);
-                        compute_bid(&ac, required_tools, 0, bid_budget)
-                    })
-                    .collect();
-                reported_bids = bids
-                    .iter()
-                    .map(|b| ReportedBid {
-                        worker: worker_logical_ids
-                            .get(&b.agent_id)
-                            .cloned()
-                            .unwrap_or_else(|| b.agent_id.to_string()),
-                        score: b.score,
-                    })
-                    .collect();
-                match run_auction(bids).and_then(|id| available.iter().position(|w| w.id == id)) {
+                // The first declared worker, in declaration order, whose callable
+                // tools cover every required tool gets the subtask.
+                let first_capable = available.iter().position(|wc| {
+                    let callable = callable_tools_for_declared_worker(
+                        &wc.tools,
+                        &inherited_executor_tools,
+                        declared_workers_have_memory,
+                        durable_memory_read_only,
+                    );
+                    required_tools.iter().all(|tool| callable.contains(tool))
+                });
+                match first_capable {
                     Some(pos) if self.activation_checkpoint_port.is_some() => {
                         available[pos].clone()
                     }
@@ -2300,7 +2268,7 @@ impl CoordinatorBehavior {
                         tracing::warn!(
                             coordinator = %coord_id,
                             tools = ?required_tools,
-                            "No worker bid for subtask; spawning an ad-hoc worker with the required tools"
+                            "No declared worker can call the subtask's required tools; spawning an ad-hoc worker with them"
                         );
                         adhoc = true;
                         make_adhoc()?
@@ -2391,18 +2359,11 @@ impl CoordinatorBehavior {
                     .cloned()
                     .unwrap_or_else(|| worker_id.to_string())
             };
-            let score = reported_bids
-                .iter()
-                .find(|b| b.worker == reporter_worker_id)
-                .map(|b| b.score)
-                .unwrap_or(0.0);
             plan.push(ReportedSubtask {
                 name: item.name.clone(),
                 description: item.description.clone(),
                 winner: reporter_worker_id.clone(),
-                score,
                 adhoc,
-                bids: reported_bids,
             });
             assigned_workers[idx] = Some(worker_id.clone());
             assigned_reporter_ids[idx] = Some(reporter_worker_id.clone());
@@ -2421,8 +2382,8 @@ impl CoordinatorBehavior {
                 .await;
         }
 
-        // Report the decomposition + auction outcome before the workers run, so
-        // the dashboard can render the Layer-2 plan (goal → subtasks → winners).
+        // Report the decomposition + assignments before the workers run, so
+        // the dashboard can render the Layer-2 plan (goal → subtasks → workers).
         if let Some(reporter) = &self.reporter {
             reporter.plan(&workflow_id, &coord_id, &goal, &plan);
         }
@@ -2812,7 +2773,7 @@ mod tests {
     use tokio_stream::Stream;
 
     #[test]
-    fn transaction_scoped_workers_are_not_auctioned_as_core_memory_editors() {
+    fn transaction_scoped_declared_workers_cannot_call_core_memory_editors() {
         let inherited = HashSet::from(["repo_read".to_string()]);
         let read_only = callable_tools_for_declared_worker(&[], &inherited, true, true);
         assert!(read_only.contains(&"repo_read".to_string()));
@@ -4544,7 +4505,7 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_with_no_workers_uses_adhoc() {
-        // No worker pool: the auction has nothing to bid on, so each subtask
+        // No worker pool: there is no declared worker to assign, so each subtask
         // gets an ad-hoc worker. Proves the empty-pool fallback / backward compat.
         let provider: Arc<dyn LlmProvider> = Arc::new(MockLlm);
         let counter: Arc<dyn TokenCounter> = Arc::new(SimpleCounter);
@@ -4603,10 +4564,26 @@ mod tests {
         assert_eq!(coord.worker_results.len(), 3);
     }
 
-    #[tokio::test]
-    async fn auction_routes_subtask_to_tool_matching_worker() {
-        // The single subtask requires the "special" tool; only the specialist
-        // worker has it, so the auction must route the subtask there.
+    /// A declared worker for the first-capable-worker assignment tests.
+    fn routing_worker(id: &str, tools: &[&str]) -> WorkerConfig {
+        WorkerConfig {
+            id: AgentId::new(id),
+            name: id.to_string(),
+            system_prompt: "worker".to_string(),
+            tools: tools.iter().map(|tool| tool.to_string()).collect(),
+            model: "test-model".to_string(),
+            provider: None,
+            token_budget: None,
+            sampling: SamplingConfig::default(),
+            memory: MemoryConfig::default(),
+            session_context: None,
+            project_instructions_root: None,
+        }
+    }
+
+    /// A coordinator whose HTN plan for "route" is one subtask requiring the
+    /// `special` tool, with `special` and `other` registered on the executor.
+    fn special_tool_coordinator() -> CoordinatorBehavior {
         let methods = r#"
 - task_pattern: "route"
   preconditions: []
@@ -4616,40 +4593,21 @@ mod tests {
         tools: ["special"]
       task_type: Primitive
 "#;
-        let planner = HtnPlanner::from_methods_yaml(methods).unwrap();
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockLlm);
-        let counter: Arc<dyn TokenCounter> = Arc::new(SimpleCounter);
         let mut executor = ToolExecutor::new();
         executor.register_builtin("special", Arc::new(axocoatl_tools::EchoTool));
-        let mut coord = CoordinatorBehavior::new(provider, counter)
-            .with_htn_methods(planner)
+        executor.register_builtin("other", Arc::new(axocoatl_tools::EchoTool));
+        CoordinatorBehavior::new(Arc::new(MockLlm), Arc::new(SimpleCounter))
+            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
             .with_tool_executor(Arc::new(executor))
-            .add_worker_config(WorkerConfig {
-                id: AgentId::new("generalist"),
-                name: "Generalist".to_string(),
-                system_prompt: "worker".to_string(),
-                tools: vec![],
-                model: "test-model".to_string(),
-                provider: None,
-                token_budget: None,
-                sampling: SamplingConfig::default(),
-                memory: MemoryConfig::default(),
-                session_context: None,
-                project_instructions_root: None,
-            })
-            .add_worker_config(WorkerConfig {
-                id: AgentId::new("specialist"),
-                name: "Specialist".to_string(),
-                system_prompt: "worker".to_string(),
-                tools: vec!["special".to_string()],
-                model: "test-model".to_string(),
-                provider: None,
-                token_budget: None,
-                sampling: SamplingConfig::default(),
-                memory: MemoryConfig::default(),
-                session_context: None,
-                project_instructions_root: None,
-            });
+    }
+
+    #[tokio::test]
+    async fn subtask_skips_declared_workers_that_cannot_call_its_tools() {
+        // The subtask requires "special". The first declared worker can only
+        // call "other", so the subtask goes to the next worker that can.
+        let mut coord = special_tool_coordinator()
+            .add_worker_config(routing_worker("generalist", &["other"]))
+            .add_worker_config(routing_worker("specialist", &["special"]));
 
         coord.on_start(&coord_config()).await.unwrap();
         coord.execute(AgentInput::text("route")).await.unwrap();
@@ -4662,7 +4620,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auction_rejects_unknown_required_tool_before_worker_dispatch() {
+    async fn first_declared_capable_worker_gets_the_subtask() {
+        // Both declared workers can call "special" (the first inherits every
+        // executor tool, the second names it), so declaration order decides:
+        // the first capable worker gets the subtask.
+        let reporter = Arc::new(RecordingCoordinatorReporter::default());
+        let mut coord = special_tool_coordinator()
+            .with_reporter(reporter.clone())
+            .add_worker_config(routing_worker("first", &[]))
+            .add_worker_config(routing_worker("second", &["special"]));
+
+        coord.on_start(&coord_config()).await.unwrap();
+        coord.execute(AgentInput::text("route")).await.unwrap();
+
+        assert_eq!(coord.worker_results.len(), 1);
+        assert_eq!(coord.worker_results[0].worker_id, AgentId::new("first"));
+        let plans = reporter.plans.lock().unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0][0].winner, "first");
+        assert!(!plans[0][0].adhoc);
+    }
+
+    #[tokio::test]
+    async fn unknown_required_tool_fails_before_any_worker_dispatch() {
         let methods = r#"
 - task_pattern: "route"
   preconditions: []
@@ -4777,7 +4757,7 @@ mod tests {
                 .stream_calls
                 .load(std::sync::atomic::Ordering::SeqCst),
             0,
-            "a worker missing its bid capability must never reach the provider"
+            "a worker missing its required capability must never reach the provider"
         );
         assert!(reporter.plans.lock().unwrap().is_empty());
         assert!(coordinator.active_workers.is_empty());
@@ -4823,7 +4803,7 @@ mod tests {
         let plans = reporter.plans.lock().unwrap();
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0][0].winner, "researcher");
-        assert_eq!(plans[0][0].bids[0].worker, "researcher");
+        assert!(!plans[0][0].adhoc);
         drop(plans);
         assert_eq!(&*reporter.started.lock().unwrap(), &["researcher"]);
         assert_eq!(&*reporter.completed.lock().unwrap(), &["researcher"]);

@@ -181,7 +181,7 @@ and hydrates the kept Turn without trusting the event as the result itself.
 | --- | --- | --- |
 | `lane-started` | `run`, `attempt_set_id`, `session`, `index`, `model?`, `agent` | Durable identity for one Way's live stream |
 | `lane-verified` | `attempt_set_id`, `session`, `index`, `passed`, `changed_files`, `touched_tests` | One Check result arrived |
-| `coordinator-plan` | `workflow`, `coordinator`, `goal`, `subtasks` | Coordinator decomposition and auction outcome |
+| `coordinator-plan` | `workflow`, `coordinator`, `goal`, `subtasks` | Coordinator decomposition and the worker assigned to each subtask |
 | `coordination` | `session`, `turn_id`, `operation_id`, `recorded_at`, `event` | One already-persisted transition in a multi-Agent Session turn's causal map |
 
 Other Agent stream frames for an Attempt use the lane `run` key. Reject frames

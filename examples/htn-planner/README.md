@@ -80,8 +80,8 @@ offline.
 Finally, `OrchestrationPlan::from_plan(plan, workers)` round-robins the
 primitives across workers. Each primitive carries its required tools (read from
 `parameters["tools"]` via `HtnTask::required_tools()`), which is the hand-off
-point to the capability auction that routes each task to a worker declaring those
-tools.
+point to the Coordinator, which assigns each task to the first declared worker
+that can call those tools.
 
 ## Where this lives in the real runtime
 

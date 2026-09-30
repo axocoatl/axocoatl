@@ -360,7 +360,6 @@ name = "axocoatl-coordination"
 version = "1.1.0"
 dependencies = [
  "async-trait",
- "axocoatl-core",
  "serde",
  "serde_json",
  "serde_yaml",

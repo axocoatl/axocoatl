@@ -174,8 +174,8 @@ pub enum StreamFrame {
         token_usage_known: bool,
     },
     /// A coordinator's plan for a run (Layer 2): the subtasks it decomposed the
-    /// goal into and, for each, the capability+budget auction outcome. Emitted
-    /// once, right after decompose + auction, before the workers run.
+    /// goal into and, for each, the worker it was assigned to. Emitted once,
+    /// right after decompose + assignment, before the workers run.
     CoordinatorPlan {
         workflow: String,
         coordinator: String,
@@ -380,24 +380,15 @@ pub struct WorkspaceAttemptOwnership {
     pub attempt_set_id: String,
 }
 
-/// One planned subtask in a coordinator run: what it is, which worker won the
-/// capability+budget auction (with the runner-up bids), and whether it fell
-/// back to an ad-hoc worker because no declared worker bid.
+/// One planned subtask in a coordinator run: what it is, which worker it was
+/// assigned to (`winner`: the first declared worker that can call its required
+/// tools), and whether it fell back to an ad-hoc worker because none could.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct PlanSubtask {
     pub name: String,
     pub description: String,
     pub winner: String,
-    pub score: f32,
     pub adhoc: bool,
-    pub bids: Vec<PlanBid>,
-}
-
-/// One worker's bid on a subtask in the capability+budget auction.
-#[derive(Debug, Clone, Serialize, Default)]
-pub struct PlanBid {
-    pub worker: String,
-    pub score: f32,
 }
 
 /// Live state of one agent within an in-flight run.
@@ -447,7 +438,7 @@ pub struct RunState {
     /// The coordinator's goal (the run's input).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub goal: String,
-    /// The coordinator's decomposed subtasks + auction outcomes.
+    /// The coordinator's decomposed subtasks + worker assignments.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subtasks: Vec<PlanSubtask>,
 }
@@ -1167,8 +1158,8 @@ pub fn event_frame(notif: &EventNotification) -> StreamFrame {
 }
 
 /// Bridges a coordinator's run-progress callbacks (Layer 2) onto the stream bus
-/// as frames the dashboard already understands: the decomposition + auction as a
-/// `CoordinatorPlan`, and each worker's start/finish as `AgentActivated` /
+/// as frames the dashboard already understands: the decomposition + assignments
+/// as a `CoordinatorPlan`, and each worker's start/finish as `AgentActivated` /
 /// `TaskCompleted` events scoped to the run. Built once per daemon, shared by
 /// every coordinator.
 pub struct CoordinatorStreamReporter {
@@ -1195,16 +1186,7 @@ impl axocoatl_actor::CoordinatorReporter for CoordinatorStreamReporter {
                 name: s.name.clone(),
                 description: s.description.clone(),
                 winner: s.winner.clone(),
-                score: s.score,
                 adhoc: s.adhoc,
-                bids: s
-                    .bids
-                    .iter()
-                    .map(|b| PlanBid {
-                        worker: b.worker.clone(),
-                        score: b.score,
-                    })
-                    .collect(),
             })
             .collect();
         let _ = self.bus.send(StreamFrame::CoordinatorPlan {

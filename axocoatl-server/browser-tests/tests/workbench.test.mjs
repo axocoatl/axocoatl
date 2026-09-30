@@ -4145,8 +4145,8 @@ test('Coordinator run view makes every worker and Session terminal state explici
         coordinator: coordinatorId,
         goal: 'Exercise every terminal boundary',
         subtasks: [
-          { name: 'cancelled task', winner: 'worker-a', score: 1, bids: [] },
-          { name: 'panicked task', winner: 'worker-b', score: 1, bids: [] },
+          { name: 'cancelled task', winner: 'worker-a' },
+          { name: 'panicked task', winner: 'worker-b' },
         ],
       });
       handleWsFrame({
@@ -4216,8 +4216,8 @@ test('Coordinator run view makes every worker and Session terminal state explici
           coordinator: coordinatorId,
           goal: 'Resume the visible plan',
           subtasks: [
-            { name: 'finished work', winner: 'worker-a', score: 1, bids: [] },
-            { name: 'active work', winner: 'worker-b', score: 1, bids: [] },
+            { name: 'finished work', winner: 'worker-a' },
+            { name: 'active work', winner: 'worker-b' },
           ],
           agents: [
             { agent: coordinatorId, status: 'running', output: 'partial synthesis', tokens: 2 },

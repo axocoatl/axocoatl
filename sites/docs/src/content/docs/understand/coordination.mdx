@@ -1,6 +1,6 @@
 ---
 title: Coordination and events
-description: Choose among explicit Automations, multi-Agent Sessions, typed events, and dynamic coordinator auctions.
+description: Choose among explicit Automations, multi-Agent Sessions, typed events, and dynamic coordinator decomposition.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -14,7 +14,7 @@ question and owns a different recovery boundary.
 | Multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
 | Signal field | Agents own parts of a repository and should react to each other's evidence | Deposits on paths; each Agent senses only the paths it watches |
 | Event lattice | Producers and consumers should be decoupled | Typed publish/subscribe notification |
-| Coordinator Agent | Task shape and worker choice emerge at runtime | Decomposition plus capability/budget auction |
+| Coordinator Agent | Task shape and worker choice emerge at runtime | Decomposition, then the first declared worker that can call each subtask's tools |
 
 ## Automations
 
@@ -153,14 +153,15 @@ they do not cause Agents to execute. Events never start Agents on their own.
 An Agent with `role: coordinator` handles one execution hierarchically:
 
 1. decompose the goal into subtasks;
-2. score worker bids from required tools and available budget;
+2. assign each subtask to the first declared worker, in declaration order, that can
+   call its required tools (an ad-hoc worker with exactly those tools otherwise);
 3. spawn selected worker Agents and run independent work in parallel;
 4. join their outcomes and synthesize one result.
 
 If the configured workflow supplies `htn_methods_file`, a symbolic HTN planner
 handles covered decomposition and leaves unresolved frontiers to the model.
-Without that file, decomposition is model-driven. HTN is opt-in; the auction
-and worker path are the coordinator behavior.
+Without that file, decomposition is model-driven. HTN is opt-in; worker
+assignment and execution are the coordinator behavior.
 
 Declared Workers resolve their own provider/model/fallback route, budget, sampling, exact tool
 policy, hooks, and Session-scoped Tier 1–4 memory/checkpoints beneath the Coordinator identity.
