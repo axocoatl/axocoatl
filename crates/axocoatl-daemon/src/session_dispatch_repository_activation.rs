@@ -1079,6 +1079,28 @@ mod write_scope_tests {
         }
     }
 
+    /// No pattern opens Git's own directory to a file tool, although a
+    /// bare name or wildcard matches a path at any depth.
+    #[test]
+    fn file_tools_never_write_into_a_git_directory() {
+        let root = Path::new("/workspace/repo");
+        let names = scope(&[&["config", "HEAD", "pre-commit", "exclude", "**"]]);
+        for inside in [
+            ".git/config",
+            ".git/HEAD",
+            ".git/hooks/pre-commit",
+            "/workspace/repo/.git/info/exclude",
+            ".GIT/config",
+            "lib/../.git/config",
+        ] {
+            let refused = write_refusal(Ok(names.clone()), root, inside).unwrap();
+            assert!(refused.contains(inside), "{refused}");
+        }
+        assert_eq!(write_refusal(Ok(names.clone()), root, "lib/config"), None);
+        // An Agent without a write scope is not restricted by this rule.
+        assert_eq!(write_refusal(Ok(scope(&[])), root, ".git/config"), None);
+    }
+
     #[test]
     fn tool_paths_resolve_to_repository_relative_form_or_are_refused() {
         let root = Path::new("/workspace/repo");

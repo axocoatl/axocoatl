@@ -175,6 +175,11 @@ fn validate_writes(agent_id: &str, writes: &[String]) -> Result<(), ConfigError>
             .any(|segment| segment.is_empty() || segment == "." || segment == "..")
         {
             Some("Paths cannot contain '.', '..' or empty segments")
+        } else if trimmed
+            .split('/')
+            .any(|segment| segment.eq_ignore_ascii_case(".git"))
+        {
+            Some("Git's own .git directory is never among the paths an Agent may change")
         } else if writes[..index].contains(pattern) {
             Some("This path is listed twice")
         } else {
@@ -732,7 +737,15 @@ agents:
         let written = serde_yaml::to_string(&config.agents[0]).unwrap();
         assert!(!written.contains("writes"), "{written}");
 
-        for bad in ["[../outside]", "[/etc]", "[lib/, lib/]", "[\"\"]"] {
+        for bad in [
+            "[../outside]",
+            "[/etc]",
+            "[lib/, lib/]",
+            "[\"\"]",
+            "[.git/]",
+            "[.GIT/hooks/pre-commit]",
+            "[vendor/.git/]",
+        ] {
             let yaml = format!(
                 "agents:\n  - id: bad\n    name: Bad\n    provider: ollama\n    model: llama3\n    writes: {bad}\n"
             );
