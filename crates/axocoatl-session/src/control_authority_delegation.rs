@@ -155,6 +155,7 @@ impl ControlAuthority {
             native_delegation: None,
             delegated_from: Some(reservation.clone()),
             standing: None,
+            host_checks: vec![],
         });
         Ok(next)
     }
@@ -377,6 +378,7 @@ mod tests {
             native_delegation,
             delegated_from,
             standing: None,
+            host_checks: vec![],
         };
         let mut parent = record(expanded, Some("journal".into()), None);
         parent.previous_policies.push(original.clone());
@@ -486,6 +488,7 @@ mod tests {
                 native_delegation: Some("journal".into()),
                 delegated_from: None,
                 standing: None,
+                host_checks: vec![],
             });
             state.data.activations.push(ActivationRecord {
                 activation: activation.clone(),
@@ -550,6 +553,7 @@ mod tests {
                 native_delegation: None,
                 delegated_from: Some(reservation),
                 standing: None,
+                host_checks: vec![],
             });
             assert_eq!(
                 validate_delegated_records(&stored).is_ok(),

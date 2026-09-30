@@ -33,6 +33,8 @@ use crate::turn_contract::{
     MAX_COMPLETION_CONDITIONS, MAX_CONTRACT_NODES, MAX_GRAPH_EDGES,
 };
 
+#[path = "control_authority_checks.rs"]
+mod checks;
 #[path = "control_authority_delegation.rs"]
 mod delegation;
 #[path = "control_authority_standing.rs"]
@@ -374,6 +376,10 @@ struct GrantRecord {
     delegated_from: Option<DelegatedGrantReservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     standing: Option<standing::StandingGrantCarry>,
+    /// Permission to run this turn's required checks, when this grant pays
+    /// for them. Absent on every other grant and on older stores.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    host_checks: Vec<ConditionPermission>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -666,6 +672,7 @@ impl ControlAuthority {
             native_delegation: None,
             delegated_from: None,
             standing: None,
+            host_checks: vec![],
         });
         self.commit(&mut state, next)
     }
@@ -1199,14 +1206,11 @@ impl ControlAuthority {
         validate_condition_record(&record)?;
         let derived_permission = if !condition_allowed(&record, policy)
             && !standing::condition_allowed(&record, &state.data.grants[index], policy)
+            && !checks::condition_allowed(&record, &state.data.grants[index], policy)
         {
             Some(
-                standing::replaced_condition_permission(
-                    &snapshot,
-                    &record,
-                    &state.data.grants[index],
-                )
-                .ok_or(AuthorityError::Denied)?,
+                checks::derived_permission(&snapshot, &record, &state.data.grants[index])
+                    .ok_or(AuthorityError::Denied)?,
             )
         } else {
             None
@@ -1217,15 +1221,24 @@ impl ControlAuthority {
             return Err(AuthorityError::Capacity);
         }
         let mut next = state.data.clone();
-        if let Some(permission) = derived_permission {
-            let carry = next.grants[index]
-                .standing
-                .as_mut()
-                .ok_or(AuthorityError::Denied)?;
-            if carry.conditions.len() >= MAX_COMPLETION_CONDITIONS {
+        if let Some(derived) = derived_permission {
+            let (permissions, permission) = match derived {
+                checks::DerivedPermission::Standing(permission) => (
+                    &mut next.grants[index]
+                        .standing
+                        .as_mut()
+                        .ok_or(AuthorityError::Denied)?
+                        .conditions,
+                    permission,
+                ),
+                checks::DerivedPermission::HostCheck(permission) => {
+                    (&mut next.grants[index].host_checks, permission)
+                }
+            };
+            if permissions.len() >= MAX_COMPLETION_CONDITIONS {
                 return Err(AuthorityError::Capacity);
             }
-            carry.conditions.push(permission);
+            permissions.push(permission);
         }
         next.grants[index].usage.invocations += 1;
         next.condition_calls.push(record.clone());
@@ -1264,7 +1277,8 @@ impl ControlAuthority {
             || grant.policy.revision != stored.grant.revision
             || now_ms >= grant.policy.expires_at_ms
             || (!condition_allowed(stored, &grant.policy)
-                && !standing::condition_allowed(stored, grant, &grant.policy))
+                && !standing::condition_allowed(stored, grant, &grant.policy)
+                && !checks::condition_allowed(stored, grant, &grant.policy))
         {
             return Err(AuthorityError::Denied);
         }
@@ -2762,7 +2776,9 @@ fn validate_data(data: &AuthorityData) -> Result<(), AuthorityError> {
             .chain(std::iter::once(&grant.policy))
             .find(|policy| policy.revision == call.grant.revision)
             .ok_or(AuthorityError::Invalid("missing condition grant revision"))?;
-        if (!condition_allowed(call, policy) && !standing::condition_allowed(call, grant, policy))
+        if (!condition_allowed(call, policy)
+            && !standing::condition_allowed(call, grant, policy)
+            && !checks::condition_allowed(call, grant, policy))
             || call.claimed_at_ms >= policy.expires_at_ms
         {
             return Err(AuthorityError::Invalid(
@@ -2771,6 +2787,7 @@ fn validate_data(data: &AuthorityData) -> Result<(), AuthorityError> {
         }
     }
     for grant in &data.grants {
+        checks::validate_host_checks(data, grant)?;
         let mut expected = standing::validate_carry(data, grant)?;
         expected.activations = expected
             .activations
