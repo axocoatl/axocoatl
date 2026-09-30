@@ -5,7 +5,7 @@ use axocoatl_session::execution_content::{
 };
 use base64::Engine as _;
 
-pub(super) const CAPTURE: &str = axocoatl_session::team_work::REPOSITORY_SNAPSHOT_COMMAND;
+pub(super) const CAPTURE: &str = axocoatl_session::execution_content::REPOSITORY_SNAPSHOT_COMMAND;
 
 impl SessionDispatchController {
     pub(crate) async fn capture_activation_repository(

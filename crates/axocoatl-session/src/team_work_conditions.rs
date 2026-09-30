@@ -1,8 +1,5 @@
 use super::*;
-use crate::execution_content::RepositoryCheckDefinition;
-
-pub const REPOSITORY_SNAPSHOT_COMMAND: &str =
-    include_str!("execution_content_repository_snapshot.sh");
+use crate::execution_content::{RepositoryCheckDefinition, REPOSITORY_SNAPSHOT_COMMAND};
 
 /// The existing foreground command lifetime/capture ceilings apply. Arming
 /// selects exact argv; this adds no tool capability, cost, or token grant.
@@ -45,62 +42,6 @@ pub fn standing_readiness_text(receipt: &str, checks: &[Vec<String>]) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    #[cfg(target_os = "linux")]
-    fn repository_capture_handles_shared_sandbox_ownership_only_at_the_exact_root() {
-        use std::process::Command;
-        let repo = tempfile::tempdir().unwrap();
-        assert!(Command::new("git")
-            .args(["init", "--quiet"])
-            .current_dir(repo.path())
-            .status()
-            .unwrap()
-            .success());
-        std::fs::write(repo.path().join("fixture.txt"), "original\n").unwrap();
-        assert!(Command::new("git")
-            .args(["add", "fixture.txt"])
-            .current_dir(repo.path())
-            .status()
-            .unwrap()
-            .success());
-        std::fs::write(repo.path().join("fixture.txt"), "changed\n").unwrap();
-        let baseline = Command::new("git")
-            .args(["rev-parse", "--show-toplevel"])
-            .current_dir(repo.path())
-            .env("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(!baseline.status.success());
-        assert!(String::from_utf8_lossy(&baseline.stderr).contains("dubious ownership"));
-        let capture = Command::new("sh")
-            .args(["-c", REPOSITORY_SNAPSHOT_COMMAND])
-            .current_dir(repo.path())
-            .env("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(
-            capture.status.success(),
-            "{}",
-            String::from_utf8_lossy(&capture.stderr)
-        );
-        assert!(String::from_utf8_lossy(&capture.stdout).contains("patch_b64="));
-        let nested = repo.path().join("nested");
-        std::fs::create_dir(&nested).unwrap();
-        let refused = Command::new("sh")
-            .args(["-c", REPOSITORY_SNAPSHOT_COMMAND])
-            .current_dir(nested)
-            .env("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(!refused.status.success());
-    }
-
     #[test]
     fn standing_capture_and_commands_fit_the_actual_condition_store_bound() {
         use crate::execution_content::ExecutionContentStore;
