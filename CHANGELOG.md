@@ -255,6 +255,11 @@ model-facing `coordination_control` tool, the external harness adapter and the
   next request now goes without tools and asks for the final answer, as it does at the
   end of a budget. Editing and running the same test again, reading different files and
   polling a terminal never trigger it.
+- **`GET /api/sessions/{id}/turns/{turn_id}/grants` returns each grant's usage**, as
+  the HTTP reference already said. Each grant now has a `usage` object with the
+  `activations`, `invocations`, `tokens` and `cost_microunits` it has been charged: a
+  running model call's reservation, then what the call reported once it settled. The
+  other fields are unchanged.
 - **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
   longer copies host proxy variables into containers.** Any `sandbox.network` other
   than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was

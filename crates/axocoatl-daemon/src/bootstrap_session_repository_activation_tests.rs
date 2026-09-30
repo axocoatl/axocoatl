@@ -409,6 +409,32 @@ async fn repository_activation_requires_exact_registered_owner_and_preserves_pla
         .iter()
         .any(|message| message.text_content() == Some("Use the retained checkout")));
     assert_eq!(f.sandbox.stop_calls.load(Ordering::SeqCst), 0);
+
+    // `GET …/grants` reports what the grant was charged, as the authority
+    // settled it: one activation and its one reported model call.
+    let team = r
+        .registry
+        .session_team_token(r.activation.session_id.as_str())
+        .unwrap();
+    let view = r
+        .registry
+        .with_session_team_grant_stores(&team, |canonical, content, held| {
+            crate::session_dispatch::retained_grant_view(
+                canonical,
+                content,
+                &r.activation.turn_id,
+                held,
+            )
+            .map_err(|error| DaemonError::SessionConflict(error.to_string()))
+        })
+        .unwrap();
+    let view = serde_json::to_value(&view).unwrap();
+    let usage = &view["grants"][0]["usage"];
+    assert_eq!(usage["activations"], 1, "{view}");
+    assert!(usage["invocations"].as_u64().unwrap() >= 1, "{view}");
+    assert_eq!(usage["tokens"], 12, "{view}");
+    assert_eq!(usage["cost_microunits"], 0, "{view}");
+    assert_eq!(view["grants"][0]["policy"]["id"], "repository-grant");
 }
 
 #[tokio::test]
