@@ -184,9 +184,11 @@ mcp_servers:
     command: target/debug/mcp-bridge
     args: ["--mcp-server"]
 
+# start.sh exports AXOCOATL_DEMO_OLLAMA_PORT (default 11434) after checking
+# that this local Ollama service reports cloud models disabled.
 providers:
   ollama:
-    base_url: "http://127.0.0.1:11434"
+    base_url: "http://127.0.0.1:${AXOCOATL_DEMO_OLLAMA_PORT}"
 
 server:
   host: "127.0.0.1"

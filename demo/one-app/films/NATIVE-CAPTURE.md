@@ -1,38 +1,50 @@
 # Native Session capture setup for 1.1.0
 
 Use this setup for the new workbench, Workspace/Session, context/Stop, sandbox,
-team handoff, Ways, Git, and workspace-knowledge takes. Historical `start.sh`
-instructions target the existing-root compatibility path and must not silently
-stand in for a native recording.
+Lead-with-helpers, Ways, Git, and workspace-knowledge takes. `prepare.sh` and
+`start.sh` produce a native root; the Automation films use the same scripts.
 
-1. Prepare the selected fixture using `demo/one-app/prepare.sh` in a new marked
-   temporary demo root. Record its actual workspace path. Preparation creates
-   `data/`; leave that directory untouched and unused for this native take.
-2. Choose a **different, absent** path, such as `$AXO_DEMO_ROOT/native-data`, for
-   first native startup. Assert absence before the first launch. A restart uses
-   that same existing native path; never reset or recreate it between beats.
-3. Use a reviewed explicit configuration file (`$AXO_CAPTURE_CONFIG`) with the
-   required Agent strategies, the fixture image, loopback port 8080, and an
-   actual local Ollama endpoint. Record its exact bytes/hash. Do not infer a
-   repository-local configuration from cwd.
-4. Native Ollama admission requires cloud disabled. Run a separate owned local
-   Ollama service with `OLLAMA_NO_CLOUD=1` if the user's existing service does not
-   meet that contract. Do not stop or reconfigure the user's service. Verify
-   `/api/status` and retain the actual model tag/digest/context evidence. A
-   derived local tag may set a bounded context for existing weights; record it
-   accurately rather than presenting it as a different trained model.
+1. Prepare the selected fixture with `demo/one-app/prepare.sh --scenario <name>`
+   in a new marked temporary demo root (`AXOCOATL_DEMO_ROOT`). Record its actual
+   workspace path. Preparation does not create `data/`: the daemon creates it on
+   first start, and only a data root the daemon creates itself gets the native
+   Session format. Assert `data/` is absent before the first launch. A restart
+   reuses that same existing data root; never reset or recreate it between beats.
+2. Point Podman at the intended machine before preparing or starting. When the
+   default connection is not the machine to use, export `CONTAINER_CONNECTION`
+   for both scripts; `prepare.sh` starts the default machine only when
+   `podman info` fails, so a set connection keeps it from starting another one.
+3. `start.sh` serves the explicit reviewed configuration
+   `demo/one-app/axocoatl.demo.yaml` on loopback port 18080, or another file named
+   by `AXOCOATL_DEMO_CONFIG` (the Lead-with-helpers film uses
+   `axocoatl.team.yaml`). It prints the configuration path and SHA-256; record
+   both. Do not infer a repository-local configuration from cwd.
+4. Native Ollama admission requires cloud disabled. `start.sh` reads the Ollama
+   port from `AXOCOATL_DEMO_OLLAMA_PORT` (default 11434), requires
+   `/api/status` to report cloud models disabled, and requires every model the
+   configuration names. Run a separate owned local Ollama service with
+   `OLLAMA_NO_CLOUD=1` if the user's existing service does not meet that
+   contract. Do not stop or reconfigure the user's service. Retain the actual
+   model tag/digest/context evidence. A derived local tag may set a bounded
+   context for existing weights; record it accurately rather than presenting it
+   as a different trained model.
 5. Start the exact candidate binary with explicit paths:
 
    ```bash
-   export AXO_NATIVE_DATA="$AXO_DEMO_ROOT/native-data"
+   export AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-harbor-catalog
+   export AXOCOATL_DEMO_OLLAMA_PORT=11434   # a cloud-disabled local service
+   export CONTAINER_CONNECTION=...          # only when not the default machine
    # First launch only; a restart intentionally reuses this directory.
-   test ! -e "$AXO_NATIVE_DATA"
-   AXOCOATL_DATA_DIR="$AXO_NATIVE_DATA" \
-   AXOCOATL_SOCKET_PATH="$AXO_DEMO_ROOT/run/native.sock" \
-     ./target/release/axocoatl dev -c "$AXO_CAPTURE_CONFIG"
+   test ! -e "$AXOCOATL_DEMO_ROOT/data"
+   AXOCOATL_DEMO_BIN="$PWD/target/release/axocoatl" ./demo/one-app/start.sh
    ```
 
-6. In `http://localhost:8080`, use **Open workspace…** and create the scenario's
+   The daemon keeps its data in `$AXOCOATL_DEMO_ROOT/data` and its socket in
+   `$AXOCOATL_DEMO_ROOT/run/axocoatl.sock`. Axocoatl publishes the storefront's
+   logical Preview port 8765 on a dynamic loopback port, so host port 8765 does
+   not need to be free.
+
+6. In `http://127.0.0.1:18080`, use **Open workspace…** and create the scenario's
    Session. Review its image/setup explicitly and require Ready. Retain
    `GET /api/sessions/{id}/team` and require `history_version: execution_v2`
    before sending any recorded Turn. If it reports `legacy_v1`, preserve that

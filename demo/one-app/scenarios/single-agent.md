@@ -20,7 +20,7 @@ Files, Preview, Terminal, Source Control, and the durable conversation.
 
 Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
 `northstar-storefront` fixture, a fresh native data path, real local Ollama calls,
-and the exact candidate binary at `http://localhost:8080`. Retain the actual
+and the exact candidate binary at `http://127.0.0.1:18080`. Retain the actual
 workspace path as `$AXO_DEMO_ROOT/workspace` (or record the equivalent isolated
 fixture path). Verify `history_version: execution_v2` and Ready, then explicitly
 review and apply **Team and budget** before sending.
@@ -69,7 +69,7 @@ Preview port `8765`. Keep repository checks as `npm run check`.
 ## Durable evidence
 
 ```bash
-export AXO_DEMO_URL='http://localhost:8080'
+export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase'
 git -C "$AXO_DEMO_ROOT/workspace" status --short
 git -C "$AXO_DEMO_ROOT/workspace" diff -- lib/orders.js

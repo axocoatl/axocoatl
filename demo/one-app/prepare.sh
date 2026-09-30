@@ -123,11 +123,9 @@ if tcp_port_open 18080; then
   echo "Resolve attempts and Interrupts, close its session, and stop that daemon first." >&2
   exit 1
 fi
-if tcp_port_open 8765; then
-  echo "Port 8765 is already in use; the storefront Browser preview would be unavailable." >&2
-  echo "Stop the process that owns that port before preparing the demo." >&2
-  exit 1
-fi
+# The storefront's port 8765 is a logical port inside the Session container.
+# Axocoatl publishes it on a dynamic loopback host port and Preview reaches it
+# through the daemon, so host port 8765 does not need to be free.
 
 AXO_SESSION_CONTAINERS="$(
   podman ps -a --format '{{.Names}}' |

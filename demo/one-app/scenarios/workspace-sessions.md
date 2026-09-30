@@ -26,7 +26,7 @@ restores the same Turn.
 
 Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
 `harbor-catalog` fixture, a fresh native data path, real local Ollama calls,
-and the exact candidate binary at `http://localhost:8080`. Retain the actual
+and the exact candidate binary at `http://127.0.0.1:18080`. Retain the actual
 workspace path as `$AXO_DEMO_ROOT/workspace` (or record the equivalent isolated
 fixture path). Verify `history_version: execution_v2` and Ready, then explicitly
 review and apply **Team and budget** before sending.
@@ -36,7 +36,7 @@ second. Both belong to the same prepared Workspace; avoid source edits.
 
 ## Browser actions
 
-1. Open `http://localhost:8080` and choose **Open workspace…** from the
+1. Open `http://127.0.0.1:18080` and choose **Open workspace…** from the
    Workspace switcher.
 2. Choose the prepared `workspace` directory and name the Workspace
    `Harbor Catalog`.
@@ -73,7 +73,7 @@ second. Both belong to the same prepared Workspace; avoid source edits.
 In a second terminal:
 
 ```bash
-export AXO_DEMO_URL='http://localhost:8080'
+export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-workspace-film'
 curl -sS "$AXO_DEMO_URL/api/sessions"
 ls -l "$AXO_DEMO_ROOT/data/sessions"
