@@ -143,8 +143,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused before it starts, with a message to stop Axocoatl, make a cold backup, and run
   `axocoatl session upgrade --confirm`. Single-Agent turns and a request targeted at one
   Agent keep working.
+- **Session History reads answer native Sessions in the versioned form.**
+  `GET /api/sessions/{id}/turns`, `/turns/{turn_id}` and `/messages` without
+  `history_version` returned `400` for a Session with native turns. They now answer
+  such a Session as `history_version=2`, whose entries each carry their
+  `history_version`; every other Session keeps the exact legacy shape. The HTTP
+  reference documents both versions with an example, and the WebSocket reference now
+  documents `session-needs-attention`, `activation-stream` (which native Sessions send
+  instead of `token`, `reasoning` and `tool-call`) and `activation-control-changed`.
 
 ### Fixed
+- **A message sent while a turn needs attention asks where it should go.** Send used
+  to be disabled, and a request through the API failed with only "resolve the current
+  unfinished turn". Now Send offers two explicit choices: continue the turn with the
+  message, as a Revise of an Agent with an accepted answer, or finish the turn as it is
+  and send the message as a new request, which selects every accepted final answer so
+  it carries into the next turn's conversation. The choice says plainly what is lost:
+  an Agent that failed or was interrupted has no accepted answer, so its work in that
+  turn does not carry forward, and continuing with a message is unavailable when no
+  Agent has one. The API refusal now names both options and their endpoints.
 - **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
   longer copies host proxy variables into containers.** Any `sandbox.network` other
   than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was
