@@ -247,3 +247,112 @@ async fn a_response_refused_after_completion_keeps_its_complete_usage() {
         );
     }
 }
+
+/// Four identical `bash` rounds trip the loop guard, so the fifth request
+/// withholds tools and asks for the final answer; `wrap_up` is its response.
+async fn run_to_final_answer_request(
+    wrap_up: fn() -> ScriptedEvents,
+) -> (
+    Result<AgentOutput, AgentError>,
+    Vec<ChatRequest>,
+    usize,
+    Vec<ChatMessage>,
+) {
+    let provider = Arc::new(ScriptedStreamLlm::new(move |call| {
+        if call < 4 {
+            vec![
+                Ok(StreamEvent::ToolCallDelta {
+                    index: Some(0),
+                    id: format!("bash-{call}"),
+                    name: Some("bash".to_string()),
+                    args_delta: serde_json::json!({"command": "cat lib/manifest.js"}).to_string(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish_reason: FinishReason::ToolUse,
+                }),
+            ]
+        } else {
+            wrap_up()
+        }
+    }));
+    let captured = provider.captured.clone();
+    let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut executor = axocoatl_tools::ToolExecutor::new();
+    executor.register_builtin("bash", Arc::new(ExecutionCounterTool(executions.clone())));
+    let mut behavior = DefaultAgentBehavior::new(provider, simple_counter())
+        .with_tool_round_limit(128)
+        .with_tool_executor(Arc::new(executor));
+    behavior.on_start(&AgentConfig::default()).await.unwrap();
+    let result = behavior
+        .execute(AgentInput::text("fix the collision check"))
+        .await;
+    let requests = captured.lock().unwrap().clone();
+    let executions = executions.load(std::sync::atomic::Ordering::SeqCst);
+    let history = behavior.session().as_chat_messages();
+    (result, requests, executions, history)
+}
+
+fn stray_bash_call() -> Result<StreamEvent, ProviderError> {
+    Ok(StreamEvent::ToolCallDelta {
+        index: Some(0),
+        id: "stray".to_string(),
+        name: Some("bash".to_string()),
+        args_delta: serde_json::json!({"command": "echo done"}).to_string(),
+    })
+}
+
+#[tokio::test]
+async fn a_final_answer_with_a_stray_tool_call_is_accepted_without_another_round() {
+    let (result, requests, executions, history) = run_to_final_answer_request(|| {
+        vec![
+            Ok(StreamEvent::TextDelta {
+                delta: "Fixed: every pair is compared now.".to_string(),
+            }),
+            stray_bash_call(),
+            Ok(StreamEvent::Done {
+                finish_reason: FinishReason::ToolUse,
+            }),
+        ]
+    })
+    .await;
+    let output = result.expect("the text is the final answer");
+    assert_eq!(output.content, "Fixed: every pair is compared now.");
+    assert_eq!(requests.len(), 5, "the stray call starts no further round");
+    assert!(requests[4].tools.is_empty(), "tools were withheld");
+    assert_eq!(executions, 4, "the stray call never runs");
+    assert_eq!(output.tool_calls.len(), 4);
+    let last = history.last().unwrap();
+    assert_eq!(last.role, MessageRole::Assistant);
+    assert!(
+        last.tool_calls.is_empty(),
+        "the dropped call is not recorded"
+    );
+    assert_eq!(
+        last.text_content(),
+        Some("Fixed: every pair is compared now.")
+    );
+}
+
+#[tokio::test]
+async fn a_final_answer_request_answered_only_with_a_tool_call_fails_plainly() {
+    let (result, requests, executions, _) = run_to_final_answer_request(|| {
+        vec![
+            stray_bash_call(),
+            Ok(StreamEvent::Done {
+                finish_reason: FinishReason::ToolUse,
+            }),
+        ]
+    })
+    .await;
+    let error = result.expect_err("no answer was written");
+    let AgentError::ToolFailed { reason, .. } = &error else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert!(
+        reason.contains("asked for its final answer")
+            && reason.contains("it called a tool instead (bash)"),
+        "{reason}"
+    );
+    assert_eq!(requests.len(), 5, "no extra round");
+    assert_eq!(executions, 4);
+}

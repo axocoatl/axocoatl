@@ -1623,10 +1623,12 @@ impl DefaultAgentBehavior {
     /// progress, or the budget cannot pay for another tool round and a final
     /// answer, the request goes without tools and asks for the answer now, so
     /// the activation ends with one instead of looping or failing at the limit.
+    /// Returns why tools were withheld, when they were.
     fn prepare_provider_request(
         &self,
         mut request: ChatRequest,
-    ) -> Result<(ChatRequest, ProviderToolNameMap), AgentError> {
+    ) -> Result<(ChatRequest, ProviderToolNameMap, Option<String>), AgentError> {
+        let mut final_answer_reason = None;
         if !request.tools.is_empty() {
             let reason = match &self.loop_wrap_up {
                 Some(reason) => Some(reason.clone()),
@@ -1648,9 +1650,55 @@ impl DefaultAgentBehavior {
                      is left undone.]"
                 )));
                 self.fit_final_answer_output(&mut request);
+                final_answer_reason = Some(reason);
             }
         }
-        Self::encode_provider_request(request)
+        let (request, provider_tool_names) = Self::encode_provider_request(request)?;
+        Ok((request, provider_tool_names, final_answer_reason))
+    }
+
+    /// A response to a request that withheld tools to ask for the final
+    /// answer ends the activation: stray tool calls in it never start another
+    /// round. Its text is the answer and the calls are dropped; with no text
+    /// the activation fails with the reason.
+    fn settle_final_answer_response(
+        &self,
+        response: &mut axocoatl_llm::ChatResponse,
+        undeclared_tool_calls: &mut UndeclaredToolCalls,
+        final_answer_reason: Option<&str>,
+    ) -> Result<(), AgentError> {
+        let Some(reason) = final_answer_reason else {
+            return Ok(());
+        };
+        if self.active_run_cancelled || response.tool_calls.is_empty() {
+            return Ok(());
+        }
+        let mut names = response
+            .tool_calls
+            .iter()
+            .map(|call| call.name.as_str())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        names.dedup();
+        let names = names.join(", ");
+        if response.content.trim().is_empty() {
+            return Err(AgentError::ToolFailed {
+                tool: "agent tool loop".to_string(),
+                reason: format!(
+                    "the model was asked for its final answer ({reason}); it called a tool instead ({names}) and wrote no answer. Retry with a more capable model or narrow the task"
+                ),
+            });
+        }
+        tracing::info!(
+            agent = %self.agent_id,
+            dropped = response.tool_calls.len(),
+            tools = %names,
+            "Asked for the final answer, the model also called a tool; keeping its text as the answer and dropping the calls"
+        );
+        response.tool_calls.clear();
+        response.finish_reason = axocoatl_llm::FinishReason::Stop;
+        undeclared_tool_calls.clear();
+        Ok(())
     }
 
     /// Shrink a final answer's output allowance to what the abort guard has
@@ -3087,11 +3135,13 @@ impl AgentBehavior for DefaultAgentBehavior {
                 self.session.replace_last_user_content(&message.content, tokens);
             }
         }
-        let (mut request, provider_tool_names) = if self.active_run_cancelled {
-            Self::encode_provider_request(request)?
-        } else {
-            self.prepare_provider_request(request)?
-        };
+        let (mut request, provider_tool_names, mut final_answer_reason) =
+            if self.active_run_cancelled {
+                let (request, names) = Self::encode_provider_request(request)?;
+                (request, names, None)
+            } else {
+                self.prepare_provider_request(request)?
+            };
         if !self.active_run_cancelled {
             self.ensure_request_fits_context(&request)?;
         }
@@ -3201,6 +3251,11 @@ impl AgentBehavior for DefaultAgentBehavior {
                 response.tool_calls = fallback;
             }
         }
+        self.settle_final_answer_response(
+            &mut response,
+            &mut undeclared_tool_calls,
+            final_answer_reason.as_deref(),
+        )?;
 
         // Tool execution loop: if LLM returns tool calls, execute them and continue
         let mut tool_records = Vec::new();
@@ -3736,8 +3791,9 @@ impl AgentBehavior for DefaultAgentBehavior {
                     turn_start_session_index,
                     0,
                 )?;
-                let (mut followup, provider_tool_names) =
+                let (mut followup, provider_tool_names, followup_reason) =
                     self.prepare_provider_request(followup)?;
+                final_answer_reason = followup_reason;
                 self.ensure_request_fits_context(&followup)?;
                 let est = self.preflight_provider_spend(&mut followup)?;
                 self.ensure_request_fits_context(&followup)?;
@@ -3770,6 +3826,11 @@ impl AgentBehavior for DefaultAgentBehavior {
                 {
                     self.record_provider_usage(&response.usage, usage_complete)?;
                 }
+                self.settle_final_answer_response(
+                    &mut response,
+                    &mut undeclared_tool_calls,
+                    final_answer_reason.as_deref(),
+                )?;
             } else {
                 // No tool executor — record calls but don't execute
                 unresolved_tool_count = unresolved_tool_count
@@ -3825,7 +3886,9 @@ impl AgentBehavior for DefaultAgentBehavior {
             input.system_override.as_deref(), input.model_override.clone(),
             turn_start_session_index, 0,
         )?;
-        let (mut followup, provider_tool_names) = self.prepare_provider_request(followup)?;
+        let (mut followup, provider_tool_names, followup_reason) =
+            self.prepare_provider_request(followup)?;
+        final_answer_reason = followup_reason;
         self.ensure_request_fits_context(&followup)?;
         let est = self.preflight_provider_spend(&mut followup)?;
         let prompt_estimate = self.prompt_estimate(&followup);
@@ -3844,6 +3907,11 @@ impl AgentBehavior for DefaultAgentBehavior {
         if !provider_cancelled || response.usage.total() > 0 || !response.content.is_empty() {
             self.record_provider_usage(&response.usage, streamed.usage_complete)?;
         }
+        self.settle_final_answer_response(
+            &mut response,
+            &mut undeclared_tool_calls,
+            final_answer_reason.as_deref(),
+        )?;
         }
 
         if !self.active_run_cancelled

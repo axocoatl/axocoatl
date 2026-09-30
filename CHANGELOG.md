@@ -194,8 +194,12 @@ model-facing `coordination_control` tool, the external harness adapter and the
   the call never runs and records nothing; the model gets a tool error ("`report` is
   not an available tool. Available tools: … If you are done, answer without calling a
   tool.") and continues, and the next response completes the activation. It counts as
-  a tool round for the round limit and the loop guard. Malformed calls (bad arguments,
-  an empty name, or a name no provider accepts) still fail as before.
+  a tool round for the round limit and the loop guard. When the host has withheld tools
+  to ask for the final answer (the loop guard or the budget wrap-up), a tool call in the
+  response starts no further round: its text is the answer and the call is dropped, and
+  a response with no text ends the activation with a plain failure saying the model was
+  asked for its final answer and called a tool instead. Malformed calls (bad arguments, an empty name, or a name no
+  provider accepts) still fail as before.
 - **A response refused after the model finished keeps its usage.** When a provider
   completed a response and reported its usage but the response was refused (a
   malformed tool call), that usage was lost: the activation's usage became unknown and
