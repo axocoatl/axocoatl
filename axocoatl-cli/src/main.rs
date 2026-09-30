@@ -1234,12 +1234,12 @@ async fn cmd_onboard(install_daemon: bool) {
         }
         OnboardingProvider::OpenRouter => {
             if !Confirm::new()
-                .with_prompt("Use OpenRouter credits, with no BYOK provider keys connected? (BYOK support is planned)")
+                .with_prompt("Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK)")
                 .default(true)
                 .interact()
                 .unwrap_or(false)
             {
-                eprintln!("Native OpenRouter currently requires credit billing. BYOK support remains a TODO; no configuration was written.");
+                eprintln!("Native OpenRouter requires OpenRouter credit billing and does not support BYOK provider keys; no configuration was written.");
                 return;
             }
             let key = Password::new()

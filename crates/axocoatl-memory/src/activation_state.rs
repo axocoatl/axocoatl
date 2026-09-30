@@ -3,7 +3,8 @@
 //! This isolated store does not change the existing Agent checkpoint store. Its
 //! live host must provide an owned canonical namespace under the upgraded format
 //! and Session writer. The isolated path opener remains for compatibility fixtures.
-//! No daemon, actor, Tier 2–4 memory, or live writer is wired here.
+//! The daemon's native Session controller opens it through an owned namespace;
+//! this module wires no actor, Tier 2–4 memory, or other writer itself.
 //!
 //! Inputs require opaque snapshots from successfully persisted canonical Session
 //! history. An owned namespace binds journal and workspace at open. The isolated

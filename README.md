@@ -136,8 +136,8 @@ New data roots use the native Session controller. **Team & budget** requires exp
 limits and expiry before execution. Its enforced provider boundary currently supports
 reviewed local Ollama profiles and eligible OpenRouter text/tool endpoints paid with
 OpenRouter credits. OpenRouter requires `providers.openrouter_billing: credits`, a
-normal API key, and an account with no connected BYOK provider keys. BYOK support is
-a TODO. A compatible HTTP API alone does not establish a bound.
+normal API key, and an account with no connected BYOK provider keys. BYOK is not
+supported. A compatible HTTP API alone does not establish a bound.
 The onboarding wizard offers Ollama and OpenRouter for native Sessions.
 Direct OpenAI and Anthropic configurations remain available through manual YAML
 on their supported compatibility paths.

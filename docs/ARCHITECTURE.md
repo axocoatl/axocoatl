@@ -163,7 +163,7 @@ output; incomplete responses keep the reservation and unknown usage. The normal 
 key stays in daemon configuration, never retained profile evidence.
 `providers.openrouter_billing: credits` explicitly declares an account without
 connected BYOK keys. This is a supported configuration requirement, not detection or
-prevention of external account changes. BYOK execution remains a TODO; an unexpected
+prevention of external account changes. BYOK execution is not supported; an unexpected
 BYOK response is refused and cannot establish complete credit accounting.
 
 `control_command` separates typed requested parameters from trusted source attribution and

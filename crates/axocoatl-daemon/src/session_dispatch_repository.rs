@@ -2,8 +2,7 @@
 //! Descriptive evidence identifies an already-retained resource; it cannot
 //! reconstruct ownership or turn a restored intent into permission to replay.
 //! The daemon must retain this controller and its repository owners throughout
-//! unknown outcomes. Live v2 bootstrap remains disabled until lifecycle joining
-//! and all participating repository writers use that ownership boundary.
+//! unknown outcomes.
 
 use super::*;
 use crate::bootstrap::session_repository::{
@@ -192,7 +191,6 @@ impl SessionDispatchController {
 
     /// A trusted host port, not an RPC that accepts a path or a readiness flag.
     /// Its owner must already be retained by this exact canonical controller.
-    #[allow(dead_code)] // Live v2 ingress stays disabled until shared writers are integrated.
     pub(crate) async fn start_repository_check(
         &self,
         owner: SessionRepositoryOwner,

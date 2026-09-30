@@ -73,7 +73,7 @@ async fn openrouter_billing_requires_explicit_credits_before_observation() {
         ..Default::default()
     };
     let result = preparation.observe_configured(&credentials).await;
-    assert!(matches!(result, Err(error) if error.to_string().contains("BYOK support is TODO")));
+    assert!(matches!(result, Err(error) if error.to_string().contains("not BYOK provider keys")));
     let rejected_route = NativeProviderCredentials {
         openrouter_credits_only: true,
         openrouter_configuration_error: Some("configured fallback is unsupported".into()),

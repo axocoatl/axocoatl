@@ -72,7 +72,7 @@ impl NativeProviderCredentials {
             return Err(error(reason));
         }
         if !self.openrouter_credits_only {
-            return Err(error("native OpenRouter supports OpenRouter credits only; confirm providers.openrouter_billing: credits in the active configuration. BYOK support is TODO; no inference was sent"));
+            return Err(error("native OpenRouter supports OpenRouter credits only, not BYOK provider keys; set providers.openrouter_billing: credits in the active configuration. No inference was sent"));
         }
         self.openrouter_api_key
             .as_deref()
