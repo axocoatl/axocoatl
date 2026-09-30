@@ -69,6 +69,8 @@ mod control_revision;
 mod control_tool;
 #[path = "session_dispatch_coordinator.rs"]
 mod coordinator;
+#[path = "session_dispatch_delegate.rs"]
+mod delegate;
 #[path = "session_dispatch_driver.rs"]
 mod driver;
 #[path = "session_dispatch_knowledge.rs"]
@@ -748,8 +750,9 @@ impl DispatchState {
                     .tool_result(&arguments)
                     .map_err(error)?
                     .is_none()
+                    && !self.reconcile_control_tool_outcome(&snapshot, intent, &arguments)?
                 {
-                    self.reconcile_control_tool_outcome(&snapshot, intent, &arguments)?;
+                    self.reconcile_delegate_outcome(&snapshot, intent, &arguments)?;
                 }
                 if let Some(retained) = self.content.tool_result(&arguments).map_err(error)? {
                     // A returned status and exact protected payload reached durable
@@ -1148,8 +1151,11 @@ impl DispatchState {
             {
                 return Err(error("protected executable arguments changed"));
             }
-            let replay_policy =
-                self.control_lookup_policy(activation, &invocation_id, request, &arguments)?;
+            let replay_policy = if request.tool_call.name == delegate::NAME {
+                self.delegate_replay_policy(activation, &invocation_id, request, &arguments)?
+            } else {
+                self.control_lookup_policy(activation, &invocation_id, request, &arguments)?
+            };
             let provider_run_ref = if request.tool_call.provider_metadata.is_empty() {
                 None
             } else {
@@ -1234,6 +1240,10 @@ impl DispatchState {
         if intent.tool_name == control_tool::NAME {
             self.trip(TestFailure::ControlOutcome)?;
         }
+        #[cfg(test)]
+        if intent.tool_name == delegate::NAME {
+            self.trip(TestFailure::DelegateOutcome)?;
+        }
         let ToolInvocationOutcome::Returned(returned) = outcome else {
             return Err(error(
                 "backend outcome is unknown; retained intent requires reconciliation",
@@ -1317,6 +1327,7 @@ enum TestFailure {
     AuthorityClaim,
     ContentResult,
     ControlOutcome,
+    DelegateOutcome,
     StreamObservation,
     AuditOutcome,
     CanonicalClose,
@@ -1340,5 +1351,9 @@ impl DispatchState {
 impl SessionDispatchController {
     pub(crate) fn lose_control_tool_outcome_for_test(&self) {
         self.lock().unwrap().fail_at = Some(TestFailure::ControlOutcome);
+    }
+
+    pub(crate) fn lose_delegate_outcome_for_test(&self) {
+        self.lock().unwrap().fail_at = Some(TestFailure::DelegateOutcome);
     }
 }

@@ -726,6 +726,9 @@ async fn environment_change_requires_no_unfinished_native_turn_and_keeps_history
 #[path = "bootstrap_native_coordinator_tests.rs"]
 mod coordinator_tests;
 
+#[path = "bootstrap_native_delegate_tests.rs"]
+mod delegate_tests;
+
 #[path = "bootstrap_native_ways_admission_tests.rs"]
 mod ways_admission_tests;
 

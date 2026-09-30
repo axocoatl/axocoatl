@@ -9,7 +9,7 @@ use axocoatl_core::{AgentConfig, AgentOutput, AgentRole, MeasuredTokenUsage, Tok
 use axocoatl_session::control_authority::{DelegatedGrantReservation, GrantLimits};
 use axocoatl_session::control_command::{
     CommandReceiptView, CommandSourceRecord, ControlCommandRequest, ControlCommandState,
-    ControlParameters,
+    ControlParameters, ControlTransition,
 };
 use serde::{Deserialize, Serialize};
 
@@ -363,6 +363,44 @@ impl DispatchState {
     }
 }
 
+/// Incidental runtime actor ids and parent retry generations do not make an
+/// accepted child a new task. Exact semantic repeats reattach it.
+pub(super) fn native_child_digest(
+    parent: &ActivationRef,
+    request: &ChildExecutionRequest,
+    worker: &NativeCoordinatorWorker,
+    replacement: &Option<(TurnNodeId, Vec<TurnNodeId>)>,
+) -> Result<String> {
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&(
+                parent.session_id.clone(),
+                parent.turn_id.clone(),
+                parent.node_id.clone(),
+                request.subtask_index,
+                &request.task_name,
+                &request.task_input,
+                &request.tools,
+                &request.provider_id,
+                &request.model,
+                &request.attachments,
+                worker,
+                replacement
+            ))
+            .map_err(error)?
+        )
+    ))
+}
+
+/// The child node and the command that admits it, both named by the digest.
+pub(super) fn native_child_identity(digest: &str) -> Result<(TurnNodeId, CommandId)> {
+    Ok((
+        TurnNodeId::new(format!("child-{digest}")).map_err(error)?,
+        CommandId::new(format!("child-command-{digest}")).map_err(error)?,
+    ))
+}
+
 impl SessionDispatchController {
     pub(super) fn schedule_coordinator_child(
         &self,
@@ -389,7 +427,7 @@ impl SessionDispatchController {
         self.admit_coordinator_child(parent, request, control, Some((target, rewire)))?;
         Ok(())
     }
-    fn admit_coordinator_child(
+    pub(super) fn admit_coordinator_child(
         &self,
         parent: &ActivationRef,
         request: &ChildExecutionRequest,
@@ -404,14 +442,14 @@ impl SessionDispatchController {
             .activations()
             .iter()
             .find(|item| item.activation == *parent)
-            .ok_or_else(|| error("Coordinator input is unavailable"))?
+            .ok_or_else(|| error("the delegating Agent's input is unavailable"))?
             .input;
         let bound = state
             .bound
             .get(&parent.activation_id)
             .filter(|bound| bound.activation == *parent)
             .cloned()
-            .ok_or_else(|| error("Coordinator has no live owner"))?;
+            .ok_or_else(|| error("the delegating Agent is no longer running"))?;
         let policy = state
             .authority
             .grant_policy(bound.grant.grant_id.as_str())
@@ -419,7 +457,7 @@ impl SessionDispatchController {
         let approved =
             crate::bootstrap::session_team::approved_coordinator_policy(&state.content, &policy)
                 .map_err(error)?
-                .ok_or_else(|| error("Coordinator has no approved child templates"))?;
+                .ok_or_else(|| error("this Agent has no approved helper templates"))?;
         state.validate_coordinator_resource(parent_input, &approved.resource)?;
         let mut candidates = vec![];
         for template in &approved.workers {
@@ -451,33 +489,12 @@ impl SessionDispatchController {
         }
         if candidates.len() != 1 {
             return Err(error(
-                "Coordinator child does not select one exact approved Worker template/profile",
+                "the child request does not match exactly one approved Worker template and profile",
             ));
         }
         let worker = candidates.remove(0);
-        // Incidental runtime actor ids and parent retry generations do not make
-        // an accepted child a new task. Exact semantic repeats reattach it.
-        let digest = format!(
-            "{:x}",
-            Sha256::digest(
-                serde_json::to_vec(&(
-                    parent.session_id.clone(),
-                    parent.turn_id.clone(),
-                    parent.node_id.clone(),
-                    request.subtask_index,
-                    &request.task_name,
-                    &request.task_input,
-                    &request.tools,
-                    &request.provider_id,
-                    &request.model,
-                    &request.attachments,
-                    &worker,
-                    &replacement
-                ))
-                .map_err(error)?
-            )
-        );
-        let node_id = TurnNodeId::new(format!("child-{digest}")).map_err(error)?;
+        let digest = native_child_digest(parent, request, &worker, &replacement)?;
+        let (node_id, command_id) = native_child_identity(&digest)?;
         if state.native_child_origin(&node_id)?.is_some() {
             return Ok(Box::new(CanonicalChildWait {
                 controller: self.clone(),
@@ -583,7 +600,7 @@ impl SessionDispatchController {
         let receipt = state.submit_control_command(
             ControlCommandRequest {
                 schema_version: 1,
-                command_id: CommandId::new(format!("child-command-{digest}")).map_err(error)?,
+                command_id,
                 session_id: parent.session_id.clone(),
                 turn_id: parent.turn_id.clone(),
                 execution_epoch_id: parent.execution_epoch_id.clone(),
@@ -591,7 +608,7 @@ impl SessionDispatchController {
                 expected_graph_revision: snapshot
                     .contract()
                     .graph()
-                    .ok_or_else(|| error("Coordinator graph is missing"))?
+                    .ok_or_else(|| error("the turn graph is missing"))?
                     .revision,
                 issued_at_ms: now_ms()?,
                 parameters: match replacement {
@@ -612,10 +629,11 @@ impl SessionDispatchController {
             receipt.view().state,
             ControlCommandState::Applied | ControlCommandState::Settled
         ) {
-            return Err(error(format!(
-                "Coordinator child admission was refused: {:?}",
-                receipt.view().last_transition
-            )));
+            let reason = match &receipt.view().last_transition {
+                Some(ControlTransition::Rejected { failure }) => failure.message.as_str(),
+                _ => "its admission did not complete",
+            };
+            return Err(error(format!("the child Agent was not admitted: {reason}")));
         }
         Ok(Box::new(CanonicalChildWait {
             controller: self.clone(),
@@ -743,7 +761,7 @@ impl AdmittedChildExecution for CanonicalChildWait {
                             | ActivationState::Superseded
                     ) {
                         return Err(AgentExecutionFailure::new(
-                            "Coordinator child did not produce an accepted outcome",
+                            "the child Agent stopped or failed before giving an accepted answer",
                             measured,
                         ));
                     }
@@ -752,7 +770,7 @@ impl AdmittedChildExecution for CanonicalChildWait {
                     || (self.control.is_cancelled() && latest.is_none())
                 {
                     return Err(failure(
-                        "Coordinator child execution was interrupted".into(),
+                        "the turn stopped before the child Agent finished".into(),
                     ));
                 }
             }

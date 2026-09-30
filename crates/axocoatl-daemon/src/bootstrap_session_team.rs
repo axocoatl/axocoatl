@@ -499,14 +499,14 @@ impl AxocoatlDaemon {
                 }
                 continue;
             };
-            if parent_config.role != AgentRole::Coordinator {
+            if parent_config.role == AgentRole::Worker {
                 return Err(team_error(
-                    "Only an actual Coordinator template can receive delegation",
+                    "A Worker cannot delegate; remove its helpers or choose an Autonomous or Coordinator template",
                 ));
             }
             if !session.environment.setup_reviewed {
                 return Err(team_error(
-                    "Review this Session's environment before approving Coordinator resources",
+                    "Review this Session's environment before approving helpers",
                 ));
             }
             if proposal.workers.is_empty()
@@ -528,10 +528,9 @@ impl AxocoatlDaemon {
             {
                 return Err(team_error("Delegated operations must be unique"));
             }
-            let aggregate = slot
-                .limits
-                .as_ref()
-                .ok_or_else(|| team_error("The Coordinator needs explicit aggregate limits"))?;
+            let aggregate = slot.limits.as_ref().ok_or_else(|| {
+                team_error("An Agent that delegates needs explicit aggregate limits")
+            })?;
             let old_policy = previous_approval.as_ref().and_then(|approval| {
                 approval
                     .coordinators
@@ -559,7 +558,7 @@ impl AxocoatlDaemon {
                     || worker.limits.tokens > aggregate.tokens
                     || worker.limits.cost_microunits > aggregate.cost_microunits
                 {
-                    return Err(team_error("Each Worker needs unique template identity and explicit limits within the Coordinator aggregate"));
+                    return Err(team_error("Each helper needs a unique Worker template and explicit limits within the delegating Agent's aggregate"));
                 }
                 let preserved = if slot.template_id.is_none()
                     && old_edit.is_some_and(|old| {
@@ -589,9 +588,7 @@ impl AxocoatlDaemon {
                         .ok_or_else(|| team_error("Selected Worker template is missing"))?
                         .to_core();
                     if config.role != AgentRole::Worker {
-                        return Err(team_error(
-                            "Coordinator children must use an actual Worker template",
-                        ));
+                        return Err(team_error("Helpers must use an actual Worker template"));
                     }
                     config.sampling.max_tokens = worker.max_output_tokens;
                     let identity = digest(&(session_id, &edit.command_id, &slot.slot_id, worker))?;

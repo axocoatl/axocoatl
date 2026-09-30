@@ -1,0 +1,770 @@
+//! Host `delegate` port. A lead Agent hands one self-contained task to a fresh,
+//! read-only helper and waits for its answer. Admission is the ordinary native
+//! child path: the helper is a dynamic graph node with its own grant reserved
+//! from the lead's, and this port only waits for its canonical outcome.
+use super::*;
+use axocoatl_actor::{AdmittedChildExecution, AgentRunOutcome, ChildExecutionRequest};
+use axocoatl_core::MeasuredTokenUsage;
+use axocoatl_session::control_authority::AuthorityError;
+use axocoatl_session::control_command::{
+    CommandFailure, CommandSourceRecord, ControlCommandState, ControlParameters, ControlTransition,
+};
+use axocoatl_session::invocation_audit::ProtectedArguments;
+use axocoatl_tools::{BuiltinTool, ToolError};
+use serde::{Deserialize, Serialize};
+
+pub(super) const NAME: &str = axocoatl_session::control_authority::DELEGATE_TOOL;
+const ADAPTER: &str = "delegate-child-v1";
+const MAX_TASK_BYTES: usize = 16 * 1024;
+const MAX_ANSWER_BYTES: usize = 8192;
+/// Tools that change the workspace or run commands. Until each helper has its
+/// own write scope, only helpers without them can take delegated work.
+const WRITE_TOOLS: [&str; 5] = [
+    "write_file",
+    "edit_file",
+    "bash",
+    "bash_background",
+    "spawn_terminal",
+];
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DelegateCall {
+    helper: String,
+    task: String,
+}
+
+/// Retained as the lead invocation's replay policy, so a lost return is read
+/// back from the helper's canonical outcome instead of running it again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DelegateReplayPolicy {
+    schema_version: u32,
+    adapter: String,
+    invocation_id: InvocationId,
+    activation: ActivationRef,
+    arguments: ProtectedArguments,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    node_id: Option<TurnNodeId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    command_id: Option<CommandId>,
+}
+
+struct DelegateTool {
+    controller: SessionDispatchController,
+    activation: ActivationRef,
+    description: String,
+    helpers: Vec<String>,
+}
+
+fn write_tools(profile: &ExecutionProfile) -> Vec<&str> {
+    profile
+        .tools
+        .iter()
+        .map(String::as_str)
+        .filter(|tool| WRITE_TOOLS.contains(tool))
+        .collect()
+}
+
+/// At most `max` bytes of `text`, cut on a character boundary.
+fn cut_at_char_boundary(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        return text;
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// The text the live tool returns for a failed call, for a reconciled one.
+fn failure_text(reason: String) -> String {
+    ToolError::ExecutionFailed {
+        tool: NAME.into(),
+        reason,
+    }
+    .to_string()
+}
+
+fn completed_answer(
+    helper: &str,
+    node: &TurnNodeId,
+    text: &str,
+    usage: &MeasuredTokenUsage,
+    reconciled: bool,
+) -> serde_json::Value {
+    let answer = cut_at_char_boundary(text, MAX_ANSWER_BYTES);
+    let truncated = answer.len() < text.len();
+    let mut value = serde_json::json!({
+        "helper": helper,
+        "node_id": node,
+        "status": "completed",
+        "result": answer,
+        "truncated": truncated,
+        "output_bytes": text.len(),
+        "usage": {
+            "input_tokens": usage.usage.input_tokens,
+            "output_tokens": usage.usage.output_tokens,
+            "complete": usage.complete,
+        },
+    });
+    if truncated {
+        value["note"] = format!(
+            "The answer was cut at {MAX_ANSWER_BYTES} bytes; the full answer is kept in the \
+             Session history. To get the rest, delegate a narrower task."
+        )
+        .into();
+    }
+    if reconciled {
+        value["reconciled"] = true.into();
+    }
+    value
+}
+
+/// Plain text for a refused helper admission. `limits` are the helper's,
+/// when known.
+fn refusal(helper: &str, limits: Option<&GrantLimits>, failure: &CommandFailure) -> String {
+    let reason = failure
+        .message
+        .strip_prefix("Session dispatch: ")
+        .unwrap_or(&failure.message);
+    if reason == AuthorityError::Capacity.to_string() {
+        let limits = limits
+            .map(|limits| {
+                format!(
+                    " ({} tool calls, {} tokens)",
+                    limits.invocations, limits.tokens
+                )
+            })
+            .unwrap_or_default();
+        return format!(
+            "The helper '{helper}' was not started: its limits{limits} do not fit in what is left \
+             of your budget. Finish the work yourself or write your final answer."
+        );
+    }
+    if reason == "control exceeds the approved graph size" {
+        return format!(
+            "The helper '{helper}' was not started: this turn already has as many Agents as were \
+             approved. Finish the work yourself or write your final answer."
+        );
+    }
+    format!("The helper '{helper}' was not started: {reason}.")
+}
+
+impl DispatchState {
+    /// Every approved helper template of a holder grant, with its captured
+    /// execution profile. Ad hoc selection is not offered to a lead.
+    fn delegate_helpers(
+        &self,
+        policy: &AuthorityGrant,
+    ) -> Result<Vec<(NativeCoordinatorWorker, ExecutionProfile)>> {
+        let Some(approved) =
+            crate::bootstrap::session_team::approved_coordinator_policy(&self.content, policy)
+                .map_err(error)?
+        else {
+            return Ok(vec![]);
+        };
+        let mut helpers = vec![];
+        for worker in approved.workers {
+            if worker.template_id.starts_with("adhoc-") {
+                continue;
+            }
+            let ActivationEvidenceContent::Definition { profile, .. } = self
+                .content
+                .resolve_activation_evidence(&worker.definition.snapshot)
+                .map_err(error)?
+            else {
+                return Err(error("an approved helper definition is unavailable"));
+            };
+            let profile = profile.clone();
+            helpers.push((worker, profile));
+        }
+        Ok(helpers)
+    }
+
+    /// The exact child request for one call, or the reason the model gets
+    /// when the call cannot become one.
+    fn delegate_request(
+        &self,
+        lead: &ActivationRef,
+        policy: &AuthorityGrant,
+        call: &DelegateCall,
+    ) -> Result<std::result::Result<(NativeCoordinatorWorker, ChildExecutionRequest), String>> {
+        let helpers = self.delegate_helpers(policy)?;
+        let Some((worker, profile)) = helpers
+            .iter()
+            .find(|(worker, _)| worker.template_id == call.helper)
+        else {
+            let names = helpers
+                .iter()
+                .filter(|(_, profile)| write_tools(profile).is_empty())
+                .map(|(worker, _)| worker.template_id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Ok(Err(format!(
+                "There is no helper named '{}'. Choose one of: {names}.",
+                call.helper
+            )));
+        };
+        let writes = write_tools(profile);
+        if !writes.is_empty() {
+            return Ok(Err(format!(
+                "The helper '{}' can change files or run commands ({}), and only read-only \
+                 helpers can take delegated work for now. Choose a read-only helper or do this \
+                 part yourself.",
+                call.helper,
+                writes.join(", ")
+            )));
+        }
+        if call.task.trim().is_empty() {
+            return Ok(Err(
+                "The task is empty. Say exactly what the helper should do and what it should \
+                 report back."
+                    .into(),
+            ));
+        }
+        if call.task.len() > MAX_TASK_BYTES {
+            return Ok(Err(format!(
+                "The task is {} bytes; keep it under {MAX_TASK_BYTES} bytes.",
+                call.task.len()
+            )));
+        }
+        let snapshot = self.current(lead)?;
+        let conversation = &snapshot
+            .contract()
+            .activations()
+            .iter()
+            .find(|item| item.activation == *lead)
+            .ok_or_else(|| error("the delegating activation is unavailable"))?
+            .conversation_id;
+        Ok(Ok((
+            worker.clone(),
+            ChildExecutionRequest {
+                actor_id: conversation.as_str().into(),
+                logical_worker_id: worker.template_id.clone(),
+                subtask_index: 0,
+                task_name: worker.template_id.clone(),
+                task_input: call.task.clone(),
+                tools: profile.tools.clone(),
+                provider_id: profile.provider.clone(),
+                model: profile.model.clone(),
+                attachments: vec![],
+            },
+        )))
+    }
+
+    /// The helper node and admitting command a call names, when it names one.
+    fn delegate_target(
+        &self,
+        lead: &ActivationRef,
+        call: &DelegateCall,
+    ) -> Result<Option<(TurnNodeId, CommandId)>> {
+        let bound = self
+            .bound
+            .get(&lead.activation_id)
+            .filter(|bound| bound.activation == *lead)
+            .ok_or_else(|| error("the delegating Agent is no longer running"))?;
+        let policy = self
+            .authority
+            .grant_policy(bound.grant.grant_id.as_str())
+            .map_err(error)?;
+        let Ok((worker, request)) = self.delegate_request(lead, &policy, call)? else {
+            return Ok(None);
+        };
+        let digest = super::coordinator::native_child_digest(lead, &request, &worker, &None)?;
+        super::coordinator::native_child_identity(&digest).map(Some)
+    }
+
+    pub(super) fn delegate_replay_policy(
+        &mut self,
+        activation: &ActivationRef,
+        invocation: &InvocationId,
+        request: &ToolInvocationRequest,
+        arguments: &DurableToolArguments,
+    ) -> Result<InvocationReplayPolicy> {
+        let target =
+            match serde_json::from_value::<DelegateCall>(request.tool_call.arguments.clone()) {
+                Ok(call) => self.delegate_target(activation, &call)?,
+                Err(_) => None,
+            };
+        let (node_id, command_id) = target.unzip();
+        let policy = DelegateReplayPolicy {
+            schema_version: 1,
+            adapter: ADAPTER.into(),
+            invocation_id: invocation.clone(),
+            activation: activation.clone(),
+            arguments: arguments.protected_arguments().clone(),
+            node_id,
+            command_id,
+        };
+        let policy_ref = self
+            .content
+            .retain_activation_evidence(ActivationEvidenceContent::Guidance {
+                text: serde_json::to_string(&policy).map_err(error)?,
+            })
+            .map_err(error)?
+            .reference()
+            .clone();
+        Ok(InvocationReplayPolicy::ReconcileBeforeReplay { policy_ref })
+    }
+
+    /// The accepted answer and measured usage of a helper node, when its
+    /// latest activation was accepted with complete output evidence.
+    fn accepted_helper_answer(
+        &self,
+        snapshot: &DurableTurnSnapshot,
+        node: &TurnNodeId,
+    ) -> Result<Option<(String, MeasuredTokenUsage)>> {
+        let Some(item) = snapshot
+            .contract()
+            .activations()
+            .iter()
+            .rev()
+            .find(|item| item.activation.node_id == *node)
+        else {
+            return Ok(None);
+        };
+        if item.state != ActivationState::Accepted {
+            return Ok(None);
+        }
+        let reservation = self
+            .content
+            .activation_output_reservation(snapshot, &item.activation)
+            .map_err(error)?
+            .ok_or_else(|| error("accepted helper output reservation is missing"))?;
+        let output = self
+            .content
+            .activation_output_settlement(&reservation)
+            .map_err(error)?
+            .ok_or_else(|| error("accepted helper output is missing"))?;
+        if item.output.as_ref() != Some(output.reference()) || output.complete_output().is_none() {
+            return Err(error("accepted helper has no complete output evidence"));
+        }
+        let usage = self
+            .authority
+            .provider_usage(&item.activation)
+            .map(|usage| usage.tokens)
+            .unwrap_or_default();
+        Ok(Some((output.content().output.text.clone(), usage)))
+    }
+
+    /// The lead's `delegate` result read back from the command journal and the
+    /// helper's canonical outcome, or `None` while it is still unknown.
+    fn delegate_lookup(
+        &self,
+        snapshot: &DurableTurnSnapshot,
+        intent: &InvocationIntent,
+        policy: &DelegateReplayPolicy,
+        helper: &str,
+    ) -> Result<Option<std::result::Result<serde_json::Value, String>>> {
+        let not_admitted = Err(failure_text(format!(
+            "The call to helper '{helper}' was not admitted, so no helper ran. Call delegate \
+             again if you still need it."
+        )));
+        let (Some(node), Some(command)) = (&policy.node_id, &policy.command_id) else {
+            return Ok(Some(not_admitted));
+        };
+        let Some(receipt) = self.commands.receipt(command).map_err(error)? else {
+            return Ok(Some(not_admitted));
+        };
+        let view = receipt.view();
+        let admits_node = matches!(&view.request.parameters,
+            ControlParameters::AddAgent { input, .. } if input.activation.node_id == *node);
+        // A retried lead reattaches to the command its earlier generation issued.
+        let from_lead = matches!(&view.source,
+            CommandSourceRecord::Agent { activation, .. }
+                if activation.session_id == intent.activation.session_id
+                    && activation.turn_id == intent.activation.turn_id
+                    && activation.node_id == intent.activation.node_id);
+        if !admits_node || !from_lead {
+            return Ok(None);
+        }
+        Ok(match (&view.state, &view.last_transition) {
+            (ControlCommandState::Rejected, Some(ControlTransition::Rejected { failure })) => {
+                Some(Err(failure_text(refusal(helper, None, failure))))
+            }
+            (ControlCommandState::Applied | ControlCommandState::Settled, _) => {
+                Some(match self.accepted_helper_answer(snapshot, node)? {
+                    Some((text, usage)) => Ok(completed_answer(helper, node, &text, &usage, true)),
+                    None => Err(failure_text(format!(
+                        "The helper '{helper}' did not complete (node {}), so there is no \
+                         answer. Continue without it, or delegate a narrower task.",
+                        node.as_str()
+                    ))),
+                })
+            }
+            _ => None,
+        })
+    }
+
+    /// Record the lead's lost `delegate` return from the command journal and
+    /// the helper's canonical outcome. Nothing runs again. A command that was
+    /// accepted but never applied stays unknown.
+    pub(super) fn reconcile_delegate_outcome(
+        &mut self,
+        snapshot: &DurableTurnSnapshot,
+        intent: &InvocationIntent,
+        arguments: &DurableToolArguments,
+    ) -> Result<bool> {
+        if intent.tool_name != NAME || intent.activation.turn_id != self.turn_id {
+            return Ok(false);
+        }
+        let InvocationReplayPolicy::ReconcileBeforeReplay { policy_ref } = &intent.replay_policy
+        else {
+            return Ok(false);
+        };
+        let ActivationEvidenceContent::Guidance { text } = self
+            .content
+            .resolve_activation_evidence(policy_ref)
+            .map_err(error)?
+        else {
+            return Ok(false);
+        };
+        let Ok(policy) = serde_json::from_str::<DelegateReplayPolicy>(text) else {
+            return Ok(false);
+        };
+        if policy.schema_version != 1
+            || policy.adapter != ADAPTER
+            || policy.invocation_id != intent.invocation_id
+            || policy.activation != intent.activation
+            || policy.arguments != intent.arguments
+            || arguments.protected_arguments() != &intent.arguments
+        {
+            return Ok(false);
+        }
+        let bytes = self.content.read_tool_arguments(arguments).map_err(error)?;
+        let helper = serde_json::from_slice::<DelegateCall>(&bytes)
+            .map(|call| call.helper)
+            .unwrap_or_default();
+        let Some(returned) = self.delegate_lookup(snapshot, intent, &policy, &helper)? else {
+            return Ok(false);
+        };
+        let disposition = if returned.is_ok() {
+            InvocationOutcome::Succeeded
+        } else {
+            InvocationOutcome::Failed
+        };
+        self.content
+            .record_tool_result(
+                arguments,
+                disposition,
+                &serde_json::to_vec(&returned).map_err(error)?,
+                now_ms()?,
+            )
+            .map_err(error)?;
+        Ok(true)
+    }
+}
+
+impl SessionDispatchController {
+    /// The `delegate` port for a delegation holder that may add Agents from
+    /// approved templates. Isolated Ways keep their fixed candidate roster.
+    pub(super) fn scoped_delegate_tool(
+        &self,
+        activation: &ActivationRef,
+    ) -> Result<Option<Arc<dyn BuiltinTool>>> {
+        let state = self.lock()?;
+        let bound = state
+            .bound
+            .get(&activation.activation_id)
+            .filter(|bound| bound.activation == *activation)
+            .ok_or_else(|| error("delegate source is not bound"))?;
+        let policy = state
+            .authority
+            .grant_policy(bound.grant.grant_id.as_str())
+            .map_err(error)?;
+        let delegates = policy.holder == activation.node_id
+            && policy.delegation.as_deref().is_some_and(|delegation| {
+                !delegation.templates.is_empty()
+                    && delegation
+                        .operations
+                        .iter()
+                        .any(|permission| permission.operation == DelegatedOperation::AddAgent)
+            });
+        if !delegates || state.is_isolated_ways()? {
+            return Ok(None);
+        }
+        let mut helpers = vec![];
+        let mut lines = vec![];
+        for (worker, profile) in state.delegate_helpers(&policy)? {
+            if !write_tools(&profile).is_empty() {
+                continue;
+            }
+            let tools = if profile.tools.is_empty() {
+                "no tools".to_owned()
+            } else {
+                format!("tools {}", profile.tools.join(", "))
+            };
+            lines.push(format!(
+                "- {}: {tools}; up to {} tool calls and {} tokens.",
+                worker.template_id, worker.limits.invocations, worker.limits.tokens
+            ));
+            helpers.push(worker.template_id);
+        }
+        let description = format!(
+            "Hand one self-contained task to a read-only helper Agent and wait for its answer. \
+             The helper starts fresh: it sees the Session's request and your task, not this \
+             conversation, so put every detail it needs in the task and say what to report \
+             back. Calling the same helper with the same task again in this turn returns the \
+             earlier result instead of running it again. Answers longer than {MAX_ANSWER_BYTES} \
+             bytes are cut. Each helper's limits come out of your own budget, so delegate only \
+             work that needs a separate look.\nHelpers:\n{}",
+            lines.join("\n")
+        );
+        Ok(Some(Arc::new(DelegateTool {
+            controller: self.clone(),
+            activation: activation.clone(),
+            description,
+            helpers,
+        })))
+    }
+
+    /// Admit the helper for one call, or reattach to the one an identical
+    /// earlier call admitted. Returns the helper node and a handle that waits
+    /// for its canonical outcome.
+    fn delegate(
+        &self,
+        lead: &ActivationRef,
+        call: &DelegateCall,
+    ) -> std::result::Result<(TurnNodeId, Box<dyn AdmittedChildExecution>), String> {
+        let (worker, request, node_id, command_id, control) = {
+            let state = self.lock().map_err(|failure| failure.to_string())?;
+            state
+                .execution_admission()
+                .map_err(|failure| failure.to_string())?;
+            let bound = state
+                .bound
+                .get(&lead.activation_id)
+                .filter(|bound| bound.activation == *lead)
+                .cloned()
+                .ok_or_else(|| "The delegating Agent is no longer running.".to_string())?;
+            let policy = state
+                .authority
+                .grant_policy(bound.grant.grant_id.as_str())
+                .map_err(|failure| failure.to_string())?;
+            let (worker, request) = state
+                .delegate_request(lead, &policy, call)
+                .map_err(|failure| failure.to_string())??;
+            let digest = super::coordinator::native_child_digest(lead, &request, &worker, &None)
+                .map_err(|failure| failure.to_string())?;
+            let (node_id, command_id) = super::coordinator::native_child_identity(&digest)
+                .map_err(|failure| failure.to_string())?;
+            match state
+                .commands
+                .receipt(&command_id)
+                .map_err(|failure| failure.to_string())?
+            {
+                // Resubmitting a refused helper and task would conflict with
+                // its recorded request; report the recorded refusal instead.
+                Some(receipt) => match (&receipt.view().state, &receipt.view().last_transition) {
+                    (
+                        ControlCommandState::Rejected,
+                        Some(ControlTransition::Rejected { failure }),
+                    ) => return Err(refusal(&call.helper, Some(&worker.limits), failure)),
+                    (ControlCommandState::Applied | ControlCommandState::Settled, _) => {}
+                    _ => {
+                        return Err(format!(
+                            "The earlier call to helper '{}' with this task has not finished \
+                             being recorded. Continue without it for now.",
+                            call.helper
+                        ))
+                    }
+                },
+                None => {
+                    let needed = worker.limits.invocations.saturating_add(2);
+                    if let Some(reserve) = state.host_observation_shortfall(lead, needed) {
+                        return Err(format!(
+                            "The helper '{}' was not started: its {} tool calls would use the \
+                             {reserve} invocation(s) held for the host to observe your changes \
+                             and run required checks. Do not delegate more work; finish the \
+                             task yourself or write your final answer now.",
+                            call.helper, worker.limits.invocations
+                        ));
+                    }
+                }
+            }
+            (worker, request, node_id, command_id, bound.control.clone())
+        };
+        match self.admit_coordinator_child(lead, &request, control, None) {
+            Ok(wait) => Ok((node_id, wait)),
+            Err(failure) => {
+                let state = self.lock().map_err(|failure| failure.to_string())?;
+                match state.commands.receipt(&command_id) {
+                    Ok(Some(receipt)) => match &receipt.view().last_transition {
+                        Some(ControlTransition::Rejected { failure }) => {
+                            Err(refusal(&call.helper, Some(&worker.limits), failure))
+                        }
+                        _ => Err(failure.to_string()),
+                    },
+                    _ => Err(failure.to_string()),
+                }
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl BuiltinTool for DelegateTool {
+    fn description(&self) -> &str {
+        &self.description
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "required": ["helper", "task"],
+            "properties": {
+                "helper": {
+                    "type": "string",
+                    "enum": self.helpers,
+                    "description": "The helper to run."
+                },
+                "task": {
+                    "type": "string",
+                    "description": "Everything the helper needs, at most 16 KiB: the goal, the files or facts to look at, and what to report back. The helper cannot see this conversation."
+                }
+            },
+            "additionalProperties": false
+        })
+    }
+    fn advertised_parameters_schema(&self) -> Option<serde_json::Value> {
+        if self.helpers.is_empty() {
+            return None;
+        }
+        let state = self.controller.lock().ok()?;
+        let bound = state.bound.get(&self.activation.activation_id)?;
+        state
+            .authority
+            .attest_control_source(&bound.lease, now_ms().ok()?)
+            .ok()?;
+        Some(self.parameters_schema())
+    }
+    fn concurrency_policy(&self) -> axocoatl_llm::ConcurrencyPolicy {
+        axocoatl_llm::ConcurrencyPolicy::Exclusive
+    }
+    async fn execute(
+        &self,
+        arguments: serde_json::Value,
+    ) -> std::result::Result<serde_json::Value, ToolError> {
+        let failed = |reason: String| ToolError::ExecutionFailed {
+            tool: NAME.into(),
+            reason,
+        };
+        let call: DelegateCall =
+            serde_json::from_value(arguments).map_err(|reason| ToolError::InvalidArgs {
+                tool: NAME.into(),
+                reason: format!(
+                    "{reason}. Pass exactly {{\"helper\": \"<helper>\", \"task\": \"<task>\"}}."
+                ),
+            })?;
+        let (node, wait) = self
+            .controller
+            .delegate(&self.activation, &call)
+            .map_err(failed)?;
+        match wait.run().await {
+            Ok(measured) => match measured.outcome {
+                AgentRunOutcome::Completed(output) => Ok(completed_answer(
+                    &call.helper,
+                    &node,
+                    &output.content,
+                    &measured.token_usage,
+                    false,
+                )),
+                AgentRunOutcome::Cancelled { .. } => Err(failed(format!(
+                    "The helper '{}' was stopped before it finished (node {}), so there is no \
+                     answer. Continue without it, or delegate a narrower task.",
+                    call.helper,
+                    node.as_str()
+                ))),
+            },
+            Err(failure) => Err(failed(format!(
+                "The helper '{}' did not finish (node {}): {}. Continue without its answer, or \
+                 delegate a narrower task.",
+                call.helper,
+                node.as_str(),
+                failure.message
+            ))),
+        }
+    }
+}
+
+#[cfg(test)]
+impl SessionDispatchController {
+    /// The lead's delegate intent, its audit record, its returned result and
+    /// its retained replay policy.
+    pub(crate) fn delegate_recovery_evidence_for_test(
+        &self,
+    ) -> (
+        axocoatl_session::invocation_audit::AuditedInvocation,
+        Option<serde_json::Value>,
+        serde_json::Value,
+    ) {
+        let state = self.lock().unwrap();
+        let intent = state
+            .audit
+            .records()
+            .unwrap()
+            .iter()
+            .find_map(|record| match &record.command {
+                InvocationAuditCommand::Intent(command) if command.intent.tool_name == NAME => {
+                    Some(command.intent.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        let snapshot = state
+            .canonical
+            .snapshot(&intent.activation.turn_id)
+            .unwrap();
+        let arguments = state
+            .content
+            .tool_arguments(&snapshot, &intent.activation, &intent.invocation_id)
+            .unwrap()
+            .unwrap();
+        let result = state
+            .content
+            .tool_result(&arguments)
+            .unwrap()
+            .map(|result| {
+                serde_json::from_slice(&state.content.read_tool_result(&result).unwrap()).unwrap()
+            });
+        let InvocationReplayPolicy::ReconcileBeforeReplay { policy_ref } = &intent.replay_policy
+        else {
+            panic!("delegate intent must reconcile before replay")
+        };
+        let ActivationEvidenceContent::Guidance { text } = state
+            .content
+            .resolve_activation_evidence(policy_ref)
+            .unwrap()
+        else {
+            panic!("delegate replay policy is guidance")
+        };
+        let policy = serde_json::from_str(text).unwrap();
+        (
+            state
+                .audit
+                .invocation(&intent.invocation_id)
+                .unwrap()
+                .unwrap()
+                .clone(),
+            result,
+            policy,
+        )
+    }
+
+    pub(crate) fn delegate_helper_answer_for_test(&self, node: &TurnNodeId) -> Option<String> {
+        let state = self.lock().unwrap();
+        let snapshot = state.canonical.snapshot(&state.turn_id).unwrap();
+        state
+            .accepted_helper_answer(&snapshot, node)
+            .unwrap()
+            .map(|(text, _)| text)
+    }
+
+    pub(crate) fn grant_usage_for_test(
+        &self,
+        grant_id: &str,
+    ) -> axocoatl_session::control_authority::GrantUsage {
+        self.lock().unwrap().authority.usage(grant_id).unwrap()
+    }
+}

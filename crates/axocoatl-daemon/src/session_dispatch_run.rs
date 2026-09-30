@@ -291,6 +291,7 @@ impl SessionDispatchController {
             activation.clone(),
         ));
         let host_control_tool = self.scoped_control_tool(&activation)?;
+        let host_delegate_tool = self.scoped_delegate_tool(&activation)?;
         let host_knowledge_tool = self.scoped_knowledge_tool(&activation)?;
         let behavior: Box<dyn AgentBehavior> =
             if let Some((workers, worker_tools, htn)) = coordinator_workers {
@@ -330,13 +331,16 @@ impl SessionDispatchController {
                     .with_stream_observer(observer)
                     .with_stale_tool_result_masking(
                         KEPT_TOOL_ROUNDS,
-                        [super::knowledge::NAME.to_string()],
+                        [
+                            super::knowledge::NAME.to_string(),
+                            super::delegate::NAME.to_string(),
+                        ],
                     );
                 if let Some(tool) = host_knowledge_tool {
                     behavior = behavior.with_host_knowledge_tool(tool);
                 }
-                if let Some(tool) = host_control_tool {
-                    behavior = behavior.with_host_control_tool(tool);
+                if let Some(tool) = host_delegate_tool {
+                    behavior = behavior.with_host_tool(super::delegate::NAME, tool);
                 }
                 if let Some(hooks) = hooks {
                     behavior = behavior.with_hook_registry(hooks);
