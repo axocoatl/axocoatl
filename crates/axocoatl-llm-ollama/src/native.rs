@@ -395,6 +395,13 @@ impl NativeOllamaProvider {
                 });
                 return;
             }
+            if let Some((usage, error)) = state.take_rejection() {
+                if let Some(event) = usage {
+                    if state.charge(&event).is_ok() { yield Ok(event); }
+                }
+                yield Err(error);
+                return;
+            }
             let events = match state.finish() { Ok(events) => events, Err(error) => { yield Err(error); return; } };
             for event in events {
                 if let Err(error) = state.charge(&event) { yield Err(error); return; }
@@ -800,6 +807,9 @@ struct NativeResponse {
     content: String,
     thinking: String,
     calls: Vec<ToolCall>,
+    /// Why the model's tool calls were refused. The response is still read to
+    /// its `done` record so the usage it incurred is observed and settled.
+    rejected: Option<ProviderError>,
 }
 impl NativeResponse {
     fn new(model: String, request: ChatRequest, cap: usize, token_limit: u64) -> Self {
@@ -816,6 +826,7 @@ impl NativeResponse {
             content: String::new(),
             thinking: String::new(),
             calls: Vec::new(),
+            rejected: None,
         }
     }
     fn observe_counts(&mut self, value: &Value) -> Option<MeasuredTokenUsage> {
@@ -883,6 +894,66 @@ impl NativeResponse {
         }
         self.emitted += size;
         Ok(())
+    }
+    /// Validate one record's tool calls as a whole. Nothing from a record
+    /// with a malformed call is released.
+    fn accept_calls(&self, calls: &Value) -> Result<Vec<ToolCall>, ProviderError> {
+        let calls = calls
+            .as_array()
+            .ok_or_else(|| protocol("native tool calls are not an array"))?;
+        if calls.len() > 128usize.saturating_sub(self.calls.len()) {
+            return Err(protocol("too many native tool calls"));
+        }
+        let mut accepted: Vec<ToolCall> = Vec::with_capacity(calls.len());
+        for call in calls {
+            let id = call
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| protocol("native call omitted its id"))?;
+            let function = call
+                .get("function")
+                .and_then(Value::as_object)
+                .ok_or_else(|| protocol("native call omitted its function"))?;
+            let name = function
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| protocol("native call omitted its name"))?;
+            let arguments = function
+                .get("arguments")
+                .ok_or_else(|| protocol("native call omitted its arguments"))?;
+            validate_required_tool_call_id(PROVIDER, id)?;
+            if id.len() > 256
+                || id.chars().any(char::is_control)
+                || self.calls.iter().chain(&accepted).any(|call| call.id == id)
+            {
+                return Err(protocol("invalid or duplicate native tool id"));
+            }
+            validate_response_tool_call(PROVIDER, name, arguments, &self.request.tools)?;
+            accepted.push(ToolCall {
+                id: id.into(),
+                name: name.into(),
+                arguments: arguments.clone(),
+                provider_metadata: provider_tool_metadata(PROVIDER),
+            });
+        }
+        Ok(accepted)
+    }
+    /// A refused response's error. When the server finished the response,
+    /// its terminal usage comes first and the error says the completed
+    /// response was refused, so that usage is settled rather than lost.
+    fn take_rejection(&mut self) -> Option<(Option<StreamEvent>, ProviderError)> {
+        let error = self.rejected.take()?;
+        if self.terminal.is_none() {
+            return Some((None, error));
+        }
+        let mut usage = self.usage.clone();
+        usage.complete =
+            self.terminal_counts && self.request.response_format != Some(ResponseFormat::Json);
+        let error = ProviderError::RefusedResponse {
+            provider: PROVIDER.into(),
+            message: error.to_string(),
+        };
+        Some((Some(StreamEvent::UsageObservation(usage)), error))
     }
     fn record(&mut self, value: &Value, status: u16) -> Result<Vec<StreamEvent>, ProviderError> {
         if self.terminal.is_some() {
@@ -977,49 +1048,21 @@ impl NativeResponse {
             });
         }
         if let Some(calls) = message.get("tool_calls") {
-            let calls = calls
-                .as_array()
-                .ok_or_else(|| protocol("native tool calls are not an array"))?;
-            if calls.len() > 128usize.saturating_sub(self.calls.len()) {
-                return Err(protocol("too many native tool calls"));
-            }
-            for call in calls {
-                let id = call
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| protocol("native call omitted its id"))?;
-                let function = call
-                    .get("function")
-                    .and_then(Value::as_object)
-                    .ok_or_else(|| protocol("native call omitted its function"))?;
-                let name = function
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| protocol("native call omitted its name"))?;
-                let arguments = function
-                    .get("arguments")
-                    .ok_or_else(|| protocol("native call omitted its arguments"))?;
-                validate_required_tool_call_id(PROVIDER, id)?;
-                if id.len() > 256
-                    || id.chars().any(char::is_control)
-                    || self.calls.iter().any(|call| call.id == id)
-                {
-                    return Err(protocol("invalid or duplicate native tool id"));
+            if self.rejected.is_none() {
+                match self.accept_calls(calls) {
+                    Ok(accepted) => {
+                        for call in accepted {
+                            events.push(StreamEvent::ToolCallDelta {
+                                index: Some(self.calls.len()),
+                                id: call.id.clone(),
+                                name: Some(call.name.clone()),
+                                args_delta: call.arguments.to_string(),
+                            });
+                            self.calls.push(call);
+                        }
+                    }
+                    Err(error) => self.rejected = Some(error),
                 }
-                validate_response_tool_call(PROVIDER, name, arguments, &self.request.tools)?;
-                let index = self.calls.len();
-                events.push(StreamEvent::ToolCallDelta {
-                    index: Some(index),
-                    id: id.into(),
-                    name: Some(name.into()),
-                    args_delta: arguments.to_string(),
-                });
-                self.calls.push(ToolCall {
-                    id: id.into(),
-                    name: name.into(),
-                    arguments: arguments.clone(),
-                    provider_metadata: provider_tool_metadata(PROVIDER),
-                });
             }
         }
         if done {

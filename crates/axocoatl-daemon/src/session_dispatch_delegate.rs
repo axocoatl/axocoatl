@@ -831,13 +831,21 @@ impl BuiltinTool for DelegateTool {
                     node.as_str()
                 ))),
             },
-            Err(failure) => Err(failed(format!(
-                "The helper '{}' did not finish (node {}): {}. Continue without its answer, or \
-                 delegate a narrower task.",
-                call.helper,
-                node.as_str(),
-                failure.message
-            ))),
+            Err(failure) => {
+                tracing::warn!(
+                    helper = %call.helper,
+                    node = %node.as_str(),
+                    reason = %failure.message,
+                    "Delegated helper activation failed"
+                );
+                Err(failed(format!(
+                    "The helper '{}' did not finish (node {}): {}. Continue without its answer, or \
+                     delegate a narrower task.",
+                    call.helper,
+                    node.as_str(),
+                    failure.message
+                )))
+            }
         }
     }
 }

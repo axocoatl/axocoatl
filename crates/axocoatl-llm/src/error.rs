@@ -42,6 +42,12 @@ pub enum ProviderError {
     #[error("{provider} stream ended without a complete response: {message}")]
     IncompleteStream { provider: String, message: String },
 
+    /// The provider completed this response and reported its usage, but the
+    /// response itself is malformed (for example a tool call with malformed
+    /// arguments) and was refused. Nothing from it runs; its usage stands.
+    #[error("{provider} returned a response that was refused: {message}")]
+    RefusedResponse { provider: String, message: String },
+
     #[error("Provider not found: {0}")]
     ProviderNotFound(String),
 

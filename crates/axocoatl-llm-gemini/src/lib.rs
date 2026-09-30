@@ -971,7 +971,7 @@ mod tests {
     fn nonstream_and_stream_normalization_reject_invalid_gemini_calls() {
         for function_call in [
             serde_json::json!({"name":"","args":{}}),
-            serde_json::json!({"name":"other","args":{}}),
+            serde_json::json!({"name":"not/declared","args":{}}),
             serde_json::json!({"name":"lookup"}),
             serde_json::json!({"name":"lookup","args":null}),
             serde_json::json!({"name":"lookup","args":7}),
@@ -983,6 +983,10 @@ mod tests {
             });
             assert!(parse_gemini_chunk(&chunk, &[tool("lookup")]).is_err());
         }
+        // A well-formed call to an undeclared tool is returned for the caller
+        // to answer with a tool error; it never runs.
+        let part = serde_json::json!({"functionCall": {"name":"other","args":{}}});
+        assert!(gemini_tool_call_from_part(&part, &[tool("lookup")]).is_ok());
     }
 
     #[test]

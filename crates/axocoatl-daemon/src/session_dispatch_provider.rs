@@ -80,6 +80,7 @@ impl SessionProvider {
             claim: Some(claim),
             bounds,
             observed: None,
+            terminal_usage_reported: false,
             observed_cost: None,
             bytes: 0,
             expected_provider: self.expected_provider.clone(),
@@ -236,6 +237,9 @@ struct PendingCall {
     claim: Option<ProviderCallClaim>,
     bounds: ProviderExecutionBounds,
     observed: Option<MeasuredTokenUsage>,
+    /// The latest explicit usage observation was complete: the provider
+    /// reported its terminal accounting for this response.
+    terminal_usage_reported: bool,
     observed_cost: Option<u64>,
     bytes: usize,
     expected_provider: String,
@@ -423,7 +427,11 @@ impl PendingCall {
             StreamEvent::Usage(usage) => {
                 self.observe_usage(MeasuredTokenUsage::known(usage.clone()))?;
             }
-            StreamEvent::UsageObservation(usage) => self.observe_usage(usage.clone())?,
+            StreamEvent::UsageObservation(usage) => {
+                self.terminal_usage_reported = false;
+                self.observe_usage(usage.clone())?;
+                self.terminal_usage_reported = usage.complete;
+            }
             StreamEvent::CostObservation { cost_microunits } => {
                 self.observe_cost(*cost_microunits)?
             }
@@ -479,15 +487,20 @@ impl Stream for SessionProviderStream {
             Poll::Ready(Some(Ok(event))) => event,
             Poll::Ready(Some(Err(error))) => {
                 this.finished = true;
-                return Poll::Ready(Some(
-                    match this
-                        .pending
+                // A response the adapter refused after the provider completed
+                // it and reported its usage (a malformed tool call) settles to
+                // that usage. Any other failure keeps the whole reservation.
+                let refused = matches!(error, ProviderError::RefusedResponse { .. });
+                let settled = if refused && this.pending.terminal_usage_reported {
+                    this.pending.finish(ProviderCallTerminal::Failed, true)
+                } else {
+                    this.pending
                         .finish(ProviderCallTerminal::Interrupted, false)
-                    {
-                        Ok(()) => Err(error),
-                        Err(error) => Err(error),
-                    },
-                ));
+                };
+                return Poll::Ready(Some(match settled {
+                    Ok(()) => Err(error),
+                    Err(error) => Err(error),
+                }));
             }
             Poll::Ready(None) => {
                 this.finished = true;

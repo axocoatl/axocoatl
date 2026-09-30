@@ -1674,7 +1674,7 @@ mod tests {
         for (name, arguments) in [
             ("lookup", "{"),
             ("lookup", "[]"),
-            ("not_declared", "{}"),
+            ("not/declared", "{}"),
             ("", "{}"),
         ] {
             let message = serde_json::json!({
@@ -1685,6 +1685,16 @@ mod tests {
             });
             assert!(parse_structured_tool_calls(&message, &tools).is_err());
         }
+        // A well-formed call to an undeclared tool is returned for the caller
+        // to answer with a tool error; it never runs.
+        let undeclared = serde_json::json!({
+            "tool_calls": [{
+                "id": "call",
+                "function": { "name": "not_declared", "arguments": "{}" }
+            }]
+        });
+        let calls = parse_structured_tool_calls(&undeclared, &tools).unwrap();
+        assert_eq!(calls[0].name, "not_declared");
         let missing_id = serde_json::json!({
             "tool_calls": [{
                 "id": "",
