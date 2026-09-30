@@ -163,6 +163,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   root of their checkout (up to 64 KiB) in the system prompt, as the compatibility path
   does. When the activation's starting capture lists the file, only the exact bytes it
   recorded are used.
+- **`list_dir` with an empty path lists the repository root** instead of failing with
+  `ls: cannot access ''`.
 - **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
   longer copies host proxy variables into containers.** Any `sandbox.network` other
   than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was

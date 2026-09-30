@@ -676,12 +676,14 @@ impl BuiltinTool for ListDirTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Directory path (default: ., maximum 4 KiB)" }
+                "path": { "type": "string", "description": "Directory path; empty or . is the root (the default; maximum 4 KiB)" }
             }
         })
     }
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
         let path = optional_bounded_str_arg(&args, "path", ".", "list_dir", PATH_ARG_MAX_BYTES)?;
+        // Models often pass an empty path for the root, which `ls` rejects.
+        let path = if path.trim().is_empty() { "." } else { path };
         let path = confine(self.sandbox.root(), path, "list_dir")?;
         let r = exec_bounded_stdout(
             self.sandbox.as_ref(),
@@ -1570,6 +1572,29 @@ mod tests {
             let key = if is_grep { "matches" } else { "listing" };
             assert!(output["truncated"].as_bool().unwrap());
             assert!(output[key].as_str().unwrap().len() <= TOOL_TEXT_OUTPUT_MAX_BYTES);
+        }
+    }
+
+    #[tokio::test]
+    async fn list_dir_treats_an_empty_path_as_the_repository_root() {
+        for path in ["", " ", "."] {
+            let sandbox = Arc::new(StubSandbox::new(
+                "/workspace",
+                vec![result("lib\ntest\n", "", 0)],
+            ));
+            let output = ListDirTool {
+                sandbox: sandbox.clone(),
+            }
+            .execute(json!({ "path": path }))
+            .await
+            .unwrap();
+            assert_eq!(output["listing"], "lib\ntest\n");
+            let calls = sandbox.exec_calls.lock().unwrap();
+            assert_eq!(
+                calls[0].last().map(String::as_str),
+                Some("."),
+                "{path:?}: {calls:?}"
+            );
         }
     }
 
