@@ -145,6 +145,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Agent keep working.
 
 ### Fixed
+- **Token and cost limits now count what model calls used, not what they reserved.**
+  Each call reserves its whole context plus output (36,864 tokens with a 32k local
+  model) before it is sent, and that reservation used to stay charged, so a 1,457,714
+  token limit allowed only 39 calls. When the provider reports a call's complete usage
+  (and a known cost), only that stays charged and the rest is available again; an
+  interrupted call, an incomplete measurement or a call lost in a crash keeps its whole
+  reservation. A helper's limits are reserved from its lead while it runs; when it
+  finishes or is stopped the lead is charged only what it used and can delegate again,
+  and running it again reserves its limits again. Turns recorded before this keep their
+  exact totals.
 - **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
   longer copies host proxy variables into containers.** Any `sandbox.network` other
   than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was

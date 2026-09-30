@@ -19,7 +19,7 @@ export function proposeDelegation(view,draft){
 }
 export function renderDelegationApproval(host,panel,slot,update){
  if(!canDelegate(slot))return;
- panel.append(node('h3','Helpers this Agent may delegate to'),node('p','With helpers approved, this Agent gets a delegate tool. Each helper starts in its own conversation with only the task it is given, and the limits you approve below are reserved from this Agent\'s budget above when the helper starts. A helper must be read-only: its template has writes: [] or no tool that writes files or runs commands; any other helper is refused.'));
+ panel.append(node('h3','Helpers this Agent may delegate to'),node('p','With helpers approved, this Agent gets a delegate tool. Each helper starts in its own conversation with only the task it is given, and the limits you approve below are reserved from this Agent\'s budget above while the helper runs; what the helper does not use goes back to this Agent when it finishes. A helper must be read-only: its template has writes: [] or no tool that writes files or runs commands; any other helper is refused.'));
  const latest=()=>host.draft.slots.find(item=>item.slot_id===slot.slot_id).delegation;
  const save=change=>{const next=structuredClone(latest());change(next);update('delegation',next);};
  const enabled=host.mode==='edit'&&!host.busy;

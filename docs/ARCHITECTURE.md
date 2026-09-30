@@ -162,16 +162,28 @@ live scope and opaque generation lease bind preparation to an unresolved intent 
 audit. Stop, revocation, and the final durable dispatch claim share one mutex; external
 execution occurs after its release. Reopening closes old generation gates and preserves
 charges. Settlement matches the exact audit identity and immutable intent, can occur after
-dispatch closure, and does not refund conservative reservations. Provider-specific claims share
-that same gate and budget. They bind the exact request digest/length and executor-enforced
-spend/response limits, reserve terminal metadata, and retain observed usage or an unknown
-subtotal independently of accepted conversation state. Older tool-only registrations cannot
-establish provider accounting coverage. Historical inspection requires an existing matching
-authority with closed gates and establishes durability without rewriting its records.
+dispatch closure, and does not refund a tool claim's conservative reservation. Provider-specific
+claims share that same gate and budget. They bind the exact request digest/length and
+executor-enforced spend/response limits, reserve terminal metadata, and retain observed usage
+or an unknown subtotal independently of accepted conversation state. A terminal response with
+complete usage settles the call's reservation to that usage (and its cost to a known observed
+cost): the call records what stays charged and the rest returns to the grant. An interrupted
+call, an incomplete measurement, an unknown cost, or a claim with no recorded outcome keeps
+the whole reservation. Reload re-derives every grant's usage from these records exactly;
+calls settled by earlier builds carry no settlement and stay fully charged. Older tool-only
+registrations cannot establish provider accounting coverage. Historical inspection requires
+an existing matching authority with closed gates and establishes durability without
+rewriting its records.
 Authenticated Team & budget Apply retains the full edit and exact selected-template
 provenance. The native host resolves captured definitions, provider profiles, and repository
 identity before dispatch. Coordinator child allocations reserve from the parent's aggregate
-allowance; child authority is distinct rather than a copy of the parent's grant.
+allowance; child authority is distinct rather than a copy of the parent's grant. The parent
+holds a child's full limits while any child activation runs. Once none runs (completion, Stop,
+or the reopen after a crash), the parent is charged only the child's own usage, so the unused
+part returns; a later activation of that child must reserve its full limits again and is
+refused when the parent can no longer hold them. Both follow from the stored activation state,
+so recovery cannot return a reservation twice. Children reserved by earlier builds stay
+reserved in full.
 
 Native provider preparation supports reviewed local Ollama profiles and bounded
 OpenRouter-credit profiles. OpenRouter retains one exact static model and qualified
@@ -180,8 +192,9 @@ decimal price ceilings. Those metadata are revalidated before each request; the 
 request pins the endpoint, disables fallbacks, and supplies output and price limits.
 Admission reserves the full context allowance plus bounded output at those rates.
 Streaming retains terminal measured tokens and billed cost independently of accepted
-output; incomplete responses keep the reservation and unknown usage. The normal API
-key stays in daemon configuration, never retained profile evidence.
+output and settles the reservation to them; incomplete responses keep the reservation and
+unknown usage. The normal API key stays in daemon configuration, never retained profile
+evidence.
 `providers.openrouter_billing: credits` explicitly declares an account without
 connected BYOK keys. This is a supported configuration requirement, not detection or
 prevention of external account changes. BYOK execution is not supported; an unexpected
@@ -298,8 +311,9 @@ truncation and shifting. Plain calls reserve context plus prediction capacity; J
 two full passes because the server may perform a separate thinking pass. The final structured
 response reports only the last pass, so its token measurement remains incomplete. Neither this
 profile nor its zero provider API charge describes hardware/electricity cost or establishes a
-wall-clock GPU execution ceiling. Cancellation closes the request; absent terminal evidence,
-usage remains incomplete and the reservation remains charged.
+wall-clock GPU execution ceiling. A plain call's terminal counts settle its reservation to
+them. Cancellation closes the request; absent terminal evidence, usage remains incomplete
+and the reservation remains charged.
 
 The autonomous port projects retained text evidence into the actual user message appended by
 the native actor, so provider input and successful checkpoints share the same user content. Rich

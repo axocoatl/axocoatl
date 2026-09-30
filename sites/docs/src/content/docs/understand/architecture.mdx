@@ -34,8 +34,10 @@ the running daemon without creating a second runtime.
 New data roots use the native execution controller. The Session retains an explicitly
 reviewed team, provider profiles, limits, and authority before work starts. The daemon
 records the request and exact activation identities, then reserves provider and tool
-invocations against that authority. Each activation uses its own model-facing state;
-Coordinator children consume bounded allocations from their parent.
+invocations against that authority. A provider call that reports its usage is then charged
+only that usage. Each activation uses its own model-facing state; Coordinator children
+consume bounded allocations from their parent while they run and return what they did
+not use.
 
 Provider observations, tool evidence, outputs, and control receipts remain attached
 to those exact generations. Only accepted current results become future conversation
