@@ -4,21 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Axocoatl v1.1 — agent work that holds up</title>
-  <meta name="description" content="An open-source, local-first coding workbench for durable repository Sessions, inspectable execution, several checked Ways, and deliberate Git review.">
+  <meta name="description" content="An open-source, local-first harness for coding agents: a lead that writes, read-only helpers, required checks and review when you want them, and a durable record of every step.">
   <meta name="theme-color" content="#3E7C5C">
   <link rel="canonical" href="https://axocoatl.ai/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Axocoatl">
   <meta property="og:url" content="https://axocoatl.ai/">
   <meta property="og:title" content="Axocoatl v1.1 — agent work that holds up">
-  <meta property="og:description" content="One durable repository Session. One Agent or several checked Ways. One result returned to normal Git review.">
+  <meta property="og:description" content="A lead that writes. Helpers that only read. Checks and review the host can require. A record of every step.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Axocoatl: the local-first workbench for coding agents">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Axocoatl v1.1 — agent work that holds up">
-  <meta name="twitter:description" content="One durable repository Session. One Agent or several checked Ways. One result returned to normal Git review.">
+  <meta name="twitter:description" content="A lead that writes. Helpers that only read. Checks and review the host can require. A record of every step.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -32,7 +32,7 @@
   <script type="module" src="/components/ax-theme-toggle.js"></script>
   <script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script>
   <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Axocoatl","url":"https://axocoatl.ai/","applicationCategory":"DeveloperApplication","operatingSystem":"GNU/Linux with glibc 2.35 or newer; macOS 11 or newer; Windows through WSL2","programmingLanguage":"Rust","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Open-source, local-first workbench for running coding agents inside durable Sessions."}
+  {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Axocoatl","url":"https://axocoatl.ai/","applicationCategory":"DeveloperApplication","operatingSystem":"GNU/Linux with glibc 2.35 or newer; macOS 11 or newer; Windows through WSL2","programmingLanguage":"Rust","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Open-source, local-first harness for coding agents: a lead that writes, read-only helpers, optional required checks and review, and a durable record of every step."}
   </script>
 </head>
 <body>
@@ -42,7 +42,7 @@
     <section class="container hero">
       <span class="hero-note">Axocoatl v1.1 · open source · local-first</span>
       <h1>Agent work<br>that holds up.</h1>
-      <p class="lede">Axocoatl is the local-first coding workbench for real repositories. One durable Session keeps conversation, repository tools, execution evidence, and Git review together. Workspace knowledge retains the decisions, sources, and findings the next Session needs. Start with one Agent, or select an autonomous multi-Agent team and keep its coordination map with the turn. When a decision needs evidence, compare several checked Ways from the same task and snapshot, then Keep one result as uncommitted Git changes.</p>
+      <p class="lede">Axocoatl is a local-first harness for coding agents in real repositories, on local models through Ollama or hosted models through OpenRouter. A lead Agent writes; read-only helpers answer its questions and review its work. A team can require checks and a review that the host runs before a turn completes. Every activation, tool call, and budget decision stays with one durable Session, next to the repository, Terminal, Preview, and Git review.</p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="/install">Install →</a>
         <a class="btn btn-ghost" href="https://github.com/axocoatl/axocoatl">View the source →</a>
@@ -97,25 +97,28 @@
     <section class="container section section-rule">
       <div class="split reverse">
         <div class="code-pane">
-          <div class="code-pane-head">one coordinated Turn</div>
-          <pre><code><span class="code-comment">request + exact dependencies</span>
+          <div class="code-pane-head">one Turn · default team</div>
+          <pre><code><span class="code-comment">request + approved limits</span>
        │
-       ├── <span class="code-key">architect</span> ─────┐
-       └── <span class="code-key">test analyst</span> ───┤
-                              ↓
-                           <span class="code-key">builder</span>
-                              ↓
-                           <span class="code-key">reviewer</span>
-
-<span class="code-comment">reviewer → builder · changes requested</span>
-<span class="code-comment">builder g2 → reviewer g2 · verified</span>
-<span class="code-comment">map + handoffs retained in History</span></code></pre>
+       ▼
+     <span class="code-key">lead</span> ── delegate ──▶ <span class="code-key">scout</span>
+       │  ◀──── answer ────   <span class="code-comment">read-only</span>
+       │
+   edits files
+       │
+       ▼
+<span class="code-key">required checks</span>   <span class="code-comment">host · exact tree</span>
+       ▼
+<span class="code-key">required review</span>   <span class="code-comment">host · fresh reviewer</span>
+       │  changes → lead · next round
+       ▼
+<span class="code-comment">complete · or needs attention</span></code></pre>
         </div>
         <div class="stack">
-          <span class="eyebrow">One result, several roles</span>
-          <h2>Keep the coordination.</h2>
-          <p>Select an autonomous multi-Agent Lattice team or assemble an autonomous Custom team inside the Session. For native work, review its configuration and explicit limits in Team &amp; budget. Axocoatl retains the accepted dependencies for that Turn. Roots start from the request; each downstream Agent receives the request plus only its latest direct-parent handoffs.</p>
-          <p>Independent branches continue when they can. Dependent work blocks honestly. Approved revisions retain the earlier generation and the affected route before verification. The graph, handoffs, generations, failures, and final state remain attached to the conversation. Native Coordinators create distinct Worker activations from approved templates and limits in the same recorded turn.</p>
+          <span class="eyebrow">Lead and helpers</span>
+          <h2>One writer. Helpers that read.</h2>
+          <p>New configurations start with a Lead that edits files and two read-only helpers it can delegate to: Scout answers questions about the code, Reviewer reviews a change. Each helper starts in an empty conversation, answers one task, and hands the answer back. Several can run at once. You approve every limit in Team &amp; budget before the first request.</p>
+          <p>Add required checks and the host runs them after the Agents finish, each between two captures of the repository. Add a required review and the host runs a read-only reviewer on the result; requested changes go back to the lead for a bounded number of rounds. The turn completes only when they pass on the exact final tree. Helpers get no file-writing tools, and their shell runs under a Linux Landlock write restriction where available; otherwise they get no shell.</p>
           <a href="/concepts/#execution-shapes">See the execution shapes →</a>
         </div>
       </div>
@@ -126,13 +129,13 @@
         <div class="stack">
           <span class="eyebrow">When the decision needs evidence</span>
           <h2>Compare real Ways.</h2>
-          <p>One Agent or a configured team remains the direct path. When the implementation is genuinely uncertain, the same Session can give one task and repository snapshot to several Agent/model pairs. Each Way works in an isolated checkout and sandbox.</p>
+          <p>The lead and its helpers, or one Agent, remain the direct path. When the implementation is genuinely uncertain, the same Session can give one task and repository snapshot to several Agent/model pairs. Each Way works in an isolated checkout and sandbox.</p>
           <p>Run the same repository Check. Compare Outcome, Route, available diff, cost, and an optional Judge while the decision is open. Keep one passing, non-empty result for Git review, or finish without keeping any of them. Native History retains the bounded decision after cleanup under explicit storage limits.</p>
           <a href="/showcase">See when several Ways help →</a>
         </div>
         <div class="code-pane">
           <div class="code-pane-head">optional decision mode</div>
-          <pre><code><span class="code-comment">same task + safe context + snapshot</span>
+          <pre><code><span class="code-comment">same task + prior chat text + snapshot</span>
        │
        ├── <span class="code-key">way 1</span> · agent A · model X
        ├── <span class="code-key">way 2</span> · agent B · model Y
@@ -160,7 +163,8 @@
           <span class="eyebrow">The smaller front door</span>
           <h2>One executable. Your browser.</h2>
           <p>Install one <code>axocoatl</code> executable. It starts the local Rust daemon and serves the workbench to the browser you already use. The workbench assets are embedded, so using Axocoatl requires no separate frontend install or bundled browser runtime. Podman remains the local sandbox requirement for repository Sessions.</p>
-          <p>Configure Axocoatl once for the current OS user; onboarding creates no project. Remote providers, integrations, downloads, and E2B Cloud are explicit network paths. Local-first is the default, not an offline guarantee.</p>
+          <p>Configure Axocoatl once for the current OS user; onboarding creates no project. Tools run in a rootless Podman container. Network access is on by default; set <code>network: none</code> for repositories you don't trust. Remote providers, integrations, downloads, and E2B Cloud are explicit network paths. Local-first is the default, not an offline guarantee.</p>
+          <p>Small local models get specific handling: an Ollama stream that ends early is retried once, older tool output is replaced by a short placeholder in later requests, and a request that would overflow the context window is trimmed instead of failing.</p>
         </div>
       </div>
     </section>

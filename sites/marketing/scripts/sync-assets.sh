@@ -18,13 +18,4 @@ cp -v "$SRC/colors.json"       "$DST/"
 [ -f "$SRC/wordmark-ink.png" ]    && cp -v "$SRC/wordmark-ink.png" "$DST/"
 [ -f "$SRC/wordmark-vellum.png" ] && cp -v "$SRC/wordmark-vellum.png" "$DST/"
 
-# Vendor the @axocoatl/lattice ES modules locally so the marketing site
-# doesn't depend on a public CDN. Same source the dashboard embeds.
-LATTICE_SRC="$ROOT/packages/lattice/src"
-LATTICE_DST="$SITE/vendor/lattice"
-mkdir -p "$SITE/vendor"
-rm -rf "$LATTICE_DST"
-cp -r "$LATTICE_SRC" "$LATTICE_DST"
-
 echo "Synced canonical brand assets → $DST"
-echo "Synced @axocoatl/lattice → $LATTICE_DST"

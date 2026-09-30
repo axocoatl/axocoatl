@@ -69,17 +69,33 @@
     </section>
 
     <section class="container section section-rule" id="execution-shapes">
-      <div class="section-head"><span class="eyebrow">Execution shapes</span><h2>Use the structure the work needs.</h2><p>Axocoatl starts with one Agent in one Session. A configured team and several Ways are explicit alternatives for different kinds of work.</p></div>
+      <div class="section-head"><span class="eyebrow">Execution shapes</span><h2>Use the structure the work needs.</h2><p>New configurations start with a lead and two read-only helpers. One Agent on its own is the simplest shape; it works through the repository inside the Session sandbox. <a href="/showcase/#single-agent">Watch ordinary repository work →</a></p></div>
       <div class="grid-3">
-        <article class="card"><span class="card-kicker">Default</span><h3>One Agent</h3><p>One configured Agent works through the repository and conversation. Repository file and shell execution runs inside the Session sandbox; integrations retain their explicitly configured boundaries. <a href="/showcase/#single-agent">Watch ordinary repository work →</a></p></article>
-        <article class="card"><span class="card-kicker">Autonomous team</span><h3>Coordination map</h3><p>Exact named dependencies activate each role. Agents receive only the handoffs that caused them to run, and the causal map stays with the Session turn. Native Coordinators create Workers from approved templates and limits, with their parent ownership recorded in the same turn. <a href="/showcase/#multi-agent">Watch the handoff →</a></p></article>
+        <article class="card"><span class="card-kicker">Default</span><h3>Lead and helpers</h3><p>The lead edits files and delegates read-only questions or a review to helpers. Each helper starts in an empty conversation, its limits are reserved from the lead's grant, and its answer returns to the lead. <a href="https://docs.axocoatl.ai/understand/coordination/#default-team">Read about the default team →</a></p></article>
+        <article class="card"><span class="card-kicker">Ordered team</span><h3>Dependency order</h3><p>Exact named dependencies activate each configured role. Agents receive only the handoffs that caused them to run, and the causal graph stays with the Session turn. <a href="/showcase/#multi-agent">Watch the handoff →</a></p></article>
         <article class="card"><span class="card-kicker">Decision mode</span><h3>Ways</h3><p>Independent attempts start from the same task and repository state, then run in separate working copies and sandboxes. <a href="/showcase/#ways">Watch the comparison →</a></p></article>
       </div>
-      <div class="callout"><p><strong>The structures are different.</strong> An autonomous multi-Agent turn-scoped lattice coordinates cooperating roles inside one Session and leaves a durable map. A native Coordinator creates scoped Worker activations within that recorded turn. Ways isolate competing implementations. The process-wide event lattice carries typed notifications. An Automation graph executes durable work outside the canonical Session transcript.</p></div>
+      <div class="callout"><p><strong>The structures are different.</strong> A lead delegates read-only tasks to helpers inside one recorded turn. A dependency-ordered team runs configured roles in order and keeps their handoffs. Ways isolate competing implementations. The event feed carries the events Skills publish. An Automation graph executes durable work outside the canonical Session transcript.</p></div>
+    </section>
+
+    <section class="container section section-rule" id="checks-review">
+      <div class="split reverse">
+        <div class="code-pane"><div class="code-pane-head">after the Agents finish</div><pre><code><span class="code-key">required checks</span>
+  capture · run check · capture
+       ↓
+<span class="code-key">required review</span>
+  fresh read-only reviewer
+  VERDICT: CHANGES → lead · next round
+  VERDICT: APPROVE ↓
+       ↓
+<span class="code-key">complete</span> on the exact final tree
+  <span class="code-comment">otherwise: needs attention</span></code></pre></div>
+        <div class="stack"><span class="eyebrow">Completion conditions</span><h2>The host decides when a turn is done.</h2><p>Required checks are commands Axocoatl runs in the Session's repository after the Agents finish, each between two captures of the repository. A required review runs a read-only reviewer in a fresh conversation, for 1 to 3 rounds; requested changes go back to the lead. The turn completes only when every check passes and the reviewer approves the exact final tree. Both are off until you add them in Team &amp; budget.</p><p>Each Agent's <code>writes</code> list names the paths it may change. Read-only helpers get no file-writing tools, and their shell runs under a Linux Landlock write restriction where Linux 6.2 or later allows it; otherwise they get no shell. A path-scoped writer's file tools refuse other paths, and every change it made is checked after it finishes. For a writer with a shell, that check is review evidence, not confinement.</p><p>Every Agent runs under a grant with the limits you approved. Each provider and tool call is reserved against it before it runs, and the Session records the decision.</p></div>
+      </div>
     </section>
 
     <section class="container section section-rule" id="ways-model">
-      <div class="section-head"><span class="eyebrow">Optional decision mode</span><h2>Explore several ways when needed.</h2><p>The normal path uses the Agent or configured team that fits the work. When implementation choices deserve independent evidence, the Session can own several isolated attempts without turning them into separate chats.</p></div>
+      <div class="section-head"><span class="eyebrow">Optional decision mode</span><h2>Explore several ways when needed.</h2><p>The normal path is the lead and its helpers, or one Agent. When implementation choices deserve independent evidence, the Session can own several isolated attempts without turning them into separate chats.</p></div>
       <ol class="step-list">
         <li><div><h3>Start from the same state</h3><p>Every way receives the same task and repository snapshot, plus the same provider-safe projection of prior Session context. Native provider tool transactions stay in canonical History rather than being replayed into a different model. Choose a different configured agent, provider, or model for each one.</p></div></li>
         <li><div><h3>Run in isolated working copies</h3><p>Each way gets an independent no-hardlinks clone mounted as the sole workspace in a fresh rootless Podman container.</p></div></li>
@@ -92,7 +108,7 @@
     <section class="container section section-rule" id="settings-runtime">
       <div class="section-head"><span class="eyebrow">Agents and tools</span><h2>Configuration stays in Settings.</h2><p>Runtime capabilities extend Session work. They do not become a second app or a row of peer destinations.</p></div>
       <div class="grid-3">
-        <article class="card"><span class="card-kicker">Agents</span><h3>Choose the execution shape</h3><p>Run one configured Agent or a multi-agent Session, with local or remote model providers assigned to the roles that handle the work.</p></article>
+        <article class="card"><span class="card-kicker">Agents</span><h3>Choose the team</h3><p>Edit the lead, its helpers, and their models, or run one Agent, with local or hosted model providers assigned to each role.</p></article>
         <article class="card"><span class="card-kicker">Extensions</span><h3>Add Skills and MCP servers</h3><p>Connect MCP tools for normal Session work. Publish typed Skills as events that can reach configured observers or trigger Automations.</p></article>
         <article class="card"><span class="card-kicker">Automation</span><h3>Configure repeatable work</h3><p>Create, run, and review durable Automation graphs and their run history in Settings, separate from the canonical Session transcript.</p></article>
       </div>
@@ -107,7 +123,7 @@
 
     <section class="container section section-rule" id="event-lattice-automation">
       <div class="split">
-        <div class="stack"><span class="eyebrow">Typed events</span><h2>The event lattice carries typed events.</h2><p>A Skill publishes the event types declared in its configuration. The event lattice delivers each notification to configured observers and a bounded recent-events view, while the Automation dispatcher evaluates triggers against the same typed feed.</p><p>The event lattice is transport, not an Agent graph, a set of Ways, or an Automation graph. The matching Automation remains an explicit durable workflow with its own run history.</p></div>
+        <div class="stack"><span class="eyebrow">Typed events</span><h2>The event feed carries typed events.</h2><p>A Skill publishes the event types declared in its configuration. The event feed delivers each notification to configured observers and a bounded recent-events view, while the Automation dispatcher evaluates triggers against the same feed.</p><p>The event feed is transport, not an Agent graph, a set of Ways, or an Automation graph. The matching Automation remains an explicit durable workflow with its own run history.</p></div>
         <ol class="step-list"><li><div><h3>Fire the Skill</h3><p>The configured Skill publishes its declared event with producer and payload.</p></div></li><li><div><h3>Match the trigger</h3><p>An On Skill or On Event trigger selects the Automation that should react.</p></div></li><li><div><h3>Inspect the run</h3><p>The resulting Automation and node state remain reachable in run history.</p></div></li></ol>
       </div>
       <ax-product-film
@@ -148,11 +164,11 @@
     </section>
 
     <section class="container section section-rule" id="durable-runtime">
-      <div class="section-head"><span class="eyebrow">Runtime underneath</span><h2>Durable where durability matters.</h2></div>
+      <div class="section-head"><span class="eyebrow">Runtime underneath</span><h2>Durable where durability matters.</h2><p>Native execution handles small local models specifically: an Ollama stream that ends early is retried once, older tool output is replaced by a short placeholder in later requests, and a request that would overflow the context window is trimmed instead of failing.</p></div>
       <div class="grid-3">
         <article class="card"><span class="card-kicker">Actors</span><h3>Supervised execution</h3><p>Configured agents run as actors inside one Rust daemon. The daemon owns providers, tools, events, and sandbox lifecycle.</p></article>
         <article class="card"><span class="card-kicker">History</span><h3>Canonical Session ledger</h3><p>Accepted turns, bounded tool evidence, output, failure, cancellation, and interruption remain in canonical History across reconnects. After a daemon restart, interrupted work remains visible. Native work requires explicit continuation; it is not silently replayed.</p></article>
-        <article class="card"><span class="card-kicker">Isolation</span><h3>Your sandbox choice</h3><p>Rootless Podman is local by default. E2B Cloud is an explicit remote option for compatibility execution; native repository tools currently require Podman.</p></article>
+        <article class="card"><span class="card-kicker">Isolation</span><h3>Your sandbox choice</h3><p>Tools run in a rootless Podman container. Network access is on by default; set <code>network: none</code> for repositories you don't trust. E2B Cloud is an explicit remote option for compatibility execution; native repository tools currently require Podman.</p></article>
       </div>
       <div class="split" style="margin-top:var(--s-6)">
         <div class="stack"><span class="eyebrow">Workspace knowledge</span><h2>Keep a decision across Sessions.</h2><p>Save a note with its source hash and a typed link to another note. After restart, a separate Session can retrieve the same accepted revision through the native knowledge tool. The two conversations remain separate.</p><p>Backlinks make the relationship discoverable. Source context remains something to recheck: retaining a note does not make every interpretation current or correct.</p></div>

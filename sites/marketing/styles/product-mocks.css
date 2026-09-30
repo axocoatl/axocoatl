@@ -237,11 +237,8 @@
 }
 .studio-mock-toolbar-btn:hover { background: var(--bg-3); border-color: var(--border-strong); }
 
-/* Canvas — always dark regardless of site theme. The lattice itself
-   renders on a dark backdrop, so the canvas needs to match in both
-   light and dark mode for this historical Studio illustration.
-   The lattice is also non-interactive on the hero so visitors can't
-   accidentally pan/zoom the demo away. */
+/* Canvas — always dark regardless of site theme, for this historical
+   Studio illustration. */
 .studio-mock-canvas {
   position: relative;
   flex: 1;
@@ -249,13 +246,6 @@
   background: var(--bg-2);
   overflow: hidden;
 }
-.studio-mock-canvas ax-scripted-lattice,
-.studio-mock-canvas ax-lattice {
-  position: absolute;
-  inset: 0;
-  display: block;
-}
-.studio-mock-canvas ax-lattice { pointer-events: none; }
 
 /* Status pearls — floating, bottom-right */
 .studio-mock-pearls {

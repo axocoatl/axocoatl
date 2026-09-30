@@ -59,6 +59,29 @@ for (const stale of [
   if (allContent.includes(stale)) failures.push(`stale public copy remains: ${stale}`);
 }
 
+// Retired positioning. A changelog page may keep its history; no other page may
+// use these terms.
+const retiredPositioning = [
+  ['stigmergy', /stigmerg/i],
+  ['pheromones', /pheromone/i],
+  ['signal field', /signal[- ]field/i],
+  ['swarm', /\bswarm/i],
+  ['without a manager', /without a manager/i],
+  ['no central orchestrator', /no central orchestrator/i],
+  ['secure sandbox', /secure sandbox/i],
+  ['egress control', /egress control/i],
+  ['zero trust', /zero[- ]trust/i],
+  ['go-to', /\bgo-to\b/i],
+];
+for (const file of contentFiles) {
+  const relative = path.relative(contentRoot, file);
+  if (/(^|\/)changelog(\/|\.mdx?$)/.test(relative)) continue;
+  const source = fs.readFileSync(file, 'utf8');
+  for (const [term, pattern] of retiredPositioning) {
+    if (pattern.test(source)) failures.push(`${relative} uses retired positioning term: ${term}`);
+  }
+}
+
 const cliSource = fs.readFileSync(path.join(repoRoot, 'axocoatl-cli/src/main.rs'), 'utf8');
 const cliReference = fs.readFileSync(path.join(contentRoot, 'reference/cli.mdx'), 'utf8');
 

@@ -51,6 +51,25 @@ function isRecord(value) { return value !== null && typeof value === 'object' &&
 function isNonEmptyString(value) { return typeof value === 'string' && value.trim().length > 0; }
 function isSha256(value) { return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value); }
 function isGitHead(value) { return typeof value === 'string' && /^[a-f0-9]{40}$/.test(value); }
+// Retired positioning. The changelog keeps its history; every other public
+// surface checked here must not use these terms.
+const retiredPositioning = [
+  ['stigmergy', /stigmerg/i],
+  ['pheromones', /pheromone/i],
+  ['signal field', /signal[- ]field/i],
+  ['swarm', /\bswarm/i],
+  ['without a manager', /without a manager/i],
+  ['no central orchestrator', /no central orchestrator/i],
+  ['secure sandbox', /secure sandbox/i],
+  ['egress control', /egress control/i],
+  ['zero trust', /zero[- ]trust/i],
+  ['go-to', /\bgo-to\b/i],
+];
+function checkRetiredPositioning(source, label) {
+  for (const [term, pattern] of retiredPositioning) {
+    if (pattern.test(source)) fail(label, `retired positioning term: ${term}`);
+  }
+}
 function validateLlms(source, label) {
   for (const [contract, marker] of [
     ['1.1 product category', '# Axocoatl — a local-first harness for coding agents'],
@@ -74,6 +93,7 @@ function validateLlms(source, label) {
       fail(label, `retired pre-1.0 narrative: ${retired}`);
     }
   }
+  checkRetiredPositioning(source, label);
 }
 function isSafeRepositoryPath(value) {
   return isNonEmptyString(value)
@@ -469,6 +489,7 @@ for (const page of pages) {
   }
 
   if (page !== 'changelog/index.html') {
+    checkRetiredPositioning(html.replace(/<style[\s\S]*?<\/style>/gi, ''), page);
     const visible = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ');
     const forbidden = ['unleash', 'supercharge', 'revolutionize', 'reimagine', 'lightning-fast', 'blazing-fast', 'next-generation', 'next-gen', 'AI-powered', 'AI-native', 'seamless', 'frictionless'];
     for (const word of forbidden) if (new RegExp(`\\b${word.replace('-', '[- ]')}\\b`, 'i').test(visible)) fail(page, `forbidden marketing phrase: ${word}`);
@@ -494,6 +515,7 @@ for (const page of pages) {
 for (const script of scripts) {
   const source = readRequired(join(root, script), script, 'utf8');
   if (source !== null && !source.trim()) fail(script, 'empty JavaScript file');
+  if (source !== null && script.startsWith('components/')) checkRetiredPositioning(source, script);
 }
 
 const llmsLabel = 'llms.txt';
@@ -516,6 +538,7 @@ if (root === sourceRoot) {
     if (readme.includes('https://docs.axocoatl.ai/api/http/')) {
       fail(readmeLabel, 'retired pre-1.0 HTTP reference URL');
     }
+    checkRetiredPositioning(readme, readmeLabel);
   }
 
   const workflowLabel = '.github/workflows/marketing-deploy.yml';

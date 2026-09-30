@@ -1,9 +1,10 @@
 # Axocoatl marketing site
 
 Vanilla HTML, Web Components, and CSS. The public site tells one product story:
-an open-source, local-first coding workbench built around one durable folder-anchored
-Session. Conversation, context, files, terminal, Preview, tools, history, and Git are
-the core work surface. Settings owns Agents, Skills, MCP servers, and Automations and
+an open-source, local-first harness for coding agents, where a lead writes, read-only
+helpers answer and review, and opt-in required checks and review decide when a turn
+is done, all inside one durable folder-anchored Session. Conversation, context, files,
+terminal, Preview, tools, history, and Git are the core work surface. Settings owns Agents, Skills, MCP servers, and Automations and
 shows each Agent's provider/model assignment. Normal onboarding writes one owner-only
 configuration for the current OS user; explicit project-local YAML remains an advanced
 operator path. Isolated Ways, Checks, comparison, and Keep are an optional decision mode
@@ -27,8 +28,8 @@ and reduced-motion states.
 
 | Path | Purpose |
 |---|---|
-| `/` | Workbench positioning and product breadth |
-| `/concepts` | Workspace, Session, Turn, sandboxed work surface, Settings, workspace knowledge, events, compatibility MCP approval, optional Ways, and runtime boundaries |
+| `/` | Harness positioning: lead and helpers, required checks and review, and the Session workbench |
+| `/concepts` | Workspace, Session, Turn, sandboxed work surface, execution shapes, completion conditions and write scopes, Settings, workspace knowledge, events, compatibility MCP approval, optional Ways, and runtime boundaries |
 | `/why` | Why agent work needs a durable workspace |
 | `/showcase` | Complete grouped directory of twelve product-film concepts, with the ordinary Session loop first and an evidence contract for each film |
 | `/install` | Supported installation paths and first run |
@@ -56,8 +57,8 @@ before optional Ways. Why pairs its Session and Git-control claims with visible 
 Concepts explains the workbench and runtime mechanisms in depth. Showcase is the complete
 grouped directory: the Session loop first, execution choices second, and supporting runtime
 proof last. It embeds each of the twelve film slugs exactly once in the portfolio's declared
-order. Historical videos, source GIFs, old workbench mocks, and the private brand
-reference stay in the repository but do not ship to the public site.
+order. Source GIFs, old workbench mocks, and the private brand reference stay in the
+repository but do not ship to the public site.
 
 | Film slug | Embedded placement | What the recording must prove |
 |---|---|---|
