@@ -128,8 +128,9 @@ Do not collapse all multi-Agent behavior into one scheduler:
 - **The event lattice** publishes typed notifications to triggers, webhooks,
   and observers; signal-threshold library results do not execute Agents in the
   product daemon.
-- **Native Coordinators** create distinct Worker activations from explicitly
-  approved templates and delegated limits in the Session controller.
+- **Native leads**, including Coordinator templates, delegate tasks to distinct
+  read-only helper activations from explicitly approved Worker templates and limits
+  in the Session controller.
 - **Legacy Coordinators** dynamically decompose a goal and assign each subtask
   to the first declared worker Agent that can call its tools during that Agent
   execution.

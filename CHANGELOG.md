@@ -65,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   descendants show Blocked when their current dependency cannot complete, while
   later Retry generations preserve the earlier failure evidence.
 - **Native Session execution and controls.** New data roots use one canonical turn
-  controller for ordinary Send, dependent Agents, and approved Coordinator Workers.
+  controller for ordinary Send, dependent Agents, and the helpers a lead delegates to.
   Team & budget reviews immutable definitions and explicit limits for future turns.
   The Session inspector exposes exact generation controls and reviewed Add/Replace
   edits. A bounded request-local planner proposes controls for human review; it cannot
@@ -80,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   helper reaches the lead as a tool error. The same helper and task in one turn return the
   earlier result, and a return lost to a restart is read back without running the helper
   again. Helpers whose templates can write files or run commands are refused for now.
+  A Coordinator template in a native Session team runs as such a lead over its approved
+  Worker templates; its HTN methods are not used there. Legacy Sessions keep the
+  Coordinator's own decomposition.
 - **Reviewed partial finish.** Native cooperative turns can be finished partially
   with explicit human confirmation of selected accepted results, work to stop,
   never-started work, and missing checks. Safe settlement and usage evidence remain

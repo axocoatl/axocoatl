@@ -279,8 +279,9 @@ The one app does not replace Axocoatl's runtime strengths. It makes them legible
 - An all-team turn with more than one autonomous Agent in a Lattice or Custom
   Session owns a bounded coordination lattice: exact named dependencies activate
   Agents, direct-parent handoffs become durable causal evidence, and one requested
-  revision can reactivate the affected downstream graph. Native Coordinators create
-  distinct child activations from approved Worker templates in that same controller. The process-wide
+  revision can reactivate the affected downstream graph. A native lead, including a
+  Coordinator template, delegates tasks to distinct helper activations from approved
+  Worker templates in that same controller. The process-wide
   event lattice carries typed notifications for Skills, triggers, webhooks, and
   retained API/WebSocket observers.
 - A Session's standing work can be a signal field: each team Agent owns repository paths,

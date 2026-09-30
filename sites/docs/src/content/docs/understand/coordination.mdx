@@ -14,7 +14,8 @@ question and owns a different recovery boundary.
 | Multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
 | Signal field | Agents own parts of a repository and should react to each other's evidence | Deposits on paths; each Agent senses only the paths it watches |
 | Event lattice | Producers and consumers should be decoupled | Typed publish/subscribe notification |
-| Coordinator Agent | Task shape and worker choice emerge at runtime | Decomposition, then the first declared worker that can call each subtask's tools |
+| Lead with helpers | A native Agent needs a separate read-only look at part of its task | The lead picks an approved helper and writes its task; one helper runs at a time |
+| Coordinator Agent (legacy Sessions) | Task shape and worker choice emerge at runtime | Decomposition, then the first declared worker that can call each subtask's tools |
 
 ## Automations
 
@@ -34,11 +35,15 @@ team revision. Each activation has its own input, conversation, grant, and histo
 The current-turn inspector separately reviews changes to work that has not started;
 it does not replace the future-team configuration.
 
-A Coordinator receives only explicitly approved Worker templates and delegated
-operations. Each admitted Worker instance has a separate conversation and consumes
-an allocation from the parent's shared allowance. Its command source, parent
-activation, and result stay in the same canonical Session history. Increasing
-budget or authority requires human review; another model call cannot grant it.
+An Agent whose Team & budget approval names Worker templates as helpers gets a
+`delegate` tool. A Coordinator template must have helpers and runs the same way in a
+native Session; its HTN methods are not used there. Each call starts one helper in
+its own conversation with only the Session's request and the task the lead wrote, and
+reserves the helper's approved limits from the lead's shared allowance. Helpers whose
+templates can write files or run commands are refused for now. The lead waits for the
+answer; a failed or refused helper reaches it as a tool error. The helper's command
+source, lead activation, and result stay in the same canonical Session history.
+Increasing budget or authority requires human review; another model call cannot grant it.
 
 Standing work sources feed that same Session controller. Manual events, signed
 webhooks, verified Session completion, and a signal field preserve source and
@@ -150,7 +155,7 @@ they do not cause Agents to execute. Events never start Agents on their own.
 
 ## Legacy Coordinator execution
 
-An Agent with `role: coordinator` handles one execution hierarchically:
+In a legacy Session, an Agent with `role: coordinator` handles one execution hierarchically:
 
 1. decompose the goal into subtasks;
 2. assign each subtask to the first declared worker, in declaration order, that can

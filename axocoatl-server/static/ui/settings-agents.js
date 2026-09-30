@@ -494,13 +494,13 @@ export class AxSettingsAgents extends HTMLElement {
       identity.append(h(
         'p',
         'status-note',
-        'A Coordinator owns Session conversation and orchestration continuity. Tier 2–4 memory and recall belong to its declared Workers, scoped under each Session.',
+        'In a legacy Session, a Coordinator owns conversation and orchestration continuity, and Tier 2–4 memory and recall belong to its declared Workers. In a native Session team it runs as a lead that can delegate tasks to the helper templates approved in Team and budget.',
       ));
     } else if (agent.role === 'worker') {
       identity.append(h(
         'p',
         'status-note',
-        'This Worker is created only by its Coordinator. Its configured tools, provider, budget, sampling, and memory apply inside that Coordinator run; restart the Coordinator instead.',
+        'A Worker never runs on its own. A legacy Coordinator runs it for a subtask; in a native Session team, a lead can delegate a task to it as a helper once Team and budget approves it. Its configured tools, provider, budget, sampling, and memory apply inside that run. In a legacy Session, restart its Coordinator instead.',
       ));
     }
     body.append(identity);

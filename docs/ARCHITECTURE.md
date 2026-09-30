@@ -895,8 +895,10 @@ manual, scheduled, or event-triggered runtime after `AutomationStore` exists.
 ## Coordinator role
 
 Separately, an agent can take the **coordinator** role (`role: coordinator`)
-for explicit hierarchical decomposition. Each coordination pass
-(`CoordinatorBehavior`):
+for explicit hierarchical decomposition in a legacy Session. A native Session team
+runs a Coordinator template as a `DefaultAgentBehavior` lead instead: its approved
+Worker templates are reachable only through the `delegate` tool, and its HTN methods
+are not used. Each legacy coordination pass (`CoordinatorBehavior`):
 
 1. **Decompose** the goal into subtasks. With HTN methods configured, planning
    is symbolic — an `HtnPlanner` expands compound tasks via its methods and an

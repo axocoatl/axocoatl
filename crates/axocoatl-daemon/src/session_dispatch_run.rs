@@ -24,8 +24,8 @@ const KEPT_TOOL_ROUNDS: usize = 3;
 
 /// Host-resolved resources. This first port supports an autonomous in-process
 /// actor with retained text inputs. Repository runs use the separate opaque
-/// RepositoryActivationResource; binary attachment projection and Coordinator
-/// child provisioning still require their own validated resource ports.
+/// RepositoryActivationResource; binary attachment projection still requires
+/// its own validated resource port. Helpers are admitted through `delegate`.
 pub struct AutonomousActivationResources {
     pub config: AgentConfig,
     pub profile: ExecutionProfile,
@@ -123,7 +123,7 @@ impl SessionDispatchController {
             && state.native_child_origin(&activation.node_id)?.is_none()
         {
             return Err(error(
-                "a Worker can execute only through its exact Coordinator child admission",
+                "a Worker runs only as a helper admitted by its lead's delegate call",
             ));
         }
         if state.bound.contains_key(&activation.activation_id) {
@@ -177,16 +177,6 @@ impl SessionDispatchController {
             None => tools,
         };
         let control = state.child_run_control(&activation)?;
-        let coordinator_workers = if config.role == AgentRole::Coordinator {
-            Some(state.coordinator_workers(manifest, provider.clone())?)
-        } else {
-            None
-        };
-        let planning_task = if config.role == AgentRole::Coordinator {
-            Some(request.effective_input.clone())
-        } else {
-            None
-        };
         let configuration = serde_json::to_string(&config).map_err(error)?;
         // Expected refusal is local to this activation. Validate before any
         // reservation write; uncertain persistence still fences the controller.
@@ -292,57 +282,31 @@ impl SessionDispatchController {
         ));
         let host_delegate_tool = self.scoped_delegate_tool(&activation)?;
         let host_knowledge_tool = self.scoped_knowledge_tool(&activation)?;
-        let behavior: Box<dyn AgentBehavior> =
-            if let Some((workers, worker_tools, htn)) = coordinator_workers {
-                let mut behavior = axocoatl_actor::CoordinatorBehavior::new(provider, counter)
-                    .with_tool_executor(tools)
-                    .with_activation_checkpoint_port(port.clone())
-                    .with_stream_observer(observer)
-                    .with_host_worker_tools(worker_tools)
-                    .with_planning_task(
-                        planning_task.ok_or_else(|| error("Coordinator task is missing"))?,
-                    );
-                if let Some(tool) = host_knowledge_tool {
-                    behavior = behavior.with_host_knowledge_tool(tool);
-                }
-                for (worker, logical_id) in workers {
-                    behavior = behavior.add_worker_config_with_logical_id(worker, logical_id);
-                }
-                if let Some(methods) = htn {
-                    behavior = behavior.with_htn_methods(
-                        axocoatl_coordination::htn::HtnPlanner::from_methods_yaml(&methods)
-                            .map_err(error)?,
-                    );
-                }
-                if let Some(hooks) = hooks {
-                    behavior = behavior.with_hook_registry(hooks);
-                }
-                Box::new(behavior)
-            } else {
-                let mut behavior = DefaultAgentBehavior::new(provider, counter)
-                    .with_tool_round_limit(policy.limits.invocations)
-                    .with_tool_executor(tools)
-                    .with_executor_tool_allowlist(config.tools.clone())
-                    .with_activation_checkpoint_port(port.clone())
-                    .with_stream_observer(observer)
-                    .with_stale_tool_result_masking(
-                        KEPT_TOOL_ROUNDS,
-                        [
-                            super::knowledge::NAME.to_string(),
-                            super::delegate::NAME.to_string(),
-                        ],
-                    );
-                if let Some(tool) = host_knowledge_tool {
-                    behavior = behavior.with_host_knowledge_tool(tool);
-                }
-                if let Some(tool) = host_delegate_tool {
-                    behavior = behavior.with_host_tool(super::delegate::NAME, tool);
-                }
-                if let Some(hooks) = hooks {
-                    behavior = behavior.with_hook_registry(hooks);
-                }
-                Box::new(behavior)
-            };
+        // A Coordinator template runs here as a lead like any other Agent: its
+        // approved Worker templates are reachable only through `delegate`.
+        let mut behavior = DefaultAgentBehavior::new(provider, counter)
+            .with_tool_round_limit(policy.limits.invocations)
+            .with_tool_executor(tools)
+            .with_executor_tool_allowlist(config.tools.clone())
+            .with_activation_checkpoint_port(port.clone())
+            .with_stream_observer(observer)
+            .with_stale_tool_result_masking(
+                KEPT_TOOL_ROUNDS,
+                [
+                    super::knowledge::NAME.to_string(),
+                    super::delegate::NAME.to_string(),
+                ],
+            );
+        if let Some(tool) = host_knowledge_tool {
+            behavior = behavior.with_host_knowledge_tool(tool);
+        }
+        if let Some(tool) = host_delegate_tool {
+            behavior = behavior.with_host_tool(super::delegate::NAME, tool);
+        }
+        if let Some(hooks) = hooks {
+            behavior = behavior.with_hook_registry(hooks);
+        }
+        let behavior: Box<dyn AgentBehavior> = Box::new(behavior);
         Ok(PreparedActivation {
             controller: self.clone(),
             activation,

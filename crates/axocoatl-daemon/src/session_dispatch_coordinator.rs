@@ -1,9 +1,10 @@
-//! Native hierarchical scheduling enters the same canonical driver as every
-//! other Agent. Coordinator code receives a wait handle, never another executor.
+//! Helpers a lead delegates to enter the same canonical driver as every other
+//! Agent. The lead receives a wait handle, never another executor. Children a
+//! native Coordinator admitted before it ran as a lead keep reading back.
 use super::*;
 use axocoatl_actor::{
     AdmittedChildExecution, AgentExecutionFailure, AgentRunId, AgentRunOutcome,
-    ChildExecutionRequest, MeasuredAgentRunOutcome, WorkerConfig,
+    ChildExecutionRequest, MeasuredAgentRunOutcome,
 };
 use axocoatl_core::{AgentConfig, AgentOutput, AgentRole, MeasuredTokenUsage, TokenUsageStats};
 use axocoatl_session::control_authority::{DelegatedGrantReservation, GrantLimits};
@@ -13,9 +14,8 @@ use axocoatl_session::control_command::{
 };
 use serde::{Deserialize, Serialize};
 
-type CoordinatorWorkerPreparation = (Vec<(WorkerConfig, String)>, Vec<String>, Option<String>);
-
-/// A child from a Coordinator's plan. Its node is required work of the turn.
+/// A child from a native Coordinator's plan, retained from before Coordinators
+/// ran as leads. Its node is required work of the turn. Nothing admits new ones.
 pub(super) const COORDINATOR_CHILD: &str = "native_coordinator_child_v1";
 /// A helper admitted through `delegate`. Its node is optional: a failed or
 /// stopped helper is reported to the lead as a tool error and does not hold
@@ -132,7 +132,7 @@ impl DispatchState {
             || proposal.replacement != replacement
         {
             return Err(error(
-                "child input differs from its retained Coordinator proposal",
+                "child input differs from its retained admission proposal",
             ));
         }
         Ok(proposal)
@@ -145,88 +145,18 @@ impl DispatchState {
                 .child_proposal(view)
                 .is_ok_and(|proposal| proposal.kind == DELEGATE_CHILD)
     }
-    pub(super) fn coordinator_workers(
-        &self,
-        input: &ActivationInputManifest,
-        provider: Arc<dyn axocoatl_llm::LlmProvider>,
-    ) -> Result<CoordinatorWorkerPreparation> {
-        let grant = input
-            .grant
-            .as_ref()
-            .ok_or_else(|| error("Coordinator needs its approved grant"))?;
-        let policy = self
-            .authority
-            .grant_policy(grant.grant_id.as_str())
-            .map_err(error)?;
-        let approved =
-            crate::bootstrap::session_team::approved_coordinator_policy(&self.content, &policy)
-                .map_err(error)?
-                .ok_or_else(|| {
-                    error("Coordinator has no retained Worker and delegation approval")
-                })?;
-        self.validate_coordinator_resource(input, &approved.resource)?;
-        let mut workers = vec![];
-        let mut tools = vec![];
-        for worker in &approved.workers {
-            let ActivationEvidenceContent::Definition {
-                profile,
-                configuration,
-                ..
-            } = self
-                .content
-                .resolve_activation_evidence(&worker.definition.snapshot)
-                .map_err(error)?
-            else {
-                return Err(error("approved Worker definition is missing"));
-            };
-            let config: AgentConfig = serde_json::from_str(configuration).map_err(error)?;
-            if config.role != AgentRole::Worker
-                || profile.definition != worker.definition.definition_id.as_str()
-                || !policy.profiles.contains(profile)
-                || config.provider != profile.provider
-                || config.model != profile.model
-                || config.tools != profile.tools
-            {
-                return Err(error("approved Worker differs from its captured profile"));
-            }
-            tools.extend(config.tools.clone());
-            {
-                workers.push((
-                    WorkerConfig {
-                        id: config.id,
-                        name: config.name,
-                        system_prompt: config.system_prompt.unwrap_or_default(),
-                        tools: config.tools,
-                        model: config.model,
-                        provider: Some(provider.clone()),
-                        token_budget: config.token_budget,
-                        sampling: config.sampling,
-                        memory: config.memory,
-                        session_context: None,
-                        project_instructions_root: None,
-                    },
-                    worker.template_id.clone(),
-                ));
-            }
-        }
-        tools.sort();
-        tools.dedup();
-        Ok((workers, tools, approved.htn_methods_yaml))
-    }
     fn validate_coordinator_resource(
         &self,
         input: &ActivationInputManifest,
         approved: &crate::bootstrap::session_team::ApprovedCoordinatorResource,
     ) -> Result<()> {
         let RepositoryInput::Recorded { snapshot } = &input.repository else {
-            return Err(error(
-                "Coordinator delegation requires its reviewed Session repository",
-            ));
+            return Err(error("helpers need the lead's reviewed Session repository"));
         };
         let owner = self
             .repository_owners
             .get(snapshot)
-            .ok_or_else(|| error("Coordinator repository owner is missing"))?;
+            .ok_or_else(|| error("the lead's repository owner is missing"))?;
         repository::validate_retained_repository(self, owner, snapshot)?;
         let actual = owner.metadata();
         let reviewed = axocoatl_core::SecureDir::open(&approved.working_dir)
@@ -239,7 +169,9 @@ impl DispatchState {
             || actual.backend != approved.backend
             || actual.host_workspace_inode != reviewed
         {
-            return Err(error("Coordinator runtime differs from the reviewed delegation resource; review its team budget"));
+            return Err(error(
+                "the Session environment differs from the one reviewed for helpers; review the team budget again",
+            ));
         }
         Ok(())
     }
@@ -316,14 +248,14 @@ impl DispatchState {
             .bound
             .get(&proposal.parent.activation_id)
             .filter(|bound| bound.activation == proposal.parent)
-            .ok_or_else(|| error("Coordinator command has no current execution owner"))?;
+            .ok_or_else(|| error("the delegating Agent is no longer running"))?;
         let parent = self.current(&proposal.parent)?;
         let parent_input = &parent
             .contract()
             .activations()
             .iter()
             .find(|item| item.activation == proposal.parent)
-            .ok_or_else(|| error("Coordinator activation is missing"))?
+            .ok_or_else(|| error("the delegating Agent's activation is missing"))?
             .input;
         let parent_policy = self
             .authority
@@ -334,7 +266,7 @@ impl DispatchState {
             &parent_policy,
         )
         .map_err(error)?
-        .ok_or_else(|| error("Coordinator approval is missing"))?;
+        .ok_or_else(|| error("this Agent has no approved helper templates"))?;
         if !approved.workers.contains(&proposal.worker) {
             return Err(error(
                 "proposed Worker is outside the approved templates and limits",
@@ -418,21 +350,13 @@ pub(super) fn native_child_identity(digest: &str) -> Result<(TurnNodeId, Command
 }
 
 impl SessionDispatchController {
-    pub(super) fn schedule_coordinator_child(
+    /// Admit one helper as an AddAgent command from its lead, or reattach to
+    /// the node an identical earlier request admitted.
+    pub(super) fn admit_delegated_child(
         &self,
         parent: &ActivationRef,
         request: &ChildExecutionRequest,
         control: AgentRunControl,
-    ) -> Result<Box<dyn AdmittedChildExecution>> {
-        self.admit_coordinator_child(parent, request, control, None, COORDINATOR_CHILD)
-    }
-    pub(super) fn admit_coordinator_child(
-        &self,
-        parent: &ActivationRef,
-        request: &ChildExecutionRequest,
-        control: AgentRunControl,
-        replacement: Option<(TurnNodeId, Vec<TurnNodeId>)>,
-        kind: &'static str,
     ) -> Result<Box<dyn AdmittedChildExecution>> {
         let mut state = self.lock()?;
         state.execution_admission()?;
@@ -493,7 +417,7 @@ impl SessionDispatchController {
             ));
         }
         let worker = candidates.remove(0);
-        let digest = native_child_digest(parent, request, &worker, &replacement)?;
+        let digest = native_child_digest(parent, request, &worker, &None)?;
         let (node_id, command_id) = native_child_identity(&digest)?;
         if state.native_child_origin(&node_id)?.is_some() {
             return Ok(Box::new(CanonicalChildWait {
@@ -505,13 +429,13 @@ impl SessionDispatchController {
         let conversation_id =
             NodeConversationId::new(format!("child-conversation-{digest}")).map_err(error)?;
         let proposal = NativeChildProposal {
-            kind: kind.into(),
+            kind: DELEGATE_CHILD.into(),
             parent: parent.clone(),
             request: request.clone(),
             worker: worker.clone(),
             node_id: node_id.clone(),
             conversation_id: conversation_id.clone(),
-            replacement: replacement.clone(),
+            replacement: None,
         };
         let proposal_ref = state
             .content
@@ -611,16 +535,9 @@ impl SessionDispatchController {
                     .ok_or_else(|| error("the turn graph is missing"))?
                     .revision,
                 issued_at_ms: now_ms()?,
-                parameters: match replacement {
-                    Some((target, rewire_dependents)) => ControlParameters::ReplaceFutureAgent {
-                        input: Box::new(input),
-                        target,
-                        rewire_dependents,
-                    },
-                    None => ControlParameters::AddAgent {
-                        input: Box::new(input),
-                        dependencies: vec![],
-                    },
+                parameters: ControlParameters::AddAgent {
+                    input: Box::new(input),
+                    dependencies: vec![],
                 },
             },
             source,

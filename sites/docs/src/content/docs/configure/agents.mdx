@@ -7,7 +7,8 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 An Agent entry is a configured template for a provider, model, prompt, role,
 and optional token budget. Autonomous Agents and Coordinators can own durable actors;
-Workers are created only by their Coordinator. Sessions and Automations refer to templates by
+Workers never run on their own: a legacy Coordinator runs them, and in a native Session a lead
+can delegate tasks to approved Worker templates. Sessions and Automations refer to templates by
 stable `id`.
 
 ## Define an Agent
@@ -79,9 +80,9 @@ Automation store; editing an Automation does not edit a Session team.
 
 In a native Session, **Team & budget** captures the selected Agent configuration
 and requires explicit activation, invocation, token, cost, and expiry limits.
-Those limits govern cumulative reservations before dispatch. A Worker allocation
-consumes its Coordinator's approved aggregate allowance; events do not refill it.
-Current authority and expansion requests are reviewed from the Agent inspector.
+Those limits govern cumulative reservations before dispatch. A helper's allocation
+consumes its lead's approved aggregate allowance; events do not refill it.
+Current authority and any retained expansion requests are reviewed from the Agent inspector.
 
 The enforced native provider boundary currently accepts reviewed local Ollama
 profiles and eligible [OpenRouter-credit profiles](/configure/providers/#configure-openrouter)

@@ -384,8 +384,8 @@ impl SessionDispatchController {
 
     /// Bind an exact current generation after physically resolving its immutable
     /// inputs. The returned control must be passed to a supported actor behavior.
-    /// A Coordinator must use a separate host child factory; this adapter's
-    /// boundary deliberately refuses to invent child topology or authority.
+    /// This adapter's boundary deliberately refuses to invent child topology or
+    /// authority; helpers are admitted only through the `delegate` port.
     pub fn bind_activation(
         &self,
         activation: ActivationRef,
@@ -457,16 +457,6 @@ struct InvocationAdmission {
 
 #[async_trait]
 impl ToolExecutionBoundary for ActivationBoundary {
-    async fn schedule_child(
-        &self,
-        request: &axocoatl_actor::ChildExecutionRequest,
-        control: AgentRunControl,
-    ) -> std::result::Result<Option<Box<dyn axocoatl_actor::AdmittedChildExecution>>, String> {
-        self.controller
-            .schedule_coordinator_child(&self.activation, request, control)
-            .map(Some)
-            .map_err(|failure| failure.to_string())
-    }
     fn approval_actor_scope(&self) -> std::result::Result<String, String> {
         let state = self.controller.lock().map_err(|error| error.to_string())?;
         let snapshot = state

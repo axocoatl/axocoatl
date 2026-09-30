@@ -1,6 +1,8 @@
 //! Actual owned native Begin -> lead Agent -> `delegate` -> same-driver helper.
-//! The finite local test providers report only deterministic synthetic usage;
-//! this fixture is not a claim about an external model or repository execution.
+//! A Coordinator template runs through the same lead path; its HTN methods are
+//! not used on the native path. The finite local test providers report only
+//! deterministic synthetic usage; this fixture is not a claim about an external
+//! model or repository execution.
 use super::*;
 use crate::bootstrap::session_team::{ApprovedCoordinatorPolicy, ApprovedCoordinatorResource};
 use crate::session_dispatch::NativeCoordinatorWorker;
@@ -18,6 +20,7 @@ use tokio_stream::Stream;
 
 const LEAD_MARKER: &str = "lead-private-scratch-note";
 const TASK: &str = "List every public function in src/lib.rs and report only their names.";
+const SECOND_TASK: &str = "List every public struct in src/lib.rs and report only their names.";
 const LEAD_GRANT: &str = "lead-grant";
 
 fn helper_limits() -> GrantLimits {
@@ -33,11 +36,62 @@ async fn lead_fixture(aggregate_tokens: u64) -> NativeFixture {
     lead_fixture_with_helpers(aggregate_tokens, &[("scout", &[])]).await
 }
 
-/// One Autonomous lead slot whose reviewed approval lets it add the given
-/// Worker helper templates. Delegation is minted from it at turn start.
 async fn lead_fixture_with_helpers(
     aggregate_tokens: u64,
     helpers: &[(&str, &[&str])],
+) -> NativeFixture {
+    lead_fixture_as(aggregate_tokens, helpers, LeadTemplate::autonomous()).await
+}
+
+/// The lead slot's own template role and the rest of its reviewed approval.
+struct LeadTemplate {
+    role: AgentRole,
+    operations: Vec<DelegatedOperation>,
+    htn_methods_yaml: Option<String>,
+}
+impl LeadTemplate {
+    fn autonomous() -> Self {
+        Self {
+            role: AgentRole::Autonomous,
+            operations: vec![DelegatedOperation::AddAgent],
+            htn_methods_yaml: None,
+        }
+    }
+    /// A Coordinator slot approved the way native Coordinators were before
+    /// they ran as leads: several delegated operations and HTN methods.
+    fn coordinator() -> Self {
+        Self {
+            role: AgentRole::Coordinator,
+            operations: vec![
+                DelegatedOperation::AddAgent,
+                DelegatedOperation::StopActivation,
+                DelegatedOperation::RetryActivation,
+                DelegatedOperation::FinishNormally,
+            ],
+            htn_methods_yaml: Some(
+                r#"
+- task_pattern: "Do the work"
+  preconditions: []
+  subtasks:
+    - name: "check-a"
+      parameters: {description: "Check A"}
+      task_type: Primitive
+    - name: "check-b"
+      parameters: {description: "Check B"}
+      task_type: Primitive
+"#
+                .into(),
+            ),
+        }
+    }
+}
+
+/// One lead slot whose reviewed approval lets it add the given Worker helper
+/// templates. Delegation is minted from it at turn start.
+async fn lead_fixture_as(
+    aggregate_tokens: u64,
+    helpers: &[(&str, &[&str])],
+    lead: LeadTemplate,
 ) -> NativeFixture {
     let mut fixture = native_fixture().await;
     let session_id = fixture.request.session_id.clone();
@@ -59,7 +113,7 @@ async fn lead_fixture_with_helpers(
             );
             let node_id = TurnNodeId::new(format!("team-node-{}", &identity[..24])).unwrap();
             let conversation_id = NodeConversationId::new("lead-conversation").unwrap();
-            let mut agents = vec![("lead", AgentRole::Autonomous, vec![])];
+            let mut agents = vec![("lead", lead.role.clone(), vec![])];
             for (name, tools) in helpers {
                 agents.push((
                     name,
@@ -137,10 +191,10 @@ async fn lead_fixture_with_helpers(
                         adhoc_allowed: false,
                     })
                     .collect(),
-                operations: vec![DelegatedOperation::AddAgent],
+                operations: lead.operations.clone(),
                 max_nodes: 8,
                 max_edges: 0,
-                htn_methods_yaml: None,
+                htn_methods_yaml: lead.htn_methods_yaml.clone(),
                 resource: ApprovedCoordinatorResource {
                     session_id: session_id.as_str().into(),
                     workspace_id: metadata.workspace_id.clone(),
@@ -268,15 +322,26 @@ impl axocoatl_token::TokenCounter for Counter {
     }
 }
 
+/// Holds the first helper generation while its resources are prepared, before
+/// it can reach a provider.
+#[derive(Default)]
+struct HelperSetupGate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    selected: std::sync::Mutex<Option<ActivationRef>>,
+}
+
 /// What the lead asks for and how the helper behaves; every provider request
-/// is recorded for the assertions.
+/// is recorded for the assertions. The lead delegates one task per round, in
+/// order, and then answers.
 struct Scenario {
     helper: String,
-    task: String,
+    tasks: Vec<String>,
     answer: String,
     helper_fails: bool,
     lead_fails_first_generation: bool,
     hold_helper: Option<Arc<tokio::sync::Semaphore>>,
+    hold_first_helper_setup: Option<Arc<HelperSetupGate>>,
     lead_requests: std::sync::Mutex<Vec<(ActivationRef, ChatRequest)>>,
     helper_requests: std::sync::Mutex<Vec<ChatRequest>>,
     helper_calls: AtomicUsize,
@@ -285,11 +350,12 @@ impl Scenario {
     fn new(answer: impl Into<String>) -> Self {
         Self {
             helper: "scout".into(),
-            task: TASK.into(),
+            tasks: vec![TASK.into()],
             answer: answer.into(),
             helper_fails: false,
             lead_fails_first_generation: false,
             hold_helper: None,
+            hold_first_helper_setup: None,
             lead_requests: std::sync::Mutex::new(vec![]),
             helper_requests: std::sync::Mutex::new(vec![]),
             helper_calls: AtomicUsize::new(0),
@@ -298,19 +364,28 @@ impl Scenario {
     fn helper_calls(&self) -> usize {
         self.helper_calls.load(Ordering::SeqCst)
     }
-    /// The lead's view of the delegate result in its last provider request.
-    fn last_delegate_result(&self) -> String {
+    /// The lead's view of every delegate result in its last provider request,
+    /// in call order.
+    fn delegate_results(&self) -> Vec<String> {
         let requests = self.lead_requests.lock().unwrap();
         let (_, request) = requests.last().unwrap();
         request
             .messages
             .iter()
-            .rev()
-            .find(|message| message.tool_call_id.as_deref() == Some("delegate-call"))
+            .filter(|message| {
+                message
+                    .tool_call_id
+                    .as_deref()
+                    .is_some_and(|id| id.starts_with("delegate-call"))
+            })
+            .map(|message| message.text_content().unwrap().to_owned())
+            .collect()
+    }
+    /// The lead's view of the latest delegate result in its last request.
+    fn last_delegate_result(&self) -> String {
+        self.delegate_results()
+            .pop()
             .expect("the lead's next request carries the delegate result")
-            .text_content()
-            .unwrap()
-            .to_owned()
     }
 }
 
@@ -341,7 +416,8 @@ fn provider_failure(reason: &str) -> EventStream {
     ))]))
 }
 
-/// Round 0 delegates; later rounds answer from the delegate result.
+/// Each early round delegates the next task; the round after the last task
+/// answers from the delegate results.
 struct LeadProvider {
     scenario: Arc<Scenario>,
     activation: ActivationRef,
@@ -374,7 +450,7 @@ impl LlmProvider for LeadProvider {
             .unwrap()
             .push((self.activation.clone(), request));
         let round = self.round.fetch_add(1, Ordering::SeqCst);
-        if round == 0 {
+        if let Some(task) = self.scenario.tasks.get(round) {
             return Ok(finished(
                 vec![
                     StreamEvent::TextDelta {
@@ -382,11 +458,11 @@ impl LlmProvider for LeadProvider {
                     },
                     StreamEvent::ToolCallDelta {
                         index: Some(0),
-                        id: "delegate-call".into(),
+                        id: format!("delegate-call-{round}"),
                         name: Some("delegate".into()),
                         args_delta: serde_json::json!({
                             "helper": self.scenario.helper,
-                            "task": self.scenario.task,
+                            "task": task,
                         })
                         .to_string(),
                     },
@@ -479,6 +555,23 @@ impl AutonomousActivationFactory for DelegateFactory {
             })
             .map_err(|error| error.to_string())?;
         config.id = AgentId::new(input.conversation_id.as_str());
+        if config.role == AgentRole::Worker && input.activation.generation == 1 {
+            if let Some(gate) = &self.scenario.hold_first_helper_setup {
+                let selected = {
+                    let mut selected = gate.selected.lock().unwrap();
+                    if selected.is_none() {
+                        *selected = Some(input.activation.clone());
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if selected {
+                    gate.entered.notify_one();
+                    gate.release.notified().await;
+                }
+            }
+        }
         let provider: Arc<dyn LlmProvider> = if config.role == AgentRole::Worker {
             Arc::new(HelperProvider {
                 scenario: self.scenario.clone(),
@@ -508,7 +601,16 @@ struct Run {
     outcome: std::result::Result<crate::session_dispatch::TurnDriveOutcome, String>,
 }
 
-async fn run_lead(fixture: &NativeFixture, scenario: Arc<Scenario>, lose_return: bool) -> Run {
+/// A first turn prepared for the lead but not yet driven.
+struct Started<'a> {
+    controller: crate::session_dispatch::SessionDispatchController,
+    repository: EvidenceRef,
+    bus: crate::stream::StreamBus,
+    factory: Arc<DelegateFactory>,
+    prepared: Box<crate::bootstrap::native_turn::PreparedNativeTurn<'a>>,
+}
+
+fn start_lead(fixture: &NativeFixture, scenario: Arc<Scenario>, lose_return: bool) -> Started<'_> {
     let (controller, repository) = begin(fixture, &fixture.request);
     if lose_return {
         controller.lose_delegate_outcome_for_test();
@@ -530,15 +632,26 @@ async fn run_lead(fixture: &NativeFixture, scenario: Arc<Scenario>, lose_return:
     .unwrap() else {
         panic!("owned native driver")
     };
-    let outcome = tokio::time::timeout(Duration::from_secs(10), prepared.run())
-        .await
-        .unwrap()
-        .map_err(|error| error.to_string());
-    Run {
+    Started {
         controller,
         repository,
         bus,
         factory,
+        prepared,
+    }
+}
+
+async fn run_lead(fixture: &NativeFixture, scenario: Arc<Scenario>, lose_return: bool) -> Run {
+    let started = start_lead(fixture, scenario, lose_return);
+    let outcome = tokio::time::timeout(Duration::from_secs(10), started.prepared.run())
+        .await
+        .unwrap()
+        .map_err(|error| error.to_string());
+    Run {
+        controller: started.controller,
+        repository: started.repository,
+        bus: started.bus,
+        factory: started.factory,
         outcome,
     }
 }
@@ -934,6 +1047,7 @@ fn human_action(
     controller: &crate::session_dispatch::SessionDispatchController,
     id: &str,
     action: crate::session_dispatch::HumanControlAction,
+    activation: Option<ActivationRef>,
     restart: Vec<ActivationRef>,
 ) -> crate::session_dispatch::HumanControlActionRequest {
     let snapshot = controller.snapshot().unwrap();
@@ -946,15 +1060,17 @@ fn human_action(
         execution_epoch_id: contract.epochs().last().unwrap().id.clone(),
         expected_turn_revision: contract.revision(),
         expected_graph_revision: contract.graph().unwrap().revision,
-        activation: None,
+        activation,
         action,
         instruction: None,
         include_previous_output: false,
         context: None,
-        continuation: Some(crate::session_dispatch::HumanContinuationSelection {
-            restart,
-            checks: vec![],
-        }),
+        continuation: (!restart.is_empty()).then_some(
+            crate::session_dispatch::HumanContinuationSelection {
+                restart,
+                checks: vec![],
+            },
+        ),
         blocker_id: None,
         human_response: None,
         partial_finish: None,
@@ -990,6 +1106,7 @@ async fn retried_lead_reattaches_to_accepted_helper() {
         &run.controller,
         "continue-lead",
         crate::session_dispatch::HumanControlAction::Continue,
+        None,
         restart,
     );
     let receipt = fixture
@@ -1115,4 +1232,271 @@ async fn revoked_lead_at_helper_provider_return_fails_without_poisoning_history(
     );
     assert!(controller.control_plane().is_ok());
     assert!(fixture.registry.live_native_turns().unwrap().is_empty());
+}
+
+fn completed_result(text: &str) -> serde_json::Value {
+    let value: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(value["status"], "completed", "{text}");
+    value
+}
+
+#[tokio::test]
+async fn coordinator_slot_runs_as_a_lead_that_reuses_one_helper_template_for_distinct_tasks() {
+    let fixture = lead_fixture_as(100000, &[("scout", &[])], LeadTemplate::coordinator()).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let mut scenario = Scenario::new("pub fn run");
+    scenario.tasks = vec![TASK.into(), SECOND_TASK.into()];
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:?}",
+        outcome.snapshot.contract()
+    );
+    // The approved HTN methods are not planned: the Coordinator template
+    // streams as a lead, is offered delegate, and spends one round per task.
+    {
+        let requests = scenario.lead_requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[0]
+            .1
+            .tools
+            .iter()
+            .any(|tool| tool.name == "delegate"));
+    }
+    let accepted = outcome.snapshot.contract().current_accepted_activations();
+    assert_eq!(accepted.len(), 3);
+    let helpers = accepted
+        .iter()
+        .filter(|item| item.activation.node_id != lead)
+        .collect::<Vec<_>>();
+    assert_eq!(helpers.len(), 2);
+    assert_ne!(helpers[0].activation.node_id, helpers[1].activation.node_id);
+    assert_ne!(helpers[0].conversation_id, helpers[1].conversation_id);
+    assert_eq!(helpers[0].input.definition, helpers[1].input.definition);
+    assert_eq!(scenario.helper_calls(), 2);
+    let results = scenario.delegate_results();
+    assert_eq!(results.len(), 2);
+    let nodes = results
+        .iter()
+        .map(|result| completed_result(result)["node_id"].clone())
+        .collect::<Vec<_>>();
+    assert_ne!(nodes[0], nodes[1]);
+    assert_eq!(outcome.snapshot.contract().graph_history().len(), 2);
+    assert!(fixture.registry.live_native_turns().unwrap().is_empty());
+    let commands = agent_commands(&run.controller);
+    assert_eq!(commands.len(), 2);
+    assert!(commands
+        .iter()
+        .all(|receipt| receipt.state == ControlCommandState::Settled));
+}
+
+#[tokio::test]
+async fn helper_reservations_cannot_exceed_the_lead_aggregate_budget() {
+    // Room for the lead's own calls and one helper's reserved limits, not two.
+    let fixture = lead_fixture(15000).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let mut scenario = Scenario::new("pub fn run");
+    scenario.tasks = vec![TASK.into(), SECOND_TASK.into()];
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "the lead continues after its second helper is refused"
+    );
+    assert_eq!(
+        outcome.snapshot.contract().graph().unwrap().nodes.len(),
+        2,
+        "only one explicitly bounded helper can fit"
+    );
+    assert_eq!(scenario.helper_calls(), 1);
+    let results = scenario.delegate_results();
+    assert_eq!(results.len(), 2);
+    completed_result(&results[0]);
+    assert!(
+        results[1].contains("The helper 'scout' was not started")
+            && results[1].contains("do not fit in what is left of your budget"),
+        "{}",
+        results[1]
+    );
+    let commands = agent_commands(&run.controller);
+    assert_eq!(commands.len(), 2);
+    assert_eq!(commands[0].state, ControlCommandState::Settled);
+    assert_eq!(commands[1].state, ControlCommandState::Rejected);
+    assert!(outcome
+        .snapshot
+        .contract()
+        .current_accepted_activations()
+        .iter()
+        .any(|item| item.activation.node_id == lead));
+    assert!(run.controller.grant_usage_for_test(LEAD_GRANT).tokens <= 15000);
+}
+
+#[tokio::test]
+async fn stopped_helper_continues_once_without_replaying_accepted_sibling_or_forking_driver() {
+    let fixture = lead_fixture(100000).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let gate = Arc::new(HelperSetupGate::default());
+    let mut scenario = Scenario::new("pub fn run");
+    scenario.tasks = vec![TASK.into(), SECOND_TASK.into()];
+    scenario.lead_fails_first_generation = true;
+    scenario.hold_first_helper_setup = Some(gate.clone());
+    let scenario = Arc::new(scenario);
+    let started = start_lead(&fixture, scenario.clone(), false);
+    let controller = started.controller.clone();
+    let stop = async {
+        gate.entered.notified().await;
+        let helper = gate.selected.lock().unwrap().clone().unwrap();
+        let request = human_action(
+            &controller,
+            "stop-one-helper",
+            crate::session_dispatch::HumanControlAction::Stop,
+            Some(helper.clone()),
+            vec![],
+        );
+        let receipt = fixture
+            .registry
+            .submit_human_action(
+                fixture.request.session_id.as_str(),
+                fixture.request.turn_id.as_str(),
+                request,
+                2,
+            )
+            .unwrap();
+        assert_eq!(receipt.state, ControlCommandState::Settled, "{receipt:?}");
+        gate.release.notify_one();
+        helper
+    };
+    let (first, stopped) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(started.prepared.run(), stop)
+    })
+    .await
+    .unwrap();
+    let first = first.unwrap();
+    assert_eq!(
+        first.snapshot.contract().state(),
+        Some(LogicalTurnState::NeedsAttention)
+    );
+    assert_eq!(
+        scenario.helper_calls(),
+        1,
+        "the stopped helper never reached its provider"
+    );
+    let results = scenario.delegate_results();
+    assert_eq!(results.len(), 2);
+    assert!(
+        results[0].contains("The helper 'scout' did not finish")
+            && results[0].contains(stopped.node_id.as_str()),
+        "{}",
+        results[0]
+    );
+    completed_result(&results[1]);
+    let accepted = first.snapshot.contract().current_accepted_activations();
+    assert_eq!(accepted.len(), 1);
+    let sibling = accepted[0].activation.clone();
+    assert_ne!(sibling.node_id, lead);
+    let restart = first
+        .snapshot
+        .contract()
+        .activations()
+        .iter()
+        .filter(|item| item.state != ActivationState::Accepted)
+        .map(|item| item.activation.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(restart.len(), 2);
+    let request = human_action(
+        &controller,
+        "continue-stopped-helper",
+        crate::session_dispatch::HumanControlAction::Continue,
+        None,
+        restart,
+    );
+    let receipt = fixture
+        .registry
+        .submit_human_action(
+            fixture.request.session_id.as_str(),
+            fixture.request.turn_id.as_str(),
+            request.clone(),
+            3,
+        )
+        .unwrap();
+    assert_eq!(receipt.state, ControlCommandState::Settled, "{receipt:?}");
+    let driver = controller
+        .prepare_native_control_driver(
+            &request.command_id,
+            started.repository.clone(),
+            started.bus.clone(),
+            started.factory.clone(),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(controller
+        .prepare_native_control_driver(
+            &request.command_id,
+            started.repository.clone(),
+            started.bus.clone(),
+            started.factory.clone()
+        )
+        .unwrap()
+        .is_none());
+    let outcome = tokio::time::timeout(Duration::from_secs(10), driver.run())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:?}",
+        outcome.snapshot.contract()
+    );
+    assert_eq!(outcome.snapshot.contract().graph().unwrap().nodes.len(), 3);
+    assert_eq!(
+        scenario.helper_calls(),
+        2,
+        "only the stopped helper runs again; its accepted sibling does not"
+    );
+    let accepted = outcome.snapshot.contract().current_accepted_activations();
+    assert!(accepted.iter().any(|item| item.activation == sibling));
+    assert!(accepted
+        .iter()
+        .any(|item| item.activation.node_id == stopped.node_id && item.activation.generation == 2));
+    assert!(accepted
+        .iter()
+        .any(|item| item.activation.node_id == lead && item.activation.generation == 2));
+    let results = scenario.delegate_results();
+    assert_eq!(results.len(), 2);
+    assert_eq!(
+        completed_result(&results[0])["node_id"],
+        stopped.node_id.as_str()
+    );
+    assert_eq!(
+        completed_result(&results[1])["node_id"],
+        sibling.node_id.as_str()
+    );
+    assert_eq!(agent_commands(&controller).len(), 2);
+    assert_eq!(
+        fixture
+            .registry
+            .submit_human_action(
+                fixture.request.session_id.as_str(),
+                fixture.request.turn_id.as_str(),
+                request.clone(),
+                4
+            )
+            .unwrap(),
+        receipt
+    );
+    assert!(controller
+        .prepare_native_control_driver(
+            &request.command_id,
+            started.repository,
+            started.bus,
+            started.factory
+        )
+        .unwrap()
+        .is_none());
 }
