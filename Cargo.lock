@@ -695,6 +695,7 @@ dependencies = [
  "axocoatl-isolation",
  "axocoatl-llm",
  "axocoatl-mcp",
+ "axocoatl-session",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

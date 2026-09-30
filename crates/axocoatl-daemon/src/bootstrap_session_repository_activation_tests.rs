@@ -793,6 +793,56 @@ async fn actual_native_repository_tools_write_edit_full_source_and_keep_owned_se
         .all(|invocation| invocation.evidence.disposition() == EffectDisposition::OutcomeRecorded));
 }
 
+/// The glob tool in the real sandbox: path patterns match (1.0 matched only
+/// bare names, so `**/*.test.js` and `lib/*.js` found nothing), dependency
+/// trees are skipped, and a miss says so plainly.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_repository_glob_matches_path_patterns() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    for file in [
+        "lib/a.js",
+        "lib/b.test.js",
+        "lib/deep/d.test.js",
+        "manifest.js",
+        "src/manifest-builder.js",
+        "node_modules/pkg/f.test.js",
+    ] {
+        let path = f._workspace.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "x").unwrap();
+    }
+    let r = run(&mut f, &["glob"], true);
+    let provider = Provider::new(vec![
+        ("glob", serde_json::json!({"pattern":"**/*.test.js"})),
+        ("glob", serde_json::json!({"pattern":"lib/*.js"})),
+        ("glob", serde_json::json!({"pattern":"**/manifest*.js"})),
+        ("glob", serde_json::json!({"pattern":"nothing/*.js"})),
+    ]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert!(settled.accepted, "{:?}", settled.failure);
+    assert!(idle.unwrap());
+    assert!(provider.saw(1, r#""files":["lib/b.test.js","lib/deep/d.test.js"]"#));
+    assert!(provider.saw(2, r#""files":["lib/a.js","lib/b.test.js"]"#));
+    assert!(provider.saw(3, r#""files":["manifest.js","src/manifest-builder.js"]"#));
+    assert!(provider.saw(4, "no files match 'nothing/*.js'"));
+}
+
 fn git_init(path: &std::path::Path) {
     assert!(std::process::Command::new("git")
         .args(["init", "--quiet"])

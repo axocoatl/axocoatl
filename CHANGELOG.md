@@ -212,6 +212,16 @@ model-facing `coordination_control` tool, the external harness adapter and the
   recorded are used.
 - **`list_dir` with an empty path lists the repository root** instead of failing with
   `ls: cannot access ''`.
+- **`glob` matches path patterns.** Since 1.0 it ran `find . -name PATTERN`, which
+  compares only a file's name, so any pattern with a `/` (`**/*.test.js`, `lib/*.js`,
+  `**/manifest*.js`) silently found no files. Patterns now follow the same rules as
+  write scopes: `*` and `?` stay within one path segment, `**` spans directories, a
+  pattern without `/` matches a file name at any depth, and one with `/` is matched
+  from the repository root. Results are sorted, relative to the root (no leading
+  `./`), and skip `.git`, `node_modules`, `target` and similar directories unless the
+  pattern names them; when nothing matches, the result says so and how patterns are
+  read. Patterns are limited to 1 KiB, and path matching (write scopes included) no
+  longer takes exponential time on patterns with many `*`.
 - **A long tool loop on a small-context model no longer forgets its own work every
   round.** A request was fitted against 85% of the context window on top of its full
   answer allowance, so a 32,768-token model started removing tool rounds with more than
