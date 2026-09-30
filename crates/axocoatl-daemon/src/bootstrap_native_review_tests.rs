@@ -752,32 +752,131 @@ async fn changes_after_the_last_round_need_attention_with_the_findings() {
         .any(|choice| choice.condition_id.as_str() == REVIEW_CONDITION_ID));
 }
 
-/// An answer that does not start with a verdict approves nothing: the turn
-/// needs attention and the lead is not sent anything.
+/// An answer without a verdict line approves nothing. While a round remains
+/// the host asks the reviewer again once, about the same result; when that
+/// answer has none either, or no round remains, the turn needs attention and
+/// the lead is not sent anything.
 #[tokio::test]
 async fn an_unreadable_verdict_fails_closed() {
-    let fixture = review_fixture(3).await;
-    let scenario = Scenario::new(&["Looks good to me.\nVERDICT: APPROVE"]);
+    for (max_rounds, asked) in [(1, 1), (3, 2)] {
+        let fixture = review_fixture(max_rounds).await;
+        let answer = "Looks good to me.\nVERDICT: APPROVE, with nits";
+        let scenario = Scenario::new(&[answer]);
+        let run = run_turn(&fixture, scenario.clone()).await;
+        let contract = run.outcome.snapshot.contract();
+        assert_eq!(contract.state(), Some(LogicalTurnState::NeedsAttention));
+        assert_eq!(scenario.lead_generations(), vec![1]);
+        assert_eq!(scenario.reviewer_requests.lock().unwrap().len(), asked);
+        assert_eq!(contract.epochs().len(), 1);
+        let observations = review_observations(&run);
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].0.outcome, ConditionOutcome::Failed);
+        assert_eq!(observations[0].1["verdict"], "unreadable");
+        assert_eq!(observations[0].1["round"], asked);
+        let review = run
+            .controller
+            .control_plane()
+            .unwrap()
+            .required_review
+            .unwrap();
+        assert_eq!(review.state, "failed");
+        assert!(
+            review
+                .reason
+                .starts_with("The reviewer's answer had no single VERDICT"),
+            "{}",
+            review.reason
+        );
+        assert_eq!(
+            review.reason.contains("after the host asked it again"),
+            asked > 1,
+            "{}",
+            review.reason
+        );
+        assert_eq!(review.findings, answer);
+    }
+}
+
+/// An answer without a verdict line is not a verdict: with a round left, the
+/// host asks the reviewer again about the exact same result, showing it that
+/// answer, and the second answer's approval completes the turn without
+/// running the lead again.
+#[tokio::test]
+async fn a_reviewer_without_a_verdict_is_asked_again_about_the_same_result() {
+    let fixture = review_fixture(2).await;
+    let scenario = Scenario::new(&[
+        "I found no defects in the change.",
+        "VERDICT: APPROVE\nNothing must change.",
+    ]);
     let run = run_turn(&fixture, scenario.clone()).await;
     let contract = run.outcome.snapshot.contract();
-    assert_eq!(contract.state(), Some(LogicalTurnState::NeedsAttention));
+    assert_eq!(
+        contract.state(),
+        Some(LogicalTurnState::Completed),
+        "{contract:?}"
+    );
     assert_eq!(scenario.lead_generations(), vec![1]);
     assert_eq!(contract.epochs().len(), 1);
+    let requests = scenario.reviewer_requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    assert!(!requests[0].1.contains("did not contain a verdict line"));
+    let (activation, again) = &requests[1];
+    assert_eq!(activation.generation, 2);
+    assert!(again.contains("Lead answer, generation 1"), "{again}");
+    assert!(again.contains("review round 2 of 2"), "{again}");
+    assert!(
+        again.contains("Your previous answer did not contain a verdict line."),
+        "{again}"
+    );
+    assert!(
+        again.contains("I found no defects in the change."),
+        "the reviewer reads the answer it gave: {again}"
+    );
+    // The unreadable answer recorded nothing; the second round's approval is
+    // the one verdict, about the lead's first and only answer.
     let observations = review_observations(&run);
     assert_eq!(observations.len(), 1);
-    assert_eq!(observations[0].0.outcome, ConditionOutcome::Failed);
-    assert_eq!(observations[0].1["verdict"], "unreadable");
+    let (observation, proof) = &observations[0];
+    assert_eq!(observation.outcome, ConditionOutcome::Passed);
+    assert_eq!(observation.activations[0].generation, 1);
+    assert_eq!(proof["round"], 2);
+    assert_eq!(proof["verdict"], "approve");
+    assert_eq!(proof["reviewer"]["generation"], 2);
     let review = run
         .controller
         .control_plane()
         .unwrap()
         .required_review
         .unwrap();
-    assert_eq!(review.state, "failed");
-    assert!(review
-        .reason
-        .starts_with("The reviewer's answer did not start with VERDICT"));
-    assert_eq!(review.findings, "Looks good to me.\nVERDICT: APPROVE");
+    assert_eq!(review.state, "approved");
+    assert_eq!(review.round, Some(2));
+}
+
+/// A reviewer that writes its findings first and its verdict on the last
+/// line, as a live reviewer did, is read: its approval completes the turn in
+/// the first round, and the findings are the text before the verdict.
+#[tokio::test]
+async fn a_verdict_on_the_last_line_completes_the_turn() {
+    let fixture = review_fixture(2).await;
+    let findings = "Based on my review I found no defects.\n\n1. Every pair is checked.";
+    let scenario = Scenario::new(&[&format!("{findings}\n\nVERDICT: APPROVE")]);
+    let run = run_turn(&fixture, scenario.clone()).await;
+    let contract = run.outcome.snapshot.contract();
+    assert_eq!(
+        contract.state(),
+        Some(LogicalTurnState::Completed),
+        "{contract:?}"
+    );
+    assert!(run.outcome.finalized.is_some());
+    assert_eq!(scenario.lead_generations(), vec![1]);
+    assert_eq!(scenario.reviewer_requests.lock().unwrap().len(), 1);
+    let observations = review_observations(&run);
+    assert_eq!(observations.len(), 1);
+    let (observation, proof) = &observations[0];
+    assert_eq!(observation.outcome, ConditionOutcome::Passed);
+    assert_eq!(proof["verdict"], "approve");
+    assert_eq!(proof["round"], 1);
+    assert_eq!(proof["findings"], findings);
 }
 
 /// A team without a required review admits exactly the graph it did before:

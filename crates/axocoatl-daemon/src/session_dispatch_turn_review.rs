@@ -29,6 +29,10 @@ struct ReviewRound {
     prompt: EvidenceRef,
     /// The reviewer generation that runs it.
     round: u32,
+    /// The host's note asking again for a verdict the previous round's
+    /// answer did not carry, shown beside that answer; `None` for a round
+    /// about a new result.
+    reask: Option<EvidenceRef>,
 }
 
 /// A digest naming one host step of this turn's review.
@@ -39,8 +43,15 @@ fn step_digest(value: &impl serde::Serialize) -> Result<String> {
     ))
 }
 
-const UNREADABLE: &str = "The reviewer's answer did not start with VERDICT: APPROVE or VERDICT: \
-     CHANGES, so it approves nothing. Continue runs the review again.";
+const UNREADABLE: &str = "The reviewer's answer had no single VERDICT: APPROVE or VERDICT: \
+     CHANGES line, so it approves nothing. Continue runs the review again.";
+const UNREADABLE_AGAIN: &str = "The reviewer's answer had no single VERDICT: APPROVE or VERDICT: \
+     CHANGES line, even after the host asked it again, so it approves nothing. Continue runs \
+     the review again.";
+/// What the host tells a reviewer whose answer carried no readable verdict
+/// when it asks again, in the next round, about the same result.
+const REASK: &str = "Your previous answer did not contain a verdict line. Reply with exactly \
+     `VERDICT: APPROVE` or `VERDICT: CHANGES` on its own line, followed by findings.";
 const NOT_CAPTURED: &str = "The repository could not be captured after the Agents finished, so \
      the reviewer would not see the exact result. Continue runs the review again.";
 
@@ -574,8 +585,9 @@ impl DispatchState {
 
     /// Start review round `round` in `epoch`: the reviewer's first
     /// activation, or a revision of its previous accepted one with the new
-    /// result. The driver runs it like any other admitted work. The reason
-    /// when it cannot start.
+    /// result, or with the same result and its previous answer when the host
+    /// asks again for a verdict. The driver runs it like any other admitted
+    /// work. The reason when it cannot start.
     fn start_review_round(
         &mut self,
         snapshot: &DurableTurnSnapshot,
@@ -588,6 +600,7 @@ impl DispatchState {
             repository,
             prompt,
             round,
+            reask,
         } = next;
         let current = snapshot
             .contract()
@@ -642,7 +655,8 @@ impl DispatchState {
         };
         let manifest_id =
             InputManifestId::new(format!("review-input-{}", &digest[..48])).map_err(error)?;
-        let guidance = vec![request, prompt, round_text.clone()];
+        let mut guidance = vec![request, prompt, round_text.clone()];
+        guidance.extend(reask.clone());
         let event = match previous {
             Some(previous) => {
                 let mut input = previous.input.clone();
@@ -650,12 +664,20 @@ impl DispatchState {
                 input.activation = activation;
                 input.guidance = guidance;
                 input.repository = repository;
-                input.revision_context = None;
+                // Asked again, the reviewer reads the answer that had no
+                // verdict; a round about a new result starts clean.
+                input.revision_context = match (&reask, &previous.output) {
+                    (Some(_), Some(output)) => Some(RevisionContext {
+                        activation: previous.activation.clone(),
+                        output: output.clone(),
+                    }),
+                    _ => None,
+                };
                 TurnContractEvent::ReviseAccepted {
                     previous: previous.activation.clone(),
                     input: Box::new(input),
                     invalidated_descendants: vec![],
-                    evidence: round_text,
+                    evidence: reask.unwrap_or(round_text),
                 }
             }
             None => {
@@ -805,6 +827,7 @@ impl DispatchState {
                 repository,
                 prompt,
                 round: 1,
+                reask: None,
             };
             if let Err(reason) =
                 self.start_review_round(&snapshot, &reviewer, None, first, &criterion)?
@@ -819,22 +842,36 @@ impl DispatchState {
         };
         let current_round = latest.activation.execution_epoch_id == epoch
             && latest.input.guidance.contains(&prompt);
+        let next_round = latest
+            .activation
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| error("review round overflow"));
         match latest.state {
             ActivationState::Running | ActivationState::Unstarted => Ok(false),
             ActivationState::Accepted if current_round => {
-                self.record_verdict(&snapshot, &criterion, &latest, candidate, activations)?;
+                let reask =
+                    self.record_verdict(&snapshot, &criterion, &latest, candidate, activations)?;
+                if let Some(note) = reask {
+                    // The same prompt, so the next answer is bound to the
+                    // same result.
+                    let next = ReviewRound {
+                        repository,
+                        prompt,
+                        round: next_round?,
+                        reask: Some(note),
+                    };
+                    self.start_review_round(&snapshot, &reviewer, Some(&latest), next, &criterion)?
+                        .map_err(error)?;
+                }
                 Ok(true)
             }
             ActivationState::Accepted => {
-                let round = latest
-                    .activation
-                    .generation
-                    .checked_add(1)
-                    .ok_or_else(|| error("review round overflow"))?;
                 let next = ReviewRound {
                     repository,
                     prompt,
-                    round,
+                    round: next_round?,
+                    reask: None,
                 };
                 self.start_review_round(&snapshot, &reviewer, Some(&latest), next, &criterion)?
                     .map_err(error)?;
@@ -863,7 +900,10 @@ impl DispatchState {
 
     /// Record the verdict of the accepted reviewer `item`, which was shown
     /// `candidate`, and send a request for changes back to the lead while
-    /// rounds remain.
+    /// rounds remain. An answer without a readable verdict about the tree it
+    /// was shown records nothing while a round remains and the host has not
+    /// yet asked this reviewer again about this result: the note to ask again
+    /// with in the next round is returned instead.
     fn record_verdict(
         &mut self,
         snapshot: &DurableTurnSnapshot,
@@ -871,7 +911,7 @@ impl DispatchState {
         item: &ContractActivation,
         candidate: ReviewCandidate,
         activations: Vec<ActivationRef>,
-    ) -> Result<()> {
+    ) -> Result<Option<EvidenceRef>> {
         let epoch = item.activation.execution_epoch_id.clone();
         let round = item.activation.generation;
         let answer = self.accepted_answer(snapshot, &item.activation)?;
@@ -888,10 +928,25 @@ impl DispatchState {
             before.as_ref().map(Option::as_deref),
             after.as_ref().map(Option::as_deref),
         );
+        let mut asked_again = false;
+        if verdict == ReviewVerdict::Unreadable && unbound.is_none() {
+            let note = self
+                .content
+                .retain_activation_evidence(ActivationEvidenceContent::Guidance {
+                    text: REASK.to_owned(),
+                })
+                .map_err(error);
+            let note = self.fail_closed(note)?.reference().clone();
+            asked_again = item.input.guidance.contains(&note);
+            if !asked_again && round < criterion.max_rounds {
+                return Ok(Some(note));
+            }
+        }
         let passed = verdict == ReviewVerdict::Approve && unbound.is_none();
         let mut plan = None;
         let reason = match (verdict, unbound) {
             (_, Some(reason)) => Some(reason.to_owned()),
+            (ReviewVerdict::Unreadable, None) if asked_again => Some(UNREADABLE_AGAIN.to_owned()),
             (ReviewVerdict::Unreadable, None) => Some(UNREADABLE.to_owned()),
             (ReviewVerdict::Approve, None) => None,
             (ReviewVerdict::Changes, None) if round >= criterion.max_rounds => Some(format!(
@@ -929,7 +984,7 @@ impl DispatchState {
         value["reviewed_sha256"] = serde_json::to_value(before.flatten()).map_err(error)?;
         self.record_review(&epoch, activations, value, passed)?;
         let Some(plan) = plan else {
-            return Ok(());
+            return Ok(None);
         };
         // The host's own continuation: pause the epoch the review failed in
         // and continue in a new one that revises the lead.
@@ -947,7 +1002,7 @@ impl DispatchState {
         );
         self.fail_closed(continued)?;
         self.changed.notify_waiters();
-        Ok(())
+        Ok(None)
     }
 }
 

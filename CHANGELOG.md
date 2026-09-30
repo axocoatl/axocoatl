@@ -129,7 +129,9 @@ model-facing `coordination_control` tool, the external harness adapter and the
   checks pass, in a fresh conversation shown the request, each required Agent's final
   answer and the turn's change against the tree it began with, bounded. The turn
   completes only when it answers `VERDICT: APPROVE` about that exact result; the verdict
-  is bound to the answers and tree it judged, and an unreadable answer fails closed.
+  is bound to the answers and tree it judged. A verdict line anywhere in the answer
+  counts; an answer with none, or with verdict lines that disagree, is asked again once
+  about the same result while a round remains, and otherwise fails closed.
   `VERDICT: CHANGES` sends the findings to the lead as a revision in a new epoch, and
   the checks and review run again, until the rounds run out and the turn needs
   attention with the findings. Apply refuses a reviewer that could change files, a
