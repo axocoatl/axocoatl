@@ -104,6 +104,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check again between fresh captures; an Agent that finishes after the checks captured
   the repository makes them not ready. A check whose record cannot be read shows as
   unavailable instead of hiding the turn.
+  Team & budget shows each check's arguments as a shell reads them and keeps a check's
+  exact argument list unless you change its line. Required checks do not run on
+  Explore several ways attempts, and Team & budget and Explore several ways say so.
 - **Retained Ways decisions.** Native Ways retain bounded candidate Outcomes, Routes,
   diffs, Checks, usage, Judge evidence, the human choice, and cleanup state after Keep
   or finishing without keeping. History storage limits are explicit; capacity failure

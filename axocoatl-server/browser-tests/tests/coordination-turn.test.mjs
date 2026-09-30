@@ -1446,8 +1446,8 @@ for (const options of [{theme:'light',viewport:{width:1100,height:900}}, {theme:
 
 test('never-started native descendants are blocked by the current failed generation and unblock after Retry',async()=>{const{context,page,errors}=await componentPage();try{const envelope=controlPlaneFixture();envelope.state='running';envelope.nodes[0].activations=envelope.nodes[0].activations.slice(0,1);envelope.nodes[0].activations[0].state='failed';envelope.nodes.push({node_id:'reviewer',definition_id:'reviewer-definition',label:'Reviewer',definition:missing,dependencies:['builder'],activations:[]},{node_id:'report',definition_id:'report-definition',label:'Report',definition:missing,dependencies:['reviewer'],activations:[]},{node_id:'peer',definition_id:'peer-definition',label:'Independent peer',definition:missing,dependencies:[],activations:[]});const result=await page.evaluate(async envelope=>{const{foldControlPlane}=await import('/ui/coordination-turn.js');const card=document.createElement('ax-coordination-turn');document.body.append(card);const inspect=()=>{const model=foldControlPlane(envelope);card.controlPlane=envelope;return{states:Object.fromEntries(model.agents.map(agent=>[agent.id,agent.state])),histories:model.nodes.map(node=>node.activations.length),text:card.shadowRoot.textContent}};const failed=inspect();const retry=structuredClone(envelope.nodes[0].activations[0]);retry.state='running';retry.reference.activation.generation=2;retry.reference.activation.activation_id='retry-generation';retry.generation={status:'available',value:2};envelope.nodes[0].activations.push(retry);const running=inspect();retry.state='accepted';const accepted=inspect();return{failed,running,accepted,originalState:envelope.nodes[0].activations[0].state};},envelope);assert.deepEqual(result.failed.states,{builder:'failed',reviewer:'blocked',report:'blocked',peer:'waiting'});assert.deepEqual(result.failed.histories,[1,0,0,0]);assert.match(result.failed.text,/Blocked by Builder/);assert.deepEqual(result.running.states,{builder:'working',reviewer:'waiting',report:'waiting',peer:'waiting'});assert.deepEqual(result.accepted.states,{builder:'completed',reviewer:'waiting',report:'waiting',peer:'waiting'});assert.equal(result.originalState,'failed');assert.deepEqual(result.accepted.histories,[2,0,0,0]);assert.deepEqual(errors,[]);}finally{await context.close();}});
 
-test('turn controls show each required check with its failed output and name the check to rerun', async () => {
-  const {context, page, errors} = await componentPage();
+for (const theme of ['light', 'dark']) test(`turn controls show each required check with its failed output and name the check to rerun (${theme})`, async () => {
+  const {context, page, errors} = await componentPage(theme === 'dark' ? {theme, viewport: {width: 390, height: 844}} : {theme});
   try {
     const envelope = controlPlaneFixture();
     envelope.state = 'needs_attention';
@@ -1456,7 +1456,7 @@ test('turn controls show each required check with its failed output and name the
       process_status: {kind: 'exited', code: 1}, effect_disposition: 'outcome_recorded', primary_exit: null, quiescent: true,
       reason: null, evidence: 'check-result', candidate_sha256: null, exit_code: 1, stdout: '1 test failed\n',
       stderr: 'AssertionError: expected 2 <b>\n', stdout_truncated: false, stderr_truncated: true},
-      {argv: ['cargo', 'test'], state: 'passed', run_id: 'required-check-two', process_status: {kind: 'exited', code: 0},
+      {argv: ['cargo', 'test', '--', 'not slow'], state: 'passed', run_id: 'required-check-two', process_status: {kind: 'exited', code: 0},
         effect_disposition: 'outcome_recorded', primary_exit: null, quiescent: true, reason: null, evidence: 'check-two',
         candidate_sha256: null, exit_code: 0, stdout: '', stderr: '', stdout_truncated: false, stderr_truncated: false}];
     // The second check passed on its own, but not together with the first on
@@ -1482,6 +1482,7 @@ test('turn controls show each required check with its failed output and name the
       'Some checks ran on an older tree than the current one. Continue runs them all again.');
     const checks = inspector.locator('.required-check');
     assert.equal(await checks.count(), 2);
+    if (process.env.AXOCOATL_P1_SCREENSHOT_DIR) await page.screenshot({path: `${process.env.AXOCOATL_P1_SCREENSHOT_DIR}/required-check-readiness-${theme}.png`, fullPage: true});
     const failed = checks.nth(0);
     assert.equal(await failed.locator('.check-command').textContent(), 'npm test');
     assert.equal(await failed.locator('.check-state').textContent(), 'Failed · exit code 1');
@@ -1492,9 +1493,13 @@ test('turn controls show each required check with its failed output and name the
     assert.equal(await checks.nth(1).locator('pre').count(), 1, 'an empty output adds no preview');
     const content = await inspector.locator('.content').textContent();
     for (const label of ['Repository capture before the required checks', 'Required check · npm test',
-      'Required check · cargo test', 'Repository capture after the required checks', 'Readiness of the required checks']) assert.match(content, new RegExp(label));
-    assert.match(await inspector.locator('.continuation-dependencies').first().textContent(),
-      /^Runs every required check again between fresh repository captures, then records readiness\.$/);
+      'Repository capture after the required checks', 'Readiness of the required checks']) assert.match(content, new RegExp(label));
+    // An argv shows as a shell reads it, never as words a shell would split.
+    assert.equal(await checks.nth(1).locator('.check-command').textContent(), "cargo test -- 'not slow'");
+    assert.match(content, /Required check · cargo test -- 'not slow'/);
+    assert.equal(await inspector.locator('.continuation-dependencies').count(), 1, 'said once for the whole group');
+    assert.equal(await inspector.locator('.continuation-dependencies').textContent(),
+      'Any required check you select runs every required check again between fresh repository captures, then records readiness.');
     await inspector.getByLabel('Required check · npm test').check();
     await inspector.locator('.continue-turn').click();
     assert.deepEqual(await page.evaluate(() => window.continued), {restart: [], checks: ['required-check:1']});

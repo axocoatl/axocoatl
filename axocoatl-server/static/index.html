@@ -6551,7 +6551,11 @@ function updateFanoutBtn() {
         : 'Next turn will produce one answer — click to explore several ways');
   }
   const fanout = $('#fanout');
-  if (fanout) fanout.disabled = !sessionSupportsAttempts() || !sessionRuntimeSurfaceReady();
+  if (fanout) {
+    fanout.disabled = !sessionSupportsAttempts() || !sessionRuntimeSurfaceReady();
+    // Attempts run outside the team's turn, so its required checks do not run on them.
+    fanout.requiredChecks = (S.session?.currentTeam?.required_checks || []).length;
+  }
   syncAttemptsDock();
 }
 

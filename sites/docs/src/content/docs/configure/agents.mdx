@@ -149,9 +149,13 @@ appear in the Coordinator's list exactly as written.
 
 A native Session team can have required checks: commands Axocoatl runs in the
 Session's repository after the required Agents of every turn finish. In **Team &
-budget**, open **Required checks** and enter one command per line; each line runs as
-`sh -c <line>`. If the Session has a detected check command, **Add detected** offers
-it, but it runs only after you add it and apply the team.
+budget**, open **Required checks** and enter one command per line; a line you add or
+change runs as `sh -c <line>`. A check applied through the API with its own argument
+list shows each argument quoted as a shell would read it, and keeps that exact list
+while you leave its line unchanged. If the Session has a detected check command, **Add
+detected** offers it, but it runs only after you add it and apply the team. Required
+checks do not run on attempts made with **Explore several ways**; run them there with
+**Run checks** before you keep one.
 
 After the Agents finish, Axocoatl captures the repository, runs each check, and
 captures the repository again. The turn completes only when every check passes and the

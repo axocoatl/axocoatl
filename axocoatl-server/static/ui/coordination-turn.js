@@ -1215,8 +1215,13 @@ function evidenceText(value) {
   return 'Not recorded';
 }
 
+// A check's argv as a shell reads it: a `sh -c` script as typed, any other
+// argv with each argument quoted when it needs to be.
+function shellWord(word) {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
+}
 function checkCommand(argv) {
-  return argv.length === 3 && argv[0] === 'sh' && argv[1] === '-c' ? argv[2] : argv.join(' ');
+  return argv.length === 3 && argv[0] === 'sh' && argv[1] === '-c' ? argv[2] : argv.map(shellWord).join(' ');
 }
 
 // Required-check conditions are `required-check:0` (capture before), `:1..n`
@@ -1564,15 +1569,17 @@ export class AxActivationInspector extends HTMLElement {
         checkbox.disabled = !controlRequestAvailable(item.capability); checkbox.checked = !checkbox.disabled && draft[kind].has(key);
         const text = kind === 'restart' ? `${item.activation.node_id} · generation ${item.activation.generation} · ${item.state}` : checkChoiceLabel(item.condition_id, this.#model?.controlPlane?.required_checks);
         const label = element('label'); label.append(checkbox, document.createTextNode(text)); form.append(label);
-        if (kind === 'checks' && item.required_conditions?.length) form.append(element('p', 'continuation-dependencies',
-          /^required-check:/.test(item.condition_id || '')
-            ? 'Runs every required check again between fresh repository captures, then records readiness.'
-            : `Also runs again: ${item.required_conditions.join(', ')}.`));
+        // Any required check reruns them all; that is said once below.
+        if (kind === 'checks' && item.required_conditions?.length && !/^required-check:/.test(item.condition_id || ''))
+          form.append(element('p', 'continuation-dependencies', `Also runs again: ${item.required_conditions.join(', ')}.`));
         if (checkbox.disabled) form.append(element('p', 'unavailable', item.capability?.reason || 'Unavailable'));
         choices.push({kind, item, checkbox});
         checkbox.addEventListener('change', () => { if (checkbox.checked) draft[kind].add(key); else draft[kind].delete(key); sync(); });
       }
     }
+    if ((controls.check_choices || []).some(item => /^required-check:/.test(item.condition_id || '')))
+      form.append(element('p', 'continuation-dependencies',
+        'Any required check you select runs every required check again between fresh repository captures, then records readiness.'));
     if ((controls.continuation_choices || []).length && this.#model?.controlPlane?.required_checks?.length)
       form.append(element('p', 'continuation-checks', 'Restarted work runs the required checks again after it finishes.'));
     const pending = this.#commandHistory.some(item => ['continue', 'finish'].includes(item.request.action)

@@ -125,6 +125,8 @@ export class AxFanout extends HTMLElement {
   /** Agent id -> in-flight discovery promise, so duplicate rows share one read. */
   #modelLoads = new Map();
   #choicesError = '';
+  /** How many required checks the Session's team has; none run on attempts. */
+  #requiredChecks = 0;
   /** One entry per attempt. `{}` means "the session's own agent and model". */
   #lanes = [{}, {}, {}];
 
@@ -205,6 +207,15 @@ export class AxFanout extends HTMLElement {
     return true;
   }
   get count() { return this.enabled && !this.disabled ? this.#lanes.length : 1; }
+
+  /** The number of the Session team's required checks, which attempts skip. */
+  get requiredChecks() { return this.#requiredChecks; }
+  set requiredChecks(v) {
+    const next = Number.isSafeInteger(v) && v > 0 ? v : 0;
+    if (next === this.#requiredChecks) return;
+    this.#requiredChecks = next;
+    if (this.#note) this.#note.innerHTML = this.#describe();
+  }
 
   /** Keep the switch and its label showing the truth of the attribute. */
   #syncSwitch() {
@@ -463,19 +474,21 @@ export class AxFanout extends HTMLElement {
       const agent = this.#agents.find((a) => a.id === l.agent);
       return l.model || agent?.model || '';
     }));
-    const slow = n > 8
-      ? ` <span class="warn">${n} at once is a lot for local models — expect it to be slow.</span>` : '';
+    const notes = (n > 8
+      ? ` <span class="warn">${n} at once is a lot for local models — expect it to be slow.</span>` : '')
+      + (this.#requiredChecks
+        ? ` <span class="warn checks-skipped">This Session's required checks do not run on these attempts. Run them with Run checks before you keep one.</span>` : '');
 
     if (agents.size > 1 && models.size > 1) {
-      return `Comparing different agents on different models.${slow}`;
+      return `Comparing different agents on different models.${notes}`;
     }
     if (agents.size > 1) {
-      return `Comparing <strong>agents</strong> — different prompts, tools and memory on the same model. This is the comparison that says something about design.${slow}`;
+      return `Comparing <strong>agents</strong> — different prompts, tools and memory on the same model. This is the comparison that says something about design.${notes}`;
     }
     if (models.size > 1) {
-      return `Comparing <strong>models</strong> on the same agent.${slow}`;
+      return `Comparing <strong>models</strong> on the same agent.${notes}`;
     }
-    return `Every attempt is identical, so this measures <strong>variance</strong> — how much the same setup varies run to run. Attempts tend to fail the same way, so changing the agent or the model usually tells you more.${slow}`;
+    return `Every attempt is identical, so this measures <strong>variance</strong> — how much the same setup varies run to run. Attempts tend to fail the same way, so changing the agent or the model usually tells you more.${notes}`;
   }
 }
 
