@@ -181,6 +181,29 @@ pub fn check_command(argv: &[String]) -> Result<String, ExecutionContentError> {
     ))
 }
 
+/// Invocations one pass of `checks` required checks spends from the paying
+/// grant: the Before capture, each command and the After capture.
+pub fn check_pass_invocations(checks: usize) -> u32 {
+    u32::try_from(checks).unwrap_or(u32::MAX).saturating_add(2)
+}
+
+/// Invocations the paying Agent keeps for its turn's `checks` required checks:
+/// one pass, and one more for a Continue, which runs every check again.
+/// Nothing without checks.
+pub fn check_allowance(checks: usize) -> u32 {
+    if checks == 0 {
+        return 0;
+    }
+    check_pass_invocations(checks).saturating_mul(2)
+}
+
+/// The smallest invocation limit of the Agent that pays for `checks`
+/// required checks: their allowance, the captures of its own changes before
+/// and after it runs, and one model call to answer.
+pub fn payer_minimum_invocations(checks: usize) -> u32 {
+    check_allowance(checks).saturating_add(3)
+}
+
 /// The readiness criterion of a Session team's required checks.
 pub fn readiness_text(checks: &[Vec<String>]) -> String {
     serde_json::json!({"kind":"required_check_readiness","required_checks":checks,"rule":"all exact checks pass and the captured repository tree remains unchanged"}).to_string()

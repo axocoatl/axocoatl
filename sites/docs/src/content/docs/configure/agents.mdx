@@ -159,11 +159,23 @@ checks leave the repository unchanged. A failing check leaves the turn needing
 attention, with each check's exit code and output in the turn controls. Fix the cause,
 select the check and choose **Continue** to run it again with fresh captures.
 
-Checks run on the allowance of the first required Agent, in graph order, that has the
-`bash` tool; Axocoatl holds back invocations for them from that Agent's allowance. Apply
-is refused when no required Agent has `bash`, and so is a request sent to a single
-Agent without `bash` while the team has checks. Each check may run for up to three
-minutes and keeps up to 768 KiB of output and 256 KiB of errors.
+Checks run on the allowance of the first required Agent, in graph order, whose own
+tools include `bash`; the tools of a lead's helpers never count. While that Agent works,
+Axocoatl holds back enough of its invocations to run every check and both captures
+twice: once after the Agents finish and once more after a Continue. Its invocation
+limit must be at least that allowance plus three, for the captures of its own changes
+and one answer: 9 for one check, 11 for two. Apply is refused when no required Agent
+has `bash` or that Agent's limit is too small, and so is a request sent to a single
+Agent that could not pay for them. A lead that pays cannot start a helper whose limits
+would cut into the allowance. Each check may run for up to three minutes and keeps up
+to 768 KiB of output and 256 KiB of errors.
+
+If the checks cannot be paid for because the paying Agent's budget is spent, has
+expired or was revoked, the turn needs attention and says why, for example "Required
+checks could not run: Builder's budget has 2 invocations left; they need 3." Continue
+then does not offer to run them again. Use **Finish partial result** to finish without
+them, or raise the limit: **Review current authority** can raise a lead's limits for
+the running turn, and Team & budget changes later turns.
 
 ## Actor token guards
 

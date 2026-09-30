@@ -51,6 +51,8 @@ struct LeadTemplate {
     invocations: u32,
     operations: Vec<DelegatedOperation>,
     htn_methods_yaml: Option<String>,
+    /// The team's required checks, which the lead pays for when it has bash.
+    required_checks: Vec<Vec<String>>,
 }
 impl LeadTemplate {
     fn autonomous() -> Self {
@@ -60,6 +62,17 @@ impl LeadTemplate {
             invocations: 20,
             operations: vec![DelegatedOperation::AddAgent],
             htn_methods_yaml: None,
+            required_checks: vec![],
+        }
+    }
+    /// A lead with bash on a team with one required check, which it pays
+    /// for, with `invocations` in its allowance.
+    fn paying(invocations: u32) -> Self {
+        Self {
+            tools: vec!["bash".into()],
+            invocations,
+            required_checks: vec![vec!["sh".into(), "-c".into(), "true".into()]],
+            ..Self::autonomous()
         }
     }
     /// A lead that can read the repository but not change it or run
@@ -98,6 +111,7 @@ impl LeadTemplate {
 "#
                 .into(),
             ),
+            required_checks: vec![],
         }
     }
 }
@@ -231,7 +245,8 @@ async fn lead_fixture_as(
                     text: serde_json::json!({
                         "kind": "authenticated_session_team_apply",
                         "edit": {"command_id": "approve-lead", "expected_configuration_revision": 1,
-                            "slots": [], "dependencies": [], "layout": []},
+                            "slots": [], "dependencies": [], "layout": [],
+                            "required_checks": lead.required_checks},
                         "templates": [[slot_id.as_str(), "lead"]],
                         "coordinators": [[slot_id.as_str(), approved]]
                     })
@@ -1866,6 +1881,47 @@ async fn helper_that_leaves_the_lead_too_few_tokens_is_refused() {
     // One provider call reserved 100 tokens; the helper's 10000 would leave
     // 50, less than the lead's next call.
     helper_that_leaves_the_lead_too_little_is_refused(10150, 20, "50 tokens").await;
+}
+
+/// A lead that runs commands and pays for the team's required checks cannot
+/// hand its check allowance to a helper: a helper that fits in its budget
+/// but would leave less than that allowance is not started.
+#[tokio::test]
+async fn a_lead_that_pays_for_required_checks_keeps_their_allowance_from_helpers() {
+    let fixture = lead_fixture_as(100000, &[("scout", &[])], LeadTemplate::paying(14)).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let scenario = Arc::new(Scenario::new("never produced"));
+    // This fixture's backend cannot supervise the checks the host runs after
+    // the lead, so the turn's own outcome is not what this test observes.
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let snapshot = run.controller.snapshot().unwrap();
+    assert!(snapshot
+        .contract()
+        .graph()
+        .unwrap()
+        .conditions
+        .iter()
+        .any(|condition| condition.condition_id.as_str() == "required-check:ready"));
+    assert!(run
+        .controller
+        .with_grant_stores(|_, _, held| Ok(held
+            .unwrap()
+            .1
+            .grant_pays_required_checks(LEAD_GRANT)
+            .unwrap()))
+        .unwrap());
+    assert_eq!(scenario.helper_calls(), 0);
+    assert!(helper_node(&snapshot, &lead).is_none());
+    let error = scenario.last_delegate_result();
+    assert!(
+        error.contains("The helper 'scout' was not started")
+            && error.contains("held for the host to observe your changes and run required checks"),
+        "{error}"
+    );
+    assert!(
+        agent_commands(&run.controller).is_empty(),
+        "nothing is submitted"
+    );
 }
 
 #[tokio::test]

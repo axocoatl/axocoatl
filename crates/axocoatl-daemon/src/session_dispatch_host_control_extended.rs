@@ -351,12 +351,28 @@ impl DispatchState {
                 if seen.len() != selected.restart.len() {
                     return Err(error("Continue selects an undeclared node"));
                 }
+                let condition_runs = self.check_continue_conditions(&selected.checks)?;
+                // Rerunning only checks that cannot be paid for would pause the
+                // turn again with nothing done.
+                if let Some((group, count)) = group_of(graph) {
+                    if selected.restart.is_empty()
+                        && condition_runs.iter().any(|id| group.contains(id))
+                    {
+                        if let Some(reason) = self.check_payment_shortfall(
+                            axocoatl_session::turn_checks::check_pass_invocations(count),
+                            now_ms()?,
+                            "The required checks cannot run again",
+                        )? {
+                            return Err(error(reason));
+                        }
+                    }
+                }
                 Ok(ControlParameters::ContinueTurn {
                     plan: ContinuationPlan {
                         source_epoch_id: request.execution_epoch_id.clone(),
                         epoch_id: epoch,
                         selections,
-                        condition_runs: self.check_continue_conditions(&selected.checks)?,
+                        condition_runs,
                     },
                     replay_decisions: vec![],
                 })

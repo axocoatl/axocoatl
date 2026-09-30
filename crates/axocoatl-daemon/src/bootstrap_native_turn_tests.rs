@@ -35,6 +35,13 @@ async fn native_fixture_with_invocations(invocations: u32) -> NativeFixture {
 /// The team's grants carry the Apply that approved these required checks;
 /// node-0 has no bash and node-1 has.
 async fn native_fixture_with_checks(checks: &[Vec<String>]) -> NativeFixture {
+    native_fixture_with_checks_and_invocations(checks, 16).await
+}
+/// As `native_fixture_with_checks`, with `invocations` in every grant.
+async fn native_fixture_with_checks_and_invocations(
+    checks: &[Vec<String>],
+    invocations: u32,
+) -> NativeFixture {
     let approval = serde_json::json!({
         "kind": "authenticated_session_team_apply",
         "edit": {
@@ -47,7 +54,12 @@ async fn native_fixture_with_checks(checks: &[Vec<String>]) -> NativeFixture {
         },
         "templates": [],
     });
-    native_fixture_with(0, &approval.to_string(), [&["read_file"], &["bash"]]).await
+    native_fixture_with(
+        invocations,
+        &approval.to_string(),
+        [&["read_file"], &["bash"]],
+    )
+    .await
 }
 /// Two slots whose grants `issuer` approved; slot `n` has `tools[n]`.
 async fn native_fixture_with(invocations: u32, issuer: &str, tools: [&[&str]; 2]) -> NativeFixture {
@@ -577,6 +589,37 @@ async fn targeted_send_keeps_required_checks() {
         controller.snapshot().unwrap().contract().graph(),
         Some(graph)
     );
+}
+/// A turn whose paying Agent could not afford its required checks is not
+/// admitted: one check needs two passes of three runs, the Agent's two
+/// captures and one answer, so eight invocations are refused and nine admit.
+#[tokio::test]
+async fn a_paying_agent_whose_limit_cannot_cover_the_checks_is_not_admitted() {
+    let checks = vec![vec!["sh".into(), "-c".into(), "test -f done.txt".into()]];
+    for (invocations, admitted) in [(8, false), (9, true)] {
+        let f = native_fixture_with_checks_and_invocations(&checks, invocations).await;
+        let token = f
+            .registry
+            .session_team_token(f.request.session_id.as_str())
+            .unwrap();
+        let data = SecureDir::open(f.repository._data.path()).unwrap();
+        let source = f.request.source().unwrap();
+        let result = prepare_admission(&f.registry, &token, &data, &f.request, &source);
+        match result {
+            Ok(_) => assert!(admitted, "{invocations} invocations were admitted"),
+            Err(refused) => {
+                assert!(!admitted, "{refused}");
+                let refused = refused.to_string();
+                assert!(
+                    refused.contains(
+                        "runs this Session team's required checks on its budget, and its \
+                         invocation limit of 8 is too small for them: it needs at least 9"
+                    ),
+                    "{refused}"
+                );
+            }
+        }
+    }
 }
 #[tokio::test]
 async fn exact_native_retry_cannot_create_a_second_driver_or_replay_after_stop_and_successor() {

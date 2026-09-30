@@ -32,6 +32,140 @@ impl DispatchState {
         };
         required_checks(graph, &self.content)
     }
+
+    /// Why the grant that pays for this turn's required checks cannot spend
+    /// `needed` more invocations on them at `now_ms`, in words for the
+    /// person, or `None` when it can. `lead` opens the sentence.
+    pub(super) fn check_payment_shortfall(
+        &self,
+        needed: u32,
+        now_ms: u64,
+        lead: &str,
+    ) -> Result<Option<String>> {
+        const FINISH: &str = "use Finish partial result to finish without them";
+        let Some(payer) = self.authority.required_check_payer().map_err(error)? else {
+            return Ok(Some(format!(
+                "{lead}: no Agent of this turn may pay for them. You can {FINISH}."
+            )));
+        };
+        let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
+        let name = agent_name(&self.content, snapshot.contract().graph(), &payer.holder);
+        let reason = if payer.closed {
+            format!("{lead}: this turn's authority is closed.")
+        } else if payer.revoked {
+            format!("{lead}: {name}'s authority for this turn was revoked. You can {FINISH}.")
+        } else if now_ms >= payer.expires_at_ms {
+            format!(
+                "{lead}: {name}'s budget expired. You can {FINISH}, and set a later budget \
+                 expiry in Team and budget for later turns."
+            )
+        } else if payer.invocations_left < needed {
+            let remedy = if payer.delegating {
+                format!("Raise its invocation limit with Review current authority, or {FINISH}.")
+            } else {
+                format!(
+                    "You can {FINISH}, and raise its invocation limit in Team and budget for \
+                     later turns."
+                )
+            };
+            format!(
+                "{lead}: {name}'s budget has {} left; they need {}. {remedy}",
+                invocations(payer.invocations_left),
+                invocations(needed)
+            )
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(reason))
+    }
+
+    /// Record the readiness review of this turn's required checks from
+    /// `proof`, unless the current review already records exactly it.
+    /// Whether anything was recorded.
+    fn record_check_readiness(
+        &mut self,
+        epoch: ExecutionEpochId,
+        activations: Vec<ActivationRef>,
+        proof: String,
+        passed: bool,
+    ) -> Result<bool> {
+        let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
+        let condition_id = ConditionId::new(CheckGroup::required().ready_id()).map_err(error)?;
+        if let Some(existing) = snapshot.contract().current_condition(&condition_id) {
+            if matches!(self.content.resolve_activation_evidence(&existing.evidence).map_err(error)?, ActivationEvidenceContent::Guidance {text} if text == &proof)
+            {
+                return Ok(false);
+            }
+        }
+        let command = format!(
+            "required-check-ready-{:x}",
+            Sha256::digest(proof.as_bytes())
+        );
+        let evidence = self
+            .content
+            .retain_activation_evidence(ActivationEvidenceContent::Guidance { text: proof })
+            .map_err(error);
+        let evidence = self.fail_closed(evidence)?.reference().clone();
+        let appended = self.append(
+            &command,
+            TurnContractEvent::RecordCondition {
+                epoch_id: epoch,
+                condition_id,
+                activations,
+                outcome: if passed {
+                    ConditionOutcome::Passed
+                } else {
+                    ConditionOutcome::Failed
+                },
+                evidence,
+            },
+        );
+        self.fail_closed(appended)?;
+        Ok(true)
+    }
+}
+
+/// Whether the latest epoch runs condition `id`: a first epoch runs every
+/// condition, a continuation only those it selected.
+fn epoch_runs(contract: &TurnContract, id: &ConditionId) -> bool {
+    contract
+        .epochs()
+        .last()
+        .and_then(|epoch| epoch.continuation.as_ref())
+        .is_none_or(|plan| plan.condition_runs.contains(id))
+}
+
+/// `count` invocations, in words.
+fn invocations(count: u32) -> String {
+    if count == 1 {
+        "1 invocation".into()
+    } else {
+        format!("{count} invocations")
+    }
+}
+
+/// The name the person gave the Agent of `node`, or its node id.
+fn agent_name(
+    content: &ExecutionContentStore,
+    graph: Option<&TurnGraphSnapshot>,
+    node: &TurnNodeId,
+) -> String {
+    graph
+        .and_then(|graph| graph.nodes.iter().find(|item| item.node_id == *node))
+        .and_then(
+            |item| match content.resolve_activation_evidence(&item.definition.snapshot) {
+                Ok(ActivationEvidenceContent::Definition { configuration, .. }) => {
+                    serde_json::from_str::<serde_json::Value>(configuration)
+                        .ok()?
+                        .get("name")?
+                        .as_str()
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_owned)
+                }
+                _ => None,
+            },
+        )
+        .unwrap_or_else(|| node.as_str().to_owned())
 }
 
 /// The required checks an admitted graph carries, read from their retained
@@ -340,12 +474,42 @@ impl SessionDispatchController {
                 if contract.condition_run(&run_id).is_some() {
                     return Ok(false);
                 }
-                let Some(grant_id) = state
-                    .authority
-                    .required_check_grant(&definition_ref, &repository, now_ms()?)
-                    .map_err(error)?
-                else {
-                    return Ok(false);
+                // Nothing of a pass is spent unless the paying grant can pay
+                // for the rest of it; otherwise the turn records why.
+                let needed = (index..definitions.len())
+                    .filter(|later| {
+                        ConditionId::new(group.condition_id(*later)).is_ok_and(|id| {
+                            contract.current_condition(&id).is_none() && epoch_runs(contract, &id)
+                        })
+                    })
+                    .count();
+                let now = now_ms()?;
+                let unpaid = state.check_payment_shortfall(
+                    u32::try_from(needed).unwrap_or(u32::MAX),
+                    now,
+                    "Required checks could not run",
+                )?;
+                let grant_id = match unpaid {
+                    Some(_) => None,
+                    None => state
+                        .authority
+                        .required_check_grant(&definition_ref, &repository, now)
+                        .map_err(error)?,
+                };
+                let Some(grant_id) = grant_id else {
+                    let ready = ConditionId::new(group.ready_id()).map_err(error)?;
+                    if !epoch_runs(contract, &ready) {
+                        return Ok(false);
+                    }
+                    let reason = unpaid.unwrap_or_else(|| {
+                        "Required checks could not run: no Agent of this turn may pay for them \
+                         now. You can use Finish partial result to finish without them."
+                            .into()
+                    });
+                    // The epoch keeps one epoch's review distinct from an
+                    // identical one in a later epoch.
+                    let proof = serde_json::json!({"kind":"required_check_readiness","turn_id":snapshot.turn_id(),"epoch_id":epoch,"required_checks":checks,"activations":activations,"passed":false,"reason":reason}).to_string();
+                    return state.record_check_readiness(epoch, activations, proof, false);
                 };
                 let policy = state.authority.grant_policy(&grant_id).map_err(error)?;
                 let reference = state
@@ -400,37 +564,7 @@ impl SessionDispatchController {
                     &after.content,
                 );
                 let proof = serde_json::json!({"kind":"required_check_readiness","turn_id":snapshot.turn_id(),"required_checks":checks,"activations":activations,"before":before.reference,"after":after.reference,"candidate_sha256":after.content.tree_sha256,"checks":results,"check_candidates":command_candidates,"passed":passed}).to_string();
-                if let Some(existing) = contract.current_condition(&condition_id) {
-                    if matches!(state.content.resolve_activation_evidence(&existing.evidence).map_err(error)?, ActivationEvidenceContent::Guidance {text} if text == &proof)
-                    {
-                        return Ok(false);
-                    }
-                }
-                let command = format!(
-                    "required-check-ready-{:x}",
-                    Sha256::digest(proof.as_bytes())
-                );
-                let evidence = state
-                    .content
-                    .retain_activation_evidence(ActivationEvidenceContent::Guidance { text: proof })
-                    .map_err(error);
-                let evidence = state.fail_closed(evidence)?.reference().clone();
-                let appended = state.append(
-                    &command,
-                    TurnContractEvent::RecordCondition {
-                        epoch_id: epoch,
-                        condition_id,
-                        activations,
-                        outcome: if passed {
-                            ConditionOutcome::Passed
-                        } else {
-                            ConditionOutcome::Failed
-                        },
-                        evidence,
-                    },
-                );
-                state.fail_closed(appended)?;
-                return Ok(true);
+                return state.record_check_readiness(epoch, activations, proof, passed);
             }
             selected
         };

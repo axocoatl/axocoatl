@@ -81,9 +81,12 @@ Agents, Coordinator children, and native Ways use canonical admission and the sh
 boundary. A Session team's required checks are conditions of each admitted turn graph:
 after the turn's required Agents are accepted, the host runs each command between two
 repository captures of that exact candidate, charged to the grant of the first required
-Agent that may use `bash`, and records one readiness review. The turn completes only when
-every check passes and the captured tree did not change; a failure leaves it needing
-attention.
+Agent whose own profile may use `bash` (a lead's helper profiles never count), and
+records one readiness review. The turn completes only when every check passes and the
+captured tree did not change; a failure leaves it needing attention. A pass starts only
+when the paying grant can pay for all of it; otherwise the readiness review records, in
+words, why the checks could not run, and a check-only Continue that could not be paid
+is refused.
 
 `turn_contract` decodes and folds a bounded schema-2 logical-turn contract separately from
 the live schema-1 ledger. Immutable manifests bind definitions, conversations, starting
@@ -660,13 +663,17 @@ and streams that sometimes end early.
 
 - **Invocation reserve.** An activation that can run commands in a repository keeps a
   reserve of invocations for the host's observations: its After capture and, on the grant
-  that pays for required checks, one shared Before capture, each check and one shared After
-  capture. A tool call must also leave room for the provider call that reads it and one
-  more, so a model whose next tool round is declined can still answer. Calls of one
-  response are counted together before any pre-hook runs, and a call that no longer fits
-  at admission is declined as a tool error rather than failing the activation. Before a
-  lead admits a helper, what the lead has left after the helper's reservation must still
-  cover reading the helper's answer.
+  that pays for required checks, two passes of one shared Before capture, each check and
+  one shared After capture (the turn's pass and one Continue), less the check runs the
+  turn already paid for and never less than one pass. A tool call must also leave room
+  for the provider call that reads it and one more, so a model whose next tool round is
+  declined can still answer. Calls of one response are counted together before any
+  pre-hook runs, and a call that no longer fits at admission is declined as a tool error
+  rather than failing the activation. Before a lead admits a helper, what the lead has
+  left after the helper's reservation must still cover reading the helper's answer and
+  the lead's own reserve, so a paying lead cannot delegate its check allowance away.
+  Apply and turn admission refuse a paying Agent whose invocation limit is smaller than
+  that allowance plus its own two captures and one answer.
 - **Bounded context.** Tool output, and long string arguments of the model's own earlier
   calls (such as a whole-file write), older than the latest three to five tool rounds are
   replaced with a placeholder in later requests, moving in steps of three so the request

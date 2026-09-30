@@ -583,8 +583,11 @@ pub(crate) fn reserve_message(reserve: u32) -> String {
 impl DispatchState {
     /// Invocations the host holds back for this activation, when it can run
     /// commands in a repository: its After capture and, when required checks
-    /// exist and this grant is the one that pays for them, one shared Before
-    /// capture, each check, and one shared After capture.
+    /// exist and this grant is the one that pays for them, what is left of
+    /// their allowance: two passes of a shared Before capture, each check and
+    /// a shared After capture, one for the turn and one for a Continue, less
+    /// the check runs this turn already paid for, and never less than one
+    /// pass.
     pub(crate) fn host_observation_reserve(&self, activation: &ActivationRef) -> Option<u32> {
         let bound = self
             .bound
@@ -600,8 +603,16 @@ impl DispatchState {
             .contract()
             .graph()
             .and_then(axocoatl_session::turn_checks::group_of);
+        let spent = group.as_ref().map_or(0, |(group, _)| {
+            snapshot
+                .contract()
+                .condition_runs()
+                .iter()
+                .filter(|run| group.contains(&run.run.condition_id))
+                .count()
+        });
         let checks = paid_checks(pays_checks, group.map(|(_, checks)| checks));
-        Some(host_reserve(checks))
+        Some(host_reserve(checks, spent))
     }
 
     /// The host observation reserve, when spending `needed` more invocations
@@ -632,27 +643,49 @@ impl DispatchState {
 
 /// How many of the turn's `checks` commands a grant pays for: all of them
 /// when it is the paying grant, else none.
-fn paid_checks(pays: bool, checks: Option<usize>) -> u32 {
+fn paid_checks(pays: bool, checks: Option<usize>) -> usize {
     match checks {
-        Some(checks) if pays => u32::try_from(checks).unwrap_or(u32::MAX),
+        Some(checks) if pays => checks,
         _ => 0,
     }
 }
 
-/// The After capture, plus a shared Before capture, each check and a shared
-/// After capture when `checks` required checks are paid from this grant.
-fn host_reserve(checks: u32) -> u32 {
-    let condition_runs = if checks == 0 {
+/// The After capture, plus what is left of the allowance of `checks`
+/// required checks paid from this grant (`turn_checks::check_allowance`)
+/// after `spent` of their runs, and at least one more pass of them.
+fn host_reserve(checks: usize, spent: usize) -> u32 {
+    use axocoatl_session::turn_checks::{check_allowance, check_pass_invocations};
+    let checks = if checks == 0 {
         0
     } else {
-        checks.saturating_add(2)
+        check_allowance(checks)
+            .saturating_sub(u32::try_from(spent).unwrap_or(u32::MAX))
+            .max(check_pass_invocations(checks))
     };
-    condition_runs.saturating_add(1)
+    checks.saturating_add(1)
 }
 
 /// The reserve, when spending `needed` more of `limit` would cut into it.
 fn reserve_shortfall(used: u32, needed: u32, reserve: u32, limit: u32) -> Option<u32> {
     (used.saturating_add(needed).saturating_add(reserve) > limit).then_some(reserve)
+}
+
+#[cfg(test)]
+impl SessionDispatchController {
+    /// A bound activation's host observation reserve, read from the real
+    /// authority, and the reserve when spending `needed` more would cut into
+    /// it.
+    pub(crate) fn host_observation_for_test(
+        &self,
+        activation: &ActivationRef,
+        needed: u32,
+    ) -> (Option<u32>, Option<u32>) {
+        let state = self.lock().unwrap();
+        (
+            state.host_observation_reserve(activation),
+            state.host_observation_shortfall(activation, needed),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -805,11 +838,11 @@ mod reserve_tests {
 
     #[test]
     fn a_tight_allowance_still_lets_the_model_answer_a_declined_round() {
-        // Ten invocations, one required check: the host keeps 4 (After, and
-        // Before + check + After for the check run).
-        let (limit, reserve) = (10, host_reserve(1));
-        assert_eq!(reserve, 4);
-        assert_eq!(host_reserve(0), 1);
+        // Thirteen invocations, one required check: the host keeps 7 (After,
+        // and Before + check + After twice: the turn's run and a Continue).
+        let (limit, reserve) = (13, host_reserve(1, 0));
+        assert_eq!(reserve, 7);
+        assert_eq!(host_reserve(0, 0), 1);
         let provider = |used| reserve_shortfall(used, 1, reserve, limit).is_none();
         let tool = |used, earlier| {
             reserve_shortfall(used, TOOL_CALL_NEEDS + earlier, reserve, limit).is_none()
@@ -859,24 +892,35 @@ mod reserve_tests {
 
     #[test]
     fn required_checks_reserve_only_on_the_paying_grant() {
-        // Two required checks: the paying grant holds back its After capture,
-        // both captures around the checks and each check.
-        assert_eq!(host_reserve(paid_checks(true, Some(2))), 5);
+        // Two required checks: the paying grant holds back its After capture
+        // and, twice, both captures around the checks and each check.
+        assert_eq!(host_reserve(paid_checks(true, Some(2)), 0), 9);
         // Every other grant of the turn holds back only its own After capture.
-        assert_eq!(host_reserve(paid_checks(false, Some(2))), 1);
+        assert_eq!(host_reserve(paid_checks(false, Some(2)), 0), 1);
         // Without checks the payer holds back nothing more either.
-        assert_eq!(host_reserve(paid_checks(true, None)), 1);
-        // With ten invocations and two checks, the payer's Agent may start a
-        // tool call only while three plus five still fit; any other Agent's
-        // grant is unaffected by the checks.
-        let reserve = host_reserve(paid_checks(true, Some(2)));
-        assert!(reserve_shortfall(2, TOOL_CALL_NEEDS, reserve, 10).is_none());
+        assert_eq!(host_reserve(paid_checks(true, None), 0), 1);
+        // Once a pass was paid for, a retried payer keeps only what is left,
+        // and never less than one more pass.
+        assert_eq!(host_reserve(paid_checks(true, Some(2)), 2), 7);
+        assert_eq!(host_reserve(paid_checks(true, Some(2)), 4), 5);
+        assert_eq!(host_reserve(paid_checks(true, Some(2)), 12), 5);
+        // With fourteen invocations and two checks, the payer's Agent may
+        // start a tool call only while three plus nine still fit; any other
+        // Agent's grant is unaffected by the checks.
+        let reserve = host_reserve(paid_checks(true, Some(2)), 0);
+        assert!(reserve_shortfall(2, TOOL_CALL_NEEDS, reserve, 14).is_none());
         assert_eq!(
-            reserve_shortfall(3, TOOL_CALL_NEEDS, reserve, 10),
+            reserve_shortfall(3, TOOL_CALL_NEEDS, reserve, 14),
             Some(reserve)
         );
-        let other = host_reserve(paid_checks(false, Some(2)));
-        assert!(reserve_shortfall(6, TOOL_CALL_NEEDS, other, 10).is_none());
+        let other = host_reserve(paid_checks(false, Some(2)), 0);
+        assert!(reserve_shortfall(10, TOOL_CALL_NEEDS, other, 14).is_none());
+        // The smallest limit Apply accepts for the payer leaves it, after its
+        // Before capture, one model call beside the reserve.
+        let minimum = axocoatl_session::turn_checks::payer_minimum_invocations(2);
+        assert_eq!(minimum, reserve + 2);
+        assert!(reserve_shortfall(1, 1, reserve, minimum).is_none());
+        assert!(reserve_shortfall(2, 1, reserve, minimum).is_some());
     }
 }
 

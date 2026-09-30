@@ -226,6 +226,159 @@ fn rerun_check(
     }
 }
 
+/// The readiness proof the turn records for its required checks, when current.
+fn readiness_proof(controller: &SessionDispatchController) -> Option<serde_json::Value> {
+    let snapshot = controller.snapshot().unwrap();
+    let observation = snapshot
+        .contract()
+        .current_condition(&ConditionId::new("required-check:ready").unwrap())?
+        .clone();
+    controller
+        .with_team_stores(|_, content, _| {
+            let ActivationEvidenceContent::Guidance { text } = content
+                .resolve_activation_evidence(&observation.evidence)
+                .unwrap()
+            else {
+                panic!("readiness is retained guidance")
+            };
+            Ok(serde_json::from_str(text).unwrap())
+        })
+        .ok()
+}
+
+/// The paying Agent's own activation holds its check allowance back through
+/// the real authority. With two checks and twelve invocations it keeps nine:
+/// its After capture and two passes of both captures and each check, so a
+/// tool call fits only while three more and those nine do. Before the grant
+/// is recorded as the payer it keeps only its After capture.
+#[tokio::test]
+async fn the_paying_activation_holds_back_its_check_allowance() {
+    let mut f = fixture().await;
+    let checks = vec![
+        vec!["sh".into(), "-c".into(), "true".into()],
+        vec!["true".into()],
+    ];
+    let r = run_checked(&mut f, &["bash"], &checks);
+    let _prepared = r
+        .controller
+        .prepare_repository_activation(
+            r.activation.clone(),
+            r.resources(Provider::new(vec![])),
+            r.resource.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        r.controller.host_observation_for_test(&r.activation, 11),
+        (Some(1), None)
+    );
+    r.controller
+        .authorize_required_checks(r.resource.reference())
+        .unwrap();
+    assert_eq!(
+        r.controller.host_observation_for_test(&r.activation, 3),
+        (Some(9), None)
+    );
+    assert_eq!(
+        r.controller.host_observation_for_test(&r.activation, 4),
+        (Some(9), Some(9))
+    );
+}
+
+/// Required checks whose paying grant cannot pay for them never start a
+/// pass: the turn needs attention with the reason in words, nothing is
+/// spent, and Continue does not offer a rerun that would pause again.
+#[tokio::test]
+async fn required_checks_that_cannot_be_paid_say_why_and_are_not_offered_again() {
+    let mut f = fixture().await;
+    let checks = vec![vec!["sh".into(), "-c".into(), "true".into()]];
+    let r = run_checked(&mut f, &["bash"], &checks);
+    r.controller
+        .authorize_required_checks(r.resource.reference())
+        .unwrap();
+    let provider = Provider::new(vec![]);
+    let settled = r
+        .controller
+        .prepare_repository_activation(
+            r.activation.clone(),
+            r.resources(provider.clone()),
+            r.resource.clone(),
+        )
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    assert!(settled.accepted, "{:?}", settled.failure);
+    // The person revokes the paying Agent's authority before the checks run.
+    r.controller
+        .revoke_control_grant("repository-grant", 1)
+        .unwrap();
+    let factory = Arc::new(Factory {
+        config: r.config.clone(),
+        profile: r.profile.clone(),
+        provider: provider.clone(),
+    });
+    let outcome = tokio::time::timeout(Duration::from_secs(10), async {
+        r.controller
+            .autonomous_turn_driver(vec![seed(&r)], factory.clone())?
+            .run()
+            .await
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let contract = outcome.snapshot.contract();
+    assert_eq!(contract.state(), Some(LogicalTurnState::NeedsAttention));
+    assert!(
+        contract.condition_runs().is_empty(),
+        "no pass starts that cannot finish"
+    );
+    let proof = readiness_proof(&r.controller).unwrap();
+    assert_eq!(proof["passed"], false);
+    let reason = proof["reason"].as_str().unwrap();
+    assert_eq!(
+        reason,
+        "Required checks could not run: Repository actor's authority for this turn was \
+         revoked. You can use Finish partial result to finish without them."
+    );
+    // Rerunning the checks alone would pause again with nothing done.
+    let view = r.controller.control_plane().unwrap();
+    let controls = view.turn_controls.unwrap();
+    let choice = controls
+        .check_choices
+        .iter()
+        .find(|choice| choice.condition_id.as_str() == "required-check:1")
+        .unwrap();
+    assert!(!choice.capability.enabled);
+    assert!(
+        choice.capability.reason.contains(
+            "The required checks cannot run again: Repository actor's authority for this \
+             turn was revoked"
+        ),
+        "{}",
+        choice.capability.reason
+    );
+    assert!(!controls.continue_turn.enabled);
+    let refused = r.controller.submit_human_action(
+        rerun_check(&r.controller, "required-check:1"),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+    );
+    assert!(
+        refused.is_err()
+            || refused.as_ref().is_ok_and(|receipt| receipt.state
+                == axocoatl_session::control_command::ControlCommandState::Rejected),
+        "{refused:?}"
+    );
+    assert_eq!(
+        r.controller.snapshot().unwrap().contract().revision(),
+        contract.revision(),
+        "a refused Continue changes nothing"
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+}
+
 /// A required check the host runs after the Agent: a failing command leaves
 /// the turn needing attention with its output, and rerunning it after the
 /// person fixes the tree completes the turn. Every command runs in the actual

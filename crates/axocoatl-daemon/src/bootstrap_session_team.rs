@@ -984,7 +984,9 @@ impl AxocoatlDaemon {
         let mut continuity = Vec::new();
         let mut changes = Vec::new();
         let mut ids = HashSet::new();
-        let mut shell_payer = false;
+        // The first required Agent with bash, which pays for the required
+        // checks of a turn sent to the whole team, and its invocation limit.
+        let mut shell_payer: Option<(String, u32)> = None;
         for proposed in &edit.slots {
             let slot_id = SessionTeamSlotId::new(proposed.slot_id.clone()).map_err(team_error)?;
             if !ids.insert(slot_id.clone()) {
@@ -1065,7 +1067,12 @@ impl AxocoatlDaemon {
             if let Some(old) = &old_config {
                 config.id = old.id.clone();
             }
-            shell_payer |= proposed.required && config.tools.iter().any(|tool| tool == "bash");
+            if shell_payer.is_none()
+                && proposed.required
+                && config.tools.iter().any(|tool| tool == "bash")
+            {
+                shell_payer = Some((proposed.name.clone(), limits.invocations));
+            }
             let unchanged = prior.is_some()
                 && !proposed.reset_history
                 && old_config.as_ref().is_some_and(|old| {
@@ -1221,12 +1228,26 @@ impl AxocoatlDaemon {
                 });
             }
         }
-        if !edit.required_checks.is_empty() && !shell_payer {
-            return Err(team_error(
-                "Required checks run on the allowance of a required Agent that has the bash \
-                 tool, and no required Agent in this team has bash. Make an Agent with bash \
-                 required, or remove the required checks",
-            ));
+        if !edit.required_checks.is_empty() {
+            let Some((name, limit)) = &shell_payer else {
+                return Err(team_error(
+                    "Required checks run on the allowance of a required Agent that has the bash \
+                     tool, and no required Agent in this team has bash. Make an Agent with bash \
+                     required, or remove the required checks",
+                ));
+            };
+            let checks = edit.required_checks.len();
+            let minimum = axocoatl_session::turn_checks::payer_minimum_invocations(checks);
+            if *limit < minimum {
+                return Err(team_error(format!(
+                    "{name} runs the required checks on its budget, so its invocation limit must \
+                     be at least {minimum}: {} to run the checks and the repository captures \
+                     around them twice (after the Agents finish, and once more if you \
+                     Continue), 2 to capture its own changes and 1 for its answer. Raise its \
+                     invocation limit, or remove required checks",
+                    axocoatl_session::turn_checks::check_allowance(checks)
+                )));
+            }
         }
         let dependencies = edit
             .dependencies

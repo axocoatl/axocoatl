@@ -423,6 +423,7 @@ pub(super) fn prepare_admission(
         }
         let mut definitions = Vec::new();
         let mut points = Vec::new();
+        let mut names = HashMap::new();
         for slot in &selected_slots {
             let effective_definition = model::selected_definition(request, slot, content)?;
             let ActivationEvidenceContent::Definition {
@@ -446,6 +447,7 @@ pub(super) fn prepare_admission(
                 return Err(failure("team definition has the wrong retained role"));
             };
             let config: AgentConfig = serde_json::from_str(configuration).map_err(failure)?;
+            names.insert(slot.node_id.clone(), config.name.clone());
             if config.role == axocoatl_core::AgentRole::Worker {
                 return Err(failure(
                     "A Worker must run through its Coordinator's exact child admission",
@@ -581,19 +583,41 @@ pub(super) fn prepare_admission(
         let required_checks = session_team::approved_required_checks(content, selected_slots[0])?;
         drop(team);
         if !required_checks.is_empty() {
-            // The authority charges them to the first required Agent that
-            // may use bash; without one the turn could never run them.
-            if !graph.nodes.iter().filter(|node| node.required).any(|node| {
-                grants[&node.node_id]
-                    .profiles
-                    .iter()
-                    .any(|profile| profile.tools.iter().any(|tool| tool == "bash"))
-            }) {
+            // The authority charges them to the first required Agent whose
+            // own profile may use bash; without one the turn could never run
+            // them, and with too small a limit it could not pay for them.
+            let Some(payer) = graph
+                .nodes
+                .iter()
+                .filter(|node| node.required)
+                .find(|node| {
+                    axocoatl_session::control_authority::pays_with_own_shell(
+                        &grants[&node.node_id],
+                        node,
+                    )
+                })
+            else {
                 return Err(failure(
                     "This Session team has required checks, and none of the Agents this turn \
                      runs may use bash to pay for them. Send to the whole team, or to an Agent \
                      with the bash tool",
                 ));
+            };
+            let minimum =
+                axocoatl_session::turn_checks::payer_minimum_invocations(required_checks.len());
+            let limit = grants[&payer.node_id].limits.invocations;
+            if limit < minimum {
+                let name = names
+                    .get(&payer.node_id)
+                    .filter(|name| !name.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| payer.node_id.as_str().to_owned());
+                return Err(failure(format!(
+                    "{name} runs this Session team's required checks on its budget, and its \
+                     invocation limit of {limit} is too small for them: it needs at least \
+                     {minimum}. Raise its invocation limit in Team and budget, or send to the \
+                     whole team"
+                )));
             }
             inject_checks(content, &mut graph, &required_checks)?;
             graph.validate(&request.session_id).map_err(failure)?;

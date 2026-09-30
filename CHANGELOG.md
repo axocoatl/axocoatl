@@ -93,9 +93,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Required checks for Session teams.** Team & budget can name commands the host runs
   in the Session's repository after the required Agents of every native turn finish,
   each between two repository captures of the accepted candidate and charged to the
-  first required Agent that may use `bash`. A turn completes only when every check
-  passes and the repository is unchanged; a failure leaves it needing attention. The
-  turn's controls show each check's command, state, exit code and output.
+  first required Agent whose own tools include `bash`. That Agent keeps enough of its
+  budget to run the checks twice, once and after one Continue; Apply refuses a smaller
+  invocation limit, and a lead that pays cannot hand that allowance to a helper. A turn
+  completes only when every check passes and the repository is unchanged; a failure
+  leaves it needing attention. When the checks cannot be paid for, the turn says why and
+  Continue does not offer to rerun them. The turn's controls show each check's command,
+  state, exit code and output.
 - **Retained Ways decisions.** Native Ways retain bounded candidate Outcomes, Routes,
   diffs, Checks, usage, Judge evidence, the human choice, and cleanup state after Keep
   or finishing without keeping. History storage limits are explicit; capacity failure
