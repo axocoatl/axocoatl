@@ -6,7 +6,6 @@ pub mod automation_store;
 pub mod bootstrap;
 pub mod consolidation;
 pub mod error;
-pub mod external_harness;
 pub mod git;
 pub mod git_host;
 pub mod interrupt;

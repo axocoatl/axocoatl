@@ -327,43 +327,6 @@ pub struct ProviderCallRecord {
     pub outcome: Option<ProviderCallOutcome>,
 }
 
-impl ProviderCallRecord {
-    /// Project an existing durable native call into the shared run vocabulary.
-    /// Intent provider/model are requested values only. The caller must supply
-    /// explicit observed facts and their retained provenance; unknown facts
-    /// must remain unknown. This changes no dispatch claim or stored call bytes.
-    pub fn provider_run_reference(
-        &self,
-        executor: crate::provider_run::ExecutorIdentity,
-        observed: crate::provider_run::ProviderIdentity,
-        external: crate::provider_run::ExternalRunIdentity,
-        evidence: EvidenceRef,
-    ) -> Result<crate::provider_run::ProviderRunRef, crate::provider_run::ProviderRunError> {
-        use crate::provider_run::{
-            ProviderIdentity, ProviderRunRef, RunFact, PROVIDER_RUN_SCHEMA_VERSION,
-        };
-        let value = ProviderRunRef {
-            schema_version: PROVIDER_RUN_SCHEMA_VERSION,
-            activation: self.activation.clone(),
-            local_request_id: self.intent.call_id.clone(),
-            executor,
-            requested: ProviderIdentity {
-                provider: RunFact::Known {
-                    value: self.intent.provider.clone(),
-                },
-                model: RunFact::Known {
-                    value: self.intent.model.clone(),
-                },
-            },
-            observed,
-            external,
-            evidence,
-        };
-        value.validate()?;
-        Ok(value)
-    }
-}
-
 /// A single durable provider claim. No duplicate call id can mint another
 /// dispatch claim, including after restart or acknowledgement loss.
 #[derive(Debug)]
