@@ -1200,6 +1200,11 @@ pre { max-height: 230px; overflow: auto; white-space: pre-wrap; font: var(--fs-x
 .check-readiness.passed .check-readiness-state { color: var(--ok, var(--text)); }
 .check-readiness.failed .check-readiness-state,.check-readiness.unavailable .check-readiness-state { color: var(--err, var(--warn)); }
 .check-readiness .check-readiness-reason { margin: 4px 0 0; }
+.required-review { padding: 8px 0; border-top: 1px solid var(--border); }
+.required-review .review-state { font-weight: 600; margin: 0; }
+.required-review.approved .review-state { color: var(--ok, var(--text)); }
+.required-review.changes .review-state,.required-review.failed .review-state,.required-review.unavailable .review-state { color: var(--err, var(--warn)); }
+.required-review .review-reason { margin: 4px 0 0; }
 dialog:modal { position: fixed; inset: 12px; width: calc(100% - 24px); max-height: calc(100dvh - 24px); margin: auto; overflow: auto; }
 dialog::backdrop { background: rgba(0,0,0,.55); }
 `;
@@ -1227,6 +1232,7 @@ function checkCommand(argv) {
 // Required-check conditions are `required-check:0` (capture before), `:1..n`
 // (the commands), `:n+1` (capture after) and `:ready`.
 function checkChoiceLabel(conditionId, requiredChecks) {
+  if (conditionId === 'required-review:verdict') return 'Required review · run the reviewer again';
   const match = /^required-check:(\d+|ready)$/.exec(conditionId || '');
   const checks = Array.isArray(requiredChecks) ? requiredChecks : [];
   if (!match || !checks.length) return `Check · ${conditionId}`;
@@ -1550,6 +1556,25 @@ export class AxActivationInspector extends HTMLElement {
       this.#content.append(item);
     }
   }
+  // The host-run reviewer's verdict on the turn's result: its round, the
+  // verdict and the findings, bounded by the host.
+  #renderRequiredReview() {
+    const review = this.#model?.controlPlane?.required_review;
+    if (!review || typeof review.state !== 'string') return;
+    const reviewer = typeof review.reviewer === 'string' && review.reviewer ? `Reviewer ${review.reviewer}. ` : '';
+    this.#content.append(element('h3', '', 'Required review'), element('p', 'label',
+      `${reviewer}The host runs it after the required Agents finish and the required checks pass. The turn completes only when it approves the exact result.`));
+    const titles = {approved: 'Approved', changes: 'Changes requested', failed: 'Not approved', running: 'Reviewing',
+      not_run: 'Not run yet', skipped: 'Skipped', unavailable: 'Review unavailable'};
+    const round = Number.isInteger(review.round) && Number.isInteger(review.max_rounds) && review.max_rounds > 0
+      ? ` · round ${review.round} of ${review.max_rounds}` : '';
+    const section = element('section', `required-review ${review.state}`);
+    section.append(element('p', 'review-state', `${titles[review.state] || review.state}${round}${review.current === false && review.round ? ' · earlier result' : ''}`));
+    if (typeof review.reason === 'string' && review.reason) section.append(element('p', 'review-reason', review.reason));
+    if (typeof review.findings === 'string' && review.findings)
+      section.append(element('p', 'label', 'Findings'), element('pre', 'review-findings', review.findings));
+    this.#content.append(section);
+  }
   #renderTurnControls() {
     const controls = this.#model?.controlPlane?.turn_controls;
     if (typeof this.commandHandler !== 'function' || !controls) {
@@ -1582,6 +1607,8 @@ export class AxActivationInspector extends HTMLElement {
         'Any required check you select runs every required check again between fresh repository captures, then records readiness.'));
     if ((controls.continuation_choices || []).length && this.#model?.controlPlane?.required_checks?.length)
       form.append(element('p', 'continuation-checks', 'Restarted work runs the required checks again after it finishes.'));
+    if (this.#model?.controlPlane?.required_review && ((controls.continuation_choices || []).length || (controls.check_choices || []).length))
+      form.append(element('p', 'continuation-review', 'Restarted work and rerun checks also run the required review again on the new result.'));
     const pending = this.#commandHistory.some(item => ['continue', 'finish'].includes(item.request.action)
       && !['settled', 'rejected', 'failed'].includes(item.receipt?.state));
     const submit = element('button', 'continue-turn', 'Continue'); submit.type = 'submit';
@@ -1702,6 +1729,7 @@ export class AxActivationInspector extends HTMLElement {
     }
     if (!node) {
       this.#renderRequiredChecks();
+      this.#renderRequiredReview();
       this.#renderTurnControls();
       this.#renderReceipts(this.#commandHistory);
       this.#syncPresentation(); this.#dialog.scrollTop = scroll;

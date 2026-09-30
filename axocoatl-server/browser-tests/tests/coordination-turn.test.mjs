@@ -1516,3 +1516,43 @@ for (const theme of ['light', 'dark']) test(`turn controls show each required ch
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });
+
+for (const theme of ['light', 'dark']) test(`turn controls show the required review's verdict, findings and round, and rerun it by name (${theme})`, async () => {
+  const {context, page, errors} = await componentPage(theme === 'dark' ? {theme, viewport: {width: 390, height: 844}} : {theme});
+  try {
+    const envelope = controlPlaneFixture();
+    envelope.state = 'needs_attention';
+    envelope.nodes[0].activations.at(-1).state = 'accepted';
+    envelope.required_review = {reviewer: 'reviewer', state: 'changes', verdict: 'changes', round: 2, max_rounds: 2, current: true,
+      candidate_sha256: 'tree', findings: 'src/lib.rs:3: the new function has no test <b>',
+      reason: 'The reviewer asked for changes in round 2 of 2, the last round the host runs. Read the findings, then Revise the lead with them, change the files yourself and Continue the review, or Finish.'};
+    envelope.turn_controls = {execution_epoch_id: 'epoch-one', continue_turn: {enabled: true, reason: ''},
+      finish: {enabled: false, reason: 'The review did not approve.'}, continuation_choices: [],
+      check_choices: [{condition_id: 'required-review:verdict', required_conditions: [], capability: {enabled: true, reason: ''}}]};
+    await page.evaluate(async value => {
+      const {foldControlPlane} = await import('/ui/coordination-turn.js');
+      const inspector = document.createElement('ax-activation-inspector');
+      inspector.commandHandler = async command => { window.continued = command.continuation; };
+      inspector.model = foldControlPlane(value); document.body.append(inspector); inspector.showTurnControls();
+    }, envelope);
+    const inspector = page.locator('ax-activation-inspector');
+    const review = inspector.locator('.required-review');
+    assert.equal(await review.locator('.review-state').textContent(), 'Changes requested · round 2 of 2');
+    assert.match(await review.locator('.review-reason').textContent(), /the last round the host runs/);
+    assert.equal(await review.locator('.review-findings').textContent(), 'src/lib.rs:3: the new function has no test <b>', 'findings are text, never markup');
+    if (process.env.AXOCOATL_P1_SCREENSHOT_DIR) await page.screenshot({path: `${process.env.AXOCOATL_P1_SCREENSHOT_DIR}/required-review-${theme}.png`, fullPage: true});
+    await inspector.getByLabel('Required review · run the reviewer again').check();
+    await inspector.locator('.continue-turn').click();
+    assert.deepEqual(await page.evaluate(() => window.continued), {restart: [], checks: ['required-review:verdict']});
+    await page.evaluate(async value => {
+      const {foldControlPlane} = await import('/ui/coordination-turn.js');
+      value.state = 'completed';
+      value.required_review = {...value.required_review, state: 'approved', verdict: 'approve', findings: '', reason: 'The reviewer approved this result in round 2 of 2.'};
+      const inspector = document.querySelector('ax-activation-inspector');
+      inspector.model = foldControlPlane(value); inspector.showTurnControls();
+    }, envelope);
+    assert.equal(await review.locator('.review-state').textContent(), 'Approved · round 2 of 2');
+    assert.equal(await review.locator('.review-findings').count(), 0);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});

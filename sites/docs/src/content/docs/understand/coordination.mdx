@@ -48,6 +48,16 @@ answer; a failed or refused helper reaches it as a tool error. The helper's comm
 source, lead activation, and result stay in the same canonical Session history.
 Increasing budget or authority requires human review; another model call cannot grant it.
 
+Review is otherwise something a lead may ask a helper for. A team can instead require
+it: its **Required review** names a read-only Worker template that the host itself runs
+after the required Agents finish and the required checks pass. The reviewer is an
+optional node of the admitted turn graph with its own grant and a fresh conversation
+for each round, and its verdict is a completion condition over the required Agents'
+results. A request for changes continues the turn in a new epoch that revises the lead
+with the findings, up to the approved rounds; the lead cannot skip, answer for or
+approve its own review. See
+[Required review](/configure/agents/#required-review).
+
 ## Legacy multi-Agent Sessions
 
 A lattice-mode Session stores the selected config-owned team ID; Custom mode stores
