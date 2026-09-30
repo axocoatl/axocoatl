@@ -260,6 +260,9 @@ pub struct SessionTeamPreview {
     pub configuration_revision: u64,
     pub applies_to: &'static str,
     pub profiles: Vec<ExecutionProfile>,
+    /// Slots whose definition lists no tools. In a native Session the list is
+    /// exact, so the review says each can only answer from the conversation.
+    pub toolless_slots: Vec<String>,
     coordinators: Vec<(String, ApprovedCoordinatorPolicy)>,
 }
 
@@ -389,12 +392,24 @@ pub(crate) fn approved_coordinator_policy(
     Ok(None)
 }
 
+/// The distinct profiles the reviewed grants authorize, and the slots whose
+/// own definition lists no tools.
 fn review_profiles(
     content: &ExecutionContentStore,
     graph: &SessionTeamGraph,
-) -> Result<Vec<ExecutionProfile>, DaemonError> {
+) -> Result<(Vec<ExecutionProfile>, Vec<String>), DaemonError> {
     let mut profiles = Vec::new();
+    let mut toolless_slots = Vec::new();
     for slot in &graph.slots {
+        let ActivationEvidenceContent::Definition { profile, .. } = content
+            .resolve_activation_evidence(&slot.definition.snapshot)
+            .map_err(team_error)?
+        else {
+            return Err(team_error("Session definition is unavailable"));
+        };
+        if profile.tools.is_empty() {
+            toolless_slots.push(slot.slot_id.as_str().to_owned());
+        }
         let reference = slot
             .grant
             .as_ref()
@@ -411,7 +426,7 @@ fn review_profiles(
             }
         }
     }
-    Ok(profiles)
+    Ok((profiles, toolless_slots))
 }
 /// The paths the slot may change after checking the pattern grammar: its
 /// explicit `writes`, or `base`, the scope of the template or definition it
@@ -1105,13 +1120,15 @@ impl AxocoatlDaemon {
                             .into(),
                         })
                         .collect();
+                    let (profiles, toolless_slots) = review_profiles(content, &record.graph)?;
                     return Ok(Some(SessionTeamPreview {
                         edit: edit.clone(),
                         review_digest,
                         changes,
                         configuration_revision: record.configuration_revision,
                         applies_to: "future_turns",
-                        profiles: review_profiles(content, &record.graph)?,
+                        profiles,
+                        toolless_slots,
                         coordinators: approval.coordinators,
                     }));
                 }
@@ -1547,7 +1564,7 @@ impl AxocoatlDaemon {
             continuity,
             layout: edit.layout.clone(),
         };
-        let profiles = self
+        let (profiles, toolless_slots) = self
             .session_dispatch_lifecycles
             .with_session_team_stores(&token, |_, content, _| {
                 review_profiles(content, &commit.graph)
@@ -1586,6 +1603,7 @@ impl AxocoatlDaemon {
             configuration_revision,
             applies_to: "future_turns",
             profiles,
+            toolless_slots,
             coordinators,
         })
     }

@@ -45,6 +45,7 @@ agents:
     provider: ollama
     model: llama3.2
     system_prompt: "You are a coding assistant. Your file and shell tools run inside a remote microVM — use them normally."
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
     depends_on: []
 
 providers:

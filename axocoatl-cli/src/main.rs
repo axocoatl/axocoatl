@@ -847,6 +847,9 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
     let config = match load_cli_config(config_path).await {
         Ok(c) => {
             pass(&format!("Config valid: {}", config_path.display()));
+            for warning in axocoatl_config::no_tools_warnings(&c) {
+                warn(&warning.problem(), axocoatl_config::NoToolsWarning::HINT);
+            }
             Some(c)
         }
         Err(e) => {
@@ -1359,12 +1362,24 @@ async fn cmd_validate(config_path: &std::path::Path) {
             }
             println!("  Workflows: {}", config.workflows.len());
             println!("  MCP servers: {}", config.mcp_servers.len());
+            for warning in no_tools_warning_lines(&config) {
+                eprintln!("{warning}");
+            }
         }
         Err(e) => {
             eprintln!("Configuration error:\n{e}");
             std::process::exit(1);
         }
     }
+}
+
+/// `validate` warns, without failing, about each Agent that is not a Worker
+/// and lists no tools: in a native Session it has none.
+fn no_tools_warning_lines(config: &axocoatl_config::AxocoatlConfig) -> Vec<String> {
+    axocoatl_config::no_tools_warnings(config)
+        .iter()
+        .map(|warning| format!("warning: {warning}"))
+        .collect()
 }
 
 /// Singleton reservation acquired before daemon bootstrap. Development and
@@ -2924,6 +2939,35 @@ mod tests {
         assert!(sandbox_network_doctor_line("none").contains("no network"));
         assert!(sandbox_network_doctor_line("bridge")
             .contains("set sandbox.network: none for repositories you do not trust"));
+    }
+
+    #[test]
+    fn validate_warns_about_an_agent_that_lists_no_tools() {
+        let config = axocoatl_config::parse_config(
+            "agents:\n  - id: coder\n    name: Coder\n    provider: ollama\n    model: llama3\n",
+            std::path::Path::new("config.yaml"),
+        )
+        .unwrap();
+        assert_eq!(
+            no_tools_warning_lines(&config),
+            vec![
+                "warning: coder lists no tools: in native Sessions it cannot read or change \
+                 files. List the tools it needs, for example [read_file, list_dir, grep, glob, \
+                 write_file, edit_file, bash]."
+                    .to_string()
+            ]
+        );
+        // The generated default team lists its tools.
+        let generated =
+            axocoatl_config::parse_config(&init_configuration(), std::path::Path::new("a.yaml"))
+                .unwrap();
+        let reported: Vec<String> = axocoatl_config::no_tools_warnings(&generated)
+            .into_iter()
+            .map(|warning| warning.agent_id)
+            .collect();
+        for member in ["lead", "scout", "reviewer"] {
+            assert!(!reported.iter().any(|id| id == member), "{reported:?}");
+        }
     }
 
     #[test]

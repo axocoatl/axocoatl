@@ -143,6 +143,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `workspace_knowledge`; calls already recorded still load. The default team does not list
   it; the one-app demo's `coder` does. Its description no longer suggests that an Agent may not change code, and it
   tells the Agent not to report its work or final answer through it.
+- **An Agent that lists no tools is reported.** In a native Session an Agent's `tools`
+  list is exact, so an Agent that lists none cannot read or change files; only a legacy
+  (1.0-format) Session still gives it the baseline tools. `axocoatl validate`,
+  `axocoatl doctor` and daemon startup warn about each Agent that is not a Worker and
+  lists no tools, and the Team & budget review says such an Agent can only answer from
+  the conversation. The one-app demo's coding Agents and the E2B example list their tools.
 - **Default team prompts and `delegate` guide the lead to use its helpers.** The `delegate`
   description tells the lead to ask a helper to find the relevant code and tests before a
   change and to review the change against the task, documented contracts and tests before

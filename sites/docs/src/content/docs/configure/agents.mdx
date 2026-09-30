@@ -22,6 +22,7 @@ agents:
     system_prompt: |
       Work inside the authorized repository. Make small verified changes and
       report the commands used to check them.
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
     depends_on: [planner]
     role: autonomous
     token_budget:
@@ -39,7 +40,7 @@ agents:
 | `name` | User-facing label |
 | `provider`, `model` | Model target for this Agent |
 | `system_prompt` | Persistent operating instructions |
-| `tools` | Empty inherits the execution path's baseline tools; non-empty is an exact advertisement and dispatch allowlist. In a native Session, add `workspace_knowledge` to offer [Workspace knowledge](/workbench/knowledge/); `delegate` comes from Team & budget |
+| `tools` | The exact tools the Agent is offered and may call. In a native Session an empty or missing list means the Agent has no tools and can only answer from the conversation, so list the ones it needs, for example `[read_file, list_dir, grep, glob, write_file, edit_file, bash]`; `axocoatl validate`, `axocoatl doctor` and daemon startup warn about an Agent that is not a Worker and lists none. Add `workspace_knowledge` to offer [Workspace knowledge](/workbench/knowledge/); `delegate` comes from Team & budget. A legacy (1.0-format) Session still gives an Agent with an empty list the baseline tools |
 | `writes` | Repository paths the Agent may change in a native Session. Omit it to allow any file; `[]` makes a read-only helper. See [Limit which files an Agent may change](#limit-which-files-an-agent-may-change) |
 | `depends_on` | Exact direct-parent completion predicate for a multi-Agent Session turn; also seeds legacy Automation edges during first-boot migration |
 | `role` | `autonomous`, `coordinator`, or `worker` |

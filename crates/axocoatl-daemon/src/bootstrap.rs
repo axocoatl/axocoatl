@@ -4717,6 +4717,9 @@ impl AxocoatlDaemon {
                 );
             }
         }
+        for warning in axocoatl_config::no_tools_warnings(&config) {
+            tracing::warn!(agent = %warning.agent_id, "{warning}");
+        }
 
         // 9b. StreamBus folds frames synchronously while assigning their
         // reconnect sequence. There is no asynchronous tracker lag window.
@@ -27508,6 +27511,42 @@ providers:
         assert!(reviewer_prompt.contains("BLOCK if"));
         assert!(reviewer_prompt.contains("otherwise SHIP"));
         assert!(reviewer_prompt.contains("Never combine unresolved BLOCKING with SHIP"));
+    }
+
+    #[test]
+    fn one_app_demo_agents_that_work_in_the_repository_list_their_tools() {
+        let config = axocoatl_config::parse_config(
+            include_str!("../../../demo/one-app/axocoatl.demo.yaml"),
+            Path::new("demo/one-app/axocoatl.demo.yaml"),
+        )
+        .expect("one-app demo config parses and validates");
+        let tools = |id: &str| {
+            config
+                .agents
+                .iter()
+                .find(|agent| agent.id == id)
+                .unwrap_or_else(|| panic!("{id} exists"))
+                .tools
+                .clone()
+        };
+        // Native Session tools are exact: an empty list would leave them none.
+        for id in ["coder", "defender", "implementer"] {
+            for tool in ["read_file", "write_file", "edit_file", "bash"] {
+                assert!(
+                    tools(id).iter().any(|listed| listed == tool),
+                    "{id}: {tool}"
+                );
+            }
+        }
+        assert!(tools("coder")
+            .iter()
+            .any(|tool| tool == "workspace_knowledge"));
+        // Only the Agents that answer without the repository are reported.
+        let reported: Vec<String> = axocoatl_config::no_tools_warnings(&config)
+            .into_iter()
+            .map(|warning| warning.agent_id)
+            .collect();
+        assert_eq!(reported, ["planner", "judge", "architect", "reviewer"]);
     }
 
     #[test]
