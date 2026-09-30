@@ -24,6 +24,10 @@ harness adapter and the `axocoatl-coordination` crate.
 ### Security
 - Update rustls to 0.23.45 for RUSTSEC-2026-0285, which fixes TLS 1.3 handshake
   messages being accepted across encryption-level boundaries.
+- Rebuild the vendored Monaco editor with DOMPurify 3.4.16 for GHSA-p98j-92pf-mc4p
+  (Axocoatl never uses the affected `IN_PLACE` mode), update the vendored
+  markdown-it to 14.3.2 for GHSA-253c-mchw-3w2r, and update the docs site's undici
+  to 8.11.2.
 
 ### Added
 - **Workspace knowledge.** Native Sessions can share versioned Markdown decisions,
