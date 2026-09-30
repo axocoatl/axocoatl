@@ -81,7 +81,9 @@ pub fn scope_allows(scope: Option<&[String]>, path: &str) -> bool {
 /// Gitignore-flavoured matching. A pattern without `/` matches a file name at
 /// any depth; a pattern with `/` is anchored at the repository root. A trailing
 /// `/` names a directory and everything under it. `**` spans segments, `*` and
-/// `?` stay within one segment.
+/// `?` stay within one segment. Matching takes time proportional to the
+/// pattern times the path, never exponential, so a model-written pattern (the
+/// `glob` tool's) cannot stall the host.
 pub fn pattern_matches(pattern: &str, path: &str) -> bool {
     if let Some(directory) = pattern.strip_suffix('/') {
         return pattern_matches(&format!("{directory}/**"), path);
@@ -93,26 +95,53 @@ pub fn pattern_matches(pattern: &str, path: &str) -> bool {
             .is_some_and(|name| segment_matches(pattern.as_bytes(), name.as_bytes()));
     }
     let pattern: Vec<&str> = pattern.split('/').collect();
-    segments_match(&pattern, &path)
-}
-
-fn segments_match(pattern: &[&str], path: &[&str]) -> bool {
-    match pattern.split_first() {
-        None => path.is_empty(),
-        Some((&"**", rest)) => (0..=path.len()).any(|skip| segments_match(rest, &path[skip..])),
-        Some((head, rest)) => path.split_first().is_some_and(|(segment, tail)| {
-            segment_matches(head.as_bytes(), segment.as_bytes()) && segments_match(rest, tail)
-        }),
-    }
+    wildcard_match(
+        &pattern,
+        &path,
+        |segment| *segment == "**",
+        |segment, name| segment_matches(segment.as_bytes(), name.as_bytes()),
+    )
 }
 
 fn segment_matches(pattern: &[u8], text: &[u8]) -> bool {
-    match pattern.split_first() {
-        None => text.is_empty(),
-        Some((b'*', rest)) => (0..=text.len()).any(|skip| segment_matches(rest, &text[skip..])),
-        Some((b'?', rest)) => !text.is_empty() && segment_matches(rest, &text[1..]),
-        Some((byte, rest)) => text.first() == Some(byte) && segment_matches(rest, &text[1..]),
+    wildcard_match(
+        pattern,
+        text,
+        |byte| *byte == b'*',
+        |byte, text| *byte == b'?' || byte == text,
+    )
+}
+
+/// Match `text` against `pattern`, where a `star` item matches any run of
+/// items (none included) and every other item matches exactly one. Only the
+/// most recent star is ever revisited: an earlier star can absorb anything a
+/// later one would need, so backtracking further never finds another match.
+fn wildcard_match<P, T>(
+    pattern: &[P],
+    text: &[T],
+    star: impl Fn(&P) -> bool,
+    one: impl Fn(&P, &T) -> bool,
+) -> bool {
+    let (mut next, mut position) = (0, 0);
+    // The item after the latest star, and where its current attempt starts.
+    let mut resume: Option<(usize, usize)> = None;
+    while position < text.len() {
+        if next < pattern.len() && star(&pattern[next]) {
+            next += 1;
+            resume = Some((next, position));
+        } else if next < pattern.len() && one(&pattern[next], &text[position]) {
+            next += 1;
+            position += 1;
+        } else if let Some((after, start)) = resume {
+            // Let the star absorb one more item and try again.
+            next = after;
+            position = start + 1;
+            resume = Some((after, position));
+        } else {
+            return false;
+        }
     }
+    pattern[next..].iter().all(star)
 }
 
 #[cfg(test)]
@@ -133,6 +162,70 @@ mod tests {
         assert!(pattern_matches("**", "anything/at/all"));
         assert!(pattern_matches("lib/?.js", "lib/a.js"));
         assert!(!pattern_matches("lib/?.js", "lib/ab.js"));
+    }
+
+    /// The recursive definition the matcher replaced: exponential on some
+    /// patterns, but plainly right, so the linear matcher must agree with it.
+    fn reference_matches(pattern: &str, path: &str) -> bool {
+        fn segments(pattern: &[&str], path: &[&str]) -> bool {
+            match pattern.split_first() {
+                None => path.is_empty(),
+                Some((&"**", rest)) => (0..=path.len()).any(|skip| segments(rest, &path[skip..])),
+                Some((head, rest)) => path.split_first().is_some_and(|(segment, tail)| {
+                    bytes(head.as_bytes(), segment.as_bytes()) && segments(rest, tail)
+                }),
+            }
+        }
+        fn bytes(pattern: &[u8], text: &[u8]) -> bool {
+            match pattern.split_first() {
+                None => text.is_empty(),
+                Some((b'*', rest)) => (0..=text.len()).any(|skip| bytes(rest, &text[skip..])),
+                Some((b'?', rest)) => !text.is_empty() && bytes(rest, &text[1..]),
+                Some((byte, rest)) => text.first() == Some(byte) && bytes(rest, &text[1..]),
+            }
+        }
+        if let Some(directory) = pattern.strip_suffix('/') {
+            return reference_matches(&format!("{directory}/**"), path);
+        }
+        let path: Vec<&str> = path.split('/').collect();
+        if !pattern.contains('/') {
+            return path
+                .last()
+                .is_some_and(|name| bytes(pattern.as_bytes(), name.as_bytes()));
+        }
+        let pattern: Vec<&str> = pattern.split('/').collect();
+        segments(&pattern, &path)
+    }
+
+    #[test]
+    fn matching_agrees_with_the_recursive_definition() {
+        let patterns = "* ** ? *.js *.test.js a*b*c *a* a?c **/* **/*.js **/a lib/*.js lib/** \
+                        lib/**/*.js lib/**/b/**/*.js **/b/* lib/ lib/a/ */a.js */*/* lib/?.js \
+                        a**b **/**/x x/**/** lib/a.js **.js */** l*b/**/?.j*";
+        let paths = "a b abc aXbYc ab a.js x.test.js lib/a.js lib/ab.js lib/a/b.js lib/a/b/c.js \
+                     lib/b/x/y.js library/a.js x a/x a/b/x src/lib/a.js lib lib/a b/lib/a.js \
+                     lib/b/a.js x/y/z";
+        for pattern in patterns.split_whitespace() {
+            for path in paths.split_whitespace() {
+                assert_eq!(
+                    pattern_matches(pattern, path),
+                    reference_matches(pattern, path),
+                    "{pattern:?} {path:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_pathological_pattern_is_answered_quickly() {
+        let pattern = format!("{}b", "*a".repeat(40));
+        let name = "a".repeat(200);
+        let started = std::time::Instant::now();
+        assert!(!pattern_matches(&pattern, &name));
+        let deep = format!("{}x", "**/".repeat(40));
+        let path = vec!["a"; 200].join("/");
+        assert!(!pattern_matches(&deep, &path));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]

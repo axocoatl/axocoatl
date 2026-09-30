@@ -213,6 +213,16 @@ model-facing `coordination_control` tool, the external harness adapter and the
   recorded are used.
 - **`list_dir` with an empty path lists the repository root** instead of failing with
   `ls: cannot access ''`.
+- **`glob` matches path patterns.** Since 1.0 it ran `find . -name PATTERN`, which
+  compares only a file's name, so any pattern with a `/` (`**/*.test.js`, `lib/*.js`,
+  `**/manifest*.js`) silently found no files. Patterns now follow the same rules as
+  write scopes: `*` and `?` stay within one path segment, `**` spans directories, a
+  pattern without `/` matches a file name at any depth, and one with `/` is matched
+  from the repository root (so `./*.js` names only the root's). Results are sorted, relative to the root (no leading
+  `./`), and skip `.git`, `node_modules`, `target` and similar directories unless the
+  pattern names them; when nothing matches, the result says so and how patterns are
+  read. Patterns are limited to 1 KiB, and path matching (write scopes included) no
+  longer takes exponential time on patterns with many `*`.
 - **A long tool loop on a small-context model no longer forgets its own work every
   round.** A request was fitted against 85% of the context window on top of its full
   answer allowance, so a 32,768-token model started removing tool rounds with more than
@@ -250,6 +260,20 @@ model-facing `coordination_control` tool, the external harness adapter and the
   in the repository), and only then do the oldest turns go, never the most recent
   completed one. Leaving tool rounds out to fit a request also keeps earlier turns'
   answers.
+- **An Agent stuck restating its answer is asked for it.** In the 1.1.0 eval a solo
+  Agent that had finished repeated its answer through 18 rounds of `bash`
+  `echo "✅ …"`, about 540,000 tokens with no change, until the budget wrap-up stopped
+  it. When the last three tool rounds only printed text (`bash` commands made of
+  `echo`, `printf`, `true`, `:`, `cd` or `pwd`, with no redirection, pipe or
+  substitution), or the last four repeated the same calls with the same results, the
+  next request now goes without tools and asks for the final answer, as it does at the
+  end of a budget. Editing and running the same test again, reading different files and
+  polling a terminal never trigger it.
+- **`GET /api/sessions/{id}/turns/{turn_id}/grants` returns each grant's usage**, as
+  the HTTP reference already said. Each grant now has a `usage` object with the
+  `activations`, `invocations`, `tokens` and `cost_microunits` it has been charged: a
+  running model call's reservation, then what the call reported once it settled. The
+  other fields are unchanged.
 - **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
   longer copies host proxy variables into containers.** Any `sandbox.network` other
   than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was

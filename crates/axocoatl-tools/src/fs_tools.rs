@@ -760,6 +760,182 @@ impl BuiltinTool for GrepTool {
 
 // ── glob ────────────────────────────────────────────────────────────────
 
+/// Longest glob pattern. Real path patterns are short; the bound keeps the
+/// host-side match (pattern length times path length) cheap for every path.
+const GLOB_PATTERN_MAX_BYTES: usize = 1024;
+/// Most candidate-path bytes the sandbox lists before the host filters them.
+/// Well inside the repository port's stream bound.
+const GLOB_CANDIDATE_MAX_BYTES: usize = 512 * 1024;
+/// Directories a glob does not descend into unless its pattern names one of
+/// them: version-control internals, dependency trees and build output.
+const GLOB_SKIPPED_DIRECTORIES: &[&str] = &[
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "target",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".next",
+    ".gradle",
+];
+
+/// How one glob runs: the normalized pattern the host matches, the fixed
+/// `find` listing that supplies candidates, and the directories it skips.
+#[derive(Debug, PartialEq, Eq)]
+struct GlobPlan {
+    pattern: String,
+    /// `./*.js` or `/project/*.js`: a single name the caller anchored at the
+    /// root, which the matcher alone would look for at any depth.
+    root_only: bool,
+    argv: Vec<String>,
+    skipped: Vec<&'static str>,
+}
+
+fn glob_invalid(reason: impl Into<String>) -> ToolError {
+    ToolError::InvalidArgs {
+        tool: "glob".to_string(),
+        reason: reason.into(),
+    }
+}
+
+/// Normalize a model's pattern to a root-relative one and plan the listing.
+/// The pattern is matched on the host with the same gitignore-flavoured rules
+/// as write scopes (`axocoatl_session::path_scope::pattern_matches`); `find`
+/// only lists files, starting below the pattern's literal directory prefix and
+/// filtered by its final name where `find -name` means the same thing. Every
+/// model-derived value is one argv element, never shell text.
+fn glob_plan(pattern: &str, root: &Path) -> Result<GlobPlan, ToolError> {
+    let mut pattern = pattern.trim();
+    let root_text = root.to_string_lossy();
+    let root_text = root_text.trim_end_matches('/');
+    if pattern.starts_with('/') {
+        match pattern.strip_prefix(root_text) {
+            Some(rest) if !root_text.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
+                pattern = rest
+            }
+            _ => {
+                return Err(glob_invalid(format!(
+                    "pattern '{pattern}' is outside the project; glob patterns are relative to \
+                     the project root, e.g. 'src/**/*.rs'"
+                )))
+            }
+        }
+    }
+    let explicit_root = pattern.starts_with("./") || pattern.starts_with('/');
+    let directory = pattern.ends_with('/');
+    let segments: Vec<&str> = pattern
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect();
+    if segments.is_empty() {
+        return Err(glob_invalid(
+            "pattern names no files; use '**' for every file, '*.rs' for a file name at any \
+             depth, or 'src/**/*.rs' for a path",
+        ));
+    }
+    if segments.contains(&"..") {
+        return Err(glob_invalid(format!(
+            "pattern '{pattern}' escapes the project root; glob patterns stay inside it"
+        )));
+    }
+    let mut pattern = segments.join("/");
+    if directory {
+        pattern.push('/');
+    }
+
+    // What the pattern means segment by segment: a directory pattern names
+    // everything under it, and a pattern without `/` is a name at any depth.
+    let mut effective: Vec<&str> = segments.clone();
+    if directory {
+        effective.push("**");
+    }
+    let anchored = directory || segments.len() > 1;
+    let root_only = explicit_root && !anchored;
+    let wildcard = |segment: &str| segment.contains(['*', '?']);
+    let prefix: Vec<&str> = if anchored {
+        effective[..effective.len() - 1]
+            .iter()
+            .take_while(|segment| !wildcard(segment))
+            .copied()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let start = if prefix.is_empty() {
+        ".".to_string()
+    } else {
+        format!("./{}", prefix.join("/"))
+    };
+    // `find -name` also knows `[...]` classes and `\` escapes, which this
+    // matcher treats literally, so it only pre-filters names without them.
+    let name = effective
+        .last()
+        .copied()
+        .filter(|name| !name.chars().all(|c| c == '*'))
+        .filter(|name| !name.contains(['[', ']', '\\']));
+    let skipped: Vec<&'static str> = GLOB_SKIPPED_DIRECTORIES
+        .iter()
+        .copied()
+        .filter(|skipped| !effective.contains(skipped))
+        .collect();
+
+    let mut argv = vec!["find".to_string(), start];
+    if !skipped.is_empty() {
+        argv.extend(["-type", "d", "("].map(String::from));
+        for (index, directory) in skipped.iter().enumerate() {
+            if index > 0 {
+                argv.push("-o".to_string());
+            }
+            argv.push("-name".to_string());
+            argv.push((*directory).to_string());
+        }
+        argv.extend([")", "-prune", "-o"].map(String::from));
+    }
+    argv.extend(["-type", "f"].map(String::from));
+    if let Some(name) = name {
+        argv.push("-name".to_string());
+        argv.push(name.to_string());
+    }
+    argv.push("-print".to_string());
+    Ok(GlobPlan {
+        pattern,
+        root_only,
+        argv,
+        skipped,
+    })
+}
+
+/// Keep the listed paths that match, sorted and without `./`, within the
+/// output cap. Returns the kept paths and the bytes all matches would need.
+fn glob_matches(listing: &str, plan: &GlobPlan) -> (Vec<String>, usize) {
+    let pattern = plan.pattern.as_str();
+    let mut matches: Vec<&str> = listing
+        .lines()
+        .map(|line| line.strip_prefix("./").unwrap_or(line))
+        .filter(|path| !path.is_empty() && *path != ".")
+        .filter(|path| !plan.root_only || !path.contains('/'))
+        .filter(|path| axocoatl_session::path_scope::pattern_matches(pattern, path))
+        .collect();
+    matches.sort_unstable();
+    matches.dedup();
+    let needed = matches.iter().map(|path| path.len() + 1).sum();
+    let mut used = 0;
+    let kept = matches
+        .into_iter()
+        .take_while(|path| {
+            used += path.len() + 1;
+            used <= TOOL_TEXT_OUTPUT_MAX_BYTES
+        })
+        .map(str::to_string)
+        .collect();
+    (kept, needed)
+}
+
 pub struct GlobTool {
     sandbox: Arc<dyn Sandbox>,
 }
@@ -767,47 +943,94 @@ pub struct GlobTool {
 #[async_trait::async_trait]
 impl BuiltinTool for GlobTool {
     fn description(&self) -> &str {
-        "Find files whose name matches a glob pattern (e.g. *.rs), returning complete paths within a 64 KiB result cap"
+        "Find files by path pattern relative to the project root. `*` and `?` match within one \
+         path segment and `**` spans directories. A pattern without `/` (e.g. `*.rs`) matches \
+         file names at any depth; a pattern with `/` (e.g. `src/**/*.rs`, `lib/*.js`) matches \
+         the whole path from the root. Skips .git, node_modules, target and similar \
+         directories unless the pattern names them. Returns sorted paths within a 64 KiB cap."
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "pattern": { "type": "string", "description": "Filename glob, e.g. '*.rs' (maximum 16 KiB)" }
+                "pattern": { "type": "string", "description": "Path pattern, e.g. '*.rs', '**/*.test.js' or 'lib/*.js' (maximum 1 KiB)" }
             },
             "required": ["pattern"]
         })
     }
     async fn execute(&self, args: serde_json::Value) -> Result<serde_json::Value, ToolError> {
-        let pattern = bounded_str_arg(&args, "pattern", "glob", SEARCH_ARG_MAX_BYTES)?;
-        // Pattern is a positional argument to `find`, never shell text.
+        let pattern = bounded_str_arg(&args, "pattern", "glob", GLOB_PATTERN_MAX_BYTES)?;
+        let plan = glob_plan(pattern, self.sandbox.root())?;
+        let argv: Vec<&str> = plan.argv.iter().map(String::as_str).collect();
         let r = exec_bounded_stdout(
             self.sandbox.as_ref(),
-            &["find", ".", "-name", pattern, "-type", "f"],
+            &argv,
             FS_TIMEOUT,
             "glob",
-            TOOL_TEXT_OUTPUT_MAX_BYTES,
+            GLOB_CANDIDATE_MAX_BYTES,
         )
         .await?;
-        let r = require_ok("glob", r)?;
-        let bounded = truncate_utf8(r.stdout, TOOL_TEXT_OUTPUT_MAX_BYTES);
-        let mut output = bounded.text;
-        if bounded.truncated {
+        // `find` also fails when the pattern's directory does not exist, or
+        // when a subdirectory is unreadable after listing the rest.
+        let missing_start = r.exit_code != 0
+            && r.stdout.is_empty()
+            && plan.argv[1] != "."
+            && r.stderr.contains("No such file or directory");
+        if r.exit_code != 0 && r.stdout.is_empty() && !missing_start {
+            return Err(require_ok("glob", r).unwrap_err());
+        }
+        let listing = truncate_utf8(r.stdout, GLOB_CANDIDATE_MAX_BYTES);
+        let mut candidates = listing.text;
+        if listing.truncated {
             // A byte cap may end inside a path. Never invent a partial match.
-            match output.rfind('\n') {
-                Some(end) => output.truncate(end + 1),
-                None => output.clear(),
+            match candidates.rfind('\n') {
+                Some(end) => candidates.truncate(end + 1),
+                None => candidates.clear(),
             }
         }
-        let files: Vec<&str> = output.lines().filter(|line| !line.is_empty()).collect();
+        let (files, needed) = glob_matches(&candidates, &plan);
         let count = files.len();
-        Ok(serde_json::json!({
+        let returned_bytes: usize = files.iter().map(|path| path.len() + 1).sum();
+        let output_truncated = returned_bytes < needed;
+        let mut notes = Vec::new();
+        if count == 0 {
+            notes.push(format!(
+                "no files match '{}'. A pattern without '/' matches file names at any depth; \
+                 one with '/' is matched from the project root, and '**/' spans directories.",
+                plan.pattern
+            ));
+            if !plan.skipped.is_empty() {
+                notes.push(format!(
+                    "Skipped directories unless named in the pattern: {}.",
+                    plan.skipped.join(", ")
+                ));
+            }
+        }
+        if listing.truncated {
+            notes.push(format!(
+                "The project listing passed {GLOB_CANDIDATE_MAX_BYTES} bytes, so some files \
+                 were not checked; start the pattern with a directory to narrow it."
+            ));
+        }
+        if output_truncated {
+            notes.push(format!(
+                "Only the first {count} matches fit the {TOOL_TEXT_OUTPUT_MAX_BYTES}-byte result."
+            ));
+        }
+        if r.exit_code != 0 && !missing_start {
+            notes.push("Some directories could not be read.".to_string());
+        }
+        let mut output = serde_json::json!({
             "files": files,
             "count": count,
-            "truncated": bounded.truncated,
-            "captured_bytes": bounded.original_bytes,
+            "truncated": listing.truncated || output_truncated,
+            "captured_bytes": needed,
             "output_limit_bytes": TOOL_TEXT_OUTPUT_MAX_BYTES,
-        }))
+        });
+        if !notes.is_empty() {
+            output["message"] = serde_json::Value::String(notes.join(" "));
+        }
+        Ok(output)
     }
 }
 
@@ -1615,9 +1838,10 @@ mod tests {
 
     #[tokio::test]
     async fn glob_never_returns_a_partial_path_at_the_byte_cap() {
+        // The candidate listing is cut inside a path: that path is dropped.
         let output_text = format!(
-            "./complete.rs\n./{}",
-            "x".repeat(TOOL_TEXT_OUTPUT_MAX_BYTES)
+            "./complete.rs\n./{}.rs",
+            "x".repeat(super::GLOB_CANDIDATE_MAX_BYTES)
         );
         let sandbox = Arc::new(StubSandbox::new(
             "/workspace",
@@ -1628,8 +1852,256 @@ mod tests {
             .await
             .unwrap();
         assert!(output["truncated"].as_bool().unwrap());
-        assert_eq!(output["files"], json!(["./complete.rs"]));
+        assert_eq!(output["files"], json!(["complete.rs"]));
         assert_eq!(output["count"], 1);
+        assert!(output["message"].as_str().unwrap().contains("narrow it"));
+
+        // More matches than the result holds: whole paths only, marked.
+        let listing: String = (0..8_000)
+            .map(|index| format!("./src/file-{index:05}.rs\n"))
+            .collect();
+        let sandbox = Arc::new(StubSandbox::new("/workspace", vec![result(listing, "", 0)]));
+        let output = GlobTool { sandbox }
+            .execute(json!({"pattern": "src/*.rs"}))
+            .await
+            .unwrap();
+        assert!(output["truncated"].as_bool().unwrap());
+        let files = output["files"].as_array().unwrap();
+        assert!(files.len() < 8_000);
+        assert_eq!(files[0], "src/file-00000.rs");
+        assert!(files
+            .iter()
+            .all(|file| file.as_str().unwrap().ends_with(".rs")));
+        let returned: usize = files
+            .iter()
+            .map(|file| file.as_str().unwrap().len() + 1)
+            .sum();
+        assert!(returned <= TOOL_TEXT_OUTPUT_MAX_BYTES);
+    }
+
+    #[test]
+    fn glob_plans_a_fixed_listing_below_the_pattern_s_literal_directory() {
+        let root = Path::new("/workspace/repo");
+        let plan = |pattern: &str| super::glob_plan(pattern, root).unwrap();
+
+        let any_depth = plan("**/*.test.js");
+        assert_eq!(any_depth.pattern, "**/*.test.js");
+        assert_eq!(any_depth.argv[..2], ["find", "."]);
+        assert!(any_depth.argv.ends_with(&[
+            "-type".into(),
+            "f".into(),
+            "-name".into(),
+            "*.test.js".into(),
+            "-print".into()
+        ]));
+        assert!(any_depth.skipped.contains(&"node_modules"));
+        assert!(any_depth.skipped.contains(&".git"));
+
+        assert_eq!(plan("lib/*.js").argv[1], "./lib");
+        assert_eq!(plan("./lib/deep/**/*.js").argv[1], "./lib/deep");
+        assert_eq!(plan("./lib/deep/**/*.js").pattern, "lib/deep/**/*.js");
+        assert_eq!(plan("*.js").argv[1], ".");
+        assert!(!plan("*.js").root_only);
+        // `./` or the project path anchors a bare name at the root.
+        assert!(plan("./*.js").root_only);
+        assert!(plan("/workspace/repo/*.js").root_only);
+        assert!(!plan("./lib/*.js").root_only);
+        // A directory names everything under it, with no name filter.
+        let directory = plan("lib/");
+        assert_eq!(directory.argv[1], "./lib");
+        assert!(directory
+            .argv
+            .windows(2)
+            .filter(|pair| pair[0] == "-name")
+            .all(|pair| super::GLOB_SKIPPED_DIRECTORIES.contains(&pair[1].as_str())));
+        // Naming a skipped directory searches it.
+        let named = plan("node_modules/pkg/*.js");
+        assert_eq!(named.argv[1], "./node_modules/pkg");
+        assert!(!named.skipped.contains(&"node_modules"));
+        // An absolute path inside the project is made relative.
+        assert_eq!(plan("/workspace/repo/lib/*.js").pattern, "lib/*.js");
+        // Classes `find -name` would interpret are matched only by the host.
+        assert!(!plan("a[1].js")
+            .argv
+            .windows(2)
+            .any(|pair| pair[0] == "-name" && pair[1] == "a[1].js"));
+        // Option-looking values stay single arguments after `-name` or `./`.
+        let option = plan("-delete");
+        assert!(option
+            .argv
+            .windows(2)
+            .any(|pair| pair[0] == "-name" && pair[1] == "-delete"));
+        assert_eq!(plan("-rf/*.js").argv[1], "./-rf");
+
+        for bad in ["", "  ", "/", "./", "../x/*.js", "lib/../../x", "/etc/*"] {
+            assert!(
+                matches!(
+                    super::glob_plan(bad, root),
+                    Err(super::ToolError::InvalidArgs { .. })
+                ),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// Runs argv on this machine inside a directory, as the sandbox runs it
+    /// inside the container: real `find`, real exit status.
+    struct HostDirSandbox {
+        root: PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl Sandbox for HostDirSandbox {
+        fn root(&self) -> &Path {
+            &self.root
+        }
+        async fn exec(
+            &self,
+            argv: &[&str],
+            _timeout: Duration,
+        ) -> Result<ExecResult, IsolationError> {
+            let output = Command::new(argv[0])
+                .args(&argv[1..])
+                .current_dir(&self.root)
+                .output()
+                .map_err(IsolationError::Io)?;
+            Ok(ExecResult {
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                exit_code: output.status.code().unwrap_or(-1),
+            })
+        }
+        async fn exec_stdin(
+            &self,
+            _argv: &[&str],
+            _stdin: &str,
+            _timeout: Duration,
+        ) -> Result<ExecResult, IsolationError> {
+            unreachable!("glob never writes")
+        }
+        fn spawn_background(&self, _command: &str) -> String {
+            unreachable!("glob never backgrounds")
+        }
+        fn spawn_pty(
+            &self,
+            _command: &str,
+            _rows: u16,
+            _cols: u16,
+        ) -> Result<Arc<PtyTerminal>, String> {
+            Err("unused".to_string())
+        }
+        fn get_terminal(&self, _id: &str) -> Option<Arc<PtyTerminal>> {
+            None
+        }
+        fn kill_terminal(&self, _id: &str) -> bool {
+            false
+        }
+        fn list_terminals(&self) -> Vec<(String, String, bool)> {
+            Vec::new()
+        }
+        fn list_tasks(&self) -> Vec<BgTask> {
+            Vec::new()
+        }
+        fn with_root(&self, root: &Path) -> Arc<dyn Sandbox> {
+            Arc::new(Self {
+                root: root.to_path_buf(),
+            })
+        }
+        async fn stop(&self) {}
+    }
+
+    /// 1.0 ran `find . -name PATTERN`, so every pattern with a `/` matched
+    /// nothing: `**/*.test.js`, `lib/*.js` and `**/manifest*.js` all returned
+    /// no files in the 1.1.0 eval.
+    #[tokio::test]
+    async fn glob_matches_paths_with_directories_in_a_real_tree() {
+        let root = std::env::temp_dir().join(format!(
+            "axocoatl-glob-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for file in [
+            "lib/a.js",
+            "lib/b.test.js",
+            "lib/deep/c.js",
+            "lib/deep/d.test.js",
+            "test/e.test.js",
+            "x.js",
+            "manifest.js",
+            "src/manifest-builder.js",
+            "src/notes.md",
+            "node_modules/pkg/index.js",
+            "node_modules/pkg/f.test.js",
+            ".git/hooks/h.js",
+        ] {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "x").unwrap();
+        }
+        let tool = GlobTool {
+            sandbox: Arc::new(HostDirSandbox { root: root.clone() }),
+        };
+        let glob = |pattern: &'static str| {
+            let tool = &tool;
+            async move {
+                tool.execute(json!({ "pattern": pattern }))
+                    .await
+                    .unwrap_or_else(|error| panic!("{pattern}: {error}"))
+            }
+        };
+
+        let cases: [(&str, &[&str]); 8] = [
+            (
+                "**/*.test.js",
+                &["lib/b.test.js", "lib/deep/d.test.js", "test/e.test.js"],
+            ),
+            ("lib/*.js", &["lib/a.js", "lib/b.test.js"]),
+            (
+                "*.js",
+                &[
+                    "lib/a.js",
+                    "lib/b.test.js",
+                    "lib/deep/c.js",
+                    "lib/deep/d.test.js",
+                    "manifest.js",
+                    "src/manifest-builder.js",
+                    "test/e.test.js",
+                    "x.js",
+                ],
+            ),
+            (
+                "**/manifest*.js",
+                &["manifest.js", "src/manifest-builder.js"],
+            ),
+            ("lib/**/*.test.js", &["lib/b.test.js", "lib/deep/d.test.js"]),
+            ("src/", &["src/manifest-builder.js", "src/notes.md"]),
+            ("node_modules/**/*.test.js", &["node_modules/pkg/f.test.js"]),
+            ("./*.js", &["manifest.js", "x.js"]),
+        ];
+        let mut outputs = Vec::new();
+        for (pattern, _) in &cases {
+            outputs.push(glob(pattern).await);
+        }
+        let missing_directory = glob("nothing/*.js").await;
+        let no_name = glob("*.py").await;
+        std::fs::remove_dir_all(&root).unwrap();
+
+        for ((pattern, expected), output) in cases.iter().zip(&outputs) {
+            assert_eq!(output["files"], json!(expected), "{pattern}");
+            assert_eq!(output["count"], expected.len(), "{pattern}");
+            assert_eq!(output["truncated"], false, "{pattern}");
+            assert!(output.get("message").is_none(), "{pattern}: {output}");
+        }
+        for output in [missing_directory, no_name] {
+            assert_eq!(output["count"], 0);
+            assert_eq!(output["files"], json!([]));
+            let message = output["message"].as_str().unwrap();
+            assert!(message.starts_with("no files match '"), "{message}");
+            assert!(message.contains("node_modules"), "{message}");
+        }
     }
 
     #[tokio::test]

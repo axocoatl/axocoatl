@@ -419,6 +419,10 @@ pub struct DefaultAgentBehavior {
     /// The provider's reported input over the local count of the same
     /// request, in thousandths (at least 1,000), from the last complete call.
     prompt_scale_milli: std::sync::atomic::AtomicUsize,
+    /// Why this activation's tool loop must end: set when its recent rounds
+    /// repeat without progress (see `tool_loop_repeats`). The remaining
+    /// requests go without tools and ask for the final answer.
+    loop_wrap_up: Option<String>,
 }
 
 /// Share of the context window (1/32) left free for what the local count
@@ -485,6 +489,7 @@ impl DefaultAgentBehavior {
             abandoned_output_tokens: std::sync::atomic::AtomicUsize::new(0),
             dropped_rounds: std::sync::atomic::AtomicUsize::new(0),
             prompt_scale_milli: std::sync::atomic::AtomicUsize::new(1_000),
+            loop_wrap_up: None,
         }
     }
 
@@ -1564,17 +1569,23 @@ impl DefaultAgentBehavior {
         None
     }
 
-    /// Encode a request for the provider. When the budget cannot pay for
-    /// another tool round and a final answer, the request goes without tools
-    /// and asks for the answer now, so the activation ends with one instead
-    /// of failing at the limit.
+    /// Encode a request for the provider. When the tool loop stopped making
+    /// progress, or the budget cannot pay for another tool round and a final
+    /// answer, the request goes without tools and asks for the answer now, so
+    /// the activation ends with one instead of looping or failing at the limit.
     fn prepare_provider_request(
         &self,
         mut request: ChatRequest,
     ) -> Result<(ChatRequest, ProviderToolNameMap), AgentError> {
         if !request.tools.is_empty() {
-            let (encoded, _) = Self::encode_provider_request(request.clone())?;
-            if let Some(reason) = self.budget_wrap_up(&encoded) {
+            let reason = match &self.loop_wrap_up {
+                Some(reason) => Some(reason.clone()),
+                None => {
+                    let (encoded, _) = Self::encode_provider_request(request.clone())?;
+                    self.budget_wrap_up(&encoded)
+                }
+            };
+            if let Some(reason) = reason {
                 tracing::info!(
                     agent = %self.agent_id,
                     reason = %reason,
@@ -1842,6 +1853,7 @@ impl DefaultAgentBehavior {
 
     fn begin_budgeted_operation(&mut self) {
         self.execution_usage.reset();
+        self.loop_wrap_up = None;
         self.dropped_rounds
             .store(0, std::sync::atomic::Ordering::Relaxed);
         self.tracker = self
@@ -3141,6 +3153,7 @@ impl AgentBehavior for DefaultAgentBehavior {
 
         // Tool execution loop: if LLM returns tool calls, execute them and continue
         let mut tool_records = Vec::new();
+        let mut repeats = crate::tool_loop_repeats::ToolLoopRepeats::default();
         let mut tool_activity_count = 0_usize;
         let mut tool_error_count = 0_usize;
         let mut unresolved_tool_count = 0_usize;
@@ -3580,6 +3593,7 @@ impl AgentBehavior for DefaultAgentBehavior {
                     }
                 }
                 indexed.sort_by_key(|(i, _, _)| *i);
+                let round_start = tool_records.len();
                 // Phase 3: Run post-hooks and record results
                 for (_, tool_result, run_post_hooks) in indexed {
                     let tc = &tool_result.tool_call;
@@ -3623,6 +3637,9 @@ impl AgentBehavior for DefaultAgentBehavior {
                     self.session
                         .append_tool_result(&tc.name, &tc.id, &result_str, tool_tokens);
                 }
+                if self.loop_wrap_up.is_none() {
+                    self.loop_wrap_up = repeats.observe(&tool_records[round_start..]);
+                }
 
                 // Once dispatch begins, every started tool and post-hook is
                 // awaited and recorded. Cancellation is observed only here, at
@@ -3632,7 +3649,11 @@ impl AgentBehavior for DefaultAgentBehavior {
                     break;
                 }
 
-                self.consume_safe_boundary_guidance(None)?;
+                if self.consume_safe_boundary_guidance(None)? {
+                    // New guidance is new work: repeats before it do not count.
+                    repeats = Default::default();
+                    self.loop_wrap_up = None;
+                }
                 if self.observe_cancellation() { response.tool_calls.clear(); break; }
 
                 // Make follow-up LLM call with tool results — streamed too.
@@ -3725,6 +3746,8 @@ impl AgentBehavior for DefaultAgentBehavior {
         // controller. The atomic final empty poll prevents a completion race.
         if self.active_run_cancelled || !response.tool_calls.is_empty()
             || !self.consume_safe_boundary_guidance(Some(&response.content))? { break; }
+        repeats = Default::default();
+        self.loop_wrap_up = None;
         if self.observe_cancellation() { break; }
         let followup = self.build_request_from_session(
             input.system_override.as_deref(), input.model_override.clone(),
@@ -4229,6 +4252,7 @@ mod tests {
     include!("default_behavior_checkpoint_tests.rs");
     include!("default_behavior_usage_tests.rs");
     include!("default_behavior_context_fit_tests.rs");
+    include!("default_behavior_repeat_tests.rs");
     use axocoatl_core::{AgentConfig, AgentId, OverflowPolicy, TokenBudget, TokenUsageStats};
     use axocoatl_llm::{
         ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError, StreamEvent,
@@ -5619,7 +5643,8 @@ mod tests {
 
     /// Emits one tool call for `tool_rounds` responses, followed by a terminal
     /// response whose text may be empty. This models providers that keep
-    /// retrying a failed edit instead of explaining what blocked them.
+    /// retrying a failed edit instead of explaining what blocked them, with a
+    /// new attempt each time (an identical retry ends the loop sooner).
     struct ToolLoopLlm {
         calls: std::sync::atomic::AtomicUsize,
         tool_rounds: usize,
@@ -5663,7 +5688,7 @@ mod tests {
                         index: Some(0),
                         id: format!("tool-loop-{round}"),
                         name: Some(self.tool_name.to_string()),
-                        args_delta: "{\"text\":\"hi\"}".to_string(),
+                        args_delta: format!("{{\"text\":\"hi\",\"attempt\":{round}}}"),
                     }),
                     Ok(StreamEvent::Done {
                         finish_reason: FinishReason::ToolUse,

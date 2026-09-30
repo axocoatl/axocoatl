@@ -182,6 +182,10 @@ pub struct AuthorityGrantStatus {
     pub policy: AuthorityGrant,
     pub authority_revision: u64,
     pub revoked_at_revision: Option<u64>,
+    /// What the grant has been charged so far: reservations of calls still
+    /// running, and what settled calls reported (see `ProviderCallRecord`).
+    #[serde(default)]
+    pub usage: GrantUsage,
 }
 
 impl AuthorityGrant {
@@ -1764,6 +1768,7 @@ impl ControlAuthority {
             policy: record.policy.clone(),
             authority_revision: state.data.revision,
             revoked_at_revision: record.revoked_at_revision,
+            usage: record.usage.clone(),
         })
     }
 
@@ -4351,6 +4356,35 @@ mod provider_tests {
             Some(maximal)
         );
         assert_eq!(gate.usage("grant").unwrap().tokens, 100);
+    }
+
+    /// The grants API reports each grant's usage as the authority charges
+    /// it: a running call's reservation, then what the settled call reported.
+    #[test]
+    fn grant_status_reports_the_charged_usage() {
+        let (_root, gate, lease) = fixture();
+        let claim = gate
+            .claim_provider_call(&lease, intent("first"), 100)
+            .unwrap();
+        let reserved = gate.grant_status("grant").unwrap().usage;
+        assert_eq!(reserved, gate.usage("grant").unwrap());
+        assert_eq!((reserved.tokens, reserved.cost_microunits), (100, 10));
+        gate.settle_provider_call(&claim, &outcome()).unwrap();
+        let status = gate.grant_status("grant").unwrap();
+        assert_eq!(status.usage, gate.usage("grant").unwrap());
+        assert_eq!((status.usage.tokens, status.usage.cost_microunits), (20, 2));
+        assert!(status.usage.activations >= 1 && status.usage.invocations >= 1);
+        assert_eq!(gate.grant_statuses().unwrap(), vec![status.clone()]);
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(
+            json["usage"],
+            serde_json::json!({
+                "activations": status.usage.activations,
+                "invocations": status.usage.invocations,
+                "tokens": 20,
+                "cost_microunits": 2,
+            })
+        );
     }
 
     #[test]

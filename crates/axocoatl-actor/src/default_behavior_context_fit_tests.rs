@@ -38,8 +38,9 @@ struct FakeGrant {
 }
 
 /// A tool loop: each round the Agent writes `text_chars` of its own text
-/// (which masking never shortens) and echoes `arg_chars`. It answers when no
-/// tools are offered, or after `rounds` rounds.
+/// (which masking never shortens) and echoes `arg_chars`, numbered so no two
+/// rounds repeat. It answers when no tools are offered, or after `rounds`
+/// rounds.
 struct LongLoopLlm {
     rounds: usize,
     text_chars: usize,
@@ -142,7 +143,8 @@ impl LlmProvider for LongLoopLlm {
                 index: Some(0),
                 id: format!("call_{n}"),
                 name: Some("echo".to_string()),
-                args_delta: serde_json::json!({"text": prose(self.arg_chars)}).to_string(),
+                args_delta: serde_json::json!({"text": numbered(n, prose(self.arg_chars))})
+                    .to_string(),
             }));
         }
         if let Some(usage) = &self.usage {
@@ -162,6 +164,16 @@ impl LlmProvider for LongLoopLlm {
 /// `chars` characters of ordinary words (a tokenizer's cheap case).
 fn prose(chars: usize) -> String {
     "the file reads ".repeat(chars / 15 + 1)[..chars].to_string()
+}
+
+/// `text` with its start replaced by the round number, keeping its length,
+/// so each round's call differs from the last as distinct work does.
+fn numbered(round: usize, text: String) -> String {
+    let number = format!("{round:04}");
+    if text.len() < number.len() {
+        return text;
+    }
+    format!("{number}{}", &text[number.len()..])
 }
 
 fn echo_executor() -> Arc<axocoatl_tools::ToolExecutor> {

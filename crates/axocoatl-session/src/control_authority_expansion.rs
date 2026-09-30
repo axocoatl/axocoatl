@@ -190,6 +190,7 @@ fn grant_statuses(data: &AuthorityData) -> Vec<AuthorityGrantStatus> {
             policy: record.policy.clone(),
             authority_revision: data.revision,
             revoked_at_revision: record.revoked_at_revision,
+            usage: record.usage.clone(),
         })
         .collect()
 }

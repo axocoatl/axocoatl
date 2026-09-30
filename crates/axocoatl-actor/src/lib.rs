@@ -11,6 +11,7 @@ pub mod recall;
 pub mod registry;
 pub mod run_control;
 pub mod summarizer;
+mod tool_loop_repeats;
 mod tool_result_masking;
 
 pub use activation_checkpoint::*;
