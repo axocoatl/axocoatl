@@ -534,6 +534,9 @@ async fn closed_registration_cannot_execute_a_prepared_repository_activation() {
 #[tokio::test]
 async fn scoped_write_file_is_refused_before_any_effect() {
     let mut f = fixture().await;
+    std::fs::create_dir_all(f._workspace.path().join("config")).unwrap();
+    std::fs::write(f._workspace.path().join("config/x"), "original\n").unwrap();
+    std::fs::write(f._workspace.path().join("config/y"), "a\n").unwrap();
     let r = run_scoped(&mut f, &["write_file", "edit_file"], &["lib/"]);
     let provider = Provider::new(vec![
         (
@@ -565,7 +568,14 @@ async fn scoped_write_file_is_refused_before_any_effect() {
     assert!(provider.saw(2, "lib/../config/y uses '..'"));
     // Refused by the scope, never by the supervisor that would have run it.
     assert!(!provider.saw(1, "supervision") && !provider.saw(2, "supervision"));
-    assert!(!f._workspace.path().join("config").exists());
+    assert_eq!(
+        std::fs::read_to_string(f._workspace.path().join("config/x")).unwrap(),
+        "original\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f._workspace.path().join("config/y")).unwrap(),
+        "a\n"
+    );
     assert!(f.owner.execution_is_idle().unwrap());
     let snapshot = r.controller.snapshot().unwrap();
     // Both refused calls, and the host's Before and After captures.
@@ -1109,6 +1119,62 @@ async fn actual_scoped_shell_work_inside_its_paths_is_accepted() {
     let command = "printf y > lib/file-1.js && printf n > lib/new.js && git add lib \
         && mkdir -p build && printf o > build/out.js && git status --short | wc -l";
     let (settled, _) = settle_scoped_shell(&mut f, &["lib/"], command).await;
+    assert!(settled.accepted, "{:?}", settled.failure);
+}
+
+/// The same refusals with an actual supervisor that would run the write: the
+/// existing files outside lib/ keep their exact bytes, and the captures
+/// confirm nothing changed.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_scoped_write_file_is_refused_before_any_effect() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    let root = f._workspace.path().to_owned();
+    git_init(&root);
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::write(root.join("config/x"), "original\n").unwrap();
+    std::fs::write(root.join("config/y"), "a\n").unwrap();
+    let r = run_scoped(&mut f, &["write_file", "edit_file"], &["lib/"]);
+    let provider = Provider::new(vec![
+        (
+            "write_file",
+            serde_json::json!({"path":"config/x", "content":"outside"}),
+        ),
+        (
+            "edit_file",
+            serde_json::json!({"path":"config/y", "old":"a", "new":"b"}),
+        ),
+    ]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let x = std::fs::read_to_string(root.join("config/x"));
+    let y = std::fs::read_to_string(root.join("config/y"));
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert!(idle.unwrap());
+    assert_eq!(x.unwrap(), "original\n");
+    assert_eq!(y.unwrap(), "a\n");
+    assert!(provider.saw(
+        1,
+        "config/x is outside the paths this Agent may change (lib/)"
+    ));
+    assert!(provider.saw(
+        2,
+        "config/y is outside the paths this Agent may change (lib/)"
+    ));
     assert!(settled.accepted, "{:?}", settled.failure);
 }
 
