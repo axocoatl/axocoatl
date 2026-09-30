@@ -29,7 +29,7 @@ async function call(session,suffix='',body,headers={}){
 test('actual Session team routes authenticate whole-graph Apply, retain exact retries and leave Cancel unchanged',async()=>{
   const id=runtime.fixtures.alpha.sessions[0].id,peer=runtime.fixtures.beta.sessions[0].id;
   const current=await call(id);assert.equal(current.status,200,JSON.stringify(current.value));assert.equal(current.value.history_version,'execution_v2');assert.equal(current.value.configuration_revision,0);assert.equal(current.value.approved,false);assert.equal(current.value.slots[0].template_id,'browser-test-coder');assert.equal(current.value.slots[0].limits,null);
-  assert.equal(current.value.proposed_delegation,undefined,'a configuration without read-only Worker templates proposes no helpers');
+  assert.equal(current.value.proposed_delegation,undefined,'a configuration without read-only Worker templates offers no helpers');
   const edit={command_id:'team-route-approved',expected_configuration_revision:0,slots:current.value.slots.map(slot=>({...slot,max_output_tokens:128,limits:{activations:2,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),dependencies:current.value.dependencies,layout:current.value.layout};
   const forbidden=await call(id,'/preview',edit,{origin:'https://foreign.invalid'});assert.ok(forbidden.status>=400);
   const preview=await call(id,'/preview',edit);assert.equal(preview.status,200,JSON.stringify(preview.value));assert.equal(preview.value.applies_to,'future_turns');assert.equal((await call(id)).value.configuration_revision,0,'Preview cannot authorize a future turn');
@@ -143,7 +143,7 @@ test('actual Session team with a bash Agent applies required checks and reports 
   }finally{await daemon.stop();}
 });
 
-test('a new Session proposes the read-only Worker templates as helpers, and the person approves their limits',async()=>{
+test('a new Session offers the read-only Worker templates as helpers without approving them; it works alone unless the person approves their limits',async()=>{
   const daemon=await launchTestDaemon({nativeDataRoot:true,agentTools:['read_file','bash'],ollamaBaseUrl:`http://127.0.0.1:${modelServer.address().port}`,
     helpers:[{id:'scout',name:'Scout',tools:['read_file','grep','bash'],writes:[]},{id:'shell',name:'Shell',tools:['read_file','bash']},{id:'reviewer',name:'Reviewer',tools:['read_file','bash'],writes:[]}]});
   try{
@@ -154,18 +154,21 @@ test('a new Session proposes the read-only Worker templates as helpers, and the 
     const session=await created.json();assert.equal(created.status,200,JSON.stringify(session));
     const url=`${daemon.baseUrl}/api/sessions/${session.id}/team`,current=await (await fetch(url)).json();
     assert.deepEqual(current.proposed_delegation,{slot_id:'slot-browser-test-coder',helpers:['scout','reviewer'],operations:['add_agent'],max_nodes:6,max_edges:5});
-    assert.equal(current.slots.length,1,'the helpers are not team members');assert.equal(current.slots[0].delegation,undefined,'the proposal is not an approval');
+    assert.equal(current.slots.length,1,'the helpers are not team members');assert.equal(current.slots[0].delegation,undefined,'the offer is not an approval');
     const {helpers,slot_id,...bounds}=current.proposed_delegation;
-    const edit={command_id:'default-team',expected_configuration_revision:0,dependencies:[],layout:[],
-      slots:current.slots.map(slot=>({...slot,max_output_tokens:128,limits:{activations:2,invocations:12,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000,
-        ...(slot.slot_id===slot_id?{delegation:{...bounds,workers:helpers.map(template_id=>({template_id,limits:{activations:1,invocations:4,tokens:8000,cost_microunits:0},max_output_tokens:64,adhoc_allowed:false}))}}:{})}))};
     const post=async(suffix,body)=>{const response=await fetch(`${url}${suffix}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return{status:response.status,value:await response.json()};};
+    const budgeted=slot=>({...slot,max_output_tokens:128,limits:{activations:2,invocations:12,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000});
+    const alone=await post('/preview',{command_id:'single-agent',expected_configuration_revision:0,dependencies:[],layout:[],slots:current.slots.map(budgeted)});
+    assert.equal(alone.status,200,JSON.stringify(alone.value));assert.deepEqual(alone.value.coordinators,[],'without opting in, the Agent works alone');
+    const edit={command_id:'default-team',expected_configuration_revision:0,dependencies:[],layout:[],
+      slots:current.slots.map(slot=>({...budgeted(slot),
+        ...(slot.slot_id===slot_id?{delegation:{...bounds,workers:helpers.map(template_id=>({template_id,limits:{activations:1,invocations:4,tokens:8000,cost_microunits:0},max_output_tokens:64,adhoc_allowed:false}))}}:{})}))};
     const preview=await post('/preview',edit);assert.equal(preview.status,200,JSON.stringify(preview.value));
     const [[lead,policy]]=preview.value.coordinators;assert.equal(lead,'slot-browser-test-coder');
     assert.deepEqual(policy.workers.map(worker=>worker.template_id),['scout','reviewer']);assert.equal(policy.max_nodes,6);assert.equal(policy.max_edges,5);
     assert.deepEqual(preview.value.profiles.filter(profile=>profile.write_scope).map(profile=>profile.write_scope),[[],[]],'both helpers are reviewed as read-only');
     const applied=await post('/apply',{edit,review_digest:preview.value.review_digest});assert.equal(applied.status,200,JSON.stringify(applied.value));
-    const saved=await (await fetch(url)).json();assert.equal(saved.proposed_delegation,undefined,'an applied team is not proposed helpers again');
+    const saved=await (await fetch(url)).json();assert.equal(saved.proposed_delegation,undefined,'an applied team is not offered helpers again');
     assert.deepEqual(saved.slots[0].delegation.workers.map(worker=>worker.template_id),['scout','reviewer']);
   }finally{await daemon.stop();}
 });

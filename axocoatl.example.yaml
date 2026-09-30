@@ -11,10 +11,11 @@
 #   axocoatl dev
 #
 # Then open http://localhost:8080, create a folder-anchored Session on Lead, and
-# open Team & budget: it proposes Scout and Reviewer as Lead's helpers. Enter
-# the limits for all three, Apply, and send a request in the Session chat. On a
-# fresh data directory, the workflow below seeds a manual Automation that is
-# also available through the compatibility HTTP API.
+# open Team & budget. The Session starts with Lead alone: enter its limits,
+# Apply, and send a request in the Session chat. To add Scout and Reviewer as
+# Lead's read-only helpers, select "Let this Agent delegate to helpers" and
+# enter their limits too. On a fresh data directory, the workflow below seeds a
+# manual Automation that is also available through the compatibility HTTP API.
 #
 # The larger demo config, including scheduled seeds and MCP servers, lives in
 # axocoatl.yaml. Use that once you're past first contact.
@@ -23,16 +24,16 @@
 agents:
   # Default team. Lead owns the change and is the only one that edits files.
   # Scout and Reviewer are Workers with `writes: []`: read-only helpers Lead
-  # can delegate to once Team & budget approves their limits. To change the
-  # team, edit these entries (or add Workers with `writes: []`); to work with
-  # one Agent only, clear "Let this Agent delegate to helpers" in Team & budget.
+  # can delegate to once you select "Let this Agent delegate to helpers" in
+  # Team & budget and approve their limits; until then Lead works alone. To
+  # change the team, edit these entries (or add Workers with `writes: []`).
   - id: lead
     name: "Lead"
     provider: ollama
     model: llama3.2
     role: autonomous
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
-    system_prompt: "You own this change. 1. Look first: for code you do not know, ask scout to find the relevant files and tests. 2. Make the change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Ask reviewer to review your diff against the task and fix what it finds. Then summarize what you changed."
+    system_prompt: "You own this change. 1. Look first: find the relevant files and tests for code you do not know. If you have helpers, ask scout to find them. 2. Make the change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Check your diff against the task. If you have helpers, ask reviewer to review it. Fix each defect found. Then summarize what you changed."
     sampling: { max_tokens: 4096 }
 
   - id: scout

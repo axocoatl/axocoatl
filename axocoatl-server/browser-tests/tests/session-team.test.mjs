@@ -150,11 +150,15 @@ test('Checks the person did not edit keep their exact arguments; a changed line 
  }finally{await context.close();}
 });
 
-test('A new Session drafts its proposed read-only helpers; the person enters their limits or removes them',async()=>{
+test('A new Session offers its read-only helpers unselected; selecting delegation drafts them and the person enters their limits',async()=>{
  {const{page,context,calls,errors}=await fixture({proposal:true});try{
-  await page.getByText('QA reviewer <literal> may delegate to the read-only helpers Scout and Critic: enter their limits too, or clear Let this Agent delegate to helpers.',{exact:false}).waitFor();
+  await page.getByText('QA reviewer <literal> works alone. To let it delegate to the read-only helpers Scout and Critic, select Let this Agent delegate to helpers and enter each helper\'s limits too.',{exact:false}).waitFor();
+  assert.equal(await page.locator('ax-session-team').evaluate(element=>element.draft.slots[0].delegation??null),null,'the offer is not a draft');
   await enterBudget(page);
-  assert.equal(await page.getByLabel('Let this Agent delegate to helpers',{exact:true}).isChecked(),true);
+  await page.getByText('Scout and Critic are available as read-only helpers. They cost extra tokens; one Agent is cheaper for small tasks.',{exact:true}).waitFor();
+  const delegate=page.getByLabel('Let this Agent delegate to helpers',{exact:true});
+  assert.equal(await delegate.isChecked(),false);assert.equal(await page.getByLabel('Use helper: Scout',{exact:true}).count(),0);
+  await delegate.check();
   assert.equal(await page.getByLabel('Maximum Agents in the turn, helpers included',{exact:true}).inputValue(),'6');
   assert.equal(await page.getByLabel('Maximum connections in the turn graph',{exact:true}).inputValue(),'5');
   for(const name of ['Scout','Critic']){
@@ -171,8 +175,9 @@ test('A new Session drafts its proposed read-only helpers; the person enters the
   await page.getByText('may delegate to helpers: at most 6 Agents and 5 connections in the turn',{exact:false}).waitFor();assert.deepEqual(errors,[]);
  }finally{await context.close();}}
  {const{page,context,calls,errors}=await fixture({proposal:true});try{
-  await enterBudget(page);await page.getByLabel('Let this Agent delegate to helpers',{exact:true}).uncheck();
-  await review(page);assert.equal(calls.find(call=>call.suffix==='/preview').body.slots[0].delegation,null);assert.deepEqual(errors,[]);
+  await enterBudget(page);await review(page);
+  assert.equal(calls.find(call=>call.suffix==='/preview').body.slots[0].delegation??null,null,'without opting in, the Agent works alone');
+  assert.equal(await page.getByText('may delegate to helpers',{exact:false}).count(),0);assert.deepEqual(errors,[]);
  }finally{await context.close();}}
 });
 
@@ -187,7 +192,7 @@ test('Add Agent adds the template chosen beside it',async()=>{
  }finally{await context.close();}
 });
 
-test('On a real daemon, a new Session on the lead drafts its read-only Worker helpers by name',async()=>{
+test('On a real daemon, a new Session on the lead offers its read-only Worker helpers by name',async()=>{
  const daemon=await launchTestDaemon({nativeDataRoot:true,agentTools:['read_file','bash'],
   helpers:[{id:'scout',name:'Scout',tools:['read_file','grep','bash'],writes:[]},{id:'reviewer',name:'Reviewer',tools:['read_file','bash'],writes:[]}]});
  const context=await browser.newContext({viewport:{width:1100,height:820}}),page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -195,8 +200,11 @@ test('On a real daemon, a new Session on the lead drafts its read-only Worker he
   const session=daemon.fixtures.alpha.sessions[0].id;
   await page.route('**/team-fixture',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-session-team session="${session}"></ax-session-team><script type="module" src="/ui/session-team.js"></script></body></html>`}));
   await page.goto(`${daemon.baseUrl}/team-fixture`);await page.getByRole('button',{name:'Team and budget',exact:true}).click();
-  await page.getByText('Browser Test Coder may delegate to the read-only helpers Scout and Reviewer',{exact:false}).waitFor();
+  await page.getByText('Browser Test Coder works alone. To let it delegate to the read-only helpers Scout and Reviewer',{exact:false}).waitFor();
   await page.getByRole('button',{name:'Edit',exact:true}).click();
+  await page.getByText('Scout and Reviewer are available as read-only helpers.',{exact:false}).waitFor();
+  const delegate=page.getByLabel('Let this Agent delegate to helpers',{exact:true});
+  assert.equal(await delegate.isChecked(),false);await delegate.check();
   for(const name of ['Scout','Reviewer']){
    assert.equal(await page.getByLabel(`Use helper: ${name}`,{exact:true}).isChecked(),true);
    await page.getByText(`${name} · browser-test-model`,{exact:true}).waitFor();

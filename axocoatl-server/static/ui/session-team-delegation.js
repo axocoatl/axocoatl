@@ -7,15 +7,16 @@ const role=item=>String(item.role||'autonomous').toLowerCase();
 const canDelegate=slot=>role(slot)!=='worker';
 // A helper starts unapproved: the person enters its limits.
 const workerDraft=template=>({template_id:template.template_id,limits:{activations:null,invocations:null,tokens:null,cost_microunits:null},max_output_tokens:template.max_output_tokens??null,adhoc_allowed:false});
-// The daemon proposes read-only helpers for a new Session's single Agent. The
-// proposal becomes that Agent's draft approval; nothing is approved until Apply.
-export function proposeDelegation(view,draft){
- const proposal=view.proposed_delegation,slot=proposal&&draft.slots.find(item=>item.slot_id===proposal.slot_id);
- if(!slot||slot.delegation||!canDelegate(slot))return null;
- const helpers=proposal.helpers.map(id=>view.templates.find(template=>template.template_id===id)).filter(Boolean);
+// The daemon offers the read-only Worker templates as helpers to a new
+// Session's single Agent. The Agent works alone unless the person selects Let
+// this Agent delegate to helpers, which drafts the offered helpers with empty
+// limits; nothing is approved until Apply.
+export function offeredHelpers(view,slot){
+ const offer=view?.proposed_delegation;
+ if(!offer||!slot||offer.slot_id!==slot.slot_id||!canDelegate(slot))return null;
+ const helpers=offer.helpers.map(id=>view.templates.find(template=>template.template_id===id)).filter(Boolean);
  if(!helpers.length)return null;
- slot.delegation={workers:helpers.map(workerDraft),operations:[...proposal.operations],max_nodes:proposal.max_nodes,max_edges:proposal.max_edges};
- return{slot,helpers};
+ return{names:new Intl.ListFormat('en',{type:'conjunction'}).format(helpers.map(template=>template.name)),count:helpers.length,draft:()=>({workers:helpers.map(workerDraft),operations:[...offer.operations],max_nodes:offer.max_nodes,max_edges:offer.max_edges})};
 }
 export function renderDelegationApproval(host,panel,slot,update){
  if(!canDelegate(slot))return;
@@ -24,7 +25,9 @@ export function renderDelegationApproval(host,panel,slot,update){
  const save=change=>{const next=structuredClone(latest());change(next);update('delegation',next);};
  const enabled=host.mode==='edit'&&!host.busy;
  const check=(parent,label,checked,onchange)=>{const wrapper=node('label',label,{class:'check'}),input=node('input',null,{type:'checkbox'});input.checked=checked;input.disabled=!enabled;input.onchange=()=>onchange(input.checked);wrapper.prepend(input);parent.append(wrapper);return input;};
- check(panel,'Let this Agent delegate to helpers',!!slot.delegation,checked=>{update('delegation',checked?{workers:[],operations:['add_agent'],max_nodes:null,max_edges:null}:null);host.renderPanel();});
+ const offered=offeredHelpers(host.view,slot);
+ if(offered)panel.append(node('p',offered.count>1?`${offered.names} are available as read-only helpers. They cost extra tokens; one Agent is cheaper for small tasks.`:`${offered.names} is available as a read-only helper. It costs extra tokens; one Agent is cheaper for small tasks.`));
+ check(panel,'Let this Agent delegate to helpers',!!slot.delegation,checked=>{update('delegation',checked?offered?.draft()??{workers:[],operations:['add_agent'],max_nodes:null,max_edges:null}:null);host.renderPanel();});
  if(!slot.delegation)return;
  for(const[key,label,min]of [['max_nodes','Maximum Agents in the turn, helpers included',1],['max_edges','Maximum connections in the turn graph',0]]){const wrapper=node('label',label),input=node('input',null,{type:'number',min,step:1});input.value=slot.delegation[key]??'';input.disabled=!enabled;input.oninput=()=>save(value=>{value[key]=input.value===''?null:Number(input.value);});wrapper.append(input);panel.append(wrapper);}
  panel.append(node('h4','Helper templates'));

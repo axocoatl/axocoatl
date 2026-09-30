@@ -548,15 +548,17 @@ fn scaffold_project(
 /// The default team in every starting configuration: Lead owns the change
 /// and is the only Agent that edits files; Scout and Reviewer are Workers with
 /// `writes: []`, read-only helpers Lead can delegate to. A new Session on Lead
-/// proposes both helpers in Team & budget, where the person approves every
-/// limit. `model` is an already-serialized YAML scalar.
+/// starts with Lead alone; Team & budget offers both helpers as an option,
+/// and the person approves every limit. `model` is an already-serialized YAML
+/// scalar.
 fn default_team_agents(provider_id: &str, model: &str, max_tokens: Option<u32>) -> String {
     let sampling = max_tokens
         .map(|max_tokens| format!("    sampling:\n      max_tokens: {max_tokens}\n"))
         .unwrap_or_default();
     format!(
         r#"  # Default team. Lead owns the change; Scout and Reviewer are read-only
-  # helpers it can delegate to once Team & budget approves their limits.
+  # helpers it can delegate to once you opt in and approve their limits in
+  # Team & budget. A new Session starts with Lead alone.
   - id: lead
     name: "Lead"
     provider: {provider_id}
@@ -586,11 +588,11 @@ fn default_team_agents(provider_id: &str, model: &str, max_tokens: Option<u32>) 
     )
 }
 
-const LEAD_PROMPT: &str = "You own this change. 1. Look first: for code you do not know, ask \
-    scout to find the relevant files and tests. 2. Make the change. 3. Run the check command \
-    from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Ask \
-    reviewer to review your diff against the task and fix what it finds. Then summarize what \
-    you changed.";
+const LEAD_PROMPT: &str = "You own this change. 1. Look first: find the relevant files and \
+    tests for code you do not know. If you have helpers, ask scout to find them. 2. Make the \
+    change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, \
+    and fix failures. 4. Check your diff against the task. If you have helpers, ask reviewer to \
+    review it. Fix each defect found. Then summarize what you changed.";
 const SCOUT_PROMPT: &str = "Answer the lead's question with file paths, line numbers and short \
     evidence. Change nothing.";
 const REVIEWER_PROMPT: &str = "Review the described change. Check it against the task and \
@@ -658,8 +660,9 @@ Next steps — copy/paste:
   axocoatl dev --config axocoatl.yaml
 
 Open http://localhost:8080, choose Open workspace…, and create a Session on
-Lead. Team & budget proposes Scout and Reviewer as its read-only helpers;
-enter the limits for all three and Apply before the first request. For plain
+Lead. It starts as one Agent: in Team & budget, enter its limits and Apply
+before the first request. To add Scout and Reviewer as read-only helpers,
+select Let this Agent delegate to helpers and enter their limits too. For plain
 chat without a Session: axocoatl chat --config axocoatl.yaml
 
 To add a hosted provider, keep its key out of the file and out of Git:
@@ -3076,7 +3079,8 @@ mod tests {
         assert!(steps.contains("cd demo-project"));
         assert!(steps.contains("ollama pull llama3.2"));
         assert!(steps.contains("create a Session on\nLead"));
-        assert!(steps.contains("proposes Scout and Reviewer"));
+        assert!(steps.contains("It starts as one Agent"));
+        assert!(steps.contains("select Let this Agent delegate to helpers"));
         assert!(steps.contains("mv .env.example .env"));
         assert!(steps.contains("never commit this file"));
         assert!(steps.contains("set -a\n  . ./.env\n  set +a"));
@@ -3127,9 +3131,9 @@ mod tests {
         assert_eq!(lead.writes, None, "the lead may change any file");
         let prompt = lead.system_prompt.as_deref().unwrap();
         assert!(
-            prompt.contains("ask scout")
+            prompt.contains("If you have helpers, ask scout")
                 && prompt.contains("AXOCOATL.md")
-                && prompt.contains("Ask reviewer"),
+                && prompt.contains("If you have helpers, ask reviewer"),
             "{prompt}"
         );
         for helper in &config.agents[1..3] {

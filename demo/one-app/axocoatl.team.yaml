@@ -4,7 +4,7 @@
 # the only Agent that edits files; Scout and Reviewer are read-only Workers
 # (`writes: []`) that Lead can delegate to once Team and budget approves their
 # limits. It is a separate file because Worker templates make Team and budget
-# propose helpers for every new single-Agent Session; the other scenarios keep
+# offer helpers to every new single-Agent Session; the other scenarios keep
 # axocoatl.demo.yaml. Start it with:
 #
 #   AXOCOATL_DEMO_CONFIG=axocoatl.team.yaml ./demo/one-app/start.sh
@@ -17,11 +17,12 @@ agents:
     role: autonomous
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
     system_prompt: |
-      You own this change. 1. Look first: for code you do not know, ask scout
-      to find the relevant files and tests. 2. Make the change. 3. Run the
-      check command from the project instructions (AXOCOATL.md), or the tests,
-      and fix failures. 4. Ask reviewer to review your diff against the task
-      and fix what it finds. Then summarize what you changed. /no_think
+      You own this change. 1. Look first: find the relevant files and tests
+      for code you do not know. If you have helpers, ask scout to find them.
+      2. Make the change. 3. Run the check command from the project
+      instructions (AXOCOATL.md), or the tests, and fix failures. 4. Check
+      your diff against the task. If you have helpers, ask reviewer to review
+      it. Fix each defect found. Then summarize what you changed. /no_think
     sampling: { max_tokens: 4096 }
 
   - id: scout

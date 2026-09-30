@@ -57,8 +57,9 @@ Team & budget approves it.
 
 ## The default team
 
-`axocoatl onboard`, `axocoatl init`, and the repository's example configurations start with
-one lead and two read-only helpers:
+`axocoatl onboard`, `axocoatl init`, and the repository's example configurations define
+one lead and two read-only helpers. A new Session starts with one Agent, the lead; the
+helpers and a required review are opt-in in Team & budget:
 
 ```yaml
 agents:
@@ -68,7 +69,7 @@ agents:
     model: llama3.2
     role: autonomous
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
-    system_prompt: "You own this change. 1. Look first: for code you do not know, ask scout to find the relevant files and tests. 2. Make the change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Ask reviewer to review your diff against the task and fix what it finds. Then summarize what you changed."
+    system_prompt: "You own this change. 1. Look first: find the relevant files and tests for code you do not know. If you have helpers, ask scout to find them. 2. Make the change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Check your diff against the task. If you have helpers, ask reviewer to review it. Fix each defect found. Then summarize what you changed."
     sampling: { max_tokens: 4096 }
   - id: scout
     name: Scout
@@ -90,16 +91,18 @@ agents:
     sampling: { max_tokens: 4096 }
 ```
 
-A new Session selects the first Agent that is not a Worker, here Lead. When its team is
-that one Agent, Team & budget proposes every Worker with `writes: []` as its helpers; you
-enter every limit and apply them. See [Default team](/understand/coordination/#default-team).
+A new Session selects the first Agent that is not a Worker, here Lead, and runs it alone.
+When its team is that one Agent, Team & budget offers every Worker with `writes: []` as its
+helpers: select **Let this Agent delegate to helpers** to add them, then enter every limit
+and apply. See [Default team](/understand/coordination/#default-team). The Lead prompt asks
+for scout and reviewer only if it has helpers.
 
 To change the team, edit these entries and restart the daemon:
 
 - change `model` on all three for a different local model;
 - rewrite a `system_prompt`; short, plain instructions suit small local models;
-- add another Worker with `writes: []` to have it proposed as a helper too, or remove one;
-- remove `writes: []` from a Worker and it is no longer proposed; `delegate` then refuses
+- add another Worker with `writes: []` to have it offered as a helper too, or remove one;
+- remove `writes: []` from a Worker and it is no longer offered; `delegate` then refuses
   it if it can write files or run commands.
 
 In a native Session, every Agent, including a helper and the required reviewer, is given
@@ -107,10 +110,9 @@ the `AXOCOATL.md` at the root of its repository checkout (up to 64 KiB) with its
 prompt. Put the project's check command and its conventions there; the default Lead prompt
 tells the lead to run that command.
 
-To work with one Agent, clear **Let this Agent delegate to helpers** in Team & budget, or
-choose another Agent when you create the Session. A configuration without Workers that
-have `writes: []` proposes no helpers. One Agent is the cheaper choice for small tasks;
-see [What helpers cost](/understand/coordination/#what-helpers-cost).
+One Agent is the default and the cheaper choice for small tasks; see
+[What helpers cost](/understand/coordination/#what-helpers-cost). A configuration without
+Workers that have `writes: []` offers no helpers.
 
 ## Define a Session team
 

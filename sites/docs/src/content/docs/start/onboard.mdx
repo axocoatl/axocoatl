@@ -60,19 +60,21 @@ Both choices write the same Agents, on the provider and model you choose:
 | **Reviewer** (`reviewer`) | Worker | `read_file`, `list_dir`, `grep`, `glob`, `bash` | Nothing (`writes: []`) |
 | **Assistant** (`assistant`) | Autonomous | none | Not used in Sessions by default |
 
-Lead owns the change. Its instructions say to send a focused read-only question to
-Scout, to ask Reviewer for an independent review before finishing, and to verify with
-the tests. Scout answers with file paths, line numbers and short evidence. Reviewer
-reports concrete defects with `file:line`, or says it found none. Neither changes files.
+Lead owns the change. Its instructions say to look first, to verify with the tests,
+and, if it has helpers, to send a focused read-only question to Scout and to ask
+Reviewer for an independent review before finishing. Scout answers with file paths,
+line numbers and short evidence. Reviewer reports concrete defects with `file:line`,
+or says it found none. Neither changes files.
 Assistant is the plain chat Agent for `axocoatl chat`.
 
 This is configuration only: onboarding still creates no project, Workspace, or
-Session. A new Session selects Lead unless you choose another Agent. Its **Team &
-budget** then proposes Scout and Reviewer as Lead's helpers. You enter the limits for
-Lead and for each helper and choose **Apply** before the first request; clear **Let
-this Agent delegate to helpers** to run Lead alone. Required checks stay off until you
-add them. [Default team](/understand/coordination/#default-team) describes how the
-helpers run, and [Agents](/configure/agents/#the-default-team) how to change them.
+Session. A new Session selects Lead unless you choose another Agent, and starts with
+Lead alone: in **Team & budget** you enter Lead's limits and choose **Apply** before the
+first request. Scout and Reviewer are offered there as Lead's helpers; select **Let this
+Agent delegate to helpers** and enter each helper's limits to use them. Required checks
+and a required review stay off until you add them.
+[Default team](/understand/coordination/#default-team) describes how the helpers run,
+and [Agents](/configure/agents/#the-default-team) how to change them.
 
 ## User-level locations
 
