@@ -9,7 +9,9 @@ let runtime;
 const turnId = 'control-plane-retained-turn';
 
 before(async () => {
-  runtime = await launchTestDaemon();
+  runtime = await launchTestDaemon({
+    extraAgents: [{ id: 'browser-test-reviewer', name: 'Browser Test Reviewer', dependsOn: ['browser-test-coder'] }],
+  });
   const session = runtime.fixtures.alpha.sessions[0];
   await runtime.restartWithSessionTurnEvents([
     {
@@ -20,6 +22,8 @@ before(async () => {
         created_at: 1000, updated_at: 1000, execution_events: [], agent_outputs: [],
       },
     },
+    // Coordination records written by 1.1.0 development builds. Nothing writes
+    // them now, but history that contains them must still load.
     {
       schema_version: 1, operation_id: `plan:${turnId}`, recorded_at: 1001,
       kind: 'execution', turn_id: turnId, execution: {
@@ -66,7 +70,10 @@ test('real control-plane route is exact, versioned, read-only and survives daemo
   assert.equal(view.session_id, session.id);
   assert.equal(view.turn_id, turnId);
   assert.equal(view.request.value, legacy.user_input);
-  assert.equal(view.nodes[0].label, 'Recorded coder');
+  assert.deepEqual(view.nodes.map((node) => node.node_id), ['browser-test-coder']);
+  assert.deepEqual(view.edges, []);
+  assert.equal(view.nodes[0].activations.length, 1);
+  assert.equal(view.nodes[0].activations[0].output.value, 'Retained response.');
   assert.equal(view.nodes[0].activations[0].reference.kind, 'legacy');
   assert.equal(view.nodes[0].activations[0].capabilities.stop.enabled, false);
   assert.equal(view.nodes[0].activations[0].capabilities.retry.enabled, false);
@@ -137,4 +144,59 @@ test('versioned legacy list, lookup, search and exports preserve opaque identity
     assert.equal((await fetch(`${endpoint}history_version=99`)).status,400);
   }
   assert.deepEqual(await readFile(path.join(runtime.runRoot,'data','session-history','turns.v1.jsonl')),before);
+});
+
+function sendTurn(sessionId, turnId, input) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(`${runtime.baseUrl.replace(/^http/, 'ws')}/ws`);
+    let settled = false;
+    const finish = (error, frame) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.close();
+      if (error) reject(error);
+      else resolve(frame);
+    };
+    const timer = setTimeout(() => finish(new Error(`Turn ${turnId} timed out.\n${runtime.logs()}`)), 30_000);
+    socket.addEventListener('error', () => finish(new Error(`WebSocket failed for ${turnId}`)));
+    socket.addEventListener('message', ({ data }) => {
+      const frame = JSON.parse(data);
+      if (frame.kind === 'snapshot') {
+        socket.send(JSON.stringify({
+          cmd: 'session', id: sessionId, turn_id: turnId, idempotency_key: turnId,
+          input, display_input: input, reference_ids: [], context_references: [],
+        }));
+      }
+      if (frame.kind === 'error') finish(new Error(JSON.stringify(frame)));
+      if (frame.session !== sessionId || frame.turn_id !== turnId) return;
+      if (['session-accepted', 'session-done', 'session-error', 'session-request-rejected'].includes(frame.kind)) {
+        finish(null, frame);
+      }
+    });
+  });
+}
+
+test('a legacy multi-Agent turn is refused before it starts and names the upgrade command', async () => {
+  const workspace = runtime.fixtures.alpha.workspace;
+  const response = await fetch(`${runtime.baseUrl}/api/workspaces/${encodeURIComponent(workspace.id)}/sessions`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Legacy two-Agent team',
+      mode: { kind: 'custom', agents: ['browser-test-coder', 'browser-test-reviewer'] },
+      enabled_skills: [], exposed_ports: [], setup_approved: false, setup_reviewed: false,
+    }),
+  });
+  assert.ok(response.ok, await response.clone().text());
+  const session = await response.json();
+  const ledger = path.join(runtime.runRoot, 'data', 'session-history', 'turns.v1.jsonl');
+  const before = await readFile(ledger);
+  const turn = 'legacy-multi-agent-refused';
+  const terminal = await sendTurn(session.id, turn, 'Review the retained change.');
+  assert.ok(['session-error', 'session-request-rejected'].includes(terminal.kind), JSON.stringify(terminal));
+  assert.match(terminal.error, /2 Agents/);
+  assert.match(terminal.error, /`axocoatl session upgrade --confirm`/);
+  const missing = await fetch(`${runtime.baseUrl}/api/sessions/${session.id}/turns/${turn}`);
+  assert.equal(missing.status, 404, 'the refused turn is never begun');
+  assert.deepEqual(await readFile(ledger), before, 'the refusal writes no history');
 });

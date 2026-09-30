@@ -273,11 +273,7 @@ mod tests {
                 output: text.into(),
                 attempt_id: None,
                 activation_generation: Some(1),
-                disposition: None,
-                causal_signal_id: None,
                 superseded: false,
-                superseded_by_generation: None,
-                superseded_by_signal_id: None,
                 recorded_at: 1,
             });
         }

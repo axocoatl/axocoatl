@@ -16,9 +16,7 @@ use axocoatl_session::turn_contract::{
     ActivationRef, ActivationState, ConditionKind, EvidenceRef, GraphMutation, LogicalTurnState,
     TurnNodeId,
 };
-use axocoatl_session::turn_ledger::{
-    SessionTurn, SessionTurnAgentOutputDisposition, SessionTurnLifecycle,
-};
+use axocoatl_session::turn_ledger::SessionTurn;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 
@@ -266,68 +264,7 @@ impl SessionTurnControlPlane {
                 continue;
             }
             let kind = record.event.kind.as_str();
-            if kind == "coordination_planned" {
-                if let Some(agents) = metadata.get("agents").and_then(Value::as_array) {
-                    for agent in agents {
-                        let object = agent.as_object();
-                        let id = agent
-                            .as_str()
-                            .or_else(|| object.and_then(|a| text(a, &["id", "agent_id"])));
-                        let Some(id) = id else { continue };
-                        let node = legacy_node(&mut view.nodes, id);
-                        if let Some(name) = object.and_then(|a| text(a, &["name", "label"])) {
-                            node.label = name.into();
-                        }
-                        if let Some(dependencies) = object.and_then(|a| a.get("depends_on")) {
-                            node.dependencies = string_list(dependencies);
-                        }
-                    }
-                }
-                // The current runtime writes dependencies on each planned node.
-                // Older explicit edge arrays are accepted only with both ends.
-                for key in ["dependencies", "edges"] {
-                    if let Some(edges) = metadata.get(key).and_then(Value::as_array) {
-                        for edge in edges.iter().filter_map(Value::as_object) {
-                            if let (Some(parent), Some(child)) = (
-                                text(edge, &["from", "source", "parent"]),
-                                text(edge, &["to", "target", "child"]),
-                            ) {
-                                let node = legacy_node(&mut view.nodes, child);
-                                if !node.dependencies.iter().any(|id| id == parent) {
-                                    node.dependencies.push(parent.into());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             let generation = generation(metadata);
-            if let Some(state) = legacy_event_state(kind) {
-                if let Some(id) = text(metadata, &["agent_id", "agent"]) {
-                    let node = legacy_node(&mut view.nodes, id);
-                    let activation = legacy_activation(node, turn, generation);
-                    activation.state = state.into();
-                    activation.reason = text_value(metadata, &["reason", "summary", "error"]);
-                    if kind == "coordination_agent_activated" {
-                        activation.started_at = EvidenceValue::available(record.recorded_at);
-                    } else if matches!(state, "completed" | "failed" | "cancelled") {
-                        activation.completed_at = EvidenceValue::available(record.recorded_at);
-                    }
-                    if let Some(usage) = metadata.get("usage") {
-                        activation.usage = EvidenceValue::available(usage.clone());
-                    }
-                    activation.evidence.push(ControlPlaneEvidence {
-                        kind: kind.into(),
-                        reference: EvidenceValue::available(record.operation_id.clone()),
-                        summary: text_value(metadata, &["summary", "reason", "error"]),
-                        recorded_at: EvidenceValue::available(record.recorded_at),
-                        details: EvidenceValue::available(selected_metadata(
-                            metadata,
-                            &["parents", "cause_signal_ids", "signal_id"],
-                        )),
-                    });
-                }
-            }
             if matches!(kind, "tool_started" | "tool_result") {
                 if let Some(id) = text(metadata, &["agent_id", "agent"]) {
                     let node = legacy_node(&mut view.nodes, id);
@@ -355,50 +292,14 @@ impl SessionTurnControlPlane {
                     });
                 }
             }
-            if kind == "coordination_signal" {
-                if let (Some(source), Some(target)) = (
-                    text(metadata, &["from_agent", "from", "source"]),
-                    text(metadata, &["to_agent", "to", "target"]),
-                ) {
-                    let applied = metadata.get("applied").and_then(Value::as_bool);
-                    view.edges.push(ControlPlaneEdge {
-                        id: text(metadata, &["signal_id"])
-                            .unwrap_or(&record.operation_id)
-                            .into(),
-                        kind: if applied == Some(false) {
-                            "unapplied_signal"
-                        } else {
-                            "signal"
-                        }
-                        .into(),
-                        source: source.into(),
-                        target: target.into(),
-                        generation: EvidenceValue::from_option(generation),
-                        recorded_at: EvidenceValue::available(record.recorded_at),
-                        summary: text_value(metadata, &["summary", "message"]),
-                        evidence: EvidenceValue::available(record.operation_id.clone()),
-                    });
-                }
-            }
         }
         for output in &turn.agent_outputs {
             let node = legacy_node(&mut view.nodes, &output.agent_id);
             let activation = legacy_activation(node, turn, output.activation_generation);
             // A superseded result is historical evidence, never the current
-            // answer. The disposition does not replace a later blocked state.
+            // answer.
             if output.superseded {
                 activation.state = "superseded".into();
-            } else if activation.state == "unknown" {
-                activation.state = match output.disposition {
-                    Some(SessionTurnAgentOutputDisposition::Completed) => "completed",
-                    Some(SessionTurnAgentOutputDisposition::ChangesRequested) => {
-                        "changes_requested"
-                    }
-                    Some(SessionTurnAgentOutputDisposition::Failed) => "failed",
-                    Some(SessionTurnAgentOutputDisposition::Cancelled) => "cancelled",
-                    None => "unknown",
-                }
-                .into();
             }
             activation.output = bounded_text(&output.output);
             activation.evidence.push(ControlPlaneEvidence {
@@ -408,10 +309,7 @@ impl SessionTurnControlPlane {
                 recorded_at: EvidenceValue::available(output.recorded_at),
                 details: EvidenceValue::available(json!({
                     "model": output.model,
-                    "disposition": output.disposition,
                     "superseded": output.superseded,
-                    "superseded_by_generation": output.superseded_by_generation,
-                    "causal_signal_id": output.causal_signal_id,
                 })),
             });
         }
@@ -436,37 +334,6 @@ impl SessionTurnControlPlane {
                 }
                 // Turn creation is not evidence of the Agent's actual start.
                 activation.completed_at = EvidenceValue::from_option(turn.completed_at);
-            }
-        }
-        if turn.status.is_terminal() {
-            for node in &mut view.nodes {
-                for activation in &mut node.activations {
-                    if matches!(activation.state.as_str(), "running" | "waiting") {
-                        activation.state = match turn.status {
-                            SessionTurnLifecycle::Interrupted => "interrupted",
-                            SessionTurnLifecycle::Cancelled => "cancelled",
-                            _ => "unknown",
-                        }
-                        .into();
-                        activation.reason = EvidenceValue::available(
-                            "The turn closed without a recorded terminal event for this activation.".into()
-                        );
-                    }
-                }
-            }
-        }
-        for node in &view.nodes {
-            for parent in &node.dependencies {
-                view.edges.push(ControlPlaneEdge {
-                    id: format!("legacy-dependency:{}:{}", parent, node.node_id),
-                    kind: "dependency".into(),
-                    source: parent.clone(),
-                    target: node.node_id.clone(),
-                    generation: EvidenceValue::NotRecorded,
-                    recorded_at: EvidenceValue::NotRecorded,
-                    summary: EvidenceValue::NotRecorded,
-                    evidence: EvidenceValue::NotRecorded,
-                });
             }
         }
         view
@@ -1020,19 +887,6 @@ fn generation(metadata: &Map<String, Value>) -> Option<u32> {
         .and_then(|generation| u32::try_from(generation).ok())
 }
 
-fn string_list(value: &Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn selected_metadata(metadata: &Map<String, Value>, keys: &[&str]) -> Value {
     Value::Object(
         keys.iter()
@@ -1086,19 +940,6 @@ fn legacy_activation<'a>(
         }
     };
     &mut node.activations[index]
-}
-
-fn legacy_event_state(kind: &str) -> Option<&'static str> {
-    match kind {
-        "coordination_agent_activated" => Some("running"),
-        "coordination_agent_reactivated" => Some("waiting"),
-        "coordination_agent_completed" => Some("completed"),
-        "coordination_agent_failed" => Some("failed"),
-        "coordination_agent_blocked" => Some("blocked"),
-        "coordination_agent_cancelled" => Some("cancelled"),
-        "agent_output_superseded" => Some("superseded"),
-        _ => None,
-    }
 }
 
 fn activation_state(state: ActivationState) -> &'static str {

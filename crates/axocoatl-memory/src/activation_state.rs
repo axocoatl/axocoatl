@@ -2146,11 +2146,7 @@ fn validate_ordinary_legacy_turn(turn: &SessionTurn, agent: &mut Option<String>)
         if output.agent_id != *recorded
             || output.attempt_id.is_some()
             || output.activation_generation.is_some()
-            || output.disposition.is_some()
-            || output.causal_signal_id.is_some()
             || output.superseded
-            || output.superseded_by_generation.is_some()
-            || output.superseded_by_signal_id.is_some()
         {
             return Err(unsupported(
                 "output has coordinated or foreign activation attribution",
@@ -2274,11 +2270,7 @@ fn project_plain_legacy(
                 || output.output != *answer
                 || output.attempt_id.is_some()
                 || output.activation_generation.is_some()
-                || output.disposition.is_some()
-                || output.causal_signal_id.is_some()
                 || output.superseded
-                || output.superseded_by_generation.is_some()
-                || output.superseded_by_signal_id.is_some()
             {
                 return Err(ActivationStateError::UnsupportedLegacy(
                     "attributed output is not an exact ordinary single-agent answer",
