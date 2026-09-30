@@ -61,7 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-only helper, which starts in its own empty conversation, and waits for the answer.
   Answers over 8192 bytes are cut for the lead; the full answer stays in Session History.
   Each helper is an Add Agent command from the lead, an optional node in the turn graph,
-  and a child grant whose limits are reserved from the lead's budget. A helper is not
+  and a child grant whose limits are reserved from the lead's budget. Several `delegate`
+  calls in one model response run their helpers at the same time; each is admitted
+  against the graph and reservations the ones before it left. A helper is not
   started when its limits would leave the lead too little to read the answer. A failed or
   refused helper reaches the lead as a tool error. The same helper and task in one turn
   return the earlier result; a call whose helper was never started can be made again. A

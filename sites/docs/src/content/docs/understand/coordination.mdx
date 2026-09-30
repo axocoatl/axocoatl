@@ -13,7 +13,7 @@ question and owns a different recovery boundary.
 | Automation | The graph can be declared ahead of time | Explicit DAG nodes and edges |
 | Multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
 | Event lattice | Producers and consumers should be decoupled | Typed publish/subscribe notification |
-| Lead with helpers | A native Agent needs a separate read-only look at part of its task | The lead picks an approved helper and writes its task; one helper runs at a time |
+| Lead with helpers | A native Agent needs a separate read-only look at part of its task | The lead picks an approved helper and writes its task; several calls in one response run their helpers at the same time |
 | Coordinator Agent (legacy Sessions) | Task shape and worker choice emerge at runtime | Decomposition, then the first declared worker that can call each subtask's tools |
 
 ## Automations
@@ -38,8 +38,10 @@ An Agent whose Team & budget approval names Worker templates as helpers gets a
 `delegate` tool. A Coordinator template must have helpers and runs the same way in a
 native Session; its HTN methods are not used there. Each call starts one helper in
 its own conversation with only the Session's request and the task the lead wrote, and
-reserves the helper's approved limits from the lead's shared allowance. A helper is not
-started when that reservation would leave the lead too little to read its answer. A helper
+reserves the helper's approved limits from the lead's shared allowance. Several calls in
+one model response run their helpers at the same time; each is admitted against what the
+ones before it reserved. A helper is not started when that reservation would leave the
+lead too little to read its answer, counting every helper already started. A helper
 must be read-only: its template has no tool that writes files or runs commands, or it has
 `writes: []`, which withholds `write_file` and `edit_file` and runs its `bash` where it
 cannot change the repository. Any other helper is refused, and the lead is told that

@@ -413,14 +413,21 @@ impl DispatchState {
 impl SessionDispatchController {
     /// Admit one helper as an AddAgent command from its lead, or reattach to
     /// the node an identical earlier request admitted. `attempt` is the one
-    /// the caller resolved for this request; it must still be current.
+    /// the caller resolved for this request; it must still be current. A
+    /// fresh helper that would leave its lead too little to read the answer
+    /// is declined with the model-facing reason and nothing is submitted.
+    ///
+    /// Several of a lead's calls may admit at once. The follow-up reserve,
+    /// the turn and graph revisions the command expects, and the command's
+    /// reservation and graph revision are all read and written under one
+    /// controller lock, so each admission builds on the one before it.
     pub(super) fn admit_delegated_child(
         &self,
         parent: &ActivationRef,
         request: &ChildExecutionRequest,
         attempt: u32,
         control: AgentRunControl,
-    ) -> Result<Box<dyn AdmittedChildExecution>> {
+    ) -> Result<std::result::Result<Box<dyn AdmittedChildExecution>, String>> {
         let mut state = self.lock()?;
         state.execution_admission()?;
         let snapshot = state.current(parent)?;
@@ -492,11 +499,19 @@ impl SessionDispatchController {
             ..
         } = current;
         if state.native_child_origin(&node_id)?.is_some() {
-            return Ok(Box::new(CanonicalChildWait {
+            return Ok(Ok(Box::new(CanonicalChildWait {
                 controller: self.clone(),
                 node_id,
                 control,
-            }));
+            })));
+        }
+        if let Some(refused) = state.delegate_follow_up_shortfall(
+            parent,
+            &policy,
+            &worker.template_id,
+            &worker.limits,
+        )? {
+            return Ok(Err(refused));
         }
         let conversation_id =
             NodeConversationId::new(format!("child-conversation-{digest}")).map_err(error)?;
@@ -624,11 +639,11 @@ impl SessionDispatchController {
             };
             return Err(error(format!("the child Agent was not admitted: {reason}")));
         }
-        Ok(Box::new(CanonicalChildWait {
+        Ok(Ok(Box::new(CanonicalChildWait {
             controller: self.clone(),
             node_id,
             control,
-        }))
+        })))
     }
 }
 struct CanonicalChildWait {

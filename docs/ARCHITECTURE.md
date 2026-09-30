@@ -248,6 +248,12 @@ records that no helper ran. A repeat of a call whose command admitted no helper 
 admission attempt with its own command and node ids; the first attempt keeps the original
 ids. Ordinary shell/tool effects remain `ManualOnly`.
 
+`delegate` is a concurrency-safe tool, so a lead's `delegate` calls in one response run
+their helpers at the same time. The controller admits them one after another: each reads
+the turn and graph revisions, checks the lead's follow-up reserve, reserves the helper's
+limits, and applies its graph revision under the same controller lock, so each admission
+builds on the one before it and identical calls reattach to one helper.
+
 Its one-shot autonomous actor port additionally reserves the actual candidate checkpoint and
 terminal output before any provider dispatch. The optional `ActivationCheckpointPort` restores
 only the captured savepoint, excludes legacy latest-file lookup, keeps durable memory read-only,
@@ -676,6 +682,8 @@ and streams that sometimes end early.
   rather than failing the activation. Before a lead admits a helper, what the lead has
   left after the helper's reservation must still cover reading the helper's answer and
   the lead's own reserve, so a paying lead cannot delegate its check allowance away.
+  Helpers requested together are checked one after another, each after the reservations
+  of the ones before it.
   Apply and turn admission refuse a paying Agent whose invocation limit is smaller than
   that allowance plus its own two captures and one answer.
 - **Bounded context.** Tool output, and long string arguments of the model's own earlier
