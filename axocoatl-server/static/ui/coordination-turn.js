@@ -1195,6 +1195,11 @@ pre { max-height: 230px; overflow: auto; white-space: pre-wrap; font: var(--fs-x
 .required-check { padding: 8px 0; border-top: 1px solid var(--border); }
 .required-check .check-state { font-weight: 600; }
 .required-check.failed .check-state,.required-check.timed_out .check-state,.required-check.signalled .check-state,.required-check.launch_failed .check-state { color: var(--err, var(--warn)); }
+.check-readiness { padding: 8px 0; border-top: 1px solid var(--border); }
+.check-readiness .check-readiness-state { font-weight: 600; margin: 0; }
+.check-readiness.passed .check-readiness-state { color: var(--ok, var(--text)); }
+.check-readiness.failed .check-readiness-state,.check-readiness.unavailable .check-readiness-state { color: var(--err, var(--warn)); }
+.check-readiness .check-readiness-reason { margin: 4px 0 0; }
 dialog:modal { position: fixed; inset: 12px; width: calc(100% - 24px); max-height: calc(100dvh - 24px); margin: auto; overflow: auto; }
 dialog::backdrop { background: rgba(0,0,0,.55); }
 `;
@@ -1210,8 +1215,13 @@ function evidenceText(value) {
   return 'Not recorded';
 }
 
+// A check's argv as a shell reads it: a `sh -c` script as typed, any other
+// argv with each argument quoted when it needs to be.
+function shellWord(word) {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
+}
 function checkCommand(argv) {
-  return argv.length === 3 && argv[0] === 'sh' && argv[1] === '-c' ? argv[2] : argv.join(' ');
+  return argv.length === 3 && argv[0] === 'sh' && argv[1] === '-c' ? argv[2] : argv.map(shellWord).join(' ');
 }
 
 // Required-check conditions are `required-check:0` (capture before), `:1..n`
@@ -1510,14 +1520,26 @@ export class AxActivationInspector extends HTMLElement {
     const checks = this.#model?.controlPlane?.required_checks;
     if (!Array.isArray(checks) || !checks.length) return;
     this.#content.append(element('h3', '', 'Required checks'), element('p', 'label',
-      'The host runs these after the required Agents finish. A failure leaves the turn needing attention; select a check below to run it again.'));
+      'The host runs these after the required Agents finish. A failure leaves the turn needing attention; select a check below and Continue to run them all again.'));
+    // Whether the checks passed together on the current tree: a command's own
+    // exit code alone does not make the turn ready.
+    const readiness = this.#model?.controlPlane?.required_check_readiness;
+    if (readiness && typeof readiness.state === 'string') {
+      const titles = {passed: 'Ready · every check passed on the current tree', failed: 'Not ready',
+        not_run: 'Not run yet', skipped: 'Skipped', unavailable: 'Readiness unavailable'};
+      const summary = element('section', `check-readiness ${readiness.state}`);
+      summary.append(element('p', 'check-readiness-state', titles[readiness.state] || readiness.state));
+      if (readiness.state !== 'passed' && typeof readiness.reason === 'string' && readiness.reason)
+        summary.append(element('p', 'check-readiness-reason', readiness.reason));
+      this.#content.append(summary);
+    }
     const states = {pending: 'Not run yet', passed: 'Passed', failed: 'Failed', unverified: 'Exited 0, not yet counted as passing',
       signalled: 'Stopped by a signal', timed_out: 'Timed out', interrupted: 'Interrupted', launch_failed: 'Could not start',
-      not_dispatched: 'Not started', outcome_unknown: 'Outcome unknown', skipped: 'Skipped'};
+      not_dispatched: 'Not started', outcome_unknown: 'Outcome unknown', skipped: 'Skipped', unavailable: 'Unavailable'};
     for (const check of checks) {
       if (!Array.isArray(check?.argv)) continue;
       const item = element('section', `required-check ${typeof check.state === 'string' ? check.state : ''}`);
-      item.append(element('pre', 'check-command', checkCommand(check.argv)));
+      item.append(element('pre', 'check-command', check.argv.length ? checkCommand(check.argv) : 'Command unavailable'));
       const state = element('p', 'check-state', `${states[check.state] || String(check.state || 'Unknown')}${Number.isInteger(check.exit_code) ? ` · exit code ${check.exit_code}` : ''}`);
       item.append(state);
       if (typeof check.reason === 'string' && check.reason) item.append(element('p', 'label', check.reason));
@@ -1547,13 +1569,19 @@ export class AxActivationInspector extends HTMLElement {
         checkbox.disabled = !controlRequestAvailable(item.capability); checkbox.checked = !checkbox.disabled && draft[kind].has(key);
         const text = kind === 'restart' ? `${item.activation.node_id} · generation ${item.activation.generation} · ${item.state}` : checkChoiceLabel(item.condition_id, this.#model?.controlPlane?.required_checks);
         const label = element('label'); label.append(checkbox, document.createTextNode(text)); form.append(label);
-        if (kind === 'checks' && item.required_conditions?.length) form.append(element('p', 'continuation-dependencies',
-          `Also refreshes candidate captures and readiness: ${item.required_conditions.join(', ')}. Other check commands run only when selected.`));
+        // Any required check reruns them all; that is said once below.
+        if (kind === 'checks' && item.required_conditions?.length && !/^required-check:/.test(item.condition_id || ''))
+          form.append(element('p', 'continuation-dependencies', `Also runs again: ${item.required_conditions.join(', ')}.`));
         if (checkbox.disabled) form.append(element('p', 'unavailable', item.capability?.reason || 'Unavailable'));
         choices.push({kind, item, checkbox});
         checkbox.addEventListener('change', () => { if (checkbox.checked) draft[kind].add(key); else draft[kind].delete(key); sync(); });
       }
     }
+    if ((controls.check_choices || []).some(item => /^required-check:/.test(item.condition_id || '')))
+      form.append(element('p', 'continuation-dependencies',
+        'Any required check you select runs every required check again between fresh repository captures, then records readiness.'));
+    if ((controls.continuation_choices || []).length && this.#model?.controlPlane?.required_checks?.length)
+      form.append(element('p', 'continuation-checks', 'Restarted work runs the required checks again after it finishes.'));
     const pending = this.#commandHistory.some(item => ['continue', 'finish'].includes(item.request.action)
       && !['settled', 'rejected', 'failed'].includes(item.receipt?.state));
     const submit = element('button', 'continue-turn', 'Continue'); submit.type = 'submit';

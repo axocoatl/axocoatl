@@ -60,14 +60,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-only helper, which starts in its own empty conversation, and waits for the answer.
   Answers over 8192 bytes are cut for the lead; the full answer stays in Session History.
   Each helper is an Add Agent command from the lead, an optional node in the turn graph,
-  and a child grant whose limits are reserved from the lead's budget. A helper is not
+  and a child grant whose limits are reserved from the lead's budget. Several `delegate`
+  calls in one model response run their helpers at the same time; each is admitted
+  against the graph and reservations the ones before it left. A helper is not
   started when its limits would leave the lead too little to read the answer. A failed or
   refused helper reaches the lead as a tool error. The same helper and task in one turn
   return the earlier result; a call whose helper was never started can be made again. A
   return lost to a restart is read back without running the helper again, including when
   the restart came before the helper was admitted. Older helper answers stay whole in
-  later requests until the context runs short. Helpers whose templates can write files or
-  run commands are refused for now.
+  later requests until the context runs short. A helper must be read-only: its template
+  has no tool that writes files or runs commands, or it has `writes: []`, which withholds
+  `write_file` and `edit_file` and runs its `bash` where it cannot change the repository.
+  Any other helper is refused, and the refusal says to set `writes: []` on it.
   A Coordinator template in a native Session team runs as such a lead over its approved
   Worker templates. Legacy Sessions keep the Coordinator's own decomposition. The Agent
   graph draws a "delegated" edge from a lead to each helper, animated while the helper
@@ -91,9 +95,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Required checks for Session teams.** Team & budget can name commands the host runs
   in the Session's repository after the required Agents of every native turn finish,
   each between two repository captures of the accepted candidate and charged to the
-  first required Agent that may use `bash`. A turn completes only when every check
-  passes and the repository is unchanged; a failure leaves it needing attention. The
-  turn's controls show each check's command, state, exit code and output.
+  first required Agent whose own tools include `bash`. That Agent keeps enough of its
+  budget to run the checks twice, once and after one Continue; Apply refuses a smaller
+  invocation limit, and a lead that pays cannot hand that allowance to a helper. A turn
+  completes only when every check passes and the repository is unchanged; a failure
+  leaves it needing attention. When the checks cannot be paid for, the turn says why and
+  Continue does not offer to rerun them. The turn's controls show each check's command,
+  state, exit code and output, and above them whether the checks passed together on the
+  current tree and, if not, why. Continue on any check, or on restarted work, runs every
+  check again between fresh captures; an Agent that finishes after the checks captured
+  the repository makes them not ready. A check whose record cannot be read shows as
+  unavailable instead of hiding the turn.
+  Team & budget shows each check's arguments as a shell reads them and keeps a check's
+  exact argument list unless you change its line. Required checks do not run on
+  Explore several ways attempts, and Team & budget and Explore several ways say so.
 - **Retained Ways decisions.** Native Ways retain bounded candidate Outcomes, Routes,
   diffs, Checks, usage, Judge evidence, the human choice, and cleanup state after Keep
   or finishing without keeping. History storage limits are explicit; capacity failure
@@ -117,6 +132,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and creates no project, Workspace, or Session.
 
 ### Fixed
+- **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
+  longer copies host proxy variables into containers.** Any `sandbox.network` other
+  than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was
+  treated as `bridge`; `axocoatl validate`, `axocoatl doctor` and daemon start now
+  refuse it with an error naming the two accepted values, and `doctor` prints the
+  configured network. Every `podman run` now passes `--http-proxy=false`, so the
+  host's `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY` and `NO_PROXY` values, which can
+  include a proxy user name and password, no longer reach commands in the container.
 - **Paused turns no longer deadlock on a cancelled re-preparation.** Opening Files or
   Terminal after a restart re-prepares a Ready local environment; if that request was
   dropped (for example by navigating away) or the daemon shut down, the environment

@@ -32,6 +32,140 @@ impl DispatchState {
         };
         required_checks(graph, &self.content)
     }
+
+    /// Why the grant that pays for this turn's required checks cannot spend
+    /// `needed` more invocations on them at `now_ms`, in words for the
+    /// person, or `None` when it can. `lead` opens the sentence.
+    pub(super) fn check_payment_shortfall(
+        &self,
+        needed: u32,
+        now_ms: u64,
+        lead: &str,
+    ) -> Result<Option<String>> {
+        const FINISH: &str = "use Finish partial result to finish without them";
+        let Some(payer) = self.authority.required_check_payer().map_err(error)? else {
+            return Ok(Some(format!(
+                "{lead}: no Agent of this turn may pay for them. You can {FINISH}."
+            )));
+        };
+        let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
+        let name = agent_name(&self.content, snapshot.contract().graph(), &payer.holder);
+        let reason = if payer.closed {
+            format!("{lead}: this turn's authority is closed.")
+        } else if payer.revoked {
+            format!("{lead}: {name}'s authority for this turn was revoked. You can {FINISH}.")
+        } else if now_ms >= payer.expires_at_ms {
+            format!(
+                "{lead}: {name}'s budget expired. You can {FINISH}, and set a later budget \
+                 expiry in Team and budget for later turns."
+            )
+        } else if payer.invocations_left < needed {
+            let remedy = if payer.delegating {
+                format!("Raise its invocation limit with Review current authority, or {FINISH}.")
+            } else {
+                format!(
+                    "You can {FINISH}, and raise its invocation limit in Team and budget for \
+                     later turns."
+                )
+            };
+            format!(
+                "{lead}: {name}'s budget has {} left; they need {}. {remedy}",
+                invocations(payer.invocations_left),
+                invocations(needed)
+            )
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(reason))
+    }
+
+    /// Record the readiness review of this turn's required checks from
+    /// `proof`, unless the current review already records exactly it.
+    /// Whether anything was recorded.
+    fn record_check_readiness(
+        &mut self,
+        epoch: ExecutionEpochId,
+        activations: Vec<ActivationRef>,
+        proof: String,
+        passed: bool,
+    ) -> Result<bool> {
+        let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
+        let condition_id = ConditionId::new(CheckGroup::required().ready_id()).map_err(error)?;
+        if let Some(existing) = snapshot.contract().current_condition(&condition_id) {
+            if matches!(self.content.resolve_activation_evidence(&existing.evidence).map_err(error)?, ActivationEvidenceContent::Guidance {text} if text == &proof)
+            {
+                return Ok(false);
+            }
+        }
+        let command = format!(
+            "required-check-ready-{:x}",
+            Sha256::digest(proof.as_bytes())
+        );
+        let evidence = self
+            .content
+            .retain_activation_evidence(ActivationEvidenceContent::Guidance { text: proof })
+            .map_err(error);
+        let evidence = self.fail_closed(evidence)?.reference().clone();
+        let appended = self.append(
+            &command,
+            TurnContractEvent::RecordCondition {
+                epoch_id: epoch,
+                condition_id,
+                activations,
+                outcome: if passed {
+                    ConditionOutcome::Passed
+                } else {
+                    ConditionOutcome::Failed
+                },
+                evidence,
+            },
+        );
+        self.fail_closed(appended)?;
+        Ok(true)
+    }
+}
+
+/// Whether the latest epoch runs condition `id`: a first epoch runs every
+/// condition, a continuation only those it selected.
+fn epoch_runs(contract: &TurnContract, id: &ConditionId) -> bool {
+    contract
+        .epochs()
+        .last()
+        .and_then(|epoch| epoch.continuation.as_ref())
+        .is_none_or(|plan| plan.condition_runs.contains(id))
+}
+
+/// `count` invocations, in words.
+fn invocations(count: u32) -> String {
+    if count == 1 {
+        "1 invocation".into()
+    } else {
+        format!("{count} invocations")
+    }
+}
+
+/// The name the person gave the Agent of `node`, or its node id.
+fn agent_name(
+    content: &ExecutionContentStore,
+    graph: Option<&TurnGraphSnapshot>,
+    node: &TurnNodeId,
+) -> String {
+    graph
+        .and_then(|graph| graph.nodes.iter().find(|item| item.node_id == *node))
+        .and_then(
+            |item| match content.resolve_activation_evidence(&item.definition.snapshot) {
+                Ok(ActivationEvidenceContent::Definition { configuration, .. }) => {
+                    serde_json::from_str::<serde_json::Value>(configuration)
+                        .ok()?
+                        .get("name")?
+                        .as_str()
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_owned)
+                }
+                _ => None,
+            },
+        )
+        .unwrap_or_else(|| node.as_str().to_owned())
 }
 
 /// The required checks an admitted graph carries, read from their retained
@@ -238,6 +372,7 @@ impl SessionDispatchController {
             let mut results = Vec::new();
             let mut observations = Vec::new();
             let mut command_candidates = Vec::new();
+            let mut before_run = None;
             for (index, definition) in definitions.iter().enumerate() {
                 let condition_id = ConditionId::new(group.condition_id(index)).map_err(error)?;
                 let definition_ref = state
@@ -250,6 +385,9 @@ impl SessionDispatchController {
                     let Some(recorded) = recorded else {
                         return Ok(false);
                     };
+                    if index == 0 {
+                        before_run = Some(recorded.run.run_id.clone());
+                    }
                     let arguments = state
                         .content
                         .condition_arguments(&snapshot, &recorded.run.run_id)
@@ -320,8 +458,14 @@ impl SessionDispatchController {
                                 return Ok(true);
                             }
                         };
+                        // No command runs on a tree the host could not see.
                         if index == 0 && capture.content.tree_sha256.is_none() {
-                            return Ok(false);
+                            let ready = ConditionId::new(group.ready_id()).map_err(error)?;
+                            if !epoch_runs(contract, &ready) {
+                                return Ok(false);
+                            }
+                            let proof = serde_json::json!({"kind":"required_check_readiness","turn_id":snapshot.turn_id(),"required_checks":checks,"activations":activations,"before":capture.reference,"passed":false,"reason":NOT_CAPTURED}).to_string();
+                            return state.record_check_readiness(epoch, activations, proof, false);
                         }
                         observations.push(capture);
                     }
@@ -340,12 +484,42 @@ impl SessionDispatchController {
                 if contract.condition_run(&run_id).is_some() {
                     return Ok(false);
                 }
-                let Some(grant_id) = state
-                    .authority
-                    .required_check_grant(&definition_ref, &repository, now_ms()?)
-                    .map_err(error)?
-                else {
-                    return Ok(false);
+                // Nothing of a pass is spent unless the paying grant can pay
+                // for the rest of it; otherwise the turn records why.
+                let needed = (index..definitions.len())
+                    .filter(|later| {
+                        ConditionId::new(group.condition_id(*later)).is_ok_and(|id| {
+                            contract.current_condition(&id).is_none() && epoch_runs(contract, &id)
+                        })
+                    })
+                    .count();
+                let now = now_ms()?;
+                let unpaid = state.check_payment_shortfall(
+                    u32::try_from(needed).unwrap_or(u32::MAX),
+                    now,
+                    "Required checks could not run",
+                )?;
+                let grant_id = match unpaid {
+                    Some(_) => None,
+                    None => state
+                        .authority
+                        .required_check_grant(&definition_ref, &repository, now)
+                        .map_err(error)?,
+                };
+                let Some(grant_id) = grant_id else {
+                    let ready = ConditionId::new(group.ready_id()).map_err(error)?;
+                    if !epoch_runs(contract, &ready) {
+                        return Ok(false);
+                    }
+                    let reason = unpaid.unwrap_or_else(|| {
+                        "Required checks could not run: no Agent of this turn may pay for them \
+                         now. You can use Finish partial result to finish without them."
+                            .into()
+                    });
+                    // The epoch keeps one epoch's review distinct from an
+                    // identical one in a later epoch.
+                    let proof = serde_json::json!({"kind":"required_check_readiness","turn_id":snapshot.turn_id(),"epoch_id":epoch,"required_checks":checks,"activations":activations,"passed":false,"reason":reason}).to_string();
+                    return state.record_check_readiness(epoch, activations, proof, false);
                 };
                 let policy = state.authority.grant_policy(&grant_id).map_err(error)?;
                 let reference = state
@@ -391,46 +565,40 @@ impl SessionDispatchController {
                 let before = &observations[0];
                 let after = &observations[1];
                 let outcomes: Vec<_> = results.iter().map(|(_, _, outcome)| *outcome).collect();
-                let passed = readiness_passed(
+                // Work accepted after the checks began is not what they ran on.
+                let current: Vec<_> = contract
+                    .current_accepted_activations()
+                    .iter()
+                    .map(|item| item.activation.clone())
+                    .collect();
+                let failure = readiness_failure(
                     definitions.len(),
                     &outcomes,
                     &command_candidates,
                     checks.len(),
                     &before.content,
                     &after.content,
-                );
-                let proof = serde_json::json!({"kind":"required_check_readiness","turn_id":snapshot.turn_id(),"required_checks":checks,"activations":activations,"before":before.reference,"after":after.reference,"candidate_sha256":after.content.tree_sha256,"checks":results,"check_candidates":command_candidates,"passed":passed}).to_string();
-                if let Some(existing) = contract.current_condition(&condition_id) {
-                    if matches!(state.content.resolve_activation_evidence(&existing.evidence).map_err(error)?, ActivationEvidenceContent::Guidance {text} if text == &proof)
-                    {
-                        return Ok(false);
-                    }
+                )
+                .or_else(|| {
+                    before_run
+                        .as_ref()
+                        .zip(state.canonical.records().ok())
+                        .is_some_and(|(before_run, records)| {
+                            accepted_after_capture(
+                                records,
+                                snapshot.turn_id(),
+                                before_run,
+                                &current,
+                            )
+                        })
+                        .then_some(ACCEPTED_AFTER_CAPTURE)
+                });
+                let passed = failure.is_none();
+                let mut proof = serde_json::json!({"kind":"required_check_readiness","turn_id":snapshot.turn_id(),"required_checks":checks,"activations":activations,"before":before.reference,"after":after.reference,"candidate_sha256":after.content.tree_sha256,"checks":results,"check_candidates":command_candidates,"passed":passed});
+                if let Some(reason) = failure {
+                    proof["reason"] = reason.into();
                 }
-                let command = format!(
-                    "required-check-ready-{:x}",
-                    Sha256::digest(proof.as_bytes())
-                );
-                let evidence = state
-                    .content
-                    .retain_activation_evidence(ActivationEvidenceContent::Guidance { text: proof })
-                    .map_err(error);
-                let evidence = state.fail_closed(evidence)?.reference().clone();
-                let appended = state.append(
-                    &command,
-                    TurnContractEvent::RecordCondition {
-                        epoch_id: epoch,
-                        condition_id,
-                        activations,
-                        outcome: if passed {
-                            ConditionOutcome::Passed
-                        } else {
-                            ConditionOutcome::Failed
-                        },
-                        evidence,
-                    },
-                );
-                state.fail_closed(appended)?;
-                return Ok(true);
+                return state.record_check_readiness(epoch, activations, proof.to_string(), passed);
             }
             selected
         };
@@ -445,17 +613,51 @@ impl SessionDispatchController {
     }
 }
 
-/// Whether recorded results establish readiness: every capture and command
-/// passed, each command ran on the candidate its group captured, and the
-/// captured tree and HEAD did not change while the commands ran.
-fn readiness_passed(
+/// Why the checks are not ready, in words for the person.
+const NOT_CAPTURED: &str = "The repository could not be captured around the checks, so they \
+     establish nothing. Continue runs them again.";
+const NOT_ALL_RUN: &str = "Some checks have no result on the current tree. Continue runs them \
+     all again.";
+const CHECK_FAILED: &str = "A check failed. Fix the cause, then Continue to run the checks again.";
+const CHANGED_FILES: &str = "A check changed files, so the repository after the checks is not the \
+     one they ran on. Continue runs them again on the changed tree.";
+const OLDER_TREE: &str = "Some checks ran on an older tree than the current one. Continue runs \
+     them all again.";
+const ACCEPTED_AFTER_CAPTURE: &str = "An Agent finished after the checks captured the repository, \
+     so they did not run on its result. Continue runs them again.";
+
+/// Why recorded results do not establish readiness, or `None` when they do:
+/// every capture and command passed, each command ran on the candidate its
+/// group captured, and the captured tree and HEAD did not change while the
+/// commands ran.
+fn readiness_failure(
     definitions: usize,
     outcomes: &[ConditionOutcome],
     command_candidates: &[Option<(String, Option<String>)>],
     checks: usize,
     before: &ActivationRepositorySnapshot,
     after: &ActivationRepositorySnapshot,
-) -> bool {
+) -> Option<&'static str> {
+    use ConditionOutcome::Passed;
+    if outcomes.len() != definitions || definitions != checks + 2 {
+        return Some(NOT_ALL_RUN);
+    }
+    if before.tree_sha256.is_none()
+        || after.tree_sha256.is_none()
+        || outcomes[0] != Passed
+        || outcomes[checks + 1] != Passed
+    {
+        return Some(NOT_CAPTURED);
+    }
+    if outcomes[1..=checks]
+        .iter()
+        .any(|outcome| *outcome != Passed)
+    {
+        return Some(CHECK_FAILED);
+    }
+    if before.tree_sha256 != after.tree_sha256 || before.head != after.head {
+        return Some(CHANGED_FILES);
+    }
     let candidate = after
         .tree_sha256
         .clone()
@@ -464,14 +666,54 @@ fn readiness_passed(
         && command_candidates
             .iter()
             .all(|observed| observed.is_some() && observed == &candidate);
-    outcomes.len() == definitions
-        && commands_match
-        && outcomes
-            .iter()
-            .all(|outcome| *outcome == ConditionOutcome::Passed)
-        && before.tree_sha256.is_some()
-        && before.tree_sha256 == after.tree_sha256
-        && before.head == after.head
+    (!commands_match).then_some(OLDER_TREE)
+}
+
+/// Whether recorded results establish readiness (see [`readiness_failure`]).
+#[cfg(test)]
+fn readiness_passed(
+    definitions: usize,
+    outcomes: &[ConditionOutcome],
+    command_candidates: &[Option<(String, Option<String>)>],
+    checks: usize,
+    before: &ActivationRepositorySnapshot,
+    after: &ActivationRepositorySnapshot,
+) -> bool {
+    readiness_failure(
+        definitions,
+        outcomes,
+        command_candidates,
+        checks,
+        before,
+        after,
+    )
+    .is_none()
+}
+
+/// Whether one of the `current` accepted activations was accepted after the
+/// intent of the checks' Before capture `before` in this turn's `records`:
+/// its changes may be missing from what the checks ran on.
+fn accepted_after_capture(
+    records: &[TurnContractEnvelope],
+    turn: &LogicalTurnId,
+    before: &ConditionRunId,
+    current: &[ActivationRef],
+) -> bool {
+    let mut captured = false;
+    for record in records.iter().filter(|record| record.turn_id == *turn) {
+        match &record.event {
+            TurnContractEvent::RecordConditionIntent { run, .. } if run.run_id == *before => {
+                captured = true;
+            }
+            TurnContractEvent::AcceptActivation { activation, .. }
+                if captured && current.contains(activation) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Required Agents must all settle before checking, but they do not redefine a

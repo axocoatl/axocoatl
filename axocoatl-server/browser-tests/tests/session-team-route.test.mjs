@@ -130,6 +130,10 @@ test('actual Session team with a bash Agent applies required checks and reports 
     const checks=[['sh','-c','npm test'],['cargo','test','--quiet']];
     const edit={command_id:'checks-applied',expected_configuration_revision:0,slots:current.slots.map(slot=>({...slot,max_output_tokens:128,limits:{activations:2,invocations:12,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),dependencies:current.dependencies,layout:current.layout,required_checks:checks};
     const post=async(suffix,body)=>{const response=await fetch(`${url}${suffix}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return{status:response.status,value:await response.json()};};
+    // Two checks need 8 invocations for two passes, 2 captures and 1 answer.
+    const tight=structuredClone(edit);tight.command_id='checks-tight';for(const slot of tight.slots)slot.limits.invocations=10;
+    const refused=await post('/preview',tight);assert.equal(refused.status,409,JSON.stringify(refused.value));
+    assert.match(refused.value.error,/runs the required checks on its budget, so its invocation limit must be at least 11/);
     const preview=await post('/preview',edit);assert.equal(preview.status,200,JSON.stringify(preview.value));assert.deepEqual(preview.value.edit.required_checks,checks);
     const applied=await post('/apply',{edit,review_digest:preview.value.review_digest});assert.equal(applied.status,200,JSON.stringify(applied.value));
     const saved=await (await fetch(url)).json();assert.deepEqual(saved.required_checks,checks);

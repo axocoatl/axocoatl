@@ -701,3 +701,44 @@ fn authority_without_host_checks_keeps_its_exact_bytes() {
     let reopened = f.gate();
     assert!(reopened.grant_pays_required_checks("plain").unwrap());
 }
+
+/// A lead's grant carries its helpers' profiles too. A helper that may use
+/// bash does not make a lead without bash pay: the host holds the check
+/// allowance back only from an activation that runs commands itself, so the
+/// next required Agent whose own profile has bash pays.
+#[test]
+fn a_lead_pays_for_checks_only_when_its_own_profile_has_bash() {
+    let f = fixture(&["a", "b"]);
+    let (a, b) = (TurnNodeId::new("a").unwrap(), TurnNodeId::new("b").unwrap());
+    let mut lead = policy("grant-a", &a, &["read_file"]);
+    let mut helper = lead.profiles[0].clone();
+    helper.definition = "builder-helper".into();
+    helper.tools = vec!["bash".into()];
+    lead.profiles.push(helper);
+    let gate = f.gate();
+    gate.install_grant(lead.clone(), 0).unwrap();
+    // Only the lead: its helper's bash cannot pay.
+    assert!(matches!(f.authorize(&gate), Err(AuthorityError::Denied)));
+    assert_eq!(gate.required_check_payer().unwrap(), None);
+    gate.install_grant(policy("grant-b", &b, &["bash"]), gate.revision().unwrap())
+        .unwrap();
+    f.authorize(&gate).unwrap();
+    assert!(!gate.grant_pays_required_checks("grant-a").unwrap());
+    assert!(gate.grant_pays_required_checks("grant-b").unwrap());
+    let payer = gate.required_check_payer().unwrap().unwrap();
+    assert_eq!(payer.grant_id, "grant-b");
+    assert_eq!(payer.holder, b);
+    assert_eq!(payer.invocations_left, 10);
+    assert!(!payer.revoked && !payer.delegating && !payer.closed);
+    // The same lead whose own profile has bash pays itself.
+    let g = fixture(&["a", "b"]);
+    let gate = g.gate();
+    let mut own = lead.clone();
+    own.profiles[0].tools = vec!["bash".into()];
+    gate.install_grant(own, 0).unwrap();
+    gate.install_grant(policy("grant-b", &b, &["bash"]), gate.revision().unwrap())
+        .unwrap();
+    g.authorize(&gate).unwrap();
+    assert!(gate.grant_pays_required_checks("grant-a").unwrap());
+    assert!(!gate.grant_pays_required_checks("grant-b").unwrap());
+}

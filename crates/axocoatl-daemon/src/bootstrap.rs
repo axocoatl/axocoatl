@@ -685,6 +685,20 @@ fn require_e2b_template_compatible(
     )))
 }
 
+/// The local container network for `sandbox.network`. Only exact `bridge` and
+/// `none` are accepted; any other value is refused so a misspelled `none` can
+/// never start a container with a network.
+fn configured_sandbox_network(
+    value: &str,
+) -> Result<axocoatl_isolation::session_sandbox::SandboxNetwork, DaemonError> {
+    axocoatl_config::validate_sandbox_network(value)?;
+    Ok(if value == "none" {
+        axocoatl_isolation::session_sandbox::SandboxNetwork::None
+    } else {
+        axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge
+    })
+}
+
 fn bounded_setup_output(mut value: String) -> String {
     if value.len() <= SESSION_SETUP_OUTPUT_CAP {
         return value;
@@ -4819,6 +4833,9 @@ impl AxocoatlDaemon {
         config: AxocoatlConfig,
         reattach_active_ready: bool,
     ) -> Result<Self, DaemonError> {
+        // Refuse a network setting other than `bridge` or `none` before any
+        // container or durable state is touched.
+        axocoatl_config::validate_sandbox_network(&config.sandbox.network)?;
         // Runtime cleanup is the first fallible bootstrap responsibility after
         // the durable Session authority becomes available. A later provider,
         // workspace, MCP, or automation failure must not leave an interrupted
@@ -8484,10 +8501,14 @@ impl AxocoatlDaemon {
                     // generic hook empty so no second implicit path can run it.
                     allow_post_create: false,
                     allow_untrusted_image: sc.allow_untrusted_images,
-                    network: match sc.network.as_str() {
-                        "none" => axocoatl_isolation::session_sandbox::SandboxNetwork::None,
-                        _ => axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge,
-                    },
+                    network: configured_sandbox_network(&sc.network).map_err(|error| {
+                        SessionEnvironmentPreparationError {
+                            error,
+                            effective_image: None,
+                            runtime: None,
+                            setup_results: Vec::new(),
+                        }
+                    })?,
                     require_resource_limits: sc.require_resource_limits,
                     passive_start: false,
                     runtime_authority: Some(self.local_runtime_authority.clone()),
@@ -13602,10 +13623,7 @@ trap - 0 1 2 15
             )?),
             allow_post_create: false,
             allow_untrusted_image: config.allow_untrusted_images,
-            network: match config.network.as_str() {
-                "none" => axocoatl_isolation::session_sandbox::SandboxNetwork::None,
-                _ => axocoatl_isolation::session_sandbox::SandboxNetwork::Bridge,
-            },
+            network: configured_sandbox_network(&config.network)?,
             require_resource_limits: config.require_resource_limits,
             passive_start: false,
             runtime_authority: Some(self.local_runtime_authority.clone()),
@@ -23722,6 +23740,35 @@ mod tests {
     use super::*;
 
     include!("bootstrap_runtime_cache_tests.rs");
+
+    #[tokio::test]
+    async fn unknown_sandbox_network_is_refused_not_bridged() {
+        use axocoatl_isolation::session_sandbox::SandboxNetwork;
+        assert!(matches!(
+            configured_sandbox_network("none").unwrap(),
+            SandboxNetwork::None
+        ));
+        assert!(matches!(
+            configured_sandbox_network("bridge").unwrap(),
+            SandboxNetwork::Bridge
+        ));
+        for refused in ["None", "off", "disabled", ""] {
+            let error = configured_sandbox_network(refused).unwrap_err().to_string();
+            assert!(
+                error.contains("sandbox.network") && error.contains("\"bridge\" or \"none\""),
+                "{refused}: {error}"
+            );
+        }
+
+        // Daemon start refuses it before touching a data root or container.
+        let mut config = test_config();
+        config.sandbox.network = "off".to_string();
+        let error = match AxocoatlDaemon::bootstrap_headless(config).await {
+            Ok(_) => panic!("a daemon must not start with sandbox.network: off"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("sandbox.network"), "{error}");
+    }
 
     #[tokio::test]
     async fn cancelled_shutdown_join_returns_the_pending_task_for_exact_retry() {

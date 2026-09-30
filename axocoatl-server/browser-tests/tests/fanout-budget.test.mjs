@@ -14,3 +14,18 @@ test('Ways retains separate explicit budgets per heterogeneous attempt and rejec
  assert.equal(await page.locator('ax-fanout').evaluate(element=>element.validateApprovals()),true);const lanes=await page.locator('ax-fanout').evaluate(element=>element.lanes);assert.deepEqual(lanes.map(lane=>lane.agent),['coder','reviewer']);assert.equal(lanes[1].approval.max_output_tokens,256);assert.deepEqual(lanes[0].approval.limits,{activations:2,invocations:10,tokens:20000,cost_microunits:0});
  await page.getByRole('button',{name:'+ Add an attempt',exact:true}).click();await page.locator('ax-fanout').evaluate(element=>{element.shadowRoot.querySelectorAll('details')[2].open=true;});await page.getByLabel('Attempt 3: Total token limit',{exact:true}).fill('30000');assert.equal(await page.locator('ax-fanout').evaluate(element=>element.lanes[1].approval.limits.tokens),20000,'Copied attempts do not share a mutable approval');await page.getByLabel('Attempt 3: Budget expires (your local time)',{exact:true}).fill('2000-10-10T10:00');assert.equal(await page.locator('ax-fanout').evaluate(element=>element.validateApprovals()),false);assert.deepEqual(errors,[]);
  }finally{await context.close();}});
+
+test('Ways says plainly that the Session team\'s required checks do not run on attempts',async()=>{const context=await browser.newContext({viewport:{width:390,height:844},colorScheme:'light',reducedMotion:'reduce'}),page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));try{
+ await page.route('**/checks-fixture',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><html data-theme="light"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/tokens.css"><ax-fanout open enabled></ax-fanout><script type="module" src="/ui/fanout.js"></script></html>'}));
+ await page.route('**/api/agents',route=>route.fulfill({json:[{id:'coder',role:'autonomous',provider:'ollama',model:'code'}]}));await page.route('**/api/llm/models?*',route=>route.fulfill({json:['code']}));
+ await page.goto(`${runtime.baseUrl}/checks-fixture`);await page.waitForFunction(()=>customElements.get('ax-fanout'));
+ const note=()=>page.locator('ax-fanout').evaluate(element=>element.shadowRoot.querySelector('.note').textContent);
+ assert.doesNotMatch(await note(),/required checks/);
+ await page.locator('ax-fanout').evaluate(element=>{element.requiredChecks=2;});
+ assert.match(await note(),/This Session's required checks do not run on these attempts\. Run them with Run checks before you keep one\./);
+ if(process.env.AXOCOATL_P1_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.AXOCOATL_P1_SCREENSHOT_DIR}/ways-required-checks.png`,fullPage:true});
+ await page.locator('ax-fanout').evaluate(element=>{element.lanes=[{agent:'coder'},{agent:'coder'}];});
+ assert.match(await note(),/required checks do not run on these attempts/,'the notice survives a new configuration');
+ await page.locator('ax-fanout').evaluate(element=>{element.requiredChecks=0;});
+ assert.doesNotMatch(await note(),/required checks/);assert.deepEqual(errors,[]);
+ }finally{await context.close();}});

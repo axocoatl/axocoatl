@@ -35,6 +35,7 @@ use crate::turn_contract::{
 
 #[path = "control_authority_checks.rs"]
 mod checks;
+pub use checks::{pays_with_own_shell, RequiredCheckPayer};
 #[path = "control_authority_delegation.rs"]
 mod delegation;
 pub use delegation::DelegatedGrantReservation;

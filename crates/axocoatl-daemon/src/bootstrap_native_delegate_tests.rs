@@ -51,6 +51,10 @@ struct LeadTemplate {
     invocations: u32,
     operations: Vec<DelegatedOperation>,
     legacy_htn_methods_yaml: Option<String>,
+    /// The team's required checks, which the lead pays for when it has bash.
+    required_checks: Vec<Vec<String>>,
+    /// Helper templates approved with `writes: []`.
+    read_only_helpers: Vec<String>,
 }
 impl LeadTemplate {
     fn autonomous() -> Self {
@@ -60,6 +64,18 @@ impl LeadTemplate {
             invocations: 20,
             operations: vec![DelegatedOperation::AddAgent],
             legacy_htn_methods_yaml: None,
+            required_checks: vec![],
+            read_only_helpers: vec![],
+        }
+    }
+    /// A lead with bash on a team with one required check, which it pays
+    /// for, with `invocations` in its allowance.
+    fn paying(invocations: u32) -> Self {
+        Self {
+            tools: vec!["bash".into()],
+            invocations,
+            required_checks: vec![vec!["sh".into(), "-c".into(), "true".into()]],
+            ..Self::autonomous()
         }
     }
     /// A lead that can read the repository but not change it or run
@@ -98,6 +114,8 @@ impl LeadTemplate {
 "#
                 .into(),
             ),
+            required_checks: vec![],
+            read_only_helpers: vec![],
         }
     }
 }
@@ -139,6 +157,11 @@ async fn lead_fixture_as(
             }
             let mut retained = vec![];
             for (name, role, tools) in agents {
+                let writes = lead
+                    .read_only_helpers
+                    .iter()
+                    .any(|helper| helper == name)
+                    .then(Vec::new);
                 let definition_id = AgentDefinitionId::new(format!("{name}-definition")).unwrap();
                 let config = AgentConfig {
                     id: AgentId::new(if role == AgentRole::Worker {
@@ -150,6 +173,7 @@ async fn lead_fixture_as(
                     provider: "ollama".into(),
                     model: "test-model".into(),
                     tools: tools.clone(),
+                    writes: writes.clone(),
                     sampling: SamplingConfig {
                         max_tokens: Some(128),
                         ..Default::default()
@@ -162,7 +186,7 @@ async fn lead_fixture_as(
                     model: "test-model".into(),
                     isolation: "in-process".into(),
                     tools,
-                    write_scope: None,
+                    write_scope: writes,
                 };
                 let snapshot = content
                     .retain_activation_evidence(ActivationEvidenceContent::Definition {
@@ -231,7 +255,8 @@ async fn lead_fixture_as(
                     text: serde_json::json!({
                         "kind": "authenticated_session_team_apply",
                         "edit": {"command_id": "approve-lead", "expected_configuration_revision": 1,
-                            "slots": [], "dependencies": [], "layout": []},
+                            "slots": [], "dependencies": [], "layout": [],
+                            "required_checks": lead.required_checks},
                         "templates": [[slot_id.as_str(), "lead"]],
                         "coordinators": [[slot_id.as_str(), approved]]
                     })
@@ -350,10 +375,14 @@ struct HelperSetupGate {
 
 /// What the lead asks for and how the helper behaves; every provider request
 /// is recorded for the assertions. The lead delegates one task per round, in
-/// order, and then answers.
+/// order, or every task in its first round when `together`, and then answers.
 struct Scenario {
     helper: String,
     tasks: Vec<String>,
+    together: bool,
+    /// Helpers inside their provider call. When set, each helper's provider
+    /// waits there for another helper and fails if none arrives in time.
+    rendezvous: Option<tokio::sync::watch::Sender<usize>>,
     answer: String,
     helper_fails: bool,
     lead_fails_first_generation: bool,
@@ -368,6 +397,8 @@ impl Scenario {
         Self {
             helper: "scout".into(),
             tasks: vec![TASK.into()],
+            together: false,
+            rendezvous: None,
             answer: answer.into(),
             helper_fails: false,
             lead_fails_first_generation: false,
@@ -467,25 +498,28 @@ impl LlmProvider for LeadProvider {
             .unwrap()
             .push((self.activation.clone(), request));
         let round = self.round.fetch_add(1, Ordering::SeqCst);
-        if let Some(task) = self.scenario.tasks.get(round) {
-            return Ok(finished(
-                vec![
-                    StreamEvent::TextDelta {
-                        delta: LEAD_MARKER.into(),
-                    },
-                    StreamEvent::ToolCallDelta {
-                        index: Some(0),
-                        id: format!("delegate-call-{round}"),
-                        name: Some("delegate".into()),
-                        args_delta: serde_json::json!({
-                            "helper": self.scenario.helper,
-                            "task": task,
-                        })
-                        .to_string(),
-                    },
-                ],
-                FinishReason::ToolUse,
-            ));
+        let tasks = match (self.scenario.together, round) {
+            (true, 0) => self.scenario.tasks.iter().collect::<Vec<_>>(),
+            (true, _) => vec![],
+            (false, _) => self.scenario.tasks.get(round).into_iter().collect(),
+        };
+        if !tasks.is_empty() {
+            let mut events = vec![StreamEvent::TextDelta {
+                delta: LEAD_MARKER.into(),
+            }];
+            for (index, task) in tasks.into_iter().enumerate() {
+                events.push(StreamEvent::ToolCallDelta {
+                    index: Some(index),
+                    id: format!("delegate-call-{round}-{index}"),
+                    name: Some("delegate".into()),
+                    args_delta: serde_json::json!({
+                        "helper": self.scenario.helper,
+                        "task": task,
+                    })
+                    .to_string(),
+                });
+            }
+            return Ok(finished(events, FinishReason::ToolUse));
         }
         if self.scenario.lead_fails_first_generation && self.activation.generation == 1 {
             return Ok(provider_failure("lead provider lost its connection"));
@@ -527,6 +561,17 @@ impl LlmProvider for HelperProvider {
         self.scenario.helper_calls.fetch_add(1, Ordering::SeqCst);
         if let Some(hold) = &self.scenario.hold_helper {
             hold.acquire().await.unwrap().forget();
+        }
+        if let Some(inside) = &self.scenario.rendezvous {
+            let mut others = inside.subscribe();
+            inside.send_modify(|count| *count += 1);
+            let met =
+                tokio::time::timeout(Duration::from_secs(2), others.wait_for(|count| *count >= 2))
+                    .await;
+            if !matches!(met, Ok(Ok(_))) {
+                inside.send_modify(|count| *count -= 1);
+                return Ok(provider_failure("no other helper ran at the same time"));
+            }
         }
         if self.scenario.helper_fails {
             return Ok(provider_failure("helper provider failed"));
@@ -976,6 +1021,80 @@ async fn delegate_refuses_a_helper_that_can_change_files() {
     assert_eq!(scenario.helper_calls(), 0);
     assert!(helper_node(&outcome.snapshot, &lead).is_none());
     assert!(agent_commands(&run.controller).is_empty());
+}
+
+/// A helper with bash whose writes are `[]` is read-only: it is not offered
+/// the file-writing tools and its shell cannot change the repository, so it
+/// takes delegated work. The same template without `writes: []` is refused,
+/// and the refusal says how to make it read-only.
+#[tokio::test]
+async fn a_helper_with_bash_takes_delegated_work_only_when_its_writes_are_empty() {
+    for read_only in [true, false] {
+        let mut template = LeadTemplate::autonomous();
+        if read_only {
+            template.read_only_helpers = vec!["shell".into()];
+        }
+        let fixture = lead_fixture_as(
+            100000,
+            &[
+                ("scout", &[]),
+                ("shell", &["read_file", "write_file", "bash"]),
+            ],
+            template,
+        )
+        .await;
+        let lead = fixture.request.node_evidence[0].node_id.clone();
+        let mut scenario = Scenario::new("pub fn run");
+        scenario.helper = "shell".into();
+        let scenario = Arc::new(scenario);
+        let run = run_lead(&fixture, scenario.clone(), false).await;
+        let snapshot = run.controller.snapshot().unwrap();
+        let first_request = scenario.lead_requests.lock().unwrap()[0].1.clone();
+        let tool = first_request
+            .tools
+            .iter()
+            .find(|tool| tool.name == "delegate")
+            .unwrap();
+        if read_only {
+            assert_eq!(
+                tool.parameters["properties"]["helper"]["enum"],
+                serde_json::json!(["scout", "shell"])
+            );
+            assert!(
+                tool.description.contains(
+                    "- shell: tools read_file, bash (its bash cannot change the repository)"
+                ),
+                "{}",
+                tool.description
+            );
+            assert!(
+                helper_node(&snapshot, &lead).is_some(),
+                "the read-only helper is admitted"
+            );
+            let commands = agent_commands(&run.controller);
+            assert_eq!(commands.len(), 1);
+            assert!(matches!(
+                commands[0].state,
+                ControlCommandState::Applied | ControlCommandState::Settled
+            ));
+        } else {
+            assert_eq!(
+                tool.parameters["properties"]["helper"]["enum"],
+                serde_json::json!(["scout"])
+            );
+            assert!(!tool.description.contains("shell"));
+            let error = scenario.last_delegate_result();
+            assert!(
+                error.contains(
+                    "The helper 'shell' can change files or run commands (write_file, bash)"
+                ) && error.contains("setting `writes: []` on it"),
+                "{error}"
+            );
+            assert_eq!(scenario.helper_calls(), 0);
+            assert!(helper_node(&snapshot, &lead).is_none());
+            assert!(agent_commands(&run.controller).is_empty());
+        }
+    }
 }
 
 #[tokio::test]
@@ -1868,6 +1987,47 @@ async fn helper_that_leaves_the_lead_too_few_tokens_is_refused() {
     helper_that_leaves_the_lead_too_little_is_refused(10150, 20, "50 tokens").await;
 }
 
+/// A lead that runs commands and pays for the team's required checks cannot
+/// hand its check allowance to a helper: a helper that fits in its budget
+/// but would leave less than that allowance is not started.
+#[tokio::test]
+async fn a_lead_that_pays_for_required_checks_keeps_their_allowance_from_helpers() {
+    let fixture = lead_fixture_as(100000, &[("scout", &[])], LeadTemplate::paying(14)).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let scenario = Arc::new(Scenario::new("never produced"));
+    // This fixture's backend cannot supervise the checks the host runs after
+    // the lead, so the turn's own outcome is not what this test observes.
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let snapshot = run.controller.snapshot().unwrap();
+    assert!(snapshot
+        .contract()
+        .graph()
+        .unwrap()
+        .conditions
+        .iter()
+        .any(|condition| condition.condition_id.as_str() == "required-check:ready"));
+    assert!(run
+        .controller
+        .with_grant_stores(|_, _, held| Ok(held
+            .unwrap()
+            .1
+            .grant_pays_required_checks(LEAD_GRANT)
+            .unwrap()))
+        .unwrap());
+    assert_eq!(scenario.helper_calls(), 0);
+    assert!(helper_node(&snapshot, &lead).is_none());
+    let error = scenario.last_delegate_result();
+    assert!(
+        error.contains("The helper 'scout' was not started")
+            && error.contains("held for the host to observe your changes and run required checks"),
+        "{error}"
+    );
+    assert!(
+        agent_commands(&run.controller).is_empty(),
+        "nothing is submitted"
+    );
+}
+
 #[tokio::test]
 async fn repeating_a_refused_helper_call_is_a_fresh_admission() {
     let fixture = lead_fixture(helper_limits().tokens - 1000).await;
@@ -1966,4 +2126,188 @@ async fn unreadable_helper_proposal_is_an_error_not_a_required_node() {
         activation: input.activation.clone(),
     };
     assert!(!run.controller.is_delegate_child_for_test(&stop).unwrap());
+}
+
+/// Two delegate calls of one model round admit their helpers one after the
+/// other against the graph each admission leaves, and the helpers run at the
+/// same time: each helper's provider waits for the other to arrive.
+#[tokio::test]
+async fn two_delegate_calls_in_one_round_run_their_helpers_at_the_same_time() {
+    let fixture = lead_fixture(100000).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let mut scenario = Scenario::new("pub fn run");
+    scenario.tasks = vec![TASK.into(), SECOND_TASK.into()];
+    scenario.together = true;
+    scenario.rendezvous = Some(tokio::sync::watch::channel(0).0);
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:?}",
+        outcome.snapshot.contract()
+    );
+    assert_eq!(
+        scenario.lead_requests.lock().unwrap().len(),
+        2,
+        "one round delegates both tasks and the next reads both answers"
+    );
+    assert_eq!(scenario.helper_calls(), 2);
+    let results = scenario.delegate_results();
+    assert_eq!(results.len(), 2);
+    let nodes = results
+        .iter()
+        .map(|result| {
+            let result = completed_result(result);
+            assert_eq!(result["result"], "pub fn run");
+            result["node_id"].as_str().unwrap().to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(nodes[0], nodes[1]);
+
+    let contract = outcome.snapshot.contract();
+    let history = contract.graph_history();
+    assert_eq!(history.len(), 2, "one graph revision per helper");
+    let start = history[0].previous.revision;
+    assert_eq!(
+        history[1].previous.revision,
+        start + 1,
+        "the second admission builds on the first"
+    );
+    assert_eq!(contract.graph().unwrap().revision, start + 2);
+    assert_eq!(contract.graph().unwrap().nodes.len(), 3);
+    let accepted = contract.current_accepted_activations();
+    assert_eq!(accepted.len(), 3);
+    assert!(accepted.iter().any(|item| item.activation.node_id == lead));
+
+    let commands = agent_commands(&run.controller);
+    assert_eq!(commands.len(), 2);
+    assert!(commands
+        .iter()
+        .all(|receipt| receipt.state == ControlCommandState::Settled));
+
+    let usage = run.controller.grant_usage_for_test(LEAD_GRANT);
+    let limits = helper_limits();
+    // The lead's own activation plus both helpers' full reserved limits.
+    assert_eq!(usage.activations, 1 + 2 * limits.activations);
+    assert!(usage.invocations > 2 * limits.invocations);
+    assert!(usage.tokens >= 2 * limits.tokens);
+    assert!(fixture.registry.live_native_turns().unwrap().is_empty());
+}
+
+/// Two helpers requested together when the lead's budget holds only one:
+/// one runs, the other call gets the plain refusal, and the lead finishes.
+#[tokio::test]
+async fn helpers_requested_together_cannot_exceed_the_lead_aggregate_budget() {
+    let fixture = lead_fixture(15000).await;
+    let mut scenario = Scenario::new("pub fn run");
+    scenario.tasks = vec![TASK.into(), SECOND_TASK.into()];
+    scenario.together = true;
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:?}",
+        outcome.snapshot.contract()
+    );
+    assert_eq!(scenario.helper_calls(), 1);
+    assert_eq!(outcome.snapshot.contract().graph().unwrap().nodes.len(), 2);
+    let results = scenario.delegate_results();
+    assert_eq!(results.len(), 2);
+    let (completed, refused): (Vec<_>, Vec<_>) = results
+        .iter()
+        .partition(|result| result.contains("\"status\":\"completed\""));
+    assert_eq!(completed.len(), 1, "{results:?}");
+    assert!(
+        refused[0].contains("The helper 'scout' was not started")
+            && refused[0].contains("do not fit in what is left of your budget"),
+        "{}",
+        refused[0]
+    );
+    let mut states = agent_commands(&run.controller)
+        .into_iter()
+        .map(|receipt| receipt.state)
+        .collect::<Vec<_>>();
+    states.sort_by_key(|state| format!("{state:?}"));
+    assert_eq!(
+        states,
+        [ControlCommandState::Rejected, ControlCommandState::Settled]
+    );
+    assert!(run.controller.grant_usage_for_test(LEAD_GRANT).tokens <= 15000);
+}
+
+/// Two helpers that each fit, but together would leave the lead too few
+/// tokens to read their answers: the second admission sees the first's
+/// reservation, so only one is started.
+#[tokio::test]
+async fn helpers_requested_together_keep_the_lead_able_to_read_their_answers() {
+    // One provider call reserved 100 tokens; after one helper's 10000, 10050
+    // are left, and a second helper would leave 50, less than the next call.
+    let fixture = lead_fixture_as(20150, &[("scout", &[])], LeadTemplate::reader(20)).await;
+    let mut scenario = Scenario::new("pub fn run");
+    scenario.tasks = vec![TASK.into(), SECOND_TASK.into()];
+    scenario.together = true;
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:?}",
+        outcome.snapshot.contract()
+    );
+    assert_eq!(scenario.helper_calls(), 1);
+    let results = scenario.delegate_results();
+    assert_eq!(results.len(), 2);
+    let (completed, refused): (Vec<_>, Vec<_>) = results
+        .iter()
+        .partition(|result| result.contains("\"status\":\"completed\""));
+    assert_eq!(completed.len(), 1, "{results:?}");
+    assert!(
+        refused[0].contains("not enough to read its answer") && refused[0].contains("50 tokens"),
+        "{}",
+        refused[0]
+    );
+    let commands = agent_commands(&run.controller);
+    assert_eq!(commands.len(), 1, "the declined helper submits nothing");
+    assert_eq!(commands[0].state, ControlCommandState::Settled);
+}
+
+/// The same helper and task twice in one round admit one helper; both calls
+/// return its answer.
+#[tokio::test]
+async fn identical_calls_in_one_round_run_one_helper() {
+    let fixture = lead_fixture(100000).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let mut scenario = Scenario::new("pub fn run");
+    scenario.tasks = vec![TASK.into(), TASK.into()];
+    scenario.together = true;
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:?}",
+        outcome.snapshot.contract()
+    );
+    assert_eq!(scenario.helper_calls(), 1);
+    let node = helper_node(&outcome.snapshot, &lead).unwrap();
+    let results = scenario.delegate_results();
+    assert_eq!(results.len(), 2);
+    for result in &results {
+        let result = completed_result(result);
+        assert_eq!(result["node_id"], node.as_str());
+        assert_eq!(result["result"], "pub fn run");
+    }
+    assert_eq!(agent_commands(&run.controller).len(), 1);
+    assert_eq!(outcome.snapshot.contract().graph().unwrap().nodes.len(), 2);
+    assert_eq!(
+        run.controller.grant_usage_for_test(LEAD_GRANT).activations,
+        1 + helper_limits().activations,
+        "the helper's limits are reserved once"
+    );
 }

@@ -81,9 +81,16 @@ Agents, Coordinator children, and native Ways use canonical admission and the sh
 boundary. A Session team's required checks are conditions of each admitted turn graph:
 after the turn's required Agents are accepted, the host runs each command between two
 repository captures of that exact candidate, charged to the grant of the first required
-Agent that may use `bash`, and records one readiness review. The turn completes only when
-every check passes and the captured tree did not change; a failure leaves it needing
-attention.
+Agent whose own profile may use `bash` (a lead's helper profiles never count), and
+records one readiness review. The turn completes only when every check passes and the
+captured tree did not change; a failure leaves it needing attention. The review records
+why it failed in words, and it also fails when an accepted activation was accepted after
+the Before capture's intent, so work admitted during a pass cannot complete unchecked.
+A Continue that selects any condition of the group, or restarts any Agent, reruns the
+whole group: readiness needs every command on the one tree its captures saw. A pass
+starts only when the paying grant can pay for all of it; otherwise the readiness review
+records, in words, why the checks could not run, and a check-only Continue that could
+not be paid is refused.
 
 `turn_contract` decodes and folds a bounded schema-2 logical-turn contract separately from
 the live schema-1 ledger. Immutable manifests bind definitions, conversations, starting
@@ -240,6 +247,12 @@ requested or accepted without a canonical node, then reads the return again, so 
 records that no helper ran. A repeat of a call whose command admitted no helper is a new
 admission attempt with its own command and node ids; the first attempt keeps the original
 ids. Ordinary shell/tool effects remain `ManualOnly`.
+
+`delegate` is a concurrency-safe tool, so a lead's `delegate` calls in one response run
+their helpers at the same time. The controller admits them one after another: each reads
+the turn and graph revisions, checks the lead's follow-up reserve, reserves the helper's
+limits, and applies its graph revision under the same controller lock, so each admission
+builds on the one before it and identical calls reattach to one helper.
 
 Its one-shot autonomous actor port additionally reserves the actual candidate checkpoint and
 terminal output before any provider dispatch. The optional `ActivationCheckpointPort` restores
@@ -659,13 +672,19 @@ and streams that sometimes end early.
 
 - **Invocation reserve.** An activation that can run commands in a repository keeps a
   reserve of invocations for the host's observations: its After capture and, on the grant
-  that pays for required checks, one shared Before capture, each check and one shared After
-  capture. A tool call must also leave room for the provider call that reads it and one
-  more, so a model whose next tool round is declined can still answer. Calls of one
-  response are counted together before any pre-hook runs, and a call that no longer fits
-  at admission is declined as a tool error rather than failing the activation. Before a
-  lead admits a helper, what the lead has left after the helper's reservation must still
-  cover reading the helper's answer.
+  that pays for required checks, two passes of one shared Before capture, each check and
+  one shared After capture (the turn's pass and one Continue), less the check runs the
+  turn already paid for and never less than one pass. A tool call must also leave room
+  for the provider call that reads it and one more, so a model whose next tool round is
+  declined can still answer. Calls of one response are counted together before any
+  pre-hook runs, and a call that no longer fits at admission is declined as a tool error
+  rather than failing the activation. Before a lead admits a helper, what the lead has
+  left after the helper's reservation must still cover reading the helper's answer and
+  the lead's own reserve, so a paying lead cannot delegate its check allowance away.
+  Helpers requested together are checked one after another, each after the reservations
+  of the ones before it.
+  Apply and turn admission refuse a paying Agent whose invocation limit is smaller than
+  that allowance plus its own two captures and one answer.
 - **Bounded context.** Tool output, and long string arguments of the model's own earlier
   calls (such as a whole-file write), older than the latest three to five tool rounds are
   replaced with a placeholder in later requests, moving in steps of three so the request
@@ -1031,16 +1050,23 @@ agent:**
   `NET_RAW`, `DAC_READ_SEARCH`, …), so a setuid binary can't escalate and the
   classic namespace/mount escape levers are gone.
 - **Network.** The default is bridged networking so installs and development
-  servers work. Set `sandbox.network: none` when repository code and commands in
-  the local container must have no outbound connection; this also disables
-  network-dependent setup and commands in that container. It does not govern
+  servers work. Set `sandbox.network: none` for repositories you do not trust, or
+  whenever repository code and commands in the local container must have no
+  outbound connection; this also disables
+  network-dependent setup and commands in that container. Only `bridge` and `none`
+  are accepted; any other value fails config validation, `axocoatl doctor` and daemon
+  start rather than falling back to bridge. Every `podman run` passes
+  `--http-proxy=false`, so the host's proxy variables (which can hold a proxy user
+  name and password) are not copied into the container. It does not govern
   daemon-side model providers, MCP, web search, webhooks, remote sandboxes, the
   embedding-model download, or image-registry access. Configured Preview ports
   remain logical container-port identities; local Podman assigns each Session its
   own loopback host mapping, and the Session-aware proxy resolves that mapping
   without exposing arbitrary host services.
 - **Resources.** Memory, CPU, and PID caps (2 GB / 2 CPUs / 512 pids) bound a
-  runaway loop or fork bomb, where the host's cgroup delegation allows it.
+  runaway loop or fork bomb, where the host's cgroup delegation allows it. With the
+  default `require_resource_limits: false`, a host that cannot apply them starts the
+  container without them and logs a warning; set it to `true` to refuse instead.
 
 **Environment readiness and consent.** A Session persists an environment generation and one
 of `unprepared`, `awaiting_approval`, `preparing`, `ready`, or `failed`. Repository detection
@@ -1181,15 +1207,20 @@ The Agents of one native Session share one checkout. An Agent's `writes` list, o
 **May change** choice in Team & budget, is recorded in the profile of every activation it
 runs, and enforcement reads it from that admitted record, never from live configuration.
 A scope that cannot be read refuses the write or process it was checking. A helper cannot
-be admitted with a wider scope than the lead that delegated to it.
+be admitted with a wider scope than the lead that delegated to it, and `delegate` admits
+only a read-only helper: one whose template has no tool that writes files or runs
+commands, or whose scope is empty (`writes: []`), so its `bash` runs under the write
+restriction below and `write_file` and `edit_file` are withheld.
 
 - `write_file` and `edit_file` refuse paths outside the scope before any effect, refuse
   `..` and any path through a symbolic link, and tell the Agent to leave the file
   unchanged and describe the needed change in its answer.
 - A read-only Agent (`writes: []`) is not offered `write_file` or `edit_file`. Its own
   `bash` commands run under a kernel write restriction (Landlock, applied by the
-  in-sandbox execution supervisor between fork and exec): only `/tmp`, `/var/tmp`, `/dev`
-  and the container home are writable, never the repository. A supervisor that cannot
+  in-sandbox execution supervisor between fork and exec): only `/tmp`, `/var/tmp` and
+  `/dev` are writable, never the repository. `HOME` (and the XDG directories) point at a
+  scratch directory under `/tmp`, created for that command and removed when it ends, so
+  the Session's shared home stays unchanged. A supervisor that cannot
   apply it refuses to launch that command. The read-only file tools and the host's own
   repository captures run without the restriction.
 - A writer's shell can still write outside its paths, so the activation's own Before and
@@ -1227,7 +1258,9 @@ The sandbox is pluggable behind one trait, selected for this daemon configuratio
   A **git-repo** Session clones a clean, pushed branch over HTTPS. The git token
   (`sandbox.e2b.git_token`, e.g. `${GITHUB_TOKEN}`) is injected as a sandbox
   secret and read by an in-VM credential helper at fill-time — it is never
-  written into the repo's Git config, remote URL, or a command line. Changes remain
+  written into the repo's Git config, remote URL, or a command line. It is an
+  environment variable of the VM, so every command in the VM can read it, including
+  repository scripts and Agent commands. Changes remain
   ordinary working-tree state in the remote sandbox. Axocoatl does not automatically
   commit or push; review, commit, and push deliberately through the Session's repository
   tools. A scratch Session (no repository) gets a fresh remote workspace.
@@ -1266,5 +1299,7 @@ Report security issues per [SECURITY.md](../SECURITY.md).
 (providers) · `axocoatl-config` · `axocoatl-actor` (runtime) ·
 `axocoatl-memory` · `axocoatl-coordination` (turn scheduling) ·
 `axocoatl-graph` · `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` ·
-`axocoatl-isolation` (Podman sandbox) · `axocoatl-daemon` · `axocoatl-server` ·
-`axocoatl-cli`.
+`axocoatl-isolation` (Podman and E2B sandboxes) · `axocoatl-exec` (in-sandbox
+command supervisor; applies the Landlock write restriction) · `axocoatl-session`
+(durable Workspace, Session and turn storage) · `axocoatl-daemon` ·
+`axocoatl-server` · `axocoatl-service` (systemd / launchd) · `axocoatl-cli`.

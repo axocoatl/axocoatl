@@ -2,12 +2,28 @@
 //!
 //! Required checks are conditions of the admitted turn graph. The host runs
 //! them through the independent condition port, charged to the grant of the
-//! first required Agent that may use bash. That grant carries permission to
-//! run exactly those checks against this turn's repository and nothing else:
-//! no tool, graph command or allowance is widened.
+//! first required Agent whose own profile may use bash. That grant carries
+//! permission to run exactly those checks against this turn's repository and
+//! nothing else: no tool, graph command or allowance is widened.
 use super::*;
 use crate::turn_checks::REQUIRED_CHECK_PREFIX;
-use crate::turn_contract::TurnGraphSnapshot;
+use crate::turn_contract::{GraphNode, TurnGraphSnapshot};
+
+/// The grant that pays for a turn's required checks, and what it has left.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredCheckPayer {
+    pub grant_id: String,
+    pub holder: TurnNodeId,
+    /// Invocations the grant may still spend.
+    pub invocations_left: u32,
+    pub revoked: bool,
+    pub expires_at_ms: u64,
+    /// Whether a person can raise its limits during the turn: only a lead's
+    /// grant carries delegation that Current work authority can widen.
+    pub delegating: bool,
+    /// The turn's authority is closed; nothing more runs.
+    pub closed: bool,
+}
 
 #[cfg(test)]
 #[path = "control_authority_checks_tests.rs"]
@@ -105,6 +121,30 @@ impl ControlAuthority {
             .is_empty())
     }
 
+    /// The grant that pays for this turn's required checks, if one was
+    /// authorized, with what it has left.
+    pub fn required_check_payer(&self) -> Result<Option<RequiredCheckPayer>, AuthorityError> {
+        let state = self.lock()?;
+        Ok(state
+            .data
+            .grants
+            .iter()
+            .find(|record| !record.host_checks.is_empty())
+            .map(|record| RequiredCheckPayer {
+                grant_id: record.policy.id.clone(),
+                holder: record.policy.holder.clone(),
+                invocations_left: record
+                    .policy
+                    .limits
+                    .invocations
+                    .saturating_sub(record.usage.invocations),
+                revoked: record.revoked_at_revision.is_some(),
+                expires_at_ms: record.policy.expires_at_ms,
+                delegating: record.policy.delegation.is_some(),
+                closed: state.data.closed,
+            }))
+    }
+
     /// The grant that may run this exact required check now, if any.
     pub fn required_check_grant(
         &self,
@@ -136,7 +176,7 @@ impl ControlAuthority {
 }
 
 /// The grant of the first required node, in graph order, that is installed,
-/// unrevoked, not delegated, and whose profile may use bash.
+/// unrevoked, not delegated, and whose node's own profile may use bash.
 fn paying_grant(data: &AuthorityData, graph: &TurnGraphSnapshot) -> Option<usize> {
     graph
         .nodes
@@ -147,9 +187,20 @@ fn paying_grant(data: &AuthorityData, graph: &TurnGraphSnapshot) -> Option<usize
                 record.policy.holder == node.node_id
                     && record.revoked_at_revision.is_none()
                     && record.delegated_from.is_none()
-                    && has_shell(&record.policy)
+                    && pays_with_own_shell(&record.policy, node)
             })
         })
+}
+
+/// Whether `node`'s own profile in `policy` may use bash. A lead's grant also
+/// carries the profiles of the helpers it may start; their tools never make
+/// the lead pay for required checks, because the host holds back the check
+/// allowance only from an activation that runs commands itself.
+pub fn pays_with_own_shell(policy: &AuthorityGrant, node: &GraphNode) -> bool {
+    policy.profiles.iter().any(|profile| {
+        profile.definition == node.definition.definition_id.as_str()
+            && profile.tools.iter().any(|tool| tool == "bash")
+    })
 }
 
 pub(super) fn has_shell(policy: &AuthorityGrant) -> bool {

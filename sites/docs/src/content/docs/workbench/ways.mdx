@@ -86,6 +86,10 @@ Enter one non-interactive check command and choose **Run checks**. Axocoatl runs
 that command against each completed Attempt. A check is not inferred from the
 Agent's prose, and a successful Agent turn is not the same as a passing check.
 
+A Session team's required checks do not run on Attempts. When the team has them,
+**Explore several ways** says so; run them here with **Run checks**, joined with `&&`
+if there are several, before you keep an Attempt.
+
 An Attempt is keepable only when it completed, changed at least one file, and
 passed Checks. If Checks are interrupted, partial results remain visible while
 the set is unresolved and you can retry them. You can also stop Checks and finish
