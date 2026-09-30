@@ -76,11 +76,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read-only helper, which starts in its own empty conversation, and waits for the answer.
   Answers over 8192 bytes are cut for the lead; the full answer stays in Session History.
   Each helper is an Add Agent command from the lead, an optional node in the turn graph,
-  and a child grant whose limits are reserved from the lead's budget. A failed or refused
-  helper reaches the lead as a tool error. The same helper and task in one turn return the
-  earlier result, and a return lost to a restart is read back without running the helper
-  again. Older helper answers stay whole in later requests until the context runs short.
-  Helpers whose templates can write files or run commands are refused for now.
+  and a child grant whose limits are reserved from the lead's budget. A helper is not
+  started when its limits would leave the lead too little to read the answer. A failed or
+  refused helper reaches the lead as a tool error. The same helper and task in one turn
+  return the earlier result, and a return lost to a restart is read back without running
+  the helper again. Older helper answers stay whole in later requests until the context
+  runs short. Helpers whose templates can write files or run commands are refused for now.
   A Coordinator template in a native Session team runs as such a lead over its approved
   Worker templates; its HTN methods are not used there. Legacy Sessions keep the
   Coordinator's own decomposition. The Agent graph draws a "delegated" edge from a

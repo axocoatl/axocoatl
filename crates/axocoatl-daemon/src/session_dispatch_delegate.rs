@@ -17,6 +17,10 @@ pub(super) const NAME: &str = axocoatl_session::control_authority::DELEGATE_TOOL
 const ADAPTER: &str = "delegate-child-v1";
 const MAX_TASK_BYTES: usize = 16 * 1024;
 const MAX_ANSWER_BYTES: usize = 8192;
+/// Provider calls a lead must still be able to make after a helper's limits
+/// are reserved: one reads the answer, and one more lets it answer after a
+/// declined tool round.
+const FOLLOW_UP_CALLS: u32 = 2;
 /// Tools that change the workspace or run commands. Until each helper has its
 /// own write scope, only helpers without them can take delegated work.
 const WRITE_TOOLS: [&str; 5] = [
@@ -251,6 +255,71 @@ impl DispatchState {
                 model: profile.model.clone(),
                 attachments: vec![],
             },
+        )))
+    }
+
+    /// Why reserving a helper's `limits` would leave the lead unable to read
+    /// its answer, or `None` when enough is left: the invocations of
+    /// `FOLLOW_UP_CALLS` provider calls, the tokens and cost of one, and the
+    /// invocations the host holds back to observe a lead that runs commands.
+    /// A helper that does not fit at all is left to its admission command.
+    fn delegate_follow_up_shortfall(
+        &self,
+        lead: &ActivationRef,
+        policy: &AuthorityGrant,
+        helper: &str,
+        limits: &GrantLimits,
+    ) -> Result<Option<String>> {
+        let used = self.authority.usage(&policy.id).map_err(error)?;
+        let total = &policy.limits;
+        let (Some(invocations), Some(tokens), Some(cost)) = (
+            total
+                .invocations
+                .checked_sub(used.invocations)
+                .and_then(|left| left.checked_sub(limits.invocations)),
+            total
+                .tokens
+                .checked_sub(used.tokens)
+                .and_then(|left| left.checked_sub(limits.tokens)),
+            total
+                .cost_microunits
+                .checked_sub(used.cost_microunits)
+                .and_then(|left| left.checked_sub(limits.cost_microunits)),
+        ) else {
+            return Ok(None);
+        };
+        let call = self
+            .authority
+            .largest_provider_reservation(lead)
+            .map_err(error)?
+            .unwrap_or(DispatchReservation {
+                tokens: 0,
+                cost_microunits: 0,
+            });
+        let reserve = self.host_observation_reserve(lead).unwrap_or(0);
+        let needed = FOLLOW_UP_CALLS.saturating_add(reserve);
+        if invocations >= needed && tokens >= call.tokens && cost >= call.cost_microunits {
+            return Ok(None);
+        }
+        let held = if reserve > 0 {
+            format!(
+                ", including {reserve} held for the host to observe your changes and run \
+                 required checks"
+            )
+        } else {
+            String::new()
+        };
+        let cost = if cost < call.cost_microunits {
+            " Its cost limit would also leave too little for your next model call."
+        } else {
+            ""
+        };
+        Ok(Some(format!(
+            "The helper '{helper}' was not started: after reserving its limits ({} tool calls, \
+             {} tokens) you would have {invocations} tool calls and {tokens} tokens left, not \
+             enough to read its answer; that needs at least {needed} tool calls{held} and {} \
+             tokens.{cost} Do this part yourself, or write your final answer now.",
+            limits.invocations, limits.tokens, call.tokens
         )))
     }
 
@@ -572,15 +641,11 @@ impl SessionDispatchController {
                     }
                 },
                 None => {
-                    let needed = worker.limits.invocations.saturating_add(2);
-                    if let Some(reserve) = state.host_observation_shortfall(lead, needed) {
-                        return Err(format!(
-                            "The helper '{}' was not started: its {} tool calls would use the \
-                             {reserve} invocation(s) held for the host to observe your changes \
-                             and run required checks. Do not delegate more work; finish the \
-                             task yourself or write your final answer now.",
-                            call.helper, worker.limits.invocations
-                        ));
+                    if let Some(refused) = state
+                        .delegate_follow_up_shortfall(lead, &policy, &call.helper, &worker.limits)
+                        .map_err(|failure| failure.to_string())?
+                    {
+                        return Err(refused);
                     }
                 }
             }

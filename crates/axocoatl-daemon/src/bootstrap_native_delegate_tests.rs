@@ -43,9 +43,12 @@ async fn lead_fixture_with_helpers(
     lead_fixture_as(aggregate_tokens, helpers, LeadTemplate::autonomous()).await
 }
 
-/// The lead slot's own template role and the rest of its reviewed approval.
+/// The lead slot's own template role and tools, its invocation allowance,
+/// and the rest of its reviewed approval.
 struct LeadTemplate {
     role: AgentRole,
+    tools: Vec<String>,
+    invocations: u32,
     operations: Vec<DelegatedOperation>,
     htn_methods_yaml: Option<String>,
 }
@@ -53,8 +56,19 @@ impl LeadTemplate {
     fn autonomous() -> Self {
         Self {
             role: AgentRole::Autonomous,
+            tools: vec![],
+            invocations: 20,
             operations: vec![DelegatedOperation::AddAgent],
             htn_methods_yaml: None,
+        }
+    }
+    /// A lead that can read the repository but not change it or run
+    /// commands, with `invocations` in its allowance.
+    fn reader(invocations: u32) -> Self {
+        Self {
+            tools: vec!["read_file".into()],
+            invocations,
+            ..Self::autonomous()
         }
     }
     /// A Coordinator slot approved the way native Coordinators were before
@@ -62,6 +76,8 @@ impl LeadTemplate {
     fn coordinator() -> Self {
         Self {
             role: AgentRole::Coordinator,
+            tools: vec![],
+            invocations: 20,
             operations: vec![
                 DelegatedOperation::AddAgent,
                 DelegatedOperation::StopActivation,
@@ -113,7 +129,7 @@ async fn lead_fixture_as(
             );
             let node_id = TurnNodeId::new(format!("team-node-{}", &identity[..24])).unwrap();
             let conversation_id = NodeConversationId::new("lead-conversation").unwrap();
-            let mut agents = vec![("lead", lead.role.clone(), vec![])];
+            let mut agents = vec![("lead", lead.role.clone(), lead.tools.clone())];
             for (name, tools) in helpers {
                 agents.push((
                     name,
@@ -177,7 +193,7 @@ async fn lead_fixture_as(
             }
             let lead_limits = GrantLimits {
                 activations: 12,
-                invocations: 20,
+                invocations: lead.invocations,
                 tokens: aggregate_tokens,
                 cost_microunits: 0,
             };
@@ -1519,4 +1535,57 @@ async fn stopped_helper_continues_once_without_replaying_accepted_sibling_or_for
         )
         .unwrap()
         .is_none());
+}
+
+/// A lead that can only read: its helper fits in what is left of its budget
+/// but would leave too little for the lead to read the answer, so the helper
+/// is not started and the lead finishes on its own.
+async fn helper_that_leaves_the_lead_too_little_is_refused(
+    aggregate_tokens: u64,
+    invocations: u32,
+    short: &str,
+) {
+    let fixture = lead_fixture_as(
+        aggregate_tokens,
+        &[("scout", &[])],
+        LeadTemplate::reader(invocations),
+    )
+    .await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let scenario = Arc::new(Scenario::new("never produced"));
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:?}",
+        outcome.snapshot.contract()
+    );
+    assert_eq!(scenario.helper_calls(), 0);
+    assert!(helper_node(&outcome.snapshot, &lead).is_none());
+    let error = scenario.last_delegate_result();
+    assert!(
+        error.contains("The helper 'scout' was not started")
+            && error.contains("not enough to read its answer")
+            && error.contains(short),
+        "{error}"
+    );
+    assert!(
+        agent_commands(&run.controller).is_empty(),
+        "nothing is submitted"
+    );
+}
+
+#[tokio::test]
+async fn helper_that_leaves_the_lead_too_few_invocations_is_refused() {
+    // One provider call and the delegate call are spent; the helper's 4
+    // would use the rest, leaving no call to read its answer.
+    helper_that_leaves_the_lead_too_little_is_refused(100000, 6, "0 tool calls").await;
+}
+
+#[tokio::test]
+async fn helper_that_leaves_the_lead_too_few_tokens_is_refused() {
+    // One provider call reserved 100 tokens; the helper's 10000 would leave
+    // 50, less than the lead's next call.
+    helper_that_leaves_the_lead_too_little_is_refused(10150, 20, "50 tokens").await;
 }

@@ -473,16 +473,11 @@ pub(crate) fn reserve_message(reserve: u32) -> String {
 }
 
 impl DispatchState {
-    /// Invocations the host holds back for this activation: its After
-    /// capture and, when required checks exist and this grant is the one that
-    /// pays for them, one shared Before capture, each check, and one shared
-    /// After capture. Returns the reserve when spending `needed` more
-    /// invocations would cut into it.
-    pub(crate) fn host_observation_shortfall(
-        &self,
-        activation: &ActivationRef,
-        needed: u32,
-    ) -> Option<u32> {
+    /// Invocations the host holds back for this activation, when it can run
+    /// commands in a repository: its After capture and, when required checks
+    /// exist and this grant is the one that pays for them, one shared Before
+    /// capture, each check, and one shared After capture.
+    pub(crate) fn host_observation_reserve(&self, activation: &ActivationRef) -> Option<u32> {
         let bound = self
             .bound
             .get(&activation.activation_id)
@@ -499,6 +494,23 @@ impl DispatchState {
         } else {
             0
         };
+        Some(host_reserve(checks))
+    }
+
+    /// The host observation reserve, when spending `needed` more invocations
+    /// would cut into it.
+    pub(crate) fn host_observation_shortfall(
+        &self,
+        activation: &ActivationRef,
+        needed: u32,
+    ) -> Option<u32> {
+        let reserve = self.host_observation_reserve(activation)?;
+        let grant = self
+            .bound
+            .get(&activation.activation_id)?
+            .grant
+            .grant_id
+            .as_str();
         let limit = self
             .authority
             .grant_status(grant)
@@ -507,7 +519,7 @@ impl DispatchState {
             .limits
             .invocations;
         let used = self.authority.usage(grant).ok()?.invocations;
-        reserve_shortfall(used, needed, host_reserve(checks), limit)
+        reserve_shortfall(used, needed, reserve, limit)
     }
 }
 

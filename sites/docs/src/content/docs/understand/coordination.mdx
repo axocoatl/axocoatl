@@ -39,8 +39,9 @@ An Agent whose Team & budget approval names Worker templates as helpers gets a
 `delegate` tool. A Coordinator template must have helpers and runs the same way in a
 native Session; its HTN methods are not used there. Each call starts one helper in
 its own conversation with only the Session's request and the task the lead wrote, and
-reserves the helper's approved limits from the lead's shared allowance. Helpers whose
-templates can write files or run commands are refused for now. The lead waits for the
+reserves the helper's approved limits from the lead's shared allowance. A helper is not
+started when that reservation would leave the lead too little to read its answer. Helpers
+whose templates can write files or run commands are refused for now. The lead waits for the
 answer; a failed or refused helper reaches it as a tool error. The helper's command
 source, lead activation, and result stay in the same canonical Session history.
 Increasing budget or authority requires human review; another model call cannot grant it.

@@ -1514,6 +1514,30 @@ impl ControlAuthority {
             .cloned())
     }
 
+    /// The largest tokens and cost any provider call of this activation
+    /// reserved: what its next call is expected to reserve. `None` before its
+    /// first call.
+    pub fn largest_provider_reservation(
+        &self,
+        activation: &ActivationRef,
+    ) -> Result<Option<DispatchReservation>, AuthorityError> {
+        let state = self.lock()?;
+        Ok(state
+            .data
+            .provider_calls
+            .iter()
+            .filter(|call| call.activation == *activation)
+            .map(|call| &call.intent.reservation)
+            .fold(None, |largest: Option<DispatchReservation>, reservation| {
+                let (tokens, cost_microunits) =
+                    largest.map_or((0, 0), |largest| (largest.tokens, largest.cost_microunits));
+                Some(DispatchReservation {
+                    tokens: tokens.max(reservation.tokens),
+                    cost_microunits: cost_microunits.max(reservation.cost_microunits),
+                })
+            }))
+    }
+
     /// Exact measured subtotal across this activation's claimed calls. An
     /// unregistered or legacy tool-only activation has no coverage proof and
     /// errors; a provider-gated activation with no claims is known zero.
