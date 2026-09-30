@@ -130,6 +130,7 @@ impl SessionDispatchController {
             state.reconcile_conditions()?;
             state.reconcile_promotions()?;
             state.reconcile_control_commands()?;
+            state.reconcile_delegate_returns()?;
             let snapshot = state.canonical.snapshot(&state.turn_id).map_err(error)?;
             state
                 .authority

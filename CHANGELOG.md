@@ -79,9 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a child grant whose limits are reserved from the lead's budget. A helper is not
   started when its limits would leave the lead too little to read the answer. A failed or
   refused helper reaches the lead as a tool error. The same helper and task in one turn
-  return the earlier result, and a return lost to a restart is read back without running
-  the helper again. Older helper answers stay whole in later requests until the context
-  runs short. Helpers whose templates can write files or run commands are refused for now.
+  return the earlier result; a call whose helper was never started can be made again. A
+  return lost to a restart is read back without running the helper again, including when
+  the restart came before the helper was admitted. Older helper answers stay whole in
+  later requests until the context runs short. Helpers whose templates can write files or
+  run commands are refused for now.
   A Coordinator template in a native Session team runs as such a lead over its approved
   Worker templates; its HTN methods are not used there. Legacy Sessions keep the
   Coordinator's own decomposition. The Agent graph draws a "delegated" edge from a

@@ -901,6 +901,49 @@ async fn truncated_result_keeps_known_status_and_full_digest_across_reopen() {
     }
 }
 #[tokio::test]
+async fn delegate_without_a_delegation_policy_is_refused_at_the_gate() {
+    let fixture = fixture();
+    let control = bind(&fixture);
+    let refused = control
+        .execution_boundary()
+        .unwrap()
+        .admit(&ToolInvocationRequest {
+            actor_id: fixture.config.id.to_string(),
+            provider_id: fixture.profile.provider.clone(),
+            model_id: fixture.profile.model.clone(),
+            provider_response_group: 1,
+            provider_call_index: 0,
+            provider_call_count: 1,
+            tool_call: axocoatl_llm::ToolCall {
+                id: "forced-delegate".into(),
+                name: delegate::NAME.into(),
+                arguments: serde_json::json!({"helper": "scout", "task": "Look around."}),
+                provider_metadata: Default::default(),
+            },
+        })
+        .await;
+    let Err(refused) = refused else {
+        panic!("a holder without delegation must not reach the delegate port")
+    };
+    assert!(
+        refused.to_string().contains("outside the current grant"),
+        "{refused}"
+    );
+    assert!(fixture
+        .controller
+        .snapshot()
+        .unwrap()
+        .contract()
+        .invocations()
+        .is_empty());
+    let state = fixture.controller.lock().unwrap();
+    state
+        .ready()
+        .expect("a refused port is not journal corruption");
+    assert_eq!(state.authority.usage("grant").unwrap().invocations, 0);
+}
+
+#[tokio::test]
 async fn revoked_tool_admission_preserves_claimed_settlement_and_readable_history() {
     let fixture = fixture();
     let control = bind(&fixture);

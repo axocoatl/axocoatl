@@ -137,13 +137,16 @@ impl DispatchState {
         }
         Ok(proposal)
     }
-    /// Whether an Agent graph command admits a `delegate` helper. Anything that
-    /// does not resolve to that exact kind keeps the required default.
-    pub(super) fn is_delegate_child(&self, view: &CommandReceiptView) -> bool {
-        matches!(view.source, CommandSourceRecord::Agent { .. })
-            && self
-                .child_proposal(view)
-                .is_ok_and(|proposal| proposal.kind == DELEGATE_CHILD)
+    /// Whether an Agent graph command admits a `delegate` helper. Human and
+    /// non-graph commands do not. An Agent's graph command always carries a
+    /// retained proposal, so failing to read it is an error, never a guess.
+    pub(super) fn is_delegate_child(&self, view: &CommandReceiptView) -> Result<bool> {
+        if !matches!(view.source, CommandSourceRecord::Agent { .. })
+            || self.graph_control_input(view).is_none()
+        {
+            return Ok(false);
+        }
+        Ok(self.child_proposal(view)?.kind == DELEGATE_CHILD)
     }
     fn validate_coordinator_resource(
         &self,
@@ -349,13 +352,73 @@ pub(super) fn native_child_identity(digest: &str) -> Result<(TurnNodeId, Command
     ))
 }
 
+/// The digest of one admission attempt for a request digest. The first
+/// attempt is the request digest itself, so children admitted before retries
+/// existed keep their ids. A later attempt follows only attempts whose
+/// command ended without admitting a child.
+pub(super) fn native_child_attempt_digest(digest: &str, attempt: u32) -> Result<String> {
+    if attempt <= 1 {
+        return Ok(digest.to_owned());
+    }
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&(digest, "attempt", attempt)).map_err(error)?)
+    ))
+}
+
+/// The attempt a request takes now, named by its digest.
+pub(super) struct ChildAttempt {
+    pub attempt: u32,
+    pub digest: String,
+    pub node_id: TurnNodeId,
+    pub command_id: CommandId,
+    /// The state of this attempt's command, when it was submitted.
+    pub state: Option<ControlCommandState>,
+}
+
+impl DispatchState {
+    /// The attempt an identical request takes now: the one whose command
+    /// admitted the child, or is still being recorded, or else the first
+    /// unused one. Attempts whose command was rejected or failed admitted no
+    /// child, so a repeat is a fresh admission rather than their refusal.
+    pub(super) fn native_child_attempt(&self, digest: &str) -> Result<ChildAttempt> {
+        let mut attempt = 1u32;
+        loop {
+            let attempt_digest = native_child_attempt_digest(digest, attempt)?;
+            let (node_id, command_id) = native_child_identity(&attempt_digest)?;
+            let state = self
+                .commands
+                .receipt(&command_id)
+                .map_err(error)?
+                .map(|receipt| receipt.view().state);
+            if !matches!(
+                state,
+                Some(ControlCommandState::Rejected | ControlCommandState::Failed)
+            ) {
+                return Ok(ChildAttempt {
+                    attempt,
+                    digest: attempt_digest,
+                    node_id,
+                    command_id,
+                    state,
+                });
+            }
+            attempt = attempt
+                .checked_add(1)
+                .ok_or_else(|| error("child admission attempts are exhausted"))?;
+        }
+    }
+}
+
 impl SessionDispatchController {
     /// Admit one helper as an AddAgent command from its lead, or reattach to
-    /// the node an identical earlier request admitted.
+    /// the node an identical earlier request admitted. `attempt` is the one
+    /// the caller resolved for this request; it must still be current.
     pub(super) fn admit_delegated_child(
         &self,
         parent: &ActivationRef,
         request: &ChildExecutionRequest,
+        attempt: u32,
         control: AgentRunControl,
     ) -> Result<Box<dyn AdmittedChildExecution>> {
         let mut state = self.lock()?;
@@ -417,8 +480,17 @@ impl SessionDispatchController {
             ));
         }
         let worker = candidates.remove(0);
-        let digest = native_child_digest(parent, request, &worker, &None)?;
-        let (node_id, command_id) = native_child_identity(&digest)?;
+        let current =
+            state.native_child_attempt(&native_child_digest(parent, request, &worker, &None)?)?;
+        if current.attempt != attempt {
+            return Err(error("the helper's admission changed; call delegate again"));
+        }
+        let ChildAttempt {
+            digest,
+            node_id,
+            command_id,
+            ..
+        } = current;
         if state.native_child_origin(&node_id)?.is_some() {
             return Ok(Box::new(CanonicalChildWait {
                 controller: self.clone(),
@@ -891,5 +963,70 @@ impl DispatchState {
             }
         }
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+impl SessionDispatchController {
+    pub(crate) fn is_delegate_child_for_test(&self, view: &CommandReceiptView) -> Result<bool> {
+        self.lock().unwrap().is_delegate_child(view)
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    /// Helpers admitted before attempts existed keep their node and command
+    /// ids: the first attempt is the plain digest of the request.
+    #[test]
+    fn first_attempt_identity_is_the_retained_digest() {
+        let parent = ActivationRef {
+            session_id: SessionId::new("session").unwrap(),
+            turn_id: LogicalTurnId::new("turn").unwrap(),
+            execution_epoch_id: ExecutionEpochId::new("epoch").unwrap(),
+            node_id: TurnNodeId::new("lead").unwrap(),
+            generation: 1,
+            activation_id: ActivationId::new("lead-activation").unwrap(),
+        };
+        let request = ChildExecutionRequest {
+            actor_id: "lead-conversation".into(),
+            logical_worker_id: "scout".into(),
+            subtask_index: 0,
+            task_name: "scout".into(),
+            task_input: "List every public function.".into(),
+            tools: vec!["read_file".into()],
+            provider_id: "ollama".into(),
+            model: "test-model".into(),
+            attachments: vec![],
+        };
+        let worker = NativeCoordinatorWorker {
+            template_id: "scout".into(),
+            definition: DefinitionSnapshotRef {
+                definition_id: AgentDefinitionId::new("scout-definition").unwrap(),
+                snapshot: EvidenceRef::new("scout-snapshot").unwrap(),
+            },
+            limits: GrantLimits {
+                activations: 2,
+                invocations: 4,
+                tokens: 10000,
+                cost_microunits: 0,
+            },
+            adhoc_allowed: false,
+        };
+        let digest = native_child_digest(&parent, &request, &worker, &None).unwrap();
+        let first = native_child_attempt_digest(&digest, 1).unwrap();
+        assert_eq!(first, digest);
+        let (node, command) = native_child_identity(&first).unwrap();
+        assert_eq!(node.as_str(), format!("child-{digest}"));
+        assert_eq!(command.as_str(), format!("child-command-{digest}"));
+        assert_eq!(
+            digest,
+            "14de81a3e16109660bdfceb17faae527a62840695dc304754e6c49f70cdc74ac"
+        );
+        let second = native_child_attempt_digest(&digest, 2).unwrap();
+        assert_ne!(second, digest);
+        assert_ne!(second, native_child_attempt_digest(&digest, 3).unwrap());
+        assert_eq!(second, native_child_attempt_digest(&digest, 2).unwrap());
     }
 }

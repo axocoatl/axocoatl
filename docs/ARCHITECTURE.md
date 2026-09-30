@@ -239,8 +239,11 @@ A native lead's `delegate` call retains a replay policy that names the helper no
 command that admits it. If the raw return is lost, reopening reads it back from the command
 journal and the helper's canonical outcome: an accepted helper yields its answer, and a
 refused, failed, or stopped one yields a tool error. The evidence is labeled reconciliation.
-No helper or provider call is repeated. An admitting command that was accepted but never
-applied remains unknown, and ordinary shell/tool effects remain `ManualOnly`.
+No helper or provider call is repeated. Reopening first ends an admitting command left
+requested or accepted without a canonical node, then reads the return again, so one reopen
+records that no helper ran. A repeat of a call whose command admitted no helper is a new
+admission attempt with its own command and node ids; the first attempt keeps the original
+ids. Ordinary shell/tool effects remain `ManualOnly`.
 
 Its one-shot autonomous actor port additionally reserves the actual candidate checkpoint and
 terminal output before any provider dispatch. The optional `ActivationCheckpointPort` restores

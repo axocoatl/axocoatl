@@ -627,10 +627,21 @@ struct Started<'a> {
 }
 
 fn start_lead(fixture: &NativeFixture, scenario: Arc<Scenario>, lose_return: bool) -> Started<'_> {
+    start_lead_with(fixture, scenario, |controller| {
+        if lose_return {
+            controller.lose_delegate_outcome_for_test();
+        }
+    })
+}
+
+/// A first turn whose controller `arm` prepares before the lead runs.
+fn start_lead_with(
+    fixture: &NativeFixture,
+    scenario: Arc<Scenario>,
+    arm: impl FnOnce(&crate::session_dispatch::SessionDispatchController),
+) -> Started<'_> {
     let (controller, repository) = begin(fixture, &fixture.request);
-    if lose_return {
-        controller.lose_delegate_outcome_for_test();
-    }
+    arm(&controller);
     let factory = Arc::new(DelegateFactory {
         controller: controller.clone(),
         scenario,
@@ -977,7 +988,9 @@ async fn delegate_is_unavailable_without_a_delegation_policy() {
     assert!(requests
         .iter()
         .all(|(_, request)| request.tools.iter().all(|tool| tool.name != "delegate")));
-    // A forced call names an undeclared tool and fails before admission.
+    // A forced call names an undeclared tool and fails before admission. The
+    // dispatch gate's own refusal is covered by
+    // `delegate_without_a_delegation_policy_is_refused_at_the_gate`.
     assert_eq!(
         outcome.snapshot.contract().state(),
         Some(LogicalTurnState::NeedsAttention)
@@ -1537,6 +1550,270 @@ async fn stopped_helper_continues_once_without_replaying_accepted_sibling_or_for
         .is_none());
 }
 
+/// The Session after a process restart: a fresh repository owner, the stores
+/// recovered from disk, and the latest turn attached to a new registry.
+struct Restarted {
+    registry: SessionDispatchRegistry,
+    controller: crate::session_dispatch::SessionDispatchController,
+    repository: EvidenceRef,
+    /// The control-plane read after startup recovery's single open.
+    first_open: serde_json::Value,
+    request: NativeFirstTurnRequest,
+    _owner: SessionRepositoryOwner,
+    fixture: Fixture,
+}
+
+async fn restart(fixture: NativeFixture, turn: LogicalTurnId) -> Restarted {
+    use axocoatl_session::execution_ownership::UpgradedFormatOwnership;
+    let NativeFixture {
+        repository: f,
+        registry,
+        request,
+    } = fixture;
+    drop(registry);
+    drop(f.owner.retire_idle().unwrap());
+    let sandbox = Arc::new(ControlledSandbox::new(
+        f.owner.root(),
+        "restarted-incarnation",
+    ));
+    let mut metadata = f.owner.metadata().clone();
+    metadata.execution_identity.clone_from(&sandbox.incarnation);
+    let registered: Arc<dyn Sandbox> = sandbox;
+    f.owner
+        .inner
+        .sandboxes
+        .lock()
+        .await
+        .insert(metadata.session_id.clone(), registered.clone());
+    let owner = SessionRepositoryOwner {
+        inner: Arc::new(RepositoryOwnerInner {
+            attempt: None,
+            identity: f.owner.identity().clone(),
+            metadata,
+            runtime: f.owner.inner.runtime.clone(),
+            sandbox: registered,
+            data_root: f.owner.inner.data_root.clone(),
+            workspace_root: f.owner.inner.workspace_root.clone(),
+            sessions: f.owner.inner.sessions.clone(),
+            workspaces: f.owner.inner.workspaces.clone(),
+            sandboxes: f.owner.inner.sandboxes.clone(),
+            start: f.owner.inner.start.clone(),
+            shutdown: f.owner.inner.shutdown.clone(),
+            workspace_operation: Mutex::new(Some(f.operation.clone().lock_owned().await)),
+            workspace_gate: f.operation.clone(),
+            execution: Arc::new(AsyncMutex::new(())),
+            state: Mutex::new(ExecutionState::default()),
+            changed: Notify::new(),
+        }),
+    };
+    owner.validate_current().await.unwrap();
+    let session = owner
+        .inner
+        .sessions
+        .lock()
+        .await
+        .get(&owner.metadata().session_id)
+        .unwrap()
+        .clone();
+    let format = Arc::new(UpgradedFormatOwnership::open(f._data.path()).unwrap());
+    let stores =
+        crate::bootstrap::session_recovery::recover_session_stores(format, &session).unwrap();
+    let registry = SessionDispatchRegistry::default();
+    let token = registry.retain_existing_session(&mut Some(stores)).unwrap();
+    // Startup recovery opened the turn once; read it before attaching opens
+    // it again.
+    let first_open = serde_json::to_value(
+        registry
+            .control_plane(request.session_id.as_str(), turn.as_str())
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    let (controller, repository) = registry
+        .attach_existing_turn(&token, turn, owner.clone())
+        .unwrap();
+    Restarted {
+        registry,
+        controller,
+        repository,
+        first_open,
+        request,
+        _owner: owner,
+        fixture: f,
+    }
+}
+
+/// The process stops while the lead's helper admission is recorded as
+/// requested, or accepted but not yet applied. No helper ran. One reopen
+/// resolves the lost return, and the continued lead delegates the same task
+/// again, which runs the helper once and completes the turn.
+async fn crash_in_helper_admission_then_continue(accepted: bool) {
+    use axocoatl_session::invocation_audit::{InvocationFinalEvidence, InvocationOutcomeSource};
+    let fixture = lead_fixture(100000).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let scenario = Arc::new(Scenario::new("pub fn run"));
+    let Started {
+        controller,
+        factory,
+        prepared,
+        ..
+    } = start_lead_with(&fixture, scenario.clone(), |controller| {
+        controller.crash_delegate_admission_for_test(accepted)
+    });
+    let first = tokio::time::timeout(Duration::from_secs(10), prepared.run())
+        .await
+        .unwrap();
+    assert!(first.is_err());
+    let (before, result, _) = controller.delegate_recovery_evidence_for_test();
+    assert!(result.is_none());
+    assert!(before.final_evidence.is_none());
+    controller.close_registered_repository_admission().unwrap();
+    controller
+        .wait_for_registered_executions(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let turn = controller.snapshot().unwrap().turn_id().clone();
+    assert_eq!(scenario.helper_calls(), 0);
+    drop(factory);
+    drop(controller);
+
+    let restarted = restart(fixture, turn.clone()).await;
+    let delegate_calls = restarted.first_open["invocations"]["value"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|value| value["intent"]["tool_name"] == "delegate")
+        .collect::<Vec<_>>();
+    assert_eq!(delegate_calls.len(), 1);
+    assert!(
+        !delegate_calls[0]["final_evidence"].is_null(),
+        "one open resolves the lost return: {}",
+        delegate_calls[0]
+    );
+    let controller = restarted.controller.clone();
+    let (after, result, _) = controller.delegate_recovery_evidence_for_test();
+    assert_eq!(after.intent, before.intent);
+    assert!(
+        matches!(
+            after.final_evidence,
+            Some(InvocationFinalEvidence::Outcome {
+                outcome: InvocationOutcome::Failed,
+                source: InvocationOutcomeSource::Reconciliation,
+                ..
+            })
+        ),
+        "{:?}",
+        after.final_evidence
+    );
+    let result = result.unwrap();
+    let returned = result["Err"].as_str().unwrap();
+    assert!(
+        returned.contains("was not admitted, so no helper ran")
+            && returned.contains("Call delegate again"),
+        "{returned}"
+    );
+    let commands = agent_commands(&controller);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(
+        commands[0].state,
+        if accepted {
+            ControlCommandState::Failed
+        } else {
+            ControlCommandState::Rejected
+        }
+    );
+    let snapshot = controller.snapshot().unwrap();
+    assert!(helper_node(&snapshot, &lead).is_none());
+    assert_eq!(
+        snapshot.contract().state(),
+        Some(LogicalTurnState::NeedsAttention),
+        "{:?}",
+        snapshot.contract()
+    );
+
+    let restart_lead = snapshot
+        .contract()
+        .activations()
+        .iter()
+        .filter(|item| item.state != ActivationState::Accepted)
+        .map(|item| item.activation.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(restart_lead.len(), 1);
+    assert_eq!(restart_lead[0].node_id, lead);
+    let request = human_action(
+        &controller,
+        "continue-after-restart",
+        crate::session_dispatch::HumanControlAction::Continue,
+        None,
+        restart_lead,
+    );
+    let receipt = restarted
+        .registry
+        .submit_human_action(
+            restarted.request.session_id.as_str(),
+            turn.as_str(),
+            request.clone(),
+            now_ms(),
+        )
+        .unwrap();
+    assert_eq!(receipt.state, ControlCommandState::Settled, "{receipt:?}");
+    let factory = Arc::new(DelegateFactory {
+        controller: controller.clone(),
+        scenario: scenario.clone(),
+        resolved: std::sync::Mutex::new(vec![]),
+    });
+    let driver = controller
+        .prepare_native_control_driver(
+            &request.command_id,
+            restarted.repository.clone(),
+            crate::stream::StreamBus::new(64),
+            factory,
+        )
+        .unwrap()
+        .unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(10), driver.run())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:?}",
+        outcome.snapshot.contract()
+    );
+    assert_eq!(scenario.helper_calls(), 1, "the helper runs exactly once");
+    let answer = completed_result(&scenario.last_delegate_result());
+    let node = helper_node(&outcome.snapshot, &lead).unwrap();
+    assert_eq!(answer["node_id"], node.as_str());
+    let commands = agent_commands(&controller);
+    assert_eq!(commands.len(), 2, "the retry is a fresh admission");
+    assert_eq!(commands[1].state, ControlCommandState::Settled);
+    assert!(restarted.registry.live_native_turns().unwrap().is_empty());
+    // Every invocation has a known outcome, so the repository is released.
+    restarted
+        .registry
+        .release_after_turn(restarted.request.session_id.as_str(), &turn)
+        .unwrap();
+    assert!(restarted.fixture.operation.try_lock().is_ok());
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+#[tokio::test]
+async fn crash_before_helper_admission_is_accepted_resolves_after_one_reopen() {
+    crash_in_helper_admission_then_continue(false).await;
+}
+
+#[tokio::test]
+async fn crash_before_accepted_helper_admission_is_applied_resolves_after_one_reopen() {
+    crash_in_helper_admission_then_continue(true).await;
+}
+
 /// A lead that can only read: its helper fits in what is left of its budget
 /// but would leave too little for the lead to read the answer, so the helper
 /// is not started and the lead finishes on its own.
@@ -1588,4 +1865,104 @@ async fn helper_that_leaves_the_lead_too_few_tokens_is_refused() {
     // One provider call reserved 100 tokens; the helper's 10000 would leave
     // 50, less than the lead's next call.
     helper_that_leaves_the_lead_too_little_is_refused(10150, 20, "50 tokens").await;
+}
+
+#[tokio::test]
+async fn repeating_a_refused_helper_call_is_a_fresh_admission() {
+    let fixture = lead_fixture(helper_limits().tokens - 1000).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let mut scenario = Scenario::new("never produced");
+    scenario.tasks = vec![TASK.into(), TASK.into()];
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed)
+    );
+    assert_eq!(scenario.helper_calls(), 0);
+    assert!(helper_node(&outcome.snapshot, &lead).is_none());
+    let results = scenario.delegate_results();
+    assert_eq!(results.len(), 2);
+    for result in &results {
+        assert!(
+            result.contains("The helper 'scout' was not started")
+                && result.contains("do not fit in what is left of your budget"),
+            "{result}"
+        );
+    }
+    // The repeat is checked again as its own admission, not answered from
+    // the recorded refusal.
+    let commands = agent_commands(&run.controller);
+    assert_eq!(commands.len(), 2);
+    assert!(commands
+        .iter()
+        .all(|receipt| receipt.state == ControlCommandState::Rejected));
+    assert_ne!(
+        commands[0].request.command_id,
+        commands[1].request.command_id
+    );
+}
+
+#[tokio::test]
+async fn identical_call_in_the_same_activation_returns_the_earlier_answer() {
+    let fixture = lead_fixture(100000).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let mut scenario = Scenario::new("pub fn run");
+    scenario.tasks = vec![TASK.into(), TASK.into()];
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed)
+    );
+    assert_eq!(scenario.helper_calls(), 1, "the repeat reattaches");
+    let node = helper_node(&outcome.snapshot, &lead).unwrap();
+    let results = scenario.delegate_results();
+    assert_eq!(results.len(), 2);
+    for result in &results {
+        let result = completed_result(result);
+        assert_eq!(result["node_id"], node.as_str());
+        assert_eq!(result["result"], "pub fn run");
+    }
+    assert_eq!(agent_commands(&run.controller).len(), 1);
+    assert_eq!(outcome.snapshot.contract().graph().unwrap().nodes.len(), 2);
+    assert_eq!(
+        run.controller.grant_usage_for_test(LEAD_GRANT).activations,
+        1 + helper_limits().activations,
+        "the helper's limits are reserved once"
+    );
+}
+
+#[tokio::test]
+async fn unreadable_helper_proposal_is_an_error_not_a_required_node() {
+    let fixture = lead_fixture(100000).await;
+    let scenario = Arc::new(Scenario::new("pub fn run"));
+    let run = run_lead(&fixture, scenario, false).await;
+    run.outcome.unwrap();
+    let admitted = agent_commands(&run.controller).remove(0);
+    assert!(run
+        .controller
+        .is_delegate_child_for_test(&admitted)
+        .unwrap());
+    // A content-store read failure must not read as an older, required kind.
+    let mut unreadable = admitted.clone();
+    let ControlParameters::AddAgent { input, .. } = &mut unreadable.request.parameters else {
+        panic!("delegate admits the helper with AddAgent")
+    };
+    input.grant.as_mut().unwrap().evidence = EvidenceRef::new("content-missing").unwrap();
+    assert!(run
+        .controller
+        .is_delegate_child_for_test(&unreadable)
+        .is_err());
+    // A command that adds no Agent carries no proposal to read.
+    let mut stop = admitted;
+    let ControlParameters::AddAgent { input, .. } = &stop.request.parameters else {
+        unreachable!()
+    };
+    stop.request.parameters = ControlParameters::StopActivation {
+        activation: input.activation.clone(),
+    };
+    assert!(!run.controller.is_delegate_child_for_test(&stop).unwrap());
 }

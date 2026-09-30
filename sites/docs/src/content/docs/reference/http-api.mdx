@@ -340,8 +340,9 @@ A native lead's `delegate` call whose raw return was lost retains a labeled
 reconciliation result read from the command that admitted the helper and the
 helper's canonical outcome: its accepted answer, or the error for a refused, failed,
 or stopped helper. Recovery does not run the helper again or repeat a provider
-request. An admitting command that was accepted but not applied stays unknown;
-ordinary shell/tool effects are not automatically replayed.
+request. An admitting command left requested or accepted by a crash admitted no
+helper; the same reopen records that, and the lead may call `delegate` again.
+Ordinary shell/tool effects are not automatically replayed.
 
 For native cooperative turns, `turn_controls.partial_finish` supplies the exact
 review for a human partial finish. The existing control-command POST uses

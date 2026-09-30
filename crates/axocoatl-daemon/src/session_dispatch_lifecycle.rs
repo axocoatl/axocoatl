@@ -452,6 +452,7 @@ impl SessionDispatchController {
             state.reconcile_conditions()?;
             state.reconcile_promotions()?;
             state.reconcile_control_commands()?;
+            state.reconcile_delegate_returns()?;
             Ok(())
         })();
         state.changed.notify_waiters();

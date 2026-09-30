@@ -2,6 +2,7 @@
 //! read-only helper and waits for its answer. Admission is the ordinary native
 //! child path: the helper is a dynamic graph node with its own grant reserved
 //! from the lead's, and this port only waits for its canonical outcome.
+use super::coordinator::ChildAttempt;
 use super::*;
 use axocoatl_actor::{AdmittedChildExecution, AgentRunOutcome, ChildExecutionRequest};
 use axocoatl_core::MeasuredTokenUsage;
@@ -126,9 +127,21 @@ fn completed_answer(
     value
 }
 
+/// The model-facing text for a call whose helper was never admitted.
+fn not_admitted(helper: &str) -> String {
+    format!(
+        "The call to helper '{helper}' was not admitted, so no helper ran. Call delegate again \
+         if you still need it."
+    )
+}
+
 /// Plain text for a refused helper admission. `limits` are the helper's,
 /// when known.
 fn refusal(helper: &str, limits: Option<&GrantLimits>, failure: &CommandFailure) -> String {
+    // Reconstruction rejects a request that never reached acceptance.
+    if failure.code == "request_not_accepted" {
+        return not_admitted(helper);
+    }
     let reason = failure
         .message
         .strip_prefix("Session dispatch: ")
@@ -153,7 +166,10 @@ fn refusal(helper: &str, limits: Option<&GrantLimits>, failure: &CommandFailure)
              approved. Finish the work yourself or write your final answer."
         );
     }
-    format!("The helper '{helper}' was not started: {reason}.")
+    format!(
+        "The helper '{helper}' was not started: {reason}. No helper ran; call delegate again if \
+         you still need it, or continue without it."
+    )
 }
 
 impl DispatchState {
@@ -342,7 +358,8 @@ impl DispatchState {
             return Ok(None);
         };
         let digest = super::coordinator::native_child_digest(lead, &request, &worker, &None)?;
-        super::coordinator::native_child_identity(&digest).map(Some)
+        let attempt = self.native_child_attempt(&digest)?;
+        Ok(Some((attempt.node_id, attempt.command_id)))
     }
 
     pub(super) fn delegate_replay_policy(
@@ -427,10 +444,7 @@ impl DispatchState {
         policy: &DelegateReplayPolicy,
         helper: &str,
     ) -> Result<Option<std::result::Result<serde_json::Value, String>>> {
-        let not_admitted = Err(failure_text(format!(
-            "The call to helper '{helper}' was not admitted, so no helper ran. Call delegate \
-             again if you still need it."
-        )));
+        let not_admitted = Err(failure_text(not_admitted(helper)));
         let (Some(node), Some(command)) = (&policy.node_id, &policy.command_id) else {
             return Ok(Some(not_admitted));
         };
@@ -453,6 +467,9 @@ impl DispatchState {
             (ControlCommandState::Rejected, Some(ControlTransition::Rejected { failure })) => {
                 Some(Err(failure_text(refusal(helper, None, failure))))
             }
+            // Reconstruction fails an accepted admission that has no canonical
+            // node: no helper ran.
+            (ControlCommandState::Failed, _) => Some(not_admitted),
             (ControlCommandState::Applied | ControlCommandState::Settled, _) => {
                 Some(match self.accepted_helper_answer(snapshot, node)? {
                     Some((text, usage)) => Ok(completed_answer(helper, node, &text, &usage, true)),
@@ -467,9 +484,44 @@ impl DispatchState {
         })
     }
 
+    /// Whether a `delegate` call of this turn still has no recorded return.
+    fn has_unresolved_delegate_return(&self) -> Result<bool> {
+        for record in self.audit.records().map_err(error)? {
+            let InvocationAuditCommand::Intent(command) = &record.command else {
+                continue;
+            };
+            if command.intent.tool_name != NAME || command.intent.activation.turn_id != self.turn_id
+            {
+                continue;
+            }
+            if self
+                .audit
+                .invocation(&command.intent.invocation_id)
+                .map_err(error)?
+                .is_some_and(|audited| audited.final_evidence.is_none())
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Run after control command reconciliation on reconstruction. A lost
+    /// `delegate` return reads its admitting command's terminal state, which
+    /// only command reconciliation settles after a crash; reconcile the
+    /// invocations again so one reopen resolves it. Never called while an
+    /// Agent runs: a live call legitimately has no return yet.
+    pub(super) fn reconcile_delegate_returns(&mut self) -> Result<()> {
+        if self.has_unresolved_delegate_return()? {
+            self.reconcile()?;
+        }
+        Ok(())
+    }
+
     /// Record the lead's lost `delegate` return from the command journal and
-    /// the helper's canonical outcome. Nothing runs again. A command that was
-    /// accepted but never applied stays unknown.
+    /// the helper's canonical outcome. Nothing runs again. A command still
+    /// requested or accepted stays unknown until command reconciliation ends
+    /// it.
     pub(super) fn reconcile_delegate_outcome(
         &mut self,
         snapshot: &DurableTurnSnapshot,
@@ -576,7 +628,8 @@ impl SessionDispatchController {
              The helper starts fresh: it sees the Session's request and your task, not this \
              conversation, so put every detail it needs in the task and say what to report \
              back. Calling the same helper with the same task again in this turn returns the \
-             earlier result instead of running it again. Answers longer than {MAX_ANSWER_BYTES} \
+             earlier result instead of running it again; a call whose helper was not started \
+             is tried again. Answers longer than {MAX_ANSWER_BYTES} \
              bytes are cut. Each helper's limits come out of your own budget, so delegate only \
              work that needs a separate look.\nHelpers:\n{}",
             lines.join("\n")
@@ -597,7 +650,7 @@ impl SessionDispatchController {
         lead: &ActivationRef,
         call: &DelegateCall,
     ) -> std::result::Result<(TurnNodeId, Box<dyn AdmittedChildExecution>), String> {
-        let (worker, request, node_id, command_id, control) = {
+        let (worker, request, attempt, control) = {
             let state = self.lock().map_err(|failure| failure.to_string())?;
             state
                 .execution_admission()
@@ -617,29 +670,22 @@ impl SessionDispatchController {
                 .map_err(|failure| failure.to_string())??;
             let digest = super::coordinator::native_child_digest(lead, &request, &worker, &None)
                 .map_err(|failure| failure.to_string())?;
-            let (node_id, command_id) = super::coordinator::native_child_identity(&digest)
+            let attempt = state
+                .native_child_attempt(&digest)
                 .map_err(|failure| failure.to_string())?;
-            match state
-                .commands
-                .receipt(&command_id)
-                .map_err(|failure| failure.to_string())?
-            {
-                // Resubmitting a refused helper and task would conflict with
-                // its recorded request; report the recorded refusal instead.
-                Some(receipt) => match (&receipt.view().state, &receipt.view().last_transition) {
-                    (
-                        ControlCommandState::Rejected,
-                        Some(ControlTransition::Rejected { failure }),
-                    ) => return Err(refusal(&call.helper, Some(&worker.limits), failure)),
-                    (ControlCommandState::Applied | ControlCommandState::Settled, _) => {}
-                    _ => {
-                        return Err(format!(
-                            "The earlier call to helper '{}' with this task has not finished \
-                             being recorded. Continue without it for now.",
-                            call.helper
-                        ))
-                    }
-                },
+            match attempt.state {
+                // An identical call reattaches to the helper it admitted.
+                Some(ControlCommandState::Applied | ControlCommandState::Settled) => {}
+                Some(_) => {
+                    return Err(format!(
+                        "The earlier call to helper '{}' with this task has not finished being \
+                         recorded, so it cannot be repeated yet. Continue without it, or \
+                         delegate a different task.",
+                        call.helper
+                    ))
+                }
+                // Earlier attempts, if any, admitted no helper: this is a
+                // fresh admission.
                 None => {
                     if let Some(refused) = state
                         .delegate_follow_up_shortfall(lead, &policy, &call.helper, &worker.limits)
@@ -649,9 +695,15 @@ impl SessionDispatchController {
                     }
                 }
             }
-            (worker, request, node_id, command_id, bound.control.clone())
+            (worker, request, attempt, bound.control.clone())
         };
-        match self.admit_delegated_child(lead, &request, control) {
+        let ChildAttempt {
+            attempt,
+            node_id,
+            command_id,
+            ..
+        } = attempt;
+        match self.admit_delegated_child(lead, &request, attempt, control) {
             Ok(wait) => Ok((node_id, wait)),
             Err(failure) => {
                 let state = self.lock().map_err(|failure| failure.to_string())?;

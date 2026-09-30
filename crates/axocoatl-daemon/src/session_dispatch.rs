@@ -1306,6 +1306,8 @@ enum TestFailure {
     Promotion,
     SuccessorRequest,
     SuccessorBegin,
+    AgentCommandRequested,
+    AgentCommandAccepted,
 }
 #[cfg(test)]
 impl DispatchState {
@@ -1317,11 +1319,41 @@ impl DispatchState {
             Ok(())
         }
     }
+
+    /// A process that dies while an Agent's command is at `cut` writes
+    /// nothing more, so the delegate return is lost with it.
+    fn crash_agent_command(
+        &mut self,
+        view: &axocoatl_session::control_command::CommandReceiptView,
+        cut: TestFailure,
+    ) -> Result<()> {
+        if !matches!(
+            view.source,
+            axocoatl_session::control_command::CommandSourceRecord::Agent { .. }
+        ) {
+            return Ok(());
+        }
+        let result = self.trip(cut);
+        if result.is_err() {
+            self.fail_at = Some(TestFailure::DelegateOutcome);
+        }
+        self.fail_closed(result)
+    }
 }
 
 #[cfg(test)]
 impl SessionDispatchController {
     pub(crate) fn lose_delegate_outcome_for_test(&self) {
         self.lock().unwrap().fail_at = Some(TestFailure::DelegateOutcome);
+    }
+
+    /// Stop the process while the lead's first helper admission is recorded
+    /// as requested (`accepted: false`) or accepted but not yet applied.
+    pub(crate) fn crash_delegate_admission_for_test(&self, accepted: bool) {
+        self.lock().unwrap().fail_at = Some(if accepted {
+            TestFailure::AgentCommandAccepted
+        } else {
+            TestFailure::AgentCommandRequested
+        });
     }
 }

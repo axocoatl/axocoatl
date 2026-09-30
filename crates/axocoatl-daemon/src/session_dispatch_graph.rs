@@ -29,7 +29,7 @@ impl DispatchState {
             &self.canonical,
             &self.turn_id,
             view,
-            !self.is_delegate_child(view),
+            !self.is_delegate_child(view)?,
         )
     }
     pub(super) fn validate_graph_control(&self, view: &CommandReceiptView) -> Result<()> {

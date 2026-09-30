@@ -92,6 +92,8 @@ impl DispatchState {
             .map_err(error);
         let requested = self.fail_closed(result)?;
         let view = requested.view().clone();
+        #[cfg(test)]
+        self.crash_agent_command(&view, super::TestFailure::AgentCommandRequested)?;
         if let Err(reason) = self.validate_control_projection(&view, false) {
             return self.command_update(
                 &view,
@@ -129,6 +131,8 @@ impl DispatchState {
             },
         )?;
         self.changed.notify_waiters();
+        #[cfg(test)]
+        self.crash_agent_command(&view, super::TestFailure::AgentCommandAccepted)?;
         let result = self.apply_control(accepted.view());
         self.fail_closed(result)?;
         self.commands
