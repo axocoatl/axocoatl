@@ -11,10 +11,10 @@ prerequisites, run command, and expected output.
 | --- | --- | --- |
 | [research-pipeline.yaml](research-pipeline.yaml) | 2 | legacy workflow seed → manual Automation DAG |
 | [feature-dev.yaml](feature-dev.yaml) | 5 | legacy linear DAG seed (architect → planner → coder → reviewer → docs) |
-| [incident-response.yaml](incident-response.yaml) | 3 | Skill event declarations; add an Automation for a reachable reaction |
+| [incident-response.yaml](incident-response.yaml) | 2 | Skills that publish events, and first-boot OnEvent Automations that react |
 | [local-only.yaml](local-only.yaml) | 2 | Ollama, no API keys, and `sandbox.network: none` for session tools |
 | [mcp-tools.yaml](mcp-tools.yaml) | 1 | a single MCP server (stdio transport) |
-| [event-webhooks.yaml](event-webhooks.yaml) | 2 | outbound event egress — signed webhooks on `TaskCompleted` / `AgentFailed` |
+| [event-webhooks.yaml](event-webhooks.yaml) | 1 | outbound event egress — a signed webhook on a Skill's `DeployFinished` event |
 | [e2b-backend.yaml](e2b-backend.yaml) | 1 | daemon-global E2B Cloud backend and template for ordinary Sessions |
 
 ## Running an example

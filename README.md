@@ -84,8 +84,8 @@ request. To change the team, see
 
 1. Open or resume a Workspace Session.
 2. Ask one Agent for a solution, or use a Lattice or Custom team when the work
-   needs several cooperating roles. An autonomous multi-Agent team's causal
-   Coordination map stays with the Turn. A Coordinator can create bounded Workers
+   needs several cooperating roles. A native team's execution graph stays with the
+   Turn. A Coordinator can create bounded Workers
    from approved templates inside the same recorded turn. In a native Session,
    review and apply **Team & budget** before the first Send.
 3. When an implementation decision needs independent evidence, turn on
@@ -143,8 +143,8 @@ New data roots use the native Session controller. **Team & budget** requires exp
 limits and expiry before execution. Its enforced provider boundary currently supports
 reviewed local Ollama profiles and eligible OpenRouter text/tool endpoints paid with
 OpenRouter credits. OpenRouter requires `providers.openrouter_billing: credits`, a
-normal API key, and an account with no connected BYOK provider keys. BYOK support is
-a TODO. A compatible HTTP API alone does not establish a bound.
+normal API key, and an account with no connected BYOK provider keys. BYOK is not
+supported. A compatible HTTP API alone does not establish a bound.
 The onboarding wizard offers Ollama and OpenRouter for native Sessions.
 Direct OpenAI and Anthropic configurations remain available through manual YAML
 on their supported compatibility paths.
@@ -249,17 +249,17 @@ Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
   Session scopes. A
   configured background "sleep-time" pass consolidates registered idle autonomous
   Agents' memory. Declared Coordinator Workers are not polled by that loop.
-  Legacy coordinated turns can read these stores, but their speculative execution
-  cannot write them or run core-memory consolidation.
-- **Event lattice** — Skills and runtime components publish typed events;
+  Legacy Lattice, Custom, and Coordinator turns can read these stores, but cannot
+  write them or run core-memory consolidation during the turn.
+- **Event feed** — firing a Skill publishes each event in its `emits` list;
   Automation triggers, webhooks, and retained API/WebSocket observers consume
-  the shared notification feed. Separately, each legacy all-team turn with more than one
-  autonomous Agent in a Lattice or Custom Session owns a scoped predicate lattice
-  whose signals activate exact dependencies and are retained as Session evidence.
-  Native turns use their canonical dependency graph and accepted-generation evidence.
-  The coordination crate exposes both signal models to library users.
+  that feed, which starts no Agents on its own. Native Session turns use their
+  canonical dependency graph and accepted-generation evidence. On a 1.0 data root,
+  a Session turn that would run two or more Agents is refused until the operator
+  runs `axocoatl session upgrade --confirm`. Library users get the feed from
+  `axocoatl_core::event_feed`.
 - **Coordinator role** — for explicit hierarchical work, an agent with
-  `role: coordinator` decomposes a goal into subtasks (HTN or LLM), assigns each
+  `role: coordinator` decomposes a goal into subtasks with its model, assigns each
   to the first declared worker that can call its required tools, runs them in
   parallel, and synthesizes the results. Internal checkpoints protect the live
   orchestration boundary. On the legacy path, once a Session turn is Completed,
@@ -270,7 +270,7 @@ Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
 - **Automations** — explicit DAGs created, inspected, edited, and run in
   Settings, with the HTTP API available for programmatic CRUD. New records start
   with a valid Input → Agent graph. They can fire manually, on a fixed interval, by
-  lattice event type, or by one Skill. The persisted Automation store is live in
+  the name of an event a Skill publishes, or by one Skill. The persisted Automation store is live in
   both `dev` and `serve`; legacy YAML is first-boot seed data only. A top-level
   Interrupt parked at an operator decision survives a daemon restart and resumes
   without replaying completed nodes; arbitrary in-flight calls and nested
@@ -337,7 +337,6 @@ Every example is runnable with a mock LLM — **no API keys needed** — unless
 noted. See [`examples/`](examples/).
 
 **Coordination & planning**
-- [`htn-planner`](examples/htn-planner) — symbolic HTN decomposition; compound tasks expand via methods and only unresolved frontiers reach the LLM.
 - [`crash-recovery`](examples/crash-recovery) — a standalone example-owned behavior that resumes a multi-step workflow checkpoint without re-running completed steps; this is not the normal Session Coordinator terminal-recovery contract.
 
 **Memory & providers**

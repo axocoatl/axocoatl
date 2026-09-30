@@ -7671,7 +7671,6 @@ Used by:
 - axocoatl-a2a 1.1.0 (https://github.com/axocoatl/axocoatl)
 - axocoatl-actor 1.1.0 (https://github.com/axocoatl/axocoatl)
 - axocoatl-config 1.1.0 (https://github.com/axocoatl/axocoatl)
-- axocoatl-coordination 1.1.0 (https://github.com/axocoatl/axocoatl)
 - axocoatl-core 1.1.0 (https://github.com/axocoatl/axocoatl)
 - axocoatl-daemon 1.1.0 (https://github.com/axocoatl/axocoatl)
 - axocoatl-isolation 1.1.0 (https://github.com/axocoatl/axocoatl)

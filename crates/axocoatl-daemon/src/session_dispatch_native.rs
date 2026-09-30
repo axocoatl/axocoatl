@@ -58,11 +58,10 @@ pub(crate) struct NativeDefinitionPreparation {
 
 /// Opaque host result. References become executable only through a current
 /// canonical manifest and the actual controller-owned content/authority stores.
-#[allow(dead_code)] // Read by the pending native ingress join.
+/// The captured provider profile stays in content, keyed by the definition.
 pub(crate) struct CapturedNativeDefinition {
     pub(crate) definition: DefinitionSnapshotRef,
     pub(crate) profile: ExecutionProfile,
-    pub(crate) provider_configuration: EvidenceRef,
 }
 
 fn validate_native_config(config: &AgentConfig) -> Result<()> {
@@ -266,7 +265,7 @@ impl NativeDefinitionPreparation {
                 "native capture differs from the exact retained definition",
             ));
         }
-        let retained = content
+        content
             .retain_provider_profile(
                 canonical,
                 &definition.snapshot,
@@ -277,7 +276,6 @@ impl NativeDefinitionPreparation {
         Ok(CapturedNativeDefinition {
             definition: definition.clone(),
             profile: self.profile.clone(),
-            provider_configuration: retained.reference().clone(),
         })
     }
 }
@@ -396,10 +394,8 @@ impl NativeActivationFactory {
         };
         let mut config: AgentConfig = serde_json::from_str(&configuration).map_err(error)?;
         validate_native_config(&config)?;
-        if (config.id.0 != input.conversation_id.as_str()
-            && state
-                .native_child_origin(&input.activation.node_id)?
-                .is_none())
+        let instance = state.owns_instance_conversation(&input.activation.node_id)?;
+        if (config.id.0 != input.conversation_id.as_str() && !instance)
             || profile.definition != definition_id.as_str()
             || profile.provider != config.provider
             || profile.model != config.model
@@ -450,10 +446,7 @@ impl NativeActivationFactory {
         let runtime: NativeRuntimeConfiguration =
             serde_json::from_str(retained.configuration()).map_err(error)?;
         runtime.validate(&config)?;
-        if state
-            .native_child_origin(&input.activation.node_id)?
-            .is_some()
-        {
+        if instance {
             config.id = axocoatl_core::AgentId::new(input.conversation_id.as_str());
         }
         Ok(ResolvedNativeResources {

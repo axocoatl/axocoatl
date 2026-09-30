@@ -1,7 +1,7 @@
 //! Explicit pre-actor-start conversion of real legacy Session stores.
 //!
 //! The caller closes ingress and joins the old runtime before acquiring/using
-//! this seam. Nothing here enables upgraded-root startup or creates an executor.
+//! this seam. It converts stores only; it starts no actor or executor.
 //! The caller retains format ownership across failures so a partially imported
 //! Session can reopen and repeat the same deterministic conversion.
 
@@ -54,7 +54,6 @@ pub(crate) struct MigratedSessionState {
     pub content: ExecutionContentStore,
     pub activation_state: ActivationStateStore,
     pub seal: DurableLegacySeal,
-    pub assignments: Vec<LegacyRoleAssignment>,
 }
 
 /// Run before the explicit root-format conversion and again at the store join.
@@ -73,7 +72,9 @@ pub(super) async fn require_migration_quiescence(
 /// Convert after explicit format upgrade while its actual kernel-backed owner
 /// remains held by the caller. There is no provider dispatch or automatic
 /// orphan replay. A real running legacy row is refused until the existing
-/// orphan-reconciliation path has durably settled it.
+/// orphan-reconciliation path has durably settled it. The daemon converts
+/// through `PreparedStartupMigration`; tests call this directly.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn migrate_held_session_state(
     ownership: Arc<UpgradedFormatOwnership>,
@@ -253,7 +254,6 @@ async fn migrate_held_session_state_with_mode(
             content,
             activation_state,
             seal,
-            assignments,
         });
     }
     Ok(converted)

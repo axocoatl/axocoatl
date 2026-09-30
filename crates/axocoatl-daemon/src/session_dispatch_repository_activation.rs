@@ -57,7 +57,6 @@ pub struct RepositoryActivationResource {
 }
 
 impl SessionDispatchController {
-    #[allow(dead_code)] // Host port remains dormant until live v2 ingress is joined.
     pub(crate) fn repository_activation_resource(
         &self,
         reference: &EvidenceRef,

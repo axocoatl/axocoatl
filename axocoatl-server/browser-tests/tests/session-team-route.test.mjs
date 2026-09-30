@@ -167,3 +167,44 @@ test('a new Session proposes the read-only Worker templates as helpers, and the 
     assert.deepEqual(saved.slots[0].delegation.workers.map(worker=>worker.template_id),['scout','reviewer']);
   }finally{await daemon.stop();}
 });
+
+test('actual Session team applies a required review only with a read-only Worker whose budget covers every round',async()=>{
+  const daemon=await launchTestDaemon({nativeDataRoot:true,agentTools:['read_file'],ollamaBaseUrl:`http://127.0.0.1:${modelServer.address().port}`,
+    // Worker templates inside a Coordinator's workflow may review too.
+    extraAgents:[{id:'browser-test-coordinator',name:'Browser Test Coordinator',role:'coordinator'},
+      {id:'browser-test-reviewer',name:'Browser Test Reviewer',role:'worker',tools:['read_file','bash'],writes:[]},
+      {id:'browser-test-writer',name:'Browser Test Writer',role:'worker',tools:['read_file','write_file']}],
+    workflows:[{id:'browser-test-review-team',entryPoint:'browser-test-coordinator',agents:['browser-test-coordinator','browser-test-reviewer','browser-test-writer']}]});
+  try{
+    const id=daemon.fixtures.alpha.sessions[0].id,url=`${daemon.baseUrl}/api/sessions/${id}/team`;
+    const current=await (await fetch(url)).json();
+    assert.deepEqual(current.reviewers,['browser-test-reviewer'],'only a read-only Worker may review');
+    assert.equal(current.required_review,undefined);
+    const post=async(suffix,body)=>{const response=await fetch(`${url}${suffix}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return{status:response.status,value:await response.json()};};
+    const edit=(command_id,required_review,activations=2)=>({command_id,expected_configuration_revision:0,slots:current.slots.map(slot=>({...slot,max_output_tokens:128,limits:{activations,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),dependencies:current.dependencies,layout:current.layout,...(required_review?{required_review}:{})});
+    const review={template_id:'browser-test-reviewer',max_rounds:2,limits:{activations:2,invocations:6,tokens:32768,cost_microunits:0},max_output_tokens:128};
+    const refusals=[
+      [{...review,max_rounds:4},/runs 1 to 3 rounds/],
+      [{...review,template_id:'browser-test-writer'},/can change files or run commands \(write_file\)/],
+      [{...review,template_id:'browser-test-coder'},/is not a Worker template/],
+      [{...review,limits:{...review.limits,invocations:5}},/needs at least 6 invocations for 2 rounds/],
+    ];
+    for(const [index,[setting,message]] of refusals.entries()){
+      const refused=await post('/preview',edit(`review-refused-${index}`,setting));assert.equal(refused.status,409,JSON.stringify(refused.value));assert.match(refused.value.error,message);
+    }
+    const lead=await post('/preview',edit('review-lead-too-small',review,1));assert.equal(lead.status,409,JSON.stringify(lead.value));
+    assert.match(lead.value.error,/its activation limit must be at least 2/);
+    // Rounds left out default to two.
+    const {max_rounds,...defaulted}=review;
+    const reviewed=edit('review-applied',defaulted);
+    const preview=await post('/preview',reviewed);assert.equal(preview.status,200,JSON.stringify(preview.value));
+    assert.deepEqual(preview.value.edit.required_review,review);
+    const applied=await post('/apply',{edit:reviewed,review_digest:preview.value.review_digest});assert.equal(applied.status,200,JSON.stringify(applied.value));
+    const saved=await (await fetch(url)).json();assert.deepEqual(saved.required_review,review);
+    // Removing it applies a team with no review again.
+    const plain={...edit('review-removed'),expected_configuration_revision:saved.configuration_revision,slots:saved.slots.map(slot=>({...slot,limits:{activations:2,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000}))};
+    const removedPreview=await post('/preview',plain);assert.equal(removedPreview.status,200,JSON.stringify(removedPreview.value));assert.equal(removedPreview.value.edit.required_review,undefined);
+    const removed=await post('/apply',{edit:plain,review_digest:removedPreview.value.review_digest});assert.equal(removed.status,200,JSON.stringify(removed.value));
+    assert.equal((await (await fetch(url)).json()).required_review,undefined);
+  }finally{await daemon.stop();}
+});

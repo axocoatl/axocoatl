@@ -4,7 +4,7 @@ use super::*;
 use axocoatl_isolation::session_sandbox::{BgTask, ExecResult};
 use axocoatl_isolation::IsolationError;
 use axocoatl_session::execution_ownership::LegacyFormatOwnership;
-use axocoatl_session::execution_store::ExecutionStoreOwner;
+use axocoatl_session::execution_store::{ExecutionStoreOwner, SessionExecutionStore};
 use axocoatl_session::turn_contract::SessionId;
 use axocoatl_session::{SessionEnvironmentState, SessionMode};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -117,8 +117,10 @@ struct Fixture {
     _workspace: tempfile::TempDir,
 }
 
+/// A Session with an actual native creation origin, so its stores can enter
+/// the registry and Begin through the checked path.
 async fn fixture() -> Fixture {
-    fixture_with_legacy_turn(None).await
+    fixture_with_origin(None, false, true).await
 }
 
 async fn fixture_with_legacy_turn(legacy_turn_id: Option<&str>) -> Fixture {
@@ -778,35 +780,29 @@ async fn an_armed_unbound_effect_cannot_acquire_supervisor_attribution_after_dis
 }
 
 #[tokio::test]
-async fn late_settlement_cannot_target_a_live_lease_or_unsupervised_retained_effect() {
+async fn a_dropped_dispatched_lease_stays_held_without_a_settlement() {
     let f = fixture().await;
     let mut lease = f.owner.execution_lease().await.unwrap();
     lease.mark_dispatched().unwrap();
     {
         let state = f.owner.inner.state.lock().unwrap();
-        assert!(state.retained_supervised_binding().is_err());
         assert_eq!(state.active.as_deref(), Some(lease.id()));
+        assert!(state.supervised.is_none());
     }
     let id = lease.id().to_owned();
     drop(lease);
-    {
-        let state = f.owner.inner.state.lock().unwrap();
-        assert!(state.retained_supervised_binding().is_err());
-        assert!(state.last_settled.is_none());
-    }
     assert_held(&f, &id);
     assert_eq!(f.sandbox.stop_calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
-async fn late_settlement_eligibility_never_clears_stop_or_competes_with_checked_cleanup() {
+async fn an_abandoned_cleanup_never_clears_a_requested_stop() {
     let f = fixture().await;
     let id = arm_and_drop(&f.owner).await;
     f.owner.request_supervised_stop().unwrap();
     let cleanup = f.owner.begin_cleanup().unwrap().unwrap();
     {
         let state = f.owner.inner.state.lock().unwrap();
-        assert!(state.retained_supervised_binding().is_err());
         assert!(state.admission_closed);
         assert!(state.cleaning);
     }
@@ -814,7 +810,6 @@ async fn late_settlement_eligibility_never_clears_stop_or_competes_with_checked_
     drop(cleanup);
     {
         let state = f.owner.inner.state.lock().unwrap();
-        assert!(state.retained_supervised_binding().is_err());
         assert!(state.admission_closed);
     }
     assert!(f.owner.execution_lease().await.is_err());
@@ -908,6 +903,119 @@ fn controller_with_tools(
     crate::session_dispatch::SessionDispatchController::open(canonical, turn_id).unwrap()
 }
 
+/// Retain the fixture's stores and Begin their first turn through the
+/// registry's checked first-Begin path, which registers the controller with
+/// the fixture's owner as a native Session's first turn does.
+fn begin_registered(
+    registry: &crate::bootstrap::session_dispatch::SessionDispatchRegistry,
+    fixture: &mut Fixture,
+) -> (
+    crate::session_dispatch::SessionDispatchController,
+    axocoatl_session::turn_contract::EvidenceRef,
+) {
+    begin_registered_with_tools(registry, fixture, &[])
+}
+
+fn begin_registered_with_tools(
+    registry: &crate::bootstrap::session_dispatch::SessionDispatchRegistry,
+    fixture: &mut Fixture,
+    tools: &[&str],
+) -> (
+    crate::session_dispatch::SessionDispatchController,
+    axocoatl_session::turn_contract::EvidenceRef,
+) {
+    use axocoatl_session::control_authority::ExecutionProfile;
+    use axocoatl_session::execution_content::{
+        ActivationEvidenceContent, ExecutionContentStore, ExecutionRequestContent,
+    };
+    use axocoatl_session::turn_contract::*;
+    let canonical = fixture._canonical.take().unwrap();
+    let session_id = canonical.owner().session_id.as_str().to_owned();
+    let token = registry
+        .retain_existing_session(&mut Some(held_stores(canonical)))
+        .unwrap();
+    let team = registry.session_team_token(&session_id).unwrap();
+    let definition_id = AgentDefinitionId::new("lifecycle-definition").unwrap();
+    let definition = registry
+        .with_session_team_stores(&team, |_, content: &mut ExecutionContentStore, _| {
+            Ok(content
+                .retain_activation_evidence(ActivationEvidenceContent::Definition {
+                    definition_id: definition_id.clone(),
+                    revision: 1,
+                    profile: ExecutionProfile {
+                        definition: definition_id.as_str().into(),
+                        provider: "local".into(),
+                        model: "model".into(),
+                        isolation: "in-process".into(),
+                        tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
+                        write_scope: None,
+                    },
+                    configuration: "{}".into(),
+                })
+                .unwrap())
+        })
+        .unwrap();
+    let turn_id = LogicalTurnId::new("lifecycle-turn").unwrap();
+    let spec = crate::session_dispatch::SuccessorTurn {
+        command_id: CommandId::new("lifecycle-begin").unwrap(),
+        turn_id: turn_id.clone(),
+        epoch_id: ExecutionEpochId::new("lifecycle-epoch").unwrap(),
+        graph: TurnGraphSnapshot {
+            snapshot_id: GraphSnapshotId::new("lifecycle-graph").unwrap(),
+            revision: 1,
+            nodes: vec![GraphNode {
+                node_id: TurnNodeId::new("node").unwrap(),
+                slot_id: SessionTeamSlotId::new("slot").unwrap(),
+                definition: DefinitionSnapshotRef {
+                    definition_id,
+                    snapshot: definition.reference().clone(),
+                },
+                conversation_id: NodeConversationId::new("conversation").unwrap(),
+                starting_savepoint: ConversationSavepoint::Empty,
+                required: true,
+            }],
+            dependencies: vec![],
+            conditions: vec![],
+        },
+        request: ExecutionRequestContent {
+            turn_id,
+            recorded_at_unix_ms: 1,
+            display_input: "Retained request".into(),
+            effective_input: "Retained request".into(),
+            context: vec![],
+            target_definition: None,
+            model: None,
+        },
+    };
+    registry
+        .begin_first_turn_checked(&token, fixture.owner.clone(), spec, |_, _, _| Ok(()))
+        .unwrap()
+}
+
+/// Canonical, content and activation stores opened from one canonical owner.
+fn held_stores(canonical: SessionExecutionStore) -> crate::session_dispatch::RetainedSessionStores {
+    use axocoatl_memory::activation_state::ActivationStateStore;
+    use axocoatl_session::execution_content::ExecutionContentStore;
+    use axocoatl_session::execution_namespace::ExecutionComponent;
+    let content = ExecutionContentStore::open_owned(
+        canonical
+            .component_namespace(ExecutionComponent::ExecutionContent)
+            .unwrap(),
+    )
+    .unwrap();
+    let memory = ActivationStateStore::open_owned(
+        canonical
+            .component_namespace(ExecutionComponent::ActivationState)
+            .unwrap(),
+    )
+    .unwrap();
+    crate::session_dispatch::RetainedSessionStores {
+        canonical,
+        content,
+        memory,
+    }
+}
+
 fn closed_successor(
     controller: &crate::session_dispatch::SessionDispatchController,
 ) -> crate::session_dispatch::SuccessorTurn {
@@ -957,9 +1065,7 @@ async fn registry_close_reopen_without_entry_cannot_acknowledge_a_later_registra
         .unwrap();
     registry.complete_session_cleanup(&stale).unwrap();
     registry.reopen_session(&session_id).unwrap();
-    registry
-        .register(controller(&mut fixture), fixture.owner.clone())
-        .unwrap();
+    begin_registered(&registry, &mut fixture);
     assert!(registry.complete_session_cleanup(&stale).is_err());
     assert!(registry.forget_deleted_session(&session_id).is_err());
     let mut current = registry
@@ -982,12 +1088,9 @@ async fn registry_inspection_uses_exact_retained_controller_without_changing_rev
     let registry = SessionDispatchRegistry::default();
     let mut fixture = fixture().await;
     let session_id = fixture.owner.metadata().session_id.clone();
-    let controller = controller(&mut fixture);
+    let (controller, _) = begin_registered(&registry, &mut fixture);
     let before = controller.snapshot().unwrap();
     let turn_id = before.turn_id().as_str().to_owned();
-    registry
-        .register(controller.clone(), fixture.owner.clone())
-        .unwrap();
     let view = registry
         .control_plane(&session_id, &turn_id)
         .unwrap()
@@ -1026,9 +1129,7 @@ async fn registry_unknown_and_failed_cleanup_keep_canonical_and_actual_owner_unt
     let registry = SessionDispatchRegistry::default();
     let mut fixture = fixture().await;
     let session_id = fixture.owner.metadata().session_id.clone();
-    registry
-        .register(controller(&mut fixture), fixture.owner.clone())
-        .unwrap();
+    begin_registered(&registry, &mut fixture);
     let id = arm_and_drop(&fixture.owner).await;
     fixture.sandbox.fail_stop.store(true, Ordering::SeqCst);
     assert!(registry
@@ -1077,9 +1178,7 @@ async fn registry_cancelled_cleanup_keeps_unknown_execution_and_allows_exact_ret
     let registry = Arc::new(SessionDispatchRegistry::default());
     let mut fixture = fixture().await;
     let session_id = fixture.owner.metadata().session_id.clone();
-    registry
-        .register(controller(&mut fixture), fixture.owner.clone())
-        .unwrap();
+    begin_registered(&registry, &mut fixture);
     let id = arm_and_drop(&fixture.owner).await;
     fixture.sandbox.block_stop.store(true, Ordering::SeqCst);
     let registry_task = registry.clone();
@@ -1113,7 +1212,7 @@ async fn registry_successor_preserves_idle_capability_and_refuses_consuming_hand
     let registry = SessionDispatchRegistry::default();
     let mut fixture = fixture().await;
     let session_id = fixture.owner.metadata().session_id.clone();
-    let controller = controller(&mut fixture);
+    let (controller, _) = begin_registered(&registry, &mut fixture);
     let next = closed_successor(&controller);
     let retained_next = crate::session_dispatch::SuccessorTurn {
         command_id: next.command_id.clone(),
@@ -1122,16 +1221,13 @@ async fn registry_successor_preserves_idle_capability_and_refuses_consuming_hand
         graph: next.graph.clone(),
         request: next.request.clone(),
     };
-    registry
-        .register(controller.clone(), fixture.owner.clone())
-        .unwrap();
     assert!(controller.begin_successor(next).is_err());
     assert!(
         axocoatl_session::execution_ownership::UpgradedFormatOwnership::open(fixture._data.path())
             .is_err()
     );
     registry
-        .begin_successor(&session_id, retained_next)
+        .begin_native_successor_checked(&session_id, retained_next, |_, _, _| Ok(()))
         .unwrap();
     // Same owner and content capability survive advancement. No runtime restart.
     drop(fixture.owner.execution_lease().await.unwrap());
@@ -1152,20 +1248,20 @@ async fn registry_successor_storage_failure_and_unknown_lease_preserve_ownership
         let registry = SessionDispatchRegistry::default();
         let mut fixture = fixture().await;
         let session_id = fixture.owner.metadata().session_id.clone();
-        let controller = controller(&mut fixture);
+        let (controller, _) = begin_registered(&registry, &mut fixture);
         let next = closed_successor(&controller);
         if storage_failure {
             controller.fail_registered_successor_request_for_test();
         }
-        registry
-            .register(controller, fixture.owner.clone())
-            .unwrap();
+        drop(controller);
         let unknown = if storage_failure {
             None
         } else {
             Some(arm_and_drop(&fixture.owner).await)
         };
-        assert!(registry.begin_successor(&session_id, next).is_err());
+        assert!(registry
+            .begin_native_successor_checked(&session_id, next, |_, _, _| Ok(()))
+            .is_err());
         assert!(fixture.operation.try_lock().is_err());
         assert!(
             axocoatl_session::execution_ownership::UpgradedFormatOwnership::open(
@@ -1202,9 +1298,7 @@ async fn registry_cancelled_borrowed_lifecycle_retains_parked_workspace_until_re
     let registry = SessionDispatchRegistry::default();
     let mut fixture = fixture().await;
     let session_id = fixture.owner.metadata().session_id.clone();
-    registry
-        .register(controller(&mut fixture), fixture.owner.clone())
-        .unwrap();
+    begin_registered(&registry, &mut fixture);
 
     let (prepared, ready) = tokio::sync::oneshot::channel();
     {
@@ -1260,9 +1354,7 @@ async fn registry_concurrent_retry_waits_for_both_lifecycle_holders() {
     let registry = Arc::new(SessionDispatchRegistry::default());
     let mut fixture = fixture().await;
     let session_id = fixture.owner.metadata().session_id.clone();
-    registry
-        .register(controller(&mut fixture), fixture.owner.clone())
-        .unwrap();
+    begin_registered(&registry, &mut fixture);
     let mut first = registry
         .prepare_session_cleanup(&session_id, Duration::from_secs(1))
         .await
@@ -1303,9 +1395,7 @@ async fn registry_queued_cleanup_cannot_reuse_a_completed_registration() {
     let registry = Arc::new(SessionDispatchRegistry::default());
     let mut fixture = fixture().await;
     let session_id = fixture.owner.metadata().session_id.clone();
-    registry
-        .register(controller(&mut fixture), fixture.owner.clone())
-        .unwrap();
+    begin_registered(&registry, &mut fixture);
     let mut first = registry
         .prepare_session_cleanup(&session_id, Duration::from_secs(1))
         .await
@@ -1341,11 +1431,11 @@ async fn finalized_turn_releases_workspace_then_reacquires_a_fresh_owner_for_suc
     let registry = SessionDispatchRegistry::default();
     let mut f = fixture().await;
     let session_id = f.owner.metadata().session_id.clone();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     let next = closed_successor(&controller);
     let turn_id = controller.snapshot().unwrap().turn_id().clone();
     let revision = controller.snapshot().unwrap().contract().revision();
-    registry.register(controller, f.owner.clone()).unwrap();
+    drop(controller);
     registry.release_after_turn(&session_id, &turn_id).unwrap();
     registry.release_after_turn(&session_id, &turn_id).unwrap();
     assert!(
@@ -1388,7 +1478,9 @@ async fn finalized_turn_releases_workspace_then_reacquires_a_fresh_owner_for_suc
         view.turn_revision,
         crate::session_control_plane::EvidenceValue::Available { value: revision }
     );
-    registry.begin_successor(&session_id, next).unwrap();
+    registry
+        .begin_native_successor_checked(&session_id, next, |_, _, _| Ok(()))
+        .unwrap();
     let mut cleanup = registry
         .prepare_session_cleanup(&session_id, Duration::from_secs(1))
         .await
@@ -1407,12 +1499,12 @@ async fn running_or_unknown_work_never_releases_repository_ownership() {
         let registry = SessionDispatchRegistry::default();
         let mut f = fixture().await;
         let session_id = f.owner.metadata().session_id.clone();
-        let controller = controller(&mut f);
+        let (controller, _) = begin_registered(&registry, &mut f);
         if unknown {
             closed_successor(&controller);
         }
         let turn_id = controller.snapshot().unwrap().turn_id().clone();
-        registry.register(controller, f.owner.clone()).unwrap();
+        drop(controller);
         if unknown {
             arm_and_drop(&f.owner).await;
         }
@@ -1423,17 +1515,15 @@ async fn running_or_unknown_work_never_releases_repository_ownership() {
 }
 
 #[tokio::test]
-async fn stale_reacquisition_cannot_replace_a_closed_and_reopened_registration() {
+async fn stale_reacquisition_cannot_complete_after_close_and_reopen() {
     use crate::bootstrap::session_dispatch::SessionDispatchRegistry;
     let registry = SessionDispatchRegistry::default();
     let mut f = fixture().await;
     let session_id = f.owner.metadata().session_id.clone();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     closed_successor(&controller);
     let turn_id = controller.snapshot().unwrap().turn_id().clone();
-    registry
-        .register(controller.clone(), f.owner.clone())
-        .unwrap();
+    drop(controller);
     registry.release_after_turn(&session_id, &turn_id).unwrap();
     let stale = registry.prepare_reacquisition(&session_id).unwrap();
     let mut cleanup = registry
@@ -1445,20 +1535,25 @@ async fn stale_reacquisition_cannot_replace_a_closed_and_reopened_registration()
     drop(cleanup);
     registry.reopen_session(&session_id).unwrap();
     let fresh = f.owner.reacquire_between_turns().await.unwrap();
-    registry.register(controller, fresh.clone()).unwrap();
+    // Close retired the registration the stale token names. The token cannot
+    // complete against the reopened Session or retain the fresh owner.
     assert!(registry
         .complete_reacquisition(stale, fresh.clone())
         .is_err());
+    assert!(registry
+        .control_plane(&session_id, turn_id.as_str())
+        .unwrap()
+        .is_none());
     assert!(
         f.operation.try_lock().is_err(),
-        "new registration still owns Workspace"
+        "the fresh owner still holds the Workspace"
     );
-    let mut cleanup = registry
-        .prepare_session_cleanup(&session_id, Duration::from_secs(1))
-        .await
-        .unwrap();
-    drop(cleanup.take_operation());
-    registry.complete_session_cleanup(&cleanup).unwrap();
+    drop(fresh);
+    assert!(
+        f.operation.try_lock().is_ok(),
+        "the refused reacquisition retained nothing"
+    );
+    assert_eq!(f.sandbox.stop_calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1467,10 +1562,10 @@ async fn reacquisition_rechecks_close_after_the_actual_owner_was_acquired() {
     let registry = Arc::new(SessionDispatchRegistry::default());
     let mut f = fixture().await;
     let session_id = f.owner.metadata().session_id.clone();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     closed_successor(&controller);
     let turn_id = controller.snapshot().unwrap().turn_id().clone();
-    registry.register(controller, f.owner.clone()).unwrap();
+    drop(controller);
     registry.release_after_turn(&session_id, &turn_id).unwrap();
     let token = registry.prepare_reacquisition(&session_id).unwrap();
     let fresh = f.owner.reacquire_between_turns().await.unwrap();
@@ -1494,10 +1589,10 @@ async fn lost_reacquisition_ack_keeps_actual_owner_for_checked_cleanup() {
     let registry = SessionDispatchRegistry::default();
     let mut f = fixture().await;
     let session_id = f.owner.metadata().session_id.clone();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     let next = closed_successor(&controller);
     let turn_id = controller.snapshot().unwrap().turn_id().clone();
-    registry.register(controller, f.owner.clone()).unwrap();
+    drop(controller);
     registry.release_after_turn(&session_id, &turn_id).unwrap();
     let token = registry.prepare_reacquisition(&session_id).unwrap();
     let fresh = f.owner.reacquire_between_turns().await.unwrap();
@@ -1509,7 +1604,9 @@ async fn lost_reacquisition_ack_keeps_actual_owner_for_checked_cleanup() {
         .unwrap()
         .is_some());
     assert!(registry.prepare_reacquisition(&session_id).is_err());
-    assert!(registry.begin_successor(&session_id, next).is_err());
+    assert!(registry
+        .begin_native_successor_checked(&session_id, next, |_, _, _| Ok(()))
+        .is_err());
     let mut cleanup = registry
         .prepare_session_cleanup(&session_id, Duration::from_secs(1))
         .await
@@ -1527,10 +1624,10 @@ async fn cancelled_cleanup_after_between_turn_reacquisition_keeps_the_parked_gua
     let registry = Arc::new(SessionDispatchRegistry::default());
     let mut f = fixture().await;
     let session_id = f.owner.metadata().session_id.clone();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     closed_successor(&controller);
     let turn_id = controller.snapshot().unwrap().turn_id().clone();
-    registry.register(controller, f.owner.clone()).unwrap();
+    drop(controller);
     registry.release_after_turn(&session_id, &turn_id).unwrap();
     let writer = f.operation.clone().lock_owned().await;
     let (ready, waiting) = tokio::sync::oneshot::channel();
@@ -1593,7 +1690,7 @@ async fn finalized_closure_cannot_release_a_still_owned_driver_ticket() {
     let registry = SessionDispatchRegistry::default();
     let mut f = fixture().await;
     let session_id = f.owner.metadata().session_id.clone();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     let snapshot = controller.snapshot().unwrap();
     let node = snapshot.contract().graph().unwrap().nodes[0].clone();
     let limits = GrantLimits {
@@ -1638,9 +1735,6 @@ async fn finalized_closure_cannot_release_a_still_owned_driver_ticket() {
         })
         .unwrap();
     controller.install_grant(policy).unwrap();
-    registry
-        .register(controller.clone(), f.owner.clone())
-        .unwrap();
     let driver = controller
         .autonomous_turn_driver(
             vec![crate::session_dispatch::AutonomousNodeInput {
@@ -1677,10 +1771,10 @@ async fn reacquisition_refuses_changed_runtime_and_releases_only_its_undispatche
     let registry = SessionDispatchRegistry::default();
     let mut f = fixture().await;
     let session_id = f.owner.metadata().session_id.clone();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     closed_successor(&controller);
     let turn_id = controller.snapshot().unwrap().turn_id().clone();
-    registry.register(controller, f.owner.clone()).unwrap();
+    drop(controller);
     registry.release_after_turn(&session_id, &turn_id).unwrap();
     let replacement: Arc<dyn Sandbox> = Arc::new(ControlledSandbox::new(
         f.owner.root(),
@@ -1714,7 +1808,7 @@ async fn finalized_partial_turn_needs_retained_outcome_even_when_actual_owner_is
         let registry = SessionDispatchRegistry::default();
         let mut f = fixture().await;
         let session_id = f.owner.metadata().session_id.clone();
-        let controller = controller_with_tools(&mut f, &["effect"]);
+        let (controller, _) = begin_registered_with_tools(&registry, &mut f, &["effect"]);
         let snapshot = controller.snapshot().unwrap();
         let node = snapshot.contract().graph().unwrap().nodes[0].clone();
         let activation = ActivationRef {
@@ -1791,9 +1885,6 @@ async fn finalized_partial_turn_needs_retained_outcome_even_when_actual_owner_is
                     }),
                 },
             })
-            .unwrap();
-        registry
-            .register(controller.clone(), f.owner.clone())
             .unwrap();
         let control = controller
             .bind_activation(
@@ -1891,11 +1982,11 @@ async fn cancelled_reacquisition_waiting_for_session_start_releases_only_tempora
     let registry = Arc::new(SessionDispatchRegistry::default());
     let mut f = fixture().await;
     let session_id = f.owner.metadata().session_id.clone();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     let next = closed_successor(&controller);
     let turn_id = controller.snapshot().unwrap().turn_id().clone();
     let revision = controller.snapshot().unwrap().contract().revision();
-    registry.register(controller, f.owner.clone()).unwrap();
+    drop(controller);
     registry.release_after_turn(&session_id, &turn_id).unwrap();
 
     // The real Session start mutex forces reacquisition to suspend after it
@@ -1946,7 +2037,9 @@ async fn cancelled_reacquisition_waiting_for_session_start_releases_only_tempora
     registry.complete_reacquisition(token, fresh).unwrap();
     assert!(f.operation.try_lock().is_err());
     assert!(f.owner.execution_lease().await.is_err());
-    registry.begin_successor(&session_id, next).unwrap();
+    registry
+        .begin_native_successor_checked(&session_id, next, |_, _, _| Ok(()))
+        .unwrap();
     let mut cleanup = registry
         .prepare_session_cleanup(&session_id, Duration::from_secs(1))
         .await
@@ -2055,11 +2148,8 @@ async fn historical_registry_reads_preserve_exact_receipts_after_successor_witho
     let registry = SessionDispatchRegistry::default();
     let mut f = fixture().await;
     let session_id = f.owner.metadata().session_id.clone();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     let old_turn = controller.snapshot().unwrap().turn_id().clone();
-    registry
-        .register(controller.clone(), f.owner.clone())
-        .unwrap();
     let receipt = rejected_history_action(
         &registry,
         &session_id,
@@ -2071,7 +2161,9 @@ async fn historical_registry_reads_preserve_exact_receipts_after_successor_witho
     let next_turn = next.turn_id.clone();
     let closed_current = controller.control_plane().unwrap();
     drop(controller);
-    registry.begin_successor(&session_id, next).unwrap();
+    registry
+        .begin_native_successor_checked(&session_id, next, |_, _, _| Ok(()))
+        .unwrap();
     let before = historical_read_tree(f._data.path());
     for _ in 0..3 {
         let historical = registry
@@ -2130,11 +2222,8 @@ async fn historical_receipt_loss_and_foreign_identity_stay_unavailable_without_r
         let registry = SessionDispatchRegistry::default();
         let mut f = fixture().await;
         let session_id = f.owner.metadata().session_id.clone();
-        let controller = controller(&mut f);
+        let (controller, _) = begin_registered(&registry, &mut f);
         let old_turn = controller.snapshot().unwrap().turn_id().clone();
-        registry
-            .register(controller.clone(), f.owner.clone())
-            .unwrap();
         rejected_history_action(
             &registry,
             &session_id,
@@ -2144,7 +2233,9 @@ async fn historical_receipt_loss_and_foreign_identity_stay_unavailable_without_r
         let next = closed_successor(&controller);
         let next_turn = next.turn_id.clone();
         drop(controller);
-        registry.begin_successor(&session_id, next).unwrap();
+        registry
+            .begin_native_successor_checked(&session_id, next, |_, _, _| Ok(()))
+            .unwrap();
         let files = historical_read_tree(f._data.path());
         let relative = files
             .iter()
@@ -2201,8 +2292,8 @@ async fn canonical_missing_turn_and_missing_upgraded_controller_never_read_legac
     let registry = SessionDispatchRegistry::default();
     let mut f = fixture().await;
     let session_id = f.owner.metadata().session_id.clone();
-    let controller = controller(&mut f);
-    registry.register(controller, f.owner.clone()).unwrap();
+    let (controller, _) = begin_registered(&registry, &mut f);
+    drop(controller);
     // The canonical registry is decisive even if a host still owns a legacy
     // ledger containing a matching stale row. This is the actual route selector.
     let legacy_root = tempfile::tempdir().unwrap();
@@ -2258,9 +2349,9 @@ async fn sealed_legacy_ids_outside_v2_syntax_remain_exactly_readable_without_wri
         let mut f = fixture_with_legacy_turn(Some(&legacy_id)).await;
         let registry = SessionDispatchRegistry::default();
         let session_id = f.owner.metadata().session_id.clone();
-        let controller = controller(&mut f);
+        let (controller, _) = begin_registered(&registry, &mut f);
         let current_id = controller.snapshot().unwrap().turn_id().clone();
-        registry.register(controller, f.owner.clone()).unwrap();
+        drop(controller);
         let before = historical_read_tree(f._data.path());
         for _ in 0..3 {
             let view = registry
@@ -2304,14 +2395,14 @@ async fn registered_successor_refuses_visible_and_hidden_sealed_ids_without_pois
         let mut fixture = fixture_with_legacy_turn_visibility(Some("successor-turn"), hidden).await;
         let session_id = fixture.owner.metadata().session_id.clone();
         let registry = SessionDispatchRegistry::default();
-        let controller = controller(&mut fixture);
+        let (controller, _) = begin_registered(&registry, &mut fixture);
         let next = closed_successor(&controller);
-        registry
-            .register(controller.clone(), fixture.owner.clone())
-            .unwrap();
         drop(controller);
         let before = historical_read_tree(fixture._data.path());
-        let error = registry.begin_successor(&session_id, next).unwrap_err();
+        let error = registry
+            .begin_native_successor_checked(&session_id, next, |_, _, _| Ok(()))
+            .err()
+            .expect("collision must refuse");
         assert!(error
             .to_string()
             .contains("occupied by retained legacy history"));
@@ -2354,13 +2445,12 @@ async fn successor_compares_sealed_legacy_ids_exactly_without_trimming() {
     let mut fixture = fixture_with_legacy_turn(Some(raw_id)).await;
     let session_id = fixture.owner.metadata().session_id.clone();
     let registry = SessionDispatchRegistry::default();
-    let controller = controller(&mut fixture);
+    let (controller, _) = begin_registered(&registry, &mut fixture);
     let next = closed_successor(&controller);
-    registry
-        .register(controller.clone(), fixture.owner.clone())
-        .unwrap();
     drop(controller);
-    registry.begin_successor(&session_id, next).unwrap();
+    registry
+        .begin_native_successor_checked(&session_id, next, |_, _, _| Ok(()))
+        .unwrap();
     let history = registry.history_snapshot(&session_id).unwrap().unwrap();
     assert!(history.get(raw_id).is_some());
     assert!(history.get("successor-turn").is_some());
@@ -2393,10 +2483,7 @@ async fn recovered_repository_reattachment_preserves_inputs_and_uses_fresh_physi
     use axocoatl_session::turn_contract::*;
     let mut f = fixture_with_origin(None, false, true).await;
     let registry = SessionDispatchRegistry::default();
-    let controller = controller(&mut f);
-    let original = registry
-        .register(controller.clone(), f.owner.clone())
-        .unwrap();
+    let (controller, original) = begin_registered(&registry, &mut f);
     let snapshot = controller.snapshot().unwrap();
     let node = snapshot.contract().graph().unwrap().nodes[0].clone();
     let limits = GrantLimits {
@@ -2579,11 +2666,8 @@ async fn recovered_closed_registry_joins_exact_receipts_and_disabled_controls_wi
     let registry = SessionDispatchRegistry::default();
     let mut f = fixture_with_origin(None, false, true).await;
     let session_id = f.owner.metadata().session_id.clone();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     let turn_id = controller.snapshot().unwrap().turn_id().clone();
-    registry
-        .register(controller.clone(), f.owner.clone())
-        .unwrap();
     let receipt = rejected_history_action(
         &registry,
         &session_id,

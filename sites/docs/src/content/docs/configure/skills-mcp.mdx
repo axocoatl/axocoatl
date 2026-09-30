@@ -7,7 +7,8 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 Skills and MCP serve different roles:
 
-- a **Skill** is a named, lattice-aware capability configured in Axocoatl;
+- a **Skill** is a named set of events that Axocoatl publishes on its event feed
+  when the Skill fires;
 - an **MCP server** supplies external tools over a standard protocol.
 
 Both live in Settings, but only MCP calls pass through the built-in interactive
@@ -21,9 +22,6 @@ skills:
     name: Review requested
     description: Publish an event when review should begin.
     emits: [ReviewRequested]
-    reacts_to: []
-    agents: [reviewer]
-    prompt: "Review the current change."
 ```
 
 Choose **Settings → Skills**, select the record, and choose **Fire this Skill**,
@@ -38,11 +36,16 @@ to a separate registry of built-in prompt templates. `run` renders a template
 for piping into chat; it does not list or fire the YAML Skill records shown in
 Settings.
 
-Firing publishes the event types in `emits`. It does not automatically select
-and execute an Agent from `agents`, and the current daemon does not activate
-holders from `reacts_to` or execute `prompt` as an Agent request. To make a
-published event start work, create an Automation with an **On Skill** or **On
-event** trigger.
+Firing publishes each event name in `emits` on the event feed, with the payload
+`{"fired_by_skill": "<skill-id>"}`. A Session that enables the Skill also gives its
+Agents a `skill_<id>` tool that fires it the same way. Firing starts no Agent by
+itself: to make a published event start work, create an Automation with an **On
+Skill** or **On event** trigger, or send it to an endpoint with a
+[webhook](/reference/config/#webhooks).
+
+A 1.0 Skill's `reacts_to`, `agents` and `prompt` keys were removed in 1.1.0. They
+never ran anything; a config that still sets them loads, and the daemon warns at
+startup that they are ignored.
 
 ## Connect an MCP server
 

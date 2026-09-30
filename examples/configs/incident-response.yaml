@@ -1,12 +1,16 @@
-# incident-response — Skill event declarations for an incident-response design
+# incident-response — Skills that publish incident events, and the Automations
+# that react to them
 #
 # Prerequisites: ollama serve && ollama pull llama3.2  (no API key needed)
 # Run:           axocoatl validate examples/configs/incident-response.yaml
 #                axocoatl dev -c examples/configs/incident-response.yaml
-# Expected:      Settings/API show two Skills and their event metadata. Firing a
-#                Skill publishes its `emits` events. The daemon does not execute
-#                holders from `reacts_to`; add OnSkill/OnEvent Automations for a
-#                reachable incident-response chain.
+# Expected:      On first boot the two `proactive:` entries become OnEvent
+#                Automations. Firing the Incident reported Skill (Settings →
+#                Skills, or POST /api/skills/incident-reported/fire) publishes
+#                IncidentReported and runs the triage Automation; firing
+#                Incident resolved publishes IncidentResolved and runs the
+#                postmortem Automation. A Skill event carries only the Skill id,
+#                so each Agent works from its Automation's input.
 
 agents:
   - id: ops
@@ -16,36 +20,43 @@ agents:
     system_prompt: "You are a site reliability engineer. Diagnose incidents and produce mitigation steps."
     depends_on: []
 
-  - id: analyst
-    name: "Data Analyst"
-    provider: ollama
-    model: llama3.2
-    system_prompt: "Extract the signal from logs and metrics. State the likely root cause."
-    depends_on: []
-
   - id: scribe
     name: "Scribe"
     provider: ollama
     model: llama3.2
-    system_prompt: "Write a clear, blameless incident postmortem from the resolved incident."
+    system_prompt: "Write clear, blameless incident postmortems."
     depends_on: []
 
 skills:
+  - id: incident-reported
+    name: "Incident reported"
+    description: "Announce that a new incident needs triage."
+    emits: ["IncidentReported"]
+
+  - id: incident-resolved
+    name: "Incident resolved"
+    description: "Announce that the open incident is resolved."
+    emits: ["IncidentResolved"]
+
+# First-boot seed: each entry becomes an OnEvent Automation with one Agent node.
+proactive:
   - id: incident-triage
     name: "Incident Triage"
-    description: "Diagnose an incident and propose a concrete mitigation."
-    emits: ["IncidentResolved"]
-    reacts_to: ["IncidentReported"]
-    agents: [ops, analyst]
-    prompt: "Diagnose this incident: likely cause, blast radius, immediate mitigation."
+    agent: ops
+    trigger:
+      type: on_event
+      event: IncidentReported
+    input: "An incident was reported. List, in order, the first five checks the on-call engineer should run and what each one rules out."
+    enabled: true
 
   - id: incident-postmortem
     name: "Incident Postmortem"
-    description: "Draft a blameless postmortem once the incident is resolved."
-    emits: ["PostmortemDraft"]
-    reacts_to: ["IncidentResolved"]
-    agents: [scribe]
-    prompt: "Draft a blameless postmortem: timeline, root cause, impact, mitigation, action items."
+    agent: scribe
+    trigger:
+      type: on_event
+      event: IncidentResolved
+    input: "An incident was just resolved. Draft a blameless postmortem outline: timeline, root cause, impact, mitigation, action items."
+    enabled: true
 
 providers:
   ollama:

@@ -970,6 +970,7 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
 
     // Outbound egress transparency — always surface what leaves the box.
     if let Some(cfg) = &config {
+        pass(&sandbox_network_doctor_line(&cfg.sandbox.network));
         if cfg.webhooks.is_empty() {
             pass("Outbound webhooks: none (no event egress)");
         } else {
@@ -980,7 +981,7 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
                 .map(|w| w.name.as_str())
                 .collect();
             println!(
-                "  [EGRESS] {} webhook(s) active — lattice events leave the box to: {}",
+                "  [EGRESS] {} webhook(s) active — Skill events leave the box to: {}",
                 names.len(),
                 names.join(", ")
             );
@@ -994,6 +995,18 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
         println!("Some required checks FAILED — see hints above.");
     }
     hard_ok
+}
+
+/// The `doctor` line for a validated `sandbox.network`. Config loading has
+/// already refused anything other than `bridge` or `none`.
+fn sandbox_network_doctor_line(network: &str) -> String {
+    if network == "none" {
+        "Sandbox network: none (local Session containers have no network)".to_string()
+    } else {
+        format!(
+            "Sandbox network: {network} (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)"
+        )
+    }
 }
 
 fn probe_data_dir(path: &std::path::Path) -> std::io::Result<()> {
@@ -1263,12 +1276,12 @@ async fn cmd_onboard(install_daemon: bool) {
         }
         OnboardingProvider::OpenRouter => {
             if !Confirm::new()
-                .with_prompt("Use OpenRouter credits, with no BYOK provider keys connected? (BYOK support is planned)")
+                .with_prompt("Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK)")
                 .default(true)
                 .interact()
                 .unwrap_or(false)
             {
-                eprintln!("Native OpenRouter currently requires credit billing. BYOK support remains a TODO; no configuration was written.");
+                eprintln!("Native OpenRouter requires OpenRouter credit billing and does not support BYOK provider keys; no configuration was written.");
                 return;
             }
             let key = Password::new()
@@ -2888,6 +2901,27 @@ mod tests {
         symlink(outside.path(), root.path().join(".write_probe")).unwrap();
         probe_data_dir(root.path()).unwrap();
         assert_eq!(std::fs::read(outside.path()).unwrap(), b"safe");
+    }
+
+    #[test]
+    fn validate_and_doctor_refuse_a_misspelled_sandbox_network() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.yaml");
+        std::fs::write(&path, "sandbox:\n  network: None\n").unwrap();
+        // `validate` and `doctor` both load the file through this call.
+        let error = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(axocoatl_config::load_config(&path))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("sandbox.network") && error.contains("\"bridge\" or \"none\""),
+            "{error}"
+        );
+
+        assert!(sandbox_network_doctor_line("none").contains("no network"));
+        assert!(sandbox_network_doctor_line("bridge")
+            .contains("set sandbox.network: none for repositories you do not trust"));
     }
 
     #[test]

@@ -9,18 +9,18 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axocoatl_config::SkillConfigYaml;
-use axocoatl_coordination::{EventId, EventLattice, EventType, LatticeEvent};
+use axocoatl_core::event_feed::{EventFeed, EventId, EventType, FeedEvent};
 use axocoatl_tools::{BuiltinTool, ToolError};
 
 /// A callable tool that fires one configured Skill onto the event feed.
 pub struct SkillTool {
     skill: SkillConfigYaml,
-    event_lattice: Arc<EventLattice>,
+    event_feed: Arc<EventFeed>,
     description: String,
 }
 
 impl SkillTool {
-    pub fn new(skill: SkillConfigYaml, event_lattice: Arc<EventLattice>) -> Self {
+    pub fn new(skill: SkillConfigYaml, event_feed: Arc<EventFeed>) -> Self {
         let description = format!(
             "Fire the '{}' skill — {}. Emits the events [{}] for Automations \
              and webhooks that react to them.",
@@ -30,7 +30,7 @@ impl SkillTool {
         );
         Self {
             skill,
-            event_lattice,
+            event_feed,
             description,
         }
     }
@@ -64,7 +64,7 @@ impl BuiltinTool for SkillTool {
             .unwrap_or(0);
         let mut emitted = Vec::new();
         for emit in &self.skill.emits {
-            self.event_lattice.publish(LatticeEvent {
+            self.event_feed.publish(FeedEvent {
                 id: EventId::random(),
                 event_type: EventType::Custom(emit.clone()),
                 payload: serde_json::json!({ "fired_by_skill": self.skill.id }),
@@ -78,5 +78,43 @@ impl BuiltinTool for SkillTool {
             "fired": true,
             "emitted_events": emitted,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn firing_publishes_one_skill_event_per_declared_name_and_nothing_else() {
+        let feed = Arc::new(EventFeed::new(16));
+        let mut events = feed.subscribe();
+        let skill = SkillConfigYaml {
+            id: "review".into(),
+            name: "Review".into(),
+            description: "Ask for review".into(),
+            emits: vec!["ReviewRequested".into(), "CodeReady".into()],
+            reacts_to: vec!["Ignored".into()],
+            agents: vec!["reviewer".into()],
+            prompt: "Never run".into(),
+        };
+        let tool = SkillTool::new(skill, feed.clone());
+        assert_eq!(tool.tool_name(), "skill_review");
+
+        let result = tool.execute(serde_json::json!({})).await.unwrap();
+        assert_eq!(
+            result["emitted_events"],
+            serde_json::json!(["ReviewRequested", "CodeReady"])
+        );
+        for name in ["ReviewRequested", "CodeReady"] {
+            let event = events.try_recv().unwrap();
+            assert_eq!(event.event_type, EventType::Custom(name.into()));
+            assert_eq!(event.produced_by, "skill:review");
+            assert_eq!(
+                event.payload,
+                serde_json::json!({ "fired_by_skill": "review" })
+            );
+        }
+        assert!(events.try_recv().is_err());
     }
 }

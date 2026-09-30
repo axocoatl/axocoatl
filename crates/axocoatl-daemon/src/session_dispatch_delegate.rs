@@ -76,12 +76,19 @@ fn read_only(profile: &ExecutionProfile) -> bool {
 /// commands that can: every write tool, less those an empty write scope
 /// withholds or confines. A helper with any cannot take delegated work.
 fn write_tools(profile: &ExecutionProfile) -> Vec<&str> {
-    profile
-        .tools
+    changing_tools(&profile.tools, profile.write_scope.as_deref())
+}
+
+/// Of `tools`, those with which an Agent whose write scope is `writes` could
+/// change the workspace or run commands that can. Only an Agent with none is
+/// read-only: a `delegate` helper or a required reviewer.
+pub(crate) fn changing_tools<'a>(tools: &'a [String], writes: Option<&[String]>) -> Vec<&'a str> {
+    let read_only = writes.is_some_and(<[String]>::is_empty);
+    tools
         .iter()
         .map(String::as_str)
         .filter(|tool| {
-            WRITE_TOOLS.contains(tool) && !(read_only(profile) && READ_ONLY_CONFINED.contains(tool))
+            WRITE_TOOLS.contains(tool) && !(read_only && READ_ONLY_CONFINED.contains(tool))
         })
         .collect()
 }
@@ -306,7 +313,9 @@ impl DispatchState {
     /// `FOLLOW_UP_CALLS` provider calls, the tokens and cost of one, and the
     /// invocations the host holds back to observe a lead that runs commands.
     /// A helper that does not fit at all is left to its admission command.
-    fn delegate_follow_up_shortfall(
+    /// Checked under the same lock as the reservation, so helpers admitted
+    /// together from one model round each see the others' reserved limits.
+    pub(super) fn delegate_follow_up_shortfall(
         &self,
         lead: &ActivationRef,
         policy: &AuthorityGrant,
@@ -662,9 +671,10 @@ impl SessionDispatchController {
              conversation, so put every detail it needs in the task and say what to report \
              back. Calling the same helper with the same task again in this turn returns the \
              earlier result instead of running it again; a call whose helper was not started \
-             is tried again. Answers longer than {MAX_ANSWER_BYTES} \
-             bytes are cut. Each helper's limits come out of your own budget, so delegate only \
-             work that needs a separate look.\nHelpers:\n{}",
+             is tried again. Several delegate calls in one response run their helpers at the \
+             same time. Answers longer than {MAX_ANSWER_BYTES} bytes are cut. Each helper's \
+             limits come out of your own budget, so delegate only work that needs a separate \
+             look.\nHelpers:\n{}",
             lines.join("\n")
         );
         Ok(Some(Arc::new(DelegateTool {
@@ -706,27 +716,19 @@ impl SessionDispatchController {
             let attempt = state
                 .native_child_attempt(&digest)
                 .map_err(|failure| failure.to_string())?;
-            match attempt.state {
-                // An identical call reattaches to the helper it admitted.
-                Some(ControlCommandState::Applied | ControlCommandState::Settled) => {}
-                Some(_) => {
-                    return Err(format!(
-                        "The earlier call to helper '{}' with this task has not finished being \
-                         recorded, so it cannot be repeated yet. Continue without it, or \
-                         delegate a different task.",
-                        call.helper
-                    ))
-                }
-                // Earlier attempts, if any, admitted no helper: this is a
-                // fresh admission.
-                None => {
-                    if let Some(refused) = state
-                        .delegate_follow_up_shortfall(lead, &policy, &call.helper, &worker.limits)
-                        .map_err(|failure| failure.to_string())?
-                    {
-                        return Err(refused);
-                    }
-                }
+            // An identical call reattaches to the helper it admitted. With no
+            // command, earlier attempts, if any, admitted no helper: this is a
+            // fresh admission, whose follow-up reserve is checked with it.
+            if !matches!(
+                attempt.state,
+                None | Some(ControlCommandState::Applied | ControlCommandState::Settled)
+            ) {
+                return Err(format!(
+                    "The earlier call to helper '{}' with this task has not finished being \
+                     recorded, so it cannot be repeated yet. Continue without it, or delegate a \
+                     different task.",
+                    call.helper
+                ));
             }
             (worker, request, attempt, bound.control.clone())
         };
@@ -737,7 +739,8 @@ impl SessionDispatchController {
             ..
         } = attempt;
         match self.admit_delegated_child(lead, &request, attempt, control) {
-            Ok(wait) => Ok((node_id, wait)),
+            Ok(Ok(wait)) => Ok((node_id, wait)),
+            Ok(Err(refused)) => Err(refused),
             Err(failure) => {
                 let state = self.lock().map_err(|failure| failure.to_string())?;
                 match state.commands.receipt(&command_id) {
@@ -789,8 +792,11 @@ impl BuiltinTool for DelegateTool {
             .ok()?;
         Some(self.parameters_schema())
     }
+    /// Helpers are read-only and each admission is serialized by the
+    /// controller, so several calls of one model round run their helpers at
+    /// the same time.
     fn concurrency_policy(&self) -> axocoatl_llm::ConcurrencyPolicy {
-        axocoatl_llm::ConcurrencyPolicy::Exclusive
+        axocoatl_llm::ConcurrencyPolicy::Safe
     }
     async fn execute(
         &self,

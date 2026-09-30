@@ -206,11 +206,8 @@ For focused runtime work, useful package gates include:
 ```bash
 cargo test -p axocoatl-daemon
 cargo test -p axocoatl-server
-cargo test -p axocoatl-coordination
 cargo test -p axocoatl-isolation
 ```
-
-The coordination package tests its event feed and HTN primitives.
 
 ## Quick reference
 

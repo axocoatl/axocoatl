@@ -58,7 +58,7 @@ async fn native_heterogeneous_team_keeps_each_selected_model_on_a_shared_provide
         )
         .unwrap();
         assert_eq!(preparation.model(), model);
-        fixture.registry.prepare_first_turn_content(&fixture.token, |canonical, content, _, _| {
+        fixture.registry.with_session_team_stores(&fixture.team, |canonical, content, _| {
             let (definition, existing) = preparation.prepare_content(canonical, content).map_err(native_error)?;
             assert!(existing.is_none());
             let runtime = serde_json::from_value(serde_json::json!({
@@ -74,9 +74,11 @@ async fn native_heterogeneous_team_keeps_each_selected_model_on_a_shared_provide
                 }
             })).unwrap();
             let first = preparation.capture(canonical, content, &definition, &runtime).map_err(native_error)?;
+            let captured_profile = provider_profile(canonical, content, &first.definition);
             let (_, retained) = preparation.prepare_content(canonical, content).map_err(native_error)?;
             let second = preparation.capture(canonical, content, &definition, &retained.unwrap()).map_err(native_error)?;
-            assert_eq!(first.provider_configuration, second.provider_configuration);
+            assert_eq!(first.definition, second.definition);
+            assert_eq!(provider_profile(canonical, content, &second.definition), captured_profile);
             captured.push((definition.snapshot, model.to_owned()));
             Ok(())
         }).unwrap();
@@ -125,8 +127,32 @@ struct PendingFixture {
     ownership: Arc<UpgradedFormatOwnership>,
     owner: ExecutionStoreOwner,
     registry: Arc<session_dispatch::SessionDispatchRegistry>,
-    token: session_dispatch::PendingSessionToken,
+    team: session_dispatch::SessionTeamToken,
     session_id: String,
+}
+/// The provider profile evidence retained for a captured definition.
+fn provider_profile(
+    canonical: &SessionExecutionStore,
+    content: &ExecutionContentStore,
+    definition: &axocoatl_session::turn_contract::DefinitionSnapshotRef,
+) -> axocoatl_session::turn_contract::EvidenceRef {
+    content
+        .resolve_provider_profile(canonical, &definition.snapshot)
+        .unwrap()
+        .unwrap()
+        .0
+        .clone()
+}
+fn team_profile(
+    registry: &session_dispatch::SessionDispatchRegistry,
+    team: &session_dispatch::SessionTeamToken,
+    definition: &axocoatl_session::turn_contract::DefinitionSnapshotRef,
+) -> axocoatl_session::turn_contract::EvidenceRef {
+    registry
+        .with_session_team_stores(team, |canonical, content, _| {
+            Ok(provider_profile(canonical, content, definition))
+        })
+        .unwrap()
 }
 fn pending_fixture() -> PendingFixture {
     let root = tempfile::tempdir().unwrap();
@@ -158,9 +184,10 @@ fn pending_fixture() -> PendingFixture {
         .unwrap();
     let owner = receipt.owner().clone();
     let registry = Arc::new(session_dispatch::SessionDispatchRegistry::default());
-    let token = registry
+    registry
         .retain_native_session(ownership.clone(), receipt)
         .unwrap();
+    let team = registry.session_team_token(&session.id).unwrap();
     PendingFixture {
         _root: root,
         _workspace: workspace,
@@ -168,7 +195,7 @@ fn pending_fixture() -> PendingFixture {
         ownership,
         owner,
         registry,
-        token,
+        team,
         session_id: session.id,
     }
 }
@@ -269,7 +296,7 @@ async fn exact_pending_preparation_reuses_bytes_across_close_reopen_and_rejects_
     let server = server(None, None).await;
     let first = prepare_retained_native_definition(
         &fixture.registry,
-        &fixture.token,
+        &fixture.team,
         &fixture.data,
         &server.uri(),
         preparation(),
@@ -278,7 +305,7 @@ async fn exact_pending_preparation_reuses_bytes_across_close_reopen_and_rejects_
     .unwrap();
     let second = prepare_retained_native_definition(
         &fixture.registry,
-        &fixture.token,
+        &fixture.team,
         &fixture.data,
         &server.uri(),
         preparation(),
@@ -286,14 +313,18 @@ async fn exact_pending_preparation_reuses_bytes_across_close_reopen_and_rejects_
     .await
     .unwrap();
     assert_eq!(first.definition, second.definition);
-    assert_eq!(first.provider_configuration, second.provider_configuration);
+    assert_eq!(
+        team_profile(&fixture.registry, &fixture.team, &first.definition),
+        team_profile(&fixture.registry, &fixture.team, &second.definition)
+    );
     assert_eq!(first.profile, second.profile);
     assert_eq!(count(&server, "/api/generate").await, 1);
     assert_eq!(count(&server, "/api/chat").await, 0);
     assert_eq!(count(&server, "/api/pull").await, 0);
+    let original_profile = team_profile(&fixture.registry, &fixture.team, &first.definition);
     let original = fixture
         .registry
-        .prepare_first_turn_content(&fixture.token, |canonical, content, _, _| {
+        .with_session_team_stores(&fixture.team, |canonical, content, _| {
             assert!(canonical.records().map_err(native_error)?.is_empty());
             let (_, profile) = content
                 .resolve_provider_profile(canonical, &first.definition.snapshot)
@@ -332,14 +363,18 @@ async fn exact_pending_preparation_reuses_bytes_across_close_reopen_and_rejects_
         content,
         memory,
     });
-    let fresh = fixture
+    fixture
         .registry
         .retain_existing_session(&mut stores)
+        .unwrap();
+    let fresh = fixture
+        .registry
+        .session_team_token(&fixture.session_id)
         .unwrap();
     let before = server.received_requests().await.unwrap().len();
     assert!(prepare_retained_native_definition(
         &fixture.registry,
-        &fixture.token,
+        &fixture.team,
         &fixture.data,
         &server.uri(),
         preparation()
@@ -356,10 +391,13 @@ async fn exact_pending_preparation_reuses_bytes_across_close_reopen_and_rejects_
     )
     .await
     .unwrap();
-    assert_eq!(third.provider_configuration, first.provider_configuration);
+    assert_eq!(
+        team_profile(&fixture.registry, &fresh, &third.definition),
+        original_profile
+    );
     fixture
         .registry
-        .prepare_first_turn_content(&fresh, |canonical, content, _, _| {
+        .with_session_team_stores(&fresh, |canonical, content, _| {
             let (_, profile) = content
                 .resolve_provider_profile(canonical, &first.definition.snapshot)
                 .map_err(native_error)?
@@ -377,7 +415,7 @@ async fn closing_during_metadata_prevents_capture_into_retired_pending_session()
     let server = server(Some(fixture.registry.clone()), None).await;
     let (definition, _) = fixture
         .registry
-        .prepare_first_turn_content(&fixture.token, |canonical, content, _, _| {
+        .with_session_team_stores(&fixture.team, |canonical, content, _| {
             preparation()
                 .prepare_content(canonical, content)
                 .map_err(native_error)
@@ -385,7 +423,7 @@ async fn closing_during_metadata_prevents_capture_into_retired_pending_session()
         .unwrap();
     assert!(prepare_retained_native_definition(
         &fixture.registry,
-        &fixture.token,
+        &fixture.team,
         &fixture.data,
         &server.uri(),
         preparation()
@@ -427,7 +465,7 @@ async fn cancelled_context_observation_retains_owned_stores_without_inventing_a_
     let url = server.uri();
     let mut request = Box::pin(prepare_retained_native_definition(
         &fixture.registry,
-        &fixture.token,
+        &fixture.team,
         &fixture.data,
         &url,
         preparation(),
@@ -440,7 +478,7 @@ async fn cancelled_context_observation_retains_owned_stores_without_inventing_a_
     assert!(SessionExecutionStore::open(fixture.ownership.clone(), fixture.owner.clone()).is_err());
     fixture
         .registry
-        .prepare_first_turn_content(&fixture.token, |canonical, content, _, _| {
+        .with_session_team_stores(&fixture.team, |canonical, content, _| {
             let (_, profile) = preparation()
                 .prepare_content(canonical, content)
                 .map_err(native_error)?;

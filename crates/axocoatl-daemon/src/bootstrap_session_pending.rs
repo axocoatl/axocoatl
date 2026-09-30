@@ -3,7 +3,7 @@
 use super::*;
 use crate::session_dispatch::RetainedSessionStores;
 use axocoatl_core::SecureDir;
-use axocoatl_memory::activation_state::{ActivationStateStore, LegacyRoleAssignment};
+use axocoatl_memory::activation_state::ActivationStateStore;
 use axocoatl_session::execution_content::ExecutionContentStore;
 use axocoatl_session::execution_namespace::ExecutionComponent;
 use axocoatl_session::execution_ownership::UpgradedFormatOwnership;
@@ -16,7 +16,6 @@ struct PendingStores {
     content: Option<ExecutionContentStore>,
     memory: Option<ActivationStateStore>,
     legacy_seal: Option<DurableLegacySeal>,
-    assignments: Vec<LegacyRoleAssignment>,
 }
 
 impl PendingStores {
@@ -430,7 +429,6 @@ impl SessionDispatchRegistry {
     /// Move actual migration-returned stores into the registry before validating
     /// their join. Rejected duplicate admission leaves `migrated` untouched;
     /// later validation errors retain all stores in the inserted exact entry.
-    #[allow(dead_code)] // Native ingress remains separately gated.
     pub(crate) fn retain_migrated_session(
         &self,
         migrated: &mut Option<super::super::session_migration::MigratedSessionState>,
@@ -458,7 +456,6 @@ impl SessionDispatchRegistry {
             content: Some(source.content),
             memory: Some(source.activation_state),
             legacy_seal: Some(source.seal),
-            assignments: source.assignments,
         }));
         state.pending.insert(session_id.clone(), entry.clone());
         entry
@@ -498,7 +495,6 @@ impl SessionDispatchRegistry {
             content: None,
             memory: None,
             legacy_seal: None,
-            assignments: Vec::new(),
         }));
         state.pending.insert(session_id.clone(), entry.clone());
         {
@@ -537,7 +533,6 @@ impl SessionDispatchRegistry {
 
     /// Startup receives its already-open child stores. A native origin must
     /// already be recorded; reopening never invents it from absence of history.
-    #[allow(dead_code)]
     pub(crate) fn retain_existing_session(
         &self,
         source: &mut Option<RetainedSessionStores>,
@@ -590,7 +585,6 @@ impl SessionDispatchRegistry {
             content: Some(source.content),
             memory: Some(source.memory),
             legacy_seal: legacy_seal.as_ref().ok().cloned().flatten(),
-            assignments: Vec::new(),
         }));
         state.pending.insert(session_id.clone(), entry.clone());
         legacy_seal?;
@@ -844,7 +838,6 @@ impl SessionDispatchRegistry {
         Ok((controller, reference))
     }
 
-    #[allow(dead_code)]
     pub(crate) fn prepare_first_turn(&self, session_id: &str) -> Result<PendingSessionToken> {
         let state = self
             .state
@@ -886,56 +879,6 @@ impl SessionDispatchRegistry {
             .canonical()?
             .identity()
             .map_err(|error| failure(error.to_string()))
-    }
-
-    /// Synchronous host preparation of immutable definitions and exact starting
-    /// savepoints. The registry retains every store if preparation returns Err.
-    #[allow(dead_code)]
-    pub(crate) fn prepare_first_turn_content<T>(
-        &self,
-        token: &PendingSessionToken,
-        prepare: impl FnOnce(
-            &SessionExecutionStore,
-            &mut ExecutionContentStore,
-            &mut ActivationStateStore,
-            &[LegacyRoleAssignment],
-        ) -> Result<T>,
-    ) -> Result<T> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| failure("Session dispatch registry failed"))?;
-        let entry = Self::require_pending(&state, token)?;
-        let mut stores = entry
-            .stores
-            .lock()
-            .map_err(|_| failure("retained history ownership failed"))?;
-        stores.verify()?;
-        let PendingStores {
-            canonical,
-            content,
-            memory,
-            assignments,
-            ..
-        } = &mut *stores;
-        prepare(
-            canonical.as_ref().expect("verified canonical"),
-            content.as_mut().expect("verified content"),
-            memory.as_mut().expect("verified memory"),
-            assignments,
-        )
-    }
-
-    /// First Begin retains the actual idle repository owner before any request
-    /// or Begin write. Failed constructor setup restores the SAME held stores.
-    #[allow(dead_code)]
-    pub(crate) fn begin_first_turn(
-        &self,
-        token: &PendingSessionToken,
-        owner: SessionRepositoryOwner,
-        spec: SuccessorTurn,
-    ) -> Result<(SessionDispatchController, EvidenceRef)> {
-        self.begin_first_turn_checked(token, owner, spec, |_, _, _| Ok(()))
     }
 
     /// Synchronous final validation shares Begin's exact registry/store lock.

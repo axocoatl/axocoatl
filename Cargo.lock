@@ -297,7 +297,6 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axocoatl-config",
- "axocoatl-coordination",
  "axocoatl-core",
  "axocoatl-llm",
  "axocoatl-memory",
@@ -356,20 +355,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "axocoatl-coordination"
-version = "1.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "serde_yaml",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "axocoatl-core"
 version = "1.1.0"
 dependencies = [
@@ -378,6 +363,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "tokio",
  "uuid",
 ]
 
@@ -388,7 +374,6 @@ dependencies = [
  "async-trait",
  "axocoatl-actor",
  "axocoatl-config",
- "axocoatl-coordination",
  "axocoatl-core",
  "axocoatl-exec",
  "axocoatl-isolation",
@@ -636,7 +621,6 @@ dependencies = [
  "axocoatl-a2a",
  "axocoatl-actor",
  "axocoatl-config",
- "axocoatl-coordination",
  "axocoatl-core",
  "axocoatl-daemon",
  "axocoatl-isolation",
@@ -2339,16 +2323,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "htn-planner"
-version = "0.1.1"
-dependencies = [
- "async-trait",
- "axocoatl-coordination",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3421,7 +3395,6 @@ dependencies = [
  "async-trait",
  "axocoatl-actor",
  "axocoatl-config",
- "axocoatl-coordination",
  "axocoatl-core",
  "axocoatl-llm",
  "ractor",

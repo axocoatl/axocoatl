@@ -259,17 +259,6 @@ impl SessionDispatchController {
                          fold further issues into one of them instead of adding more"
                     )));
                 }
-                // Decided on the first pass only; the second must not re-ask
-                // what the first accepted.
-                if matches!(digests, HostDigests::NotRead)
-                    && matches!(kind, KnowledgeKind::Finding | KnowledgeKind::Pitfall)
-                {
-                    if let Some(message) =
-                        uncited_mention(&state, activation, &id, &title, &body, &sources)?
-                    {
-                        return Err(error(message));
-                    }
-                }
                 if let Some(source) = sources
                     .iter()
                     .find(|source| !super::repository_snapshot::digest_path_ok(&source.path))
@@ -394,77 +383,6 @@ impl DispatchState {
         }
         Ok(())
     }
-}
-
-/// Activations already asked once to cite a file their finding names. The
-/// second attempt is accepted as written; this only prompts, it never blocks.
-static CITATION_PROMPTS: std::sync::Mutex<std::collections::BTreeSet<String>> =
-    std::sync::Mutex::new(std::collections::BTreeSet::new());
-
-/// A repository file the finding's text names but its sources do not cite.
-/// A finding is about the files it cites, so naming the broken file while
-/// citing another one records the wrong file. Asks once per note.
-fn uncited_mention(
-    state: &DispatchState,
-    activation: &ActivationRef,
-    note_id: &str,
-    title: &str,
-    body: &str,
-    sources: &[ProposedSource],
-) -> Result<Option<String>> {
-    let key = format!("{}:{note_id}", activation.activation_id.as_str());
-    if CITATION_PROMPTS.lock().map_err(error)?.contains(&key) {
-        return Ok(None);
-    }
-    // A truncated capture only lists some files; names it lists are still
-    // checked, others are not flagged.
-    let Ok((manifest, _complete)) = starting_manifest(state, activation) else {
-        return Ok(None);
-    };
-    let cited: Vec<&str> = sources.iter().map(|source| source.path.as_str()).collect();
-    let uncited = uncited_paths(
-        manifest.keys().map(String::as_str),
-        &format!("{title}\n{body}"),
-        &cited,
-    );
-    if uncited.is_empty() {
-        return Ok(None);
-    }
-    let mut prompts = CITATION_PROMPTS.lock().map_err(error)?;
-    if prompts.len() >= 4096 {
-        prompts.clear();
-    }
-    prompts.insert(key);
-    Ok(Some(format!(
-        "Your finding names {} but does not cite it. A finding is about the files it cites, \
-         so cite the file that must change (role must_change) and cite supporting files with \
-         role evidence. Propose again; if the text is right as written, \
-         repeat the same call.",
-        uncited.join(", ")
-    )))
-}
-
-/// Repository files a text names, by full path or by a basename unique in the
-/// repository, that are not among `cited`.
-fn uncited_paths<'a>(
-    files: impl Iterator<Item = &'a str> + Clone,
-    text: &str,
-    cited: &[&str],
-) -> Vec<&'a str> {
-    let mut basenames: std::collections::BTreeMap<&str, usize> = Default::default();
-    for path in files.clone() {
-        *basenames
-            .entry(path.rsplit('/').next().unwrap_or(path))
-            .or_default() += 1;
-    }
-    files
-        .filter(|path| !cited.contains(path))
-        .filter(|path| {
-            let name = path.rsplit('/').next().unwrap_or(path);
-            text.contains(path)
-                || (name.contains('.') && basenames.get(name) == Some(&1) && text.contains(name))
-        })
-        .collect()
 }
 
 /// Findings and pitfalls one activation may stage. More than a handful from
@@ -797,29 +715,5 @@ bm90LWJhc2U2NA==\t644\tfile\tshort\n";
             "",
             &paths,
         ));
-    }
-
-    #[test]
-    fn a_finding_that_names_an_uncited_file_is_noticed() {
-        use super::uncited_paths;
-        let files = [
-            "lib/paths.js",
-            "lib/manifest.js",
-            "test/paths.test.js",
-            "a/index.js",
-            "b/index.js",
-        ];
-        let text = "clean() in paths.js keeps dot segments; see lib/manifest.js and index.js";
-        assert_eq!(
-            uncited_paths(files.iter().copied(), text, &["lib/manifest.js"]),
-            ["lib/paths.js"],
-            "a unique basename counts; an ambiguous one does not"
-        );
-        assert!(uncited_paths(
-            files.iter().copied(),
-            text,
-            &["lib/manifest.js", "lib/paths.js"]
-        )
-        .is_empty());
     }
 }

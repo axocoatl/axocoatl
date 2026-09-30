@@ -581,6 +581,7 @@ pub(super) fn prepare_admission(
             .map_err(failure)?;
         // Every slot's grant carries the same approved Apply.
         let required_checks = session_team::approved_required_checks(content, selected_slots[0])?;
+        let review = session_team::approved_review(content, selected_slots[0])?;
         drop(team);
         if !required_checks.is_empty() {
             // The authority charges them to the first required Agent whose
@@ -621,6 +622,11 @@ pub(super) fn prepare_admission(
             }
             inject_checks(content, &mut graph, &required_checks)?;
             graph.validate(&request.session_id).map_err(failure)?;
+        }
+        if let Some(review) = &review {
+            let grant = inject_review(content, &mut graph, review, request, &grants)?;
+            graph.validate(&request.session_id).map_err(failure)?;
+            grants.insert(grant.holder.clone(), grant);
         }
         let retained_request = content
             .retain_request(request.request.clone())
@@ -698,7 +704,11 @@ pub(super) fn prepare_admission(
                 }));
                 grant.validate().map_err(failure)?;
             }
-            let supplied = evidence[&slot.node_id];
+            // The host's own reviewer has no caller-supplied evidence.
+            let (supplied_guidance, supplied_attachments) = evidence
+                .get(&slot.node_id)
+                .map(|supplied| (supplied.guidance.clone(), supplied.attachments.clone()))
+                .unwrap_or_default();
             let retained_grant = content
                 .retain_activation_evidence(ActivationEvidenceContent::Grant {
                     policy: grant.clone(),
@@ -709,13 +719,13 @@ pub(super) fn prepare_admission(
                     limits: grant.limits.clone(),
                 })
                 .map_err(failure)?;
-            let mut guidance = Vec::with_capacity(supplied.guidance.len() + 1);
+            let mut guidance = Vec::with_capacity(supplied_guidance.len() + 1);
             guidance.push(retained_request.reference().clone());
-            guidance.extend(supplied.guidance.clone());
+            guidance.extend(supplied_guidance);
             nodes.push(TurnAdmissionNodeInput {
                 node_id: slot.node_id.clone(),
                 guidance,
-                attachments: supplied.attachments.clone(),
+                attachments: supplied_attachments,
                 budget: budget.reference().clone(),
                 grant: GrantSnapshotRef {
                     grant_id: GrantId::new(&grant.id).map_err(failure)?,
@@ -791,6 +801,104 @@ fn inject_checks(
     Ok(())
 }
 
+/// Add the required reviewer to an admitted graph: one optional node in a
+/// fresh conversation that no Agent depends on, and the review condition over
+/// the graph's required nodes. Returns the reviewer's grant: the approved
+/// reviewer budget for this turn, issued by the same Apply and expiring with
+/// the earliest grant of the turn. Retries derive the same node and grant.
+fn inject_review(
+    content: &mut axocoatl_session::execution_content::ExecutionContentStore,
+    graph: &mut TurnGraphSnapshot,
+    review: &session_team::ApprovedReview,
+    request: &NativeFirstTurnRequest,
+    grants: &HashMap<TurnNodeId, AuthorityGrant>,
+) -> Result<AuthorityGrant, DaemonError> {
+    use axocoatl_session::turn_review::{ReviewCriterion, REVIEW_CONDITION_ID, REVIEW_NODE_ID};
+    use sha2::Digest;
+    let ActivationEvidenceContent::Definition {
+        profile,
+        configuration,
+        ..
+    } = content
+        .resolve_activation_evidence(&review.definition.snapshot)
+        .map_err(failure)?
+    else {
+        return Err(failure("The approved reviewer definition is missing"));
+    };
+    let profile = profile.clone();
+    let config: AgentConfig = serde_json::from_str(configuration).map_err(failure)?;
+    if config.role != axocoatl_core::AgentRole::Worker
+        || !crate::session_dispatch::changing_tools(&profile.tools, profile.write_scope.as_deref())
+            .is_empty()
+    {
+        return Err(failure(
+            "The approved reviewer is not a read-only Worker; apply the team again",
+        ));
+    }
+    let nodes: Vec<_> = graph
+        .nodes
+        .iter()
+        .filter(|node| node.required)
+        .map(|node| node.node_id.clone())
+        .collect();
+    let payer = nodes
+        .first()
+        .and_then(|node| grants.get(node))
+        .ok_or_else(|| failure("A required review needs a required Agent to review"))?;
+    let digest = format!(
+        "{:x}",
+        sha2::Sha256::digest(
+            serde_json::to_vec(&("required-review-v1", &request.session_id, &request.turn_id))
+                .map_err(failure)?
+        )
+    );
+    let node_id = TurnNodeId::new(REVIEW_NODE_ID).map_err(failure)?;
+    graph.nodes.push(GraphNode {
+        node_id: node_id.clone(),
+        slot_id: SessionTeamSlotId::new(REVIEW_NODE_ID).map_err(failure)?,
+        definition: review.definition.clone(),
+        conversation_id: NodeConversationId::new(format!("review-conversation-{}", &digest[..40]))
+            .map_err(failure)?,
+        starting_savepoint: ConversationSavepoint::Empty,
+        required: false,
+    });
+    let criterion = content
+        .retain_activation_evidence(ActivationEvidenceContent::Guidance {
+            text: serde_json::to_string(&ReviewCriterion::new(
+                &review.template_id,
+                review.max_rounds,
+            ))
+            .map_err(failure)?,
+        })
+        .map_err(failure)?
+        .reference()
+        .clone();
+    graph.conditions.push(CompletionCondition {
+        condition_id: ConditionId::new(REVIEW_CONDITION_ID).map_err(failure)?,
+        kind: ConditionKind::Review { criterion },
+        nodes,
+    });
+    let grant = AuthorityGrant {
+        id: format!("review-grant-{}", &digest[..40]),
+        revision: 1,
+        issuer_evidence: payer.issuer_evidence.clone(),
+        holder: node_id,
+        descendants: vec![],
+        allow_stop_descendants: false,
+        delegation: None,
+        profiles: vec![profile],
+        conditions: vec![],
+        limits: review.limits.clone(),
+        expires_at_ms: grants
+            .values()
+            .map(|grant| grant.expires_at_ms)
+            .min()
+            .unwrap_or(payer.expires_at_ms),
+    };
+    grant.validate().map_err(failure)?;
+    Ok(grant)
+}
+
 pub(super) fn verify_selected_team(
     canonical: &axocoatl_session::execution_store::SessionExecutionStore,
     content: &axocoatl_session::execution_content::ExecutionContentStore,
@@ -818,9 +926,12 @@ pub(super) fn verify_selected_team(
     if selected.configuration_revision != revision {
         return Err(failure("Session team changed before exact Begin"));
     }
+    // The reviewer admission adds is no team slot.
+    let reviewer = axocoatl_session::turn_review::review_node(graph).map(|node| &node.node_id);
     let points = graph
         .nodes
         .iter()
+        .filter(|node| Some(&node.node_id) != reviewer)
         .map(|node| (node.slot_id.clone(), node.starting_savepoint.clone()))
         .collect::<Vec<_>>();
     let mut expected = selected_graph(
@@ -843,12 +954,21 @@ pub(super) fn verify_selected_team(
             node.definition = model::selected_definition(&request, slot, content)?;
         }
     }
-    // The team graph carries no check conditions; admission adds them.
+    // The team graph carries no check conditions or reviewer; admission adds
+    // them.
     let mut admitted = graph.clone();
     if let Some((group, _)) = axocoatl_session::turn_checks::group_of(graph) {
         admitted
             .conditions
             .retain(|condition| !group.contains(&condition.condition_id));
+    }
+    if let Some(reviewer) = axocoatl_session::turn_review::review_node(graph) {
+        admitted
+            .nodes
+            .retain(|node| node.node_id != reviewer.node_id);
+        admitted.conditions.retain(|condition| {
+            condition.condition_id.as_str() != axocoatl_session::turn_review::REVIEW_CONDITION_ID
+        });
     }
     if expected != admitted {
         return Err(failure(

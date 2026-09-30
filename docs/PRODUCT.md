@@ -28,8 +28,8 @@ merely because it exists in the current working directory.
 2. Resume the last session or open a project directory as a named Workspace, then start a
    Session inside it.
 3. Add any files needed as **Once** or **Session** context, then ask the selected Agent or
-   configured team for one result. An autonomous multi-Agent Lattice or Custom turn keeps its
-   causal Coordination map with the conversation. A Coordinator can create Workers from
+   configured team for one result. A native team turn keeps its execution graph with the
+   conversation. A Coordinator can create Workers from
    explicitly approved templates and limits; their separate activations and parent ownership
    remain in the same turn history.
 4. When an implementation decision needs independent evidence, turn on **Explore several
@@ -282,7 +282,7 @@ The one app does not replace Axocoatl's runtime strengths. It makes them legible
   revision can reactivate the affected downstream graph. A native lead, including a
   Coordinator template, delegates tasks to distinct helper activations from approved
   Worker templates in that same controller. The process-wide
-  event lattice carries typed notifications for Skills, triggers, webhooks, and
+  event feed carries the events Skills publish to triggers, webhooks, and
   retained API/WebSocket observers.
 - MCP, Skills, and Automations extend what sessions and agents can do.
 

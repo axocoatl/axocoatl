@@ -292,7 +292,7 @@ pub enum AutomationTrigger {
         #[serde(default)]
         input: Option<String>,
     },
-    /// Fires when a lattice event matches. Event name is the match key;
+    /// Fires when an event-feed event matches. Event name is the match key;
     /// `input` is the fallback prompt if the event payload doesn't carry one.
     OnEvent {
         event: String,
@@ -513,7 +513,7 @@ mod tests {
             name: id.into(),
             agents: agents.iter().map(|s| s.to_string()).collect(),
             entry_point: agents.first().map(|s| s.to_string()),
-            htn_methods_file: None,
+            ..Default::default()
         }
     }
 

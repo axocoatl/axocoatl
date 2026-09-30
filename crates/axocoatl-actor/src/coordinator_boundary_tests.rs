@@ -100,20 +100,8 @@ async fn acknowledged_coordinator_child_refusal_cannot_fall_back_to_legacy() {
 
 #[tokio::test]
 async fn acknowledged_child_persistence_failure_cannot_be_synthesized_as_success() {
-    let methods = r#"
-- task_pattern: "route"
-  preconditions: []
-  subtasks:
-    - name: "change-one"
-      parameters:
-        tools: ["side_effect"]
-      task_type: Primitive
-    - name: "change-two"
-      parameters:
-        tools: ["side_effect"]
-      task_type: Primitive
-"#;
     let provider = Arc::new(GatedCoordinatorToolLlm {
+        plan: r#"[{"name":"change-one","description":"change-one","tools":["side_effect"]},{"name":"change-two","description":"change-two","tools":["side_effect"]}]"#,
         direct_calls: std::sync::atomic::AtomicUsize::new(0),
         stream_calls: std::sync::atomic::AtomicUsize::new(0),
     });
@@ -130,7 +118,6 @@ async fn acknowledged_child_persistence_failure_cannot_be_synthesized_as_success
         }),
     );
     let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(SimpleCounter))
-        .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
         .with_tool_executor(Arc::new(executor));
     coordinator
         .on_start(&AgentConfig {
@@ -157,8 +144,9 @@ async fn acknowledged_child_persistence_failure_cannot_be_synthesized_as_success
         provider
             .direct_calls
             .load(std::sync::atomic::Ordering::SeqCst),
-        0,
-        "synthesis must not turn an evidence persistence failure into success"
+        1,
+        "only decomposition ran; synthesis must not turn an evidence persistence failure \
+         into success"
     );
     coordinator.on_stop().await.unwrap();
     assert!(coordinator.active_workers.is_empty());

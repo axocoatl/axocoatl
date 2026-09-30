@@ -142,42 +142,27 @@ schedules:
     enabled: true
 
 # ─────────────────────────── SKILLS ───────────────────────────
-# Firing a Skill publishes the events it declares in `emits`. `reacts_to`,
-# `agents`, and `prompt` are capability metadata in the current daemon; use an
-# OnSkill or OnEvent Automation for a reachable event-driven reaction.
+# A Skill is a named set of events. Firing it (Settings → Skills,
+# `POST /api/skills/{id}/fire`, or an Agent calling its `skill_<id>` tool in a
+# Session that enables it) publishes each event in `emits` on the event feed.
+# OnSkill and OnEvent Automations and outbound webhooks react to those events;
+# the Skill itself runs nothing. Skills are the only source of these events.
 
 skills:
-  - id: code-review-checklist
-    name: "Code Review Checklist"
-    description: "Structured 12-point review across correctness, style, performance, security."
-    emits: ["ReviewComplete", "BlockingIssueFound"]
-    reacts_to: ["CodeReady", "PullRequestOpened"]
-    agents: [reviewer, lead]
-    prompt: "Review the code against: correctness, edge cases, error handling, performance, security, style, naming, tests. Return JSON with `issues` and `severity`."
+  - id: review-requested
+    name: "Review requested"
+    description: "Announce that the current change is ready for review."
+    emits: ["ReviewRequested"]
 
-  - id: incident-postmortem
-    name: "Incident Postmortem"
-    description: "Drafts a blameless postmortem from incident events."
-    emits: ["PostmortemDraft"]
-    reacts_to: ["IncidentResolved", "AgentFailed"]
-    agents: [ops, analyst]
-    prompt: "Draft a blameless postmortem with: timeline, root cause, impact, mitigation, action items."
+  - id: incident-resolved
+    name: "Incident resolved"
+    description: "Announce that the open incident is resolved."
+    emits: ["IncidentResolved"]
 
-  - id: customer-summary
-    name: "Customer Summary"
-    description: "Distills a support thread into a one-paragraph customer voice summary."
-    emits: ["CustomerInsight"]
-    reacts_to: ["SupportThreadClosed"]
-    agents: [support, summarizer]
-    prompt: "Summarize this conversation from the customer's perspective in one paragraph. Highlight the underlying need."
-
-  - id: release-notes
-    name: "Release Notes Formatter"
-    description: "Formats merged PR titles into user-facing release notes."
-    emits: ["ReleaseNotesReady"]
-    reacts_to: ["ReleaseReady"]
-    agents: [summarizer]
-    prompt: "Convert the given PR list into release notes grouped as: New, Improved, Fixed."
+  - id: release-ready
+    name: "Release ready"
+    description: "Announce that a release candidate is ready for notes and checks."
+    emits: ["ReleaseReady"]
 
 # ─────────────────────────── PROVIDERS / SERVER ───────────────
 
@@ -231,11 +216,11 @@ proactive:
     input: "Give a concise one-paragraph briefing on recent activity and anything that needs attention."
     enabled: true
 
-  - id: failure-watch
-    name: "Failure Watcher"
+  - id: postmortem-watch
+    name: "Postmortem Drafter"
     agent: ops
     trigger:
       type: on_event
-      event: AgentFailed
-    input: "An agent just failed. Diagnose the likely cause and suggest a concrete fix."
+      event: IncidentResolved          # published when the incident-resolved Skill fires
+    input: "An incident was just resolved. Draft a blameless postmortem outline: timeline, root cause, impact, mitigation, action items."
     enabled: true

@@ -6,7 +6,7 @@ A practical overview of how Axocoatl's one workbench runs and coordinates agents
 
 ```
             ┌─────────────────────────── axocoatl daemon ───────────────────────────┐
- App / CLI  │  ProviderRegistry   AgentRegistry   EventLattice   McpToolRegistry     │
+ App / CLI  │  ProviderRegistry   AgentRegistry   EventFeed      McpToolRegistry     │
  HTTP / WS ─┼─▶ (per-agent LLMs)  (ractor actors) (skills/events)  (MCP tools)         │
     / IPC   │        │                 │                │                            │
             │        └──────── DefaultAgentBehavior ─────┘                            │
@@ -15,7 +15,7 @@ A practical overview of how Axocoatl's one workbench runs and coordinates agents
 ```
 
 The **daemon** (`axocoatl-daemon`) bootstraps everything: providers, agents
-(spawned as `ractor` actors), the event lattice, MCP connections, and the
+(spawned as `ractor` actors), the event feed, MCP connections, and the
 canonical Automation trigger runtime. Both `axocoatl dev` and `axocoatl serve`
 expose the Unix-socket IPC server and HTTP/browser app from the same daemon
 state; `serve` is also what the installed background service runs.
@@ -58,10 +58,10 @@ state models identical or restore peer browser destinations. Changes at this sea
 run identity, transcript ownership, reconnect, cancellation, persistence, and cleanup end to
 end.
 
-`AutomationStore` is the canonical persisted configuration for manual, scheduled, lattice-
-event, and Skill-triggered automations. Legacy workflow/schedule/proactive YAML seeds the store
+`AutomationStore` is the canonical persisted configuration for manual, scheduled, event-
+and Skill-triggered automations. Legacy workflow/schedule/proactive YAML seeds the store
 only when its canonical file does not exist; it is not a parallel live registry. One dispatcher
-reconciles store changes and lattice notifications for both `dev` and `serve`, prevents
+reconciles store changes and event-feed notifications for both `dev` and `serve`, prevents
 overlapping automatic runs of the same automation, and records last outcome/count/error in
 compatibility views. It clones an owned
 execution context before provider/tool work, so neither the store nor the daemon state lock is
@@ -91,6 +91,20 @@ whole group: readiness needs every command on the one tree its captures saw. A p
 starts only when the paying grant can pay for all of it; otherwise the readiness review
 records, in words, why the checks could not run, and a check-only Continue that could
 not be paid is refused.
+
+A Session team's required review adds one optional reviewer node, `required-review`,
+with its own grant from the same Apply and a fresh conversation per turn, and one review
+condition, `required-review:verdict`, over the required Agents. The one turn driver
+starts each round itself after the required Agents are accepted and the check readiness
+passed: a reviewer activation whose input is the request, a bounded prompt with each
+required Agent's accepted answer and the change between the turn's first Before capture
+and the candidate tree, and the round. It records the verdict only from a reviewer
+accepted in the current epoch whose input names that exact prompt, and only an
+`APPROVE` whose own captures, when it has them, saw the same tree passes. `CHANGES`
+with rounds left pauses the epoch and continues in a new one whose plan revises the
+single required sink with the findings, as a person's Revise does, and reruns every
+condition; the preview of those events must apply first, or the turn needs attention
+with the reason.
 
 `turn_contract` decodes and folds a bounded schema-2 logical-turn contract separately from
 the live schema-1 ledger. Immutable manifests bind definitions, conversations, starting
@@ -170,7 +184,7 @@ output; incomplete responses keep the reservation and unknown usage. The normal 
 key stays in daemon configuration, never retained profile evidence.
 `providers.openrouter_billing: credits` explicitly declares an account without
 connected BYOK keys. This is a supported configuration requirement, not detection or
-prevention of external account changes. BYOK execution remains a TODO; an unexpected
+prevention of external account changes. BYOK execution is not supported; an unexpected
 BYOK response is refused and cannot establish complete credit accounting.
 
 `control_command` separates typed requested parameters from trusted source attribution and
@@ -247,6 +261,12 @@ requested or accepted without a canonical node, then reads the return again, so 
 records that no helper ran. A repeat of a call whose command admitted no helper is a new
 admission attempt with its own command and node ids; the first attempt keeps the original
 ids. Ordinary shell/tool effects remain `ManualOnly`.
+
+`delegate` is a concurrency-safe tool, so a lead's `delegate` calls in one response run
+their helpers at the same time. The controller admits them one after another: each reads
+the turn and graph revisions, checks the lead's follow-up reserve, reserves the helper's
+limits, and applies its graph revision under the same controller lock, so each admission
+builds on the one before it and identical calls reattach to one helper.
 
 Its one-shot autonomous actor port additionally reserves the actual candidate checkpoint and
 terminal output before any provider dispatch. The optional `ActivationCheckpointPort` restores
@@ -329,10 +349,9 @@ identity and expose controls only through current host capabilities. Pending own
 resolve exact command retries before provider or repository reacquisition.
 
 The existing Session composer and Agent inspector expose native Guide, exact generation
-controls, reviewed current-turn Add/Replace, and explicit continuation. A request-local planner
-has no tools or repository access and returns one typed proposal for review; Apply still uses
-the ordinary human command handler. Team edits configure future turns separately. Environment
-review, close/reopen, and deletion retain the canonical Session owner through settlement.
+controls, reviewed current-turn Add/Replace, and explicit continuation. Team edits configure
+future turns separately. Environment review, close/reopen, and deletion retain the canonical
+Session owner through settlement.
 
 ### Legacy Session execution
 
@@ -540,14 +559,14 @@ checkpoint-backed Agent total.
 ## Automations
 
 `AutomationStore` (`{data_dir}/automations.json`) is the single runtime source for
-manual, scheduled, lattice-event, and Skill-triggered DAGs. When that canonical file
+manual, scheduled, event- and Skill-triggered DAGs. When that canonical file
 does not exist, legacy `workflows:`, `schedules:`, and `proactive:` YAML seeds it once.
 An existing file remains authoritative even when the user has deleted every record;
 later YAML changes do not replace or resurrect Automations.
 
 One trigger runtime is started by both `axocoatl dev` and `axocoatl serve`. A single
-timer reconciles every `Schedule` record against the live store; one lattice
-subscriber matches `OnEvent` by canonical event type and `OnSkill` by exact
+timer reconciles every `Schedule` record against the live store; one event-feed
+subscriber matches `OnEvent` by canonical event name and `OnSkill` by exact
 `produced_by = skill:<id>`. It checks the current record again immediately before
 execution. Create, update, enable, cadence/event/Skill changes, and delete therefore
 affect subsequent dispatch without per-Automation tasks or stale runners.
@@ -676,6 +695,8 @@ and streams that sometimes end early.
   rather than failing the activation. Before a lead admits a helper, what the lead has
   left after the helper's reservation must still cover reading the helper's answer and
   the lead's own reserve, so a paying lead cannot delegate its check allowance away.
+  Helpers requested together are checked one after another, each after the reservations
+  of the ones before it.
   Apply and turn admission refuse a paying Agent whose invocation limit is smaller than
   that allowance plus its own two captures and one answer.
 - **Bounded context.** Tool output, and long string arguments of the model's own earlier
@@ -694,65 +715,32 @@ and streams that sometimes end early.
 - **Failure classes.** A failed activation states its failure class (provider stream,
   budget, context limit, write scope, capture, admission) and a suggested next step.
 
-## Multi-agent sessions and event lattice
+## Multi-agent sessions and the event feed
 
 Native Sessions retain their approved whole-team revision and immutable definitions before
 Begin. Their common controller activates exact dependencies, records every generation, and
 admits Coordinator-created Worker instances from explicitly approved reusable templates. Each
-instance has a distinct conversation and authority allocation. The following describes the
-retained legacy configuration-driven coordination path.
+instance has a distinct conversation and authority allocation. The versioned
+`GET /api/sessions/{id}/turns/{turn_id}/control-plane` projection binds reads of that graph
+to the exact Session and turn. It distinguishes unknown, missing, unavailable, and unrecorded
+evidence; current Agent settings do not substitute for an absent historical definition.
 
-A Session retains either a selected legacy `workflows:` ID for `Lattice` mode or
-selected Agent IDs for `Custom` mode. At each all-team request that resolves to more
-than one autonomous Agent, the daemon resolves that selection against current Agent
-configuration and snapshots the validated membership and dependency graph into the
-turn. A Coordinator-led team remains a separate hierarchical direct execution and
-does not receive a synthetic peer graph. Configuration changes therefore affect
-future turns, never a retained turn map. Removing or renaming a referenced Agent or
-team does not quarantine the Session or hide its History; a genuinely new turn is
-rejected before durable Begin and tells the operator to restore the reference or
-create a new Session with an available selection. Roots activate from the accepted user request;
-an Agent with `depends_on` activates only after one distinct completion signal from
-every named parent in that Session graph. A downstream Agent receives the original
-request plus only the direct-parent contributions that caused its activation.
-Unrelated branches remain runnable after one branch fails, while descendants whose
-all-of predicate can no longer be satisfied become explicitly blocked.
+A Session on a 1.0-format data root retains either a selected legacy `workflows:` ID for
+`Lattice` mode or selected Agent IDs for `Custom` mode and resolves that selection against
+current Agent configuration at each all-team request. Legacy execution runs one Agent per
+turn: a single-Agent Session, a request targeted at one Agent, a one-Agent team, and a
+Coordinator-led team (which runs only its Coordinator) execute directly. A request that
+resolves to two or more Agents is refused before durable Begin; the error tells the operator
+to stop Axocoatl, make a cold backup, and run `axocoatl session upgrade --confirm`, which
+converts 1.0 Sessions, including multi-Agent Sessions, to native Sessions. Removing or
+renaming a referenced Agent or team does not quarantine the Session or hide its History; a
+genuinely new turn is rejected before durable Begin and tells the operator to restore the
+reference or create a new Session with an available selection. Retained legacy History still
+loads and renders each Agent's recorded output. The control-plane projection also reads
+legacy turns, and legacy activation identities confer no per-Agent command authority.
 
-Agents share the Session checkout, so ready nodes execute serially in deterministic
-graph order. That is a repository-safety boundary, not a claim that the graph lacks
-parallelism in principle. The internal `coordination_signal` tool is advertised only while
-the exact downstream activation is active, has not spent its one revision request, and has
-at least one eligible upstream target. Its request-local JSON Schema enumerates those exact
-Agent IDs, and the activation prompt names the same set without adding transitive ancestor
-outputs. Advertisement is not authority: execution rechecks the active lease, unspent
-allowance, and eligible target, so a stale or fabricated call fails. The
-target and every completed downstream result derived from it reactivate in dependency
-order, and the requester runs again against
-the newest direct-parent evidence; every Agent is capped at two activations for the
-turn. Targeting one Agent directly, a one-Agent team, and a coordinator-led workflow
-remain direct executions rather than fake coordination graphs.
-
-The immutable graph snapshot, causal signals, activation generations, completion,
-failure, blocked or stopped states, output disposition, summaries, and usage are appended to the
-canonical Session turn ledger before their matching `coordination` WebSocket frame
-is published. An applied revision is one atomic ledger batch: the requester's
-`changes_requested` output, the signal with that requesting activation's usage and
-completeness, every affected output supersession, and every reactivation append together or
-not at all; live frames publish only after that batch is durable.
-Conversation folds that evidence into an inline Coordination card,
-and the existing Agent graph shows the same node states. Reload reconstructs both
-from History. The graph runs in View mode, with a selected-activation inspector for
-retained input, output, partial output, usage, and causal evidence. The versioned
-`GET /api/sessions/{id}/turns/{turn_id}/control-plane` projection binds those reads
-to the exact Session and turn, including ordinary and directly targeted history.
-It distinguishes unknown, missing, unavailable, and unrecorded evidence; current
-Agent settings do not substitute for an absent historical definition. Legacy
-activation identities confer no per-Agent command authority.
-This is bounded foreground Session work, not a background
-config-owned workflow runner.
-
-Every Lattice or Custom Session turn uses a two-phase checkpoint cache boundary, including a
-targeted, one-Agent, or Coordinator-led turn that deliberately bypasses the graph. A SingleAgent
+Every legacy Lattice or Custom Session turn, whether targeted, one-Agent, or Coordinator-led,
+uses a two-phase checkpoint cache boundary. A SingleAgent
 Session also uses this boundary when its selected Agent is a Coordinator; ordinary autonomous
 SingleAgent Sessions retain their existing canonical-ledger checkpoint repair. A Completed
 ordinary turn may keep its live actor for conversation continuity. After Failed, Cancelled, or
@@ -792,38 +780,21 @@ mutation is disabled for the whole turn: no semantic auto-store, daily-log archi
 personal/shared core edit, or core consolidation is promoted, including after Completed. This
 fail-closed limit remains until those stores gain generation-aware transactional deltas.
 
-The durable fold uses one explicit protocol: `coordination_planned`,
-`coordination_agent_activated`, `coordination_signal`,
-`agent_output_superseded`, `coordination_agent_reactivated`,
-`coordination_agent_completed`, `coordination_agent_failed`,
-`coordination_agent_blocked`, `coordination_agent_cancelled`,
-`coordination_recovery_partial`, then
-`coordination_completed`. `agent_output_superseded` is also a recognized ledger
-operation: it marks the exact earlier Agent generation stale while retaining its
-output as evidence. HTTP turn JSON flattens `RecordTurnExecution` beside its
-operation ID and timestamp; the live frame nests the same execution body under
-`event` and repeats the durable identity in its envelope.
-
-If the daemon restarts during coordinated work, ledger recovery records
-`coordination_agent_cancelled` for every node still waiting or running before it
-terminalizes the turn as Interrupted. A pending reactivation does not pretend
-its next generation started. Any retained turn-wide stream is preserved through
-`coordination_recovery_partial` as explicitly unattributed evidence because
-tool-loop and multi-Agent boundaries cannot be reconstructed safely from text
-lengths after a process death.
-
-`EventLattice` is the process-wide event feed. Skills publish into it; the
-canonical Automation dispatcher matches `OnEvent` and `OnSkill`; configured
-webhooks, the recent-events API, and WebSocket compatibility frames observe the
-same feed. It keeps no history and never starts Agents on its own. The Session
-scheduler is deliberately turn-scoped and predicate-based.
+`EventFeed` (`axocoatl_core::event_feed`) is the process-wide event feed. The
+daemon publishes one kind of event on it: firing a Skill (the fire route or an
+Agent's `skill_<id>` tool) publishes one `Custom` event per name in the Skill's
+`emits` list. The canonical Automation dispatcher matches `OnEvent` and `OnSkill`;
+configured webhooks, the recent-events API, and WebSocket compatibility frames
+observe the same feed. It keeps no history and never starts Agents on its own.
+A Skill's 1.0 `reacts_to`, `agents` and `prompt` keys still parse but are ignored
+with a startup warning. The Session scheduler is deliberately turn-scoped and
+predicate-based.
 
 The per-Agent `activation_threshold` / `activation_decay` keys were removed in 1.1.0 with
-the process-wide threshold counter; the daemon warns when a config still sets them. `TurnCoordinationScheduler`
-orders one turn's Agents by exact named dependencies and has no thresholds or decay.
+the process-wide threshold counter; the daemon warns when a config still sets them.
 
 The remaining reads of legacy `workflows:` are intentional: Lattice-session
-membership, coordinator worker/HTN selection, validation, and first-boot
+membership, coordinator worker selection, validation, and first-boot
 Automation migration. Legacy `schedules:` and `proactive:` records are validation
 and first-boot migration inputs only. None of these sections forms a parallel
 manual, scheduled, or event-triggered runtime after `AutomationStore` exists.
@@ -833,14 +804,12 @@ manual, scheduled, or event-triggered runtime after `AutomationStore` exists.
 Separately, an agent can take the **coordinator** role (`role: coordinator`)
 for explicit hierarchical decomposition in a legacy Session. A native Session team
 runs a Coordinator template as a `DefaultAgentBehavior` lead instead: its approved
-Worker templates are reachable only through the `delegate` tool, and its HTN methods
-are not used. Each legacy coordination pass (`CoordinatorBehavior`):
+Worker templates are reachable only through the `delegate` tool. Each legacy
+coordination pass (`CoordinatorBehavior`):
 
-1. **Decompose** the goal into subtasks. With HTN methods configured, planning
-   is symbolic — an `HtnPlanner` expands compound tasks via its methods and an
-   `LlmFrontierResolver` resolves only the frontiers the methods don't cover.
-   Without methods, the LLM decomposes the whole goal. Each subtask carries the
-   tools it needs.
+1. **Decompose** the goal into subtasks with the model. Each subtask carries the
+   tools it needs. The symbolic HTN planner was removed in 1.1.0; the daemon
+   warns when a workflow still sets `htn_methods_file` and ignores it.
 2. **Assign** each subtask to the **first declared worker**, in declaration
    order, whose callable tools cover the subtask's required tools. If no pooled
    worker can cover a subtask's tools, an ad-hoc worker is spawned with exactly
@@ -867,8 +836,7 @@ marks an orphaned running turn Interrupted, and Completed, Cancelled, Failed, or
 Interrupted projection clears private orchestration state. The next user turn
 decomposes fresh. Workers are always torn down after a pass — on success and on
 every error path — so no actor or task leaks, and a fully failed worker set
-surfaces an error rather than a hollow result. The underlying primitives
-(`axocoatl-coordination`: lattice, HTN) are independently tested.
+surfaces an error rather than a hollow result.
 
 ## Workspace knowledge
 
@@ -897,10 +865,9 @@ observation, admitted on the activation's grant only while the invocation reserv
 spare it, that hashes a path only when it resolves to exactly `<repository>/<path>` as a
 readable regular file, never through a symbolic link or outside the repository. A digest
 the model gives is kept only for a file the host could not read; the activation's starting
-capture is the last fallback. A finding that names repository files it does not cite is
-asked once to cite them. An omitted `expected_revision` creates a note and never replaces
-an existing one, and a proposal whose note could never be published (over the document
-limit) is refused when proposed.
+capture is the last fallback. An omitted `expected_revision` creates a note and never
+replaces an existing one, and a proposal whose note could never be published (over the
+document limit) is refused when proposed.
 
 `knowledge_index` builds a bounded, rebuildable index from caller-supplied source
 under a declared snapshot identity. Pinned Tree-sitter grammars parse Rust,
@@ -928,8 +895,8 @@ use `SessionExecutionStore` for canonical history and `ActivationStateStore` for
 input, candidate checkpoints, and accepted-generation promotion. Their actor construction
 in `session_dispatch_run.rs` does not attach daily-log, core-memory, or semantic-memory
 stores, so the Tier 2–4 recall and core-edit capabilities below are not available on that
-path. Legacy coordinated turns may read their attached stores but cannot make speculative
-Tier 2–4 writes or run consolidation.
+path. Legacy Lattice, Custom, and Coordinator turns may read their attached stores but
+cannot make Tier 2–4 writes or run consolidation during the turn.
 
 | Tier | What | Persistence |
 |---|---|---|
@@ -1043,16 +1010,23 @@ agent:**
   `NET_RAW`, `DAC_READ_SEARCH`, …), so a setuid binary can't escalate and the
   classic namespace/mount escape levers are gone.
 - **Network.** The default is bridged networking so installs and development
-  servers work. Set `sandbox.network: none` when repository code and commands in
-  the local container must have no outbound connection; this also disables
-  network-dependent setup and commands in that container. It does not govern
+  servers work. Set `sandbox.network: none` for repositories you do not trust, or
+  whenever repository code and commands in the local container must have no
+  outbound connection; this also disables
+  network-dependent setup and commands in that container. Only `bridge` and `none`
+  are accepted; any other value fails config validation, `axocoatl doctor` and daemon
+  start rather than falling back to bridge. Every `podman run` passes
+  `--http-proxy=false`, so the host's proxy variables (which can hold a proxy user
+  name and password) are not copied into the container. It does not govern
   daemon-side model providers, MCP, web search, webhooks, remote sandboxes, the
   embedding-model download, or image-registry access. Configured Preview ports
   remain logical container-port identities; local Podman assigns each Session its
   own loopback host mapping, and the Session-aware proxy resolves that mapping
   without exposing arbitrary host services.
 - **Resources.** Memory, CPU, and PID caps (2 GB / 2 CPUs / 512 pids) bound a
-  runaway loop or fork bomb, where the host's cgroup delegation allows it.
+  runaway loop or fork bomb, where the host's cgroup delegation allows it. With the
+  default `require_resource_limits: false`, a host that cannot apply them starts the
+  container without them and logs a warning; set it to `true` to refuse instead.
 
 **Environment readiness and consent.** A Session persists an environment generation and one
 of `unprepared`, `awaiting_approval`, `preparing`, `ready`, or `failed`. Repository detection
@@ -1203,8 +1177,10 @@ restriction below and `write_file` and `edit_file` are withheld.
   unchanged and describe the needed change in its answer.
 - A read-only Agent (`writes: []`) is not offered `write_file` or `edit_file`. Its own
   `bash` commands run under a kernel write restriction (Landlock, applied by the
-  in-sandbox execution supervisor between fork and exec): only `/tmp`, `/var/tmp`, `/dev`
-  and the container home are writable, never the repository. A supervisor that cannot
+  in-sandbox execution supervisor between fork and exec): only `/tmp`, `/var/tmp` and
+  `/dev` are writable, never the repository. `HOME` (and the XDG directories) point at a
+  scratch directory under `/tmp`, created for that command and removed when it ends, so
+  the Session's shared home stays unchanged. A supervisor that cannot
   apply it refuses to launch that command. The read-only file tools and the host's own
   repository captures run without the restriction.
 - A writer's shell can still write outside its paths, so the activation's own Before and
@@ -1242,7 +1218,9 @@ The sandbox is pluggable behind one trait, selected for this daemon configuratio
   A **git-repo** Session clones a clean, pushed branch over HTTPS. The git token
   (`sandbox.e2b.git_token`, e.g. `${GITHUB_TOKEN}`) is injected as a sandbox
   secret and read by an in-VM credential helper at fill-time — it is never
-  written into the repo's Git config, remote URL, or a command line. Changes remain
+  written into the repo's Git config, remote URL, or a command line. It is an
+  environment variable of the VM, so every command in the VM can read it, including
+  repository scripts and Agent commands. Changes remain
   ordinary working-tree state in the remote sandbox. Axocoatl does not automatically
   commit or push; review, commit, and push deliberately through the Session's repository
   tools. A scratch Session (no repository) gets a fresh remote workspace.
@@ -1277,9 +1255,10 @@ Report security issues per [SECURITY.md](../SECURITY.md).
 
 ## Crate map
 
-`axocoatl-core` (types) · `axocoatl-token` (budgets) · `axocoatl-llm*`
+`axocoatl-core` (types, event feed) · `axocoatl-token` (budgets) · `axocoatl-llm*`
 (providers) · `axocoatl-config` · `axocoatl-actor` (runtime) ·
-`axocoatl-memory` · `axocoatl-coordination` (lattice/HTN) ·
-`axocoatl-graph` · `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` ·
-`axocoatl-isolation` (Podman sandbox) · `axocoatl-daemon` · `axocoatl-server` ·
-`axocoatl-cli`.
+`axocoatl-memory` · `axocoatl-graph` · `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` ·
+`axocoatl-isolation` (Podman and E2B sandboxes) · `axocoatl-exec` (in-sandbox
+command supervisor; applies the Landlock write restriction) · `axocoatl-session`
+(durable Workspace, Session and turn storage) · `axocoatl-daemon` ·
+`axocoatl-server` · `axocoatl-service` (systemd / launchd) · `axocoatl-cli`.

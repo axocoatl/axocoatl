@@ -64,7 +64,7 @@
      becomes a module. -->
 <script type="module">
   import { iconForFile } from '/ui/file-tree.js';
-  import { foldCoordinationEvents, foldControlPlane } from '/ui/coordination-turn.js';
+  import { foldControlPlane } from '/ui/activation-inspector.js';
   import '/ui/rail.js';
   import '/ui/launcher.js';
   import '/ui/attempts.js';
@@ -104,7 +104,6 @@
   addEventListener('error', (e) => window.__bootErrors.push(String(e.message)));
   addEventListener('unhandledrejection', (e) => window.__bootErrors.push('reject: ' + (e.reason?.message || e.reason)));
   window.iconForFile = iconForFile;
-  window.foldCoordinationEvents = foldCoordinationEvents;
   window.foldControlPlane = foldControlPlane;
   window.historyPresentation = historyPresentation;
   window.renderExecutionHistoryTurn = renderExecutionHistoryTurn;
@@ -1145,8 +1144,7 @@ S.session = {
   environment: { state: 'unprepared' },
   liveStreams: new Map(), historyState: 'idle', historyError: '', historyGeneration: 0,
   controlPlaneTurns: new Map(), controlPlaneLatestTurnId: '',
-  coordinationCards: new Map(), coordinationEvents: new Map(), coordinationLatestEvents: [],
-  coordinationLatestTurnId: '', coordinationGraphTurnId: '', graphAgents: [],
+  coordinationGraphTurnId: '', graphAgents: [],
   activeTurnTargetAgent: null,
 };
 // Session live ownership is global browser state. It is updated for every
@@ -2622,8 +2620,7 @@ function openCockpit(s) {
     environment: s.environment || { state: 'unprepared' },
     streamEl: null, streamBuf: '', toolCards: {}, liveStreams: new Map(),
     controlPlaneTurns: new Map(), controlPlaneLatestTurnId: '',
-  coordinationCards: new Map(), coordinationEvents: new Map(), coordinationLatestEvents: [],
-    coordinationLatestTurnId: '', coordinationGraphTurnId: '', graphAgents: [],
+    coordinationGraphTurnId: '', graphAgents: [],
     activeTurnTargetAgent: null,
     historyState: 'loading', historyError: '', historyGeneration: 0, historyController: null,
     refs: [],
@@ -4973,10 +4970,10 @@ function sessionToolKey(turnId, agentId, callId, occurrence = 0, coordinationGen
     String(callId || ''),
     Number(occurrence) || 0,
   ];
-  // Provider-local call ids and their occurrence counters restart when a
-  // coordinated Agent is reactivated. Keep the legacy identity unchanged for
-  // ordinary/older frames, and extend it only when the runtime supplies the
-  // activation generation.
+  // Provider-local call ids and their occurrence counters restart with each
+  // activation. Keep the identity unchanged for ordinary frames, and extend it
+  // only when the runtime supplies the activation generation (native Ways
+  // candidates).
   if (coordinationGeneration !== null && coordinationGeneration !== undefined) {
     identity.push(String(coordinationGeneration));
   }
@@ -5035,37 +5032,6 @@ function sessionLiveStream(agentId = 'agent') {
     S.session.liveStreams.set(key, live);
   }
   return live;
-}
-function resetSessionLiveStreamForRevision(agentId, turnId = S.session.activeTurnId) {
-  const key = String(agentId || 'agent');
-  const activeTurnId = String(turnId || '');
-  const cachedRun = _liveSessionRuns.get(S.session.id);
-  if (cachedRun?.turn_id === activeTurnId && Array.isArray(cachedRun.agents)) {
-    const cachedAgent = cachedRun.agents.find(agent => agent?.agent === key);
-    if (cachedAgent) {
-      cachedAgent.status = 'pending';
-      cachedAgent.output = '';
-      cachedAgent.thinking = '';
-      cachedAgent.tokens = 0;
-      // mergeLiveSessionRun treats this WebSocket-observed activation boundary
-      // as newer than an in-flight HTTP/RunState projection of the old
-      // generation. AgentActivated keeps the marker while filling generation
-      // N+1, so an older HTTP body cannot win again later in the same turn.
-      cachedAgent.resetOutput = true;
-      cachedAgent.coordinationRevisionReset = true;
-    }
-  }
-  const live = S.session.liveStreams instanceof Map
-    ? S.session.liveStreams.get(key) : null;
-  live?.streamEl?.closest?.('.smsg')?.remove?.();
-  live?.reasoningEl?.closest?.('details')?.remove?.();
-  if (S.session.liveStreams instanceof Map) S.session.liveStreams.delete(key);
-  for (const row of document.querySelectorAll('#session-msgs .smsg[data-turn-id][data-agent-id]')) {
-    if (row.dataset.turnId === activeTurnId && row.dataset.agentId === key) row.remove();
-  }
-  for (const reasoning of document.querySelectorAll('#session-msgs details.chat-reasoning[data-turn-id][data-agent-id]')) {
-    if (reasoning.dataset.turnId === activeTurnId && reasoning.dataset.agentId === key) reasoning.remove();
-  }
 }
 function sessionAppendText(delta, agentId = 'agent') {
   setThinking($('#session-msgs'), false);
@@ -5439,168 +5405,18 @@ function resolvePendingSessionTurn(sessionId, pending, turns) {
   setSessionTurnPending(false);
 }
 
-const COORDINATION_EXECUTION_KINDS = new Set([
-  'coordination_planned',
-  'coordination_signal',
-  'coordination_agent_activated',
-  'coordination_agent_reactivated',
-  'coordination_agent_completed',
-  'coordination_agent_failed',
-  'coordination_agent_blocked',
-  'coordination_agent_cancelled',
-  'coordination_recovery_partial',
-  'coordination_completed',
-  'agent_output_superseded',
-]);
-
-function coordinationEventsForTurn(turn) {
-  return (Array.isArray(turn?.execution_events) ? turn.execution_events : [])
-    .filter(event => COORDINATION_EXECUTION_KINDS.has(event?.kind));
-}
-
-function coordinationRevisionPendingAgents(events) {
-  const pending = new Set();
-  for (const event of (Array.isArray(events) ? events : [])) {
-    const metadata = event?.metadata && typeof event.metadata === 'object'
-      ? event.metadata : {};
-    const agent = metadata.agent_id || metadata.agent || '';
-    if (!agent) continue;
-    if (event.kind === 'agent_output_superseded'
-        || event.kind === 'coordination_agent_reactivated') {
-      pending.add(agent);
-    } else if (event.kind === 'coordination_agent_activated') {
-      // Reactivation is a two-step boundary: queued/revision-pending first,
-      // then an actual new activation. A reconnect RunState may still carry
-      // the prior generation until this durable activation exists.
-      pending.delete(agent);
-    }
-  }
-  return pending;
-}
-
-function coordinationEventIdentity(event) {
-  if (event?.operation_id) return event.operation_id;
-  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
-  return [event?.kind || '', event?.execution_id || '', metadata.agent_id || '',
-    metadata.generation || '', metadata.signal_id || ''].join(':');
-}
-
-function setCoordinationEvents(turnId, events) {
-  const unique = [];
-  const seen = new Set();
-  for (const event of (Array.isArray(events) ? events : [])) {
-    if (!COORDINATION_EXECUTION_KINDS.has(event?.kind)) continue;
-    const key = coordinationEventIdentity(event);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(event);
-  }
-  S.session.coordinationEvents.set(turnId, unique);
-  return unique;
-}
-
-function mountCoordinationCard(turn, userElement, events) {
-  const turnId = typeof turn === 'string' ? turn : turn?.id || '';
-  if (!turnId || !userElement || !events.some(event => event.kind === 'coordination_planned')) {
-    return null;
-  }
-  let card = S.session.coordinationCards.get(turnId);
-  if (!card?.isConnected) {
-    card = document.createElement('ax-coordination-turn');
-    card.dataset.turnId = turnId;
-    card.addEventListener('open-agent-graph', event => {
-      const selectedTurnId = event.detail?.turnId || turnId;
-      openModule('trace');
-      void showCoordinationGraph(selectedTurnId);
-    });
-    userElement.insertAdjacentElement('afterend', card);
-    S.session.coordinationCards.set(turnId, card);
-  }
-  card.turn = typeof turn === 'object' && turn
-    ? { ...card.turn, ...turn, session_id: S.session.id, execution_events: events }
-    : { id: turnId, execution_events: events };
-  return card;
-}
-
-function applyCoordinationGraphEvent(event) {
-  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
-  if (event.kind === 'coordination_planned') {
-    for (const agent of (S.session.graphAgents || [])) sessionLatticeStatus(agent, 'idle');
-    return;
-  }
-  const agent = metadata.agent_id || metadata.agent || null;
-  if (!agent) return;
-  if (event.kind === 'coordination_agent_activated') sessionLatticeStatus(agent, 'running');
-  else if (event.kind === 'coordination_agent_reactivated') sessionLatticeStatus(agent, 'pending');
-  else if (event.kind === 'agent_output_superseded') sessionLatticeStatus(agent, 'pending');
-  else if (event.kind === 'coordination_agent_completed') sessionLatticeStatus(agent, 'success');
-  else if (event.kind === 'coordination_agent_failed') sessionLatticeStatus(agent, 'error');
-  else if (event.kind === 'coordination_agent_blocked') sessionLatticeStatus(agent, 'blocked');
-  else if (event.kind === 'coordination_agent_cancelled') sessionLatticeStatus(agent, 'cancelled');
-}
-
-function onSessionCoordinationFrame(frame) {
-  if (!S.session.id || frame?.session !== S.session.id
-      || !frame.turn_id || frame.turn_id !== S.session.activeTurnId) return;
-  const body = frame.event?.event && typeof frame.event.event === 'object'
-    ? frame.event.event : frame.event;
-  const raw = body && typeof body === 'object'
-    ? { ...body, operation_id: frame.operation_id || body.operation_id,
-      recorded_at: frame.recorded_at ?? body.recorded_at }
-    : null;
-  if (!raw || !COORDINATION_EXECUTION_KINDS.has(raw.kind)) return;
-  if (raw.kind === 'coordination_agent_reactivated') {
-    const metadata = raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {};
-    if (metadata.agent_id) resetSessionLiveStreamForRevision(metadata.agent_id, frame.turn_id);
-  }
-  const prior = S.session.coordinationEvents.get(frame.turn_id) || [];
-  const events = setCoordinationEvents(frame.turn_id, [...prior, raw]);
-  const userElement = Array.from(document.querySelectorAll('#session-msgs .smsg.user'))
-    .find(element => element.dataset.turnId === frame.turn_id);
-  const userInput = userElement?.querySelector('.smsg-body')?.textContent || '';
-  mountCoordinationCard({ id: frame.turn_id, user_input: userInput }, userElement, events);
-  S.session.coordinationLatestEvents = events;
-  S.session.coordinationLatestTurnId = frame.turn_id;
-  if (raw.kind === 'coordination_planned') {
-    S.session.coordinationGraphTurnId = frame.turn_id;
-    void sessionLatticeBuild(S.session, events, frame.turn_id);
-  } else if (S.session.coordinationGraphTurnId === frame.turn_id) {
-    applyCoordinationGraphEvent(raw);
-    scheduleCoordinationGraphRefresh(frame.turn_id);
-  }
-}
-
 async function showCoordinationGraph(turnId) {
   S.session.waysGraph = null;
-  const events = S.session.coordinationEvents.get(turnId) || [];
-  if (!events.some(event => event.kind === 'coordination_planned')
-      && !S.session.controlPlaneTurns?.has(turnId) && !isExecutionHistoryTurn(turnId)) return;
+  if (!S.session.controlPlaneTurns?.has(turnId) && !isExecutionHistoryTurn(turnId)) return;
   S.session.coordinationGraphTurnId = turnId;
-  await sessionLatticeBuild(S.session, events, turnId);
-}
-
-function agentOutputDispositionLabel(disposition) {
-  const value = String(disposition || '').trim().toLowerCase();
-  if (!value || value === 'completed') return '';
-  if (value === 'failed') return 'failed · partial output';
-  if (value === 'cancelled' || value === 'canceled') return 'stopped · partial output';
-  if (value === 'changes_requested') return 'changes requested · incomplete output';
-  return `${value.replaceAll('_', ' ')} · incomplete output`;
+  await sessionLatticeBuild(S.session, turnId);
 }
 
 function renderSessionTurns(turns, options = {}) {
   const previouslyInspectedTurn = S.session.coordinationGraphTurnId;
   const host = $('#session-msgs');
-  const liveCoordinationTurnId = options.preserveLive
-    ? (options.liveRun?.turn_id || S.session.activeTurnId || '') : '';
-  const liveCoordinationEvents = liveCoordinationTurnId
-    ? (S.session.coordinationEvents.get(liveCoordinationTurnId) || []).slice() : [];
   host.innerHTML = '';
   S.session.toolCards = {};
-  S.session.coordinationCards = new Map();
-  S.session.coordinationEvents = new Map();
-  S.session.coordinationLatestEvents = [];
-  S.session.coordinationLatestTurnId = '';
   S.session.coordinationGraphTurnId = '';
   S.session.graphAgents = [];
   S.session.streamEl = null;
@@ -5652,19 +5468,6 @@ function renderSessionTurns(turns, options = {}) {
       hasContext: context.length > 0,
     }));
     host.appendChild(user);
-
-    const durableCoordinationEvents = coordinationEventsForTurn(turn);
-    const coordinationEvents = setCoordinationEvents(
-      turn.id || '',
-      turn.id === liveCoordinationTurnId
-        ? [...durableCoordinationEvents, ...liveCoordinationEvents]
-        : durableCoordinationEvents,
-    );
-    mountCoordinationCard(turn, user, coordinationEvents);
-    if (coordinationEvents.length) {
-      S.session.coordinationLatestEvents = coordinationEvents;
-      S.session.coordinationLatestTurnId = turn.id || '';
-    }
 
     // Tool route evidence is part of the canonical turn ledger, not only the
     // live WebSocket. Rebuild the same cards after reload/restart so a user can
@@ -5722,15 +5525,13 @@ function renderSessionTurns(turns, options = {}) {
       }
     }
 
-    const coordinatedTurn = coordinationEvents.some(event => event.kind === 'coordination_planned');
     const recordedAgentOutputs = Array.isArray(turn.agent_outputs) ? turn.agent_outputs : [];
     const agentOutputs = recordedAgentOutputs.filter(output => output?.superseded !== true);
-    const outputs = coordinatedTurn || recordedAgentOutputs.length
+    const outputs = recordedAgentOutputs.length
       ? agentOutputs.map(output => ({
         agent: output.agent_id || 'agent',
         content: output.output || '',
         generation: Number(output.activation_generation) || null,
-        disposition: output.disposition || null,
       }))
       : [{ agent: turn.agent_id || 'agent', content: turn.final_output || turn.partial_output || '' }];
     for (const output of outputs) {
@@ -5740,16 +5541,7 @@ function renderSessionTurns(turns, options = {}) {
       assistant.dataset.agentId = output.agent;
       if (output.generation) assistant.dataset.generation = String(output.generation);
       const generationLabel = output.generation > 1 ? ` · revision ${output.generation - 1}` : '';
-      const disposition = String(output.disposition || '').trim().toLowerCase();
-      const dispositionLabel = agentOutputDispositionLabel(disposition);
-      if (dispositionLabel) {
-        assistant.dataset.disposition = disposition;
-        assistant.classList.add('incomplete-output');
-      }
-      assistant.appendChild(el(
-        'div', 'smsg-role',
-        output.agent + generationLabel + (dispositionLabel ? ` · ${dispositionLabel}` : ''),
-      ));
+      assistant.appendChild(el('div', 'smsg-role', output.agent + generationLabel));
       const body = el('div', 'smsg-body prose');
       body.innerHTML = mdRender(output.content);
       assistant.appendChild(body);
@@ -5786,30 +5578,16 @@ function renderSessionTurns(turns, options = {}) {
   if (options.preserveLive) {
     const running = visible.find(turn => turn.status === 'running' && turn.history_version !== 'execution_v2');
     if (running && running.id === S.session.activeTurnId) {
-      const runningCoordinationEvents = S.session.coordinationEvents.get(running.id)
-        || coordinationEventsForTurn(running);
-      const runningIsCoordinated = runningCoordinationEvents
-        .some(event => event.kind === 'coordination_planned');
-      const pendingRevisionAgents = coordinationRevisionPendingAgents(runningCoordinationEvents);
       const liveAgents = Array.isArray(options.liveRun?.agents) ? options.liveRun.agents : [];
       const replayAgents = liveAgents.length
         ? liveAgents
-        : runningIsCoordinated
-          ? []
-          : [{
-            agent: running.agent_id || 'agent',
-            output: running.partial_output || '',
-            status: 'running',
-          }];
+        : [{
+          agent: running.agent_id || 'agent',
+          output: running.partial_output || '',
+          status: 'running',
+        }];
       for (const liveAgent of replayAgents) {
         const liveAgentId = liveAgent?.agent || running.agent_id || 'agent';
-        if (pendingRevisionAgents.has(liveAgentId)) {
-          // History is durable evidence for the revision boundary. Do not let
-          // a stale reconnect snapshot recreate the superseded output or its
-          // terminal status while this Agent is queued for a later generation.
-          resetSessionLiveStreamForRevision(liveAgentId, running.id);
-          continue;
-        }
         const liveOutput = liveAgent?.output || '';
         const completedOutputs = Array.isArray(running.agent_outputs)
           ? running.agent_outputs : [];
@@ -5817,7 +5595,7 @@ function renderSessionTurns(turns, options = {}) {
         const completed = [...currentOutputs].reverse().find(output =>
           (output.agent_id || 'agent') === liveAgentId);
         let canonicalOutput = completed?.output || '';
-        if (!completedOutputs.length && !runningIsCoordinated) {
+        if (!completedOutputs.length) {
           canonicalOutput = running.partial_output || '';
         }
         const mergedOutput = canonicalOutput.startsWith(liveOutput)
@@ -5858,7 +5636,7 @@ function renderSessionTurns(turns, options = {}) {
     ? previouslyInspectedTurn : S.session.controlPlaneLatestTurnId;
   if (inspectedTurnId) {
     S.session.coordinationGraphTurnId = inspectedTurnId;
-    void sessionLatticeBuild(S.session, S.session.coordinationEvents.get(inspectedTurnId) || [], inspectedTurnId);
+    void sessionLatticeBuild(S.session, inspectedTurnId);
   }
   host.scrollTop = host.scrollHeight;
 }
@@ -7798,7 +7576,7 @@ async function openCoordinationReference(reference) {
   S.session.pendingGraphReference = structuredClone(metadata);
   S.session.coordinationGraphTurnId = metadata.source_turn_id;
   openModule('trace');
-  await sessionLatticeBuild(S.session, S.session.coordinationEvents.get(metadata.source_turn_id) || [], metadata.source_turn_id);
+  await sessionLatticeBuild(S.session, metadata.source_turn_id);
 }
 
 function removeRef(i) {
@@ -8753,7 +8531,7 @@ function scheduleCoordinationGraphRefresh(turnId, delay = 100) {
   _coordinationRefreshTimer = setTimeout(() => {
     if (S.session.id === sessionId && S.session.coordinationGraphTurnId === turnId
         && (delay === 100 || visibleSurfaces().includes('trace'))) {
-      void sessionLatticeBuild(S.session, S.session.coordinationEvents.get(turnId) || [], turnId);
+      void sessionLatticeBuild(S.session, turnId);
     }
   }, delay);
 }
@@ -8811,9 +8589,7 @@ async function readCoordinationControlPlane(sessionId, turnId, signal) {
     }
     hydrateCoordinationCommands(envelope);
     $('#session-guidance')?.acceptEnvelope?.(envelope);
-    const card = S.session.coordinationCards.get(turnId);
-    if (card) card.controlPlane = envelope;
-    await sessionLatticeBuild(S.session, S.session.coordinationEvents.get(turnId) || [], turnId, envelope);
+    await sessionLatticeBuild(S.session, turnId, envelope);
     // Stop acknowledgement can precede the actor's final safe-boundary result.
     // A silent independent branch must not leave this exact target stale.
     if (visibleSurfaces().includes('trace') && coordinationControlStillSettling(envelope)) {
@@ -8830,7 +8606,10 @@ async function readCoordinationControlPlane(sessionId, turnId, signal) {
   }
 }
 
-async function sessionLatticeBuild(session, coordinationEvents = null, coordinationTurnId = '', envelope = null) {
+async function sessionLatticeBuild(session, graphTurnId = '', envelope = null) {
+  // A turn's Agent graph is the projection of its control-plane envelope
+  // (native `execution_v2` or retained `legacy_v1`). Until that envelope is
+  // read, the graph shows the configured team.
   const host = $('#session-lattice-host');
   if (!host) return;
   const buildId = ++_sessionLatticeBuildId;
@@ -8848,7 +8627,7 @@ async function sessionLatticeBuild(session, coordinationEvents = null, coordinat
     return;
   }
   S.session.waysGraph = null;
-  const turnId = coordinationTurnId || S.session.coordinationGraphTurnId || S.session.controlPlaneLatestTurnId || '';
+  const turnId = graphTurnId || S.session.coordinationGraphTurnId || S.session.controlPlaneLatestTurnId || '';
   const previous = S.session.lattice;
   const sameIdentity = previous?.dataset.sessionId === sessionId && previous?.dataset.turnId === turnId;
   const selected = sameIdentity ? previous.selectedIds() : [];
@@ -8856,11 +8635,6 @@ async function sessionLatticeBuild(session, coordinationEvents = null, coordinat
   const oldInspector = sameIdentity ? host.querySelector('ax-activation-inspector') : null;
   const activeAgents = sessionActiveAgentIds(session);
   S.session.agents = activeAgents;
-  const selectedEvents = Array.isArray(coordinationEvents) ? coordinationEvents
-    : (turnId ? S.session.coordinationEvents.get(turnId) || [] : []);
-  const card = S.session.coordinationCards.get(turnId);
-  const turn = card?.turn || S.session.controlPlaneTurns?.get(turnId)
-    || { id: turnId, session_id: sessionId, execution_events: selectedEvents };
   if (isExecutionHistoryTurn(turnId) && envelope === null) {
     if (!sameIdentity) { host.replaceChildren(); S.session.lattice = null; S.session.graphAgents = []; }
     host.querySelector('.session-graph-notice')?.remove();
@@ -8870,8 +8644,8 @@ async function sessionLatticeBuild(session, coordinationEvents = null, coordinat
     await refreshCoordinationControlPlane(sessionId, turnId);
     return;
   }
-  const folded = typeof window.foldControlPlane === 'function'
-    ? window.foldControlPlane(envelope ?? turn, selectedEvents) : null;
+  const folded = envelope && typeof window.foldControlPlane === 'function'
+    ? window.foldControlPlane(envelope) : null;
   if (folded?.unsupported) {
     const notice = mkDiv('session-graph-notice', folded.warnings[0]);
     notice.setAttribute('role', 'status');
@@ -8887,7 +8661,14 @@ async function sessionLatticeBuild(session, coordinationEvents = null, coordinat
     notice.textContent = 'The retained execution graph is unavailable.'; host.append(notice); return;
   }
   const hasSnapshot = Boolean(folded?.nodes?.length && folded.agents?.length);
-  const agentRecords = hasSnapshot ? folded.agents : sessionConfiguredGraphAgents(session);
+  // Before its envelope is read, a retained turn that recorded one Agent (a
+  // single-Agent or direct-target turn) shows only that Agent.
+  const recordedTurn = hasSnapshot ? null : S.session.controlPlaneTurns?.get(turnId);
+  const recordedAgent = typeof recordedTurn?.agent_id === 'string' ? recordedTurn.agent_id : '';
+  const agentRecords = hasSnapshot ? folded.agents
+    : recordedAgent ? [{ id: recordedAgent, label: recordedAgent, dependsOn: [],
+      state: { running: 'working', cancelled: 'stopped' }[recordedTurn.status] || recordedTurn.status }]
+      : sessionConfiguredGraphAgents(session);
   const agents = agentRecords.map(agent => agent.id);
   const dependencies = agentRecords.flatMap(agent => (agent.dependsOn || []).map(from => ({ from, to: agent.id })));
   // Helpers a lead delegated to are laid out after it, but stay separate from
@@ -9037,7 +8818,6 @@ customElements.whenDefined('ax-session-guidance').then(() => {
   const guidance = $('#session-guidance');
   guidance.commandHandler = submitCoordinationCommand;
   guidance.addEventListener('guidance-state-change', syncSessionComposerState);
-  guidance.addEventListener('plan-current-work', () => guidance.openPlanner($('#session-text').value, {references:canonicalInlineReferences(ensureRefs()),attachment_ids:$('#session-context')?.selectedReferenceIds?.() || []}));
   guidance.addEventListener('open-current-turn-controls', async event => {
     if (event.detail.sessionId !== S.session.id) return;
     openModule('trace'); await showCoordinationGraph(event.detail.turnId);
@@ -9277,7 +9057,7 @@ document.addEventListener('keydown', e => {
 });
 
 // ╔════════════════════ Unified live WebSocket ════════════════════╗
-// The dashboard's only live transport — lattice events, workflow tokens,
+// The dashboard's only live transport — typed events, workflow tokens,
 // and chat all flow over one reconnecting socket.
 let axoWs = null;
 let wsBackoff = 500;
@@ -9572,16 +9352,6 @@ function mergeLiveSessionRun(snapshot, cached, { preferCachedTurn = true } = {})
       merged.agents.push(structuredClone(cachedAgent));
       continue;
     }
-    if (cachedAgent.resetOutput === true
-        && cachedAgent.coordinationRevisionReset === true) {
-      current.output = String(cachedAgent.output || '');
-      current.thinking = String(cachedAgent.thinking || '');
-      current.status = cachedAgent.status || 'pending';
-      current.tokens = Number(cachedAgent.tokens || 0);
-      current.resetOutput = true;
-      current.coordinationRevisionReset = true;
-      continue;
-    }
     current.output = longerStreamProjection(current.output, cachedAgent.output);
     current.thinking = longerStreamProjection(current.thinking, cachedAgent.thinking);
     if (liveAgentStatusRank(cachedAgent.status) > liveAgentStatusRank(current.status)) {
@@ -9842,7 +9612,7 @@ function replaceWorkspaceAttemptOwnerships(items) {
 
 function handleWsFrame(d) {
   $('#settings-automations')?.handleFrame?.(d);
-  if (['token', 'reasoning', 'tool-call', 'event', 'coordination', 'coordinator-plan'].includes(d.kind)
+  if (['token', 'reasoning', 'tool-call', 'event', 'coordinator-plan'].includes(d.kind)
       && (d.workflow === S.session.id || d.session === S.session.id)
       && isExecutionHistoryTurn(d.turn_id || S.session.activeTurnId)) return;
   cacheSessionRunFrame(d);
@@ -10031,15 +9801,9 @@ function handleWsFrame(d) {
       break;
     }
 
-    // A persisted, turn-scoped coordination transition. The inline card and
-    // focused Agent graph consume the same event shape Session History uses,
-    // so a live view and a reloaded view cannot tell different stories.
     case 'activation-stream':
     case 'activation-control-changed':
       observeExecutionHistoryFrame(d);
-      break;
-    case 'coordination':
-      onSessionCoordinationFrame(d);
       break;
 
     // A streamed token / reasoning chunk — routed to the session cockpit when
@@ -10139,14 +9903,12 @@ function handleWsFrame(d) {
         }
         const terminalTurnId = d.turn_id || S.session.activeTurnId;
         const terminalTarget = S.session.activeTurnTargetAgent;
-        const coordinated = (S.session.coordinationEvents.get(terminalTurnId) || [])
-          .some(event => event.kind === 'coordination_planned');
         setSessionTurnRunning(terminalTurnId, false);
         S.session.pendingTurn = null;
         setSessionTurnPending(false);
         S.session.streamEl = null;
         setThinking($('#session-msgs'), false);
-        if (!coordinated && !isExecutionHistoryTurn(terminalTurnId)) {
+        if (!isExecutionHistoryTurn(terminalTurnId)) {
           if (terminalTarget) sessionLatticeStatus(terminalTarget, 'success');
           else if ((S.session.agents || []).length === 1) {
             sessionLatticeStatus(S.session.agents[0], 'success');
@@ -10182,14 +9944,12 @@ function handleWsFrame(d) {
         }
         const terminalTurnId = d.turn_id || S.session.activeTurnId;
         const terminalTarget = S.session.activeTurnTargetAgent;
-        const coordinated = (S.session.coordinationEvents.get(terminalTurnId) || [])
-          .some(event => event.kind === 'coordination_planned');
         setSessionTurnRunning(terminalTurnId, false);
         S.session.pendingTurn = null;
         setSessionTurnPending(false);
         S.session.streamEl = null;
         setThinking($('#session-msgs'), false);
-        if (!coordinated && !isExecutionHistoryTurn(terminalTurnId)) {
+        if (!isExecutionHistoryTurn(terminalTurnId)) {
           if (terminalTarget) sessionLatticeStatus(terminalTarget, 'cancelled');
           else if ((S.session.agents || []).length === 1) {
             sessionLatticeStatus(S.session.agents[0], 'cancelled');

@@ -1192,7 +1192,7 @@ function createController(host, root) {
           const eventName = h('input', 'input');
           eventName.value = triggerDraft.eventName;
           eventName.placeholder = 'ReviewReady';
-          triggerControls.eventName = detailField('Event name', eventName, 'Matches the published event type exactly.');
+          triggerControls.eventName = detailField('Event name', eventName, 'Matches an event name from a Skill’s emits list exactly.');
         } else if (triggerKind.value === 'on_skill') {
           const skill = h('select', 'select');
           const none = h('option', '', state.skills.length ? 'Choose a Skill' : 'No Skills available');
@@ -1878,7 +1878,7 @@ function createController(host, root) {
       [
         ['manual', '▶ Manual — user clicks Run'],
         ['schedule', '⏱ Schedule — fire on an interval'],
-        ['on_event', '⊛ On event — lattice event matches'],
+        ['on_event', '⊛ On event — a Skill event name matches'],
         ['on_skill', '◆ On skill — a Skill is published'],
       ].forEach(([value, label]) => {
         const option = h('option', '', label); option.value = value; option.selected = trigger.kind === value; kind.append(option);
@@ -1897,7 +1897,7 @@ function createController(host, root) {
           const input = h('textarea', 'input'); input.value = trigger.kind === 'schedule' ? trigger.input || '' : '';
           controls.input = addField('Default trigger input (optional)', input);
         } else if (kind.value === 'on_event') {
-          const event = h('input', 'input'); event.value = trigger.kind === 'on_event' ? trigger.event || '' : ''; event.placeholder = 'AgentFailed';
+          const event = h('input', 'input'); event.value = trigger.kind === 'on_event' ? trigger.event || '' : ''; event.placeholder = 'ReviewReady';
           controls.event = addField('Event name', event);
           const input = h('textarea', 'input'); input.value = trigger.kind === 'on_event' ? trigger.input || '' : '';
           controls.input = addField('Default trigger input (optional)', input);

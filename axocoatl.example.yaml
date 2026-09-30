@@ -95,17 +95,13 @@ workflows:
     entry_point: researcher
 
 # ─── Skill ──────────────────────────────────────────────────────────
-# Firing a Skill publishes its EMIT events. `reacts_to`, `agents`, and `prompt`
-# remain capability metadata in the current daemon; use an OnSkill or OnEvent
-# Automation for a reachable reaction.
+# Firing a Skill publishes each event in `emits` on the event feed. Add an
+# OnSkill or OnEvent Automation, or a webhook, to react to it.
 skills:
   - id: quick-research
     name: "Quick research"
-    description: "Publish a ResearchRequested event into the lattice."
+    description: "Publish a ResearchRequested event on the event feed."
     emits: ["ResearchRequested"]
-    reacts_to: []
-    agents: [researcher]
-    prompt: "Research this topic in 3 bullets."
 
 # ─── Sleep-time memory consolidation ────────────────────────────────
 # Idle agents periodically promote durable facts from their semantic memory

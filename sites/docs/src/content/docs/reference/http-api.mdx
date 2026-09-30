@@ -113,12 +113,11 @@ not permission to choose another activation or team.
 
 | Method | Path | Request / behavior |
 | --- | --- | --- |
-| GET | `/api/sessions/{id}/team` | Current team revision, selected templates, explicit limits, and expiry. `required_checks` lists the applied team's checks; `suggested_check` is the Session's detected check command as an argument array, offered only and never run unless an Apply includes it |
-| POST | `/api/sessions/{id}/team/preview` | Typed whole-team edit; resolves and reviews future-turn definitions and authority. A slot's `writes` is the whole list of paths that Agent may change: `null` allows any file and `[]` is read-only. Leaving it out keeps the scope of the template or current definition the slot starts from, so omitting it never widens what the Agent may change; the app always sends it. The edit's optional `required_checks` is an array of argument arrays, such as `[["sh", "-c", "npm test"]]`, that the host runs after every turn's required Agents finish; it is refused when no required Agent has `bash` |
+| GET | `/api/sessions/{id}/team` | Current team revision, selected templates, explicit limits, and expiry. `required_checks` lists the applied team's checks; `suggested_check` is the Session's detected check command as an argument array, offered only and never run unless an Apply includes it. `required_review` is the applied team's review setting, when it has one, and `reviewers` lists the templates that may review: read-only Workers |
+| POST | `/api/sessions/{id}/team/preview` | Typed whole-team edit; resolves and reviews future-turn definitions and authority. A slot's `writes` is the whole list of paths that Agent may change: `null` allows any file and `[]` is read-only. Leaving it out keeps the scope of the template or current definition the slot starts from, so omitting it never widens what the Agent may change; the app always sends it. The edit's optional `required_checks` is an array of argument arrays, such as `[["sh", "-c", "npm test"]]`, that the host runs after every turn's required Agents finish; it is refused when no required Agent has `bash`. The optional `required_review` is `{"template_id", "max_rounds", "limits", "max_output_tokens"}`: a read-only Worker template the host runs after every turn's required Agents and checks, 1 to 3 rounds (2 when omitted), the reviewer's limits for all rounds of one turn, and its output bound per request (the template's when omitted) |
 | POST | `/api/sessions/{id}/team/apply` | `{edit, review_digest}`; exact reviewed future-turn edit |
 | POST | `/api/sessions/{id}/team/cancel` | Cancel the referenced team draft without changing current authority |
 | POST | `/api/sessions/{id}/turns/{turn_id}/control-commands` | Typed human action with exact command/activation/revision identities; returns the canonical receipt |
-| POST | `/api/sessions/{id}/turns/{turn_id}/control-plan` | Bounded request-local proposal from the selected planning Agent; no execution authority |
 | POST | `/api/sessions/{id}/turns/{turn_id}/graph-edits/preview` | Review AddAgent or ReplaceFutureAgent against the exact graph revision. The new work starts from one of the Session team's Agents (`agent.source_slot_id`) or a configured template (`agent.template_id`), exactly one of the two, and keeps what that Agent may change; `agent.writes` may only narrow it |
 | POST | `/api/sessions/{id}/turns/{turn_id}/graph-edits/apply` | Apply the original reviewed graph edit and digest |
 | GET | `/api/sessions/{id}/turns/{turn_id}/grants` | Current grants, cumulative usage, and retained expansion proposals |
@@ -142,9 +141,9 @@ not permission to choose another activation or team.
 | GET | `/api/mcp/tools` | Discovered tool name, server, and description |
 | GET | `/api/mcp/permissions` | Durable saved permission decisions |
 | DELETE | `/api/mcp/permissions?server=…&agent_id=…&tool=…` | Revoke matching decision; Agent/tool are optional |
-| GET | `/api/skills` | Configured YAML Skills |
-| POST | `/api/skills/{id}/fire` | Publish every event in the Skill's `emits` list |
-| GET | `/api/events/recent` | In-memory recent typed-event log |
+| GET | `/api/skills` | Configured YAML Skills: `id`, `name`, `description`, `emits` |
+| POST | `/api/skills/{id}/fire` | Publish every event in the Skill's `emits` list on the event feed |
+| GET | `/api/events/recent` | The last 200 event-feed events, in memory |
 
 Catalog connection changes are not persisted to YAML and do not rebuild
 already-created Agent tool executors. Approval decisions use the WebSocket
@@ -245,20 +244,14 @@ Session `mode` is tagged JSON such as
 `{"kind":"single_agent","agent_id":"coder"}` or
 `{"kind":"lattice","workflow_id":"feature-team"}` or
 `{"kind":"custom","agents":["planner","coder","reviewer"]}`. In compatibility
-(`legacy_v1`) execution, an all-team autonomous multi-Agent Lattice or Custom turn appends its immutable graph and causal
-coordination transitions to the returned turn's `execution_events`. A one-Agent
-team, a coordinator-led team, or a request targeted to one Agent runs directly
-and does not fabricate a Coordination map.
+(`legacy_v1`) execution, Lattice mode resolves its stored team ID and Custom mode
+resolves its stored Agent IDs against the current daemon configuration when each turn
+starts. A single-Agent Session, a one-Agent team, a team whose entry point is a
+Coordinator, or a request targeted to one Agent runs directly. A turn that would run
+two or more Agents is refused before it starts; the error tells the operator to stop
+Axocoatl, make a cold backup, and run `axocoatl session upgrade --confirm`.
 
-For compatibility all-team turns, Lattice mode resolves its stored team ID and Custom mode
-resolves its stored Agent IDs against the current daemon configuration. Agent
-dependencies are validated before work starts. When the resolved path is a
-multi-Agent coordination graph, its first `coordination_planned` event
-snapshots the exact Agent names, dependencies, roots, sinks, and activation
-bound used for that turn. Changing configuration afterward affects a later
-turn, not this retained record.
-
-### Durable coordination records
+### Turn control plane
 
 The `control-plane` endpoint returns `schema_version: 1`, the source
 `history_version`, exact Session and turn identities, nodes, activation histories,
@@ -329,54 +322,14 @@ after) and `required-check:ready`. Selecting any of them in a Continue request, 
 restarting any Agent, reruns both captures, every check and readiness. A check-only
 Continue that the paying Agent's budget cannot cover is refused with the reason.
 
-The `execution_events` array is the canonical ordered record. A live
-`coordination` WebSocket frame nests the `RecordTurnExecution` body under
-`event`; the HTTP turn representation flattens that body beside its durable
-identity:
-
-```json
-{
-  "operation_id": "coordination:turn-id:1:agent-activated",
-  "recorded_at": 1788800000000,
-  "kind": "coordination_agent_activated",
-  "execution_id": "turn-id",
-  "metadata": {
-    "session_id": "session-id",
-    "turn_id": "turn-id",
-    "agent_id": "builder",
-    "generation": 1,
-    "cause_signal_ids": ["coordination-signal:turn-id:planner:g1:completed"],
-    "parents": ["planner"]
-  }
-}
-```
-
-The coordination kinds are `coordination_planned`,
-`coordination_agent_activated`, `coordination_signal`,
-`agent_output_superseded`, `coordination_agent_reactivated`,
-`coordination_agent_completed`, `coordination_agent_failed`,
-`coordination_agent_blocked`, `coordination_agent_cancelled`,
-`coordination_recovery_partial`, and
-`coordination_completed`. See the
-[WebSocket coordination metadata table](/reference/websocket/#coordination-event-metadata)
-for every per-kind field and the live envelope.
-
-Each coordinated entry in `agent_outputs` also carries its generation-aware
-identity:
-
-| Field | Meaning |
-| --- | --- |
-| `operation_id` | Ledger operation that recorded this exact output |
-| `activation_generation` | One-based Agent activation represented by this output |
-| `disposition` | `completed`, `changes_requested`, `failed`, or `cancelled` |
-| `causal_signal_id` | Completion, failure, or feedback signal associated with the output, when one exists |
-| `superseded` | Whether a later accepted generation made this output stale |
-| `superseded_by_generation` | Replacement generation, when stale |
-| `superseded_by_signal_id` | Revision signal that caused the replacement, when stale |
-
-Canonical JSON retains superseded outputs as evidence. Normal conversation,
-checkpoint projection, search output matching, and Markdown export omit those
-stale Agent outputs so they cannot be mistaken for the current result.
+A native turn whose team has a required review carries `required_review` in its control
+plane: the `reviewer` template, `state` (`not_run`, `running`, `approved`, `changes`,
+`failed`, `skipped` or `unavailable`), a `reason` in words, the `verdict` (`approve`,
+`changes` or `unreadable`), bounded `findings`, the `round` and `max_rounds`, `current`
+(whether the verdict is about the current result) and the `candidate_sha256` tree the
+reviewer was shown. The reviewer is the graph node `required-review` and its verdict the
+condition `required-review:verdict`; selecting that condition in a Continue request runs
+the reviewer again, and rerun checks or restarted work run it again too.
 
 The directory must already exist when registering a new Workspace. The server has
 no configured folder allowlist.

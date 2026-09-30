@@ -39,7 +39,7 @@ fn require_legacy_history_write(
 ) -> Result<(), DaemonError> {
     if retained_execution || matches!(ownership, DataRootFormatOwnership::Upgraded(_)) {
         return Err(DaemonError::SessionConflict(format!(
-            "{} requires versioned Session history and accepted-state cleanup that is not enabled in this build; no legacy history mutation was performed",
+            "{} is not available for a Session with versioned history; no legacy history mutation was performed",
             operation.description(),
         )));
     }

@@ -87,7 +87,7 @@ events, Automations, and sandbox lifecycle.
   with manual, interval, event, or Skill triggers and separate run history.
 - Coordination: a configured coordinator Agent can decompose a goal, assign
   work to configured workers, run them in parallel, and synthesize the result.
-  The typed event lattice carries notifications; it is not the Session, Agent
+  The event feed carries the events Skills publish; it is not the Session, Agent
   graph, Ways model, or Automation graph.
 
 ## Isolation and network boundary

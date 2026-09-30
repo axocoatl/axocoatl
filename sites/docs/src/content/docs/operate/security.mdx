@@ -109,7 +109,10 @@ in the read-write Workspace.
 
 The local default is rootless Podman with `no-new-privileges`, dropped
 capabilities, fixed resource-limit requests, and trust gates for custom images
-and repository post-create commands. Keep these defaults for unknown projects:
+and repository post-create commands. Two defaults are open: `network: bridge`
+lets Session containers make outbound connections, and
+`require_resource_limits: false` lets a Session start without resource limits
+when the host cannot apply them. For a repository you do not trust, set:
 
 ```yaml
 sandbox:
@@ -119,6 +122,14 @@ sandbox:
   allow_untrusted_images: false
   require_resource_limits: true
 ```
+
+`network` accepts only `bridge` or `none`. Any other value, such as `None` or
+`off`, is a configuration error: `axocoatl validate`, `axocoatl doctor` and
+daemon start report it instead of starting a container with a network.
+
+Podman containers do not receive the host's proxy variables (`HTTP_PROXY`,
+`HTTPS_PROXY`, `NO_PROXY` and the others Podman would copy by default), so a
+proxy URL with a user name and password stays on the host.
 
 `allow_post_create_command: true` is not a hidden execution hook. It defaults
 only the exact devcontainer command to checked for an unreviewed Session; the
@@ -143,10 +154,11 @@ outside the Workspace.
 An Agent configured with `writes: []` is a read-only helper. It is not offered
 `write_file` or `edit_file`, and the host refuses them if it asks. Its own `bash`
 commands run under a Linux Landlock write restriction: nothing in the repository,
-including `.git`, can change. Only `/tmp`, `/var/tmp`, `/dev` and a fresh home
-directory for each command are writable, so the helper cannot leave configuration in
-the Session's shared home for later commands. The restriction needs Landlock ABI 3
-(Linux 6.2 or later) and a container runtime that allows it. Where it cannot be
+including `.git`, can change. Only `/tmp`, `/var/tmp` and `/dev` are writable. Each
+command gets a scratch home directory under `/tmp`, removed when it ends, so the helper
+cannot leave configuration in the Session's shared home for later commands. The
+restriction needs Landlock ABI 3 (Linux 6.2 or later) and a container runtime that
+allows it. Where it cannot be
 applied, the helper's `bash` commands do not run and its read-only file tools still
 work. Axocoatl's own before-and-after repository captures run without the restriction;
 they read no Git configuration, attributes or ignore file from outside the repository
@@ -168,6 +180,16 @@ as review evidence. An Agent held to its paths with file tools only, without `ba
 cannot do either. See
 [Limit which files an Agent may change](/configure/agents/#limit-which-files-an-agent-may-change).
 
+A team's required reviewer must be read-only in the same sense: Apply and turn
+admission refuse a reviewer template that could change files or run commands that can.
+The host, not the lead, starts it after the required Agents and checks finish, on its
+own approved budget, and the turn completes only when it approves the exact answers and
+repository tree it was shown. It fails closed: an answer without a readable verdict, a
+reviewer that did not finish, or a tree that changed while it read approves nothing.
+The review is a model's judgement, not verification; a reviewer can miss a defect or be
+misled by what it reads in the repository. See
+[Required review](/configure/agents/#required-review).
+
 `network: none` blocks container egress and Preview ports, but does not block
 the host daemon itself from reaching model providers, MCP servers, web search,
 webhooks, a remote sandbox service, or a registry for a Podman image pull. It
@@ -183,7 +205,7 @@ Review every path by which content can leave the machine:
 - E2B Cloud remote sandboxes, including repository transfer;
 - remote MCP servers and tools;
 - configured web search;
-- lattice webhooks and their headers;
+- event webhooks and their headers;
 - package downloads or repository scripts inside a bridged container;
 - embedding-model downloads during first use.
 
@@ -201,7 +223,9 @@ It does not prove the safety of any destination.
 - For environment placeholders, inject credentials into the process or service
   through an approved OS secret mechanism.
 - Scope E2B Git tokens, MCP credentials, webhook headers, API keys, and bearer
-  tokens to the smallest usable authority.
+  tokens to the smallest usable authority. The E2B Git token is an environment
+  variable of the remote VM, so every command in that VM can read it, including
+  repository scripts and Agent commands.
 - Protect the data root, backups, config, service definition, and logs. Axocoatl
   has no application-level at-rest encryption.
 

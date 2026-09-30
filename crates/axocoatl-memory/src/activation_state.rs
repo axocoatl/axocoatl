@@ -3,7 +3,8 @@
 //! This isolated store does not change the existing Agent checkpoint store. Its
 //! live host must provide an owned canonical namespace under the upgraded format
 //! and Session writer. The isolated path opener remains for compatibility fixtures.
-//! No daemon, actor, Tier 2–4 memory, or live writer is wired here.
+//! The daemon's native Session controller opens it through an owned namespace;
+//! this module wires no actor, Tier 2–4 memory, or other writer itself.
 //!
 //! Inputs require opaque snapshots from successfully persisted canonical Session
 //! history. An owned namespace binds journal and workspace at open. The isolated
@@ -2146,11 +2147,7 @@ fn validate_ordinary_legacy_turn(turn: &SessionTurn, agent: &mut Option<String>)
         if output.agent_id != *recorded
             || output.attempt_id.is_some()
             || output.activation_generation.is_some()
-            || output.disposition.is_some()
-            || output.causal_signal_id.is_some()
             || output.superseded
-            || output.superseded_by_generation.is_some()
-            || output.superseded_by_signal_id.is_some()
         {
             return Err(unsupported(
                 "output has coordinated or foreign activation attribution",
@@ -2274,11 +2271,7 @@ fn project_plain_legacy(
                 || output.output != *answer
                 || output.attempt_id.is_some()
                 || output.activation_generation.is_some()
-                || output.disposition.is_some()
-                || output.causal_signal_id.is_some()
                 || output.superseded
-                || output.superseded_by_generation.is_some()
-                || output.superseded_by_signal_id.is_some()
             {
                 return Err(ActivationStateError::UnsupportedLegacy(
                     "attributed output is not an exact ordinary single-agent answer",

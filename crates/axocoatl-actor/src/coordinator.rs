@@ -2,9 +2,8 @@
 //! subtasks, assigns each to a worker agent, runs them in parallel, and
 //! synthesizes the results.
 //!
-//! - Decomposition prefers the symbolic HTN planner (resolving any LLM frontiers
-//!   task-by-task) and falls back to whole-goal LLM decomposition only when no
-//!   planner is configured.
+//! - The model decomposes the goal into subtasks, each naming the tools it
+//!   needs.
 //! - Each subtask goes to the first declared worker whose callable tools cover
 //!   the subtask's required tools (an ad-hoc worker otherwise); declared workers
 //!   are spawned with their configured checkpoint, daily/core/semantic memory,
@@ -18,7 +17,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use axocoatl_coordination::{HtnPlanner, HtnTask, HtnTaskType};
 use axocoatl_core::{
     secure_fs::SecureDir, AgentAttachment, AgentConfig, AgentId, AgentInput, AgentOutput,
     ChatMessage, ConversationMode, MemoryConfig, MessageRole, OverflowPolicy, SamplingConfig,
@@ -42,7 +40,6 @@ use crate::default_behavior::{
     attach_to_last_user_message, load_project_instructions, DefaultAgentBehavior,
 };
 use crate::error::AgentError;
-use crate::frontier_resolver::LlmFrontierResolver;
 use crate::provider_budget::ControlledChat;
 use crate::run_control::{AgentRunControl, AgentRunOutcome};
 
@@ -242,7 +239,7 @@ struct OrchestrationState {
     /// known because their legacy execution paths stored only completed calls.
     #[serde(default = "default_true")]
     token_usage_known: bool,
-    /// Coordinator-side provider usage only (decomposition/frontiers/synthesis).
+    /// Coordinator-side provider usage only (decomposition and synthesis).
     /// This is the amount recharged into the shared coordinator tracker on
     /// resume; worker usage remains governed by each worker's own budget.
     #[serde(default)]
@@ -652,7 +649,7 @@ pub trait CoordinatorReporter: Send + Sync {
 ///
 /// The coordinator:
 /// 1. Receives a high-level task
-/// 2. Decomposes it into subtasks (via HTN planner or LLM)
+/// 2. Decomposes it into subtasks with the model
 /// 3. Spawns worker agents for each subtask
 /// 4. Collects results and synthesizes a final response
 pub struct CoordinatorBehavior {
@@ -695,10 +692,6 @@ pub struct CoordinatorBehavior {
     worker_handles: HashMap<AgentId, tokio::task::JoinHandle<()>>,
     /// Collected results from workers.
     worker_results: Vec<WorkerResult>,
-    /// Optional HTN planner. When set, decompose_task tries symbolic
-    /// decomposition (no LLM call) before falling back to the LLM.
-    htn_planner: Option<HtnPlanner>,
-    planning_task: Option<String>,
     /// Monotonic run counter — scopes worker actor names per run so repeated
     /// executions of the same coordinator never collide in ractor's registry.
     run_seq: u64,
@@ -775,8 +768,6 @@ impl CoordinatorBehavior {
             active_workers: HashMap::new(),
             worker_handles: HashMap::new(),
             worker_results: Vec::new(),
-            htn_planner: None,
-            planning_task: None,
             run_seq: 0,
             checkpoint_store: None,
             activation_checkpoint_port: None,
@@ -891,13 +882,6 @@ impl CoordinatorBehavior {
         self
     }
 
-    /// The host retains the semantic task separately from its structured
-    /// context projection, so configured HTN patterns keep their exact meaning.
-    pub fn with_planning_task(mut self, task: String) -> Self {
-        self.planning_task = Some(task);
-        self
-    }
-
     pub fn with_stream_observer(mut self, observer: Arc<dyn crate::AgentStreamObserver>) -> Self {
         self.stream_observer = Some(observer);
         self
@@ -984,7 +968,7 @@ impl CoordinatorBehavior {
         self
     }
 
-    /// Bind coordinator-side decomposition/frontier/synthesis calls to the same
+    /// Bind coordinator-side decomposition and synthesis calls to the same
     /// directory Session context supplied to standalone agents and workers.
     pub fn with_session_context(mut self, working_dir: impl std::fmt::Display) -> Self {
         let working_dir = working_dir.to_string();
@@ -1050,13 +1034,6 @@ impl CoordinatorBehavior {
             }
         }
         Ok(())
-    }
-
-    /// Attach an HTN planner. When set, `decompose_task` tries symbolic
-    /// decomposition (no LLM call) before falling back to the LLM.
-    pub fn with_htn_methods(mut self, planner: HtnPlanner) -> Self {
-        self.htn_planner = Some(planner);
-        self
     }
 
     /// Spawn a worker agent and return its ID.
@@ -1487,88 +1464,14 @@ impl CoordinatorBehavior {
         (request, protected_suffix_start)
     }
 
-    /// Decompose a goal into subtasks. Prefers the symbolic HTN planner: it
-    /// plans, resolves any LLM frontiers (decomposing only those tasks with the
-    /// model, not the whole goal), and errors if the plan can't be made fully
-    /// primitive. Only when no planner is configured does it decompose the whole
-    /// goal with the LLM. Either way, an empty decomposition is an error.
+    /// Decompose a goal into subtasks with the model. An empty decomposition
+    /// is an error.
     async fn decompose_task(
         &mut self,
         task: &str,
         request_context: &mut CoordinatorRequestContext,
         control: Option<&AgentRunControl>,
     ) -> Result<(Vec<Subtask>, TokenUsageStats), AgentError> {
-        if let Some(planner) = &self.htn_planner {
-            let root = HtnTask {
-                name: self
-                    .planning_task
-                    .clone()
-                    .unwrap_or_else(|| task.to_string()),
-                parameters: HashMap::new(),
-                task_type: HtnTaskType::Compound,
-            };
-            // resolve_frontiers takes &mut self; clone so the shared planner is
-            // left untouched across runs.
-            let mut planner = planner.clone();
-            let resolver = LlmFrontierResolver::new(self.provider.clone(), self.counter.clone())
-                .with_tracker(self.tracker.clone())
-                .with_control(control.cloned())
-                .with_model(request_context.model.clone())
-                .with_request_context(
-                    request_context.history.clone(),
-                    request_context.system.clone(),
-                    request_context.attachments.clone(),
-                    self.sampling.clone(),
-                );
-            let plan_result = planner.resolve_frontiers(root, &resolver, 4).await;
-            let resolver_usage = resolver.usage();
-            self.merge_active_run_usage(&resolver_usage);
-            if !resolver.usage_known() {
-                self.mark_active_run_usage_unknown();
-            }
-            let plan = match plan_result {
-                Ok(plan) => plan,
-                Err(message) => {
-                    if let Some(error) = resolver.take_failure() {
-                        return Err(error);
-                    }
-                    return Err(AgentError::Internal(message));
-                }
-            };
-            if !plan.llm_frontiers.is_empty() {
-                return Err(AgentError::Internal(format!(
-                    "HTN planning left {} task(s) unresolved after frontier resolution",
-                    plan.llm_frontiers.len()
-                )));
-            }
-            let subtasks: Vec<Subtask> = plan
-                .primitives
-                .into_iter()
-                .map(|t| Subtask {
-                    description: t
-                        .parameters
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                        .unwrap_or_else(|| t.name.clone()),
-                    required_tools: t.required_tools(),
-                    name: t.name,
-                })
-                .collect();
-            if subtasks.is_empty() {
-                return Err(AgentError::Internal(
-                    "HTN planning produced no subtasks".to_string(),
-                ));
-            }
-            tracing::info!(
-                coordinator = %self.agent_id,
-                subtasks = subtasks.len(),
-                "Decomposed via HTN"
-            );
-            return Ok((subtasks, resolver_usage));
-        }
-
-        // No planner configured — decompose the whole goal with the LLM.
         let decompose_prompt = format!(
             "You are a task decomposition engine. Break the following task into 2-5 \
              independent subtasks.\n\
@@ -2993,6 +2896,16 @@ mod tests {
         assert_ne!(started["worker-a"].1, started["worker-b"].1);
     }
 
+    /// Whether `request` is the coordinator's decomposition call, which a mock
+    /// answers with a JSON plan instead of its synthesis text.
+    fn is_decomposition(request: &ChatRequest) -> bool {
+        request
+            .messages
+            .first()
+            .and_then(ChatMessage::text_content)
+            .is_some_and(|system| system.contains("You decompose tasks into subtasks"))
+    }
+
     /// Every chat returns a fixed two-subtask decomposition. The coordinator's
     /// decompose call parses it into two subtasks; worker + synthesis calls just
     /// echo it back — enough to exercise the full decompose→delegate→synthesize
@@ -3073,6 +2986,45 @@ mod tests {
                 status: 500,
                 message: "mock LLM failure".to_string(),
             })
+        }
+    }
+
+    /// Answers decomposition with a fixed plan and fails every worker and
+    /// synthesis call.
+    struct PlanThenFailLlm(&'static str);
+
+    #[async_trait]
+    impl LlmProvider for PlanThenFailLlm {
+        fn provider_id(&self) -> &str {
+            "failing"
+        }
+        fn model_id(&self) -> &str {
+            "fail"
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            if !is_decomposition(&request) {
+                return FailingLlm.chat(request).await;
+            }
+            Ok(ChatResponse {
+                content: self.0.to_string(),
+                tool_calls: vec![],
+                finish_reason: FinishReason::Stop,
+                usage: TokenUsageStats::new(1, 1),
+                model: "fail".to_string(),
+                provider: "failing".to_string(),
+            })
+        }
+        async fn chat_stream(
+            &self,
+            request: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            FailingLlm.chat_stream(request).await
         }
     }
 
@@ -3263,21 +3215,26 @@ mod tests {
             ProviderCapabilities::default()
         }
 
-        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
-            if !self
-                .injected
-                .swap(true, std::sync::atomic::Ordering::SeqCst)
-            {
-                self.store
-                    .save(&pending_orchestration_checkpoint(
-                        3,
-                        "final checkpoint goal",
-                    ))
-                    .await
-                    .unwrap();
-            }
+        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            let content = if is_decomposition(&request) {
+                r#"[{"name":"work","description":"work","tools":[]}]"#
+            } else {
+                if !self
+                    .injected
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    self.store
+                        .save(&pending_orchestration_checkpoint(
+                            3,
+                            "final checkpoint goal",
+                        ))
+                        .await
+                        .unwrap();
+                }
+                "synthesized answer"
+            };
             Ok(ChatResponse {
-                content: "synthesized answer".to_string(),
+                content: content.to_string(),
                 tool_calls: Vec::new(),
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsageStats::new(1, 1),
@@ -3465,6 +3422,8 @@ mod tests {
     }
 
     struct GatedCoordinatorToolLlm {
+        /// The JSON plan returned for the decomposition call.
+        plan: &'static str,
         direct_calls: std::sync::atomic::AtomicUsize,
         stream_calls: std::sync::atomic::AtomicUsize,
     }
@@ -3487,11 +3446,16 @@ mod tests {
             }
         }
 
-        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
             self.direct_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let content = if is_decomposition(&request) {
+                self.plan
+            } else {
+                "fresh synthesis"
+            };
             Ok(ChatResponse {
-                content: "fresh synthesis".to_string(),
+                content: content.to_string(),
                 tool_calls: Vec::new(),
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsageStats::new(1, 1),
@@ -3586,11 +3550,16 @@ mod tests {
             }
         }
 
-        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
             self.direct_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let content = if is_decomposition(&request) {
+                r#"[{"name":"work","description":"work","tools":[]}]"#
+            } else {
+                "coordinator final"
+            };
             Ok(ChatResponse {
-                content: "coordinator final".to_string(),
+                content: content.to_string(),
                 tool_calls: Vec::new(),
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsageStats::new(1, 1),
@@ -3805,50 +3774,6 @@ mod tests {
             serde_json::to_string(&context.history).unwrap(),
             history_before
         );
-    }
-
-    #[tokio::test]
-    async fn htn_frontier_rejects_oversized_current_suffix_before_dispatch() {
-        let provider = Arc::new(CoordinatorWindowLlm::new(300, Vec::new(), "worker"));
-        let history = vec![ChatMessage::user(format!(
-            "CURRENT FRONTIER TURN {}",
-            "x".repeat(4_000)
-        ))];
-        let history_before = serde_json::to_string(&history).unwrap();
-        let resolver =
-            LlmFrontierResolver::new(provider.clone(), Arc::new(CoordinatorWindowCounter))
-                .with_request_context(
-                    history.clone(),
-                    None,
-                    Vec::new(),
-                    SamplingConfig {
-                        max_tokens: Some(8),
-                        ..Default::default()
-                    },
-                );
-        let task = HtnTask {
-            name: "unresolved".to_string(),
-            parameters: HashMap::new(),
-            task_type: HtnTaskType::Compound,
-        };
-
-        let error =
-            axocoatl_coordination::FrontierResolver::resolve(&resolver, &task, &HashMap::new())
-                .await
-                .unwrap_err();
-
-        assert!(error.contains("context"));
-        assert!(matches!(
-            resolver.take_failure(),
-            Some(AgentError::ContextLimitExceeded { .. })
-        ));
-        assert_eq!(
-            provider
-                .direct_calls
-                .load(std::sync::atomic::Ordering::SeqCst),
-            0
-        );
-        assert_eq!(serde_json::to_string(&history).unwrap(), history_before);
     }
 
     #[tokio::test]
@@ -4208,14 +4133,6 @@ mod tests {
 
     #[tokio::test]
     async fn supplied_and_stateless_coordination_leave_actor_and_worker_memory_unchanged() {
-        let methods = r#"
-- task_pattern: "route"
-  preconditions: []
-  subtasks:
-    - name: "work"
-      parameters: {}
-      task_type: Primitive
-"#;
         let temp = tempfile::tempdir().unwrap();
         let checkpoint_store = Arc::new(CheckpointStore::new(
             temp.path().join("checkpoints"),
@@ -4241,7 +4158,6 @@ mod tests {
         executor.register_builtin("echo", Arc::new(axocoatl_tools::EchoTool));
         let worker_id = AgentId::new("request-local-worker");
         let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
-            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
             .with_checkpoint_store(checkpoint_store.clone())
             .with_data_root(data_root)
             .with_tool_executor(Arc::new(executor))
@@ -4297,8 +4213,9 @@ mod tests {
             serde_json::to_vec(&after_supplied.session_messages).unwrap(),
             serde_json::to_vec(coordinator.session.messages()).unwrap()
         );
-        assert_eq!(after_supplied.cumulative_token_usage.input_tokens, 5);
-        assert_eq!(after_supplied.cumulative_token_usage.output_tokens, 6);
+        // Baseline plus decomposition, two worker rounds and synthesis.
+        assert_eq!(after_supplied.cumulative_token_usage.input_tokens, 6);
+        assert_eq!(after_supplied.cumulative_token_usage.output_tokens, 7);
         assert!(after_supplied.cumulative_token_usage_known);
         assert!(checkpoint_store
             .load_latest(&worker_id)
@@ -4333,8 +4250,8 @@ mod tests {
             serde_json::to_vec(&after_stateless.session_messages).unwrap(),
             serde_json::to_vec(coordinator.session.messages()).unwrap()
         );
-        assert_eq!(after_stateless.cumulative_token_usage.input_tokens, 7);
-        assert_eq!(after_stateless.cumulative_token_usage.output_tokens, 8);
+        assert_eq!(after_stateless.cumulative_token_usage.input_tokens, 9);
+        assert_eq!(after_stateless.cumulative_token_usage.output_tokens, 10);
         assert!(after_stateless.cumulative_token_usage_known);
         assert!(checkpoint_store
             .load_latest(&worker_id)
@@ -4348,8 +4265,8 @@ mod tests {
         restored.on_start(&coord_config()).await.unwrap();
         let restored_usage = restored.cumulative_token_usage_measurement();
         assert!(restored_usage.complete);
-        assert_eq!(restored_usage.usage.input_tokens, 7);
-        assert_eq!(restored_usage.usage.output_tokens, 8);
+        assert_eq!(restored_usage.usage.input_tokens, 9);
+        assert_eq!(restored_usage.usage.output_tokens, 10);
         assert_eq!(
             serde_json::to_string(restored.session.messages()).unwrap(),
             actor_session_before,
@@ -4424,80 +4341,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn coordinator_uses_htn_when_methods_loaded() {
-        // The HTN method decomposes the goal into THREE subtasks; the LLM mock
-        // would return only two. Three workers proves HTN was used for
-        // decomposition (no LLM decompose call).
-        let methods = r#"
-- task_pattern: "build something"
-  preconditions: []
-  subtasks:
-    - name: "htn_a"
-      parameters: {}
-      task_type: Primitive
-    - name: "htn_b"
-      parameters: {}
-      task_type: Primitive
-    - name: "htn_c"
-      parameters: {}
-      task_type: Primitive
-"#;
-        let planner = HtnPlanner::from_methods_yaml(methods).unwrap();
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockLlm);
-        let counter: Arc<dyn TokenCounter> = Arc::new(SimpleCounter);
-        let mut coord = CoordinatorBehavior::new(provider, counter)
-            .with_htn_methods(planner)
-            .add_worker_config(WorkerConfig {
-                id: AgentId::new("h1"),
-                name: "H1".to_string(),
-                system_prompt: "worker".to_string(),
-                tools: vec![],
-                model: "test-model".to_string(),
-                provider: None,
-                token_budget: None,
-                sampling: SamplingConfig::default(),
-                memory: MemoryConfig::default(),
-                session_context: None,
-                project_instructions_root: None,
-            })
-            .add_worker_config(WorkerConfig {
-                id: AgentId::new("h2"),
-                name: "H2".to_string(),
-                system_prompt: "worker".to_string(),
-                tools: vec![],
-                model: "test-model".to_string(),
-                provider: None,
-                token_budget: None,
-                sampling: SamplingConfig::default(),
-                memory: MemoryConfig::default(),
-                session_context: None,
-                project_instructions_root: None,
-            })
-            .add_worker_config(WorkerConfig {
-                id: AgentId::new("h3"),
-                name: "H3".to_string(),
-                system_prompt: "worker".to_string(),
-                tools: vec![],
-                model: "test-model".to_string(),
-                provider: None,
-                token_budget: None,
-                sampling: SamplingConfig::default(),
-                memory: MemoryConfig::default(),
-                session_context: None,
-                project_instructions_root: None,
-            });
-
-        coord.on_start(&coord_config()).await.unwrap();
-        let out = coord
-            .execute(AgentInput::text("build something"))
-            .await
-            .unwrap();
-
-        assert!(!out.content.is_empty());
-        assert_eq!(coord.worker_results.len(), 3);
-    }
-
-    #[tokio::test]
     async fn coordinator_with_no_workers_uses_adhoc() {
         // No worker pool: there is no declared worker to assign, so each subtask
         // gets an ad-hoc worker. Proves the empty-pool fallback / backward compat.
@@ -4511,51 +4354,6 @@ mod tests {
         assert!(!out.content.is_empty());
         // MockLlm decomposed into two subtasks → two ad-hoc workers.
         assert_eq!(coord.worker_results.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn coordinator_resolves_htn_frontier_via_llm() {
-        // The method for "root" yields one primitive (p1) and one compound task
-        // (needs_llm) with no method — a frontier. resolve_frontiers asks the LLM
-        // (MockLlm → two subtasks) to decompose just that task, so the final plan
-        // is fully primitive: p1 + the two resolved subtasks = 3.
-        let methods = r#"
-- task_pattern: "root"
-  preconditions: []
-  subtasks:
-    - name: "p1"
-      parameters: {}
-      task_type: Primitive
-    - name: "needs_llm"
-      parameters: {}
-      task_type: Compound
-"#;
-        let planner = HtnPlanner::from_methods_yaml(methods).unwrap();
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockLlm);
-        let counter: Arc<dyn TokenCounter> = Arc::new(SimpleCounter);
-        let mut coord = CoordinatorBehavior::new(provider, counter).with_htn_methods(planner);
-        for id in ["r1", "r2", "r3"] {
-            coord = coord.add_worker_config(WorkerConfig {
-                id: AgentId::new(id),
-                name: id.to_string(),
-                system_prompt: "worker".to_string(),
-                tools: vec![],
-                model: "test-model".to_string(),
-                provider: None,
-                token_budget: None,
-                sampling: SamplingConfig::default(),
-                memory: MemoryConfig::default(),
-                session_context: None,
-                project_instructions_root: None,
-            });
-        }
-
-        coord.on_start(&coord_config()).await.unwrap();
-        let out = coord.execute(AgentInput::text("root")).await.unwrap();
-
-        assert!(!out.content.is_empty());
-        // p1 + the two LLM-resolved frontier subtasks.
-        assert_eq!(coord.worker_results.len(), 3);
     }
 
     /// A declared worker for the first-capable-worker assignment tests.
@@ -4575,23 +4373,17 @@ mod tests {
         }
     }
 
-    /// A coordinator whose HTN plan for "route" is one subtask requiring the
-    /// `special` tool, with `special` and `other` registered on the executor.
+    /// A coordinator whose model plans one subtask requiring the `special`
+    /// tool, with `special` and `other` registered on the executor.
     fn special_tool_coordinator() -> CoordinatorBehavior {
-        let methods = r#"
-- task_pattern: "route"
-  preconditions: []
-  subtasks:
-    - name: "needs_special"
-      parameters:
-        tools: ["special"]
-      task_type: Primitive
-"#;
+        let provider = CoordinatorBudgetLlm::new(
+            vec![r#"[{"name":"needs_special","description":"needs_special","tools":["special"]}]"#],
+            Vec::new(),
+        );
         let mut executor = ToolExecutor::new();
         executor.register_builtin("special", Arc::new(axocoatl_tools::EchoTool));
         executor.register_builtin("other", Arc::new(axocoatl_tools::EchoTool));
-        CoordinatorBehavior::new(Arc::new(MockLlm), Arc::new(SimpleCounter))
-            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
+        CoordinatorBehavior::new(Arc::new(provider), Arc::new(SimpleCounter))
             .with_tool_executor(Arc::new(executor))
     }
 
@@ -4637,19 +4429,14 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_required_tool_fails_before_any_worker_dispatch() {
-        let methods = r#"
-- task_pattern: "route"
-  preconditions: []
-  subtasks:
-    - name: "needs_typo"
-      parameters:
-        tools: ["definitely_not_registered"]
-      task_type: Primitive
-"#;
-        let provider = Arc::new(CoordinatorBudgetLlm::new(Vec::new(), Vec::new()));
+        let provider = Arc::new(CoordinatorBudgetLlm::new(
+            vec![
+                r#"[{"name":"needs_typo","description":"needs_typo","tools":["definitely_not_registered"]}]"#,
+            ],
+            Vec::new(),
+        ));
         let reporter = Arc::new(RecordingCoordinatorReporter::default());
         let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
-            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
             .with_reporter(reporter.clone())
             .add_worker_config(WorkerConfig {
                 id: AgentId::new("misconfigured-worker"),
@@ -4677,8 +4464,8 @@ mod tests {
             provider
                 .direct_calls
                 .load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "HTN decomposition is local and synthesis must not run"
+            1,
+            "only decomposition reaches the provider; synthesis must not run"
         );
         assert_eq!(
             provider
@@ -4697,15 +4484,6 @@ mod tests {
 
     #[tokio::test]
     async fn recall_required_worker_fails_closed_when_semantic_store_is_unopenable() {
-        let methods = r#"
-- task_pattern: "route"
-  preconditions: []
-  subtasks:
-    - name: "needs_recall"
-      parameters:
-        tools: ["recall_search"]
-      task_type: Primitive
-"#;
         let temp = tempfile::tempdir().unwrap();
         let data_path = temp.path().join("data");
         std::fs::create_dir_all(data_path.join("memory")).unwrap();
@@ -4713,10 +4491,14 @@ mod tests {
         // construction fail before any embedder/network work or worker spawn.
         std::fs::write(data_path.join("memory/semantic"), b"not a directory").unwrap();
         let data_root = SecureDir::open(&data_path).unwrap();
-        let provider = Arc::new(CoordinatorBudgetLlm::new(Vec::new(), Vec::new()));
+        let provider = Arc::new(CoordinatorBudgetLlm::new(
+            vec![
+                r#"[{"name":"needs_recall","description":"needs_recall","tools":["recall_search"]}]"#,
+            ],
+            Vec::new(),
+        ));
         let reporter = Arc::new(RecordingCoordinatorReporter::default());
         let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
-            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
             .with_data_root(data_root)
             .with_reporter(reporter.clone())
             .add_worker_config(WorkerConfig {
@@ -4744,7 +4526,8 @@ mod tests {
             provider
                 .direct_calls
                 .load(std::sync::atomic::Ordering::SeqCst),
-            0
+            1,
+            "only decomposition reaches the provider"
         );
         assert_eq!(
             provider
@@ -4759,15 +4542,13 @@ mod tests {
 
     #[tokio::test]
     async fn scoped_worker_reports_only_stable_logical_identity() {
-        let methods = r#"
-- task_pattern: "route"
-  preconditions: []
-  subtasks:
-    - name: "work"
-      parameters: {}
-      task_type: Primitive
-"#;
-        let provider = Arc::new(CoordinatorBudgetLlm::new(vec!["final"], vec![]));
+        let provider = Arc::new(CoordinatorBudgetLlm::new(
+            vec![
+                r#"[{"name":"work","description":"work","tools":[]}]"#,
+                "final",
+            ],
+            vec![],
+        ));
         let reporter = Arc::new(RecordingCoordinatorReporter::default());
         let scoped_id = AgentId::new("session-9:coordinator-1:worker:researcher");
         let config = WorkerConfig {
@@ -4784,7 +4565,6 @@ mod tests {
             project_instructions_root: None,
         };
         let mut coordinator = CoordinatorBehavior::new(provider, Arc::new(UnitCounter))
-            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
             .with_reporter(reporter.clone())
             .add_worker_config_with_logical_id(config, "researcher");
         coordinator.on_start(&coord_config()).await.unwrap();
@@ -4952,21 +4732,13 @@ mod tests {
     async fn coordinator_cancellation_waits_for_started_tool_and_stops_followup() {
         use crate::run_control::AgentRunId;
 
-        let methods = r#"
-- task_pattern: "route"
-  preconditions: []
-  subtasks:
-    - name: "change"
-      parameters:
-        tools: ["side_effect"]
-      task_type: Primitive
-"#;
         let temp = tempfile::tempdir().unwrap();
         let checkpoint_store = Arc::new(CheckpointStore::new(
             temp.path(),
             axocoatl_memory::CheckpointPolicy::Manual,
         ));
         let provider = Arc::new(GatedCoordinatorToolLlm {
+            plan: r#"[{"name":"change","description":"change","tools":["side_effect"]}]"#,
             direct_calls: std::sync::atomic::AtomicUsize::new(0),
             stream_calls: std::sync::atomic::AtomicUsize::new(0),
         });
@@ -4984,7 +4756,6 @@ mod tests {
         );
         let reporter = Arc::new(RecordingCoordinatorReporter::default());
         let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
-            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
             .with_checkpoint_store(checkpoint_store.clone())
             .with_tool_executor(Arc::new(executor))
             .with_reporter(reporter.clone())
@@ -5050,8 +4821,8 @@ mod tests {
             provider
                 .direct_calls
                 .load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "cancellation must prevent synthesis"
+            1,
+            "only decomposition ran; cancellation must prevent synthesis"
         );
         assert!(coordinator.active_workers.is_empty());
         assert!(coordinator.worker_handles.is_empty());
@@ -5103,20 +4874,13 @@ mod tests {
             provider
                 .direct_calls
                 .load(std::sync::atomic::Ordering::SeqCst),
-            1
+            3,
+            "the fresh run decomposes again and synthesizes"
         );
     }
 
     #[tokio::test]
     async fn final_checkpoint_failure_poisoned_run_and_left_no_resumable_state() {
-        let methods = r#"
-- task_pattern: "final checkpoint goal"
-  preconditions: []
-  subtasks:
-    - name: "work"
-      parameters: {}
-      task_type: Primitive
-"#;
         let temp = tempfile::tempdir().unwrap();
         let store = Arc::new(CheckpointStore::new(
             temp.path(),
@@ -5140,7 +4904,6 @@ mod tests {
             project_instructions_root: None,
         };
         let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
-            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
             .with_checkpoint_store(store.clone())
             .add_worker_config(worker());
         coordinator.on_start(&coord_config()).await.unwrap();
@@ -5221,14 +4984,6 @@ mod tests {
 
     #[tokio::test]
     async fn cancelled_run_reconciles_a_tombstone_version_race_before_restart() {
-        let methods = r#"
-- task_pattern: "cancelled same goal"
-  preconditions: []
-  subtasks:
-    - name: "work"
-      parameters: {}
-      task_type: Primitive
-"#;
         let temp = tempfile::tempdir().unwrap();
         let store = Arc::new(CheckpointStore::new(
             temp.path(),
@@ -5239,8 +4994,11 @@ mod tests {
             .await
             .unwrap();
         let provider = Arc::new(CoordinatorBudgetLlm::new(
-            vec!["fresh synthesis"],
-            vec![TokenUsageStats::new(1, 1)],
+            vec![
+                r#"[{"name":"work","description":"work","tools":[]}]"#,
+                "fresh synthesis",
+            ],
+            vec![TokenUsageStats::new(1, 1), TokenUsageStats::new(1, 1)],
         ));
         let reporter = Arc::new(RecordingCoordinatorReporter::default());
         let worker = || WorkerConfig {
@@ -5257,7 +5015,6 @@ mod tests {
             project_instructions_root: None,
         };
         let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
-            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
             .with_checkpoint_store(store.clone())
             .with_reporter(reporter.clone())
             .add_worker_config(worker());
@@ -5287,7 +5044,6 @@ mod tests {
         );
 
         let mut restored = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
-            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
             .with_checkpoint_store(store)
             .with_reporter(reporter.clone())
             .add_worker_config(worker());
@@ -5309,14 +5065,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_run_reconciles_a_tombstone_version_race_before_restart() {
-        let methods = r#"
-- task_pattern: "failed same goal"
-  preconditions: []
-  subtasks:
-    - name: "work"
-      parameters: {}
-      task_type: Primitive
-"#;
+        let plan = r#"[{"name":"work","description":"work","tools":[]}]"#;
         let temp = tempfile::tempdir().unwrap();
         let store = Arc::new(CheckpointStore::new(
             temp.path(),
@@ -5340,12 +5089,11 @@ mod tests {
             session_context: None,
             project_instructions_root: None,
         };
-        let planner = HtnPlanner::from_methods_yaml(methods).unwrap();
-        let mut coordinator = CoordinatorBehavior::new(Arc::new(FailingLlm), Arc::new(UnitCounter))
-            .with_htn_methods(planner.clone())
-            .with_checkpoint_store(store.clone())
-            .with_reporter(reporter.clone())
-            .add_worker_config(worker());
+        let mut coordinator =
+            CoordinatorBehavior::new(Arc::new(PlanThenFailLlm(plan)), Arc::new(UnitCounter))
+                .with_checkpoint_store(store.clone())
+                .with_reporter(reporter.clone())
+                .add_worker_config(worker());
         coordinator.on_start(&coord_config()).await.unwrap();
         // The resumed run writes v2 (plan) and v3 (failed outcome). This v4
         // makes only the first terminal tombstone attempt conflict.
@@ -5366,11 +5114,11 @@ mod tests {
         assert_eq!(terminal.version, 5);
         assert!(terminal.behavior_state.is_none());
 
-        let mut restored = CoordinatorBehavior::new(Arc::new(FailingLlm), Arc::new(UnitCounter))
-            .with_htn_methods(planner)
-            .with_checkpoint_store(store)
-            .with_reporter(reporter.clone())
-            .add_worker_config(worker());
+        let mut restored =
+            CoordinatorBehavior::new(Arc::new(PlanThenFailLlm(plan)), Arc::new(UnitCounter))
+                .with_checkpoint_store(store)
+                .with_reporter(reporter.clone())
+                .add_worker_config(worker());
         restored.on_start(&coord_config()).await.unwrap();
         assert!(restored.resumed_state.is_none());
         let second = restored.execute(AgentInput::text("failed same goal")).await;
@@ -5384,22 +5132,12 @@ mod tests {
 
     #[tokio::test]
     async fn coordinator_errors_when_all_workers_fail() {
-        // HTN decomposes with no LLM call, but the workers run on a failing
-        // provider, so every subtask fails — the coordinator surfaces an error
-        // instead of synthesizing from nothing.
-        let methods = r#"
-- task_pattern: "build something"
-  preconditions: []
-  subtasks:
-    - name: "a"
-      parameters: {}
-      task_type: Primitive
-    - name: "b"
-      parameters: {}
-      task_type: Primitive
-"#;
-        let planner = HtnPlanner::from_methods_yaml(methods).unwrap();
-        let provider: Arc<dyn LlmProvider> = Arc::new(FailingLlm);
+        // The model plans two subtasks, but every worker call fails, so every
+        // subtask fails — the coordinator surfaces an error instead of
+        // synthesizing from nothing.
+        let provider: Arc<dyn LlmProvider> = Arc::new(PlanThenFailLlm(
+            r#"[{"name":"a","description":"a","tools":[]},{"name":"b","description":"b","tools":[]}]"#,
+        ));
         let counter: Arc<dyn TokenCounter> = Arc::new(SimpleCounter);
         let temp = tempfile::tempdir().unwrap();
         let store = Arc::new(CheckpointStore::new(
@@ -5408,7 +5146,6 @@ mod tests {
         ));
         let reporter = Arc::new(RecordingCoordinatorReporter::default());
         let mut coord = CoordinatorBehavior::new(provider, counter)
-            .with_htn_methods(planner)
             .with_checkpoint_store(store.clone())
             .with_reporter(reporter.clone())
             .add_worker_config(WorkerConfig {
@@ -5774,47 +5511,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn htn_frontiers_share_one_coordinator_budget_tracker() {
-        let methods = r#"
-- task_pattern: "root"
-  preconditions: []
-  subtasks:
-    - name: "frontier_a"
-      parameters: {}
-      task_type: Compound
-    - name: "frontier_b"
-      parameters: {}
-      task_type: Compound
-"#;
-        let provider = Arc::new(CoordinatorBudgetLlm::new(
-            vec![
-                r#"[{"name":"a","description":"A","tools":[]}]"#,
-                r#"[{"name":"b","description":"B","tools":[]}]"#,
-            ],
-            vec![TokenUsageStats::new(10, 1), TokenUsageStats::new(10, 1)],
-        ));
-        let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
-            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap());
-        coordinator
-            .on_start(&coord_config_with_budget(11, 15, OverflowPolicy::Abort))
-            .await
-            .unwrap();
-
-        let error = coordinator
-            .decompose_task("root", &mut request_context(), None)
-            .await
-            .unwrap_err();
-        assert!(matches!(error, AgentError::TokenBudgetExceeded { .. }));
-        assert_eq!(
-            provider
-                .direct_calls
-                .load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "the second frontier must see usage recorded by the first"
-        );
-    }
-
-    #[tokio::test]
     async fn coordinator_warn_policy_dispatches_and_saturates_hostile_usage() {
         let provider = Arc::new(CoordinatorBudgetLlm::new(
             vec![r#"[{"name":"a","description":"A","tools":[]}]"#],
@@ -5845,17 +5541,14 @@ mod tests {
 
     #[tokio::test]
     async fn spawned_worker_preserves_full_abort_budget_before_dispatch() {
-        let methods = r#"
-- task_pattern: "root"
-  preconditions: []
-  subtasks:
-    - name: "worker_task"
-      parameters: {}
-      task_type: Primitive
-"#;
-        let provider = Arc::new(CoordinatorBudgetLlm::new(vec!["synthesized"], vec![]));
+        let provider = Arc::new(CoordinatorBudgetLlm::new(
+            vec![
+                r#"[{"name":"worker_task","description":"worker_task","tools":[]}]"#,
+                "synthesized",
+            ],
+            vec![],
+        ));
         let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
-            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
             .add_worker_config(WorkerConfig {
                 id: AgentId::new("guarded-worker"),
                 name: "Guarded worker".to_string(),
@@ -5891,8 +5584,8 @@ mod tests {
             provider
                 .direct_calls
                 .load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "failed workers leave nothing to synthesize"
+            1,
+            "only decomposition ran; failed workers leave nothing to synthesize"
         );
     }
 }

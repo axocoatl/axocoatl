@@ -71,7 +71,7 @@ workbench uses.
 | E2B environment fails its command probe | Build the required repository commands into the configured template; Axocoatl verifies but does not package-provision E2B |
 | An E2B Session fails to resume | Inspect its retained exact runtime ID and authority error; Axocoatl will not silently replace a missing or unreachable remote workspace with a fresh clone |
 | E2B creation remains blocked with an exact creation token | Restore provider access so Axocoatl can reconcile it. If that is impossible, delete every sandbox bearing metadata `axocoatl_creation_token=<exact token>`, then use the exact-token manual confirmation in **Review setup**; confirmation itself does not contact or delete E2B |
-| Terminal or Agent command cannot reach the internet | `sandbox.network`, DNS, proxy, and host policy |
+| Terminal or Agent command cannot reach the internet | `sandbox.network`, DNS, and host policy; local Podman containers do not receive the host's proxy variables |
 | Preview cannot connect | Exposed port at creation, server still running, bind to `0.0.0.0` inside sandbox |
 | Preview says the port is not configured | Create a Session with that logical container port under **Exposed ports** |
 | Preview transport cannot be allocated | Check Podman health; each Session receives its own dynamic loopback host mapping |

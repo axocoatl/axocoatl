@@ -11,9 +11,9 @@ question and owns a different recovery boundary.
 | Mechanism | Use when | Ordering/choice |
 | --- | --- | --- |
 | Automation | The graph can be declared ahead of time | Explicit DAG nodes and edges |
-| Multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
-| Event lattice | Producers and consumers should be decoupled | Typed publish/subscribe notification |
-| Lead with helpers | A native Agent needs a separate read-only look at part of its task | The lead picks an approved helper and writes its task; one helper runs at a time |
+| Native multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
+| Event feed | A Skill should announce something that Automations and webhooks react to | Publish/subscribe notification of a Skill's declared events |
+| Lead with helpers | A native Agent needs a separate read-only look at part of its task | The lead picks an approved helper and writes its task; several calls in one response run their helpers at the same time |
 | Coordinator Agent (legacy Sessions) | Task shape and worker choice emerge at runtime | Decomposition, then the first declared worker that can call each subtask's tools |
 
 ## Automations
@@ -36,10 +36,12 @@ it does not replace the future-team configuration.
 
 An Agent whose Team & budget approval names Worker templates as helpers gets a
 `delegate` tool. A Coordinator template must have helpers and runs the same way in a
-native Session; its HTN methods are not used there. Each call starts one helper in
+native Session. Each call starts one helper in
 its own conversation with only the Session's request and the task the lead wrote, and
-reserves the helper's approved limits from the lead's shared allowance. A helper is not
-started when that reservation would leave the lead too little to read its answer. A helper
+reserves the helper's approved limits from the lead's shared allowance. Several calls in
+one model response run their helpers at the same time; each is admitted against what the
+ones before it reserved. A helper is not started when that reservation would leave the
+lead too little to read its answer, counting every helper already started. A helper
 must be read-only: its template has no tool that writes files or runs commands, or it has
 `writes: []`, which withholds `write_file` and `edit_file` and runs its `bash` where it
 cannot change the repository. Any other helper is refused, and the lead is told that
@@ -47,6 +49,16 @@ setting `writes: []` on it makes it read-only. The lead waits for the
 answer; a failed or refused helper reaches it as a tool error. The helper's command
 source, lead activation, and result stay in the same canonical Session history.
 Increasing budget or authority requires human review; another model call cannot grant it.
+
+Review is otherwise something a lead may ask a helper for. A team can instead require
+it: its **Required review** names a read-only Worker template that the host itself runs
+after the required Agents finish and the required checks pass. The reviewer is an
+optional node of the admitted turn graph with its own grant and a fresh conversation
+for each round, and its verdict is a completion condition over the required Agents'
+results. A request for changes continues the turn in a new epoch that revises the lead
+with the findings, up to the approved rounds; the lead cannot skip, answer for or
+approve its own review. See
+[Required review](/configure/agents/#required-review).
 
 ## Default team
 
@@ -72,69 +84,47 @@ In the Agent graph, the lead appears alone until it delegates. Each helper it st
 then appears with a "delegated" edge from the lead; a helper is not a dependency and
 does not gate the turn's answer.
 
-Review by the Reviewer is advice to the lead, not a gate: the lead decides when to ask
-for it and what to do with the answer. To make a command decide whether a turn
-completes, add a [required check](/configure/agents/#required-checks).
+Review the lead asks Reviewer for is advice to the lead, not a gate: the lead decides
+when to ask for it and what to do with the answer. To make the review decide whether a
+turn completes, choose Reviewer under **Required review** in Team & budget. To make a
+command decide, add a [required check](/configure/agents/#required-checks).
 
-## Legacy multi-Agent Sessions
+## Sessions on a 1.0 data root
 
-A lattice-mode Session stores the selected config-owned team ID; Custom mode stores
-the selected Agent IDs. Each all-team request resolves that selection against current
-Agent configuration. When the result contains more than one autonomous Agent, Axocoatl
-snapshots its exact membership and dependencies. Later configuration changes affect
-future turns, never retained maps. Removing or renaming a referenced Agent or team does
-not remove the Session or its History; a new turn stops before durable acceptance and
-tells you to restore the reference or create a new Session with an available selection.
-Each autonomous multi-Agent request owns a validated Coordination map in canonical
-Session History:
+A data root that still uses the 1.0 format runs one Agent per Session turn. A
+single-Agent Session, a one-Agent team, a team whose entry point is a Coordinator,
+and a request targeted at one Agent keep working. A turn that would run two or more
+Agents is refused before it starts. The message tells you to stop Axocoatl, make a
+cold backup, and run `axocoatl session upgrade --confirm`. The upgrade converts 1.0 Sessions, including
+multi-Agent Sessions, to native Sessions, where **Team & budget** runs the team.
+History recorded before the upgrade still loads and shows each Agent's output.
+Removing or renaming a referenced Agent or team does not remove the Session or its
+History; a new turn stops before it starts and tells you to restore the reference or
+create a new Session with an available selection.
 
-1. Agents without dependencies activate from the accepted request.
-2. A downstream Agent activates only after every named direct dependency has
-   completed.
-3. Its input contains the request and those direct-parent contributions, not
-   every earlier Agent's output.
-4. A failed branch blocks only descendants that can no longer satisfy their
-   dependency predicate; independent ready work may continue.
-5. A reviewer can request one bounded revision from an ancestor. The target and
-   every completed downstream result derived from it run again before the reviewer
-   verifies the newest direct-parent result.
-
-The internal `coordination_signal` tool is advertised only while that exact activation is
-active, has not spent its one revision request, and has eligible upstream targets. Its
-request-local schema enumerates those exact Agent IDs. Execution still rechecks the active
-activation, unspent allowance, and eligible target, so a stale or fabricated call cannot rely
-on an earlier advertisement. The activation prompt names the same eligible IDs without
-including a transitive ancestor's output.
-
-When a request is accepted and applied, the requester's `changes_requested` output, the
-signal with that activation's usage and completeness, affected-output supersessions, and
-reactivations are recorded as one durable batch before matching live frames publish. A
-Coordinator-led team instead runs through the Coordinator's separate live hierarchy and does
-not fabricate this peer map.
-
-Agents in a Session share one checkout, so ready work is executed serially in a
-stable order until parallel repository writers have explicit isolation and merge
-authority. This is bounded foreground work, not an Automation trigger.
-When a workflow enters a Coordinator, the Session executes that entry once and the
-Coordinator owns its declared Workers; the roster is not looped again. A Worker cannot be
-selected or targeted directly.
+When a team's entry point is a Coordinator, the Session runs only that Coordinator, and
+the Coordinator owns its declared Workers. A Worker cannot be selected or targeted directly.
 
 Explore several ways is a separate comparison mechanism and currently requires
 a single autonomous-Agent Session. Coordinator and worker roles remain on the normal Session
 path rather than becoming nested workers inside a comparison Way.
 
-## Typed event lattice
+## Event feed
 
-Skills and runtime components publish events with a type, payload, producer,
-and timestamp. Current consumers include:
+The daemon publishes one kind of event: firing a Skill publishes each name in its
+`emits` list, with producer `skill:<skill-id>`, payload `{"fired_by_skill": "<skill-id>"}`,
+and a timestamp. A Skill fires from **Settings → Skills**, from
+`POST /api/skills/{id}/fire`, or when an Agent calls its `skill_<id>` tool in a Session
+that enables the Skill. Consumers are:
 
-- enabled **On event** Automations matching the type exactly;
+- enabled **On event** Automations matching the event name exactly;
 - enabled **On Skill** Automations matching `skill:<skill-id>` exactly;
 - configured webhook filters;
-- recent-event API and WebSocket observers.
+- the recent-event API and `event` WebSocket frames.
 
-A YAML Skill's `reacts_to` and holder fields are metadata in the current daemon;
-they do not cause Agents to execute. Events never start Agents on their own.
+The feed keeps no history and starts no work on its own. A 1.0 Skill's `reacts_to`,
+`agents` and `prompt` keys were removed in 1.1.0: they never ran anything, and the
+daemon now warns that they are ignored.
 
 ## Legacy Coordinator execution
 
@@ -146,10 +136,9 @@ In a legacy Session, an Agent with `role: coordinator` handles one execution hie
 3. spawn selected worker Agents and run independent work in parallel;
 4. join their outcomes and synthesize one result.
 
-If the configured workflow supplies `htn_methods_file`, a symbolic HTN planner
-handles covered decomposition and leaves unresolved frontiers to the model.
-Without that file, decomposition is model-driven. HTN is opt-in; worker
-assignment and execution are the coordinator behavior.
+The model decomposes the goal, and each subtask names the tools it needs. A
+workflow's `htn_methods_file` was removed in 1.1.0 with the symbolic HTN planner;
+the daemon warns and ignores it.
 
 Declared Workers resolve their own provider/model/fallback route, budget, sampling, exact tool
 policy, hooks, and Session-scoped Tier 1–4 memory/checkpoints beneath the Coordinator identity.
@@ -172,25 +161,22 @@ run semantic auto-store, daily-log archive writes, personal/shared core edits, o
 consolidation during the turn. That restriction also applies to Completed work until these durable
 tiers support causal transactional promotion.
 
-Decomposition, unresolved HTN frontiers, and synthesis are checked against the exact
+Decomposition and synthesis are checked against the exact
 configured model window before dispatch. If older context must be reduced, Axocoatl omits only
 completed User/plain-Assistant text at User boundaries. System messages, the current request
 suffix, attachments, and canonical Session History remain intact. This is bounded request-local
 projection, not the summarization pipeline used by a stateful autonomous Agent.
 
 <Aside type="note" title="Events do not choose workers">
-The lattice carries notifications. Worker arbitration happens inside a
+The event feed carries notifications. Worker arbitration happens inside a
 coordinator execution; Automation ordering happens in the DAG executor.
 </Aside>
 
 ## Observe coordination
 
-Conversation places a durable **Coordination** card beneath each coordinated
-request. It shows request → Agents → answer, node state, dependencies, handoff
-summaries, and the causal event timeline. **Open Agent graph** reveals the same
-turn state in the focused graph surface. Reloading rebuilds both from the turn
-ledger; live `coordination` frames are published only after their matching
-record is durable.
+**Open Agent graph** shows a turn's Agents and activations in the focused graph
+surface. Reloading rebuilds it from canonical Session History. A legacy turn recorded
+with several Agents shows each Agent's output; it has no coordination graph.
 
 The Agent graph opens in View mode. Select an Agent to open its
 inspector, then choose a recorded activation to review input, output, partial
@@ -199,13 +185,13 @@ which details are unknown, missing, or not recorded. The graph also supports
 ordinary and directly targeted turns using their recorded membership. Historical
 inspection alone grants no command authority. Native current work exposes exact
 Guide, Stop, Retry, and other controls only when the host reports that capability.
-Legacy graphs remain read-only, with whole-turn Stop in Conversation. See
+Legacy turns remain read-only, with whole-turn Stop in Conversation. See
 [native controls](/workbench/history/#control-native-work).
 
 Integrations can read the Session turn endpoint for the canonical record.
 `GET /api/events/recent` and `event` WebSocket frames remain the separate
 process-wide notification feed; there is no global event-feed browser destination.
-The [WebSocket reference](/reference/websocket/#coordination-event-metadata)
-defines the exact turn-coordination event fields.
+The [HTTP API reference](/reference/http-api/#turn-control-plane) defines the
+turn control-plane fields.
 
 Next: [Protocols →](/understand/protocols/)

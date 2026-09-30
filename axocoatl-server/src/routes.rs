@@ -1851,20 +1851,6 @@ pub async fn apply_session_graph_edit(
 /// POST /api/sessions/{id}/turns/{turn_id}/control-commands — exact human
 /// intervention. The outer local request middleware authenticates the channel;
 /// source attribution is constructed by the controller, never browser JSON.
-pub async fn plan_session_control(
-    State(state): State<AppState>,
-    Path((id, turn_id)): Path<(String, String)>,
-    Json(request): Json<axocoatl_daemon::ControlPlannerRequest>,
-) -> Result<Json<axocoatl_daemon::ControlPlannerResult>, (StatusCode, Json<ErrorResponse>)> {
-    state
-        .read()
-        .await
-        .plan_session_control(&id, &turn_id, request)
-        .await
-        .map(Json)
-        .map_err(attempt_err)
-}
-
 pub async fn submit_session_control_action(
     State(state): State<AppState>,
     Path((id, turn_id)): Path<(String, String)>,
@@ -4906,8 +4892,6 @@ pub struct SkillEntry {
     pub name: String,
     pub description: String,
     pub emits: Vec<String>,
-    pub reacts_to: Vec<String>,
-    pub agents: Vec<String>,
 }
 
 pub async fn list_skills(State(state): State<AppState>) -> Json<Vec<SkillEntry>> {
@@ -4921,8 +4905,6 @@ pub async fn list_skills(State(state): State<AppState>) -> Json<Vec<SkillEntry>>
             name: g.name.clone(),
             description: g.description.clone(),
             emits: g.emits.clone(),
-            reacts_to: g.reacts_to.clone(),
-            agents: g.agents.clone(),
         })
         .collect();
     Json(entries)
@@ -4938,7 +4920,7 @@ pub async fn fire_skill(
     State(state): State<AppState>,
     Path(skill_id): Path<String>,
 ) -> Result<Json<FireSkillResponse>, (StatusCode, Json<ErrorResponse>)> {
-    use axocoatl_coordination::{EventId, EventType, LatticeEvent};
+    use axocoatl_core::event_feed::{EventId, EventType, FeedEvent};
     use std::time::{SystemTime, UNIX_EPOCH};
     let daemon = state.read().await;
     let g = daemon
@@ -4961,17 +4943,14 @@ pub async fn fire_skill(
         .unwrap_or(0);
     let mut published = Vec::new();
     for emit in &g.emits {
-        let ev = LatticeEvent {
+        let ev = FeedEvent {
             id: EventId::random(),
             event_type: EventType::Custom(emit.clone()),
-            payload: serde_json::json!({
-                "fired_by_skill": skill_id,
-                "agents_holding": g.agents,
-            }),
+            payload: serde_json::json!({ "fired_by_skill": skill_id }),
             produced_by: format!("skill:{skill_id}"),
             timestamp: ts,
         };
-        daemon.event_lattice.publish(ev);
+        daemon.event_feed.publish(ev);
         published.push(emit.clone());
     }
     Ok(Json(FireSkillResponse {
@@ -4980,7 +4959,7 @@ pub async fn fire_skill(
     }))
 }
 
-// --- Recent lattice events (retained integration/event-history API) ---
+// --- Recent event-feed events (retained integration/event-history API) ---
 
 #[derive(Serialize)]
 pub struct EventEntry {
@@ -7336,14 +7315,13 @@ mod tests {
                 name: "Z team".to_string(),
                 agents: vec!["reviewer".to_string()],
                 entry_point: Some("reviewer".to_string()),
-                htn_methods_file: None,
+                ..Default::default()
             },
             axocoatl_config::WorkflowConfigYaml {
                 id: "a-team".to_string(),
                 name: "A team".to_string(),
                 agents: vec!["planner".to_string(), "builder".to_string()],
-                entry_point: None,
-                htn_methods_file: None,
+                ..Default::default()
             },
         ];
 

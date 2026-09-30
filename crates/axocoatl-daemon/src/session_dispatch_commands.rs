@@ -353,7 +353,7 @@ impl DispatchState {
         Ok(())
     }
 
-    fn validate_control_input(
+    pub(super) fn validate_control_input(
         &self,
         snapshot: &DurableTurnSnapshot,
         input: &ActivationInputManifest,
@@ -372,9 +372,9 @@ impl DispatchState {
         };
         let config: axocoatl_core::AgentConfig =
             serde_json::from_str(configuration).map_err(error)?;
-        let native_child = self
-            .native_child_origin(&input.activation.node_id)?
-            .is_some();
+        // A helper or the required reviewer runs its Worker template in a
+        // conversation of its own.
+        let native_child = self.owns_instance_conversation(&input.activation.node_id)?;
         if !(matches!(
             config.role,
             axocoatl_core::AgentRole::Autonomous | axocoatl_core::AgentRole::Coordinator

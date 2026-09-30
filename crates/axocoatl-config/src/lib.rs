@@ -494,8 +494,8 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
                     return Err(ConfigError::InvalidField {
                         field: format!("agents[{}].depends_on", agent.id),
                         value: format!("{:?}", agent.depends_on),
-                        reason: "A worker is driven by its coordinator, not by the \
-                                 event lattice, so it must not declare depends_on"
+                        reason: "A worker is driven by its coordinator, so it must \
+                                 not declare depends_on"
                             .to_string(),
                         suggestion: "Remove depends_on from this worker agent.".to_string(),
                     });
@@ -582,6 +582,8 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
         }
     }
 
+    validate_sandbox_network(&config.sandbox.network)?;
+
     for webhook in &config.webhooks {
         if webhook.name.trim().is_empty() {
             return Err(ConfigError::InvalidField {
@@ -603,6 +605,26 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     }
 
     Ok(())
+}
+
+/// The only values `sandbox.network` accepts.
+pub const SANDBOX_NETWORK_VALUES: [&str; 2] = ["bridge", "none"];
+
+/// Refuse any `sandbox.network` other than exactly `bridge` or `none`. Any
+/// other spelling (`None`, `off`, `disabled`, ...) is an error rather than a
+/// silent bridge network.
+pub fn validate_sandbox_network(value: &str) -> Result<(), ConfigError> {
+    if SANDBOX_NETWORK_VALUES.contains(&value) {
+        return Ok(());
+    }
+    Err(ConfigError::InvalidField {
+        field: "sandbox.network".to_string(),
+        value: format!("{value:?}"),
+        reason: "sandbox.network accepts only \"bridge\" or \"none\", in lowercase".to_string(),
+        suggestion: "Set network: none for no container network, or network: bridge to allow \
+                     outbound connections"
+            .to_string(),
+    })
 }
 
 /// Lightweight check that a string is an `http`/`https` URL with a host — used
@@ -768,6 +790,61 @@ agents:
         assert_eq!(config.agents[0].activation_decay, Some(0.05));
         assert_eq!(config.agents[1].activation_threshold, None);
         assert_eq!(config.agents[1].activation_decay, None);
+    }
+
+    #[test]
+    fn removed_skill_keys_still_parse_so_they_can_be_reported() {
+        let yaml = r#"
+agents:
+  - id: coder
+    name: "Coder"
+    provider: ollama
+    model: llama3
+skills:
+  - id: legacy
+    name: "Legacy"
+    description: "A 1.0 Skill"
+    emits: [CodeReady]
+    reacts_to: [ReviewRequested]
+    agents: [coder]
+    prompt: "Review the change."
+  - id: current
+    name: "Current"
+    description: "A 1.1 Skill"
+    emits: [ReviewRequested]
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        // A 1.0 config that still sets them keeps loading; the daemon warns.
+        assert_eq!(
+            config.skills[0].removed_keys(),
+            vec!["reacts_to", "agents", "prompt"]
+        );
+        assert_eq!(config.skills[0].emits, vec!["CodeReady".to_string()]);
+        assert!(config.skills[1].removed_keys().is_empty());
+    }
+
+    #[test]
+    fn removed_htn_methods_file_still_parses_so_it_can_be_reported() {
+        let yaml = r#"
+agents:
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: llama3
+    role: coordinator
+workflows:
+  - id: wf
+    name: "WF"
+    agents: [lead]
+    entry_point: lead
+    htn_methods_file: methods.yaml
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        // A 1.0 config that still sets it keeps loading; the daemon warns.
+        assert_eq!(
+            config.workflows[0].htn_methods_file.as_deref(),
+            Some("methods.yaml")
+        );
     }
 
     #[test]
@@ -1511,6 +1588,39 @@ mcp_servers:
 "#;
         let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
         assert!(err.to_string().contains("unknown MCP transport"));
+    }
+
+    #[test]
+    fn sandbox_network_accepts_only_bridge_or_none() {
+        for accepted in ["bridge", "none"] {
+            let yaml = format!("sandbox:\n  network: {accepted}\n");
+            let config = parse_config(&yaml, &PathBuf::from("test.yaml")).unwrap();
+            assert_eq!(config.sandbox.network, accepted);
+        }
+        let default = parse_config("agents: []\n", &PathBuf::from("test.yaml")).unwrap();
+        assert_eq!(default.sandbox.network, "bridge");
+
+        for refused in [
+            "None",
+            "NONE",
+            "off",
+            "disabled",
+            "host",
+            "\"\"",
+            "\" none\"",
+        ] {
+            let yaml = format!("sandbox:\n  network: {refused}\n");
+            let err = parse_config(&yaml, &PathBuf::from("test.yaml")).unwrap_err();
+            let message = err.to_string();
+            assert!(
+                message.contains("sandbox.network") && message.contains("\"bridge\" or \"none\""),
+                "{refused}: {message}"
+            );
+        }
+
+        let mut config = parse_config("agents: []\n", &PathBuf::from("test.yaml")).unwrap();
+        config.sandbox.network = "off".to_string();
+        assert!(validate_config(&config).is_err());
     }
 
     #[test]

@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Recorded Agent execution inspector.** The Session's existing Agent graph now
   opens in View mode. Select an Agent and activation to inspect its retained input,
   output, partial output, usage, and causal evidence. Ordinary and directly targeted
-  turns remain inspectable alongside coordinated turns; missing or unknown evidence
+  turns remain inspectable alongside native team turns; missing or unknown evidence
   is labeled explicitly. Historical evidence does not itself authorize controls;
   native actions require the host's exact current capability or explicit revalidation.
   Saved evidence references reopen their original activation after reload. Unstarted
@@ -53,15 +53,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controller for ordinary Send, dependent Agents, and the helpers a lead delegates to.
   Team & budget reviews immutable definitions and explicit limits for future turns.
   The Session inspector exposes exact generation controls and reviewed Add/Replace
-  edits. A bounded request-local planner proposes controls for human review; it cannot
-  execute them. Guide and Revise retain the human instruction, selected context, and
+  edits. Guide and Revise retain the human instruction, selected context, and
   attachments. Existing legacy roots retain their compatibility path.
 - **Lead `delegate` tool.** In a native Session, an Agent whose Team & budget approval
   names helper templates gets a `delegate` tool. It hands one self-contained task to a
   read-only helper, which starts in its own empty conversation, and waits for the answer.
   Answers over 8192 bytes are cut for the lead; the full answer stays in Session History.
   Each helper is an Add Agent command from the lead, an optional node in the turn graph,
-  and a child grant whose limits are reserved from the lead's budget. A helper is not
+  and a child grant whose limits are reserved from the lead's budget. Several `delegate`
+  calls in one model response run their helpers at the same time; each is admitted
+  against the graph and reservations the ones before it left. A helper is not
   started when its limits would leave the lead too little to read the answer. A failed or
   refused helper reaches the lead as a tool error. The same helper and task in one turn
   return the earlier result; a call whose helper was never started can be made again. A
@@ -72,10 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `write_file` and `edit_file` and runs its `bash` where it cannot change the repository.
   Any other helper is refused, and the refusal says to set `writes: []` on it.
   A Coordinator template in a native Session team runs as such a lead over its approved
-  Worker templates; its HTN methods are not used there. Legacy Sessions keep the
-  Coordinator's own decomposition. The Agent graph draws a "delegated" edge from a
-  lead to each helper, animated while the helper runs, and the control-plane read
-  reports it as a `delegated_by` edge.
+  Worker templates. Legacy Sessions keep the Coordinator's own decomposition. The Agent
+  graph draws a "delegated" edge from a lead to each helper, animated while the helper
+  runs, and the control-plane read reports it as a `delegated_by` edge.
 - **Reviewed partial finish.** Native cooperative turns can be finished partially
   with explicit human confirmation of selected accepted results, work to stop,
   never-started work, and missing checks. Safe settlement and usage evidence remain
@@ -109,21 +109,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Team & budget shows each check's arguments as a shell reads them and keeps a check's
   exact argument list unless you change its line. Required checks do not run on
   Explore several ways attempts, and Team & budget and Explore several ways say so.
+- **Required review for Session teams.** Team & budget can name a read-only Worker
+  template as the team's required reviewer, with 1 to 3 rounds and its own budget.
+  The host, not the lead, runs it after the required Agents finish and the required
+  checks pass, in a fresh conversation shown the request, each required Agent's final
+  answer and the turn's change against the tree it began with, bounded. The turn
+  completes only when it answers `VERDICT: APPROVE` about that exact result; the verdict
+  is bound to the answers and tree it judged, and an unreadable answer fails closed.
+  `VERDICT: CHANGES` sends the findings to the lead as a revision in a new epoch, and
+  the checks and review run again, until the rounds run out and the turn needs
+  attention with the findings. Apply refuses a reviewer that could change files, a
+  budget that cannot pay for every round, and a lead that cannot run once per round.
+  The turn controls show the verdict, findings and round.
 - **Retained Ways decisions.** Native Ways retain bounded candidate Outcomes, Routes,
   diffs, Checks, usage, Judge evidence, the human choice, and cleanup state after Keep
   or finishing without keeping. History storage limits are explicit; capacity failure
   preserves recovery evidence. History supports search, export, context attachment,
   and a separate explicit deletion action. Keep remains an uncommitted Git decision.
-- **Durable Session coordination maps.** Autonomous multi-Agent Lattice and Custom turns now
-  activate from exact named dependencies, pass only the direct contributions that
-  caused each activation, continue independent work when one branch fails, and mark
-  unreachable descendants blocked. A downstream Agent can request one bounded
-  revision from an ancestor through an internal coordination signal; every completed
-  downstream result derived from that ancestor runs again before verification. The immutable graph, signals,
-  generations, lifecycle, summaries, and usage are retained in canonical Session
-  History and rendered inline with the request as a reload-safe Coordination card
-  connected to the existing Agent graph. This legacy coordination path remains
-  available alongside native turn graphs.
 - **Default team.** The configurations `axocoatl onboard` and `axocoatl init` write, and
   the repository's example configurations, define Lead, an autonomous Agent that edits
   files, and Scout and Reviewer, Workers with `writes: []` that Lead can delegate to;
@@ -135,7 +137,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the person. **Add Agent** adds the template chosen beside it. A configuration without
   such Workers behaves as before.
 
+### Changed
+- **Multi-Agent turns on a 1.0 data root require the Session upgrade.** On a data root
+  that still uses the 1.0 format, a Session turn that would run two or more Agents is
+  refused before it starts, with a message to stop Axocoatl, make a cold backup, and run
+  `axocoatl session upgrade --confirm`. Single-Agent turns and a request targeted at one
+  Agent keep working.
+
 ### Fixed
+- **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
+  longer copies host proxy variables into containers.** Any `sandbox.network` other
+  than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was
+  treated as `bridge`; `axocoatl validate`, `axocoatl doctor` and daemon start now
+  refuse it with an error naming the two accepted values, and `doctor` prints the
+  configured network. Every `podman run` now passes `--http-proxy=false`, so the
+  host's `HTTP_PROXY`, `HTTPS_PROXY`, `FTP_PROXY` and `NO_PROXY` values, which can
+  include a proxy user name and password, no longer reach commands in the container.
 - **Paused turns no longer deadlock on a cancelled re-preparation.** Opening Files or
   Terminal after a restart re-prepares a Ready local environment; if that request was
   dropped (for example by navigating away) or the daemon shut down, the environment
@@ -188,15 +205,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   autonomous dependency graphs that are not closed acyclic DAGs. Persisted
   Sessions and History survive later team renames or removal; a new turn fails
   before mutation until the named team is restored or a new Session is created.
-- **Exact coordination-feedback authority.** The internal `coordination_signal` tool is
-  now advertised only for an active activation with an unspent revision request and eligible
-  upstream targets, and its request schema enumerates those exact Agent IDs. Execution still
-  rechecks the active activation lease, allowance, and target against stale or fabricated calls.
-  An applied `changes_requested` transition atomically retains the requesting activation's
-  usage and completeness with the durable signal and rerun boundary. Non-empty Agent tool
-  allowlists now apply uniformly to executor, recall, and core-memory tools, so a coordinated
-  role cannot receive an undeclared memory capability alongside its internal signal.
-- **Crash-safe coordinated Session continuity.** Lattice and Custom actors, plus
+- **Agent tool allowlists cover memory tools.** Non-empty Agent tool allowlists now apply
+  uniformly to executor, recall, and core-memory tools, so an Agent cannot receive an
+  undeclared memory capability.
+- **Crash-safe team Session continuity.** Lattice and Custom actors, plus
   a Coordinator selected by a single-Agent Session, now stage checkpoints behind
   the canonical Session turn. A completed turn
   promotes each Agent's own causal transcript; failed, cancelled, interrupted,
@@ -213,9 +225,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   then rebuild completed conversation without reviving private plans or Worker state.
   Transaction-scoped Agents can still read Tier 2–4 memory, but semantic auto-store,
   daily-log archive writes, core edits, and core consolidation now fail closed for
-  the whole turn until those stores gain transactional promotion. Restart recovery
-  now closes every still-live coordination node and preserves any aggregate stream
-  only as explicitly unattributed evidence rather than inventing an Agent answer. Ordinary
+  the whole turn until those stores gain transactional promotion. Ordinary
   single-Agent failed, cancelled, or interrupted boundaries likewise retain stop ownership and
   block cached retries or new turns until the actor is proven stopped and rebuilt from History.
 - **Fail-closed release retries.** Normal releases and the incident-locked v1.0.1
@@ -235,11 +245,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   v1.0.1 binary.
 
 ### Removed
+- The `axocoatl-coordination` crate. Its event feed moved to `axocoatl_core::event_feed`;
+  the rest (pheromone activation, auction, HTN, the signal field and the legacy turn
+  scheduler) was removed. Version 1.0.0 stays on crates.io.
 - Pheromone threshold activation. The event lattice is now a plain event feed:
   it no longer registers Agents, accumulates signal or keeps every event in
   memory for the life of the process. Per-Agent `activation_threshold` and
   `activation_decay` are ignored with a warning. The `stigmergic-workflow` and
-  `skills-lattice` examples and the routing benchmark are gone.
+  `skills-lattice` examples and the routing benchmark are gone. The feed moved
+  from `axocoatl-coordination` to `axocoatl_core::event_feed` as `EventFeed`
+  (`LatticeEvent` is now `FeedEvent`); WebSocket `event` frames, webhook payloads
+  and `GET /api/events/recent` are unchanged. The daemon only ever published the
+  events a Skill declares, so the sample configs, the `proactive-agents` example
+  and the docs now watch Skill events instead of `AgentFailed` or `TaskCompleted`.
+- Skill `reacts_to`, `agents` and `prompt`. They never ran anything: firing a
+  Skill only publishes the events in its `emits` list. A config that still sets
+  them loads, and the daemon warns that they are ignored. `GET /api/skills` no
+  longer returns them, a fired Skill's event payload no longer carries
+  `agents_holding`, and Settings → Skills groups Skills by the events they emit.
 - The Coordinator's worker auction. Each subtask now goes to the first declared
   Worker, in declaration order, whose callable tools cover its required tools,
   and falls back to an ad-hoc Worker as before. When several Workers can do a
@@ -253,6 +276,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   human controls. Stored records from the tool still load: a call whose return was lost
   stays unknown, an accepted Agent revision that was never applied is marked failed, and
   retained grant proposals still appear with the turn's grants.
+- The Coordinator's symbolic HTN planner. A Coordinator always decomposes its
+  task with its model; a workflow's `htn_methods_file` is ignored with a
+  warning. The `HtnPlanner`, `FrontierResolver` and `LlmFrontierResolver`
+  library types and the `htn-planner` example are gone.
 
 ## [1.0.1] — unpublished draft
 

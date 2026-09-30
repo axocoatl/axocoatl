@@ -65,6 +65,7 @@ mod conditions;
 mod coordinator;
 #[path = "session_dispatch_delegate.rs"]
 mod delegate;
+pub(crate) use delegate::changing_tools;
 #[path = "session_dispatch_driver.rs"]
 mod driver;
 #[path = "session_dispatch_knowledge.rs"]
@@ -102,6 +103,8 @@ mod run;
 mod stream;
 #[path = "session_dispatch_turn_checks.rs"]
 mod turn_checks;
+#[path = "session_dispatch_turn_review.rs"]
+mod turn_review;
 pub use conditions::SettledRepositoryCheck;
 pub use driver::{
     AutonomousActivationFactory, AutonomousNodeInput, AutonomousTurnDriver, TurnDriveOutcome,
@@ -660,9 +663,7 @@ impl DispatchState {
             return Err(error("input definition has the wrong evidence role"));
         };
         let instance_matches = retained_configuration == configuration
-            || (self
-                .native_child_origin(&input.activation.node_id)?
-                .is_some()
+            || (self.owns_instance_conversation(&input.activation.node_id)?
                 && serde_json::to_string(&coordinator::instance_configuration(
                     &retained_configuration,
                     &input.conversation_id,

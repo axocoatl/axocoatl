@@ -23,8 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axocoatl_config::{
-    Automation, AutomationNode, AutomationNodeKind, BranchExpr, ConditionalBranch, NodeInput,
-    ResumeStrategy,
+    Automation, AutomationNode, AutomationNodeKind, ConditionalBranch, NodeInput, ResumeStrategy,
 };
 use axocoatl_core::{AgentOutput, TokenUsageStats};
 
@@ -1684,18 +1683,13 @@ fn emit_event(
     });
 }
 
-// Marker — BranchExpr is part of the public re-export and used by the
-// conditional path. Silences the "unused" warning on the std::sync::Arc
-// import that some downstream consumers expected.
-#[allow(dead_code)]
-fn _branch_expr_referenced(_: &BranchExpr) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use axocoatl_actor::{AgentActor, AgentBehavior, AgentError};
     use axocoatl_config::{
-        AutomationEdge, AutomationNodeKind as Kind, AutomationTrigger, NodeInput, ResumeStrategy,
+        AutomationEdge, AutomationNodeKind as Kind, AutomationTrigger, BranchExpr, NodeInput,
+        ResumeStrategy,
     };
     use axocoatl_core::{AgentConfig, AgentId, AgentInput};
     use axocoatl_tools::{BuiltinTool, ToolError};

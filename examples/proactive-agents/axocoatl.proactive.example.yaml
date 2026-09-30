@@ -21,13 +21,31 @@ agents:
     name: "Ops Agent"
     provider: ollama
     model: llama3.2
-    system_prompt: "You are an operations agent. When an agent fails, diagnose the likely cause from the error and the failing agent's context, then suggest one concrete, actionable fix. Be specific and brief."
+    system_prompt: "You are an operations agent. When a build fails, diagnose the likely cause and suggest one concrete, actionable fix. Be specific and brief."
 
   - id: secretary
     name: "Secretary"
     provider: ollama
     model: llama3.2
     system_prompt: "You are a concise operations secretary. Produce short, factual status briefings. No fluff."
+
+# ─────────────────────────── SKILLS ───────────────────────────
+# Firing a Skill (Settings → Skills, `POST /api/skills/{id}/fire`, or an Agent
+# calling its `skill_<id>` tool) publishes each event in its `emits` list on the
+# event feed. A Skill's declared event is the only kind of event the daemon
+# publishes, so it is what an on_event trigger can watch. The cargo demo fires
+# these same Skills on its own feed.
+
+skills:
+  - id: build-failed
+    name: "Build failed"
+    description: "Report a failing CI build to the ops agent."
+    emits: ["BuildFailed"]
+
+  - id: deploy-finished
+    name: "Deploy finished"
+    description: "Announce that a deploy finished."
+    emits: ["DeployFinished"]
 
 # ─────────────────────────── WORKFLOW + SCHEDULE ──────────────
 # The seed conversion turns this into `sched:briefing-run`, a Schedule
@@ -63,16 +81,16 @@ proactive:
     input: "Give a concise one-paragraph briefing on recent activity and anything that needs attention."
     enabled: true
 
-  # (b) on_event trigger — fires one agent whenever a named lattice event fires.
-  #     This is the entry the cargo demo drives: a simulated AgentFailed event
-  #     activates the ops agent with its diagnostic prompt.
+  # (b) on_event trigger — fires one agent whenever a named event is published
+  #     on the event feed. This is the entry the cargo demo drives: firing the
+  #     build-failed Skill publishes BuildFailed and activates the ops agent.
   - id: failure-watch
     name: "Failure Watcher"
     agent: ops
     trigger:
       type: on_event
-      event: AgentFailed               # any AgentFailed event on the lattice
-    input: "An agent just failed. Diagnose the likely cause and suggest a concrete fix."
+      event: BuildFailed               # published when the build-failed Skill fires
+    input: "CI reported a failing build. Diagnose the likely cause and suggest a concrete fix."
     enabled: true
 
 # ─────────────────────────── PROVIDERS ────────────────────────

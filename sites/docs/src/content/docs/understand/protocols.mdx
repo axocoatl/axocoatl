@@ -52,16 +52,17 @@ for delegating a local task to a remote A2A Agent.
 webhooks:
   - name: internal-events
     url: "https://hooks.example.internal/axocoatl"
-    events: [TaskCompleted, AgentFailed]
+    events: [ReviewReady]
     secret: "${WEBHOOK_SECRET}"
     headers:
       Authorization: "${INTERNAL_TOKEN}"
     enabled: true
 ```
 
-When an event type matches, Axocoatl sends JSON containing a delivery ID, event
-ID/type, producer, timestamp, and payload. An empty `events` list selects all
-coordination events but excludes pure telemetry unless named explicitly.
+The events come from the event feed, where firing a Skill publishes each name in
+its `emits` list. When an event name matches, Axocoatl sends JSON containing a
+delivery ID, event ID/type, producer, timestamp, and payload. An empty `events`
+list selects every event.
 
 With `secret`, the raw body is signed with HMAC-SHA256 and sent in
 `X-Axocoatl-Signature` using the `sha256=<hex>` form. Verify the signature and

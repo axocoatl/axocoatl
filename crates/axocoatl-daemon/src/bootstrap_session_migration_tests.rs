@@ -161,7 +161,7 @@ async fn real_host_conversion_reconciles_staged_roles_seals_history_and_reopens_
     .unwrap();
     assert!(source.list_session_turn_transactions().unwrap().is_empty());
     let mut expected = Vec::new();
-    for result in &migrated {
+    for (result, spec) in migrated.iter().zip(&specs) {
         assert!(result.canonical.records().unwrap().is_empty());
         assert_eq!(
             result
@@ -172,7 +172,7 @@ async fn real_host_conversion_reconciles_staged_roles_seals_history_and_reopens_
                 .len(),
             1
         );
-        for assignment in &result.assignments {
+        for assignment in &deterministic_assignments(spec).unwrap() {
             let baseline = result
                 .activation_state
                 .committed_reference(&assignment.conversation_id)
@@ -216,8 +216,8 @@ async fn real_host_conversion_reconciles_staged_roles_seals_history_and_reopens_
     )
     .await
     .unwrap();
-    for result in &reopened {
-        for assignment in &result.assignments {
+    for (result, spec) in reopened.iter().zip(&specs) {
+        for assignment in &deterministic_assignments(spec).unwrap() {
             let actual = result
                 .activation_state
                 .committed_reference(&assignment.conversation_id)
@@ -237,6 +237,119 @@ async fn real_host_conversion_reconciles_staged_roles_seals_history_and_reopens_
         std::fs::read(root.path().join("session-history/turns.v1.jsonl")).unwrap(),
         original
     );
+}
+
+/// A 1.0 multi-Agent Session ran its Agents one after another and recorded
+/// each Agent's ordinary output. Those turns are refused on a 1.0 root now,
+/// and `axocoatl session upgrade --confirm` is how the Session keeps working:
+/// every Agent keeps its own completed answer and the request it received.
+#[tokio::test]
+async fn multi_agent_legacy_session_upgrades_each_agent_output() {
+    let root = tempfile::tempdir().unwrap();
+    let data = SecureDir::open(root.path()).unwrap();
+    let lease = DataDirLease::acquire(&data).unwrap();
+    let source =
+        CheckpointStore::new_in_secure(&data, "checkpoints", CheckpointPolicy::Manual).unwrap();
+    let mut ledger = SessionTurnStore::open_in_secure(&data, "session-history").unwrap();
+    let session = "team";
+    let turn = "turn-team";
+    ledger
+        .begin(BeginSessionTurn {
+            turn_id: Some(turn.to_owned()),
+            session_id: session.to_owned(),
+            user_input: "request turn-team".to_owned(),
+            agent_id: None,
+            model: None,
+            context: vec![],
+            idempotency_key: None,
+            metadata: serde_json::json!({"mode": "custom"})
+                .as_object()
+                .cloned()
+                .unwrap(),
+        })
+        .unwrap();
+    for agent in ["coder", "reviewer"] {
+        ledger
+            .record_agent_output(
+                turn,
+                format!("{turn}:{agent}:output"),
+                agent,
+                None,
+                format!("{agent} own completed answer"),
+                None,
+            )
+            .unwrap();
+        source
+            .save(&checkpoint(&format!("{session}:{agent}"), 1, true))
+            .await
+            .unwrap();
+    }
+    ledger
+        .transition(
+            turn,
+            format!("{turn}:terminal"),
+            TransitionSessionTurn {
+                status: SessionTurnLifecycle::Completed,
+                final_output: Some("aggregate output".to_owned()),
+                error: None,
+                metadata: serde_json::Map::new(),
+            },
+        )
+        .unwrap();
+    drop(ledger);
+    let specs = vec![LegacySessionMigration {
+        session_id: session.to_owned(),
+        workspace_id: "workspace".to_owned(),
+        actors: ["coder", "reviewer"]
+            .into_iter()
+            .map(|agent| LegacyActorMigration {
+                checkpoint_agent_id: format!("{session}:{agent}"),
+                recorded_agent_id: agent.to_owned(),
+                policy: LegacyActorProjectionPolicy::CompletedPerAgent,
+                tool_replay_policy: ToolReplayPolicy::CompleteNativeGroups,
+            })
+            .collect(),
+    }];
+    let actors = AgentRegistry::new();
+    let active = Mutex::new(HashMap::new());
+    let ownership = lease.ownership.into_upgraded().unwrap();
+    let migrated = migrate_held_session_state(
+        ownership,
+        &data,
+        &source,
+        &actors,
+        &active,
+        &specs,
+        &str::len,
+    )
+    .await
+    .unwrap();
+    assert_eq!(migrated.len(), 1);
+    let result = &migrated[0];
+    assert_eq!(
+        result
+            .content
+            .read_legacy_history(&result.seal)
+            .unwrap()
+            .turns
+            .len(),
+        1
+    );
+    let assignments = deterministic_assignments(&specs[0]).unwrap();
+    assert_eq!(assignments.len(), 2);
+    for assignment in &assignments {
+        let baseline = result
+            .activation_state
+            .committed_reference(&assignment.conversation_id)
+            .unwrap()
+            .unwrap();
+        let checkpoint = result.activation_state.checkpoint(&baseline).unwrap();
+        assert_eq!(checkpoint.session_messages[0].content, "request turn-team");
+        assert_eq!(
+            checkpoint.session_messages[1].content,
+            format!("{} own completed answer", assignment.recorded_agent_id)
+        );
+    }
 }
 
 struct NoopBehavior;
@@ -281,7 +394,11 @@ async fn a_real_actor_must_be_joined_and_unregistered_before_explicit_upgrade() 
     assert!(require_migration_quiescence(&actors, &active)
         .await
         .is_err());
-    lease.require_legacy_startup_ready().unwrap();
+    // The root stays in its legacy format until the actors are joined.
+    assert!(matches!(
+        lease.ownership,
+        DataRootFormatOwnership::Legacy(_)
+    ));
     actor
         .stop_and_wait(None, Some(std::time::Duration::from_secs(3)))
         .await
@@ -430,6 +547,7 @@ async fn prepared_source_proven_upgrade_resumes_after_restart_without_settings_o
         std::slice::from_ref(&f.session),
     )
     .unwrap();
+    let assignments = deterministic_assignments(&preparation.sessions[0].specification).unwrap();
     let (upgraded, _) = preparation
         .upgrade_held(
             f.lease.take().unwrap(),
@@ -480,12 +598,12 @@ async fn prepared_source_proven_upgrade_resumes_after_restart_without_settings_o
         1
     );
     assert!(registry.retains_session(&f.session.id).unwrap());
-    let token = registry.prepare_first_turn(&f.session.id).unwrap();
+    let team = registry.session_team_token(&f.session.id).unwrap();
     registry
-        .prepare_first_turn_content(&token, |canonical, _, memory, assignments| {
+        .with_session_team_stores(&team, |canonical, _, memory| {
             assert!(canonical.records().unwrap().is_empty());
             assert_eq!(assignments.len(), 2);
-            for assignment in assignments {
+            for assignment in &assignments {
                 let committed = memory
                     .committed_reference(&assignment.conversation_id)
                     .unwrap()
@@ -642,6 +760,8 @@ async fn unknown_role_upgrade_keeps_history_archive_and_usage_without_replaying_
             preparation.sessions[0].specification.actors[0].policy,
             LegacyActorProjectionPolicy::UnknownRoleHistoryOnly
         );
+        let assignments =
+            deterministic_assignments(&preparation.sessions[0].specification).unwrap();
         let (lease, _) = preparation
             .upgrade_held(
                 lease,
@@ -672,9 +792,9 @@ async fn unknown_role_upgrade_keeps_history_archive_and_usage_without_replaying_
             )
             .await
             .unwrap();
-        let token = registry.prepare_first_turn(&session.id).unwrap();
+        let team = registry.session_team_token(&session.id).unwrap();
         registry
-            .prepare_first_turn_content(&token, |canonical, content, memory, assignments| {
+            .with_session_team_stores(&team, |canonical, content, memory| {
                 let assignment = &assignments[0];
                 let baseline = memory
                     .legacy_baseline_checkpoint(&assignment.conversation_id)

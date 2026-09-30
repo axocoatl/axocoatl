@@ -58,7 +58,6 @@ ordered_crates=(
   axocoatl-llm-gemini
   axocoatl-mcp
   axocoatl-tools
-  axocoatl-coordination
   axocoatl-actor
   axocoatl-service
   axocoatl-daemon

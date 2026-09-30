@@ -8,12 +8,10 @@ use axocoatl_llm::{
     ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError,
     ProviderExecutionBounds, StreamEvent,
 };
-use axocoatl_memory::activation_state::ActivationStateStore;
 use axocoatl_session::control_authority::{AuthorityGrant, ExecutionProfile, GrantLimits};
 use axocoatl_session::execution_content::{
     ActivationEvidenceContent, ExecutionContentStore, ExecutionRequestContent,
 };
-use axocoatl_session::execution_namespace::ExecutionComponent;
 use axocoatl_session::turn_contract::*;
 use axocoatl_token::TokenCounter;
 use std::pin::Pin;
@@ -209,19 +207,13 @@ fn run_with(
     writes: Option<&[&str]>,
     checks: &[Vec<String>],
 ) -> Run {
-    let mut canonical = f._canonical.take().unwrap();
-    let mut content = ExecutionContentStore::open_owned(
-        canonical
-            .component_namespace(ExecutionComponent::ExecutionContent)
-            .unwrap(),
-    )
-    .unwrap();
-    let memory = ActivationStateStore::open_owned(
-        canonical
-            .component_namespace(ExecutionComponent::ActivationState)
-            .unwrap(),
-    )
-    .unwrap();
+    let canonical = f._canonical.take().unwrap();
+    let session_id = canonical.owner().session_id.clone();
+    let registry = SessionDispatchRegistry::default();
+    let token = registry
+        .retain_existing_session(&mut Some(held_stores(canonical)))
+        .unwrap();
+    let team = registry.session_team_token(session_id.as_str()).unwrap();
     let config = AgentConfig {
         id: AgentId::new("conversation"),
         name: "Repository actor".into(),
@@ -240,7 +232,7 @@ fn run_with(
         write_scope: config.writes.clone(),
     };
     let activation = ActivationRef {
-        session_id: canonical.owner().session_id.clone(),
+        session_id,
         turn_id: LogicalTurnId::new("repository-turn").unwrap(),
         execution_epoch_id: ExecutionEpochId::new("repository-epoch").unwrap(),
         node_id: TurnNodeId::new("repository-node").unwrap(),
@@ -248,20 +240,44 @@ fn run_with(
         activation_id: ActivationId::new("repository-activation").unwrap(),
     };
     let definition_id = AgentDefinitionId::new(profile.definition.clone()).unwrap();
-    let definition = content
-        .retain_activation_evidence(ActivationEvidenceContent::Definition {
-            definition_id: definition_id.clone(),
-            revision: 1,
-            profile: profile.clone(),
-            configuration: serde_json::to_string(&config).unwrap(),
+    let (definition, conditions) = registry
+        .with_session_team_stores(&team, |_, content, _| {
+            let definition = content
+                .retain_activation_evidence(ActivationEvidenceContent::Definition {
+                    definition_id: definition_id.clone(),
+                    revision: 1,
+                    profile: profile.clone(),
+                    configuration: serde_json::to_string(&config).unwrap(),
+                })
+                .unwrap();
+            Ok((
+                DefinitionSnapshotRef {
+                    definition_id: definition_id.clone(),
+                    snapshot: definition.reference().clone(),
+                },
+                required_check_conditions(content, &activation.node_id, checks),
+            ))
         })
         .unwrap();
-    let definition = DefinitionSnapshotRef {
-        definition_id,
-        snapshot: definition.reference().clone(),
-    };
-    let request = content
-        .retain_request(ExecutionRequestContent {
+    let spec = crate::session_dispatch::SuccessorTurn {
+        command_id: CommandId::new("repository-begin").unwrap(),
+        turn_id: activation.turn_id.clone(),
+        epoch_id: activation.execution_epoch_id.clone(),
+        graph: TurnGraphSnapshot {
+            snapshot_id: GraphSnapshotId::new("repository-graph").unwrap(),
+            revision: 1,
+            nodes: vec![GraphNode {
+                node_id: activation.node_id.clone(),
+                slot_id: SessionTeamSlotId::new("repository-slot").unwrap(),
+                definition: definition.clone(),
+                conversation_id: NodeConversationId::new("conversation").unwrap(),
+                starting_savepoint: ConversationSavepoint::Empty,
+                required: true,
+            }],
+            dependencies: vec![],
+            conditions,
+        },
+        request: ExecutionRequestContent {
             turn_id: activation.turn_id.clone(),
             recorded_at_unix_ms: 1,
             display_input: "Use the retained checkout".into(),
@@ -269,52 +285,17 @@ fn run_with(
             context: vec![],
             target_definition: None,
             model: None,
-        })
-        .unwrap();
-    let conditions = required_check_conditions(&mut content, &activation.node_id, checks);
-    canonical
-        .begin_with_request(
-            TurnContractEnvelope {
-                schema_version: TURN_CONTRACT_SCHEMA_VERSION,
-                command_id: CommandId::new("repository-begin").unwrap(),
-                expected_revision: 0,
-                session_id: activation.session_id.clone(),
-                turn_id: activation.turn_id.clone(),
-                event: TurnContractEvent::Begin {
-                    epoch_id: activation.execution_epoch_id.clone(),
-                    predecessor: None,
-                    graph: TurnGraphSnapshot {
-                        snapshot_id: GraphSnapshotId::new("repository-graph").unwrap(),
-                        revision: 1,
-                        nodes: vec![GraphNode {
-                            node_id: activation.node_id.clone(),
-                            slot_id: SessionTeamSlotId::new("repository-slot").unwrap(),
-                            definition: definition.clone(),
-                            conversation_id: NodeConversationId::new("conversation").unwrap(),
-                            starting_savepoint: ConversationSavepoint::Empty,
-                            required: true,
-                        }],
-                        dependencies: vec![],
-                        conditions,
-                    },
-                },
-            },
-            &request,
-        )
-        .unwrap();
-    let controller = SessionDispatchController::open_retained(
-        crate::session_dispatch::RetainedSessionStores {
-            canonical,
-            content,
-            memory,
         },
-        activation.turn_id.clone(),
-    )
-    .unwrap_or_else(|failure| panic!("{}", failure.error));
-    let registry = SessionDispatchRegistry::default();
-    let reference = registry
-        .register(controller.clone(), f.owner.clone())
+    };
+    let (controller, reference) = registry
+        .begin_first_turn_checked(&token, f.owner.clone(), spec, |_, _, _| Ok(()))
         .unwrap();
+    let request = controller
+        .snapshot()
+        .unwrap()
+        .request_ref()
+        .unwrap()
+        .clone();
     let resource = controller
         .repository_activation_resource(&reference)
         .unwrap();
@@ -370,7 +351,7 @@ fn run_with(
                     conversation_id: NodeConversationId::new("conversation").unwrap(),
                     starting_savepoint: ConversationSavepoint::Empty,
                     parents: vec![],
-                    guidance: vec![request.reference().clone()],
+                    guidance: vec![request],
                     attachments: vec![],
                     repository: if repository_recorded {
                         RepositoryInput::Recorded {

@@ -358,75 +358,6 @@ impl SessionDispatchRegistry {
         )
     }
 
-    /// Insert the strong owner before attaching a resource or permitting its
-    /// first command. A failed content write leaves the registration retained
-    /// for explicit cleanup rather than dropping canonical ownership.
-    #[allow(dead_code)] // Host port remains dormant while live schema-2 ingress is disabled.
-    pub(crate) fn register(
-        &self,
-        controller: SessionDispatchController,
-        owner: SessionRepositoryOwner,
-    ) -> Result<EvidenceRef> {
-        let snapshot = controller
-            .snapshot()
-            .map_err(|error| failure(error.to_string()))?;
-        if snapshot.journal_id() != owner.identity().journal_id()
-            || snapshot.owner() != owner.identity().owner()
-            || !owner.execution_is_idle()?
-        {
-            return Err(failure(
-                "repository registration requires the exact idle canonical Session owner",
-            ));
-        }
-        let session_id = owner.identity().owner().session_id.as_str().to_owned();
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| failure("Session dispatch registry failed"))?;
-        if state.closed
-            || state.closing_sessions.contains(&session_id)
-            || state.entries.contains_key(&session_id)
-            || state.pending.contains_key(&session_id)
-        {
-            return Err(failure(
-                "Session dispatch is closing or already has a retained controller",
-            ));
-        }
-        let gate = Arc::new(RepositoryRegistrationGate {
-            identity: owner.identity().clone(),
-            open: AtomicBool::new(true),
-        });
-        controller
-            .install_hook_registry(self.hooks.clone())
-            .map_err(|error| failure(error.to_string()))?;
-        controller
-            .install_repository_registration(&gate)
-            .map_err(|error| failure(error.to_string()))?;
-        let entry = Arc::new(RegisteredEntry {
-            controller,
-            owner: Mutex::new(owner),
-            gate: Mutex::new(gate),
-            between_turns: Mutex::new(None),
-            reference: Mutex::new(None),
-            cleanup: Arc::new(AsyncMutex::new(())),
-            operation: Mutex::new(None),
-            retired: AtomicBool::new(false),
-        });
-        state.entries.insert(session_id, entry.clone());
-        // Admission and registry removal share this lock. No command may start
-        // until its actual resource has also been retained by the controller.
-        let reference = entry
-            .controller
-            .retain_repository_resource(entry.owner()?)
-            .map_err(|error| failure(error.to_string()))?;
-        *entry
-            .reference
-            .lock()
-            .map_err(|_| failure("repository registration reference failed"))? =
-            Some(reference.clone());
-        Ok(reference)
-    }
-
     /// Serialize the admission fence with the controller's final dispatch gate.
     /// The registry mutex never stays held across an async backend operation.
     fn close_entry(entry: &RegisteredEntry) -> Result<()> {
@@ -683,7 +614,6 @@ impl SessionDispatchRegistry {
 
     /// Complete only the physical portion of a finalized turn. History,
     /// command receipts and canonical ownership remain registered for reads.
-    #[allow(dead_code)] // Live schema-2 ingress remains disabled.
     pub(crate) fn release_after_turn(
         &self,
         session_id: &str,
@@ -739,7 +669,6 @@ impl SessionDispatchRegistry {
         Ok(())
     }
 
-    #[allow(dead_code)] // Explicit host port for the disabled schema-2 ingress.
     pub(crate) fn prepare_reacquisition(
         &self,
         session_id: &str,
@@ -784,7 +713,6 @@ impl SessionDispatchRegistry {
         })
     }
 
-    #[allow(dead_code)] // The daemon revalidates its identity before this join.
     pub(crate) fn complete_reacquisition(
         &self,
         token: RepositoryReacquisition,
@@ -884,32 +812,6 @@ impl SessionDispatchRegistry {
     pub(crate) fn fail_next_reacquisition_ack_for_test(&self) {
         self.fail_reacquisition_ack.store(true, Ordering::SeqCst);
     }
-
-    /// No controller is consumed: failed storage leaves the same strong owner
-    /// in this entry. The controller preserves idle repository capabilities.
-    #[allow(dead_code)] // Used by the retained host port, not the live legacy dispatcher.
-    pub(crate) fn begin_successor(&self, session_id: &str, spec: SuccessorTurn) -> Result<()> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| failure("Session dispatch registry failed"))?;
-        if state.closed || state.closing_sessions.contains(session_id) {
-            return Err(failure("Session lifecycle admission is closed"));
-        }
-        let entry = state
-            .entries
-            .get(session_id)
-            .ok_or_else(|| failure("Session has no retained dispatch controller"))?;
-        if entry.retired.load(Ordering::SeqCst) || !entry.owner()?.execution_is_idle()? {
-            return Err(failure(
-                "successor must wait for actual repository process settlement",
-            ));
-        }
-        entry
-            .controller
-            .begin_registered_successor(spec)
-            .map_err(|error| failure(error.to_string()))
-    }
 }
 
 impl AxocoatlDaemon {
@@ -995,7 +897,6 @@ impl AxocoatlDaemon {
     /// Rejoin the same validated Ready resource after an ordinary writer had
     /// access between finalized turns. Changes to environment/runtime identity
     /// are refused and require their own existing lifecycle integration.
-    #[allow(dead_code)] // Live v2 execution remains guarded.
     pub(crate) async fn reacquire_session_dispatch_repository(
         &self,
         session_id: &str,
@@ -1010,19 +911,5 @@ impl AxocoatlDaemon {
         self.validate_repository_daemon_binding(&owner)?;
         self.session_dispatch_lifecycles
             .complete_reacquisition(token, owner)
-    }
-
-    #[allow(dead_code)] // Upgraded-root execution remains explicitly disabled in bootstrap.
-    pub(crate) fn register_session_dispatch(
-        &self,
-        controller: SessionDispatchController,
-        owner: SessionRepositoryOwner,
-    ) -> Result<EvidenceRef> {
-        self.require_runtime_admission()?;
-        self.validate_repository_daemon_binding(&owner)?;
-        controller
-            .attach_stream_bus(self.stream_bus.clone())
-            .map_err(|error| failure(error.to_string()))?;
-        self.session_dispatch_lifecycles.register(controller, owner)
     }
 }

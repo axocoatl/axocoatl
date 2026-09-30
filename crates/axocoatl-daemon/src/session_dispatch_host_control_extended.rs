@@ -60,13 +60,27 @@ impl DispatchState {
     fn check_continue_conditions(
         &self,
         selected: &[ConditionId],
-        restarts: bool,
+        restart: &[ActivationRef],
     ) -> Result<Vec<ConditionId>> {
         let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
+        let graph = snapshot.contract().graph();
+        let reviewer = graph.and_then(axocoatl_session::turn_review::review_node);
+        let review = reviewer.map(|_| axocoatl_session::turn_review::review_condition_id());
+        // Restarting only the reviewer reruns the review, not the checks.
+        let restarts_work = restart.iter().any(|activation| {
+            reviewer.is_none_or(|reviewer| reviewer.node_id != activation.node_id)
+        });
+        let mut selected = selected.to_vec();
+        if let Some(review) = &review {
+            if !restart.is_empty() && !selected.contains(review) {
+                selected.push(review.clone());
+            }
+        }
         continue_conditions(
-            selected,
-            restarts,
-            snapshot.contract().graph().and_then(group_of),
+            &selected,
+            restarts_work,
+            graph.and_then(group_of),
+            review.as_ref(),
         )
     }
     fn human_successor_input(
@@ -195,57 +209,14 @@ impl DispatchState {
                 };
                 let invalidate = self.human_revision_invalidation(target)?;
                 if let Some(epoch_id) = continuation_epoch {
-                    let mut affected = HashSet::from([target.node_id.clone()]);
-                    loop {
-                        let before = affected.len();
-                        for edge in &graph.dependencies {
-                            if affected.contains(&edge.parent) {
-                                affected.insert(edge.child.clone());
-                            }
-                        }
-                        if before == affected.len() {
-                            break;
-                        }
-                    }
-                    let mut selections = Vec::with_capacity(graph.nodes.len());
-                    for node in &graph.nodes {
-                        if node.node_id == target.node_id {
-                            selections.push(ContinuationSelection::Revise {
-                                previous: target.clone(),
-                                input: Box::new(input.clone()),
-                                invalidated_descendants: invalidate.clone(),
-                                evidence: instruction.clone(),
-                            });
-                        } else if affected.contains(&node.node_id) {
-                            selections.push(ContinuationSelection::AwaitDependencies {
-                                node_id: node.node_id.clone(),
-                            });
-                        } else {
-                            match contract
-                                .activations()
-                                .iter()
-                                .rev()
-                                .find(|item| item.activation.node_id == node.node_id)
-                            {
-                                Some(item) if item.state == ActivationState::Accepted => selections
-                                    .push(ContinuationSelection::RetainAccepted {
-                                        activation: item.activation.clone(),
-                                    }),
-                                Some(item) => {
-                                    selections.push(ContinuationSelection::LeaveBlocked {
-                                        activation: item.activation.clone(),
-                                        blocker: request_evidence.clone(),
-                                    })
-                                }
-                                None => selections.push(
-                                    ContinuationSelection::LeaveUnmaterializedBlocked {
-                                        node_id: node.node_id.clone(),
-                                        blocker: request_evidence.clone(),
-                                    },
-                                ),
-                            }
-                        }
-                    }
+                    let selections = revision_selections(
+                        contract,
+                        target,
+                        &input,
+                        &invalidate,
+                        instruction,
+                        request_evidence,
+                    )?;
                     return Ok(ControlParameters::ContinueTurn {
                         plan: ContinuationPlan {
                             source_epoch_id: request.execution_epoch_id.clone(),
@@ -365,7 +336,7 @@ impl DispatchState {
                     return Err(error("Continue selects an undeclared node"));
                 }
                 let condition_runs =
-                    self.check_continue_conditions(&selected.checks, !selected.restart.is_empty())?;
+                    self.check_continue_conditions(&selected.checks, &selected.restart)?;
                 // Rerunning only checks that cannot be paid for would pause the
                 // turn again with nothing done.
                 if let Some((group, count)) = group_of(graph) {
@@ -506,32 +477,106 @@ impl DispatchState {
     }
 }
 
+/// The node selections of a continuation that revises `target` with `input`,
+/// carrying `instruction`: its dependents wait for it, other accepted work is
+/// kept, and other unfinished work stays blocked by `blocker`. A person's
+/// Revise of a paused turn and the host's revision after a required review
+/// asked for changes both continue this way.
+pub(in crate::session_dispatch) fn revision_selections(
+    contract: &TurnContract,
+    target: &ActivationRef,
+    input: &ActivationInputManifest,
+    invalidate: &[ActivationRef],
+    instruction: &EvidenceRef,
+    blocker: &EvidenceRef,
+) -> Result<Vec<ContinuationSelection>> {
+    let graph = contract
+        .graph()
+        .ok_or_else(|| error("turn graph is unavailable"))?;
+    let mut affected = HashSet::from([target.node_id.clone()]);
+    loop {
+        let before = affected.len();
+        for edge in &graph.dependencies {
+            if affected.contains(&edge.parent) {
+                affected.insert(edge.child.clone());
+            }
+        }
+        if before == affected.len() {
+            break;
+        }
+    }
+    let mut selections = Vec::with_capacity(graph.nodes.len());
+    for node in &graph.nodes {
+        if node.node_id == target.node_id {
+            selections.push(ContinuationSelection::Revise {
+                previous: target.clone(),
+                input: Box::new(input.clone()),
+                invalidated_descendants: invalidate.to_vec(),
+                evidence: instruction.clone(),
+            });
+        } else if affected.contains(&node.node_id) {
+            selections.push(ContinuationSelection::AwaitDependencies {
+                node_id: node.node_id.clone(),
+            });
+        } else {
+            match contract
+                .activations()
+                .iter()
+                .rev()
+                .find(|item| item.activation.node_id == node.node_id)
+            {
+                Some(item) if item.state == ActivationState::Accepted => {
+                    selections.push(ContinuationSelection::RetainAccepted {
+                        activation: item.activation.clone(),
+                    })
+                }
+                Some(item) => selections.push(ContinuationSelection::LeaveBlocked {
+                    activation: item.activation.clone(),
+                    blocker: blocker.clone(),
+                }),
+                None => selections.push(ContinuationSelection::LeaveUnmaterializedBlocked {
+                    node_id: node.node_id.clone(),
+                    blocker: blocker.clone(),
+                }),
+            }
+        }
+    }
+    Ok(selections)
+}
+
 /// Selecting any condition of the graph's check group, or restarting any
 /// Agent (`restarts`), reruns the whole group: both captures, every command
 /// and readiness. Readiness needs every command to have run on the one tree
 /// the captures around them saw, and whatever changed the tree since the last
 /// pass, a person's fix or restarted work, leaves every earlier command on an
 /// older tree; rerunning only the selected command could never make the
-/// group ready. `group` is the group and its command count.
+/// group ready. `group` is the group and its command count. The required
+/// review, `review`, runs again whenever the checks or restarted work do: a
+/// verdict is about the result it was shown.
 fn continue_conditions(
     selected: &[ConditionId],
     restarts: bool,
     group: Option<(CheckGroup, usize)>,
+    review: Option<&ConditionId>,
 ) -> Result<Vec<ConditionId>> {
     let mut conditions = selected.to_vec();
-    let Some((group, count)) = group else {
-        return Ok(conditions);
-    };
-    if restarts || selected.iter().any(|id| group.contains(id)) {
-        for id in (0..count + 2)
-            .map(|index| group.condition_id(index))
-            .chain(std::iter::once(group.ready_id()))
-        {
-            let id = ConditionId::new(id).map_err(error)?;
-            if !conditions.contains(&id) {
-                conditions.push(id);
+    let mut rerun = restarts;
+    if let Some((group, count)) = group {
+        if restarts || selected.iter().any(|id| group.contains(id)) {
+            rerun = true;
+            for id in (0..count + 2)
+                .map(|index| group.condition_id(index))
+                .chain(std::iter::once(group.ready_id()))
+            {
+                let id = ConditionId::new(id).map_err(error)?;
+                if !conditions.contains(&id) {
+                    conditions.push(id);
+                }
             }
         }
+    }
+    if let Some(review) = review.filter(|review| rerun && !conditions.contains(review)) {
+        conditions.push(review.clone());
     }
     Ok(conditions)
 }
@@ -620,6 +665,8 @@ fn human_turn_control_choices(
     }
     // While a check group is not ready, each of its conditions can be rerun.
     let group = group_of(graph);
+    let review = axocoatl_session::turn_review::review_node(graph)
+        .map(|_| axocoatl_session::turn_review::review_condition_id());
     let check_choices = graph
         .conditions
         .iter()
@@ -638,6 +685,7 @@ fn human_turn_control_choices(
                     std::slice::from_ref(&condition.condition_id),
                     false,
                     group.clone(),
+                    review.as_ref(),
                 )?
                 .into_iter()
                 .filter(|id| id != &condition.condition_id)
@@ -778,7 +826,8 @@ mod check_continuation_tests {
             "required-check:4",
             "required-check:ready",
         ];
-        let result = continue_conditions(std::slice::from_ref(&selected), false, group()).unwrap();
+        let result =
+            continue_conditions(std::slice::from_ref(&selected), false, group(), None).unwrap();
         assert_eq!(
             result.iter().map(ConditionId::as_str).collect::<Vec<_>>(),
             every
@@ -786,16 +835,16 @@ mod check_continuation_tests {
         // Another condition, or a turn without checks, selects only itself.
         let other = ConditionId::new("review").unwrap();
         assert_eq!(
-            continue_conditions(std::slice::from_ref(&other), false, group()).unwrap(),
+            continue_conditions(std::slice::from_ref(&other), false, group(), None).unwrap(),
             vec![other.clone()]
         );
         assert_eq!(
-            continue_conditions(std::slice::from_ref(&selected), false, None).unwrap(),
-            vec![selected]
+            continue_conditions(std::slice::from_ref(&selected), false, None, None).unwrap(),
+            vec![selected.clone()]
         );
         // Restarting an Agent runs the whole group again after it, as Revise
         // does; without checks it selects nothing more.
-        let restarted = continue_conditions(&[], true, group()).unwrap();
+        let restarted = continue_conditions(&[], true, group(), None).unwrap();
         assert_eq!(
             restarted
                 .iter()
@@ -810,6 +859,31 @@ mod check_continuation_tests {
                 "required-check:ready",
             ]
         );
-        assert!(continue_conditions(&[], true, None).unwrap().is_empty());
+        assert!(continue_conditions(&[], true, None, None)
+            .unwrap()
+            .is_empty());
+        // The required review runs again after rerun checks or restarted
+        // work, and alone when only it is selected.
+        let review = ConditionId::new("required-review:verdict").unwrap();
+        let rerun = continue_conditions(
+            std::slice::from_ref(&selected),
+            false,
+            group(),
+            Some(&review),
+        )
+        .unwrap();
+        assert_eq!(rerun.last(), Some(&review));
+        assert_eq!(
+            continue_conditions(&[], true, None, Some(&review)).unwrap(),
+            vec![review.clone()]
+        );
+        assert_eq!(
+            continue_conditions(std::slice::from_ref(&review), false, group(), Some(&review))
+                .unwrap(),
+            vec![review.clone()]
+        );
+        assert!(continue_conditions(&[], false, group(), Some(&review))
+            .unwrap()
+            .is_empty());
     }
 }

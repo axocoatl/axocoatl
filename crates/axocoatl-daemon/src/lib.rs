@@ -14,7 +14,6 @@ pub mod mcp_approval_hook;
 pub mod proactive;
 pub mod scheduler;
 pub mod session_control_plane;
-mod session_coordination;
 pub mod session_dispatch;
 pub mod skill_tool;
 pub mod stream;
@@ -39,8 +38,6 @@ pub use bootstrap::session_graph::{
     HumanGraphEditApply, HumanGraphEditPreview, HumanGraphEditRequest,
 };
 pub use bootstrap::ways_history::{WaysDecisionExport, WaysHistoryConfiguration, WaysHistoryView};
-
-pub use bootstrap::control_planner::{ControlPlannerRequest, ControlPlannerResult};
 
 pub use bootstrap::session_knowledge::{
     SessionKnowledgeEdit, SessionKnowledgeNote, SessionKnowledgeView,

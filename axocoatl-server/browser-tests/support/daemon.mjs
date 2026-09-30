@@ -183,6 +183,8 @@ export async function launchTestDaemon({
   agentTools = [],
   agentWrites,
   helpers = [],
+  extraAgents = [],
+  workflows = [],
   port: requestedPort = Number(process.env.AXOCOATL_E2E_PORT) || 0,
 } = {}) {
   const runRoot = await mkdtemp(path.join(tmpdir(), 'axocoatl-browser-e2e-'));
@@ -216,10 +218,7 @@ skills:
 ${skills.map((skill) => `  - id: ${JSON.stringify(skill.id)}
     name: ${JSON.stringify(skill.name)}
     description: ${JSON.stringify(skill.description)}
-    emits: ${JSON.stringify(skill.emits || [])}
-    reacts_to: ${JSON.stringify(skill.reactsTo || [])}
-    agents: ${JSON.stringify(skill.agents || [])}
-    prompt: ${JSON.stringify(skill.prompt || '')}`).join('\n')}
+    emits: ${JSON.stringify(skill.emits || [])}`).join('\n')}
 ` : '';
   const config = `
 agents:
@@ -238,6 +237,20 @@ agents:
     role: worker
     tools: ${JSON.stringify(helper.tools || [])}${helper.writes === undefined ? '' : `
     writes: ${JSON.stringify(helper.writes)}`}`).join('')}
+${extraAgents.map((agent) => `  - id: ${JSON.stringify(agent.id)}
+    name: ${JSON.stringify(agent.name || agent.id)}
+    role: ${JSON.stringify(agent.role || 'autonomous')}
+    provider: ollama
+    model: browser-test-model
+    system_prompt: Browser regression fixture. No turns are executed.
+    depends_on: ${JSON.stringify(agent.dependsOn || [])}
+    tools: ${JSON.stringify(agent.tools || [])}${agent.writes === undefined ? '' : `
+    writes: ${JSON.stringify(agent.writes)}`}`).join('\n')}
+${workflows.length ? `workflows:
+${workflows.map((workflow) => `  - id: ${JSON.stringify(workflow.id)}
+    name: ${JSON.stringify(workflow.name || workflow.id)}
+    entry_point: ${JSON.stringify(workflow.entryPoint)}
+    agents: ${JSON.stringify(workflow.agents)}`).join('\n')}` : ''}
 
 providers:
   ollama:
