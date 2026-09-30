@@ -217,10 +217,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source and audited delta without claiming that the films were captured with the
   v1.0.1 binary.
 
-### Deprecated
-- Per-Agent `activation_threshold` and `activation_decay` tune the process-wide
-  event lattice, which does not start Session work. The daemon logs a warning when
-  either is set. Configure thresholds and a half-life on a signal field instead.
+### Removed
+- Pheromone threshold activation. The event lattice is now a plain event feed:
+  it no longer registers Agents, accumulates signal or keeps every event in
+  memory for the life of the process. Per-Agent `activation_threshold` and
+  `activation_decay` are ignored with a warning. The `stigmergic-workflow` and
+  `skills-lattice` examples and the routing benchmark are gone.
 
 ## [1.0.1] — unpublished draft
 

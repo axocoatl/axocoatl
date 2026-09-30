@@ -81,5 +81,5 @@ the end of the run.
 
 - [`customer-support`](../customer-support) — session resume for a *single*
   agent across a simulated crash (conversation memory, not a multi-step DAG).
-- [`stigmergic-workflow`](../stigmergic-workflow) — how a standalone example
-  drives a multi-step DAG with the reusable `EventLattice` signal primitives.
+- [`multi-provider`](../multi-provider) — a multi-step dependency DAG where
+  each step runs on its own provider.

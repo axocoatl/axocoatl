@@ -380,6 +380,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    notification, and hands it to the small illustrative guard helper.
     // -----------------------------------------------------------------------
     let lattice = EventLattice::new(64);
+    let mut published = 0;
     let mut events = lattice.subscribe();
 
     println!(
@@ -403,6 +404,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         produced_by: "feature-dev".to_string(),
         timestamp: now_unix(),
     });
+    published += 1;
 
     let notif = events.recv().await?;
     match deliver(&notif, &state, &ops_ref).await {
@@ -432,6 +434,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         produced_by: "doc-writer".to_string(),
         timestamp: now_unix(),
     });
+    published += 1;
     let notif = events.recv().await?;
     let outcome = deliver(&notif, &state, &ops_ref).await;
     println!(
@@ -455,6 +458,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         produced_by: "release-checklist".to_string(),
         timestamp: now_unix(),
     });
+    published += 1;
     let notif = events.recv().await?;
     let outcome = deliver(&notif, &state, &ops_ref).await;
     println!(
@@ -483,6 +487,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         produced_by: "feature-dev".to_string(),
         timestamp: now_unix(),
     });
+    published += 1;
     let notif = events.recv().await?;
     let outcome = deliver(&notif, &state, &ops_ref).await;
     println!(
@@ -498,8 +503,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n{}", "─".repeat(70));
     println!(
         "\n{} events published; the watcher fired {} time(s). The only fire was the first",
-        lattice.event_count(),
-        runs,
+        published, runs,
     );
     println!("AgentFailed — every other event was correctly gated out (wrong type, cooldown,");
     println!("disabled). This offline helper illustrates the guards; the daemon's shared");

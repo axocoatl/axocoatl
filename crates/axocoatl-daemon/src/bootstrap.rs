@@ -3929,28 +3929,6 @@ impl std::fmt::Debug for AxocoatlDaemon {
     }
 }
 
-/// An agent's event-lattice activation params: `(threshold, decay_rate)`.
-///
-/// Uses the per-agent `activation_threshold` / `activation_decay` overrides when
-/// set; otherwise the default — entry agents (no `depends_on`) get `(1.0, 0.0)`
-/// so a single `UserInput` (signal 1.0) activates them, and downstream agents
-/// get `(0.5 × N, 0.01)` so they fire once their N dependencies' `TaskCompleted`
-/// signals (0.5 each) accumulate.
-fn lattice_params(agent_yaml: &axocoatl_config::AgentConfigYaml) -> (f32, f32) {
-    let (mut threshold, mut decay_rate) = if agent_yaml.depends_on.is_empty() {
-        (1.0_f32, 0.0_f32)
-    } else {
-        (agent_yaml.depends_on.len() as f32 * 0.5, 0.01)
-    };
-    if let Some(t) = agent_yaml.activation_threshold {
-        threshold = t;
-    }
-    if let Some(d) = agent_yaml.activation_decay {
-        decay_rate = d;
-    }
-    (threshold, decay_rate)
-}
-
 impl AxocoatlDaemon {
     /// Whether the configured Ollama endpoint is local enough that its model
     /// API charge is known to be zero. A remote Ollama-compatible service can
@@ -5038,35 +5016,19 @@ impl AxocoatlDaemon {
             );
         }
 
-        // 8. Set up the event lattice used by Skills, Automation triggers,
+        // 8. Set up the event feed used by Skills, Automation triggers,
         //    webhooks, the recent-events API, and compatibility event frames.
         let event_lattice = Arc::new(EventLattice::new(256));
 
         for agent_yaml in &config.agents {
-            // Workers aren't lattice-activated — their coordinator drives them.
-            if matches!(agent_yaml.role, AgentRoleYaml::Worker) {
-                continue;
-            }
-            let agent_id = AgentId::new(&agent_yaml.id);
-            // Preserve each agent's coordination metadata in the lattice.
-            // Runtime execution is owned by sessions and AutomationStore; there
-            // is no second config-owned activation runner.
             if agent_yaml.activation_threshold.is_some() || agent_yaml.activation_decay.is_some() {
                 tracing::warn!(
                     agent = %agent_yaml.id,
-                    "activation_threshold and activation_decay are deprecated: they tune the \
-                     process-wide event lattice, which does not start Session work. Use a \
-                     signal field route threshold and half-life instead"
+                    "activation_threshold and activation_decay were removed in 1.1.0 and are \
+                     ignored: events no longer activate Agents"
                 );
             }
-            let (threshold, decay_rate) = lattice_params(agent_yaml);
-            event_lattice.register_agent(agent_id, threshold, decay_rate);
         }
-
-        tracing::info!(
-            agents_in_lattice = event_lattice.agent_count(),
-            "Registered agents in event lattice"
-        );
 
         // 9b. StreamBus folds frames synchronously while assigning their
         // reconnect sequence. There is no asynchronous tracker lag window.
@@ -5078,20 +5040,17 @@ impl AxocoatlDaemon {
             Arc::new(StdMutex::new(VecDeque::with_capacity(200)));
         let log_for_task = event_log.clone();
         let mut event_rx = event_lattice.subscribe();
-        let lattice_for_task = event_lattice.clone();
         let bus_for_bridge = stream_bus.clone();
         tokio::spawn(async move {
             while let Ok(notif) = event_rx.recv().await {
                 // Bridge to the stream bus for WebSocket observers.
                 let _ = bus_for_bridge.send(crate::stream::event_frame(&notif));
                 // Keep the ring buffer for the recent-events API.
-                if let Some(full) = lattice_for_task.get_event(&notif.event_id) {
-                    if let Ok(mut log) = log_for_task.lock() {
-                        if log.len() >= 200 {
-                            log.pop_front();
-                        }
-                        log.push_back(full);
+                if let Ok(mut log) = log_for_task.lock() {
+                    if log.len() >= 200 {
+                        log.pop_front();
                     }
+                    log.push_back(LatticeEvent::from(notif));
                 }
             }
         });
@@ -6172,10 +6131,6 @@ impl AxocoatlDaemon {
         )
         .await?;
         self.agent_handles.lock().unwrap().push(handle);
-
-        // Re-register in the event lattice with the same threshold rules.
-        let (threshold, decay_rate) = lattice_params(agent_yaml);
-        self.event_lattice.register_agent(id, threshold, decay_rate);
 
         tracing::info!(agent = %agent_id, "Agent restarted");
         Ok(())

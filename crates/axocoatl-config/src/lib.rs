@@ -653,7 +653,7 @@ agents:
     }
 
     #[test]
-    fn parse_activation_overrides() {
+    fn removed_activation_keys_still_parse_so_they_can_be_reported() {
         let yaml = r#"
 agents:
   - id: tuned
@@ -670,10 +670,9 @@ agents:
     depends_on: [a]
 "#;
         let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
-        // Explicit per-agent overrides are read through.
+        // A 1.0 config that still sets them keeps loading; the daemon warns.
         assert_eq!(config.agents[0].activation_threshold, Some(0.75));
         assert_eq!(config.agents[0].activation_decay, Some(0.05));
-        // Absent → None, so the automatic 0.5 × N threshold still applies.
         assert_eq!(config.agents[1].activation_threshold, None);
         assert_eq!(config.agents[1].activation_decay, None);
     }

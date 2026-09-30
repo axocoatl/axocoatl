@@ -146,12 +146,7 @@ and timestamp. Current consumers include:
 - recent-event API and WebSocket observers.
 
 A YAML Skill's `reacts_to` and holder fields are metadata in the current daemon;
-they do not cause Agents to execute. The reusable coordination crate contains
-the turn-scoped exact-dependency scheduler used by multi-Agent Sessions, the
-path-scoped signal field used by Session work sources, and the older process-wide
-pheromone threshold primitive. The product daemon does not run that process-wide
-primitive's returned activation IDs as another workflow engine; the
-[signal field](#signal-field) is the path-scoped replacement for Session work.
+they do not cause Agents to execute. Events never start Agents on their own.
 
 ## Legacy Coordinator execution
 

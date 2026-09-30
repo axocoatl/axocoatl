@@ -79,13 +79,12 @@ Cost contrast:
   the frontier step is 100% of the $0.01350 total ...
 ```
 
-In the standalone mock binary, activation order
-(`triage → drafter → synthesizer`) comes from the example-owned queue and the
-`EventLattice`, as in the
-[`stigmergic-workflow`](../stigmergic-workflow) example. `synthesizer` has two
-dependencies, so its threshold is `0.5 × 2 = 1.0` and the example queues it only
-after both upstream signals arrive. The live daemon uses the same agent/provider
-shape through a Lattice session, but executes that session in dependency order.
+The mock binary runs the agents in dependency order: an agent runs once every
+agent in its `depends_on` has completed, and ties break by declaration order, so
+the run is always `triage → drafter → synthesizer`. `synthesizer` depends on
+both upstream agents, so it runs last and reads both outputs. The live daemon
+runs the same agent/provider shape through a Lattice session, also in
+dependency order.
 
 (The mock costs are illustrative public list prices, not a live quote.)
 
@@ -151,8 +150,4 @@ does not change — only the config.
   `axocoatl_llm_anthropic::AnthropicProvider`, `axocoatl_llm_openai::OpenAiProvider`
 - The per-agent `provider:` / `model:` config fields:
   [`crates/axocoatl-config/src/types.rs`](../../crates/axocoatl-config/src/types.rs)
-- The standalone coordination primitive this binary demonstrates: the
-  [`stigmergic-workflow`](../stigmergic-workflow) example and
-  [`crates/axocoatl-coordination`](../../crates/axocoatl-coordination)
 - Architecture overview: [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md)
-```

@@ -227,12 +227,11 @@ pub struct AgentConfigYaml {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub role: AgentRoleYaml,
-    /// Deprecated. Tunes the process-wide event lattice, which does not start
-    /// Session work; the daemon warns when it is set. Threshold-triggered
-    /// Session work is configured per route on a signal field.
+    /// Removed in 1.1.0. Still read so the daemon can warn that it is ignored
+    /// instead of dropping a 1.0 key silently; events never activate Agents.
     #[serde(default)]
     pub activation_threshold: Option<f32>,
-    /// Deprecated with `activation_threshold`; signal fields use a half-life.
+    /// Removed in 1.1.0 with `activation_threshold`; read only to warn.
     #[serde(default)]
     pub activation_decay: Option<f32>,
     /// Sampling controls threaded into each LLM request this agent makes.

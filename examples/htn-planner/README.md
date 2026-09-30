@@ -93,9 +93,4 @@ tools.
   [`crates/axocoatl-actor/src/coordinator.rs`](../../crates/axocoatl-actor/src/coordinator.rs)
 - A real methods file loaded by a workflow (`from_methods_yaml`):
   [`research-docs/htn-ship-feature.yaml`](../../research-docs/htn-ship-feature.yaml)
-- HTN planning benchmarks — `htn_plan_primitive`, `htn_plan_simple_decomposition`,
-  `htn_plan_nested_3_levels`, `htn_plan_with_preconditions`:
-  [`benches/routing_latency.rs`](../../benches/routing_latency.rs) (the
-  `// HtnPlanner benchmarks` section, lines 103–188). Run them with
-  `cargo bench --bench routing_latency`.
 - Architecture overview: [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md)

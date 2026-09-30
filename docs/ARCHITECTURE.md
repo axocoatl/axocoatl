@@ -773,14 +773,11 @@ its next generation started. Any retained turn-wide stream is preserved through
 tool-loop and multi-Agent boundaries cannot be reconstructed safely from text
 lengths after a process death.
 
-`EventLattice` remains the typed event substrate. Skills publish into it; the
+`EventLattice` is the process-wide event feed. Skills publish into it; the
 canonical Automation dispatcher matches `OnEvent` and `OnSkill`; configured
 webhooks, the recent-events API, and WebSocket compatibility frames observe the
-same feed. Agent pheromone
-metadata and the reusable lattice primitives remain available to coordination
-code and runnable examples. The Session scheduler is deliberately turn-scoped and
-predicate-based; the daemon still does not consume process-wide `EventLattice`
-activation ids through a second workflow execution loop.
+same feed. It keeps no history and never starts Agents on its own. The Session
+scheduler is deliberately turn-scoped and predicate-based.
 
 ### Session signal field
 
@@ -886,9 +883,8 @@ threshold, every deposit with the reason it does or does not count for each slot
 chain that lists each dispatch with the deposits that caused it, how its work ended and the
 deposits its turn left, and a cause graph of the same links.
 
-The earlier `pheromone::SignalState` counter and the per-Agent `activation_threshold` /
-`activation_decay` keys belong to the process-wide event lattice, which records coordination
-metadata and does not start Session work; those keys are deprecated. `TurnCoordinationScheduler`
+The per-Agent `activation_threshold` / `activation_decay` keys were removed in 1.1.0 with
+the process-wide threshold counter; the daemon warns when a config still sets them. `TurnCoordinationScheduler`
 orders one turn's Agents by exact named dependencies and has no thresholds or decay.
 
 The remaining reads of legacy `workflows:` are intentional: Lattice-session

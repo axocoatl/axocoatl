@@ -39,9 +39,9 @@ agents:
 | `provider`, `model` | Model target for this Agent |
 | `system_prompt` | Persistent operating instructions |
 | `tools` | Empty inherits the execution path's baseline tools; non-empty is an exact advertisement and dispatch allowlist |
-| `depends_on` | Exact direct-parent completion predicate for a multi-Agent Session turn; also sets the default threshold of the process-wide pheromone primitive and seeds legacy Automation edges during first-boot migration |
+| `depends_on` | Exact direct-parent completion predicate for a multi-Agent Session turn; also seeds legacy Automation edges during first-boot migration |
 | `role` | `autonomous`, `coordinator`, or `worker` |
-| `activation_threshold`, `activation_decay` | Deprecated; the daemon warns when either is set. They tune the process-wide event lattice, which does not start Session work. The Session turn lattice uses exact named dependencies, and threshold-triggered work is set per route on a [signal field](/understand/coordination/) |
+| `activation_threshold`, `activation_decay` | Removed in 1.1.0. The daemon warns and ignores them; events never start Agents |
 | `sampling` | Optional request-generation controls for autonomous Agents, Coordinators, and declared Workers |
 | `memory` | Tier 1–4 tuning for autonomous Agents and declared Workers; a Coordinator itself uses Tier 1 plus orchestration checkpointing |
 

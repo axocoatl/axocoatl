@@ -13,6 +13,7 @@
 //! ```text
 //!     triage ──────▶ drafter ──────▶ synthesizer
 //!     (local)         (local)         (frontier)
+//!     └──────────────────────────────────▶┘
 //! ```
 //!
 //! | agent       | provider        | model                 | why this tier                          |
@@ -26,11 +27,11 @@
 //! per-1K-token price to each so the cost contrast is concrete: the two local
 //! steps together cost a fraction of the single frontier step.
 //!
-//! The standalone binary drives its queue from `EventLattice`, exactly like the
-//! `stigmergic-workflow` example. That is a coordination-library demonstration;
-//! the live daemon runs the YAML's agents through its Lattice-session path in
-//! dependency order. The product capability demonstrated in both modes is the
-//! *provider per agent*.
+//! The binary runs the agents in plain dependency order: an agent runs once
+//! every agent in its `depends_on` has completed, and ties break by the order
+//! the agents are declared, so the run is deterministic. The live daemon runs
+//! the YAML's agents through a Lattice session in the same dependency order.
+//! The capability demonstrated in both modes is the *provider per agent*.
 //!
 //! ## Mock mode (this binary) vs live mode (the YAML)
 //!
@@ -42,16 +43,14 @@
 //!
 //! Run: `cargo run -p multi-provider` (no API keys — mock providers).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use ractor::Actor;
 use tokio_stream::Stream;
 
 use axocoatl_actor::{execute_agent, AgentActor, AgentBehavior, AgentError};
-use axocoatl_coordination::{EventId, EventLattice, EventType, LatticeEvent};
 use axocoatl_core::{AgentConfig, AgentId, AgentInput, AgentOutput, TokenUsageStats};
 use axocoatl_llm::{
     ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError,
@@ -206,8 +205,7 @@ impl LlmProvider for MockFrontierProvider {
 
 // ---------------------------------------------------------------------------
 // One generic behavior — calls whatever provider it was handed with its system
-// prompt. The role + provider differences live in the spec, not here. This is
-// the same single-behavior pattern as `stigmergic-workflow`.
+// prompt. The role + provider differences live in the spec, not here.
 // ---------------------------------------------------------------------------
 
 struct RoutedAgent {
@@ -272,10 +270,10 @@ fn dag() -> Vec<AgentSpec> {
             tier: Tier::Local,
             system_prompt: "You are a triage agent. Classify the request and name the \
                             sub-questions a researcher should answer. Be terse.",
-            reply: "CLASSIFICATION: technical / comparison request.\n  \
+            reply: "CLASSIFICATION: technical / cost-tradeoff request.\n  \
                     Sub-questions:\n  \
-                    1. What coordination pattern does this example show?\n  \
-                    2. How does it differ from a central orchestrator?\n  \
+                    1. Which steps are simple enough for a small local model?\n  \
+                    2. Which step needs the frontier model, and why?\n  \
                     Route: send to drafter for a first pass.",
         },
         // drafter: produce a rough first draft. High-volume → cheap local model.
@@ -286,9 +284,9 @@ fn dag() -> Vec<AgentSpec> {
             system_prompt: "You are a drafter. Using the triage notes, write a quick, rough \
                             first-pass answer. Don't polish it — the synthesizer will.",
             reply: "DRAFT (rough):\n  \
-                    - This standalone run drives agents via a shared EventLattice.\n  \
-                    - The example queues ids when accumulated signal crosses a threshold.\n  \
-                    - The queue and completed guard remain explicit example code.\n  \
+                    - Triage and drafting are short, forgiving steps → local llama3.2:3b, free.\n  \
+                    - Synthesis reads everything upstream → big context, frontier model.\n  \
+                    - Each agent names its own provider; one DAG, two tiers.\n  \
                     (notes terse, needs tightening + a clear contrast paragraph)",
         },
         // synthesizer: read triage + draft, produce the final answer. This is
@@ -302,27 +300,17 @@ fn dag() -> Vec<AgentSpec> {
                             the rough draft, then write the final, polished answer with a \
                             crisp contrast paragraph.",
             reply: "FINAL ANSWER:\n  \
-                    In this standalone run, agents register activation thresholds in an \
-                    EventLattice. Completion events deposit signal; the example queues an \
-                    agent when the lattice reports that its threshold crossed. The running \
-                    order therefore follows the signals while queue ownership remains explicit.\n\n  \
-                    Contrast: a central orchestrator can own a richer plan and dispatch policy. \
-                    This example deliberately demonstrates the smaller pheromone primitive, \
-                    while Axocoatl's product runtime executes configured Lattice sessions in \
-                    dependency order. Verdict: the example proves its library-level behavior.",
+                    This workflow routes its cheap steps to a small local model. Triage and \
+                    the rough first draft are short, forgiving and high-volume, so they run \
+                    free on your own hardware and the data stays on the box. The frontier \
+                    model is reserved for synthesis: the one step that reads everything \
+                    upstream produced and whose quality is what ships.\n\n  \
+                    Contrast: sending every step to the frontier model would pay frontier \
+                    prices for work a 3B model handles; sending every step to the local model \
+                    would give up quality on the one step that ships. Verdict: pick the \
+                    provider per agent, and pay frontier prices only on the synthesis.",
         },
     ]
-}
-
-/// `threshold = 0.5 × N` for downstream agents; entry agents get `1.0`. This
-/// matches the daemon's registered coordination metadata and the rule the
-/// `stigmergic-workflow` example documents.
-fn threshold_for(depends_on: &[&str]) -> f32 {
-    if depends_on.is_empty() {
-        1.0
-    } else {
-        depends_on.len() as f32 * 0.5
-    }
 }
 
 /// The price + display label for a tier. Mock list prices for illustration:
@@ -341,13 +329,6 @@ fn tier_pricing(tier: Tier) -> Pricing {
     }
 }
 
-fn now_ts() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
 /// What we learned about one agent after it ran — kept so we can print a
 /// per-agent provider + cost table at the end.
 struct AgentResult {
@@ -359,43 +340,45 @@ struct AgentResult {
     output: String,
 }
 
+/// The next agent to run: the first spec, in declaration order, that has not
+/// run yet and whose `depends_on` have all completed. Declaration order breaks
+/// ties, so the run order is deterministic.
+fn next_ready<'a>(
+    specs: &'a [AgentSpec],
+    completed: &HashMap<&str, AgentResult>,
+) -> Option<&'a AgentSpec> {
+    specs.iter().find(|spec| {
+        !completed.contains_key(spec.id)
+            && spec
+                .depends_on
+                .iter()
+                .all(|dep| completed.contains_key(dep))
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Axocoatl: Multi-Provider Routing (local + frontier in one DAG) ===\n");
 
     let specs = dag();
-    let goal = "Explain the EventLattice pattern in this standalone example and contrast it with a central orchestrator.";
+    let goal = "Explain how this workflow splits its steps between a local model and a frontier model, and what that does to the cost.";
 
     // -----------------------------------------------------------------------
-    // 1. Build the lattice and register each agent with its activation params,
-    //    exactly like the stigmergic-workflow example. The DAG topology is the
-    //    same idea; the new thing is the provider tier attached to each agent.
+    // 1. List the agents. Each one declares its dependencies and the provider
+    //    tier it runs on side by side — the DAG says *when* a step runs, the
+    //    tier says *where*.
     // -----------------------------------------------------------------------
-    let lattice = EventLattice::new(64);
-    let mut deps_of: HashMap<AgentId, Vec<AgentId>> = HashMap::new();
-    let mut tier_of: HashMap<AgentId, Tier> = HashMap::new();
-
-    println!("Registering agents on the lattice (each with its own provider):");
+    println!("Agents (each with its own provider):");
     for spec in &specs {
-        let id = AgentId::new(spec.id);
-        let threshold = threshold_for(spec.depends_on);
-        // decay_rate 0.0 — signals don't fade, so a join is exact: 0.5 + 0.5 is
-        // exactly 1.0. Same deterministic setup the stigmergic-workflow example
-        // uses; daemon coordination metadata defaults downstream agents to a
-        // small 0.01 decay.
-        lattice.register_agent(id.clone(), threshold, 0.0);
-        deps_of.insert(
-            id.clone(),
-            spec.depends_on.iter().map(|d| AgentId::new(*d)).collect(),
-        );
-        tier_of.insert(id.clone(), spec.tier);
         let provider_label = match spec.tier {
             Tier::Local => "local-small  (llama3.2:3b)",
             Tier::Frontier => "frontier     (claude-sonnet-4-6)",
         };
         println!(
-            "  • {:<12} provider={:<34} threshold {:.1}",
-            spec.id, provider_label, threshold
+            "  • {:<12} provider={:<34} depends_on=[{}]",
+            spec.id,
+            provider_label,
+            spec.depends_on.join(", ")
         );
     }
     println!();
@@ -431,10 +414,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    tier. This is the line that does the routing: a Local-tier agent gets
     //    a `MockLocalProvider`, a Frontier-tier agent gets a frontier one.
     // -----------------------------------------------------------------------
-    let mut refs: HashMap<AgentId, ractor::ActorRef<axocoatl_actor::AgentMessage>> = HashMap::new();
+    let mut refs: HashMap<&str, ractor::ActorRef<axocoatl_actor::AgentMessage>> = HashMap::new();
     let mut handles = Vec::new();
     for spec in &specs {
-        let id = AgentId::new(spec.id);
         let provider: Arc<dyn LlmProvider> = match spec.tier {
             Tier::Local => Arc::new(MockLocalProvider {
                 reply: spec.reply.to_string(),
@@ -446,7 +428,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // The AgentConfig records the chosen provider/model — the same fields a
         // YAML agent sets via `provider:` / `model:`.
         let config = AgentConfig {
-            id: id.clone(),
+            id: AgentId::new(spec.id),
             name: spec.id.to_string(),
             provider: provider.provider_id().to_string(),
             model: provider.model_id().to_string(),
@@ -463,66 +445,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (config, Box::new(behavior) as Box<dyn AgentBehavior>),
         )
         .await?;
-        refs.insert(id, actor_ref);
+        refs.insert(spec.id, actor_ref);
         handles.push(handle);
     }
 
     // -----------------------------------------------------------------------
-    // 4. Drive the standalone cascade off the lattice, as in the
-    //    stigmergic-workflow example. Entry agents are kicked off directly;
-    //    each completion publishes a TaskCompleted event; the lattice returns
-    //    whoever just crossed their threshold; a `completed` guard stops re-runs.
+    // 4. Run the DAG in dependency order. Each step takes the first agent (in
+    //    spec order) whose `depends_on` have all completed, feeds it the goal
+    //    or its upstream outputs, and records its provider, usage and cost.
     // -----------------------------------------------------------------------
-    let mut completed: HashMap<AgentId, AgentResult> = HashMap::new();
-    let mut activation_order: Vec<String> = Vec::new();
-
-    let mut queue: VecDeque<AgentId> = specs
-        .iter()
-        .filter(|s| s.depends_on.is_empty())
-        .map(|s| AgentId::new(s.id))
-        .collect();
+    let mut completed: HashMap<&str, AgentResult> = HashMap::new();
+    let mut run_order: Vec<&str> = Vec::new();
 
     println!("Goal: {goal}\n{}", "─".repeat(72));
 
-    while let Some(agent_id) = queue.pop_front() {
-        if completed.contains_key(&agent_id) {
-            continue; // already ran — the example's completed guard
-        }
+    while let Some(spec) = next_ready(&specs, &completed) {
+        let agent_id = spec.id;
 
         // Build this agent's input from its upstream outputs (or the goal, if
         // it is an entry agent).
-        let deps = deps_of.get(&agent_id).cloned().unwrap_or_default();
-        let input_text = if deps.is_empty() {
+        let input_text = if spec.depends_on.is_empty() {
             goal.to_string()
         } else {
             let mut buf = format!("Goal: {goal}\n\nUpstream results:\n");
-            for d in &deps {
-                if let Some(res) = completed.get(d) {
-                    buf.push_str(&format!("\n[from {d}]\n{}\n", res.output));
-                }
+            for dep in spec.depends_on {
+                buf.push_str(&format!("\n[from {dep}]\n{}\n", completed[dep].output));
             }
             buf
         };
 
-        let tier = *tier_of.get(&agent_id).expect("tier set at registration");
+        let tier = spec.tier;
         let tier_label = match tier {
             Tier::Local => "local-small",
             Tier::Frontier => "frontier",
         };
 
-        // A short, honest activation line showing WHY it fired and on which tier.
-        if deps.is_empty() {
-            println!("\n⚡ {agent_id} activated — entry agent, kicked off directly  [provider: {tier_label}]");
-        } else {
-            let signal = deps.len() as f32 * 0.5;
-            let threshold = deps.len() as f32 * 0.5;
+        // A short, honest run line showing WHY it is ready and on which tier.
+        if spec.depends_on.is_empty() {
             println!(
-                "\n⚡ {agent_id} activated — {} upstream complete, signal {signal:.1} ≥ threshold {threshold:.1}  [provider: {tier_label}]",
-                deps.len(),
+                "\n▶ {agent_id} runs — entry agent, starts from the goal  [provider: {tier_label}]"
+            );
+        } else {
+            println!(
+                "\n▶ {agent_id} runs — all dependencies complete ({})  [provider: {tier_label}]",
+                spec.depends_on.join(", "),
             );
         }
 
-        let actor = refs.get(&agent_id).expect("agent spawned above");
+        let actor = refs.get(agent_id).expect("agent spawned above");
         let output = execute_agent(actor, AgentInput::text(&input_text))
             .await
             .map_err(|e| format!("{agent_id} failed: {e}"))?;
@@ -540,7 +510,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         completed.insert(
-            agent_id.clone(),
+            agent_id,
             AgentResult {
                 provider_id: tier_label.to_string(),
                 model_id: match tier {
@@ -553,26 +523,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 output: output.content.clone(),
             },
         );
-        activation_order.push(agent_id.to_string());
+        run_order.push(agent_id);
+    }
 
-        // Publish the completion. publish() deposits signal on every registered
-        // agent and returns whoever just crossed their threshold.
-        let activated = lattice.publish(LatticeEvent {
-            id: EventId::random(),
-            event_type: EventType::TaskCompleted {
-                task_id: agent_id.to_string(),
-            },
-            payload: serde_json::json!({ "agent_id": agent_id.to_string() }),
-            produced_by: agent_id.to_string(),
-            timestamp: now_ts(),
-        });
-
-        for next in activated {
-            let known = deps_of.contains_key(&next);
-            if known && !completed.contains_key(&next) && !queue.contains(&next) {
-                queue.push_back(next);
-            }
-        }
+    // Anything left over depends on an agent that never completed (a typo or a
+    // cycle in `depends_on`) — say so instead of printing a partial report.
+    if completed.len() != specs.len() {
+        let stuck: Vec<&str> = specs
+            .iter()
+            .map(|s| s.id)
+            .filter(|id| !completed.contains_key(id))
+            .collect();
+        return Err(format!("never ran (unmet depends_on): {}", stuck.join(", ")).into());
     }
 
     // -----------------------------------------------------------------------
@@ -581,8 +543,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    almost entirely on the one agent that needed the frontier model.
     // -----------------------------------------------------------------------
     println!("\n{}", "─".repeat(72));
-    println!("\nActivation order reported by EventLattice:");
-    for (i, id) in activation_order.iter().enumerate() {
+    println!("\nRun order (dependency order):");
+    for (i, id) in run_order.iter().enumerate() {
         println!("  {}. {id}", i + 1);
     }
 
@@ -595,11 +557,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut frontier_total = TokenUsageStats::default();
     let mut local_cost = 0.0;
     let mut frontier_cost = 0.0;
-    // Report in activation order so the table reads top-to-bottom like the run.
-    for id in &activation_order {
-        let res = completed
-            .get(&AgentId::new(id.as_str()))
-            .expect("ran above");
+    // Report in run order so the table reads top-to-bottom like the run.
+    for id in &run_order {
+        let res = &completed[id];
         println!(
             "  {:<13} {:<13} {:<20} {:>10} {:>12}",
             id,

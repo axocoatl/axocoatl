@@ -151,8 +151,7 @@ impl LlmProvider for RoleLlm {
 }
 
 // ---------------------------------------------------------------------------
-// One generic behavior — calls its provider with its system prompt. Same shape
-// as the stigmergic-workflow example's `LatticeAgent`.
+// One generic behavior — calls its provider with its system prompt.
 // ---------------------------------------------------------------------------
 
 struct StepAgent {

@@ -360,18 +360,12 @@ name = "axocoatl-coordination"
 version = "1.1.0"
 dependencies = [
  "async-trait",
- "axocoatl-actor",
  "axocoatl-core",
- "axocoatl-llm",
- "axocoatl-token",
- "dashmap",
- "ractor",
  "serde",
  "serde_json",
  "serde_yaml",
  "thiserror 2.0.20",
  "tokio",
- "tokio-stream",
  "tracing",
  "uuid",
 ]
@@ -733,7 +727,6 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "axocoatl-actor",
- "axocoatl-coordination",
  "axocoatl-core",
  "axocoatl-isolation",
  "axocoatl-token",
@@ -3033,11 +3026,9 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "axocoatl-actor",
- "axocoatl-coordination",
  "axocoatl-core",
  "axocoatl-llm",
  "ractor",
- "serde_json",
  "tokio",
  "tokio-stream",
 ]
@@ -4463,21 +4454,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
-name = "skills-lattice"
-version = "0.1.1"
-dependencies = [
- "async-trait",
- "axocoatl-actor",
- "axocoatl-coordination",
- "axocoatl-core",
- "axocoatl-llm",
- "ractor",
- "serde_json",
- "tokio",
- "tokio-stream",
-]
-
-[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4541,21 +4517,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "stigmergic-workflow"
-version = "0.1.1"
-dependencies = [
- "async-trait",
- "axocoatl-actor",
- "axocoatl-coordination",
- "axocoatl-core",
- "axocoatl-llm",
- "ractor",
- "serde_json",
- "tokio",
- "tokio-stream",
-]
 
 [[package]]
 name = "streaming-iterator"

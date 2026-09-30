@@ -1,9 +1,9 @@
 //! Exposes a configured Skill to a session agent as a callable tool.
 //!
-//! Calling the tool fires the skill into the lattice — publishing its `emit`
-//! events, the same mechanism as the `/api/skills/{id}/fire` route, but
-//! reachable by an agent mid-session. This is Axocoatl's answer to "connectors":
-//! a per-session allowlist of skills the agents may reach into the lattice with.
+//! Calling the tool fires the skill — publishing its `emit` events on the
+//! event feed, the same mechanism as the `/api/skills/{id}/fire` route, but
+//! reachable by an agent mid-session. On-event Automations and webhooks are
+//! what react to those events.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,7 +12,7 @@ use axocoatl_config::SkillConfigYaml;
 use axocoatl_coordination::{EventId, EventLattice, EventType, LatticeEvent};
 use axocoatl_tools::{BuiltinTool, ToolError};
 
-/// A callable tool that fires one configured Skill into the lattice.
+/// A callable tool that fires one configured Skill onto the event feed.
 pub struct SkillTool {
     skill: SkillConfigYaml,
     event_lattice: Arc<EventLattice>,
@@ -22,8 +22,8 @@ pub struct SkillTool {
 impl SkillTool {
     pub fn new(skill: SkillConfigYaml, event_lattice: Arc<EventLattice>) -> Self {
         let description = format!(
-            "Fire the '{}' skill — {}. Emits lattice events [{}] that can \
-             activate other agents in the org.",
+            "Fire the '{}' skill — {}. Emits the events [{}] for Automations \
+             and webhooks that react to them.",
             skill.name,
             skill.description,
             skill.emits.join(", "),

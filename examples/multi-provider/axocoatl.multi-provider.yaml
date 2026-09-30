@@ -59,10 +59,9 @@ agents:
     token_budget: { per_execution: 6000, per_call: 4000, overflow_policy: abort }
 
 # ─── Workflow ───────────────────────────────────────────────────────
-# A product Lattice session runs these session-scoped agents in dependency
-# order: triage, then drafter, then synthesizer after both prior outputs are
-# available. The companion mock binary demonstrates the lower-level
-# EventLattice pheromone primitive separately.
+# A Lattice session runs these session-scoped agents in dependency order:
+# triage, then drafter, then synthesizer once both prior outputs are
+# available. The companion mock binary runs the same order with mock providers.
 workflows:
   - id: route-and-synthesize
     name: "Route and synthesize"

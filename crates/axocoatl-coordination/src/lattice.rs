@@ -1,10 +1,5 @@
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
-
-use axocoatl_core::AgentId;
-
-use crate::pheromone::SignalState;
 
 /// Unique event identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -61,8 +56,7 @@ impl EventType {
         }
     }
 
-    /// Whether this event is pure observability telemetry (broadcast via
-    /// `notify_observers`) rather than a coordination signal. Egress sinks
+    /// Whether this event is pure observability telemetry. Egress sinks
     /// exclude these from the default "all events" set so a webhook is not
     /// spammed on every agent activation.
     pub fn is_telemetry(&self) -> bool {
@@ -84,107 +78,45 @@ pub struct EventNotification {
     pub timestamp: u64,
 }
 
-/// The typed event lattice — the shared coordination space.
-/// Thread-safe: uses DashMap for concurrent signal tracking and broadcast for notifications.
+/// The process-wide event feed: Skills, Automation triggers, webhooks and
+/// the recent-events API publish to and subscribe from it. It keeps no
+/// history and starts no work; subscribers that need history keep their own.
 pub struct EventLattice {
-    events: DashMap<EventId, LatticeEvent>,
-    signals: DashMap<AgentId, SignalState>,
     notify_tx: broadcast::Sender<EventNotification>,
 }
 
 impl EventLattice {
     pub fn new(channel_capacity: usize) -> Self {
         let (tx, _) = broadcast::channel(channel_capacity);
-        Self {
-            events: DashMap::new(),
-            signals: DashMap::new(),
-            notify_tx: tx,
-        }
+        Self { notify_tx: tx }
     }
 
-    /// Register an agent with its signal parameters.
-    pub fn register_agent(&self, agent_id: AgentId, threshold: f32, decay_rate: f32) {
-        self.signals
-            .insert(agent_id, SignalState::new(threshold, decay_rate));
-    }
-
-    /// Publish an event to the lattice.
-    /// Returns the list of agent IDs that should activate as a result.
-    pub fn publish(&self, event: LatticeEvent) -> Vec<AgentId> {
-        let event_id = event.id.clone();
-        let event_type = event.event_type.clone();
-        let payload = event.payload.clone();
-        let produced_by = event.produced_by.clone();
-        let timestamp = event.timestamp;
-
-        // Store the event
-        self.events.insert(event_id.clone(), event);
-
-        // Broadcast notification
+    /// Broadcast an event to every current subscriber.
+    pub fn publish(&self, event: LatticeEvent) {
         let _ = self.notify_tx.send(EventNotification {
-            event_id,
-            event_type: event_type.clone(),
-            payload,
-            produced_by,
-            timestamp,
+            event_id: event.id,
+            event_type: event.event_type,
+            payload: event.payload,
+            produced_by: event.produced_by,
+            timestamp: event.timestamp,
         });
-
-        // Calculate signal strength based on event type
-        let signal_strength = match &event_type {
-            EventType::TaskAvailable { .. } => 1.0,
-            EventType::TaskCompleted { .. } => 0.5,
-            EventType::UserInput => 1.0,
-            EventType::ToolResult { .. } => 0.3,
-            EventType::AgentFailed { .. } => 0.8,
-            EventType::WorkflowCompleted => 0.1,
-            EventType::AgentActivated { .. } => 0.1,
-            EventType::Custom(_) => 0.5,
-        };
-
-        // Update signals and check for activations
-        let mut activated = Vec::new();
-        for mut entry in self.signals.iter_mut() {
-            entry.value_mut().add_signal(signal_strength);
-            if entry.value_mut().should_activate() {
-                activated.push(entry.key().clone());
-            }
-        }
-
-        activated
-    }
-
-    /// Get an event by ID.
-    pub fn get_event(&self, id: &EventId) -> Option<LatticeEvent> {
-        self.events.get(id).map(|e| e.clone())
     }
 
     /// Subscribe to event notifications.
     pub fn subscribe(&self) -> broadcast::Receiver<EventNotification> {
         self.notify_tx.subscribe()
     }
+}
 
-    /// Broadcast an event to observers (SSE streams, dashboards) **without**
-    /// affecting coordination — no signal accumulation, no activation, no
-    /// storage. Use this for pure telemetry, e.g. an "agent starting" signal,
-    /// so observability never perturbs the stigmergic cascade.
-    pub fn notify_observers(&self, event: &LatticeEvent) {
-        let _ = self.notify_tx.send(EventNotification {
-            event_id: event.id.clone(),
-            event_type: event.event_type.clone(),
-            payload: event.payload.clone(),
-            produced_by: event.produced_by.clone(),
-            timestamp: event.timestamp,
-        });
-    }
-
-    /// Number of events in the lattice.
-    pub fn event_count(&self) -> usize {
-        self.events.len()
-    }
-
-    /// Number of registered agents.
-    pub fn agent_count(&self) -> usize {
-        self.signals.len()
+impl From<EventNotification> for LatticeEvent {
+    fn from(notification: EventNotification) -> Self {
+        Self {
+            id: notification.event_id,
+            event_type: notification.event_type,
+            payload: notification.payload,
+            produced_by: notification.produced_by,
+            timestamp: notification.timestamp,
+        }
     }
 }
 
@@ -211,17 +143,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn publish_and_retrieve_event() {
+    #[tokio::test]
+    async fn a_published_event_reaches_subscribers_whole() {
         let lattice = EventLattice::new(100);
+        let mut rx = lattice.subscribe();
         let event = task_event("research");
         let event_id = event.id.clone();
         lattice.publish(event);
 
-        assert_eq!(lattice.event_count(), 1);
-        let retrieved = lattice.get_event(&event_id).unwrap();
+        let received = LatticeEvent::from(rx.recv().await.unwrap());
+        assert_eq!(received.id, event_id);
+        assert_eq!(received.produced_by, "test");
         assert!(matches!(
-            retrieved.event_type,
+            received.event_type,
             EventType::TaskAvailable { .. }
         ));
     }
@@ -248,42 +182,6 @@ mod tests {
             task_id: "t".into()
         }
         .is_telemetry());
-    }
-
-    #[test]
-    fn agent_activation_on_threshold() {
-        let lattice = EventLattice::new(100);
-        // Agent with threshold 1.0 — a single TaskAvailable (strength 1.0) should activate it
-        lattice.register_agent(AgentId::new("agent-1"), 1.0, 0.0);
-
-        let activated = lattice.publish(task_event("research"));
-        assert_eq!(activated.len(), 1);
-        assert_eq!(activated[0], AgentId::new("agent-1"));
-    }
-
-    #[test]
-    fn no_activation_below_threshold() {
-        let lattice = EventLattice::new(100);
-        // Agent with threshold 2.0 — needs 2 events to activate
-        lattice.register_agent(AgentId::new("agent-1"), 2.0, 0.0);
-
-        let activated = lattice.publish(task_event("a"));
-        assert!(activated.is_empty());
-
-        let activated = lattice.publish(task_event("b"));
-        assert_eq!(activated.len(), 1); // Now threshold crossed
-    }
-
-    #[test]
-    fn multiple_agents_independent() {
-        let lattice = EventLattice::new(100);
-        lattice.register_agent(AgentId::new("fast"), 0.5, 0.0); // Low threshold
-        lattice.register_agent(AgentId::new("slow"), 5.0, 0.0); // High threshold
-
-        let activated = lattice.publish(task_event("task"));
-        // Only "fast" should activate (threshold 0.5, signal 1.0)
-        assert_eq!(activated.len(), 1);
-        assert_eq!(activated[0], AgentId::new("fast"));
     }
 
     #[tokio::test]

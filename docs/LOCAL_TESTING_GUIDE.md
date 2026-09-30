@@ -129,7 +129,7 @@ curl -fsS -X POST \
 ```
 
 Expect the explicit DAG executor to run the researcher node before the
-summarizer node. This is not a lattice-threshold activation loop.
+summarizer node.
 
 Create a net-new Automation with **+ Automation** in Settings. Choose its ID,
 name, starter Agent, and manual, interval, event, or Skill trigger; Settings
@@ -209,9 +209,7 @@ cargo test -p axocoatl-coordination
 cargo test -p axocoatl-isolation
 ```
 
-The coordination package tests its reusable event/signal, HTN, and auction
-primitives. Passing those tests does not prove that the product daemon uses the
-standalone example activation loops.
+The coordination package tests its event feed, HTN, and auction primitives.
 
 ## Quick reference
 
