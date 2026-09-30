@@ -433,7 +433,7 @@ mod execution {
         let mut view =
             SessionTurnControlPlane::from_execution(&snapshot, &fixture.content).unwrap();
         assert!(view.turn_controls.is_none());
-        view.expose_recovery_requests(&snapshot, None).unwrap();
+        view.expose_recovery_requests(&snapshot).unwrap();
         let controls = view.turn_controls.as_ref().unwrap();
         assert_eq!(controls.execution_epoch_id.as_str(), "epoch-a");
         assert!(!controls.continue_turn.enabled);
@@ -471,7 +471,7 @@ mod execution {
         let mut rewound =
             SessionTurnControlPlane::from_execution(&snapshot, &fixture.content).unwrap();
         rewound.mark_conversation_superseded(true);
-        rewound.expose_recovery_requests(&snapshot, None).unwrap();
+        rewound.expose_recovery_requests(&snapshot).unwrap();
         assert!(rewound.turn_controls.is_none());
         assert!(
             !rewound.nodes[0].activations[0]
@@ -485,7 +485,7 @@ mod execution {
         let closed = fixture.snapshot();
         let mut closed_view =
             SessionTurnControlPlane::from_execution(&closed, &fixture.content).unwrap();
-        closed_view.expose_recovery_requests(&closed, None).unwrap();
+        closed_view.expose_recovery_requests(&closed).unwrap();
         assert!(closed_view.turn_controls.is_none());
     }
 

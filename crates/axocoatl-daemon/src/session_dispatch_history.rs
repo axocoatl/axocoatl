@@ -261,7 +261,7 @@ impl SessionDispatchController {
                     reason: error.to_string(),
                 },
             };
-        view.expose_closed_turn_controls(snapshot, None)?;
+        view.expose_closed_turn_controls(snapshot)?;
         Ok(view)
     }
 }

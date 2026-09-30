@@ -234,13 +234,14 @@ impl PendingSessionEntry {
                     .turn_admission(canonical, &id)
                     .map_err(|error| failure(error.to_string()))?
                 {
-                    if let Ok(source) = serde_json::from_str::<
-                        crate::bootstrap::native_turn::NativeFirstTurnRequest,
-                    >(&admission.source)
+                    if serde_json::from_str::<crate::bootstrap::native_turn::NativeFirstTurnRequest>(
+                        &admission.source,
+                    )
+                    .is_ok()
                     {
-                        view.expose_closed_turn_controls(&snapshot, source.standing_work.as_ref())
+                        view.expose_closed_turn_controls(&snapshot)
                             .map_err(|error| failure(error.to_string()))?;
-                        view.expose_recovery_requests(&snapshot, source.standing_work.as_ref())
+                        view.expose_recovery_requests(&snapshot)
                             .map_err(|error| failure(error.to_string()))?;
                     }
                 }

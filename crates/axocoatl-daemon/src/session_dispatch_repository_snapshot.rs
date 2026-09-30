@@ -497,14 +497,14 @@ impl DispatchState {
             return None;
         }
         let grant = bound.grant.grant_id.as_str();
-        let pays_checks = self.authority.grant_pays_standing_checks(grant).ok()?;
-        let checks = if pays_checks {
-            self.standing_work().ok().flatten().map_or(0, |work| {
-                u32::try_from(work.required_checks.len()).unwrap_or(u32::MAX)
-            })
-        } else {
-            0
-        };
+        let pays_checks = self.authority.grant_pays_standing_checks(grant).ok()?
+            || self.authority.grant_pays_required_checks(grant).ok()?;
+        let snapshot = self.canonical.snapshot(&self.turn_id).ok()?;
+        let group = snapshot
+            .contract()
+            .graph()
+            .and_then(axocoatl_session::turn_checks::group_of);
+        let checks = paid_checks(pays_checks, group.map(|(_, checks)| checks));
         let limit = self
             .authority
             .grant_status(grant)
@@ -514,6 +514,15 @@ impl DispatchState {
             .invocations;
         let used = self.authority.usage(grant).ok()?.invocations;
         reserve_shortfall(used, needed, host_reserve(checks), limit)
+    }
+}
+
+/// How many of the turn's `checks` commands a grant pays for: all of them
+/// when it is the paying grant, else none.
+fn paid_checks(pays: bool, checks: Option<usize>) -> u32 {
+    match checks {
+        Some(checks) if pays => u32::try_from(checks).unwrap_or(u32::MAX),
+        _ => 0,
     }
 }
 
@@ -709,6 +718,28 @@ mod reserve_tests {
         assert!(provider(5));
         // Only a model that ignores the refusal again runs out.
         assert!(!provider(6));
+    }
+
+    #[test]
+    fn required_checks_reserve_only_on_the_paying_grant() {
+        // Two required checks: the paying grant holds back its After capture,
+        // both captures around the checks and each check.
+        assert_eq!(host_reserve(paid_checks(true, Some(2))), 5);
+        // Every other grant of the turn holds back only its own After capture.
+        assert_eq!(host_reserve(paid_checks(false, Some(2))), 1);
+        // Without checks the payer holds back nothing more either.
+        assert_eq!(host_reserve(paid_checks(true, None)), 1);
+        // With ten invocations and two checks, the payer's Agent may start a
+        // tool call only while three plus five still fit; any other Agent's
+        // grant is unaffected by the checks.
+        let reserve = host_reserve(paid_checks(true, Some(2)));
+        assert!(reserve_shortfall(2, TOOL_CALL_NEEDS, reserve, 10).is_none());
+        assert_eq!(
+            reserve_shortfall(3, TOOL_CALL_NEEDS, reserve, 10),
+            Some(reserve)
+        );
+        let other = host_reserve(paid_checks(false, Some(2)));
+        assert!(reserve_shortfall(6, TOOL_CALL_NEEDS, other, 10).is_none());
     }
 }
 

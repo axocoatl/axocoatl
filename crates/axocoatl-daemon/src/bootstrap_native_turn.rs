@@ -12,6 +12,7 @@ use axocoatl_session::execution_content::{
 };
 use axocoatl_session::execution_namespace::ExecutionComponent;
 use axocoatl_session::session_team::SessionTeamStore;
+use axocoatl_session::turn_checks::CheckGroup;
 use axocoatl_session::turn_contract::*;
 use serde::{Deserialize, Serialize};
 
@@ -223,13 +224,7 @@ impl AxocoatlDaemon {
         }
         let expected_team_revision = request.expected_team_revision;
         let standing_session = request.session_id.as_str().to_owned();
-        let mut expected_graph = setup.content.graph.clone();
-        if let Some(work) = &request.standing_work {
-            let prefix = format!("standing:{}:", work.receipt_id);
-            expected_graph
-                .conditions
-                .retain(|condition| !condition.condition_id.as_str().starts_with(&prefix));
-        }
+        let expected_graph = setup.content.graph.clone();
         let expected_turn = request.turn_id.clone();
         let target = request.target_definition.clone();
         let spec = SuccessorTurn {
@@ -305,6 +300,9 @@ pub(super) fn finish_owned_setup<'a>(
         .session_id
         .as_str()
         .to_owned();
+    controller
+        .authorize_required_checks(&repository)
+        .map_err(failure)?;
     match controller
         .prepare_native_host_driver(source, repository, bus, factory)
         .map_err(failure)?
@@ -604,52 +602,43 @@ pub(super) fn prepare_admission(
         memory
             .validate_starting_savepoints(&graph)
             .map_err(failure)?;
+        // Every slot's grant carries the same approved Apply.
+        let required_checks = session_team::approved_required_checks(content, selected_slots[0])?;
         drop(team);
         if let Some(work) = &request.standing_work {
-            let nodes: Vec<_> = graph
-                .nodes
-                .iter()
-                .filter(|node| node.required)
-                .map(|node| node.node_id.clone())
-                .collect();
-            let definitions =
-                axocoatl_session::team_work::standing_check_definitions(&work.required_checks)
-                    .map_err(failure)?;
-            for (index, definition) in definitions.iter().enumerate() {
-                let reference = content
-                    .retain_repository_check_definition(definition.clone())
-                    .map_err(failure)?
-                    .reference()
-                    .clone();
-                graph.conditions.push(CompletionCondition {
-                    condition_id: ConditionId::new(
-                        axocoatl_session::team_work::standing_condition_id(&work.receipt_id, index),
-                    )
-                    .map_err(failure)?,
-                    kind: ConditionKind::RepositoryCheck {
-                        definition: reference,
-                    },
-                    nodes: nodes.clone(),
-                });
+            inject_checks(
+                content,
+                &mut graph,
+                &CheckGroup::standing(&work.receipt_id),
+                &work.required_checks,
+                axocoatl_session::team_work::standing_readiness_text(
+                    &work.receipt_id,
+                    &work.required_checks,
+                ),
+            )?;
+            graph.validate(&request.session_id).map_err(failure)?;
+        } else if !required_checks.is_empty() {
+            // The authority charges them to the first required Agent that
+            // may use bash; without one the turn could never run them.
+            if !graph.nodes.iter().filter(|node| node.required).any(|node| {
+                grants[&node.node_id]
+                    .profiles
+                    .iter()
+                    .any(|profile| profile.tools.iter().any(|tool| tool == "bash"))
+            }) {
+                return Err(failure(
+                    "This Session team has required checks, and none of the Agents this turn \
+                     runs may use bash to pay for them. Send to the whole team, or to an Agent \
+                     with the bash tool",
+                ));
             }
-            if !definitions.is_empty() {
-                let criterion = content
-                    .retain_activation_evidence(ActivationEvidenceContent::Guidance {
-                        text: axocoatl_session::team_work::standing_readiness_text(
-                            &work.receipt_id,
-                            &work.required_checks,
-                        ),
-                    })
-                    .map_err(failure)?
-                    .reference()
-                    .clone();
-                graph.conditions.push(CompletionCondition {
-                    condition_id: ConditionId::new(format!("standing:{}:ready", work.receipt_id))
-                        .map_err(failure)?,
-                    kind: ConditionKind::Review { criterion },
-                    nodes,
-                });
-            }
+            inject_checks(
+                content,
+                &mut graph,
+                &CheckGroup::required(),
+                &required_checks,
+                axocoatl_session::turn_checks::readiness_text(&required_checks),
+            )?;
             graph.validate(&request.session_id).map_err(failure)?;
         }
         let retained_request = content
@@ -774,6 +763,53 @@ pub(super) fn prepare_admission(
     })
 }
 
+/// Add one check group to an admitted graph: a repository capture, each
+/// command and a capture, all over the graph's required nodes, then the
+/// readiness review. Retries retain the same definitions and criterion.
+fn inject_checks(
+    content: &mut axocoatl_session::execution_content::ExecutionContentStore,
+    graph: &mut TurnGraphSnapshot,
+    group: &CheckGroup,
+    checks: &[Vec<String>],
+    readiness: String,
+) -> Result<(), DaemonError> {
+    let nodes: Vec<_> = graph
+        .nodes
+        .iter()
+        .filter(|node| node.required)
+        .map(|node| node.node_id.clone())
+        .collect();
+    let definitions = axocoatl_session::turn_checks::check_definitions(checks).map_err(failure)?;
+    if definitions.is_empty() {
+        return Ok(());
+    }
+    for (index, definition) in definitions.iter().enumerate() {
+        let reference = content
+            .retain_repository_check_definition(definition.clone())
+            .map_err(failure)?
+            .reference()
+            .clone();
+        graph.conditions.push(CompletionCondition {
+            condition_id: ConditionId::new(group.condition_id(index)).map_err(failure)?,
+            kind: ConditionKind::RepositoryCheck {
+                definition: reference,
+            },
+            nodes: nodes.clone(),
+        });
+    }
+    let criterion = content
+        .retain_activation_evidence(ActivationEvidenceContent::Guidance { text: readiness })
+        .map_err(failure)?
+        .reference()
+        .clone();
+    graph.conditions.push(CompletionCondition {
+        condition_id: ConditionId::new(group.ready_id()).map_err(failure)?,
+        kind: ConditionKind::Review { criterion },
+        nodes,
+    });
+    Ok(())
+}
+
 pub(super) fn verify_selected_team(
     canonical: &axocoatl_session::execution_store::SessionExecutionStore,
     content: &axocoatl_session::execution_content::ExecutionContentStore,
@@ -826,7 +862,14 @@ pub(super) fn verify_selected_team(
             node.definition = model::selected_definition(&request, slot, content)?;
         }
     }
-    if expected != *graph {
+    // The team graph carries no check conditions; admission adds them.
+    let mut admitted = graph.clone();
+    if let Some((group, _)) = axocoatl_session::turn_checks::group_of(graph) {
+        admitted
+            .conditions
+            .retain(|condition| !group.contains(&condition.condition_id));
+    }
+    if expected != admitted {
         return Err(failure(
             "first-turn graph differs from the actual applied team revision",
         ));

@@ -147,12 +147,59 @@ impl Run {
 }
 
 fn run(f: &mut Fixture, tools: &[&str], repository_recorded: bool) -> Run {
-    run_with(f, tools, repository_recorded, None)
+    run_with(f, tools, repository_recorded, None, &[])
 }
 
 /// A repository activation whose Agent may change only `writes`.
 fn run_scoped(f: &mut Fixture, tools: &[&str], writes: &[&str]) -> Run {
-    run_with(f, tools, true, Some(writes))
+    run_with(f, tools, true, Some(writes), &[])
+}
+
+/// A repository activation whose turn has these required checks, as
+/// admission adds them to the graph.
+fn run_checked(f: &mut Fixture, tools: &[&str], checks: &[Vec<String>]) -> Run {
+    run_with(f, tools, true, None, checks)
+}
+
+fn required_check_conditions(
+    content: &mut ExecutionContentStore,
+    node: &TurnNodeId,
+    checks: &[Vec<String>],
+) -> Vec<CompletionCondition> {
+    use axocoatl_session::turn_checks::{check_definitions, readiness_text, CheckGroup};
+    let group = CheckGroup::required();
+    let definitions = check_definitions(checks).unwrap();
+    if definitions.is_empty() {
+        return vec![];
+    }
+    let mut conditions: Vec<_> = definitions
+        .into_iter()
+        .enumerate()
+        .map(|(index, definition)| CompletionCondition {
+            condition_id: ConditionId::new(group.condition_id(index)).unwrap(),
+            kind: ConditionKind::RepositoryCheck {
+                definition: content
+                    .retain_repository_check_definition(definition)
+                    .unwrap()
+                    .reference()
+                    .clone(),
+            },
+            nodes: vec![node.clone()],
+        })
+        .collect();
+    let criterion = content
+        .retain_activation_evidence(ActivationEvidenceContent::Guidance {
+            text: readiness_text(checks),
+        })
+        .unwrap()
+        .reference()
+        .clone();
+    conditions.push(CompletionCondition {
+        condition_id: ConditionId::new(group.ready_id()).unwrap(),
+        kind: ConditionKind::Review { criterion },
+        nodes: vec![node.clone()],
+    });
+    conditions
 }
 
 fn run_with(
@@ -160,6 +207,7 @@ fn run_with(
     tools: &[&str],
     repository_recorded: bool,
     writes: Option<&[&str]>,
+    checks: &[Vec<String>],
 ) -> Run {
     let mut canonical = f._canonical.take().unwrap();
     let mut content = ExecutionContentStore::open_owned(
@@ -223,6 +271,7 @@ fn run_with(
             model: None,
         })
         .unwrap();
+    let conditions = required_check_conditions(&mut content, &activation.node_id, checks);
     canonical
         .begin_with_request(
             TurnContractEnvelope {
@@ -246,7 +295,7 @@ fn run_with(
                             required: true,
                         }],
                         dependencies: vec![],
-                        conditions: vec![],
+                        conditions,
                     },
                 },
             },

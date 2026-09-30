@@ -200,7 +200,7 @@ impl AutonomousTurnDriver {
                 }
             }
             if self.children.as_ref().unwrap().is_empty() {
-                if self.controller.drive_standing_checks().await? {
+                if self.controller.drive_turn_checks().await? {
                     continue;
                 }
                 if let Some(outcome) = self.finish_quiescent(inspected_revision)? {

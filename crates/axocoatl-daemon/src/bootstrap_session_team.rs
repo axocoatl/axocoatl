@@ -99,6 +99,12 @@ pub struct SessionTeamEdit {
     /// Edges use visible slot identities; the daemon resolves exact node identities.
     pub dependencies: Vec<SessionTeamConnection>,
     pub layout: Vec<SessionTeamPosition>,
+    /// Exact commands (argv) the host runs after every turn's required
+    /// Agents finish. A failure leaves the turn needing attention; passing
+    /// checks on an unchanged tree let it complete. Empty means no checks,
+    /// and keeps the historical serialized shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_checks: Vec<Vec<String>>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -177,6 +183,15 @@ fn approval_for_slot(
         _ => Ok(None),
     }
 }
+/// The required checks of the Apply that approved this slot's grant.
+pub(crate) fn approved_required_checks(
+    content: &ExecutionContentStore,
+    slot: &SessionTeamSlot,
+) -> Result<Vec<Vec<String>>, DaemonError> {
+    Ok(approval_for_slot(content, slot)?
+        .map(|approval| approval.edit.required_checks)
+        .unwrap_or_default())
+}
 pub(crate) fn approved_template_for_slot(
     content: &ExecutionContentStore,
     slot: &SessionTeamSlot,
@@ -254,6 +269,23 @@ fn checked_writes(slot: &SessionTeamSlotEdit) -> Result<Option<Vec<String>>, Dae
         })?;
     }
     Ok(slot.writes.clone())
+}
+/// The team's required checks must be exact commands that fit beside the
+/// team's own conditions.
+fn check_required_checks(edit: &SessionTeamEdit, conditions: usize) -> Result<(), DaemonError> {
+    let most = MAX_COMPLETION_CONDITIONS.saturating_sub(conditions + 3);
+    if edit.required_checks.len() > most {
+        return Err(team_error(format!(
+            "A team can have at most {most} required checks; remove some"
+        )));
+    }
+    axocoatl_session::turn_checks::check_definitions(&edit.required_checks).map_err(|_| {
+        team_error(
+            "Each required check must be a command of at most 64 arguments, each at most \
+             4096 bytes and without NUL characters",
+        )
+    })?;
+    Ok(())
 }
 /// How a write scope reads in a message to the person.
 fn describe_writes(writes: Option<&[String]>) -> String {
@@ -750,6 +782,7 @@ impl AxocoatlDaemon {
                 "Session team exceeds the supported graph bounds",
             ));
         }
+        check_required_checks(edit, 0)?;
         let token = self
             .session_dispatch_lifecycles
             .session_team_token(session_id)?;
@@ -911,6 +944,7 @@ impl AxocoatlDaemon {
         let mut continuity = Vec::new();
         let mut changes = Vec::new();
         let mut ids = HashSet::new();
+        let mut shell_payer = false;
         for proposed in &edit.slots {
             let slot_id = SessionTeamSlotId::new(proposed.slot_id.clone()).map_err(team_error)?;
             if !ids.insert(slot_id.clone()) {
@@ -991,6 +1025,7 @@ impl AxocoatlDaemon {
             if let Some(old) = &old_config {
                 config.id = old.id.clone();
             }
+            shell_payer |= proposed.required && config.tools.iter().any(|tool| tool == "bash");
             let unchanged = prior.is_some()
                 && !proposed.reset_history
                 && old_config.as_ref().is_some_and(|old| {
@@ -1146,6 +1181,13 @@ impl AxocoatlDaemon {
                 });
             }
         }
+        if !edit.required_checks.is_empty() && !shell_payer {
+            return Err(team_error(
+                "Required checks run on the allowance of a required Agent that has the bash \
+                 tool, and no required Agent in this team has bash. Make an Agent with bash \
+                 required, or remove the required checks",
+            ));
+        }
         let dependencies = edit
             .dependencies
             .iter()
@@ -1163,6 +1205,9 @@ impl AxocoatlDaemon {
                 })
             })
             .collect::<Result<Vec<_>, DaemonError>>()?;
+        if let Some(previous) = &previous {
+            check_required_checks(edit, previous.graph.conditions.len())?;
+        }
         let commit = SessionTeamCommit {
             schema_version: SESSION_TEAM_SCHEMA_VERSION,
             command_id,
