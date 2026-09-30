@@ -756,6 +756,26 @@ async fn lead_delegates_to_read_only_helper_and_receives_bounded_result() {
     };
     assert_eq!(input.activation.node_id, node);
     assert!(fixture.registry.live_native_turns().unwrap().is_empty());
+
+    let plane = run.controller.control_plane().unwrap();
+    let delegated = plane
+        .edges
+        .iter()
+        .filter(|edge| edge.kind == "delegated_by")
+        .collect::<Vec<_>>();
+    assert_eq!(delegated.len(), 1);
+    assert_eq!(delegated[0].source, lead.as_str());
+    assert_eq!(delegated[0].target, node.as_str());
+    assert_eq!(
+        delegated[0].summary,
+        crate::session_control_plane::EvidenceValue::Available {
+            value: "scout".into()
+        }
+    );
+    assert!(
+        plane.nodes.iter().all(|item| item.dependencies.is_empty()),
+        "a helper is not a dependency of its lead"
+    );
 }
 
 #[tokio::test]

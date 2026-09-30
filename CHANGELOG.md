@@ -82,7 +82,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again. Helpers whose templates can write files or run commands are refused for now.
   A Coordinator template in a native Session team runs as such a lead over its approved
   Worker templates; its HTN methods are not used there. Legacy Sessions keep the
-  Coordinator's own decomposition.
+  Coordinator's own decomposition. The Agent graph draws a "delegated" edge from a
+  lead to each helper, animated while the helper runs, and the control-plane read
+  reports it as a `delegated_by` edge.
 - **Reviewed partial finish.** Native cooperative turns can be finished partially
   with explicit human confirmation of selected accepted results, work to stop,
   never-started work, and missing checks. Safe settlement and usage evidence remain

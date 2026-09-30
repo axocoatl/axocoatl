@@ -69,7 +69,7 @@ mod delegate;
 mod driver;
 #[path = "session_dispatch_knowledge.rs"]
 mod knowledge;
-pub(crate) use coordinator::NativeCoordinatorWorker;
+pub(crate) use coordinator::{NativeCoordinatorWorker, COORDINATOR_CHILD, DELEGATE_CHILD};
 #[path = "session_dispatch_graph.rs"]
 mod graph;
 pub(crate) use graph::pending_human_graph_receipt;

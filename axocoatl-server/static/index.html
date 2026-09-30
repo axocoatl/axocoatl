@@ -8889,6 +8889,10 @@ async function sessionLatticeBuild(session, coordinationEvents = null, coordinat
   const agentRecords = hasSnapshot ? folded.agents : sessionConfiguredGraphAgents(session);
   const agents = agentRecords.map(agent => agent.id);
   const dependencies = agentRecords.flatMap(agent => (agent.dependsOn || []).map(from => ({ from, to: agent.id })));
+  // Helpers a lead delegated to are laid out after it, but stay separate from
+  // dependencies: they never gate the lead or the turn's answer.
+  const delegations = agentRecords.flatMap(agent => (agent.delegatedBy || []).map(from => ({ from, to: agent.id })));
+  const agentLabel = id => agentRecords.find(agent => agent.id === id)?.label || id;
   S.session.graphAgents = agents;
   if (turnId) S.session.coordinationGraphTurnId = turnId;
   if (!agents.length) { host.innerHTML = '<div class="empty small">No agents for this session.</div>'; return; }
@@ -8944,8 +8948,11 @@ async function sessionLatticeBuild(session, coordinationEvents = null, coordinat
     const agentId = ids.length === 1 && ids[0].startsWith('sl-') ? ids[0].slice(3) : '';
     const agent = (S.agents || []).find((candidate) => candidate.id === agentId);
     const isCoordinator = String(agent?.role || '').toLowerCase() === 'coordinator';
+    // A native Coordinator runs as a lead; only legacy runs have a Coordinator run view.
+    const native = envelope?.history_version === 'execution_v2' || isExecutionHistoryTurn(turnId)
+      || S.session.currentTeam?.history_version === 'execution_v2';
     const inspectorWasHidden = inspector.hidden;
-    inspector.coordinatorAgentId = isCoordinator ? agentId : '';
+    inspector.coordinatorAgentId = isCoordinator && !native ? agentId : '';
     inspector.nodeId = agentId;
     if (inspectorWasHidden && !inspector.hidden) requestAnimationFrame(() => {
       if (lat.isConnected && lat.clientWidth && lat.clientHeight) lat.fitView();
@@ -8953,7 +8960,7 @@ async function sessionLatticeBuild(session, coordinationEvents = null, coordinat
     keepSessionGraphSelectionVisible(lat);
   });
   lat.addEventListener('node-inspect', () => inspector.focusInspector());
-  const positions = layeredLayout(agentRecords.map(agent => ({ id: agent.id, width: 160, height: 78 })), dependencies, { direction: 'LR' });
+  const positions = layeredLayout(agentRecords.map(agent => ({ id: agent.id, width: 160, height: 78 })), [...dependencies, ...delegations], { direction: 'LR' });
   const status = { working: 'running', running: 'running', completed: 'success', succeeded: 'success', failed: 'error',
     blocked: 'blocked', interrupted: 'cancelled', stopped: 'cancelled', cancelled: 'cancelled', waiting: 'pending', planned: 'pending' };
   agentRecords.forEach((agent, i) => {
@@ -8963,7 +8970,7 @@ async function sessionLatticeBuild(session, coordinationEvents = null, coordinat
     node.setAttribute('data-x', String(position.x));
     node.setAttribute('data-y', String(position.y));
     node.setAttribute('status', status[agent.state] || 'idle');
-    node.setAttribute('aria-label', `${agent.label || agent.id}; ${agent.state || 'configured'}; ${agent.dependsOn?.length ? `depends on ${agent.dependsOn.join(', ')}` : 'no configured dependencies'}`);
+    node.setAttribute('aria-label', `${agent.label || agent.id}; ${agent.state || 'configured'}; ${agent.dependsOn?.length ? `depends on ${agent.dependsOn.join(', ')}` : 'no configured dependencies'}${agent.delegatedBy?.length ? `; delegated by ${agent.delegatedBy.map(agentLabel).join(', ')}` : ''}`);
     node.append(mkDiv('sn-title', agent.label));
     node.append(mkHandle('target', 'in', 'left'), mkHandle('source', 'out', 'right'));
     lat.appendChild(node);
@@ -8973,6 +8980,16 @@ async function sessionLatticeBuild(session, coordinationEvents = null, coordinat
     edge.setAttribute('from', 'sl-' + dependency.from + ':out');
     edge.setAttribute('to', 'sl-' + dependency.to + ':in');
     edge.setAttribute('aria-label', dependency.to + ' depends on ' + dependency.from);
+    lat.appendChild(edge);
+  });
+  delegations.forEach(delegation => {
+    const helper = agentRecords.find(agent => agent.id === delegation.to);
+    const edge = document.createElement('ax-edge');
+    edge.setAttribute('from', 'sl-' + delegation.from + ':out');
+    edge.setAttribute('to', 'sl-' + delegation.to + ':in');
+    edge.setAttribute('label', 'delegated');
+    if (['working', 'running'].includes(helper?.state)) edge.setAttribute('active', '');
+    edge.setAttribute('aria-label', `${agentLabel(delegation.from)} delegated a task to ${agentLabel(delegation.to)}`);
     lat.appendChild(edge);
   });
   S.session.lattice = lat;

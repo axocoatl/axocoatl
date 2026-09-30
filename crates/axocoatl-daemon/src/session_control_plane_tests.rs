@@ -787,6 +787,158 @@ mod execution {
             .iter()
             .any(|warning| warning.contains("conversation rewind")));
     }
+
+    impl Fixture {
+        /// Admission evidence shaped like a native child grant: the grant is
+        /// held by `holder` and issued under a proposal naming `node`.
+        fn child_admission(
+            &mut self,
+            lead: &ActivationRef,
+            kind: &str,
+            helper: &str,
+            node: &str,
+            holder: &str,
+        ) -> EvidenceRef {
+            use axocoatl_session::control_authority::{AuthorityGrant, GrantLimits};
+            let proposal = self
+                .content
+                .retain_activation_evidence(ActivationEvidenceContent::Guidance {
+                    text: json!({
+                        "kind": kind,
+                        "parent": lead,
+                        "request": {"logical_worker_id": helper, "task_input": "Survey"},
+                        "node_id": node,
+                    })
+                    .to_string(),
+                })
+                .unwrap()
+                .reference()
+                .clone();
+            self.content
+                .retain_activation_evidence(ActivationEvidenceContent::Grant {
+                    policy: AuthorityGrant {
+                        id: format!("child-grant-{node}"),
+                        revision: 1,
+                        issuer_evidence: proposal,
+                        holder: TurnNodeId::new(holder).unwrap(),
+                        descendants: vec![],
+                        allow_stop_descendants: false,
+                        delegation: None,
+                        profiles: vec![],
+                        conditions: vec![],
+                        limits: GrantLimits {
+                            activations: 1,
+                            invocations: 4,
+                            tokens: 1000,
+                            cost_microunits: 0,
+                        },
+                        expires_at_ms: u64::MAX,
+                    },
+                })
+                .unwrap()
+                .reference()
+                .clone()
+        }
+
+        fn add_node(&mut self, node: &str, admission: EvidenceRef) {
+            let old = self.snapshot().contract().graph().unwrap().clone();
+            let mut graph = old.clone();
+            graph.revision += 1;
+            graph.snapshot_id = GraphSnapshotId::new(format!("graph-{node}")).unwrap();
+            graph.nodes.push(GraphNode {
+                node_id: TurnNodeId::new(node).unwrap(),
+                slot_id: SessionTeamSlotId::new(format!("dynamic-slot-{node}")).unwrap(),
+                definition: old.nodes[0].definition.clone(),
+                conversation_id: NodeConversationId::new(format!("conversation-{node}")).unwrap(),
+                starting_savepoint: ConversationSavepoint::Empty,
+                required: false,
+            });
+            self.append(TurnContractEvent::ReviseGraph {
+                epoch_id: ExecutionEpochId::new("epoch-a").unwrap(),
+                previous_graph: old.snapshot_id,
+                graph,
+                mutation: GraphMutation::Add {
+                    node_id: TurnNodeId::new(node).unwrap(),
+                },
+                admission_evidence: admission,
+            });
+        }
+    }
+
+    #[test]
+    fn agent_admitted_nodes_name_their_lead_without_becoming_dependencies() {
+        let mut fixture = Fixture::new();
+        fixture.begin();
+        let lead = fixture.snapshot().contract().activations()[0]
+            .activation
+            .clone();
+        let helper = fixture.child_admission(
+            &lead,
+            "native_delegate_child_v1",
+            "scout",
+            "node-helper",
+            "node-helper",
+        );
+        fixture.add_node("node-helper", helper.clone());
+        // Children a native Coordinator admitted before it ran as a lead.
+        let worker = fixture.child_admission(
+            &lead,
+            "native_coordinator_child_v1",
+            "worker",
+            "node-worker",
+            "node-worker",
+        );
+        fixture.add_node("node-worker", worker);
+        // A human graph edit is admitted by its request evidence, not a grant.
+        let request = fixture
+            .content
+            .retain_activation_evidence(ActivationEvidenceContent::Guidance {
+                text: "Add a reviewer".into(),
+            })
+            .unwrap()
+            .reference()
+            .clone();
+        fixture.add_node("node-human", request);
+        // A grant whose proposal names another node proves nothing about this one.
+        let forged = fixture.child_admission(
+            &lead,
+            "native_delegate_child_v1",
+            "scout",
+            "node-helper",
+            "node-forged",
+        );
+        fixture.add_node("node-forged", forged);
+
+        let view =
+            SessionTurnControlPlane::from_execution(&fixture.snapshot(), &fixture.content).unwrap();
+        let delegated = view
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == "delegated_by")
+            .collect::<Vec<_>>();
+        assert_eq!(delegated.len(), 2, "{delegated:?}");
+        assert_eq!(delegated[0].source, lead.node_id.as_str());
+        assert_eq!(delegated[0].target, "node-helper");
+        assert_eq!(
+            delegated[0].summary,
+            EvidenceValue::available("scout".into())
+        );
+        assert_eq!(
+            delegated[0].evidence,
+            EvidenceValue::available(helper.as_str().into())
+        );
+        assert_eq!(delegated[0].generation, EvidenceValue::available(1));
+        assert_eq!(delegated[1].source, lead.node_id.as_str());
+        assert_eq!(delegated[1].target, "node-worker");
+        assert_eq!(
+            delegated[1].summary,
+            EvidenceValue::available("worker".into())
+        );
+        for node in &view.nodes {
+            assert!(node.dependencies.is_empty(), "{}", node.node_id);
+        }
+        assert!(view.edges.iter().all(|edge| edge.kind != "dependency"));
+    }
 }
 
 #[test]

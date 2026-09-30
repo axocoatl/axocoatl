@@ -1106,10 +1106,16 @@ export function foldControlPlane(source = null, events = null) {
   const nodes = source.nodes;
   const stopRequested = source.stop_requested ?? null;
   const unrunNodes = new Set(stopRequested?.unrun_nodes || []);
+  // A helper admitted through delegate names its lead. It is kept apart from
+  // dependsOn: the lead waits on it inside one activation, so it neither
+  // blocks the lead nor becomes the turn's answer.
+  const delegations = (source.edges || []).filter((edge) => edge.kind === 'delegated_by');
   const agents = nodes.map((node) => {
     const activation = node.activations.at(-1);
     return { id: node.node_id, label: node.label || node.node_id,
-      dependsOn: node.dependencies || [], state: unrunNodes.has(node.node_id) ? 'stopped'
+      dependsOn: node.dependencies || [],
+      delegatedBy: [...new Set(delegations.filter((edge) => edge.target === node.node_id).map((edge) => edge.source))],
+      state: unrunNodes.has(node.node_id) ? 'stopped'
         : normalizedAgentState(activation?.state, activation?.state || 'waiting'),
       summary: unrunNodes.has(node.node_id) ? (stopRequested?.partial_finish ? 'Skipped by partial Finish' : 'Stopped before starting') : evidenceValue(activation?.reason, '') };
   });
@@ -1132,7 +1138,8 @@ export function foldControlPlane(source = null, events = null) {
       }
     } while (changed);
   }
-  const sinks = new Set(agents.filter((node) => !agents.some((other) => other.dependsOn.includes(node.id))).map((node) => node.id));
+  const sinks = new Set(agents.filter((node) => !node.delegatedBy.length
+    && !agents.some((other) => other.dependsOn.includes(node.id))).map((node) => node.id));
   const answers = nodes.flatMap((node) => {
     const activation = node.activations.at(-1);
     const content = evidenceValue(activation?.output);
@@ -1146,7 +1153,9 @@ export function foldControlPlane(source = null, events = null) {
     request: evidenceValue(source.request, ''), status: normalizedRunState(source.state, source.state),
     agents, nodes, stopRequested, agentCount: nodes.length, answers, answer: answers.map((a) => a.content).join('\n\n'),
     handoffs: (source.edges || []).filter((edge) => edge.kind !== 'dependency').map((edge) => ({
-      from: edge.source, to: edge.target, summary: evidenceValue(edge.summary, 'Not recorded'), kind: edge.kind,
+      from: edge.source, to: edge.target, kind: edge.kind,
+      summary: edge.kind === 'delegated_by' ? `Delegated a task to helper ${evidenceValue(edge.summary, 'not recorded')}`
+        : evidenceValue(edge.summary, 'Not recorded'),
     })),
     timeline: nodes.flatMap((node) => node.activations.flatMap((activation) => (activation.evidence || []).map((event) => ({
       kind: event.kind, label: `${node.label || node.node_id} · ${event.kind.replaceAll('_', ' ')}`,

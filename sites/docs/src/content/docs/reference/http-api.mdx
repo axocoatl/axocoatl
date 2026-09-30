@@ -306,6 +306,11 @@ and causal evidence. Evidence values carry an explicit `status`: `available`,
 preview includes its original byte length. Clients must not turn unavailable usage
 into zero or missing output into a successful empty answer.
 
+In a native turn, an edge of kind `delegated_by` runs from a lead's node to a helper
+node the lead admitted through `delegate`; its `summary` names the helper template and
+its `evidence` is the helper's admission grant. It is not a dependency: the lead
+waits for the helper inside its own activation, and the helper does not gate it.
+
 Compatibility Session history is identified as `legacy_v1`. Its activation references
 retain their recorded generation when available; they do not invent execution
 epochs or current Agent definitions. Per-activation Stop, Retry, Guide, and Revise

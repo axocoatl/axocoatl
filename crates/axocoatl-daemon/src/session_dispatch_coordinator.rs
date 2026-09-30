@@ -16,11 +16,11 @@ use serde::{Deserialize, Serialize};
 
 /// A child from a native Coordinator's plan, retained from before Coordinators
 /// ran as leads. Its node is required work of the turn. Nothing admits new ones.
-pub(super) const COORDINATOR_CHILD: &str = "native_coordinator_child_v1";
+pub(crate) const COORDINATOR_CHILD: &str = "native_coordinator_child_v1";
 /// A helper admitted through `delegate`. Its node is optional: a failed or
 /// stopped helper is reported to the lead as a tool error and does not hold
 /// the turn open. Children retained under the older kind stay required.
-pub(super) const DELEGATE_CHILD: &str = "native_delegate_child_v1";
+pub(crate) const DELEGATE_CHILD: &str = "native_delegate_child_v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

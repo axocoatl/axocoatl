@@ -9,7 +9,9 @@ use axocoatl_session::execution_content::{
     ActivationEvidenceContent, ContentResolution, ExecutionContentError, ExecutionContentStore,
 };
 use axocoatl_session::execution_store::DurableTurnSnapshot;
-use axocoatl_session::turn_contract::{ActivationRef, ActivationState, LogicalTurnState};
+use axocoatl_session::turn_contract::{
+    ActivationRef, ActivationState, EvidenceRef, GraphMutation, LogicalTurnState, TurnNodeId,
+};
 use axocoatl_session::turn_ledger::{
     SessionTurn, SessionTurnAgentOutputDisposition, SessionTurnLifecycle,
 };
@@ -762,6 +764,39 @@ impl SessionTurnControlPlane {
                 evidence: EvidenceValue::available(graph.snapshot_id.as_str().into()),
             });
         }
+        // A helper is not a dependency of its lead: the lead waits on it inside
+        // one activation. The edge only records who admitted the node.
+        for record in contract.graph_history() {
+            let node = match &record.mutation {
+                GraphMutation::Add { node_id } => node_id,
+                GraphMutation::ReplaceFuture { replacement, .. } => replacement,
+            };
+            let Some((lead, helper)) = delegated_by(content, &record.admission_evidence, node)
+            else {
+                continue;
+            };
+            if lead.session_id != snapshot.owner().session_id
+                || lead.turn_id != *snapshot.turn_id()
+                || !graph.nodes.iter().any(|item| item.node_id == lead.node_id)
+                || !graph.nodes.iter().any(|item| item.node_id == *node)
+            {
+                continue;
+            }
+            edges.push(ControlPlaneEdge {
+                id: format!(
+                    "delegated:{}:{}",
+                    lead.activation_id.as_str(),
+                    node.as_str()
+                ),
+                kind: "delegated_by".into(),
+                source: lead.node_id.as_str().into(),
+                target: node.as_str().into(),
+                generation: EvidenceValue::available(lead.generation),
+                recorded_at: EvidenceValue::NotRecorded,
+                summary: EvidenceValue::available(helper),
+                evidence: EvidenceValue::available(record.admission_evidence.as_str().into()),
+            });
+        }
         Ok(Self {
             schema_version: 1,
             turn_controls: None,
@@ -794,6 +829,46 @@ impl SessionTurnControlPlane {
             warnings: vec!["Invocation evidence reflects this canonical turn snapshot. Later external-effect audit evidence has not been joined.".into()],
         })
     }
+}
+
+/// The lead activation and helper template behind a node an Agent admitted,
+/// read from the proposal its child grant was issued under. Human graph edits
+/// and anything that does not resolve exactly return None.
+fn delegated_by(
+    content: &ExecutionContentStore,
+    admission: &EvidenceRef,
+    node: &TurnNodeId,
+) -> Option<(ActivationRef, String)> {
+    let Ok(ActivationEvidenceContent::Grant { policy }) =
+        content.resolve_activation_evidence(admission)
+    else {
+        return None;
+    };
+    if policy.holder != *node {
+        return None;
+    }
+    let Ok(ActivationEvidenceContent::Guidance { text }) =
+        content.resolve_activation_evidence(&policy.issuer_evidence)
+    else {
+        return None;
+    };
+    let proposal: Value = serde_json::from_str(text).ok()?;
+    let kind = proposal.get("kind")?.as_str()?;
+    if ![
+        crate::session_dispatch::COORDINATOR_CHILD,
+        crate::session_dispatch::DELEGATE_CHILD,
+    ]
+    .contains(&kind)
+        || proposal.get("node_id")?.as_str()? != node.as_str()
+    {
+        return None;
+    }
+    let lead = serde_json::from_value(proposal.get("parent")?.clone()).ok()?;
+    let helper = proposal
+        .pointer("/request/logical_worker_id")?
+        .as_str()?
+        .to_owned();
+    Some((lead, helper))
 }
 
 fn bounded_json(value: Value) -> EvidenceValue<Value> {
