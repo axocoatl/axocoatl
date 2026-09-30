@@ -101,6 +101,11 @@ To change the team, edit these entries and restart the daemon:
 - remove `writes: []` from a Worker and it is no longer proposed; `delegate` then refuses
   it if it can write files or run commands.
 
+In a native Session, every Agent, including a helper and the required reviewer, is given
+the `AXOCOATL.md` at the root of its repository checkout (up to 64 KiB) with its system
+prompt. Put the project's check command and its conventions there; the default Lead prompt
+tells the lead to run that command.
+
 To work with one Agent, clear **Let this Agent delegate to helpers** in Team & budget, or
 choose another Agent when you create the Session. A configuration without Workers that
 have `writes: []` proposes no helpers.

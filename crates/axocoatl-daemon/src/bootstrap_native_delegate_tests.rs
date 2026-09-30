@@ -903,6 +903,41 @@ async fn delegated_helper_starts_in_a_fresh_conversation() {
 }
 
 #[tokio::test]
+async fn lead_and_helper_are_given_the_checkout_project_instructions() {
+    let fixture = lead_fixture(100000).await;
+    std::fs::write(
+        fixture.repository._workspace.path().join("AXOCOATL.md"),
+        "Check your change with `npm run check`.\n",
+    )
+    .unwrap();
+    let scenario = Arc::new(Scenario::new("pub fn run"));
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    assert_eq!(
+        run.outcome.unwrap().snapshot.contract().state(),
+        Some(LogicalTurnState::Completed)
+    );
+    let system = |messages: &[ChatMessage]| {
+        messages
+            .iter()
+            .find(|message| message.role == axocoatl_core::MessageRole::System)
+            .and_then(ChatMessage::text_content)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let lead = system(&scenario.lead_requests.lock().unwrap()[0].1.messages);
+    assert!(
+        lead.contains("Check your change with `npm run check`."),
+        "{lead}"
+    );
+    assert!(lead.contains("--- from `AXOCOATL.md` ---"), "{lead}");
+    let helper = system(&scenario.helper_requests.lock().unwrap()[0].messages);
+    assert!(
+        helper.contains("Check your change with `npm run check`."),
+        "{helper}"
+    );
+}
+
+#[tokio::test]
 async fn failed_helper_returns_a_tool_error_and_the_lead_completes() {
     let fixture = lead_fixture(100000).await;
     let lead = fixture.request.node_evidence[0].node_id.clone();

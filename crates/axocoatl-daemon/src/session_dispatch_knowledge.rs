@@ -545,7 +545,7 @@ fn starting_manifest(
 
 /// `base64(path)\tmode\tkind\tsha256` lines of a repository capture. Only
 /// regular files with a well-formed digest are returned.
-fn capture_file_digests(manifest: &str) -> std::collections::BTreeMap<String, String> {
+pub(super) fn capture_file_digests(manifest: &str) -> std::collections::BTreeMap<String, String> {
     use base64::Engine as _;
     let mut files = std::collections::BTreeMap::new();
     for line in manifest.lines() {

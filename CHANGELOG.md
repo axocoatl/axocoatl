@@ -145,6 +145,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Agent keep working.
 
 ### Fixed
+- **Native Agents get the repository's `AXOCOATL.md`.** Native activations never received
+  project instructions, so an Agent ran `npm test` where the file said `npm run check`.
+  A lead, its helpers and the required reviewer are now given the `AXOCOATL.md` at the
+  root of their checkout (up to 64 KiB) in the system prompt, as the compatibility path
+  does. When the activation's starting capture lists the file, only the exact bytes it
+  recorded are used.
 - **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
   longer copies host proxy variables into containers.** Any `sandbox.network` other
   than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was

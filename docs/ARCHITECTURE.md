@@ -699,6 +699,13 @@ and streams that sometimes end early.
   of the ones before it.
   Apply and turn admission refuse a paying Agent whose invocation limit is smaller than
   that allowance plus its own two captures and one answer.
+- **Project instructions.** Every native activation with a repository, whether a lead, a
+  helper or the required reviewer, is given the `AXOCOATL.md` at the root of its checkout
+  (at most 64 KiB) in its system prompt, as the compatibility path does. The host reads it
+  from the Way's clone or the Session's Workspace after the activation's Before capture;
+  when that capture lists the file, only the exact bytes it recorded are used, so the
+  instructions never differ from the retained capture. The system prompt is rebuilt for
+  each request and is not part of the checkpoint.
 - **Bounded context.** Tool output, and long string arguments of the model's own earlier
   calls (such as a whole-file write), older than the latest three to five tool rounds are
   replaced with a placeholder in later requests, moving in steps of three so the request

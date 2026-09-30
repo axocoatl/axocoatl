@@ -32,6 +32,10 @@ pub(super) struct AttemptResourceIdentity {
     fence: Weak<AtomicBool>,
 }
 impl AttemptResourceIdentity {
+    /// This Way's own clone on the host, where its runtime works.
+    pub(super) fn lane_root(&self) -> &SecureDir {
+        &self.lane_root
+    }
     pub(super) fn validate_live(&self) -> Result<()> {
         if !self
             .fence

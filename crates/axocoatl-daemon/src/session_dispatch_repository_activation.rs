@@ -166,6 +166,11 @@ impl RepositoryActivationResource {
         self.owner.validate_dispatch_resource().map_err(error)
     }
 
+    /// The host directory holding this checkout's files.
+    pub(super) fn host_checkout(&self) -> axocoatl_core::SecureDir {
+        self.owner.host_checkout().clone()
+    }
+
     pub(super) fn description(&self) -> Result<ActivationEvidenceContent> {
         // The semantic input remains its immutable original description. The
         // separately retained reattachment proof joins it to this live owner.

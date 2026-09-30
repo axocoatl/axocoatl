@@ -518,6 +518,11 @@ fn reviewer_node() -> TurnNodeId {
 #[tokio::test]
 async fn a_reviewer_that_approves_completes_the_turn() {
     let fixture = review_fixture(2).await;
+    std::fs::write(
+        fixture.repository._workspace.path().join("AXOCOATL.md"),
+        "Every public function keeps its documented edge cases.\n",
+    )
+    .unwrap();
     let lead = fixture.request.node_evidence[0].node_id.clone();
     let scenario = Scenario::new(&["VERDICT: APPROVE\nNothing must change."]);
     let run = run_turn(&fixture, scenario.clone()).await;
@@ -556,6 +561,10 @@ async fn a_reviewer_that_approves_completes_the_turn() {
     let (activation, text) = &requests[0];
     assert_eq!(activation.generation, 1);
     assert!(text.contains("Do the work"), "the request: {text}");
+    assert!(
+        text.contains("Every public function keeps its documented edge cases."),
+        "the reviewer is given the checkout's AXOCOATL.md: {text}"
+    );
     assert!(text.contains("Lead answer, generation 1"), "{text}");
     assert!(text.contains("VERDICT: APPROVE"), "{text}");
     assert!(text.contains("no change to show"), "{text}");

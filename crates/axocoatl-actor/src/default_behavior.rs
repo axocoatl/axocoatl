@@ -16,7 +16,8 @@ use crate::behavior::{AgentBehavior, ExecutionUsageState};
 use crate::error::AgentError;
 use crate::run_control::{AgentRunControl, AgentRunOutcome};
 
-const PROJECT_INSTRUCTION_FILE_MAX_BYTES: usize = 64 * 1024;
+/// Most bytes read from one `AXOCOATL.md` project instructions file.
+pub const PROJECT_INSTRUCTION_FILE_MAX_BYTES: usize = 64 * 1024;
 const PROJECT_INSTRUCTIONS_MAX_BYTES: usize = 256 * 1024;
 const COMPACTION_ARCHIVE_MAX_BYTES: usize = 1024 * 1024;
 const COMPACTION_ARCHIVE_MESSAGE_MAX_BYTES: usize = 64 * 1024;
@@ -109,20 +110,34 @@ pub(crate) fn load_project_instructions(working_dir: &std::path::Path) -> Option
         }
     }
 
-    if chunks.is_empty() {
-        return None;
-    }
+    compose_project_instructions(
+        chunks
+            .iter()
+            .map(|(path, body)| (path.display().to_string(), body.as_str())),
+    )
+}
+
+/// The system-prompt section for `AXOCOATL.md` bodies, root-most first.
+fn compose_project_instructions<'a>(
+    chunks: impl IntoIterator<Item = (String, &'a str)>,
+) -> Option<String> {
     let mut composed = String::from(
         "Project-level instructions from `AXOCOATL.md` files in this \
          repository (root → leaf). Treat these as authoritative team \
          knowledge for working in this codebase:\n\n",
     );
-    for (path, body) in &chunks {
-        composed.push_str(&format!("--- from `{}` ---\n", path.display()));
+    let mut any = false;
+    for (path, body) in chunks {
+        let body = body.trim();
+        if body.is_empty() {
+            continue;
+        }
+        any = true;
+        composed.push_str(&format!("--- from `{path}` ---\n"));
         composed.push_str(body);
         composed.push_str("\n\n");
     }
-    Some(composed)
+    any.then_some(composed)
 }
 
 fn utf8_prefix(value: &str, max_bytes: usize) -> &str {
@@ -1166,6 +1181,16 @@ impl DefaultAgentBehavior {
     /// takes effect on the next actor spawn (session reopen).
     pub fn with_project_instructions(mut self, working_dir: &std::path::Path) -> Self {
         self.project_instructions = load_project_instructions(working_dir);
+        self
+    }
+
+    /// Use the `AXOCOATL.md` the host already read from the root of this
+    /// Agent's repository checkout as its project instructions, in the same
+    /// system-prompt section `with_project_instructions` builds. A blank body
+    /// sets none.
+    pub fn with_repository_instructions(mut self, body: &str) -> Self {
+        self.project_instructions =
+            compose_project_instructions([("AXOCOATL.md".to_string(), body)]);
         self
     }
 
