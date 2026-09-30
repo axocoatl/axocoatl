@@ -298,25 +298,35 @@ impl SessionDispatchController {
         Ok(parse_digests(stdout, &paths))
     }
 
-    /// Signal work owns only its route's paths. File tools refuse other paths
-    /// before any effect; a shell can still write anywhere, so the exact Before
-    /// and After captures of the activation decide. Returns why the activation
-    /// must not be accepted, or `None` when every change stayed in scope.
-    /// Ignored files are outside the captures and are not judged.
+    /// An activation with a write scope may change only those paths. File
+    /// tools refuse other paths before any effect; a shell can still write
+    /// anywhere, so the exact Before and After captures of the activation
+    /// decide. Returns why the activation must not be accepted, or `None` when
+    /// every change stayed in scope. A scope that cannot be read is itself a
+    /// reason. Ignored files are outside the captures and are not judged.
     pub(crate) fn write_scope_violation(
         &self,
         activation: &ActivationRef,
     ) -> Result<Option<String>> {
         let state = self.lock()?;
-        let Some(scope) = state.standing_work()?.and_then(|work| work.write_scope) else {
-            return Ok(None);
+        let admitted = state
+            .authority
+            .activation_profile(activation)
+            .map_err(error)
+            .and_then(|profile| {
+                Ok((
+                    profile.tools.iter().any(|tool| tool == "bash"),
+                    state.admitted_write_scope(activation)?,
+                ))
+            });
+        let Ok((shell, scope)) = admitted else {
+            return Ok(Some(
+                "its admitted write scope cannot be read, so its changes cannot be judged; any \
+                 change is kept for review"
+                    .into(),
+            ));
         };
-        let shell = state
-            .bound
-            .get(&activation.activation_id)
-            .filter(|bound| bound.activation == *activation)
-            .is_some_and(|bound| bound.profile.tools.iter().any(|tool| tool == "bash"));
-        if !shell {
+        if scope.is_unrestricted() || !shell {
             return Ok(None);
         }
         let snapshot = state.canonical.snapshot(&state.turn_id).map_err(error)?;
@@ -329,23 +339,19 @@ impl SessionDispatchController {
                 "its repository captures cannot establish which files it changed, so changes \
                  outside the paths this Agent may change ({}) cannot be ruled out; any change \
                  is kept for review",
-                super::repository_activation::owned_paths(&scope)
+                scope.describe()
             )));
         };
         let outside: Vec<String> = changed
             .into_iter()
-            .filter(|path| {
-                !scope
-                    .iter()
-                    .any(|pattern| axocoatl_session::path_scope::pattern_matches(pattern, path))
-            })
+            .filter(|path| !scope.allows(path))
             .collect();
         Ok((!outside.is_empty()).then(|| {
             format!(
                 "it changed {} outside the paths this Agent may change ({}); the change is kept \
                  for review",
                 outside.join(", "),
-                super::repository_activation::owned_paths(&scope)
+                scope.describe()
             )
         }))
     }

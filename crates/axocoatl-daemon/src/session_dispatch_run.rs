@@ -275,6 +275,19 @@ impl SessionDispatchController {
             controller: self.clone(),
             activation: activation.clone(),
         }));
+        // A read-only helper is never offered the file-writing tools. Its
+        // stored definition keeps them; authority refuses them regardless.
+        let offered_tools: Vec<String> = if profile.write_scope.as_ref().is_some_and(Vec::is_empty)
+        {
+            config
+                .tools
+                .iter()
+                .filter(|tool| !matches!(tool.as_str(), "write_file" | "edit_file"))
+                .cloned()
+                .collect()
+        } else {
+            config.tools.clone()
+        };
         let port = Arc::new(CheckpointPort {
             controller: self.clone(),
             reservation: checkpoint,
@@ -326,7 +339,7 @@ impl SessionDispatchController {
                 let mut behavior = DefaultAgentBehavior::new(provider, counter)
                     .with_tool_round_limit(policy.limits.invocations)
                     .with_tool_executor(tools)
-                    .with_executor_tool_allowlist(config.tools.clone())
+                    .with_executor_tool_allowlist(offered_tools)
                     .with_activation_checkpoint_port(port.clone())
                     .with_stream_observer(observer)
                     .with_stale_tool_result_masking(

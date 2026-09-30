@@ -36,6 +36,8 @@ impl TokenCounter for Counter {
 struct Provider {
     calls: AtomicUsize,
     requests: Mutex<Vec<Vec<ChatMessage>>>,
+    /// Names of the tools each request offered the model.
+    offered: Mutex<Vec<Vec<String>>>,
     operations: Vec<(&'static str, serde_json::Value)>,
 }
 impl Provider {
@@ -43,8 +45,16 @@ impl Provider {
         Arc::new(Self {
             calls: AtomicUsize::new(0),
             requests: Mutex::new(vec![]),
+            offered: Mutex::new(vec![]),
             operations,
         })
+    }
+    /// Whether the tool result of request `index` contains `text`.
+    fn saw(&self, index: usize, text: &str) -> bool {
+        self.requests.lock().unwrap()[index]
+            .iter()
+            .filter_map(ChatMessage::text_content)
+            .any(|content| content.contains(text))
     }
 }
 #[async_trait::async_trait]
@@ -84,6 +94,10 @@ impl LlmProvider for Provider {
             call <= self.operations.len(),
             "fixture provider exceeded its finite response set"
         );
+        self.offered
+            .lock()
+            .unwrap()
+            .push(request.tools.iter().map(|tool| tool.name.clone()).collect());
         self.requests.lock().unwrap().push(request.messages);
         let tool = self.operations.get(call);
         let mut events = if let Some((name, arguments)) = tool {
@@ -133,6 +147,20 @@ impl Run {
 }
 
 fn run(f: &mut Fixture, tools: &[&str], repository_recorded: bool) -> Run {
+    run_with(f, tools, repository_recorded, None)
+}
+
+/// A repository activation whose Agent may change only `writes`.
+fn run_scoped(f: &mut Fixture, tools: &[&str], writes: &[&str]) -> Run {
+    run_with(f, tools, true, Some(writes))
+}
+
+fn run_with(
+    f: &mut Fixture,
+    tools: &[&str],
+    repository_recorded: bool,
+    writes: Option<&[&str]>,
+) -> Run {
     let mut canonical = f._canonical.take().unwrap();
     let mut content = ExecutionContentStore::open_owned(
         canonical
@@ -152,6 +180,7 @@ fn run(f: &mut Fixture, tools: &[&str], repository_recorded: bool) -> Run {
         provider: "controlled".into(),
         model: "controlled-model".into(),
         tools: tools.iter().map(|tool| (*tool).into()).collect(),
+        writes: writes.map(|writes| writes.iter().map(|path| (*path).into()).collect()),
         ..Default::default()
     };
     let profile = ExecutionProfile {
@@ -160,7 +189,7 @@ fn run(f: &mut Fixture, tools: &[&str], repository_recorded: bool) -> Run {
         model: config.model.clone(),
         isolation: "in-process".into(),
         tools: config.tools.clone(),
-        write_scope: None,
+        write_scope: config.writes.clone(),
     };
     let activation = ActivationRef {
         session_id: canonical.owner().session_id.clone(),
@@ -453,6 +482,166 @@ async fn closed_registration_cannot_execute_a_prepared_repository_activation() {
     assert!(!f._workspace.path().join("closed-effect").exists());
 }
 
+#[tokio::test]
+async fn scoped_write_file_is_refused_before_any_effect() {
+    let mut f = fixture().await;
+    let r = run_scoped(&mut f, &["write_file", "edit_file"], &["lib/"]);
+    let provider = Provider::new(vec![
+        (
+            "write_file",
+            serde_json::json!({"path":"config/x", "content":"outside"}),
+        ),
+        (
+            "edit_file",
+            serde_json::json!({"path":"lib/../config/y", "old":"a", "new":"b"}),
+        ),
+    ]);
+    let settled = r
+        .controller
+        .prepare_repository_activation(
+            r.activation.clone(),
+            r.resources(provider.clone()),
+            r.resource.clone(),
+        )
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 3);
+    assert!(provider.saw(
+        1,
+        "config/x is outside the paths this Agent may change (lib/). Leave it unchanged and \
+         describe the needed change in your answer."
+    ));
+    assert!(provider.saw(2, "lib/../config/y uses '..'"));
+    // Refused by the scope, never by the supervisor that would have run it.
+    assert!(!provider.saw(1, "supervision") && !provider.saw(2, "supervision"));
+    assert!(!f._workspace.path().join("config").exists());
+    assert!(f.owner.execution_is_idle().unwrap());
+    let snapshot = r.controller.snapshot().unwrap();
+    assert_eq!(snapshot.contract().invocations().len(), 2);
+    assert!(snapshot
+        .contract()
+        .invocations()
+        .iter()
+        .all(|invocation| invocation.evidence.disposition() == EffectDisposition::OutcomeRecorded));
+    // Without a shell nothing outside the file tools could change the tree.
+    assert!(settled.accepted, "{:?}", settled.failure);
+}
+
+#[tokio::test]
+async fn read_only_helper_is_not_offered_write_tools() {
+    let tools = ["read_file", "write_file", "edit_file", "grep"];
+    let mut f = fixture().await;
+    let r = run_scoped(&mut f, &tools, &[]);
+    let provider = Provider::new(vec![]);
+    let settled = r
+        .controller
+        .prepare_repository_activation(
+            r.activation.clone(),
+            r.resources(provider.clone()),
+            r.resource.clone(),
+        )
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    assert!(settled.accepted, "{:?}", settled.failure);
+    let offered = provider.offered.lock().unwrap()[0].clone();
+    assert!(
+        offered.iter().any(|tool| tool == "read_file"),
+        "{offered:?}"
+    );
+    assert!(offered.iter().any(|tool| tool == "grep"), "{offered:?}");
+    assert!(
+        !offered
+            .iter()
+            .any(|tool| tool == "write_file" || tool == "edit_file"),
+        "{offered:?}"
+    );
+    // The stored definition keeps its tools; only what is offered narrows.
+    assert_eq!(r.config.tools, tools);
+    assert_eq!(r.profile.write_scope, Some(vec![]));
+
+    // The same definition with no scope is offered every tool.
+    let mut f = fixture().await;
+    let r = run(&mut f, &tools, true);
+    let provider = Provider::new(vec![]);
+    r.controller
+        .prepare_repository_activation(
+            r.activation.clone(),
+            r.resources(provider.clone()),
+            r.resource.clone(),
+        )
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    let offered = provider.offered.lock().unwrap()[0].clone();
+    assert!(
+        offered.iter().any(|tool| tool == "write_file"),
+        "{offered:?}"
+    );
+    assert!(
+        offered.iter().any(|tool| tool == "edit_file"),
+        "{offered:?}"
+    );
+}
+
+#[tokio::test]
+async fn write_scope_lookup_fails_closed() {
+    let mut f = fixture().await;
+    let r = run_scoped(&mut f, &["bash", "write_file"], &["lib/"]);
+    // Not yet registered with authority: its scope cannot be read, so its
+    // changes cannot be judged and the activation could not be accepted.
+    let violation = r
+        .controller
+        .write_scope_violation(&r.activation)
+        .unwrap()
+        .unwrap();
+    assert!(
+        violation.starts_with("its admitted write scope cannot be read"),
+        "{violation}"
+    );
+    let prepared = r
+        .controller
+        .prepare_repository_activation(
+            r.activation.clone(),
+            r.resources(Provider::new(vec![])),
+            r.resource.clone(),
+        )
+        .unwrap();
+    // Once registered, the durable record is read. With a shell, captures
+    // that were never taken cannot rule out an out-of-scope change.
+    let violation = r
+        .controller
+        .write_scope_violation(&r.activation)
+        .unwrap()
+        .unwrap();
+    assert!(
+        violation.starts_with("its repository captures cannot establish"),
+        "{violation}"
+    );
+    assert!(violation.contains("(lib/)"), "{violation}");
+    drop(prepared);
+
+    // An unscoped activation is never judged, whatever its captures.
+    let mut f = fixture().await;
+    let r = run(&mut f, &["bash"], true);
+    let _prepared = r
+        .controller
+        .prepare_repository_activation(
+            r.activation.clone(),
+            r.resources(Provider::new(vec![])),
+            r.resource.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        r.controller.write_scope_violation(&r.activation).unwrap(),
+        None
+    );
+}
+
 async fn actual_sandbox(f: &mut Fixture) -> Arc<axocoatl_isolation::SessionSandbox> {
     use axocoatl_isolation::{SandboxNetwork, SandboxPolicy, SessionSandbox};
     use sha2::{Digest, Sha256};
@@ -555,6 +744,97 @@ async fn actual_native_repository_tools_write_edit_full_source_and_keep_owned_se
         .invocations()
         .iter()
         .all(|invocation| invocation.evidence.disposition() == EffectDisposition::OutcomeRecorded));
+}
+
+fn git_init(path: &std::path::Path) {
+    assert!(std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(path)
+        .status()
+        .unwrap()
+        .success());
+}
+
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_read_only_helper_shell_write_is_denied_by_landlock() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    git_init(f._workspace.path());
+    std::fs::write(f._workspace.path().join("existing.txt"), "original\n").unwrap();
+    let r = run_scoped(&mut f, &["bash", "read_file"], &[]);
+    let provider = Provider::new(vec![(
+        "bash",
+        serde_json::json!({"command":"printf changed > existing.txt; printf new > created.txt; \
+            printf scratch > /tmp/scratch.txt && echo scratch-ok"}),
+    )]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let existing = std::fs::read_to_string(f._workspace.path().join("existing.txt"));
+    let created = f._workspace.path().join("created.txt").exists();
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert_eq!(existing.unwrap(), "original\n");
+    assert!(!created);
+    assert!(idle.unwrap());
+    // The shell ran and could still use its scratch space.
+    assert!(provider.saw(1, "scratch-ok"));
+    // Both host captures ran despite the restriction, so the unchanged tree
+    // is established and the helper's answer is accepted.
+    assert!(settled.accepted, "{:?}", settled.failure);
+    let snapshot = r.controller.snapshot().unwrap();
+    assert_eq!(snapshot.contract().invocations().len(), 3);
+}
+
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_shell_change_outside_scope_fails_the_activation() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    git_init(f._workspace.path());
+    std::fs::create_dir_all(f._workspace.path().join("lib")).unwrap();
+    std::fs::write(f._workspace.path().join("lib/y"), "original\n").unwrap();
+    let r = run_scoped(&mut f, &["bash"], &["lib/"]);
+    let provider = Provider::new(vec![(
+        "bash",
+        serde_json::json!({"command":"mkdir -p config && printf x > config/x && printf y > lib/y"}),
+    )]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let outside = std::fs::read_to_string(f._workspace.path().join("config/x"));
+    let inside = std::fs::read_to_string(f._workspace.path().join("lib/y"));
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    // A scoped writer's shell is not restricted; its captures judge it.
+    assert_eq!(outside.unwrap(), "x");
+    assert_eq!(inside.unwrap(), "y");
+    assert!(idle.unwrap());
+    assert!(!settled.accepted);
+    let failure = settled.failure.unwrap();
+    assert!(failure.starts_with("it changed config/x"), "{failure}");
+    assert!(failure.contains("(lib/)"), "{failure}");
 }
 
 #[tokio::test]
