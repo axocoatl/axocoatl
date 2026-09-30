@@ -983,6 +983,135 @@ async fn actual_home_configuration_cannot_hide_a_change_or_run_in_the_capture() 
     assert!(failure.contains("config/secret.txt"), "{failure}");
 }
 
+/// A committed repository of 300 files, far beyond an 8 KiB manifest prefix.
+fn sizeable_repository(root: &std::path::Path) {
+    git_init(root);
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    for index in 0..300 {
+        std::fs::write(
+            root.join(format!("lib/file-{index}.js")),
+            format!("{index}\n"),
+        )
+        .unwrap();
+    }
+    std::fs::write(root.join("config/prod.js"), "prod\n").unwrap();
+    std::fs::write(root.join(".gitignore"), "build/\n").unwrap();
+    for args in [
+        &["add", "-A"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "base",
+        ],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success());
+    }
+}
+
+/// Runs one shell command as an Agent limited to `writes` in an actual
+/// sandbox and settles the activation.
+async fn settle_scoped_shell(
+    f: &mut Fixture,
+    writes: &[&str],
+    command: &str,
+) -> (crate::session_dispatch::SettledActivation, Arc<Provider>) {
+    let sandbox = actual_sandbox(f).await;
+    let r = run_scoped(f, &["bash"], writes);
+    let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
+    let result = tokio::time::timeout(Duration::from_secs(180), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    assert!(idle.unwrap());
+    (result.unwrap().unwrap(), provider)
+}
+
+/// In a repository far larger than an 8 KiB manifest, a scoped writer's
+/// shell hides an edit behind an index flag and a new file behind its own
+/// ignore file, and plants a Git hook. The complete comparison names each.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_scoped_shell_cannot_blind_the_complete_judgement() {
+    let mut f = fixture().await;
+    sizeable_repository(f._workspace.path());
+    let command = "git update-index --skip-worktree config/prod.js && printf x > config/prod.js \
+        && printf '*\\n' > config/.gitignore && printf e > config/evil.js \
+        && printf '#!/bin/sh\\n' > .git/hooks/pre-commit && printf y > lib/file-1.js \
+        && git diff --quiet HEAD -- config && git status --porcelain -- config | wc -l";
+    let (settled, provider) = settle_scoped_shell(&mut f, &["lib/"], command).await;
+    // Git itself no longer shows either change.
+    assert!(
+        provider.saw(1, "\"stdout\":\"0\\n\""),
+        "{:?}",
+        provider.requests.lock().unwrap()[1]
+    );
+    assert!(!settled.accepted);
+    let failure = settled.failure.unwrap();
+    assert!(
+        failure.starts_with(
+            "it changed .git/hooks/pre-commit, config/.gitignore, config/prod.js outside the \
+             paths this Agent may change (lib/)"
+        ),
+        "{failure}"
+    );
+}
+
+/// The kept Before manifest is inside the sandbox, where the Agent's shell
+/// can reach it. Removing or rewriting it fails the activation closed.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_tampering_with_the_kept_manifest_fails_closed() {
+    for tamper in [
+        "for kept in /tmp/axocoatl-baseline.*; do printf x >> \"$kept/manifest\"; done",
+        "rm -rf /tmp/axocoatl-baseline.*",
+    ] {
+        let mut f = fixture().await;
+        sizeable_repository(f._workspace.path());
+        let command = format!("{tamper}; printf x > config/prod.js; echo tampered");
+        let (settled, provider) = settle_scoped_shell(&mut f, &["lib/"], &command).await;
+        assert!(provider.saw(1, "tampered"));
+        assert!(!settled.accepted);
+        let failure = settled.failure.unwrap();
+        assert!(
+            failure.starts_with("its repository captures cannot establish"),
+            "{tamper}: {failure}"
+        );
+    }
+}
+
+/// Ordinary work inside the scope, staged with Git, is accepted.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_scoped_shell_work_inside_its_paths_is_accepted() {
+    let mut f = fixture().await;
+    sizeable_repository(f._workspace.path());
+    let command = "printf y > lib/file-1.js && printf n > lib/new.js && git add lib \
+        && mkdir -p build && printf o > build/out.js && git status --short | wc -l";
+    let (settled, _) = settle_scoped_shell(&mut f, &["lib/"], command).await;
+    assert!(settled.accepted, "{:?}", settled.failure);
+}
+
 /// A file-tool-only writer limited to lib/ writes a file there that an
 /// earlier shell hard-linked to config/x. The write passes the path check,
 /// but the host's captures see config/x change and fail the activation.

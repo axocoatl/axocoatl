@@ -1,11 +1,64 @@
 //! Finite, actual tree observations through the existing invocation authority.
 use super::*;
 use axocoatl_session::execution_content::{
-    ActivationRepositorySnapshot, ActivationRepositorySnapshotView, RepositorySnapshotPhase,
+    is_capture_baseline, ActivationRepositorySnapshot, ActivationRepositorySnapshotView,
+    RepositoryComparison, RepositorySnapshotPhase, MAX_COMPARED_PATH_BYTES,
+    REPOSITORY_CAPTURE_SCRIPT,
 };
 use base64::Engine as _;
 
 pub(super) const CAPTURE: &str = axocoatl_session::execution_content::REPOSITORY_SNAPSHOT_COMMAND;
+
+/// How one capture treats the complete manifest a write-scope judgement
+/// compares (see [`REPOSITORY_CAPTURE_SCRIPT`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum CaptureMode {
+    /// Report the tree and patch only.
+    Observe,
+    /// Also keep the complete manifest in the sandbox for the After capture.
+    Keep,
+    /// Verify that the kept Before manifest at `baseline` still has the
+    /// digest the host recorded, then list every path whose entry changed.
+    Compare { baseline: String, expected: String },
+}
+
+/// The exact capture command of a mode.
+pub(super) fn capture_command(mode: &CaptureMode) -> String {
+    match mode {
+        CaptureMode::Observe => CAPTURE.to_owned(),
+        CaptureMode::Keep => format!("capture_mode=keep\n{REPOSITORY_CAPTURE_SCRIPT}"),
+        CaptureMode::Compare { baseline, expected } => format!(
+            "capture_mode=compare\nbaseline={baseline}\nexpected={expected}\n\
+             {REPOSITORY_CAPTURE_SCRIPT}"
+        ),
+    }
+}
+
+/// The mode of an exact capture command; `None` for any other command.
+pub(super) fn capture_command_mode(command: &str) -> Option<CaptureMode> {
+    if command == CAPTURE {
+        return Some(CaptureMode::Observe);
+    }
+    let head = command.strip_suffix(REPOSITORY_CAPTURE_SCRIPT)?;
+    if head == "capture_mode=keep\n" {
+        return Some(CaptureMode::Keep);
+    }
+    let (baseline, expected) = head
+        .strip_prefix("capture_mode=compare\nbaseline=")?
+        .strip_suffix('\n')?
+        .split_once("\nexpected=")?;
+    (is_capture_baseline(baseline) && is_digest(expected)).then(|| CaptureMode::Compare {
+        baseline: baseline.to_owned(),
+        expected: expected.to_owned(),
+    })
+}
+
+fn is_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
 impl SessionDispatchController {
     pub(crate) async fn capture_activation_repository(
@@ -13,7 +66,7 @@ impl SessionDispatchController {
         activation: &ActivationRef,
         phase: RepositorySnapshotPhase,
     ) -> Result<Option<EvidenceRef>> {
-        let (bound, mut observation) = {
+        let (bound, mut observation, mode) = {
             let state = self.lock()?;
             let snapshot = state.canonical.snapshot(&state.turn_id).map_err(error)?;
             if let Some(previous) = state
@@ -75,7 +128,29 @@ impl SessionDispatchController {
                 observation.unavailable =
                     Some("The approved invocation allowance is exhausted".into());
             }
-            (bound, observation)
+            // An activation whose writes are limited keeps its complete Before
+            // manifest in the sandbox; its After capture compares with it.
+            let restricted = state
+                .admitted_write_scope(activation)
+                .map_or(true, |scope| !scope.is_unrestricted());
+            let mode = match phase {
+                RepositorySnapshotPhase::Before if restricted => CaptureMode::Keep,
+                RepositorySnapshotPhase::After if restricted => state
+                    .content
+                    .repository_snapshots(&snapshot, activation)
+                    .map_err(error)?
+                    .into_iter()
+                    .find(|capture| capture.content.phase == RepositorySnapshotPhase::Before)
+                    .and_then(|before| {
+                        Some(CaptureMode::Compare {
+                            baseline: before.content.baseline?,
+                            expected: before.content.judged_sha256?,
+                        })
+                    })
+                    .unwrap_or(CaptureMode::Observe),
+                _ => CaptureMode::Observe,
+            };
+            (bound, observation, mode)
         };
         if observation.unavailable.is_none() {
             let group = match phase {
@@ -100,7 +175,7 @@ impl SessionDispatchController {
                     name: capture_tool(&bound.profile)
                         .ok_or_else(|| error("Repository capture has no admitted tool"))?
                         .into(),
-                    arguments: serde_json::json!({"command":CAPTURE}),
+                    arguments: serde_json::json!({"command": capture_command(&mode)}),
                     provider_metadata: Default::default(),
                 },
             };
@@ -111,7 +186,7 @@ impl SessionDispatchController {
                 .as_ref()
                 .ok_or_else(|| error("Repository capture has no owned invocation executor"))?;
             let returned = repository
-                .capture_snapshot(CAPTURE)
+                .capture_snapshot(&capture_command(&mode))
                 .await
                 .map_err(|error| error.to_string());
             Box::new(admitted)
@@ -135,7 +210,7 @@ impl SessionDispatchController {
             }
             match returned {
                 Ok(value) => {
-                    if let Err(failure) = parse_capture(&value, &mut observation) {
+                    if let Err(failure) = parse_capture(&value, &mut observation, &mode) {
                         observation.unavailable = Some(failure.to_string());
                     }
                 }
@@ -144,6 +219,9 @@ impl SessionDispatchController {
         }
         if let Some(reason) = &mut observation.unavailable {
             observation.tree_sha256 = None;
+            observation.judged_sha256 = None;
+            observation.baseline = None;
+            observation.compared = None;
             let mut end = reason.len().min(4096);
             while !reason.is_char_boundary(end) {
                 end -= 1;
@@ -307,8 +385,10 @@ impl SessionDispatchController {
     /// captures of every such activation decide. A read-only activation
     /// without a shell is the exception: it can write nothing. Returns why
     /// the activation must not be accepted, or `None` when every change stayed
-    /// in scope. A scope that cannot be read is itself a reason. Ignored files
-    /// are outside the captures and are not judged.
+    /// in scope. A scope that cannot be read is itself a reason. The captures
+    /// compare complete manifests, whatever the index's flags; files the
+    /// repository's ignore rules exclude are not judged, but the ignore files
+    /// Git reads, and Git's own settings, hooks and exclude files, are.
     pub(crate) fn write_scope_violation(
         &self,
         activation: &ActivationRef,
@@ -339,7 +419,7 @@ impl SessionDispatchController {
             .content
             .repository_snapshots(&snapshot, activation)
             .map_err(error)?;
-        let Some(changed) = activation_changed_paths(&captures) else {
+        let Some(changed) = judged_changed_paths(&captures) else {
             return Ok(Some(format!(
                 "its repository captures cannot establish which files it changed, so changes \
                  outside the paths this Agent may change ({}) cannot be ruled out; any change \
@@ -349,7 +429,7 @@ impl SessionDispatchController {
         };
         let outside: Vec<String> = changed
             .into_iter()
-            .filter(|path| !scope.allows(path))
+            .filter(|path| !scope.allows_change(path))
             .collect();
         Ok((!outside.is_empty()).then(|| {
             format!(
@@ -795,8 +875,33 @@ pub(crate) fn is_host_observation(group: u64) -> bool {
     group >= u64::MAX - 4096
 }
 
+/// Every repository path one activation changed, as its After capture
+/// listed them after verifying the complete Before manifest kept in the
+/// sandbox against the digest the host recorded. `None` when its captures
+/// cannot establish that list, so a write scope is never judged on less.
+/// Beside the files it names ignore files Git reads and paths inside `.git`.
+pub(crate) fn judged_changed_paths(
+    captures: &[ActivationRepositorySnapshotView],
+) -> Option<Vec<String>> {
+    let usable = |phase: RepositorySnapshotPhase| {
+        captures
+            .iter()
+            .map(|capture| &capture.content)
+            .find(|capture| capture.phase == phase)
+            .filter(|capture| capture.unavailable.is_none() && capture.tree_sha256.is_some())
+    };
+    let before = usable(RepositorySnapshotPhase::Before)?
+        .judged_sha256
+        .as_ref()?;
+    let after = usable(RepositorySnapshotPhase::After)?;
+    after.judged_sha256.as_ref()?;
+    let compared = after.compared.as_ref()?;
+    (compared.before_sha256 == *before).then(|| compared.changed_paths.clone())
+}
+
 /// Repository paths one activation changed, from its own Before and After
-/// captures, or `None` when they cannot establish it. An unchanged tree digest
+/// captures, or `None` when they cannot establish it. This serves reports of
+/// what changed; a write scope is judged by [`judged_changed_paths`]. An unchanged tree digest
 /// proves no change; complete manifests are compared exactly; otherwise the
 /// retained patches against the same HEAD are compared file by file. Ignored
 /// files are not captured and never appear.
@@ -935,6 +1040,7 @@ fn manifest_changes(before: &str, after: &str) -> Vec<String> {
 pub(super) fn parse_capture(
     value: &serde_json::Value,
     observation: &mut ActivationRepositorySnapshot,
+    mode: &CaptureMode,
 ) -> Result<()> {
     if value.get("exit_code").and_then(serde_json::Value::as_i64) != Some(0)
         || value
@@ -965,7 +1071,12 @@ pub(super) fn parse_capture(
             .copied()
             .ok_or_else(|| error("Incomplete repository capture"))
     };
-    if field("format")? != "1" || fields.len() != 8 {
+    let judgement_fields = match mode {
+        CaptureMode::Observe => 0,
+        CaptureMode::Keep => 2,
+        CaptureMode::Compare { .. } => 3,
+    };
+    if field("format")? != "1" || fields.len() != 8 + judgement_fields {
         return Err(error("Unsupported repository capture"));
     }
     let head = field("head")?;
@@ -1020,6 +1131,51 @@ pub(super) fn parse_capture(
     {
         return Err(error("Captured patch digest differs from its exact bytes"));
     }
+    if matches!(mode, CaptureMode::Observe) {
+        return Ok(());
+    }
+    let judged = field("judged")?;
+    if !is_digest(judged) {
+        return Err(error("Invalid captured manifest digest"));
+    }
+    observation.judged_sha256 = Some(judged.to_owned());
+    match mode {
+        CaptureMode::Observe => {}
+        CaptureMode::Keep => {
+            let baseline = field("baseline")?;
+            if !is_capture_baseline(baseline) {
+                return Err(error("Invalid kept manifest location"));
+            }
+            observation.baseline = Some(baseline.to_owned());
+        }
+        CaptureMode::Compare { expected, .. } => {
+            if field("compared")? != expected {
+                return Err(error(
+                    "Repository capture compared with another Before manifest",
+                ));
+            }
+            let listed = field("changed")?;
+            if listed.len() > MAX_COMPARED_PATH_BYTES * 2 {
+                return Err(error("Repository capture changed too many paths to record"));
+            }
+            let mut changed_paths = Vec::new();
+            for encoded in listed.split(',').filter(|encoded| !encoded.is_empty()) {
+                let path = base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .map_err(|_| error("Invalid changed repository path"))?;
+                changed_paths.push(String::from_utf8_lossy(&path).into_owned());
+            }
+            changed_paths.sort();
+            changed_paths.dedup();
+            if changed_paths.iter().map(String::len).sum::<usize>() > MAX_COMPARED_PATH_BYTES {
+                return Err(error("Repository capture changed too many paths to record"));
+            }
+            observation.compared = Some(RepositoryComparison {
+                before_sha256: expected.clone(),
+                changed_paths,
+            });
+        }
+    }
     Ok(())
 }
 
@@ -1046,6 +1202,9 @@ pub(super) fn empty_observation(
         patch_complete: false,
         patch_base64: None,
         unavailable: None,
+        judged_sha256: None,
+        baseline: None,
+        compared: None,
     }
 }
 
@@ -1176,5 +1335,168 @@ mod manifest_change_tests {
         expected.sort();
         assert_eq!(changed, expected);
         assert_eq!(before.get("a.txt"), after.get("a.txt"));
+    }
+}
+
+#[cfg(test)]
+mod judgement_tests {
+    use super::*;
+
+    fn digest(byte: char) -> String {
+        byte.to_string().repeat(64)
+    }
+
+    #[test]
+    fn only_exact_capture_commands_are_run() {
+        let compare = CaptureMode::Compare {
+            baseline: "/tmp/axocoatl-baseline.AbC123".into(),
+            expected: digest('a'),
+        };
+        for mode in [CaptureMode::Observe, CaptureMode::Keep, compare] {
+            assert_eq!(capture_command_mode(&capture_command(&mode)), Some(mode));
+        }
+        let script = REPOSITORY_CAPTURE_SCRIPT;
+        for refused in [
+            format!("capture_mode=keep\nrm -rf .\n{script}"),
+            format!("capture_mode=compare\nbaseline=/tmp/axocoatl-baseline.x/../y\nexpected={}\n{script}", digest('a')),
+            format!("capture_mode=compare\nbaseline=/home/agent/kept\nexpected={}\n{script}", digest('a')),
+            format!("capture_mode=compare\nbaseline=/tmp/axocoatl-baseline.x\nexpected={}\n{script}", digest('A')),
+            format!("capture_mode=compare\nbaseline=/tmp/axocoatl-baseline.x\nexpected=abc\n{script}"),
+            format!("capture_mode=observe\n{script}; true"),
+            script.to_owned(),
+        ] {
+            assert_eq!(capture_command_mode(&refused), None, "{refused:.80}");
+        }
+    }
+
+    fn output(extra: &str) -> serde_json::Value {
+        let manifest = "bGliL2E=\t644\tfile\t".to_owned() + &digest('b') + "\n";
+        let tree = format!("{:x}", Sha256::digest(manifest.as_bytes()));
+        let patch_sha = format!("{:x}", Sha256::digest(b""));
+        let stdout = format!(
+            "format=1\nhead=unborn\ntree={tree}\nmanifest_bytes={}\nmanifest_b64={}\n\
+             patch_sha256={patch_sha}\npatch_bytes=0\npatch_b64=\n{extra}",
+            manifest.len(),
+            base64::engine::general_purpose::STANDARD.encode(&manifest),
+        );
+        serde_json::json!({"stdout": stdout, "exit_code": 0, "stdout_truncated": false})
+    }
+
+    fn observation() -> ActivationRepositorySnapshot {
+        empty_observation(
+            &ActivationRef {
+                session_id: SessionId::new("s").unwrap(),
+                turn_id: LogicalTurnId::new("t").unwrap(),
+                execution_epoch_id: ExecutionEpochId::new("e").unwrap(),
+                node_id: TurnNodeId::new("n").unwrap(),
+                generation: 1,
+                activation_id: ActivationId::new("a").unwrap(),
+            },
+            RepositorySnapshotPhase::After,
+            &EvidenceRef::new("repository").unwrap(),
+        )
+    }
+
+    #[test]
+    fn judgement_fields_are_read_only_in_the_mode_that_asked_for_them() {
+        let keep = format!(
+            "judged={}\nbaseline=/tmp/axocoatl-baseline.Qx12ab\n",
+            digest('c')
+        );
+        let mut kept = observation();
+        parse_capture(&output(&keep), &mut kept, &CaptureMode::Keep).unwrap();
+        assert_eq!(kept.judged_sha256, Some(digest('c')));
+        assert_eq!(
+            kept.baseline.as_deref(),
+            Some("/tmp/axocoatl-baseline.Qx12ab")
+        );
+        // An observation that reports more than it was asked for is refused.
+        assert!(parse_capture(&output(&keep), &mut observation(), &CaptureMode::Observe).is_err());
+        let bad = format!("judged={}\nbaseline=/home/agent\n", digest('c'));
+        assert!(parse_capture(&output(&bad), &mut observation(), &CaptureMode::Keep).is_err());
+
+        let expected = digest('d');
+        let compare = CaptureMode::Compare {
+            baseline: "/tmp/axocoatl-baseline.Qx12ab".into(),
+            expected: expected.clone(),
+        };
+        let encode = |path: &str| base64::engine::general_purpose::STANDARD.encode(path);
+        let changed = format!(
+            "judged={}\ncompared={expected}\nchanged={},{}\n",
+            digest('e'),
+            encode("config/x"),
+            encode(".git/hooks/pre-commit")
+        );
+        let mut compared = observation();
+        parse_capture(&output(&changed), &mut compared, &compare).unwrap();
+        assert_eq!(
+            compared.compared,
+            Some(RepositoryComparison {
+                before_sha256: expected.clone(),
+                changed_paths: vec![".git/hooks/pre-commit".into(), "config/x".into()],
+            })
+        );
+        let nothing = format!("judged={}\ncompared={expected}\nchanged=\n", digest('e'));
+        let mut unchanged = observation();
+        parse_capture(&output(&nothing), &mut unchanged, &compare).unwrap();
+        assert_eq!(
+            unchanged.compared.unwrap().changed_paths,
+            Vec::<String>::new()
+        );
+        // A comparison with another Before manifest is not this one's.
+        let other = format!(
+            "judged={}\ncompared={}\nchanged=\n",
+            digest('e'),
+            digest('f')
+        );
+        assert!(parse_capture(&output(&other), &mut observation(), &compare).is_err());
+    }
+
+    fn view(content: ActivationRepositorySnapshot) -> ActivationRepositorySnapshotView {
+        ActivationRepositorySnapshotView {
+            reference: EvidenceRef::new("capture").unwrap(),
+            content,
+        }
+    }
+
+    #[test]
+    fn a_write_scope_is_judged_only_on_a_verified_complete_comparison() {
+        let mut before = observation();
+        before.phase = RepositorySnapshotPhase::Before;
+        before.tree_sha256 = Some(digest('1'));
+        before.judged_sha256 = Some(digest('2'));
+        before.baseline = Some("/tmp/axocoatl-baseline.Qx12ab".into());
+        let mut after = observation();
+        after.tree_sha256 = Some(digest('3'));
+        after.judged_sha256 = Some(digest('4'));
+        after.compared = Some(RepositoryComparison {
+            before_sha256: digest('2'),
+            changed_paths: vec!["config/x".into()],
+        });
+        let judged = |before: &ActivationRepositorySnapshot,
+                      after: &ActivationRepositorySnapshot| {
+            judged_changed_paths(&[view(before.clone()), view(after.clone())])
+        };
+        assert_eq!(judged(&before, &after), Some(vec!["config/x".to_owned()]));
+        // Compared with another manifest, or without one kept, nothing is established.
+        let mut other = after.clone();
+        other.compared.as_mut().unwrap().before_sha256 = digest('5');
+        assert_eq!(judged(&before, &other), None);
+        let mut unkept = before.clone();
+        unkept.judged_sha256 = None;
+        assert_eq!(judged(&unkept, &after), None);
+        let mut uncompared = after.clone();
+        uncompared.compared = None;
+        assert_eq!(judged(&before, &uncompared), None);
+        let mut unavailable = after.clone();
+        unavailable.unavailable = Some("the kept Before manifest differs".into());
+        assert_eq!(judged(&before, &unavailable), None);
+        // Equal trees are not taken as proof: the comparison decides.
+        let mut same_tree = after.clone();
+        same_tree.tree_sha256 = before.tree_sha256.clone();
+        assert_eq!(
+            judged(&before, &same_tree),
+            Some(vec!["config/x".to_owned()])
+        );
     }
 }

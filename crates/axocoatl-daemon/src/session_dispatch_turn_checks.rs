@@ -357,9 +357,11 @@ impl SessionDispatchController {
                                 capture.outcome = Some(result.reference().clone());
                                 let bytes = result.stdout().retained_bytes().map_err(error)?;
                                 let value = serde_json::json!({"exit_code":match result.status() {ConditionProcessStatus::Exited {code} => Some(*code), _ => None}, "stdout":String::from_utf8_lossy(&bytes), "stdout_truncated":result.stdout().is_truncated()});
-                                if let Err(failure) =
-                                    repository_snapshot::parse_capture(&value, &mut capture)
-                                {
+                                if let Err(failure) = repository_snapshot::parse_capture(
+                                    &value,
+                                    &mut capture,
+                                    &repository_snapshot::CaptureMode::Observe,
+                                ) {
                                     capture.tree_sha256 = None;
                                     capture.unavailable = Some(failure.to_string());
                                 }

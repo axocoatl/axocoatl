@@ -111,6 +111,26 @@ impl AdmittedWriteScope {
             .iter()
             .all(|scope| axocoatl_session::path_scope::scope_allows(Some(scope), path))
     }
+    /// Whether a change to `path` may stand. An ignore file decides which
+    /// files the captures judge, so one may change only inside a directory
+    /// every scope names whole (such as `lib/`): then all it could hide is
+    /// in scope too.
+    pub(super) fn allows_change(&self, path: &str) -> bool {
+        self.allows(path) && (!is_ignore_file(path) || self.owns_ignore_file(path))
+    }
+    fn owns_ignore_file(&self, path: &str) -> bool {
+        let Some((directory, _)) = path.rsplit_once('/') else {
+            return false;
+        };
+        self.0.iter().all(|scope| {
+            scope.iter().any(|pattern| {
+                pattern.strip_suffix('/').is_some_and(|owned| {
+                    !owned.contains(['*', '?'])
+                        && (directory == owned || directory.starts_with(&format!("{owned}/")))
+                })
+            })
+        })
+    }
     /// How the scope reads in messages to the Agent and the person.
     pub(super) fn describe(&self) -> String {
         if self.is_read_only() {
@@ -279,7 +299,7 @@ impl RepositoryInvocation {
         if !matches!(
             self.scope.intent.tool_name.as_str(),
             "bash" | REPOSITORY_CAPTURE_PORT
-        ) || command != super::repository_snapshot::CAPTURE
+        ) || super::repository_snapshot::capture_command_mode(command).is_none()
         {
             return Err(error(
                 "repository capture is not the fixed approved invocation",
@@ -416,6 +436,11 @@ impl InvocationTool {
     }
 }
 
+/// Whether `path` names a `.gitignore` file.
+fn is_ignore_file(path: &str) -> bool {
+    path.rsplit('/').next() == Some(".gitignore")
+}
+
 /// Why a file tool must not write `path` under `scope`, or `None` to allow it.
 fn write_refusal(scope: Result<AdmittedWriteScope>, root: &Path, path: &str) -> Option<String> {
     let scope = match scope {
@@ -436,9 +461,20 @@ fn write_refusal(scope: Result<AdmittedWriteScope>, root: &Path, path: &str) -> 
     let relative = scoped_relative_path(root, path);
     if relative
         .as_deref()
-        .is_some_and(|relative| scope.allows(relative))
+        .is_some_and(|relative| scope.allows_change(relative))
     {
         return None;
+    }
+    if relative
+        .as_deref()
+        .is_some_and(|relative| scope.allows(relative) && is_ignore_file(relative))
+    {
+        return Some(format!(
+            "{path} decides which files are checked for changes, so this Agent may change it \
+             only inside a directory it may change whole ({}). Leave it unchanged and describe \
+             the needed change in your answer.",
+            scope.describe()
+        ));
     }
     Some(format!(
         "{path} is outside the paths this Agent may change ({}). Leave it unchanged and \
@@ -1090,6 +1126,35 @@ mod write_scope_tests {
         for message in [outside, unreadable] {
             assert!(!message.contains("signal"), "{message}");
         }
+    }
+
+    /// An ignore file may change only inside a directory the scope names
+    /// whole, since it decides what the captures see.
+    #[test]
+    fn ignore_files_change_only_inside_an_owned_directory() {
+        let root = Path::new("/workspace/repo");
+        let owned = scope(&[&["lib/", "docs/*.md", ".gitignore", "src/**/"]]);
+        assert!(owned.allows_change("lib/.gitignore"));
+        assert!(owned.allows_change("lib/deep/.gitignore"));
+        assert!(owned.allows_change("lib/a.js"));
+        for refused in [
+            ".gitignore",
+            "docs/.gitignore",
+            "src/x/.gitignore",
+            "library/.gitignore",
+        ] {
+            assert!(!owned.allows_change(refused), "{refused}");
+        }
+        let message = write_refusal(Ok(owned.clone()), root, ".gitignore").unwrap();
+        assert!(
+            message.contains("decides which files are checked"),
+            "{message}"
+        );
+        assert_eq!(write_refusal(Ok(owned), root, "lib/.gitignore"), None);
+        // Every scope must own the directory.
+        let both = scope(&[&["lib/"], &["lib/a.js"]]);
+        assert!(!both.allows_change("lib/.gitignore"));
+        assert!(both.allows_change("lib/a.js"));
     }
 
     /// No pattern opens Git's own directory to a file tool, although a
