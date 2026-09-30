@@ -58,11 +58,10 @@ pub(crate) struct NativeDefinitionPreparation {
 
 /// Opaque host result. References become executable only through a current
 /// canonical manifest and the actual controller-owned content/authority stores.
-#[allow(dead_code)] // Read by the pending native ingress join.
+/// The captured provider profile stays in content, keyed by the definition.
 pub(crate) struct CapturedNativeDefinition {
     pub(crate) definition: DefinitionSnapshotRef,
     pub(crate) profile: ExecutionProfile,
-    pub(crate) provider_configuration: EvidenceRef,
 }
 
 fn validate_native_config(config: &AgentConfig) -> Result<()> {
@@ -266,7 +265,7 @@ impl NativeDefinitionPreparation {
                 "native capture differs from the exact retained definition",
             ));
         }
-        let retained = content
+        content
             .retain_provider_profile(
                 canonical,
                 &definition.snapshot,
@@ -277,7 +276,6 @@ impl NativeDefinitionPreparation {
         Ok(CapturedNativeDefinition {
             definition: definition.clone(),
             profile: self.profile.clone(),
-            provider_configuration: retained.reference().clone(),
         })
     }
 }

@@ -1,5 +1,5 @@
-//! Actual daemon configuration and retained first-Begin preparation for the
-//! native actor port. Live startup/migration remains owned by the main ingress.
+//! Native Agent definitions and activation factories built from the daemon's
+//! actual configuration and the Session's retained stores.
 use super::*;
 use crate::session_dispatch::{
     AutonomousActivationFactory, CapturedNativeDefinition, NativeDefinitionPreparation,
@@ -29,13 +29,11 @@ fn native_agent_config(
 }
 
 impl AxocoatlDaemon {
-    /// Prepare through the daemon's retained Session ownership, not a path or a
-    /// caller-provided observation. Exact retries reuse the original profile;
-    /// its context is never silently rediscovered after admission.
-    #[allow(dead_code)] // The approved native ingress is still being joined.
-    pub(crate) async fn prepare_native_session_definition(
+    /// Resolve and capture against the same exact retained team owner on both
+    /// sides of provider observation, for first turns and closed successors.
+    pub(crate) async fn prepare_native_session_team_definition(
         &self,
-        token: &session_dispatch::PendingSessionToken,
+        token: &session_dispatch::SessionTeamToken,
         config: AgentConfig,
         definition_id: AgentDefinitionId,
         revision: u64,
@@ -57,56 +55,6 @@ impl AxocoatlDaemon {
         .await
     }
 
-    /// Resolve and capture against the same exact retained team owner on both
-    /// sides of provider observation, for first turns and closed successors.
-    pub(crate) async fn prepare_native_session_team_definition(
-        &self,
-        token: &session_dispatch::SessionTeamToken,
-        config: AgentConfig,
-        definition_id: AgentDefinitionId,
-        revision: u64,
-        initial_limits: GrantLimits,
-    ) -> Result<CapturedNativeDefinition, DaemonError> {
-        crate::session_dispatch::validate_repository_tools(&config.tools).map_err(native_error)?;
-        let credentials = self.configured_native_provider_credentials();
-        let config = native_agent_config(&self.config, &self.provider_registry, config)?;
-        let preparation =
-            NativeDefinitionPreparation::new(config, definition_id, revision, initial_limits)
-                .map_err(native_error)?;
-        let (definition, retained) = self.session_dispatch_lifecycles.with_session_team_stores(
-            token,
-            |canonical, content, _| {
-                canonical
-                    .verify_data_root(&self.data_root)
-                    .map_err(native_error)?;
-                preparation
-                    .prepare_content(canonical, content)
-                    .map_err(native_error)
-            },
-        )?;
-        let runtime = match retained {
-            Some(runtime) => runtime,
-            None => preparation
-                .observe_configured(&credentials)
-                .await
-                .map_err(native_error)?,
-        };
-        runtime
-            .verify_credentials(&credentials)
-            .await
-            .map_err(native_error)?;
-        self.session_dispatch_lifecycles
-            .with_session_team_stores(token, |canonical, content, _| {
-                canonical
-                    .verify_data_root(&self.data_root)
-                    .map_err(native_error)?;
-                preparation
-                    .capture(canonical, content, &definition, &runtime)
-                    .map_err(native_error)
-            })
-    }
-
-    #[allow(dead_code)] // The approved native ingress is still being joined.
     pub(crate) fn native_session_activation_factory(
         &self,
         controller: &SessionDispatchController,
@@ -157,13 +105,13 @@ impl AxocoatlDaemon {
 /// daemon resolves effective configuration before entering this function.
 async fn prepare_retained_native_definition_with_credentials(
     registry: &session_dispatch::SessionDispatchRegistry,
-    token: &session_dispatch::PendingSessionToken,
+    token: &session_dispatch::SessionTeamToken,
     data_root: &SecureDir,
     credentials: &NativeProviderCredentials,
     preparation: NativeDefinitionPreparation,
 ) -> Result<CapturedNativeDefinition, DaemonError> {
     let (definition, retained) =
-        registry.prepare_first_turn_content(token, |canonical, content, _, _| {
+        registry.with_session_team_stores(token, |canonical, content, _| {
             canonical
                 .verify_data_root(data_root)
                 .map_err(native_error)?;
@@ -184,7 +132,7 @@ async fn prepare_retained_native_definition_with_credentials(
         .verify_credentials(credentials)
         .await
         .map_err(native_error)?;
-    registry.prepare_first_turn_content(token, |canonical, content, _, _| {
+    registry.with_session_team_stores(token, |canonical, content, _| {
         canonical
             .verify_data_root(data_root)
             .map_err(native_error)?;
@@ -197,7 +145,7 @@ async fn prepare_retained_native_definition_with_credentials(
 #[cfg(test)]
 async fn prepare_retained_native_definition(
     registry: &session_dispatch::SessionDispatchRegistry,
-    token: &session_dispatch::PendingSessionToken,
+    token: &session_dispatch::SessionTeamToken,
     data_root: &SecureDir,
     base_url: &str,
     preparation: NativeDefinitionPreparation,

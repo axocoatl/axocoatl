@@ -282,6 +282,9 @@ impl SessionDispatchController {
     }
 
     /// Evidence reconciliation does not mint a check permit or start a process.
+    /// The daemon reconciles when it opens a controller and at lifecycle
+    /// boundaries; tests call this directly.
+    #[cfg(test)]
     pub fn reconcile_repository_checks(&self) -> Result<()> {
         let mut state = self.lock()?;
         state.ready()?;

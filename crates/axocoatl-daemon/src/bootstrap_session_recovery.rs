@@ -388,13 +388,14 @@ mod tests {
         drop(controller);
         let registry = session_dispatch::SessionDispatchRegistry::default();
         recover_sessions(ownership, std::slice::from_ref(&session), &registry).unwrap();
-        let (token, latest) = registry
+        let (_, latest) = registry
             .pending_existing_turn(&session.id)
             .unwrap()
             .unwrap();
         assert_eq!(latest, turn_id);
+        let team = registry.session_team_token(&session.id).unwrap();
         registry
-            .prepare_first_turn_content(&token, |canonical, content, _, _| {
+            .with_session_team_stores(&team, |canonical, content, _| {
                 let snapshot = canonical.snapshot(&turn_id).unwrap();
                 assert_eq!(
                     snapshot.contract().state(),
@@ -732,8 +733,9 @@ mod tests {
         let identity = stores.canonical.identity().unwrap();
         let registry = session_dispatch::SessionDispatchRegistry::default();
         let token = registry.retain_existing_session(&mut Some(stores)).unwrap();
+        let team = registry.session_team_token(&session.id).unwrap();
         registry
-            .prepare_first_turn_content(&token, |_, content, _, _| {
+            .with_session_team_stores(&team, |_, content, _| {
                 content
                     .retain_activation_evidence(ActivationEvidenceContent::Guidance {
                         text: "Retained before Close".into(),

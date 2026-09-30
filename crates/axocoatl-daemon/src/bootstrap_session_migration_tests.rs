@@ -161,7 +161,7 @@ async fn real_host_conversion_reconciles_staged_roles_seals_history_and_reopens_
     .unwrap();
     assert!(source.list_session_turn_transactions().unwrap().is_empty());
     let mut expected = Vec::new();
-    for result in &migrated {
+    for (result, spec) in migrated.iter().zip(&specs) {
         assert!(result.canonical.records().unwrap().is_empty());
         assert_eq!(
             result
@@ -172,7 +172,7 @@ async fn real_host_conversion_reconciles_staged_roles_seals_history_and_reopens_
                 .len(),
             1
         );
-        for assignment in &result.assignments {
+        for assignment in &deterministic_assignments(spec).unwrap() {
             let baseline = result
                 .activation_state
                 .committed_reference(&assignment.conversation_id)
@@ -216,8 +216,8 @@ async fn real_host_conversion_reconciles_staged_roles_seals_history_and_reopens_
     )
     .await
     .unwrap();
-    for result in &reopened {
-        for assignment in &result.assignments {
+    for (result, spec) in reopened.iter().zip(&specs) {
+        for assignment in &deterministic_assignments(spec).unwrap() {
             let actual = result
                 .activation_state
                 .committed_reference(&assignment.conversation_id)
@@ -281,7 +281,11 @@ async fn a_real_actor_must_be_joined_and_unregistered_before_explicit_upgrade() 
     assert!(require_migration_quiescence(&actors, &active)
         .await
         .is_err());
-    lease.require_legacy_startup_ready().unwrap();
+    // The root stays in its legacy format until the actors are joined.
+    assert!(matches!(
+        lease.ownership,
+        DataRootFormatOwnership::Legacy(_)
+    ));
     actor
         .stop_and_wait(None, Some(std::time::Duration::from_secs(3)))
         .await
@@ -430,6 +434,7 @@ async fn prepared_source_proven_upgrade_resumes_after_restart_without_settings_o
         std::slice::from_ref(&f.session),
     )
     .unwrap();
+    let assignments = deterministic_assignments(&preparation.sessions[0].specification).unwrap();
     let (upgraded, _) = preparation
         .upgrade_held(
             f.lease.take().unwrap(),
@@ -480,12 +485,12 @@ async fn prepared_source_proven_upgrade_resumes_after_restart_without_settings_o
         1
     );
     assert!(registry.retains_session(&f.session.id).unwrap());
-    let token = registry.prepare_first_turn(&f.session.id).unwrap();
+    let team = registry.session_team_token(&f.session.id).unwrap();
     registry
-        .prepare_first_turn_content(&token, |canonical, _, memory, assignments| {
+        .with_session_team_stores(&team, |canonical, _, memory| {
             assert!(canonical.records().unwrap().is_empty());
             assert_eq!(assignments.len(), 2);
-            for assignment in assignments {
+            for assignment in &assignments {
                 let committed = memory
                     .committed_reference(&assignment.conversation_id)
                     .unwrap()
@@ -642,6 +647,8 @@ async fn unknown_role_upgrade_keeps_history_archive_and_usage_without_replaying_
             preparation.sessions[0].specification.actors[0].policy,
             LegacyActorProjectionPolicy::UnknownRoleHistoryOnly
         );
+        let assignments =
+            deterministic_assignments(&preparation.sessions[0].specification).unwrap();
         let (lease, _) = preparation
             .upgrade_held(
                 lease,
@@ -672,9 +679,9 @@ async fn unknown_role_upgrade_keeps_history_archive_and_usage_without_replaying_
             )
             .await
             .unwrap();
-        let token = registry.prepare_first_turn(&session.id).unwrap();
+        let team = registry.session_team_token(&session.id).unwrap();
         registry
-            .prepare_first_turn_content(&token, |canonical, content, memory, assignments| {
+            .with_session_team_stores(&team, |canonical, content, memory| {
                 let assignment = &assignments[0];
                 let baseline = memory
                     .legacy_baseline_checkpoint(&assignment.conversation_id)

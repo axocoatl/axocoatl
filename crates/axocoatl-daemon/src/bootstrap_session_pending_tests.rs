@@ -1,7 +1,5 @@
 use super::*;
-use crate::bootstrap::session_dispatch::{
-    PendingSessionToken, RegisteredControlPlane, SessionDispatchRegistry,
-};
+use crate::bootstrap::session_dispatch::{RegisteredControlPlane, SessionDispatchRegistry};
 use crate::session_dispatch::{RetainedSessionStores, SuccessorTurn};
 use axocoatl_memory::activation_state::ActivationStateStore;
 use axocoatl_session::execution_content::{
@@ -31,9 +29,12 @@ fn held_stores(canonical: SessionExecutionStore) -> RetainedSessionStores {
     }
 }
 
-fn first_spec(registry: &SessionDispatchRegistry, token: &PendingSessionToken) -> SuccessorTurn {
+/// Retain a definition through the Session's team token, as first-turn
+/// preparation does, and describe a first Begin that uses it.
+fn first_spec(registry: &SessionDispatchRegistry, session_id: &str) -> SuccessorTurn {
+    let team = registry.session_team_token(session_id).unwrap();
     registry
-        .prepare_first_turn_content(token, |_, content, _, _| {
+        .with_session_team_stores(&team, |_, content, _| {
             let definition_id = AgentDefinitionId::new("first-definition").unwrap();
             let definition = content
                 .retain_activation_evidence(ActivationEvidenceContent::Definition {
@@ -183,7 +184,6 @@ async fn first_begin_moves_exact_retained_stores_and_preserves_sealed_legacy_his
         content: stores.content,
         activation_state: stores.memory,
         seal,
-        assignments: vec![],
     });
     let token = registry.retain_migrated_session(&mut migrated).unwrap();
     assert!(migrated.is_none());
@@ -200,9 +200,9 @@ async fn first_begin_moves_exact_retained_stores_and_preserves_sealed_legacy_his
             .unwrap(),
         RegisteredControlPlane::Found(_)
     ));
-    let spec = first_spec(&registry, &token);
+    let spec = first_spec(&registry, &session_id);
     let (controller, _) = registry
-        .begin_first_turn(&token, f.owner.clone(), spec)
+        .begin_first_turn_checked(&token, f.owner.clone(), spec, |_, _, _| Ok(()))
         .unwrap();
     assert_eq!(
         controller.snapshot().unwrap().journal_id(),
@@ -240,10 +240,11 @@ async fn first_attachment_failure_keeps_all_namespaces_and_exact_begin_retry() {
     let identity = registry
         .pending_identity(&token, &f.owner.inner.data_root)
         .unwrap();
-    let spec = first_spec(&registry, &token);
+    let spec = first_spec(&registry, &session_id);
     // Compete for the real child lock, not a fake constructor-error switch.
+    let team = registry.session_team_token(&session_id).unwrap();
     let audit = registry
-        .prepare_first_turn_content(&token, |canonical, _, _, _| {
+        .with_session_team_stores(&team, |canonical, _, _| {
             Ok(
                 axocoatl_session::invocation_audit::InvocationAudit::open_owned(
                     canonical
@@ -255,7 +256,7 @@ async fn first_attachment_failure_keeps_all_namespaces_and_exact_begin_retry() {
         })
         .unwrap();
     assert!(registry
-        .begin_first_turn(&token, f.owner.clone(), spec)
+        .begin_first_turn_checked(&token, f.owner.clone(), spec, |_, _, _| Ok(()))
         .is_err());
     assert_eq!(
         registry
@@ -273,7 +274,7 @@ async fn first_attachment_failure_keeps_all_namespaces_and_exact_begin_retry() {
         2
     );
     let (journal_path, journal) = registry
-        .prepare_first_turn_content(&token, |canonical, _, _, _| {
+        .with_session_team_stores(&team, |canonical, _, _| {
             assert!(canonical
                 .component_namespace(ExecutionComponent::ExecutionContent)
                 .is_err());
@@ -285,9 +286,9 @@ async fn first_attachment_failure_keeps_all_namespaces_and_exact_begin_retry() {
         .unwrap();
     assert!(f.operation.try_lock().is_err());
     drop(audit);
-    let retry = first_spec(&registry, &token);
+    let retry = first_spec(&registry, &session_id);
     let (controller, _) = registry
-        .begin_first_turn(&token, f.owner.clone(), retry)
+        .begin_first_turn_checked(&token, f.owner.clone(), retry, |_, _, _| Ok(()))
         .unwrap();
     assert_eq!(
         controller.snapshot().unwrap().journal_id(),
@@ -304,10 +305,10 @@ async fn failed_first_begin_cleanup_parks_workspace_and_refuses_unknown_work() {
     let registry = SessionDispatchRegistry::default();
     let mut held = Some(held_stores(f._canonical.take().unwrap()));
     let token = registry.retain_existing_session(&mut held).unwrap();
-    let mut bad = first_spec(&registry, &token);
+    let mut bad = first_spec(&registry, &session_id);
     bad.request.turn_id = LogicalTurnId::new("foreign-turn").unwrap();
     assert!(registry
-        .begin_first_turn(&token, f.owner.clone(), bad)
+        .begin_first_turn_checked(&token, f.owner.clone(), bad, |_, _, _| Ok(()))
         .is_err());
     assert!(f.operation.try_lock().is_err());
     let mut cleanup = registry
@@ -332,10 +333,10 @@ async fn failed_first_begin_cleanup_parks_workspace_and_refuses_unknown_work() {
     let registry = SessionDispatchRegistry::default();
     let mut held = Some(held_stores(f._canonical.take().unwrap()));
     let token = registry.retain_existing_session(&mut held).unwrap();
-    let mut bad = first_spec(&registry, &token);
+    let mut bad = first_spec(&registry, &session_id);
     bad.request.turn_id = LogicalTurnId::new("foreign-turn").unwrap();
     assert!(registry
-        .begin_first_turn(&token, f.owner.clone(), bad)
+        .begin_first_turn_checked(&token, f.owner.clone(), bad, |_, _, _| Ok(()))
         .is_err());
     let id = arm_and_drop(&f.owner).await;
     assert!(registry
@@ -348,7 +349,7 @@ async fn failed_first_begin_cleanup_parks_workspace_and_refuses_unknown_work() {
 
 #[tokio::test]
 async fn unclassified_empty_existing_session_is_retained_but_never_inferred_native() {
-    let mut f = fixture().await;
+    let mut f = fixture_with_origin(None, false, false).await;
     let registry = SessionDispatchRegistry::default();
     let session_id = f.owner.metadata().session_id.clone();
     let canonical = f._canonical.take().unwrap();
@@ -418,8 +419,11 @@ async fn actual_empty_migration_returned_stores_join_registry_without_reopening_
         std::fs::read(root.path().join("session-history/turns.v1.jsonl")).unwrap(),
         actual_empty_ledger
     );
+    let team = registry
+        .session_team_token("empty-migrated-session")
+        .unwrap();
     registry
-        .prepare_first_turn_content(&token, |canonical, _, _, _| {
+        .with_session_team_stores(&team, |canonical, _, _| {
             assert!(canonical.native_origin().unwrap().is_none());
             assert!(canonical.legacy_seal().unwrap().is_some());
             assert!(canonical
@@ -531,10 +535,10 @@ async fn first_begin_refuses_visible_and_hidden_sealed_identity_before_any_reque
         let registry = SessionDispatchRegistry::default();
         let mut held = Some(held_stores(fixture._canonical.take().unwrap()));
         let token = registry.retain_existing_session(&mut held).unwrap();
-        let spec = first_spec(&registry, &token);
+        let spec = first_spec(&registry, &session_id);
         let before = historical_read_tree(fixture._data.path());
         let failure = registry
-            .begin_first_turn(&token, fixture.owner.clone(), spec)
+            .begin_first_turn_checked(&token, fixture.owner.clone(), spec, |_, _, _| Ok(()))
             .err()
             .expect("collision must refuse");
         assert!(failure

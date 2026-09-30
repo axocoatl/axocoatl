@@ -3,7 +3,7 @@
 //! The Workspace operation lease excludes participating Session turns, Ways and
 //! lifecycle operations. It is not an exclusive filesystem snapshot: direct
 //! Files/Git routes, existing PTYs, background processes and external editors
-//! still require their own integration. No live v2 ingress is enabled here.
+//! still require their own integration.
 //! After dispatch, raw command output cannot release ownership. A dropped lease
 //! retains its execution gates in the owner. Only an exact opaque supervisor
 //! settlement or explicit checked cleanup can release dispatched execution.
@@ -15,7 +15,7 @@ use axocoatl_isolation::session_sandbox::Sandbox;
 use axocoatl_isolation::supervisor_transport::{
     PreparedSupervisedCommand, ProcessSettlement, SupervisorCancellation,
 };
-use axocoatl_session::execution_store::{DurableSessionIdentity, SessionExecutionStore};
+use axocoatl_session::execution_store::DurableSessionIdentity;
 use axocoatl_session::{
     Session, SessionRuntimeIdentity, SessionStatus, SessionStore, WorkspaceStore,
 };
@@ -81,25 +81,9 @@ struct ExecutionState {
     active: Option<String>,
     retained: Option<RetainedExecution>,
     supervised: Option<SupervisedBinding>,
-    // A bounded exact-repeat cache. Older unrecognized receipts are refused,
-    // never applied to whichever execution happens to be current.
-    last_settled: Option<SupervisedIdentity>,
     admission_closed: bool,
     cleaning: bool,
     released: bool,
-}
-
-impl ExecutionState {
-    fn retained_supervised_binding(&self) -> Result<&SupervisedBinding> {
-        if self.active.is_some() || self.retained.is_none() || self.cleaning || self.released {
-            return Err(failure(
-                "repository has no exclusively retained execution to settle",
-            ));
-        }
-        self.supervised
-            .as_ref()
-            .ok_or_else(|| failure("retained repository execution has no bound supervisor"))
-    }
 }
 
 struct RepositoryOwnerInner {
@@ -168,30 +152,8 @@ fn validate_session_owner(session: &Session, identity: &DurableSessionIdentity) 
 }
 
 impl AxocoatlDaemon {
-    /// Resolve from actual daemon-owned stores and the held canonical data root.
-    /// Call before giving the owner to a driver; a driver must reuse this owner
-    /// rather than attempting to reacquire its own Workspace operation lock.
-    pub async fn session_repository_owner(
-        &self,
-        canonical: &SessionExecutionStore,
-    ) -> Result<SessionRepositoryOwner> {
-        canonical
-            .verify_data_root(&self.data_root)
-            .map_err(|error| failure(error.to_string()))?;
-        let identity = canonical
-            .identity()
-            .map_err(|error| failure(error.to_string()))?;
-        self.repository_owner_for_identity(identity, || {
-            canonical
-                .verify_data_root(&self.data_root)
-                .map_err(|error| failure(error.to_string()))
-        })
-        .await
-    }
-
     /// Physical resources for an exact retained pre-turn entry. The registry
     /// owns canonical stores across these waits and checks the token afterward.
-    #[allow(dead_code)] // Live native ingress is separately gated.
     pub(crate) async fn pending_session_repository_owner(
         &self,
         token: &super::session_dispatch::PendingSessionToken,
@@ -340,18 +302,6 @@ impl AxocoatlDaemon {
         owner.validate_current().await?;
         verify_canonical()?;
         Ok(owner)
-    }
-
-    /// Explicit full-runtime cleanup, never an automatic check completion or
-    /// Drop action. The host must already have authorization to stop this shared
-    /// runtime, including its terminal/background processes. Close must join
-    /// this owner before trying to reacquire the Workspace operation gate.
-    pub async fn cleanup_session_repository_owner(
-        &self,
-        owner: &SessionRepositoryOwner,
-    ) -> Result<()> {
-        self.validate_repository_daemon_binding(owner)?;
-        owner.cleanup_checked().await
     }
 
     pub(crate) fn validate_repository_daemon_binding(
@@ -618,37 +568,6 @@ impl SessionRepositoryOwner {
             .ok_or_else(|| failure("repository cleanup gate was already transferred"))
     }
 
-    /// Collect a late proof after the execution lease was dropped. Only the
-    /// exact retained helper can release its execution/start gates. Workspace
-    /// ownership and any lifecycle Stop fence remain unchanged. The last exact
-    /// acknowledged receipt is an inert repeat, including during a newer run;
-    /// older or foreign receipts are refused without changing ownership.
-    pub fn settle_retained_supervised(&self, settlement: &ProcessSettlement) -> Result<()> {
-        let mut state = self
-            .inner
-            .state
-            .lock()
-            .map_err(|_| failure("repository owner state failed"))?;
-        if state
-            .last_settled
-            .as_ref()
-            .is_some_and(|identity| identity.matches(settlement))
-        {
-            return Ok(());
-        }
-        let binding = state.retained_supervised_binding()?;
-        if !binding.identity.matches(settlement) {
-            return Err(failure(
-                "late process settlement does not match the retained helper",
-            ));
-        }
-        state.last_settled = Some(binding.identity.clone());
-        state.supervised = None;
-        state.retained.take();
-        self.inner.changed.notify_waiters();
-        Ok(())
-    }
-
     pub(crate) async fn validate_current(&self) -> Result<()> {
         if *self.inner.shutdown.borrow() {
             return Err(failure("daemon shutdown closed repository admission"));
@@ -730,6 +649,8 @@ impl SessionRepositoryOwner {
         Ok(cleaned)
     }
 
+    /// Tests drive cleanup without keeping the Workspace operation guard.
+    #[cfg(test)]
     async fn cleanup_checked(&self) -> Result<()> {
         drop(self.cleanup_with_operation().await?);
         Ok(())
@@ -1000,7 +921,6 @@ impl SessionRepositoryExecutionLease {
                     "process settlement does not match this exact prepared helper",
                 ));
             }
-            state.last_settled = Some(binding.identity.clone());
             state.supervised = None;
             state.active = None;
             self.dispatched = false;

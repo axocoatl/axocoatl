@@ -1,10 +1,10 @@
 //! Actual Podman → owned controller → durable condition → lifecycle proof.
-//! This exercises the internal host port; it does not enable live v2 ingress.
+//! The controller joins the registry through the same recovery attachment a
+//! restarted daemon uses for an existing native turn.
 #![cfg(unix)]
 
 use super::*;
 use crate::bootstrap::session_dispatch::SessionDispatchRegistry;
-use crate::session_dispatch::SessionDispatchController;
 use axocoatl_core::TokenUsageStats;
 use axocoatl_isolation::{SandboxNetwork, SandboxPolicy, SessionSandbox};
 use axocoatl_session::control_authority::{AuthorityGrant, ConditionPermission, GrantLimits};
@@ -15,10 +15,10 @@ use axocoatl_session::execution_content::{
 };
 use axocoatl_session::execution_namespace::ExecutionComponent;
 use axocoatl_session::execution_ownership::LegacyFormatOwnership;
-use axocoatl_session::execution_store::ExecutionStoreOwner;
+use axocoatl_session::execution_store::SessionExecutionStore;
 use axocoatl_session::turn_contract::{
     CheckpointSource, ConditionEffectResolution, ConditionKind, ConditionOutcome, ConditionRunId,
-    ConditionRunRef, EvidenceRef, GrantId, GrantSnapshotRef, SessionId, TurnContractEnvelope,
+    ConditionRunRef, EvidenceRef, GrantId, GrantSnapshotRef, TurnContractEnvelope,
     TurnContractEvent,
 };
 use axocoatl_session::{SessionEnvironmentState, SessionMode};
@@ -104,8 +104,15 @@ async fn prove_owned_check(
         .register(&workspace_path, Some("Actual controller check"))
         .unwrap();
     let mut sessions = SessionStore::new_in_secure(&data_root, "sessions").unwrap();
-    let session = sessions
-        .create_with_environment(
+    let format = Arc::new(
+        LegacyFormatOwnership::acquire(&data_path)
+            .unwrap()
+            .upgrade()
+            .unwrap(),
+    );
+    let (session, receipt) = sessions
+        .create_native_with_environment(
+            &format,
             "Actual controller check",
             &workspace.id,
             &workspace.canonical_path,
@@ -120,6 +127,11 @@ async fn prove_owned_check(
             true,
         )
         .unwrap();
+    // The creation receipt binds the untouched Session record. Retain it
+    // before the environment-ready transition, as the real host does.
+    let store_owner = receipt.owner().clone();
+    let mut canonical = SessionExecutionStore::open(format.clone(), store_owner.clone()).unwrap();
+    canonical.record_native_origin(&receipt).unwrap();
     cleanup.names.lock().unwrap().push(session.id.clone());
     let supervisor_root = data_root.child("execution-supervisors").unwrap();
     let policy = SandboxPolicy {
@@ -163,17 +175,6 @@ async fn prove_owned_check(
             None,
         )
         .unwrap();
-    let format = Arc::new(
-        LegacyFormatOwnership::acquire(&data_path)
-            .unwrap()
-            .upgrade()
-            .unwrap(),
-    );
-    let store_owner = ExecutionStoreOwner {
-        workspace_id: workspace.id.clone(),
-        session_id: SessionId::new(session.id.clone()).unwrap(),
-    };
-    let mut canonical = SessionExecutionStore::open(format.clone(), store_owner.clone()).unwrap();
     canonical.verify_data_root(&data_root).unwrap();
     let mut content = ExecutionContentStore::open_owned(
         canonical
@@ -202,7 +203,10 @@ async fn prove_owned_check(
         event.session_id = store_owner.session_id.clone();
         match &mut event.event {
             TurnContractEvent::StartActivation { input } => {
-                input.activation.session_id = store_owner.session_id.clone()
+                input.activation.session_id = store_owner.session_id.clone();
+                // The fixture's recorded repository belongs to its original
+                // Session; this Session's repository is attached below.
+                input.repository = axocoatl_session::turn_contract::RepositoryInput::Unavailable;
             }
             TurnContractEvent::AcceptActivation { activation, .. } => {
                 activation.session_id = store_owner.session_id.clone()
@@ -325,10 +329,58 @@ async fn prove_owned_check(
         }),
     };
     owner.validate_current().await.unwrap();
-    let controller = SessionDispatchController::open(canonical, run.turn_id.clone()).unwrap();
+    // An earlier controller wrote this turn and its per-turn stores; the
+    // registry retains the Session's stores and attaches the existing turn.
+    drop(
+        axocoatl_session::invocation_audit::InvocationAudit::open_owned(
+            canonical
+                .component_namespace(ExecutionComponent::InvocationAudit)
+                .unwrap(),
+        )
+        .unwrap(),
+    );
+    drop(
+        axocoatl_session::control_authority::ControlAuthority::open_owned(
+            canonical
+                .component_namespace(ExecutionComponent::ControlAuthority {
+                    turn_id: run.turn_id.clone(),
+                })
+                .unwrap(),
+        )
+        .unwrap(),
+    );
+    drop(
+        axocoatl_session::control_command::ControlCommandStore::open_owned(
+            canonical
+                .component_namespace(ExecutionComponent::ControlCommands {
+                    turn_id: run.turn_id.clone(),
+                })
+                .unwrap(),
+        )
+        .unwrap(),
+    );
+    let content = ExecutionContentStore::open_owned(
+        canonical
+            .component_namespace(ExecutionComponent::ExecutionContent)
+            .unwrap(),
+    )
+    .unwrap();
+    let memory = axocoatl_memory::activation_state::ActivationStateStore::open_owned(
+        canonical
+            .component_namespace(ExecutionComponent::ActivationState)
+            .unwrap(),
+    )
+    .unwrap();
     let registry = SessionDispatchRegistry::default();
-    let repository = registry
-        .register(controller.clone(), owner.clone())
+    let token = registry
+        .retain_existing_session(&mut Some(crate::session_dispatch::RetainedSessionStores {
+            canonical,
+            content,
+            memory,
+        }))
+        .unwrap();
+    let (controller, repository) = registry
+        .attach_existing_turn(&token, run.turn_id.clone(), owner.clone())
         .unwrap();
     let grant_policy = AuthorityGrant {
         id: "actual-check-grant".into(),

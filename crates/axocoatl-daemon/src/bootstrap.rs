@@ -23,7 +23,6 @@ pub(crate) mod session_team;
 #[path = "bootstrap_ways_history.rs"]
 pub(crate) mod ways_history;
 
-#[allow(dead_code)]
 #[path = "bootstrap_session_migration.rs"]
 pub(crate) mod session_migration;
 
@@ -3068,19 +3067,6 @@ impl DataDirLease {
             ))
         })?;
         Ok(Self { ownership })
-    }
-
-    #[cfg(test)]
-    fn require_legacy_startup_ready(&self) -> Result<(), DaemonError> {
-        if matches!(
-            self.ownership,
-            axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(_)
-        ) {
-            return Err(DaemonError::Session(
-                "This data directory uses the upgraded Session execution format. Live v2 startup is not enabled in this build; legacy reconciliation and execution are refused.".to_string(),
-            ));
-        }
-        Ok(())
     }
 
     fn external_root(&self) -> &SecureDir {

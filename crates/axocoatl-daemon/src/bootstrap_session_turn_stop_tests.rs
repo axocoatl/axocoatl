@@ -6,13 +6,10 @@ use axocoatl_session::turn_contract::LogicalTurnState;
 async fn registered_whole_stop_is_exact_idempotent_and_keeps_repository_open() {
     let mut f = fixture().await;
     let registry = SessionDispatchRegistry::default();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     let snapshot = controller.snapshot().unwrap();
     let session_id = snapshot.owner().session_id.as_str();
     let turn_id = snapshot.turn_id().as_str();
-    registry
-        .register(controller.clone(), f.owner.clone())
-        .unwrap();
     let before = historical_read_tree(f._data.path());
     assert!(registry
         .request_human_turn_stop(session_id, "foreign-turn")
@@ -56,11 +53,8 @@ async fn registered_whole_stop_is_exact_idempotent_and_keeps_repository_open() {
 async fn registry_lifecycle_fence_refuses_stop_without_mutating_turn() {
     let mut f = fixture().await;
     let registry = SessionDispatchRegistry::default();
-    let controller = controller(&mut f);
+    let (controller, _) = begin_registered(&registry, &mut f);
     let snapshot = controller.snapshot().unwrap();
-    registry
-        .register(controller.clone(), f.owner.clone())
-        .unwrap();
     registry.close_all_admission().unwrap();
     let before = controller.snapshot().unwrap().contract().revision();
     assert!(registry
