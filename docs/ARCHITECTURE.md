@@ -739,6 +739,13 @@ and streams that sometimes end early.
   spending) cannot pay for another tool round and an answer, its next request goes
   without tools and asks for the final answer. A limit that still stops it is named in
   plain words in the failure.
+- **Answering when a tool loop stops making progress.** When the Agent's last three tool
+  rounds only printed text (`bash` commands made of `echo`, `printf`, `true`, `:`, `cd`
+  or `pwd`, with no redirection, pipe or substitution), or its last four rounds repeated
+  the same calls and got the same results, its next request goes without tools and asks
+  for the final answer, the same way. A different round in between (an edit before the
+  same test runs again, another file read) starts the count again, polling a terminal
+  never counts, and new guidance from a person resets it.
 - **One retry for a broken stream.** A provider stream that ends early (for Ollama also
   one ended by an error record, such as an unparseable tool call) is retried once. Its
   estimated input and the output it had already streamed are charged to the same grant

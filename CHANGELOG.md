@@ -246,6 +246,15 @@ model-facing `coordination_control` tool, the external harness adapter and the
   needs 36,864.") instead of `Token budget exceeded: used …` or `LLM provider error:
   Invalid request for ollama: provider admission failed: … authority budget or storage
   capacity exhausted`.
+- **An Agent stuck restating its answer is asked for it.** In the 1.1.0 eval a solo
+  Agent that had finished repeated its answer through 18 rounds of `bash`
+  `echo "✅ …"`, about 540,000 tokens with no change, until the budget wrap-up stopped
+  it. When the last three tool rounds only printed text (`bash` commands made of
+  `echo`, `printf`, `true`, `:`, `cd` or `pwd`, with no redirection, pipe or
+  substitution), or the last four repeated the same calls with the same results, the
+  next request now goes without tools and asks for the final answer, as it does at the
+  end of a budget. Editing and running the same test again, reading different files and
+  polling a terminal never trigger it.
 - **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
   longer copies host proxy variables into containers.** Any `sandbox.network` other
   than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was

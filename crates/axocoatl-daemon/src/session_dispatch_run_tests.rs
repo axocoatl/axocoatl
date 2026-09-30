@@ -128,7 +128,13 @@ impl LlmProvider for RunProvider {
                 index: Some(0),
                 id: if call == 0 { "native-call".into() } else { format!("native-call-{call}") },
                 name: Some("effect".into()),
-                args_delta: r#"{"value":"actual"}"#.into(),
+                // Each later round is a new call: identical rounds with the
+                // same result would end the loop as making no progress.
+                args_delta: if call == 0 {
+                    r#"{"value":"actual"}"#.into()
+                } else {
+                    format!(r#"{{"value":"actual","round":{call}}}"#)
+                },
             })]
         } else {
             vec![Ok(StreamEvent::TextDelta {
