@@ -1,8 +1,8 @@
 {
   "id": "release-gate-review",
   "name": "Release gate review · event-driven",
-  "description": "A Skill publishes a typed release event; this durable Automation reviews the gate and parks the evidence for an operator.",
-  "trigger": { "kind": "on_skill", "skill_id": "release-candidate-ready" },
+  "description": "Any ReleaseCandidateReady event on the event feed starts this durable Automation, which reviews the gate and parks the evidence for an operator.",
+  "trigger": { "kind": "on_event", "event": "ReleaseCandidateReady" },
   "enabled": true,
   "nodes": [
     {

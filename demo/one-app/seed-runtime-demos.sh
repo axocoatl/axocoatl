@@ -37,4 +37,5 @@ upsert_automation "$SCRIPT_DIR/automation/weather-brief.json" "weather-brief-dem
 
 echo
 echo "Runtime demonstrations are ready in Settings → Automations."
-echo "Fire Settings → Skills → Release candidate ready for the event-lattice path."
+echo "Fire Settings → Skills → Release candidate ready once; its ReleaseCandidateReady"
+echo "event starts the on_event Release gate review Automation."
