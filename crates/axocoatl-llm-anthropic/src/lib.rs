@@ -1514,13 +1514,18 @@ mod tests {
         for invalid in [
             serde_json::json!({"type":"tool_use","id":"","name":"lookup","input":{}}),
             serde_json::json!({"type":"tool_use","id":"toolu_1","name":"","input":{}}),
-            serde_json::json!({"type":"tool_use","id":"toolu_1","name":"other","input":{}}),
+            serde_json::json!({"type":"tool_use","id":"toolu_1","name":"not/declared","input":{}}),
             serde_json::json!({"type":"tool_use","id":"toolu_1","name":"lookup","input":null}),
             serde_json::json!({"type":"tool_use","id":"toolu_1","name":"lookup","input":7}),
         ] {
             assert!(tool_calls_from_native_blocks(&[invalid], &[lookup_tool()]).is_err());
         }
         assert!(tool_calls_from_native_blocks(&[valid], &[lookup_tool()]).is_ok());
+        // A well-formed call to an undeclared tool is returned for the caller
+        // to answer with a tool error; it never runs.
+        let undeclared =
+            serde_json::json!({"type":"tool_use","id":"toolu_1","name":"other","input":{}});
+        assert!(tool_calls_from_native_blocks(&[undeclared], &[lookup_tool()]).is_ok());
     }
 
     #[test]

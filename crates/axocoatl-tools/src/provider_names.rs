@@ -130,6 +130,17 @@ impl ProviderToolNameMap {
             .map(str::to_string)
     }
 
+    /// The names this request declared, as the provider saw them, sorted.
+    pub fn advertised_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .advertised_provider_names
+            .iter()
+            .map(String::as_str)
+            .collect();
+        names.sort_unstable();
+        names
+    }
+
     fn encode_name_owned(&self, internal_name: String) -> String {
         self.internal_to_provider
             .get(&internal_name)

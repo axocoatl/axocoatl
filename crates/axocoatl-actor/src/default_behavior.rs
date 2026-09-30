@@ -268,6 +268,24 @@ struct StreamChatResult {
     usage_estimate_allowed: bool,
     provider_tool_names: ProviderToolNameMap,
     provider_route: axocoatl_core::ProviderMetadata,
+    /// Calls, by provider index, to a tool the request did not declare, each
+    /// with the tool error the model gets instead. They never run.
+    undeclared_tool_calls: UndeclaredToolCalls,
+}
+
+/// Provider call index to the tool error answering an undeclared call.
+type UndeclaredToolCalls = std::collections::BTreeMap<usize, String>;
+
+/// What the model reads after calling a tool this request did not declare.
+fn undeclared_tool_error(name: &str, available: &[&str]) -> String {
+    let available = if available.is_empty() {
+        "none".to_string()
+    } else {
+        available.join(", ")
+    };
+    format!(
+        "`{name}` is not an available tool. Available tools: {available}. If you are done, answer without calling a tool."
+    )
 }
 
 fn usage_regressed(previous: &TokenUsageStats, next: &TokenUsageStats) -> bool {
@@ -642,6 +660,7 @@ impl DefaultAgentBehavior {
                 usage_estimate_allowed: true,
                 provider_tool_names,
                 provider_route,
+                undeclared_tool_calls: UndeclaredToolCalls::new(),
             });
         }
 
@@ -659,6 +678,7 @@ impl DefaultAgentBehavior {
                         usage_estimate_allowed: true,
                         provider_tool_names,
                         provider_route,
+                        undeclared_tool_calls: UndeclaredToolCalls::new(),
                     });
                 }
                 result = async {
@@ -677,12 +697,16 @@ impl DefaultAgentBehavior {
         let mut saw_usage = false;
         let mut explicit_usage_observation = false;
         let mut observed_usage_complete = true;
+        let mut saw_done = false;
+        // A response rejected after its completion event still incurred the
+        // usage the provider reported for it; an explicit observation keeps
+        // the same Done-and-complete rule as an accepted response.
         macro_rules! fail_stream {
             ($error:expr) => {
                 return Err(self.account_reported_stream_usage_on_error(
                     &usage,
                     saw_usage,
-                    !explicit_usage_observation,
+                    !explicit_usage_observation || (saw_done && observed_usage_complete),
                     $error,
                 ))
             };
@@ -702,7 +726,6 @@ impl DefaultAgentBehavior {
         let mut tool_accum: Vec<ToolAccum> = Vec::new();
 
         let mut cancelled = false;
-        let mut saw_done = false;
         // What this attempt streamed, in case it ends early without usage.
         let mut streamed_output_tokens = 0usize;
         self.abandoned_output_tokens
@@ -724,6 +747,10 @@ impl DefaultAgentBehavior {
             let event = match ev {
                 Ok(event) => event,
                 Err(error) => {
+                    // A provider that refused a response it had completed has
+                    // reported that response's terminal usage.
+                    let refused =
+                        matches!(error, axocoatl_llm::ProviderError::RefusedResponse { .. });
                     let error = match error {
                         axocoatl_llm::ProviderError::IncompleteStream { .. } => {
                             if !saw_usage {
@@ -739,7 +766,7 @@ impl DefaultAgentBehavior {
                     return Err(self.account_reported_stream_usage_on_error(
                         &usage,
                         saw_usage,
-                        !explicit_usage_observation,
+                        !explicit_usage_observation || (refused && observed_usage_complete),
                         error,
                     ));
                 }
@@ -870,7 +897,7 @@ impl DefaultAgentBehavior {
                         self.account_reported_stream_usage_on_error(
                             &usage,
                             saw_usage,
-                            !explicit_usage_observation,
+                            !explicit_usage_observation || (saw_done && observed_usage_complete),
                             error,
                         )
                     })?;
@@ -878,6 +905,7 @@ impl DefaultAgentBehavior {
                 StreamEvent::Usage(u) => {
                     if explicit_usage_observation && usage_regressed(&usage, &u) {
                         retain_usage_highwater(&mut usage, &u);
+                        observed_usage_complete = false;
                         fail_stream!(AgentError::Provider(
                             "provider cumulative usage observation decreased".to_string(),
                         ));
@@ -890,6 +918,7 @@ impl DefaultAgentBehavior {
                     explicit_usage_observation = true;
                     if saw_usage && usage_regressed(&usage, &observation.usage) {
                         retain_usage_highwater(&mut usage, &observation.usage);
+                        observed_usage_complete = false;
                         fail_stream!(AgentError::Provider(
                             "provider cumulative usage observation decreased".to_string(),
                         ));
@@ -920,6 +949,7 @@ impl DefaultAgentBehavior {
             ));
         }
 
+        let mut undeclared_tool_calls = UndeclaredToolCalls::new();
         let tool_calls = if cancelled {
             // Cancellation drops partial native call state. Parsing an
             // intentionally interrupted argument buffer would relabel a clean
@@ -928,12 +958,31 @@ impl DefaultAgentBehavior {
         } else {
             tool_accum
                 .into_iter()
-                .map(|t| {
-                    let Some(name) = provider_tool_names.decode_advertised_name_owned(t.name)
-                    else {
-                        return Err(AgentError::Provider(
-                            "provider returned an empty or undeclared tool-call name".to_string(),
-                        ));
+                .enumerate()
+                .map(|(index, t)| {
+                    // A well-formed call to a tool this request did not
+                    // declare is the model's mistake, not a protocol failure:
+                    // it is kept in history and answered with a tool error,
+                    // and never runs. A name that could not be replayed to
+                    // the provider stays malformed.
+                    let name = match provider_tool_names.decode_advertised_name(&t.name) {
+                        Some(name) => name.to_string(),
+                        None if axocoatl_llm::is_portable_tool_name(&t.name) => {
+                            undeclared_tool_calls.insert(
+                                index,
+                                undeclared_tool_error(
+                                    &t.name,
+                                    &provider_tool_names.advertised_names(),
+                                ),
+                            );
+                            provider_tool_names.decode_name_owned(t.name)
+                        }
+                        None => {
+                            return Err(AgentError::Provider(
+                                "provider returned an empty or malformed tool-call name"
+                                    .to_string(),
+                            ));
+                        }
                     };
                     let arguments: serde_json::Value =
                         serde_json::from_str(&t.args).map_err(|_| {
@@ -965,7 +1014,7 @@ impl DefaultAgentBehavior {
                     self.account_reported_stream_usage_on_error(
                         &usage,
                         saw_usage,
-                        !explicit_usage_observation,
+                        !explicit_usage_observation || (saw_done && observed_usage_complete),
                         error,
                     )
                 })?
@@ -1009,6 +1058,7 @@ impl DefaultAgentBehavior {
             usage_estimate_allowed: !explicit_usage_observation,
             provider_tool_names,
             provider_route,
+            undeclared_tool_calls,
         })
     }
 
@@ -3063,6 +3113,7 @@ impl AgentBehavior for DefaultAgentBehavior {
             usage_estimate_allowed,
             provider_tool_names,
             provider_route,
+            mut undeclared_tool_calls,
         } = self.stream_chat(request, provider_tool_names).await?;
         if provider_cancelled {
             self.active_run_cancelled = true;
@@ -3223,6 +3274,27 @@ impl AgentBehavior for DefaultAgentBehavior {
                                 .map(|(offset, call)| (call_index + offset, call)),
                         );
                         break;
+                    }
+                    if let Some(error) = undeclared_tool_calls.get(&call_index) {
+                        // The request did not declare this tool. It never
+                        // reaches hooks, admission or dispatch and records no
+                        // intent; the model gets a tool error and continues.
+                        tracing::warn!(
+                            agent = %self.agent_id,
+                            tool = %tc.name,
+                            "Model called a tool that was not declared; answering it with a tool error"
+                        );
+                        surfaced_calls.push((call_index, tc.clone()));
+                        deferred_results.push((
+                            call_index,
+                            axocoatl_tools::ToolResult {
+                                seq: call_index,
+                                tool_call: tc.clone(),
+                                result: Ok(serde_json::json!({ "error": error })),
+                            },
+                            false,
+                        ));
+                        continue;
                     }
                     if !self.tool_allowed(&tc.name) {
                         // Defense in depth: request-time advertisement already
@@ -3684,6 +3756,7 @@ impl AgentBehavior for DefaultAgentBehavior {
                     );
                 }
                 response = streamed.response;
+                undeclared_tool_calls = streamed.undeclared_tool_calls;
                 if usage_estimate_allowed && response.usage.total() == 0
                     && (!provider_cancelled || !response.content.is_empty())
                 {
@@ -3701,16 +3774,15 @@ impl AgentBehavior for DefaultAgentBehavior {
                 // No tool executor — record calls but don't execute
                 unresolved_tool_count = unresolved_tool_count
                     .saturating_add(response.tool_calls.len());
-                if let Some(call) = response.tool_calls.last() {
-                    last_tool_error = Some((
-                        call.name.clone(),
-                        "no executor was available for the requested tool".to_string(),
-                    ));
-                }
                 for (provider_call_index, tc) in response.tool_calls.iter().enumerate() {
-                    let result = serde_json::json!({
-                        "error": "no executor was available for the requested tool"
-                    });
+                    let error = undeclared_tool_calls
+                        .get(&provider_call_index)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            "no executor was available for the requested tool".to_string()
+                        });
+                    last_tool_error = Some((tc.name.clone(), error.clone()));
+                    let result = serde_json::json!({ "error": error });
                     self.emit_stream(crate::behavior::AgentStreamChunk::ToolCallStarted {
                         source_agent: None,
                         id: tc.id.clone(),
@@ -3763,6 +3835,7 @@ impl AgentBehavior for DefaultAgentBehavior {
             self.observe_prompt_scale(prompt_estimate, streamed.response.usage.input_tokens, streamed.usage_complete);
         }
         response = streamed.response;
+        undeclared_tool_calls = streamed.undeclared_tool_calls;
         if streamed.usage_estimate_allowed && response.usage.total() == 0
             && (!provider_cancelled || !response.content.is_empty()) {
             response.usage = TokenUsageStats::new(est, self.estimated_response_output_tokens(&response));
@@ -4253,6 +4326,7 @@ mod tests {
     include!("default_behavior_usage_tests.rs");
     include!("default_behavior_context_fit_tests.rs");
     include!("default_behavior_repeat_tests.rs");
+    include!("default_behavior_undeclared_tests.rs");
     use axocoatl_core::{AgentConfig, AgentId, OverflowPolicy, TokenBudget, TokenUsageStats};
     use axocoatl_llm::{
         ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError, StreamEvent,
@@ -8110,11 +8184,21 @@ mod tests {
         let behavior = DefaultAgentBehavior::new(provider, simple_counter());
         let (request, provider_tool_names) =
             DefaultAgentBehavior::encode_provider_request(request).unwrap();
-        let error = match behavior.stream_chat(request, provider_tool_names).await {
-            Err(error) => error,
-            Ok(_) => panic!("history-only alias must not be callable"),
+        let streamed = match behavior.stream_chat(request, provider_tool_names).await {
+            Ok(streamed) => streamed,
+            Err(error) => panic!("an undeclared call is answered, not a failure: {error}"),
         };
-        assert!(matches!(error, AgentError::Provider(_)), "{error:?}");
+        // The history-only alias keeps its canonical name for replay but is
+        // undeclared on this request, so it is answered and never callable.
+        assert_eq!(streamed.response.tool_calls[0].name, historical);
+        let error = streamed
+            .undeclared_tool_calls
+            .get(&0)
+            .expect("history-only alias must not be callable");
+        assert!(
+            error.contains("is not an available tool. Available tools: echo."),
+            "{error}"
+        );
     }
 
     #[tokio::test]
@@ -8234,13 +8318,26 @@ mod tests {
             .execute(AgentInput::text("call a missing tool"))
             .await
             .unwrap_err();
-        let AgentError::Provider(reason) = error else {
+        let AgentError::ToolFailed { reason, .. } = error else {
             panic!("unexpected undeclared-call error: {error}");
         };
-        assert!(reason.contains("empty or undeclared tool-call name"));
+        assert!(reason.contains("0 failed and 1 unresolved"), "{reason}");
         assert!(
-            unresolved_chunks.try_recv().is_err(),
-            "an undeclared call must fail before hooks, evidence, or dispatch"
+            reason.contains("`unavailable_tool` is not an available tool. Available tools: none."),
+            "{reason}"
+        );
+        let mut undeclared_results = 0;
+        while let Ok(chunk) = unresolved_chunks.try_recv() {
+            if matches!(
+                chunk,
+                AgentStreamChunk::ToolCallResult { is_error: true, .. }
+            ) {
+                undeclared_results += 1;
+            }
+        }
+        assert_eq!(
+            undeclared_results, 1,
+            "the undeclared call is answered, never dispatched"
         );
     }
 
@@ -8694,18 +8791,22 @@ mod tests {
         };
         behavior.on_start(&config).await.unwrap();
 
-        let error = behavior
+        // The undeclared call is answered with a tool error and the model
+        // finishes; it never reaches hooks or the dispatcher.
+        let output = behavior
             .execute(AgentInput::text("try the disallowed tool"))
             .await
-            .unwrap_err();
-        assert!(matches!(error, AgentError::Provider(_)));
+            .unwrap();
+        assert_eq!(output.content, "final answer");
         assert!(captured_hook_names.lock().unwrap().is_empty());
-        assert!(behavior.session().as_chat_messages().iter().all(|message| {
-            message
-                .tool_calls
-                .iter()
-                .all(|call| call.name != "always_fail")
-        }));
+        assert_eq!(output.tool_calls.len(), 1);
+        assert_eq!(
+            output.tool_calls[0].result,
+            Some(serde_json::json!({
+                "error": "`always_fail` is not an available tool. Available tools: echo. If you are done, answer without calling a tool."
+            })),
+            "the executor's always_fail tool never ran"
+        );
     }
 
     #[tokio::test]

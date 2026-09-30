@@ -537,10 +537,10 @@ async fn native_tool_ids_arguments_results_and_thinking_roundtrip() {
 }
 
 #[tokio::test]
-async fn malformed_undeclared_duplicate_or_unidentified_tools_are_not_actionable() {
+async fn malformed_unreplayable_duplicate_or_unidentified_tools_are_not_actionable() {
     for calls in [
         json!([{"function":{"name":"lookup","arguments":{}}}]),
-        json!([{"id":"x","function":{"name":"other","arguments":{}}}]),
+        json!([{"id":"x","function":{"name":"not/declared","arguments":{}}}]),
         json!([{"id":"x","function":{"name":"lookup","arguments":"{}"}}]),
         json!([{"id":"x","function":{"name":"lookup","arguments":{}}},{"id":"x","function":{"name":"lookup","arguments":{}}}]),
     ] {
@@ -554,6 +554,81 @@ async fn malformed_undeclared_duplicate_or_unidentified_tools_are_not_actionable
             .unwrap();
         assert!(provider.chat(tools_request()).await.is_err());
     }
+}
+
+/// Small models call tools nobody declared next to a finished answer. The
+/// call is returned for the caller to answer with a tool error; it is not a
+/// protocol failure that discards the response.
+#[tokio::test]
+async fn a_well_formed_call_to_an_undeclared_tool_is_returned_with_the_answer() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    let mut call = record("", false);
+    call["message"]["tool_calls"] =
+        json!([{"id":"call_1","function":{"index":0,"name":"report","arguments":{"issue":"x"}}}]);
+    response(
+        &server,
+        &[
+            record("The bug is in manifest.js.", false),
+            call,
+            counted(record("", true), json!(11), json!(4)),
+        ],
+    )
+    .await;
+    let provider = NativeOllamaProvider::connect(config(&server))
+        .await
+        .unwrap();
+    let outcome = provider.chat_with_accounting(tools_request()).await;
+    let response = outcome.response.unwrap();
+    assert_eq!(response.content, "The bug is in manifest.js.");
+    assert_eq!(response.finish_reason, FinishReason::ToolUse);
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].name, "report");
+    assert!(outcome.usage.complete);
+}
+
+/// A malformed call is still refused, but only after the response's `done`
+/// record: the usage the server reported for it comes first, complete, so
+/// the call can be settled instead of losing its accounting.
+#[tokio::test]
+async fn a_refused_tool_call_is_reported_after_the_terminal_usage() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    let mut call = record("", false);
+    call["message"]["tool_calls"] =
+        json!([{"id":"call_1","function":{"index":0,"name":"lookup","arguments":"[]"}}]);
+    response(
+        &server,
+        &[call, counted(record("", true), json!(11), json!(4))],
+    )
+    .await;
+    let provider = NativeOllamaProvider::connect(config(&server))
+        .await
+        .unwrap();
+    let mut stream = provider.chat_stream(tools_request()).await.unwrap();
+    let mut last_usage = None;
+    let error = loop {
+        match stream
+            .next()
+            .await
+            .expect("the stream ends with its refusal")
+        {
+            Ok(StreamEvent::UsageObservation(usage)) => last_usage = Some(usage),
+            Ok(StreamEvent::ToolCallDelta { .. } | StreamEvent::Done { .. }) => {
+                panic!("a refused call is never released")
+            }
+            Ok(_) => {}
+            Err(error) => break error,
+        }
+    };
+    assert!(
+        matches!(&error, ProviderError::RefusedResponse { message, .. } if message.contains("non-object")),
+        "{error:?}"
+    );
+    let usage = last_usage.expect("terminal usage precedes the refusal");
+    assert!(usage.complete);
+    assert_eq!(usage.usage, TokenUsageStats::new(11, 4));
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test]

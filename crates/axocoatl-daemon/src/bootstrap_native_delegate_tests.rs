@@ -385,6 +385,12 @@ struct Scenario {
     rendezvous: Option<tokio::sync::watch::Sender<usize>>,
     answer: String,
     helper_fails: bool,
+    /// The helper's first response carries its finding as text next to a
+    /// call to `report`, a tool nobody declared, as small local models do.
+    helper_calls_undeclared_tool_first: bool,
+    /// The helper's response is refused after the provider reported its
+    /// complete usage, as a malformed tool call is.
+    helper_refused_after_usage: bool,
     lead_fails_first_generation: bool,
     hold_helper: Option<Arc<tokio::sync::Semaphore>>,
     hold_first_helper_setup: Option<Arc<HelperSetupGate>>,
@@ -401,6 +407,8 @@ impl Scenario {
             rendezvous: None,
             answer: answer.into(),
             helper_fails: false,
+            helper_calls_undeclared_tool_first: false,
+            helper_refused_after_usage: false,
             lead_fails_first_generation: false,
             hold_helper: None,
             hold_first_helper_setup: None,
@@ -558,7 +566,7 @@ impl LlmProvider for HelperProvider {
         request: ChatRequest,
     ) -> std::result::Result<EventStream, ProviderError> {
         self.scenario.helper_requests.lock().unwrap().push(request);
-        self.scenario.helper_calls.fetch_add(1, Ordering::SeqCst);
+        let call = self.scenario.helper_calls.fetch_add(1, Ordering::SeqCst);
         if let Some(hold) = &self.scenario.hold_helper {
             hold.acquire().await.unwrap().forget();
         }
@@ -575,6 +583,33 @@ impl LlmProvider for HelperProvider {
         }
         if self.scenario.helper_fails {
             return Ok(provider_failure("helper provider failed"));
+        }
+        if self.scenario.helper_calls_undeclared_tool_first && call == 0 {
+            return Ok(finished(
+                vec![
+                    StreamEvent::TextDelta {
+                        delta: "Found it: the comparison only checks neighbours.".into(),
+                    },
+                    StreamEvent::ToolCallDelta {
+                        index: Some(0),
+                        id: "report-call".into(),
+                        name: Some("report".into()),
+                        args_delta: serde_json::json!({"issue": "neighbours only"}).to_string(),
+                    },
+                ],
+                FinishReason::ToolUse,
+            ));
+        }
+        if self.scenario.helper_refused_after_usage {
+            return Ok(Box::pin(tokio_stream::iter(vec![
+                Ok(StreamEvent::UsageObservation(
+                    axocoatl_core::MeasuredTokenUsage::known(TokenUsageStats::new(7, 3)),
+                )),
+                Err(ProviderError::RefusedResponse {
+                    provider: "ollama".into(),
+                    message: "provider returned malformed or non-object tool-call arguments".into(),
+                }),
+            ])));
         }
         Ok(finished(
             vec![StreamEvent::TextDelta {
@@ -991,6 +1026,110 @@ async fn failed_helper_returns_a_tool_error_and_the_lead_completes() {
     assert_eq!(accepted[0].activation.node_id, lead);
 }
 
+/// A helper's answer next to a call to a tool nobody declared is not lost:
+/// the helper is told the tool does not exist, answers, and the lead gets it.
+#[tokio::test]
+async fn helper_calling_an_undeclared_tool_is_told_so_and_its_answer_reaches_the_lead() {
+    let fixture = lead_fixture_with_helpers(100000, &[("scout", &["read_file"])]).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let mut scenario = Scenario::new("The comparison only checks neighbours.");
+    scenario.helper_calls_undeclared_tool_first = true;
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed),
+        "{:?}",
+        outcome.snapshot.contract()
+    );
+    assert_eq!(scenario.helper_calls(), 2);
+    let node = helper_node(&outcome.snapshot, &lead).expect("one helper node");
+    let accepted = outcome.snapshot.contract().current_accepted_activations();
+    assert!(
+        accepted.iter().any(|item| item.activation.node_id == node),
+        "the helper finished"
+    );
+
+    let second = scenario.helper_requests.lock().unwrap()[1].clone();
+    let refused = second
+        .messages
+        .iter()
+        .find(|message| message.tool_call_id.as_deref() == Some("report-call"))
+        .expect("the undeclared call is answered in the helper's conversation");
+    let refused = refused.text_content().unwrap();
+    assert!(
+        refused.contains("`report` is not an available tool. Available tools: ")
+            && refused.contains("read_file")
+            && refused.contains("If you are done, answer without calling a tool."),
+        "{refused}"
+    );
+    let answer = scenario.last_delegate_result();
+    assert!(
+        answer.contains("The comparison only checks neighbours."),
+        "{answer}"
+    );
+    assert!(!answer.contains("did not finish"), "{answer}");
+    // The undeclared call was never admitted as an invocation.
+    let helper_grant = outcome
+        .snapshot
+        .contract()
+        .activations()
+        .iter()
+        .find(|item| item.activation.node_id == node)
+        .and_then(|item| item.input.grant.as_ref())
+        .unwrap()
+        .grant_id
+        .as_str()
+        .to_owned();
+    let helper_usage = run.controller.grant_usage_for_test(&helper_grant);
+    assert_eq!(
+        helper_usage.invocations, 2,
+        "two provider calls, no tool call"
+    );
+    assert_eq!(helper_usage.tokens, 20);
+}
+
+/// A helper response refused after the provider reported its complete usage
+/// is charged that usage, not the whole reservation, and the lead continues.
+#[tokio::test]
+async fn refused_helper_response_settles_the_usage_its_provider_reported() {
+    let fixture = lead_fixture(100000).await;
+    let lead = fixture.request.node_evidence[0].node_id.clone();
+    let mut scenario = Scenario::new("never produced");
+    scenario.helper_refused_after_usage = true;
+    let scenario = Arc::new(scenario);
+    let run = run_lead(&fixture, scenario.clone(), false).await;
+    let outcome = run.outcome.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed)
+    );
+    let node = helper_node(&outcome.snapshot, &lead).unwrap();
+    let helper = outcome
+        .snapshot
+        .contract()
+        .activations()
+        .iter()
+        .rev()
+        .find(|item| item.activation.node_id == node)
+        .unwrap();
+    assert_eq!(helper.state, ActivationState::Failed);
+    let helper_grant = helper
+        .input
+        .grant
+        .as_ref()
+        .unwrap()
+        .grant_id
+        .as_str()
+        .to_owned();
+    let helper_usage = run.controller.grant_usage_for_test(&helper_grant);
+    // The call reserved 100 tokens; its provider reported 10.
+    assert_eq!(helper_usage.tokens, 10);
+    let error = scenario.last_delegate_result();
+    assert!(error.contains("did not finish"), "{error}");
+}
+
 #[tokio::test]
 async fn delegated_helper_budget_is_reserved_from_the_lead_grant_and_its_unused_part_returned() {
     let fixture = lead_fixture(100000).await;
@@ -1174,17 +1313,25 @@ async fn delegate_is_unavailable_without_a_delegation_policy() {
     let scenario = Arc::new(Scenario::new("never produced"));
     let run = run_lead(&fixture, scenario.clone(), false).await;
     let outcome = run.outcome.unwrap();
-    let requests = scenario.lead_requests.lock().unwrap();
-    assert!(!requests.is_empty());
-    assert!(requests
-        .iter()
-        .all(|(_, request)| request.tools.iter().all(|tool| tool.name != "delegate")));
-    // A forced call names an undeclared tool and fails before admission. The
-    // dispatch gate's own refusal is covered by
+    {
+        let requests = scenario.lead_requests.lock().unwrap();
+        assert!(!requests.is_empty());
+        assert!(requests
+            .iter()
+            .all(|(_, request)| request.tools.iter().all(|tool| tool.name != "delegate")));
+    }
+    // A forced call names an undeclared tool: it is answered with a tool
+    // error before admission, records no invocation, and the lead finishes.
+    // The dispatch gate's own refusal is covered by
     // `delegate_without_a_delegation_policy_is_refused_at_the_gate`.
     assert_eq!(
         outcome.snapshot.contract().state(),
-        Some(LogicalTurnState::NeedsAttention)
+        Some(LogicalTurnState::Completed)
+    );
+    let refused = scenario.last_delegate_result();
+    assert!(
+        refused.contains("`delegate` is not an available tool."),
+        "{refused}"
     );
     assert!(outcome.snapshot.contract().invocations().is_empty());
     assert_eq!(outcome.snapshot.contract().graph().unwrap().nodes.len(), 2);

@@ -93,13 +93,7 @@ pub fn validate_provider_request(
 
     let mut names = std::collections::HashSet::with_capacity(request.tools.len());
     for (index, tool) in request.tools.iter().enumerate() {
-        let valid_name = !tool.name.is_empty()
-            && tool.name.len() <= MAX_PROVIDER_TOOL_NAME_BYTES
-            && tool
-                .name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
-        if !valid_name {
+        if !is_portable_tool_name(&tool.name) {
             return Err(ProviderError::InvalidRequest {
                 provider: provider.to_string(),
                 message: format!(
@@ -124,10 +118,26 @@ pub fn validate_provider_request(
     Ok(())
 }
 
-/// Validate one normalized tool call before a non-streaming response becomes
-/// actionable. Provider output is untrusted: malformed arguments, empty names,
-/// and calls to functions that were not advertised must fail closed just like
-/// the actor's streaming accumulator.
+/// Whether a tool name fits the portable 1-64 byte `[A-Za-z0-9_-]` contract
+/// every shipped provider accepts, in declarations and in replayed history.
+pub fn is_portable_tool_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_PROVIDER_TOOL_NAME_BYTES
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+/// Validate one normalized tool call before a response becomes actionable.
+/// Provider output is untrusted: empty names and malformed arguments fail
+/// closed just like the actor's streaming accumulator.
+///
+/// A well-formed call to a function that was not declared in the request is
+/// not a protocol failure. Small models do this (a `report` or `answer` call
+/// next to a finished answer). It is returned so the caller can answer it
+/// with a tool error and let the model continue; the caller must never run
+/// it. Its name must still fit the portable contract, because the call is
+/// replayed to the provider as history.
 pub fn validate_response_tool_call(
     provider: &str,
     name: &str,
@@ -141,11 +151,11 @@ pub fn validate_response_tool_call(
             message: "provider returned a tool call with an empty name".to_string(),
         });
     }
-    if !tools.iter().any(|tool| tool.name == name) {
+    if !tools.iter().any(|tool| tool.name == name) && !is_portable_tool_name(name) {
         return Err(ProviderError::ApiError {
             provider: provider.to_string(),
             status: 200,
-            message: "provider returned a tool call that was not declared in the request"
+            message: "provider returned a call to an undeclared tool whose name is outside the portable tool-name contract"
                 .to_string(),
         });
     }

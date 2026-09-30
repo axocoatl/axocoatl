@@ -186,6 +186,23 @@ model-facing `coordination_control` tool, the external harness adapter and the
   instead of `token`, `reasoning` and `tool-call`) and `activation-control-changed`.
 
 ### Fixed
+- **A call to a tool that does not exist no longer throws away the Agent's work.** Small
+  local models sometimes finish with their answer as text next to a call to a tool
+  nobody declared (a `report` or `answer` call). The whole activation used to fail with
+  "provider returned a tool call that was not declared in the request", so a lead was
+  told its reviewer "did not finish" and shipped the bug the reviewer had found. Now
+  the call never runs and records nothing; the model gets a tool error ("`report` is
+  not an available tool. Available tools: … If you are done, answer without calling a
+  tool.") and continues, and the next response completes the activation. It counts as
+  a tool round for the round limit and the loop guard. Malformed calls (bad arguments,
+  an empty name, or a name no provider accepts) still fail as before.
+- **A response refused after the model finished keeps its usage.** When a provider
+  completed a response and reported its usage but the response was refused (a
+  malformed tool call), that usage was lost: the activation's usage became unknown and
+  the call kept its whole reservation (36,864 tokens with a 32k local model). The
+  native Ollama provider now reads the response to its end before refusing it, and the
+  reported usage is recorded and settles the call. A helper activation that fails is
+  now logged at WARN with its reason.
 - **A message sent while a turn needs attention asks where it should go.** Send used
   to be disabled, and a request through the API failed with only "resolve the current
   unfinished turn". Now Send offers two explicit choices: continue the turn with the
