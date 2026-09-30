@@ -57,8 +57,8 @@ mod attachment;
 mod repository_snapshot;
 pub use attachment::RetainedBinaryAttachment;
 pub use repository_snapshot::{
-    standing_check_command, ActivationRepositorySnapshot, ActivationRepositorySnapshotView,
-    RepositorySnapshotPhase, StandingRepositoryCheck, StandingRepositoryCheckView,
+    ActivationRepositorySnapshot, ActivationRepositorySnapshotView, RepositorySnapshotPhase,
+    StandingRepositoryCheck, StandingRepositoryCheckView, REPOSITORY_SNAPSHOT_COMMAND,
 };
 
 #[path = "execution_content_reattachment.rs"]
@@ -880,6 +880,12 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
         (
             "capture_unavailable",
             "The host could not observe what the Agent changed, so its work cannot be accepted automatically.",
+            "review_then_finish",
+        )
+    } else if line.starts_with("its admitted write scope cannot be read") {
+        (
+            "capture_unavailable",
+            "The host could not read which files the Agent may change, so its work cannot be accepted automatically.",
             "review_then_finish",
         )
     } else if provider.is_some() {
@@ -4418,6 +4424,7 @@ mod tests {
             model: "model".into(),
             isolation: "local".into(),
             tools: vec![],
+            write_scope: None,
         };
         let limits = GrantLimits {
             activations: 2,
@@ -5052,6 +5059,10 @@ mod tests {
         assert_eq!(
             class("Activation failed: it changed lib/paths.js outside the paths this Agent may change (none; this Agent is read-only); the change is kept for review.\n\nmodel text"),
             Some(("scope_violation", "review_then_finish"))
+        );
+        assert_eq!(
+            class("Activation failed: its admitted write scope cannot be read, so its changes cannot be judged; any change is kept for review.\n\nmodel text"),
+            Some(("capture_unavailable", "review_then_finish"))
         );
         // The model cannot choose the class: only the host's first line counts.
         assert_eq!(

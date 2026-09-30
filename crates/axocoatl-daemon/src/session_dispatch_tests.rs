@@ -222,6 +222,7 @@ fn fixture_with_captured_input_and_history(
         model: config.model.clone(),
         isolation: isolation.into(),
         tools: config.tools.clone(),
+        write_scope: None,
     };
     let definition_id = AgentDefinitionId::new("counter").unwrap();
     let definition = content

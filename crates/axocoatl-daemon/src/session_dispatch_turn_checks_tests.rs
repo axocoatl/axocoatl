@@ -5,20 +5,31 @@ use axocoatl_session::execution_content::{
 };
 use axocoatl_session::execution_ownership::LegacyFormatOwnership;
 use axocoatl_session::execution_store::ExecutionStoreOwner;
+use axocoatl_session::turn_checks::CheckGroup;
 
 /// A shared check consumes both canonical outputs. A model's assertion that a
 /// peer finished cannot substitute for the peer's retained acceptance.
 #[test]
+fn required_checks_consume_the_complete_two_agent_accepted_frontier() {
+    check_frontier(&CheckGroup::required(), false);
+}
+
+#[test]
+fn required_checks_follow_canonical_replacement_without_expanding_to_added_agents() {
+    check_frontier(&CheckGroup::required(), true);
+}
+
+#[test]
 fn standing_checks_consume_the_complete_two_agent_accepted_frontier() {
-    check_frontier(false);
+    check_frontier(&CheckGroup::standing("receipt"), false);
 }
 
 #[test]
 fn standing_checks_follow_canonical_replacement_without_expanding_to_added_agents() {
-    check_frontier(true);
+    check_frontier(&CheckGroup::standing("receipt"), true);
 }
 
-fn check_frontier(dynamic: bool) {
+fn check_frontier(group: &CheckGroup, dynamic: bool) {
     let fixture: serde_json::Value = serde_json::from_str(include_str!("../../axocoatl-session/tests/fixtures/turn_contract/check_only_recovery_preserves_accepted_generations.json")).unwrap();
     let mut begin: TurnContractEnvelope =
         serde_json::from_value(fixture["steps"][0]["envelope"].clone()).unwrap();
@@ -51,7 +62,7 @@ fn check_frontier(dynamic: bool) {
         "-c".into(),
         "test -f first.txt && test -f second.txt".into(),
     ]];
-    let definitions = standing_check_definitions(&checks).unwrap();
+    let definitions = check_definitions(&checks).unwrap();
     let definition = definitions[1].clone();
     let definition_refs = definitions
         .iter()
@@ -88,13 +99,13 @@ fn check_frontier(dynamic: bool) {
         .into_iter()
         .enumerate()
         .map(|(index, definition)| CompletionCondition {
-            condition_id: ConditionId::new(standing_condition_id("receipt", index)).unwrap(),
+            condition_id: ConditionId::new(group.condition_id(index)).unwrap(),
             kind: ConditionKind::RepositoryCheck { definition },
             nodes: nodes.clone(),
         })
         .collect();
     graph.conditions.push(CompletionCondition {
-        condition_id: ConditionId::new("standing:receipt:ready").unwrap(),
+        condition_id: ConditionId::new(group.ready_id()).unwrap(),
         kind: ConditionKind::Review {
             criterion: EvidenceRef::new("readiness-definition").unwrap(),
         },
@@ -174,9 +185,9 @@ fn check_frontier(dynamic: bool) {
     };
     for (index, node) in nodes.iter().enumerate() {
         assert!(
-            standing_check_activations(
+            check_activations(
                 canonical.snapshot(&begin.turn_id).unwrap().contract(),
-                "receipt",
+                group,
                 definitions.len()
             )
             .unwrap()
@@ -208,7 +219,7 @@ fn check_frontier(dynamic: bool) {
             session_id: begin.session_id.clone(),
             turn_id: begin.turn_id.clone(),
             epoch_id: activation.execution_epoch_id.clone(),
-            condition_id: ConditionId::new("standing:receipt:1").unwrap(),
+            condition_id: ConditionId::new(group.condition_id(1)).unwrap(),
             run_id: ConditionRunId::new("shared-check").unwrap(),
             activations: activations.clone(),
         };
@@ -267,11 +278,11 @@ fn check_frontier(dynamic: bool) {
         session_id: begin.session_id.clone(),
         turn_id: begin.turn_id.clone(),
         epoch_id: activations[0].execution_epoch_id.clone(),
-        condition_id: ConditionId::new("standing:receipt:1").unwrap(),
+        condition_id: ConditionId::new(group.condition_id(1)).unwrap(),
         run_id: ConditionRunId::new("shared-check").unwrap(),
-        activations: standing_check_activations(
+        activations: check_activations(
             canonical.snapshot(&begin.turn_id).unwrap().contract(),
-            "receipt",
+            group,
             definitions.len(),
         )
         .unwrap()
@@ -306,4 +317,126 @@ fn check_frontier(dynamic: bool) {
             vec!["a", "b"]
         }
     );
+}
+
+fn capture(tree: Option<&str>, head: Option<&str>) -> ActivationRepositorySnapshot {
+    let activation = ActivationRef {
+        session_id: SessionId::new("session").unwrap(),
+        turn_id: LogicalTurnId::new("turn").unwrap(),
+        execution_epoch_id: ExecutionEpochId::new("epoch").unwrap(),
+        node_id: TurnNodeId::new("node").unwrap(),
+        generation: 1,
+        activation_id: ActivationId::new("activation").unwrap(),
+    };
+    let mut capture = repository_snapshot::empty_observation(
+        &activation,
+        RepositorySnapshotPhase::BeforeCheck { index: 0 },
+        &EvidenceRef::new("repository").unwrap(),
+    );
+    capture.tree_sha256 = tree.map(str::to_owned);
+    capture.head = head.map(str::to_owned);
+    capture
+}
+
+type Candidate = Option<(String, Option<String>)>;
+
+/// The candidate each of two commands ran on: the group's stable capture, and
+/// none when the tree moved around them.
+fn candidates(
+    before: &ActivationRepositorySnapshot,
+    after: &ActivationRepositorySnapshot,
+) -> Vec<Candidate> {
+    let candidate = (before.tree_sha256 == after.tree_sha256)
+        .then(|| (after.tree_sha256.clone().unwrap(), after.head.clone()));
+    vec![candidate.clone(), candidate]
+}
+
+/// Whether two commands between the captures, with these four recorded
+/// outcomes, are ready.
+fn two_checks(outcomes: [ConditionOutcome; 4], before: &str, after: &str) -> bool {
+    let before = capture(Some(before), Some("head"));
+    let after = capture(Some(after), Some("head"));
+    readiness_passed(
+        4,
+        &outcomes,
+        &candidates(&before, &after),
+        2,
+        &before,
+        &after,
+    )
+}
+
+#[test]
+fn failing_check_is_not_ready() {
+    use ConditionOutcome::{Failed, Passed};
+    assert!(!two_checks(
+        [Passed, Passed, Failed, Passed],
+        "tree",
+        "tree"
+    ));
+    // A failed capture is no more ready than a failed command.
+    assert!(!two_checks(
+        [Failed, Passed, Passed, Passed],
+        "tree",
+        "tree"
+    ));
+}
+
+#[test]
+fn passing_checks_on_an_unchanged_tree_are_ready() {
+    use ConditionOutcome::Passed;
+    assert!(two_checks([Passed; 4], "tree", "tree"));
+    let outcomes = [Passed; 4];
+    let before = capture(Some("tree"), Some("head"));
+    let after = capture(Some("tree"), Some("head"));
+    let commands = candidates(&before, &after);
+    // Every command must have run on the captured candidate.
+    assert!(!readiness_passed(
+        4,
+        &outcomes,
+        &commands[..1],
+        2,
+        &before,
+        &after
+    ));
+    assert!(!readiness_passed(
+        4,
+        &outcomes[..3],
+        &commands,
+        2,
+        &before,
+        &after
+    ));
+    let elsewhere = vec![commands[0].clone(), Some(("other".into(), None))];
+    assert!(!readiness_passed(
+        4, &outcomes, &elsewhere, 2, &before, &after
+    ));
+    // An unreadable capture establishes nothing.
+    let unreadable = capture(None, Some("head"));
+    assert!(!readiness_passed(
+        4,
+        &outcomes,
+        &commands,
+        2,
+        &unreadable,
+        &unreadable
+    ));
+}
+
+#[test]
+fn a_check_that_changes_the_tree_is_not_ready() {
+    use ConditionOutcome::Passed;
+    assert!(!two_checks([Passed; 4], "tree", "changed"));
+    // A commit made by a check moves HEAD even when the tree matches.
+    let before = capture(Some("tree"), Some("head"));
+    let after = capture(Some("tree"), Some("committed"));
+    let candidate = Some(("tree".to_string(), Some("committed".to_string())));
+    assert!(!readiness_passed(
+        4,
+        &[Passed; 4],
+        &[candidate.clone(), candidate],
+        2,
+        &before,
+        &after
+    ));
 }

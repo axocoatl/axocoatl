@@ -800,6 +800,7 @@ fn branch_fixture() -> BranchFixture {
             model: config.model.clone(),
             isolation: "in-process".into(),
             tools: config.tools.clone(),
+            write_scope: None,
         };
         let definition_id = AgentDefinitionId::new(name).unwrap();
         let definition = content

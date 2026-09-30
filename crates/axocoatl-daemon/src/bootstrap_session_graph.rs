@@ -139,6 +139,29 @@ impl AxocoatlDaemon {
         config.model = request.agent.model.clone();
         config.system_prompt = request.agent.instructions.clone();
         config.sampling.max_tokens = request.agent.max_output_tokens;
+        // Work added to a running turn keeps its template's write scope unless
+        // the request narrows it; leaving the field out never widens it.
+        if let Some(writes) = &request.agent.writes {
+            if !axocoatl_session::path_scope::write_scope_within(
+                Some(writes),
+                config.writes.as_deref(),
+            ) {
+                let template = config.writes.as_deref().unwrap_or_default();
+                return Err(graph_error(if template.is_empty() {
+                    format!(
+                        "{} is a read-only helper; leave out writes to add it",
+                        request.agent.name
+                    )
+                } else {
+                    format!(
+                        "{} may change only {}; choose paths from that list",
+                        request.agent.name,
+                        template.join(", ")
+                    )
+                }));
+            }
+            config.writes = Some(writes.clone());
+        }
         let definition = self
             .prepare_native_session_team_definition(
                 &token,

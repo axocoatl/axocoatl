@@ -383,6 +383,7 @@ impl DispatchState {
             || config.provider != profile.provider
             || config.model != profile.model
             || config.tools != profile.tools
+            || config.writes != profile.write_scope
             || profile.isolation != "in-process"
         {
             return Err(error(

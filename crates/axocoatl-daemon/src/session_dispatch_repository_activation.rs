@@ -92,6 +92,58 @@ impl DispatchState {
     }
 }
 
+/// The write scopes an activation was admitted under, each a list of path
+/// patterns. A path may change only if every scope allows it, and any empty
+/// scope makes the activation read-only. No scope leaves every path open.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct AdmittedWriteScope(Vec<Vec<String>>);
+
+impl AdmittedWriteScope {
+    pub(super) fn is_unrestricted(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub(super) fn is_read_only(&self) -> bool {
+        self.0.iter().any(Vec::is_empty)
+    }
+    pub(super) fn allows(&self, path: &str) -> bool {
+        self.0
+            .iter()
+            .all(|scope| axocoatl_session::path_scope::scope_allows(Some(scope), path))
+    }
+    /// How the scope reads in messages to the Agent and the person.
+    pub(super) fn describe(&self) -> String {
+        if self.is_read_only() {
+            "none; this Agent is read-only".to_owned()
+        } else {
+            self.0
+                .iter()
+                .map(|scope| scope.join(", "))
+                .collect::<Vec<_>>()
+                .join("; and only within ")
+        }
+    }
+}
+
+impl DispatchState {
+    /// The write scope an activation was admitted with, read from its durable
+    /// authority record and never from a live copy. Standing work adds its
+    /// route's scope for every activation of its turn. A caller that cannot
+    /// read the scope must refuse the write or process it was checking.
+    pub(super) fn admitted_write_scope(
+        &self,
+        activation: &ActivationRef,
+    ) -> Result<AdmittedWriteScope> {
+        let profile = self
+            .authority
+            .activation_profile(activation)
+            .map_err(error)?;
+        let standing = self.standing_work()?.and_then(|work| work.write_scope);
+        Ok(AdmittedWriteScope(
+            profile.write_scope.into_iter().chain(standing).collect(),
+        ))
+    }
+}
+
 impl RepositoryActivationResource {
     pub fn reference(&self) -> &EvidenceRef {
         &self.reference
@@ -321,9 +373,8 @@ impl BuiltinTool for InvocationTool {
 }
 
 impl InvocationTool {
-    /// Signal work is targeted at the Agent that owns the signaled paths. Its
-    /// file-writing tools refuse other paths before any effect, so a problem in
-    /// another owner's file is reported as a finding instead of fixed in place.
+    /// File-writing tools refuse a path outside the activation's admitted write
+    /// scope before any effect. A scope that cannot be read refuses the write.
     fn enforce_write_scope(
         &self,
         arguments: &serde_json::Value,
@@ -331,42 +382,54 @@ impl InvocationTool {
         if !matches!(self.definition.name.as_str(), "write_file" | "edit_file") {
             return Ok(());
         }
-        let refuse = |reason: String| ToolError::ExecutionFailed {
-            tool: self.definition.name.clone(),
-            reason,
-        };
         let scope = self
             .scope
             .controller
             .lock()
-            .and_then(|state| state.standing_work())
-            .map_err(|failure| refuse(failure.to_string()))?
-            .and_then(|work| work.write_scope);
-        let Some(scope) = scope else {
-            return Ok(());
-        };
+            .and_then(|state| state.admitted_write_scope(&self.scope.intent.activation));
         let path = arguments
             .get("path")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
-        let root = self.scope.resource.owner.root();
-        if let Some(reason) = unfollowed_write_path(root, path) {
-            return Err(refuse(reason));
+        match write_refusal(scope, self.scope.resource.owner.root(), path) {
+            Some(reason) => Err(ToolError::ExecutionFailed {
+                tool: self.definition.name.clone(),
+                reason,
+            }),
+            None => Ok(()),
         }
-        let relative = scoped_relative_path(root, path);
-        if relative.as_deref().is_some_and(|relative| {
-            scope
-                .iter()
-                .any(|pattern| axocoatl_session::path_scope::pattern_matches(pattern, relative))
-        }) {
-            return Ok(());
-        }
-        Err(refuse(format!(
-            "{path} is outside the paths this Agent may change ({}). Do not change it; record a \
-             workspace_knowledge finding that cites it so its owner is signaled.",
-            owned_paths(&scope)
-        )))
     }
+}
+
+/// Why a file tool must not write `path` under `scope`, or `None` to allow it.
+fn write_refusal(scope: Result<AdmittedWriteScope>, root: &Path, path: &str) -> Option<String> {
+    let scope = match scope {
+        Ok(scope) => scope,
+        Err(failure) => {
+            return Some(format!(
+                "the paths this Agent may change cannot be read ({failure}), so no file is \
+                 written. Leave {path} unchanged and describe the needed change in your answer."
+            ))
+        }
+    };
+    if scope.is_unrestricted() {
+        return None;
+    }
+    if let Some(reason) = unfollowed_write_path(root, path) {
+        return Some(reason);
+    }
+    let relative = scoped_relative_path(root, path);
+    if relative
+        .as_deref()
+        .is_some_and(|relative| scope.allows(relative))
+    {
+        return None;
+    }
+    Some(format!(
+        "{path} is outside the paths this Agent may change ({}). Leave it unchanged and \
+         describe the needed change in your answer.",
+        scope.describe()
+    ))
 }
 
 /// Why a scoped write to `path` must be refused before its text is matched:
@@ -387,7 +450,7 @@ fn unfollowed_write_path(root: &Path, path: &str) -> Option<String> {
         match std::fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Some(format!(
-                    "{path} passes through a symbolic link; signal work does not write through links"
+                    "{path} passes through a symbolic link; writes do not follow symbolic links"
                 ));
             }
             Ok(_) => {}
@@ -396,15 +459,6 @@ fn unfollowed_write_path(root: &Path, path: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// How a signal write scope reads in messages; empty is read-only.
-pub(super) fn owned_paths(scope: &[String]) -> String {
-    if scope.is_empty() {
-        "none; this Agent is read-only".to_owned()
-    } else {
-        scope.join(", ")
-    }
 }
 
 /// Repository-relative form of a tool path, or `None` if it leaves the root.
@@ -517,24 +571,16 @@ impl InvocationScope {
         let write_restriction = {
             let state = self.controller.lock().map_err(isolation_error)?;
             self.validate(&state).map_err(isolation_error)?;
-            // A read-only signal route runs every process, its own shell
-            // included, under a kernel write restriction: nothing beneath the
-            // repository can change. A supervisor that cannot apply it
-            // refuses to launch, so such a route effectively has no shell.
             let read_only = state
-                .standing_work()
+                .admitted_write_scope(&self.intent.activation)
                 .map_err(isolation_error)?
-                .and_then(|work| work.write_scope)
-                .is_some_and(|scope| scope.is_empty());
-            read_only.then(|| axocoatl_exec::protocol::WriteRestriction {
-                writable: vec![
-                    "/tmp".into(),
-                    "/var/tmp".into(),
-                    "/dev".into(),
-                    axocoatl_exec::protocol::HOME_PLACEHOLDER.into(),
-                ],
-                protected: vec![self.resource.owner.root().to_string_lossy().into_owned()],
-            })
+                .is_read_only();
+            process_write_restriction(
+                read_only,
+                &self.intent.tool_name,
+                self.require_complete_capture.load(Ordering::Acquire),
+                self.resource.owner.root(),
+            )
         };
         let index = self
             .process_index
@@ -676,6 +722,32 @@ impl InvocationScope {
     }
 }
 
+/// The kernel write restriction for one repository process. Only the Agent's
+/// own shell of a read-only activation runs under it: nothing beneath the
+/// repository can change. The host-authored file tools (`read_file`, `grep`,
+/// ...) keep their own fixed commands, and the host's repository captures and
+/// digest observations, though admitted as `bash`, are exempt so a read-only
+/// helper still yields its evidence. A supervisor that cannot apply the
+/// restriction refuses to launch that one process.
+fn process_write_restriction(
+    read_only: bool,
+    tool: &str,
+    host_observation: bool,
+    root: &Path,
+) -> Option<axocoatl_exec::protocol::WriteRestriction> {
+    (read_only && tool == "bash" && !host_observation).then(|| {
+        axocoatl_exec::protocol::WriteRestriction {
+            writable: vec![
+                "/tmp".into(),
+                "/var/tmp".into(),
+                "/dev".into(),
+                axocoatl_exec::protocol::HOME_PLACEHOLDER.into(),
+            ],
+            protected: vec![root.to_string_lossy().into_owned()],
+        }
+    })
+}
+
 struct OwnedProcessWait {
     cancellation: SupervisorCancellation,
     task: Option<tokio::task::JoinHandle<std::result::Result<ExecResult, IsolationError>>>,
@@ -737,6 +809,16 @@ fn observe_result(
     {
         // A truncated success must never become EditFile's source bytes.
         return Err(isolation_error("repository command output is incomplete or exceeds its capture bound; partial bytes cannot become file input"));
+    }
+    if let ProcessOutcome::LaunchFailed { message } = outcome {
+        if execution.request().write_restriction.is_some()
+            && message.starts_with("write restriction unavailable")
+        {
+            return Err(isolation_error(
+                "This Agent is read-only and this runtime cannot enforce it, so bash is \
+                 unavailable; use read_file, grep, glob or list_dir instead.",
+            ));
+        }
     }
     let ProcessOutcome::Exited { code } = outcome else {
         return Err(isolation_error(format!(
@@ -855,8 +937,90 @@ impl Sandbox for RepositorySandbox {
 
 #[cfg(test)]
 mod write_scope_tests {
-    use super::scoped_relative_path;
+    use super::{
+        error, process_write_restriction, scoped_relative_path, write_refusal, AdmittedWriteScope,
+    };
     use std::path::Path;
+
+    fn scope(scopes: &[&[&str]]) -> AdmittedWriteScope {
+        AdmittedWriteScope(
+            scopes
+                .iter()
+                .map(|scope| scope.iter().map(|pattern| (*pattern).to_owned()).collect())
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn only_agent_shell_processes_of_read_only_helpers_are_restricted() {
+        let root = Path::new("/workspace/repo");
+        for (read_only, tool, host_observation, restricted) in [
+            (true, "bash", false, true),
+            // The host's own captures and digest observations run as bash.
+            (true, "bash", true, false),
+            // Host-authored file tools keep their fixed commands.
+            (true, "read_file", false, false),
+            (true, "grep", false, false),
+            (true, "glob", false, false),
+            (true, "list_dir", false, false),
+            // Scoped and unrestricted writers are judged by their captures.
+            (false, "bash", false, false),
+            (false, "write_file", false, false),
+        ] {
+            let restriction = process_write_restriction(read_only, tool, host_observation, root);
+            assert_eq!(
+                restriction.is_some(),
+                restricted,
+                "{read_only} {tool} {host_observation}"
+            );
+            if let Some(restriction) = restriction {
+                restriction.validate().unwrap();
+                assert_eq!(restriction.protected, vec!["/workspace/repo".to_owned()]);
+                assert!(restriction.writable.iter().any(|path| path == "/tmp"));
+            }
+        }
+    }
+
+    #[test]
+    fn scopes_combine_so_every_scope_must_allow_a_write() {
+        let root = Path::new("/workspace/repo");
+        assert_eq!(write_refusal(Ok(scope(&[])), root, "anything.js"), None);
+        assert_eq!(
+            write_refusal(Ok(scope(&[&["lib/"]])), root, "lib/a.js"),
+            None
+        );
+        assert_eq!(
+            write_refusal(Ok(scope(&[&["lib/"]])), root, "/workspace/repo/lib/a.js"),
+            None
+        );
+        let outside = write_refusal(Ok(scope(&[&["lib/"]])), root, "src/a.js").unwrap();
+        assert_eq!(
+            outside,
+            "src/a.js is outside the paths this Agent may change (lib/). Leave it unchanged and \
+             describe the needed change in your answer."
+        );
+        // A profile scope and a standing route scope both apply.
+        let both = scope(&[&["lib/"], &["lib/a.js"]]);
+        assert_eq!(write_refusal(Ok(both.clone()), root, "lib/a.js"), None);
+        assert!(write_refusal(Ok(both.clone()), root, "lib/b.js").is_some());
+        assert!(!both.is_read_only());
+        let read_only = scope(&[&["lib/"], &[]]);
+        assert!(read_only.is_read_only());
+        assert!(write_refusal(Ok(read_only.clone()), root, "lib/a.js")
+            .unwrap()
+            .contains("(none; this Agent is read-only)"));
+        // A scope that cannot be read refuses every write.
+        let unreadable =
+            write_refusal(Err(error("authority unavailable")), root, "lib/a.js").unwrap();
+        assert!(unreadable.contains("cannot be read"), "{unreadable}");
+        assert!(
+            unreadable.contains("Leave lib/a.js unchanged"),
+            "{unreadable}"
+        );
+        for message in [outside, unreadable] {
+            assert!(!message.contains("signal"), "{message}");
+        }
+    }
 
     #[test]
     fn tool_paths_resolve_to_repository_relative_form_or_are_refused() {

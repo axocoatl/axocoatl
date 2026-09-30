@@ -67,3 +67,50 @@ test('native Team preview rejects unsupported repository tools before provider o
     assert.deepEqual(await (await fetch(`${invalid.baseUrl}/api/sessions/${id}/turns?history_version=2`)).json(),[]);
   } finally { await invalid.stop(); }
 });
+
+test('actual Session team carries what each Agent may change into its reviewed profile',async()=>{
+  unavailable=false;
+  const id=runtime.fixtures.alpha.sessions[1].id,current=await call(id);assert.equal(current.status,200,JSON.stringify(current.value));
+  assert.equal(current.value.slots[0].writes,undefined,'an Agent configured without writes: may change any file');
+  const edit=(command_id,writes)=>({command_id,expected_configuration_revision:current.value.configuration_revision,slots:current.value.slots.map(slot=>({...slot,...(writes===undefined?{}:{writes}),max_output_tokens:128,limits:{activations:2,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),dependencies:current.value.dependencies,layout:current.value.layout});
+  for(const [command,writes] of [['writes-open',undefined],['writes-read-only',[]],['writes-scoped',['lib/','docs/*.md']]]){
+    const preview=await call(id,'/preview',edit(command,writes));assert.equal(preview.status,200,JSON.stringify(preview.value));
+    assert.deepEqual(preview.value.profiles.map(profile=>profile.write_scope),[writes],command);
+  }
+  for(const [index,writes] of [['../x'],['/etc'],['lib/','lib/']].entries()){
+    const refused=await call(id,'/preview',edit(`writes-refused-${index}`,writes));assert.equal(refused.status,409,JSON.stringify(refused.value));
+    assert.match(refused.value.error,/invalid list of paths it may change/);assert.match(refused.value.error,/Nothing for a read-only helper/);
+  }
+  const scoped=edit('writes-applied',['lib/']),preview=await call(id,'/preview',scoped);assert.equal(preview.status,200,JSON.stringify(preview.value));
+  const applied=await call(id,'/apply',{edit:scoped,review_digest:preview.value.review_digest});assert.equal(applied.status,200,JSON.stringify(applied.value));
+  const saved=await call(id);assert.deepEqual(saved.value.slots[0].writes,['lib/'],'the saved definition keeps its scope for the next edit');
+});
+
+test('actual Session team offers the detected check without enabling it and refuses checks nobody can pay for',async()=>{
+  unavailable=false;
+  const id=runtime.fixtures.beta.sessions[0].id;
+  const set=await fetch(`${runtime.baseUrl}/api/sessions/${id}/check`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({check_command:'npm test'})});assert.equal(set.status,200);
+  const current=await call(id);assert.equal(current.status,200,JSON.stringify(current.value));
+  assert.deepEqual(current.value.suggested_check,['sh','-c','npm test']);assert.deepEqual(current.value.required_checks,[],'a detected check is only a suggestion');
+  const edit=(command_id,required_checks)=>({command_id,expected_configuration_revision:current.value.configuration_revision,slots:current.value.slots.map(slot=>({...slot,max_output_tokens:128,limits:{activations:2,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),dependencies:current.value.dependencies,layout:current.value.layout,required_checks});
+  const plain=await call(id,'/preview',edit('checks-none',[]));assert.equal(plain.status,200,JSON.stringify(plain.value));
+  const refused=await call(id,'/preview',edit('checks-without-bash',[current.value.suggested_check]));assert.equal(refused.status,409,JSON.stringify(refused.value));
+  assert.match(refused.value.error,/no required Agent in this team has bash/);
+  const invalid=await call(id,'/preview',edit('checks-invalid',[[]]));assert.equal(invalid.status,409,JSON.stringify(invalid.value));
+  assert.match(invalid.value.error,/Each required check must be a command/);
+  const after=await call(id);assert.equal(after.value.configuration_revision,current.value.configuration_revision);assert.deepEqual(after.value.required_checks,[]);
+});
+
+test('actual Session team with a bash Agent applies required checks and reports them for the next edit',async()=>{
+  const daemon=await launchTestDaemon({nativeDataRoot:true,agentTools:['bash','read_file'],ollamaBaseUrl:`http://127.0.0.1:${modelServer.address().port}`});
+  try{
+    const id=daemon.fixtures.alpha.sessions[0].id,url=`${daemon.baseUrl}/api/sessions/${id}/team`;
+    const current=await (await fetch(url)).json();
+    const checks=[['sh','-c','npm test'],['cargo','test','--quiet']];
+    const edit={command_id:'checks-applied',expected_configuration_revision:0,slots:current.slots.map(slot=>({...slot,max_output_tokens:128,limits:{activations:2,invocations:12,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),dependencies:current.dependencies,layout:current.layout,required_checks:checks};
+    const post=async(suffix,body)=>{const response=await fetch(`${url}${suffix}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return{status:response.status,value:await response.json()};};
+    const preview=await post('/preview',edit);assert.equal(preview.status,200,JSON.stringify(preview.value));assert.deepEqual(preview.value.edit.required_checks,checks);
+    const applied=await post('/apply',{edit,review_digest:preview.value.review_digest});assert.equal(applied.status,200,JSON.stringify(applied.value));
+    const saved=await (await fetch(url)).json();assert.deepEqual(saved.required_checks,checks);
+  }finally{await daemon.stop();}
+});

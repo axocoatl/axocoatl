@@ -193,6 +193,7 @@ pub(super) fn selected_definition(
         model: expected.model.clone(),
         isolation: "in-process".into(),
         tools: expected.tools.clone(),
+        write_scope: expected.writes.clone(),
     };
     if *revision != 1
         || definition_id != &selection.definition.definition_id

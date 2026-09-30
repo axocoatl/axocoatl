@@ -40,6 +40,10 @@ pub struct SessionTeamSlotEdit {
     pub model: String,
     pub instructions: Option<String>,
     pub max_output_tokens: Option<usize>,
+    /// Repository paths this Agent may change. The edit carries the whole
+    /// value: absent lets it change any file, empty makes it read-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writes: Option<Vec<String>>,
     pub required: bool,
     pub reset_history: bool,
     pub limits: Option<GrantLimits>,
@@ -95,6 +99,12 @@ pub struct SessionTeamEdit {
     /// Edges use visible slot identities; the daemon resolves exact node identities.
     pub dependencies: Vec<SessionTeamConnection>,
     pub layout: Vec<SessionTeamPosition>,
+    /// Exact commands (argv) the host runs after every turn's required
+    /// Agents finish. A failure leaves the turn needing attention; passing
+    /// checks on an unchanged tree let it complete. Empty means no checks,
+    /// and keeps the historical serialized shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_checks: Vec<Vec<String>>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -122,6 +132,12 @@ pub struct SessionTeamView {
     pub layout: Vec<SessionTeamPosition>,
     pub templates: Vec<SessionTeamSlotEdit>,
     pub approved: bool,
+    /// The current applied team's required checks, as argv.
+    pub required_checks: Vec<Vec<String>>,
+    /// The Session's detected check command, offered as a check the person
+    /// may add. It is only a suggestion: nothing runs it unless an Apply
+    /// includes it.
+    pub suggested_check: Option<Vec<String>>,
 }
 #[derive(Serialize)]
 pub struct SessionTeamChange {
@@ -172,6 +188,15 @@ fn approval_for_slot(
         Ok(approval) if approval.kind == "authenticated_session_team_apply" => Ok(Some(approval)),
         _ => Ok(None),
     }
+}
+/// The required checks of the Apply that approved this slot's grant.
+pub(crate) fn approved_required_checks(
+    content: &ExecutionContentStore,
+    slot: &SessionTeamSlot,
+) -> Result<Vec<Vec<String>>, DaemonError> {
+    Ok(approval_for_slot(content, slot)?
+        .map(|approval| approval.edit.required_checks)
+        .unwrap_or_default())
 }
 pub(crate) fn approved_template_for_slot(
     content: &ExecutionContentStore,
@@ -238,6 +263,44 @@ fn review_profiles(
     }
     Ok(profiles)
 }
+/// The slot's `writes` after checking the pattern grammar.
+fn checked_writes(slot: &SessionTeamSlotEdit) -> Result<Option<Vec<String>>, DaemonError> {
+    if let Some(writes) = &slot.writes {
+        axocoatl_session::path_scope::validate_write_scope(writes).map_err(|reason| {
+            team_error(format!(
+                "{} has an invalid list of paths it may change: {reason}. Use repository paths \
+                 such as lib/ or docs/*.md, or choose Nothing for a read-only helper",
+                slot.name
+            ))
+        })?;
+    }
+    Ok(slot.writes.clone())
+}
+/// The team's required checks must be exact commands that fit beside the
+/// team's own conditions.
+fn check_required_checks(edit: &SessionTeamEdit, conditions: usize) -> Result<(), DaemonError> {
+    let most = MAX_COMPLETION_CONDITIONS.saturating_sub(conditions + 3);
+    if edit.required_checks.len() > most {
+        return Err(team_error(format!(
+            "A team can have at most {most} required checks; remove some"
+        )));
+    }
+    axocoatl_session::turn_checks::check_definitions(&edit.required_checks).map_err(|_| {
+        team_error(
+            "Each required check must be a command of at most 64 arguments, each at most \
+             4096 bytes and without NUL characters",
+        )
+    })?;
+    Ok(())
+}
+/// How a write scope reads in a message to the person.
+fn describe_writes(writes: Option<&[String]>) -> String {
+    match writes {
+        None => "any file".into(),
+        Some([]) => "nothing".into(),
+        Some(paths) => paths.join(", "),
+    }
+}
 fn slot_edit(
     slot: &SessionTeamSlot,
     content: &ExecutionContentStore,
@@ -283,6 +346,7 @@ fn slot_edit(
         model: config.model,
         instructions: config.system_prompt,
         max_output_tokens: config.sampling.max_tokens,
+        writes: config.writes,
         required: slot.required,
         reset_history: false,
         limits: Some(limits.clone()),
@@ -327,8 +391,14 @@ impl AxocoatlDaemon {
                 layout: vec![],
                 templates: vec![],
                 approved: false,
+                required_checks: vec![],
+                suggested_check: None,
             });
         }
+        let suggested_check = session
+            .check_command
+            .clone()
+            .map(|command| vec!["sh".into(), "-c".into(), command]);
         let token = self
             .session_dispatch_lifecycles
             .session_team_token(session_id)?;
@@ -349,6 +419,7 @@ impl AxocoatlDaemon {
                     model: config.model,
                     instructions: config.system_prompt,
                     max_output_tokens: config.sampling.max_tokens,
+                    writes: config.writes,
                     required: true,
                     reset_history: true,
                     limits: None,
@@ -369,6 +440,10 @@ impl AxocoatlDaemon {
                 )
                 .map_err(team_error)?;
                 if let Some(current) = store.current().map_err(team_error)? {
+                    let required_checks = match current.graph.slots.first() {
+                        Some(slot) => approved_required_checks(content, slot)?,
+                        None => vec![],
+                    };
                     return Ok(SessionTeamView {
                         history_version: "execution_v2",
                         configuration_revision: current.configuration_revision,
@@ -382,6 +457,8 @@ impl AxocoatlDaemon {
                         layout: current.layout.clone(),
                         templates,
                         approved: current.graph.slots.iter().all(|slot| slot.grant.is_some()),
+                        required_checks,
+                        suggested_check,
                     });
                 }
                 let selected: Vec<String> = match &session.mode {
@@ -435,6 +512,8 @@ impl AxocoatlDaemon {
                     layout: vec![],
                     templates,
                     approved: false,
+                    required_checks: vec![],
+                    suggested_check,
                 })
             },
         )
@@ -604,6 +683,34 @@ impl AxocoatlDaemon {
                     .await?
                     .definition
                 };
+                let worker_writes = self.session_dispatch_lifecycles.with_session_team_stores(
+                    token,
+                    |_, content, _| match content
+                        .resolve_activation_evidence(&definition.snapshot)
+                        .map_err(team_error)?
+                    {
+                        ActivationEvidenceContent::Definition { profile, .. } => {
+                            Ok(profile.write_scope.clone())
+                        }
+                        _ => Err(team_error("Approved Worker profile is missing")),
+                    },
+                )?;
+                let coordinator_writes = checked_writes(slot)?;
+                if !axocoatl_session::path_scope::write_scope_within(
+                    worker_writes.as_deref(),
+                    coordinator_writes.as_deref(),
+                ) {
+                    return Err(team_error(format!(
+                        "Worker {} may change {}, but {} may change only {}. A Worker cannot \
+                         change more than its Coordinator: narrow the Worker's writes: in its \
+                         configuration, or widen what {} may change",
+                        worker.template_id,
+                        describe_writes(worker_writes.as_deref()),
+                        slot.name,
+                        describe_writes(coordinator_writes.as_deref()),
+                        slot.name
+                    )));
+                }
                 workers.push(NativeCoordinatorWorker {
                     template_id: worker.template_id.clone(),
                     definition,
@@ -692,6 +799,7 @@ impl AxocoatlDaemon {
                 "Session team exceeds the supported graph bounds",
             ));
         }
+        check_required_checks(edit, 0)?;
         let token = self
             .session_dispatch_lifecycles
             .session_team_token(session_id)?;
@@ -853,6 +961,7 @@ impl AxocoatlDaemon {
         let mut continuity = Vec::new();
         let mut changes = Vec::new();
         let mut ids = HashSet::new();
+        let mut shell_payer = false;
         for proposed in &edit.slots {
             let slot_id = SessionTeamSlotId::new(proposed.slot_id.clone()).map_err(team_error)?;
             if !ids.insert(slot_id.clone()) {
@@ -929,9 +1038,11 @@ impl AxocoatlDaemon {
             config.model = proposed.model.clone();
             config.system_prompt = proposed.instructions.clone();
             config.sampling.max_tokens = proposed.max_output_tokens;
+            config.writes = checked_writes(proposed)?;
             if let Some(old) = &old_config {
                 config.id = old.id.clone();
             }
+            shell_payer |= proposed.required && config.tools.iter().any(|tool| tool == "bash");
             let unchanged = prior.is_some()
                 && !proposed.reset_history
                 && old_config.as_ref().is_some_and(|old| {
@@ -1087,6 +1198,13 @@ impl AxocoatlDaemon {
                 });
             }
         }
+        if !edit.required_checks.is_empty() && !shell_payer {
+            return Err(team_error(
+                "Required checks run on the allowance of a required Agent that has the bash \
+                 tool, and no required Agent in this team has bash. Make an Agent with bash \
+                 required, or remove the required checks",
+            ));
+        }
         let dependencies = edit
             .dependencies
             .iter()
@@ -1104,6 +1222,9 @@ impl AxocoatlDaemon {
                 })
             })
             .collect::<Result<Vec<_>, DaemonError>>()?;
+        if let Some(previous) = &previous {
+            check_required_checks(edit, previous.graph.conditions.len())?;
+        }
         let commit = SessionTeamCommit {
             schema_version: SESSION_TEAM_SCHEMA_VERSION,
             command_id,

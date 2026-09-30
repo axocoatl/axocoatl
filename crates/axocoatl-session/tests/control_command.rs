@@ -441,6 +441,7 @@ fn profile() -> ExecutionProfile {
         model: "test".into(),
         isolation: "local-test".into(),
         tools: vec![],
+        write_scope: None,
     }
 }
 

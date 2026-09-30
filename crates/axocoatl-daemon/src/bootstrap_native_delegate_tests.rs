@@ -162,6 +162,7 @@ async fn lead_fixture_as(
                     model: "test-model".into(),
                     isolation: "in-process".into(),
                     tools,
+                    write_scope: None,
                 };
                 let snapshot = content
                     .retain_activation_evidence(ActivationEvidenceContent::Definition {

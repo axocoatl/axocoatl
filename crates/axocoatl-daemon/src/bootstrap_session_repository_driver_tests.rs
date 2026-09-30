@@ -195,3 +195,149 @@ async fn native_driver_rejects_ready_e2b_owner_before_provider_or_repository_exe
     assert_eq!(session.environment.state, SessionEnvironmentState::Ready);
     assert_eq!(session.environment.runtime.as_ref().unwrap().backend, "e2b");
 }
+
+/// The continuation that reruns one required check of a paused turn.
+fn rerun_check(
+    controller: &SessionDispatchController,
+    check: &str,
+) -> crate::session_dispatch::HumanControlActionRequest {
+    let snapshot = controller.snapshot().unwrap();
+    let contract = snapshot.contract();
+    crate::session_dispatch::HumanControlActionRequest {
+        schema_version: 1,
+        command_id: CommandId::new(format!("rerun-{}", check.replace(':', "-"))).unwrap(),
+        session_id: snapshot.owner().session_id.clone(),
+        turn_id: snapshot.turn_id().clone(),
+        execution_epoch_id: contract.epochs().last().unwrap().id.clone(),
+        expected_turn_revision: contract.revision(),
+        expected_graph_revision: contract.graph().unwrap().revision,
+        activation: None,
+        action: crate::session_dispatch::HumanControlAction::Continue,
+        instruction: None,
+        include_previous_output: false,
+        context: None,
+        continuation: Some(crate::session_dispatch::HumanContinuationSelection {
+            restart: vec![],
+            checks: vec![ConditionId::new(check).unwrap()],
+        }),
+        blocker_id: None,
+        human_response: None,
+        partial_finish: None,
+    }
+}
+
+/// A required check the host runs after the Agent: a failing command leaves
+/// the turn needing attention with its output, and rerunning it after the
+/// person fixes the tree completes the turn. Every command runs in the actual
+/// supervised sandbox between two captures of the same candidate.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_failing_required_check_needs_attention_and_passing_check_completes() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    git_init(f._workspace.path());
+    std::fs::write(f._workspace.path().join("notes.txt"), "draft\n").unwrap();
+    let checks = vec![vec![
+        "sh".into(),
+        "-c".into(),
+        "echo checking approval; test -f approved.txt || { echo missing approval >&2; exit 3; }"
+            .into(),
+    ]];
+    let r = run_checked(&mut f, &["bash"], &checks);
+    let authorized = r
+        .controller
+        .authorize_required_checks(r.resource.reference());
+    let provider = Provider::new(vec![]);
+    let factory = Arc::new(Factory {
+        config: r.config.clone(),
+        profile: r.profile.clone(),
+        provider: provider.clone(),
+    });
+    let first = tokio::time::timeout(Duration::from_secs(180), async {
+        r.controller
+            .autonomous_turn_driver(vec![seed(&r)], factory.clone())?
+            .run()
+            .await
+    })
+    .await;
+    let failed = r.controller.control_plane();
+    // The person makes the change the check asks for and reruns only it.
+    std::fs::write(f._workspace.path().join("approved.txt"), "yes\n").unwrap();
+    let receipt = r.controller.submit_human_action(
+        rerun_check(&r.controller, "required-check:1"),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+    );
+    let second = tokio::time::timeout(Duration::from_secs(180), async {
+        r.controller
+            .autonomous_turn_driver(vec![seed(&r)], factory.clone())?
+            .run()
+            .await
+    })
+    .await;
+    let passed = r.controller.control_plane();
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+
+    authorized.unwrap();
+    let first = first.unwrap().unwrap();
+    assert_eq!(
+        first.snapshot.contract().state(),
+        Some(LogicalTurnState::NeedsAttention)
+    );
+    assert!(first.finalized.is_none());
+    let contract = first.snapshot.contract();
+    let outcome = |id: &str| {
+        contract
+            .current_condition(&ConditionId::new(id).unwrap())
+            .map(|observation| observation.outcome)
+    };
+    assert_eq!(outcome("required-check:0"), Some(ConditionOutcome::Passed));
+    assert_eq!(outcome("required-check:1"), Some(ConditionOutcome::Failed));
+    assert_eq!(outcome("required-check:2"), Some(ConditionOutcome::Passed));
+    assert_eq!(
+        outcome("required-check:ready"),
+        Some(ConditionOutcome::Failed)
+    );
+    let failed = failed.unwrap();
+    assert_eq!(failed.required_checks.len(), 1);
+    let check = &failed.required_checks[0];
+    assert_eq!(check.argv, checks[0]);
+    assert_eq!(check.state, "failed");
+    assert_eq!(check.exit_code, Some(3));
+    assert_eq!(check.stdout, "checking approval\n");
+    assert_eq!(check.stderr, "missing approval\n");
+    assert!(failed
+        .turn_controls
+        .unwrap()
+        .check_choices
+        .iter()
+        .any(|choice| choice.condition_id.as_str() == "required-check:1"
+            && choice.capability.enabled));
+
+    let receipt = receipt.unwrap();
+    assert_eq!(
+        receipt.state,
+        axocoatl_session::control_command::ControlCommandState::Settled,
+        "{receipt:?}"
+    );
+    let second = second.unwrap().unwrap();
+    let contract = second.snapshot.contract();
+    assert_eq!(contract.state(), Some(LogicalTurnState::Completed));
+    assert!(second.finalized.is_some());
+    assert!(contract
+        .current_condition(&ConditionId::new("required-check:ready").unwrap())
+        .is_some_and(|observation| observation.outcome == ConditionOutcome::Passed));
+    // The rerun repeated both captures and the selected check, nothing else.
+    assert_eq!(contract.condition_runs().len(), 6);
+    let passed = passed.unwrap();
+    let check = &passed.required_checks[0];
+    assert_eq!(check.state, "passed");
+    assert_eq!(check.exit_code, Some(0));
+    assert_eq!(check.stdout, "checking approval\n");
+    // The Agent answered once; the host ran every check.
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert!(idle.unwrap());
+}

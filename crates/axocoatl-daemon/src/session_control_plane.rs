@@ -9,8 +9,10 @@ use axocoatl_session::execution_content::{
     ActivationEvidenceContent, ContentResolution, ExecutionContentError, ExecutionContentStore,
 };
 use axocoatl_session::execution_store::DurableTurnSnapshot;
+use axocoatl_session::turn_checks::{group_of, project_check, CheckGroup, TurnCheckView};
 use axocoatl_session::turn_contract::{
-    ActivationRef, ActivationState, EvidenceRef, GraphMutation, LogicalTurnState, TurnNodeId,
+    ActivationRef, ActivationState, ConditionKind, EvidenceRef, GraphMutation, LogicalTurnState,
+    TurnNodeId,
 };
 use axocoatl_session::turn_ledger::{
     SessionTurn, SessionTurnAgentOutputDisposition, SessionTurnLifecycle,
@@ -200,6 +202,10 @@ pub struct SessionTurnControlPlane {
     pub commands: EvidenceValue<Vec<CommandReceiptView>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_controls: Option<crate::session_dispatch::HumanTurnControls>,
+    /// The latest run of each of the Session team's required checks, in
+    /// order. Empty when the turn has none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub required_checks: Vec<TurnCheckView>,
     pub decisions: EvidenceValue<Vec<Value>>,
     pub warnings: Vec<String>,
 }
@@ -218,6 +224,7 @@ impl SessionTurnControlPlane {
         let mut view = Self {
             schema_version: 1,
             turn_controls: None,
+            required_checks: vec![],
             history_version: "legacy_v1".into(),
             superseded_conversation: false,
             stop_requested: None,
@@ -800,6 +807,7 @@ impl SessionTurnControlPlane {
         Ok(Self {
             schema_version: 1,
             turn_controls: None,
+            required_checks: required_checks(snapshot, content)?,
             history_version: "execution_v2".into(),
             superseded_conversation: false,
             stop_requested: contract.stop_requested().cloned(),
@@ -869,6 +877,45 @@ fn delegated_by(
         .as_str()?
         .to_owned();
     Some((lead, helper))
+}
+
+/// Each required check's latest run, from the definitions the admitted graph
+/// names. Other check groups, such as standing work's, are not shown here.
+fn required_checks(
+    snapshot: &DurableTurnSnapshot,
+    content: &ExecutionContentStore,
+) -> Result<Vec<TurnCheckView>, ExecutionContentError> {
+    let Some(graph) = snapshot.contract().graph() else {
+        return Ok(vec![]);
+    };
+    let Some((group, count)) = group_of(graph) else {
+        return Ok(vec![]);
+    };
+    if group != CheckGroup::required() {
+        return Ok(vec![]);
+    }
+    let mut checks = Vec::with_capacity(count);
+    for index in 1..=count {
+        let id = group.condition_id(index);
+        let Some(condition) = graph
+            .conditions
+            .iter()
+            .find(|condition| condition.condition_id.as_str() == id)
+        else {
+            continue;
+        };
+        let ConditionKind::RepositoryCheck { definition } = &condition.kind else {
+            continue;
+        };
+        let definition = content.resolve_repository_check_definition(definition)?;
+        checks.push(project_check(
+            snapshot,
+            content,
+            &condition.condition_id,
+            definition,
+        )?);
+    }
+    Ok(checks)
 }
 
 fn bounded_json(value: Value) -> EvidenceValue<Value> {

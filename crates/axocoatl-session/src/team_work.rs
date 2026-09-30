@@ -21,10 +21,7 @@ pub use budget::{
     CeilingDecision, DurableTeamWorkAllocation, SettlementBasis, TeamWorkGrantAllocation,
     TeamWorkGrantSettlement,
 };
-pub use conditions::{
-    standing_check_definitions, standing_condition_id, standing_readiness_text,
-    REPOSITORY_SNAPSHOT_COMMAND,
-};
+pub use conditions::{standing_check_definitions, standing_condition_id, standing_readiness_text};
 
 const SCHEMA_VERSION: u32 = 1;
 const FILE_NAME: &str = "team-work.v1.json";

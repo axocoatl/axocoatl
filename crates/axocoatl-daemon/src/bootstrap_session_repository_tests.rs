@@ -854,6 +854,7 @@ fn controller_with_tools(
                 model: "model".into(),
                 isolation: "in-process".into(),
                 tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
+                write_scope: None,
             },
             configuration: "{}".into(),
         })
@@ -1626,6 +1627,7 @@ async fn finalized_closure_cannot_release_a_still_owned_driver_ticket() {
             model: "model".into(),
             isolation: "in-process".into(),
             tools: vec![],
+            write_scope: None,
         }],
         limits,
         expires_at_ms: u64::MAX,
@@ -1729,6 +1731,7 @@ async fn finalized_partial_turn_needs_retained_outcome_even_when_actual_owner_is
             model: "model".into(),
             isolation: "in-process".into(),
             tools: vec!["effect".into()],
+            write_scope: None,
         };
         let limits = GrantLimits {
             activations: 1,
@@ -2417,6 +2420,7 @@ async fn recovered_repository_reattachment_preserves_inputs_and_uses_fresh_physi
             model: "model".into(),
             isolation: "in-process".into(),
             tools: vec![],
+            write_scope: None,
         }],
         limits: limits.clone(),
         expires_at_ms: u64::MAX,

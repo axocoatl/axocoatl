@@ -51,6 +51,7 @@ fn choose_model(f: &mut NativeFixture, model: &str, widen_output: bool) {
                 model: config.model.clone(),
                 isolation: "in-process".into(),
                 tools: config.tools.clone(),
+                write_scope: None,
             };
             let definition = content
                 .retain_activation_evidence(ActivationEvidenceContent::Definition {

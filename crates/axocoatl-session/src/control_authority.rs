@@ -33,6 +33,8 @@ use crate::turn_contract::{
     MAX_COMPLETION_CONDITIONS, MAX_CONTRACT_NODES, MAX_GRAPH_EDGES,
 };
 
+#[path = "control_authority_checks.rs"]
+mod checks;
 #[path = "control_authority_delegation.rs"]
 mod delegation;
 #[path = "control_authority_standing.rs"]
@@ -83,6 +85,11 @@ pub struct ExecutionProfile {
     pub model: String,
     pub isolation: String,
     pub tools: Vec<String>,
+    /// Repository path patterns this activation may change (`path_scope`).
+    /// Absent leaves every path open and keeps the historical serialized
+    /// shape; empty is a read-only activation that may claim no write tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_scope: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,6 +381,10 @@ struct GrantRecord {
     delegated_from: Option<DelegatedGrantReservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     standing: Option<standing::StandingGrantCarry>,
+    /// Permission to run this turn's required checks, when this grant pays
+    /// for them. Absent on every other grant and on older stores.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    host_checks: Vec<ConditionPermission>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -666,6 +677,7 @@ impl ControlAuthority {
             native_delegation: None,
             delegated_from: None,
             standing: None,
+            host_checks: vec![],
         });
         self.commit(&mut state, next)
     }
@@ -1199,14 +1211,11 @@ impl ControlAuthority {
         validate_condition_record(&record)?;
         let derived_permission = if !condition_allowed(&record, policy)
             && !standing::condition_allowed(&record, &state.data.grants[index], policy)
+            && !checks::condition_allowed(&record, &state.data.grants[index], policy)
         {
             Some(
-                standing::replaced_condition_permission(
-                    &snapshot,
-                    &record,
-                    &state.data.grants[index],
-                )
-                .ok_or(AuthorityError::Denied)?,
+                checks::derived_permission(&snapshot, &record, &state.data.grants[index])
+                    .ok_or(AuthorityError::Denied)?,
             )
         } else {
             None
@@ -1217,15 +1226,24 @@ impl ControlAuthority {
             return Err(AuthorityError::Capacity);
         }
         let mut next = state.data.clone();
-        if let Some(permission) = derived_permission {
-            let carry = next.grants[index]
-                .standing
-                .as_mut()
-                .ok_or(AuthorityError::Denied)?;
-            if carry.conditions.len() >= MAX_COMPLETION_CONDITIONS {
+        if let Some(derived) = derived_permission {
+            let (permissions, permission) = match derived {
+                checks::DerivedPermission::Standing(permission) => (
+                    &mut next.grants[index]
+                        .standing
+                        .as_mut()
+                        .ok_or(AuthorityError::Denied)?
+                        .conditions,
+                    permission,
+                ),
+                checks::DerivedPermission::HostCheck(permission) => {
+                    (&mut next.grants[index].host_checks, permission)
+                }
+            };
+            if permissions.len() >= MAX_COMPLETION_CONDITIONS {
                 return Err(AuthorityError::Capacity);
             }
-            carry.conditions.push(permission);
+            permissions.push(permission);
         }
         next.grants[index].usage.invocations += 1;
         next.condition_calls.push(record.clone());
@@ -1264,7 +1282,8 @@ impl ControlAuthority {
             || grant.policy.revision != stored.grant.revision
             || now_ms >= grant.policy.expires_at_ms
             || (!condition_allowed(stored, &grant.policy)
-                && !standing::condition_allowed(stored, grant, &grant.policy))
+                && !standing::condition_allowed(stored, grant, &grant.policy)
+                && !checks::condition_allowed(stored, grant, &grant.policy))
         {
             return Err(AuthorityError::Denied);
         }
@@ -1742,6 +1761,22 @@ impl ControlAuthority {
         self.prepare_commit(&state.data, next).map(|_| ())
     }
 
+    /// The exact profile a registered activation was admitted with, read from
+    /// its durable record. Enforcement reads this rather than any live copy.
+    pub fn activation_profile(
+        &self,
+        activation: &ActivationRef,
+    ) -> Result<ExecutionProfile, AuthorityError> {
+        let state = self.lock()?;
+        state
+            .data
+            .activations
+            .iter()
+            .find(|record| record.activation == *activation)
+            .map(|record| record.profile.clone())
+            .ok_or(AuthorityError::Denied)
+    }
+
     pub fn usage(&self, grant_id: &str) -> Result<GrantUsage, AuthorityError> {
         let state = self.lock()?;
         Ok(state.data.grants[grant_index(&state.data, grant_id)?]
@@ -2022,6 +2057,10 @@ fn profile_subset(profile: &ExecutionProfile, limit: &ExecutionProfile) -> bool 
         && profile.model == limit.model
         && profile.isolation == limit.isolation
         && profile.tools.iter().all(|t| limit.tools.contains(t))
+        && crate::path_scope::write_scope_within(
+            profile.write_scope.as_deref(),
+            limit.write_scope.as_deref(),
+        )
 }
 
 fn profile_allowed(profile: &ExecutionProfile, grant: &AuthorityGrant) -> bool {
@@ -2250,6 +2289,17 @@ fn validate_dispatch(
     if !delegate_port && !knowledge_port && !activation.profile.tools.iter().any(|t| t == tool) {
         return Err(AuthorityError::Denied);
     }
+    // A read-only activation may list the file-writing tools in its captured
+    // definition, but it can never claim one.
+    if matches!(tool, "write_file" | "edit_file")
+        && activation
+            .profile
+            .write_scope
+            .as_ref()
+            .is_some_and(Vec::is_empty)
+    {
+        return Err(AuthorityError::Denied);
+    }
     if grant.usage.invocations >= grant.policy.limits.invocations
         || grant
             .usage
@@ -2449,6 +2499,10 @@ fn validate_profile(profile: &ExecutionProfile) -> Result<(), AuthorityError> {
         if !tools.insert(tool) {
             return Err(AuthorityError::Invalid("duplicate tool"));
         }
+    }
+    if let Some(scope) = &profile.write_scope {
+        crate::path_scope::validate_write_scope(scope)
+            .map_err(|_| AuthorityError::Invalid("invalid write scope"))?;
     }
     Ok(())
 }
@@ -2760,7 +2814,9 @@ fn validate_data(data: &AuthorityData) -> Result<(), AuthorityError> {
             .chain(std::iter::once(&grant.policy))
             .find(|policy| policy.revision == call.grant.revision)
             .ok_or(AuthorityError::Invalid("missing condition grant revision"))?;
-        if (!condition_allowed(call, policy) && !standing::condition_allowed(call, grant, policy))
+        if (!condition_allowed(call, policy)
+            && !standing::condition_allowed(call, grant, policy)
+            && !checks::condition_allowed(call, grant, policy))
             || call.claimed_at_ms >= policy.expires_at_ms
         {
             return Err(AuthorityError::Invalid(
@@ -2769,6 +2825,7 @@ fn validate_data(data: &AuthorityData) -> Result<(), AuthorityError> {
         }
     }
     for grant in &data.grants {
+        checks::validate_host_checks(data, grant)?;
         let mut expected = standing::validate_carry(data, grant)?;
         expected.activations = expected
             .activations
@@ -3613,6 +3670,7 @@ mod provider_tests {
             model: "model".into(),
             isolation: "local".into(),
             tools: vec![],
+            write_scope: None,
         }
     }
     fn fixture() -> (tempfile::TempDir, ControlAuthority, ActivationLease) {
@@ -4203,6 +4261,204 @@ mod provider_tests {
         assert!(!aggregate.cost_known);
         assert_eq!(aggregate.unsettled_calls, 1);
         assert!(!aggregate.tokens.complete);
+    }
+
+    fn scoped_profile(write_scope: Option<&[&str]>) -> ExecutionProfile {
+        ExecutionProfile {
+            tools: ["read_file", "write_file", "edit_file", "bash"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            write_scope: write_scope
+                .map(|scope| scope.iter().map(|pattern| (*pattern).to_owned()).collect()),
+            ..profile()
+        }
+    }
+
+    fn scoped_gate(limit: ExecutionProfile) -> (tempfile::TempDir, ControlAuthority) {
+        let root = tempfile::tempdir().unwrap();
+        let gate = ControlAuthority::open(
+            root.path(),
+            activation("a").session_id,
+            activation("a").turn_id,
+        )
+        .unwrap();
+        gate.install_grant(
+            AuthorityGrant {
+                id: "grant".into(),
+                revision: 1,
+                issuer_evidence: EvidenceRef::new("issuer").unwrap(),
+                holder: TurnNodeId::new("a").unwrap(),
+                descendants: vec![TurnNodeId::new("b").unwrap(), TurnNodeId::new("c").unwrap()],
+                allow_stop_descendants: false,
+                delegation: None,
+                profiles: vec![limit],
+                conditions: vec![],
+                limits: GrantLimits {
+                    activations: 10,
+                    invocations: 10,
+                    tokens: 1000,
+                    cost_microunits: 100,
+                },
+                expires_at_ms: 1000,
+            },
+            0,
+        )
+        .unwrap();
+        (root, gate)
+    }
+
+    #[test]
+    fn profile_without_write_scope_keeps_its_exact_bytes() {
+        assert_eq!(
+            serde_json::to_string(&profile()).unwrap(),
+            r#"{"definition":"definition","provider":"provider","model":"model","isolation":"local","tools":[]}"#
+        );
+        let decoded: ExecutionProfile = serde_json::from_str(
+            r#"{"definition":"definition","provider":"provider","model":"model","isolation":"local","tools":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(decoded, profile());
+        // A whole durable authority file written without a scope reopens and
+        // rewrites to the same bytes.
+        let (root, gate, _) = fixture();
+        let stored = std::fs::read(root.path().join(FILE)).unwrap();
+        assert!(!String::from_utf8_lossy(&stored).contains("write_scope"));
+        let reloaded: AuthorityData = serde_json::from_slice(&stored).unwrap();
+        validate_data(&reloaded).unwrap();
+        assert_eq!(serde_json::to_vec(&reloaded).unwrap(), stored);
+        drop(gate);
+        let reopened = ControlAuthority::open(
+            root.path(),
+            activation("a").session_id,
+            activation("a").turn_id,
+        )
+        .unwrap();
+        assert_eq!(
+            reopened.activation_profile(&activation("a")).unwrap(),
+            profile()
+        );
+        // A read-only scope is recorded explicitly, never as absence.
+        let read_only = serde_json::to_value(scoped_profile(Some(&[]))).unwrap();
+        assert_eq!(read_only["write_scope"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn activation_cannot_register_a_wider_write_scope_than_its_grant() {
+        let (_root, gate) = scoped_gate(scoped_profile(Some(&["lib/", "docs/"])));
+        for (node, wider) in [
+            ("a", scoped_profile(None)),
+            ("a", scoped_profile(Some(&["src/"]))),
+            ("a", scoped_profile(Some(&["lib/", "src/"]))),
+        ] {
+            assert!(matches!(
+                gate.validate_activation_grant(&activation(node), "grant", &wider, 100),
+                Err(AuthorityError::Denied)
+            ));
+            assert!(matches!(
+                gate.register_activation(
+                    activation(node),
+                    "grant",
+                    wider,
+                    gate.revision().unwrap(),
+                    100
+                ),
+                Err(AuthorityError::Denied)
+            ));
+        }
+        for (node, narrower) in [
+            ("a", scoped_profile(Some(&["lib/"]))),
+            ("b", scoped_profile(Some(&[]))),
+            ("c", scoped_profile(Some(&["docs/", "lib/"]))),
+        ] {
+            gate.register_activation(
+                activation(node),
+                "grant",
+                narrower.clone(),
+                gate.revision().unwrap(),
+                100,
+            )
+            .unwrap();
+            assert_eq!(
+                gate.activation_profile(&activation(node)).unwrap(),
+                narrower
+            );
+        }
+        assert!(matches!(
+            gate.activation_profile(&activation("unregistered")),
+            Err(AuthorityError::Denied)
+        ));
+        // A grant can be narrowed to a smaller scope, never widened or opened.
+        let mut policy = gate.grant_policy("grant").unwrap();
+        policy.revision = 2;
+        policy.profiles = vec![scoped_profile(None)];
+        assert!(matches!(
+            gate.narrow_grant(policy.clone(), gate.revision().unwrap()),
+            Err(AuthorityError::Denied)
+        ));
+        policy.profiles = vec![scoped_profile(Some(&["lib/"]))];
+        gate.narrow_grant(policy, gate.revision().unwrap()).unwrap();
+        // An invalid pattern never becomes durable authority.
+        let (_root, open) = scoped_gate(scoped_profile(None));
+        assert!(matches!(
+            open.register_activation(
+                activation("a"),
+                "grant",
+                scoped_profile(Some(&["../outside"])),
+                open.revision().unwrap(),
+                100
+            ),
+            Err(AuthorityError::Invalid(_))
+        ));
+        let mut stored = open.lock().unwrap().data.clone();
+        stored.grants[0].policy.profiles[0].write_scope = Some(vec!["lib/".into(), "lib/".into()]);
+        assert!(validate_data(&stored).is_err());
+    }
+
+    #[test]
+    fn read_only_profile_cannot_claim_write_tools() {
+        let (_root, gate) = scoped_gate(scoped_profile(None));
+        let read_only = gate
+            .register_activation(
+                activation("a"),
+                "grant",
+                scoped_profile(Some(&[])),
+                gate.revision().unwrap(),
+                100,
+            )
+            .unwrap();
+        let scoped = gate
+            .register_activation(
+                activation("b"),
+                "grant",
+                scoped_profile(Some(&["lib/"])),
+                gate.revision().unwrap(),
+                100,
+            )
+            .unwrap();
+        let prepare = |lease: &ActivationLease, id: &str, tool: &str| {
+            gate.prepare_dispatch(
+                lease,
+                InvocationId::new(id).unwrap(),
+                tool.into(),
+                DispatchReservation {
+                    tokens: 0,
+                    cost_microunits: 0,
+                },
+                100,
+            )
+        };
+        for tool in ["write_file", "edit_file"] {
+            assert!(matches!(
+                prepare(&read_only, &format!("read-only-{tool}"), tool),
+                Err(AuthorityError::Denied)
+            ));
+            // A scoped writer may claim the tool; its paths are checked at execution.
+            prepare(&scoped, &format!("scoped-{tool}"), tool).unwrap();
+        }
+        for tool in ["read_file", "bash"] {
+            prepare(&read_only, &format!("read-only-{tool}"), tool).unwrap();
+        }
     }
 }
 
@@ -4840,6 +5096,7 @@ mod condition_tests {
             model: "fixture".into(),
             isolation: "local".into(),
             tools: vec![],
+            write_scope: None,
         }];
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert!(encoded.get("conditions").is_none());

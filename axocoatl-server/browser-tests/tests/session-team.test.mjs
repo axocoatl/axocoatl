@@ -9,13 +9,13 @@ let runtime,browser,screenshots;
 before(async()=>{screenshots=await mkdtemp(join(tmpdir(),'axocoatl-session-team-'));runtime=process.env.AXOCOATL_COMPONENT_BASE_URL?{baseUrl:process.env.AXOCOATL_COMPONENT_BASE_URL,stop:async()=>{}}:await launchTestDaemon();const executablePath=await resolveChromiumExecutable();browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});});
 after(async()=>{try{await browser?.close();await runtime?.stop();}finally{if(screenshots)await rm(screenshots,{recursive:true,force:true});}});
 const template={slot_id:'slot-reviewer',template_id:'reviewer',source_slot_id:null,name:'QA reviewer <literal>',provider:'ollama',model:'local-model',instructions:'Inspect actual client changes.',max_output_tokens:128,required:true,reset_history:true,limits:null,expires_at_ms:null};
-async function fixture({theme='light',approved=false,reject=false,loseReply=false,coordinator=false,role=coordinator?'coordinator':null,helper=coordinator,legacy=false}={}){
+async function fixture({theme='light',approved=false,reject=false,loseReply=false,coordinator=false,role=coordinator?'coordinator':null,helper=coordinator,legacy=false,suggested=false}={}){
  const context=await browser.newContext({viewport:theme==='dark'?{width:390,height:840}:{width:1100,height:820},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),errors=[],calls=[];page.on('pageerror',error=>errors.push(error.message));
- const view={history_version:legacy?'legacy_v1':'execution_v2',configuration_revision:approved?1:0,slots:[{...structuredClone(template),template_id:approved?null:template.template_id,reset_history:!approved,...(approved?{limits:{activations:2,invocations:12,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000}:{})}],dependencies:[],layout:[],templates:[structuredClone(template)],approved};
+ const view={history_version:legacy?'legacy_v1':'execution_v2',configuration_revision:approved?1:0,slots:[{...structuredClone(template),template_id:approved?null:template.template_id,reset_history:!approved,...(approved?{limits:{activations:2,invocations:12,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000}:{})}],dependencies:[],layout:[],templates:[structuredClone(template)],approved,required_checks:[],suggested_check:suggested?['sh','-c','npm test']:null};
  if(role){view.slots[0].role=role;view.templates[0].role=role;}
  if(helper)view.templates.push({...structuredClone(template),template_id:'worker',slot_id:'worker',name:'Worker reviewer',role:'worker'});
  await page.route('**/team-fixture',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html data-theme="${theme}"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-session-team session="fixture-session"></ax-session-team><script type="module" src="/ui/session-team.js"></script></body></html>`}));
- await page.route('**/api/sessions/fixture-session/team**',async route=>{const suffix=new URL(route.request().url()).pathname.split('/team')[1],body=route.request().method()==='POST'?route.request().postDataJSON():null;calls.push({suffix,body});if(!suffix)return route.fulfill({json:view});if(suffix==='/cancel')return route.fulfill({json:{cancelled:true}});if(suffix==='/preview')return route.fulfill({json:{edit:body,review_digest:'exact-review',configuration_revision:body.expected_configuration_revision+1,applies_to:'future_turns',changes:body.slots.map(slot=>({slot_id:slot.slot_id,kind:'changed',history:'new conversation'})),coordinators:body.slots.filter(slot=>slot.delegation).map(slot=>[slot.slot_id,{...slot.delegation,resource:{environment_generation:1,backend:'podman',network:'none',setup_command:null}}])}});if(suffix==='/apply'){if(reject)return route.fulfill({status:409,json:{error:'Session configuration changed; refresh'}});if(loseReply){loseReply=false;return route.abort('failed');}view.configuration_revision=body.edit.expected_configuration_revision+1;view.slots=body.edit.slots;view.approved=true;return route.fulfill({json:{configuration_revision:view.configuration_revision}});}});
+ await page.route('**/api/sessions/fixture-session/team**',async route=>{const suffix=new URL(route.request().url()).pathname.split('/team')[1],body=route.request().method()==='POST'?route.request().postDataJSON():null;calls.push({suffix,body});if(!suffix)return route.fulfill({json:view});if(suffix==='/cancel')return route.fulfill({json:{cancelled:true}});if(suffix==='/preview')return route.fulfill({json:{edit:body,review_digest:'exact-review',configuration_revision:body.expected_configuration_revision+1,applies_to:'future_turns',changes:body.slots.map(slot=>({slot_id:slot.slot_id,kind:'changed',history:'new conversation'})),coordinators:body.slots.filter(slot=>slot.delegation).map(slot=>[slot.slot_id,{...slot.delegation,resource:{environment_generation:1,backend:'podman',network:'none',setup_command:null}}]),profiles:body.slots.map(slot=>({definition:slot.slot_id,provider:slot.provider,model:slot.model,isolation:'in-process',tools:['read_file','write_file'],...(slot.writes==null?{}:{write_scope:slot.writes})}))}});if(suffix==='/apply'){if(reject)return route.fulfill({status:409,json:{error:'Session configuration changed; refresh'}});if(loseReply){loseReply=false;return route.abort('failed');}view.configuration_revision=body.edit.expected_configuration_revision+1;view.slots=body.edit.slots;view.approved=true;return route.fulfill({json:{configuration_revision:view.configuration_revision}});}});
  await page.goto(`${runtime.baseUrl}/team-fixture`);await page.getByRole('button',{name:'Team and budget',exact:true}).click();await page.getByText(legacy?'This Session uses legacy history.':approved?'Saved Session configuration 1.':'Approve explicit budgets before sending',{exact:false}).waitFor();return{context,page,calls,view,errors};
 }
 async function enterBudget(page){await page.getByRole('button',{name:'Edit',exact:true}).click();for(const[label,value]of[['Activation limit','2'],['Provider and tool invocation limit','12'],['Total token limit','32768'],['Cost limit (USD)','0'],['Budget expires (your local time)','2099-10-10T10:00']])await page.getByLabel(label,{exact:true}).fill(value);}
@@ -73,10 +73,48 @@ test('Changing the selected Agent template keeps its editable configuration visi
  const{page,context,view,calls,errors}=await fixture({approved:true});try{
   await page.getByRole('button',{name:'Edit',exact:true}).click();
   await page.locator('ax-node').first().click();
-  await page.locator('ax-session-team .panel select').selectOption('reviewer');
+  await page.locator('ax-session-team .panel select').first().selectOption('reviewer');
   await page.getByLabel('Model',{exact:true}).fill('reviewed-template-model');
   await page.getByLabel('Maximum output tokens per request',{exact:true}).fill('256');
   await review(page);const edit=calls.find(call=>call.suffix==='/preview').body;
   assert.equal(edit.slots[0].template_id,'reviewer');assert.equal(edit.slots[0].model,'reviewed-template-model');assert.equal(edit.slots[0].max_output_tokens,256);assert.deepEqual(edit.slots[0].limits,view.slots[0].limits);assert.deepEqual(errors,[]);
+ }finally{await context.close();}
+});
+
+test('Read-only toggle sends empty writes, and the review says what each Agent may change',async()=>{
+ const{page,context,calls,errors}=await fixture();try{
+  const team=page.locator('ax-session-team'),mode=page.getByLabel('May change',{exact:true}),paths=page.getByLabel('Paths it may change, one per line (for example lib/ or docs/*.md)',{exact:true});
+  await enterBudget(page);assert.equal(await mode.inputValue(),'any');assert.equal(await paths.isVisible(),false);
+  await mode.selectOption('none');assert.deepEqual(await team.evaluate(element=>element.draft.slots[0].writes),[]);
+  await review(page);let preview=calls.filter(call=>call.suffix==='/preview').at(-1).body;assert.deepEqual(preview.slots[0].writes,[]);
+  await page.getByText('may change: nothing (read-only; write tools withheld).',{exact:false}).waitFor();
+  // Only these paths with nothing entered is not silently read-only.
+  await mode.selectOption('paths');assert.equal(await paths.isVisible(),true);
+  await page.getByRole('button',{name:'Preview changes',exact:true}).click();await page.getByText('Enter at least one path QA reviewer <literal> may change',{exact:false}).waitFor();
+  await paths.fill('lib/\n  docs/*.md \n\n');await review(page);preview=calls.filter(call=>call.suffix==='/preview').at(-1).body;assert.deepEqual(preview.slots[0].writes,['lib/','docs/*.md']);
+  await page.getByText('may change: lib/, docs/*.md.',{exact:false}).waitFor();
+  await mode.selectOption('any');await review(page);preview=calls.filter(call=>call.suffix==='/preview').at(-1).body;assert.equal(preview.slots[0].writes,null);
+  await page.getByText('may change: any file.',{exact:false}).waitFor();assert.deepEqual(errors,[]);
+ }finally{await context.close();}
+});
+
+test('The detected check is only offered: nothing runs it until the person adds it, and the review says what a failure means',async()=>{
+ const{page,context,calls,errors}=await fixture({suggested:true});try{
+  const team=page.locator('ax-session-team'),lines=page.getByLabel('Required checks, one command per line',{exact:true}),detected=page.getByRole('button',{name:'Add detected: npm test',exact:true});
+  await enterBudget(page);await team.locator('.checks summary').click();
+  assert.equal(await team.locator('.checks summary').textContent(),'Required checks: none');
+  assert.equal(await lines.inputValue(),'','the detected command is not prefilled as a check');assert.equal(await detected.isVisible(),true);
+  await review(page);let preview=calls.filter(call=>call.suffix==='/preview').at(-1).body;assert.deepEqual(preview.required_checks,[]);
+  assert.doesNotMatch(await team.locator('.review').textContent(),/Required check/);
+  await detected.click();assert.equal(await lines.inputValue(),'npm test');assert.equal(await detected.isVisible(),false);
+  assert.equal(await team.locator('.checks summary').textContent(),'Required checks (1)');
+  await lines.fill('npm test\n  cargo test --quiet \n\n');
+  await review(page);preview=calls.filter(call=>call.suffix==='/preview').at(-1).body;
+  assert.deepEqual(preview.required_checks,[['sh','-c','npm test'],['sh','-c','cargo test --quiet']]);
+  const listed=await team.locator('.review').textContent();
+  assert.match(listed,/Required check after each turn: npm test/);assert.match(listed,/Required check after each turn: cargo test --quiet/);
+  assert.match(listed,/A failure leaves the turn needing attention/);
+  await page.getByRole('button',{name:'Apply to this Session',exact:true}).click();await page.getByText('Saved Session configuration 1.',{exact:false}).waitFor();
+  assert.deepEqual(calls.find(call=>call.suffix==='/apply').body.edit.required_checks,preview.required_checks);assert.deepEqual(errors,[]);
  }finally{await context.close();}
 });

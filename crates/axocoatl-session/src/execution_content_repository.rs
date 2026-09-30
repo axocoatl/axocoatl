@@ -2,6 +2,12 @@
 use super::*;
 use crate::turn_contract::InvocationEvidence;
 
+/// Run at the exact working root to observe HEAD, the file manifest and the
+/// patch against HEAD. It writes only under its own temporary directory and
+/// takes no git locks.
+pub const REPOSITORY_SNAPSHOT_COMMAND: &str =
+    include_str!("execution_content_repository_snapshot.sh");
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RepositorySnapshotPhase {
@@ -58,42 +64,22 @@ pub struct StandingRepositoryCheckView {
     pub content: StandingRepositoryCheck,
 }
 
-pub fn standing_check_command(argv: &[String]) -> Result<String, ExecutionContentError> {
-    if argv.is_empty()
-        || argv[0].is_empty()
-        || argv.len() > 64
-        || argv
-            .iter()
-            .any(|arg| arg.len() > 4096 || arg.contains('\0'))
-    {
-        return Err(ExecutionContentError::Invalid("invalid check arguments"));
-    }
-    Ok(format!(
-        "exec {}",
-        argv.iter()
-            .map(|arg| format!("'{}'", arg.replace('\'', "'\"'\"'")))
-            .collect::<Vec<_>>()
-            .join(" ")
-    ))
-}
-
 impl ExecutionContentStore {
     /// A successful command applies only to the stable candidate actually
-    /// captured around that command's own epoch and accepted input frontier.
-    pub fn standing_check_candidate(
+    /// captured around that command's own epoch and accepted input frontier,
+    /// by its group's capture conditions `before_id` and `after_id`.
+    pub fn check_candidate(
         &self,
         snapshot: &DurableTurnSnapshot,
         run: &crate::turn_contract::ConditionRunRef,
-        receipt_id: &str,
-        check_count: usize,
+        before_id: &str,
+        after_id: &str,
     ) -> Result<Option<(String, Option<String>)>, ExecutionContentError> {
         self.require_snapshot(snapshot)?;
         let runs = snapshot.contract().condition_runs();
         let Some(command_position) = runs.iter().position(|item| item.run == *run) else {
             return Ok(None);
         };
-        let before_id = crate::team_work::standing_condition_id(receipt_id, 0);
-        let after_id = crate::team_work::standing_condition_id(receipt_id, check_count + 1);
         let before = runs.iter().enumerate().find(|(_, item)| {
             item.run.epoch_id == run.epoch_id
                 && item.run.activations == run.activations
@@ -220,7 +206,8 @@ impl ExecutionContentStore {
             ))?;
         let actual: serde_json::Value =
             serde_json::from_slice(&self.read_tool_arguments(&arguments)?)?;
-        if actual != serde_json::json!({"command":standing_check_command(&check.argv)?}) {
+        if actual != serde_json::json!({"command":crate::turn_checks::check_command(&check.argv)?})
+        {
             return Err(ExecutionContentError::Invalid(
                 "check arguments differ from the recorded command",
             ));
@@ -410,4 +397,64 @@ fn validate_observation(
         ));
     }
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repository_capture_handles_shared_sandbox_ownership_only_at_the_exact_root() {
+        use std::process::Command;
+        let repo = tempfile::tempdir().unwrap();
+        assert!(Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(repo.path())
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(repo.path().join("fixture.txt"), "original\n").unwrap();
+        assert!(Command::new("git")
+            .args(["add", "fixture.txt"])
+            .current_dir(repo.path())
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(repo.path().join("fixture.txt"), "changed\n").unwrap();
+        let baseline = Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .current_dir(repo.path())
+            .env("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(!baseline.status.success());
+        assert!(String::from_utf8_lossy(&baseline.stderr).contains("dubious ownership"));
+        let capture = Command::new("sh")
+            .args(["-c", REPOSITORY_SNAPSHOT_COMMAND])
+            .current_dir(repo.path())
+            .env("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(
+            capture.status.success(),
+            "{}",
+            String::from_utf8_lossy(&capture.stderr)
+        );
+        assert!(String::from_utf8_lossy(&capture.stdout).contains("patch_b64="));
+        let nested = repo.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let refused = Command::new("sh")
+            .args(["-c", REPOSITORY_SNAPSHOT_COMMAND])
+            .current_dir(nested)
+            .env("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(!refused.status.success());
+    }
 }

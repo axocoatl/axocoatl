@@ -213,6 +213,7 @@ fn factory_fixture(
         model: config.model.clone(),
         isolation: "in-process".into(),
         tools: config.tools.clone(),
+        write_scope: None,
     };
     let definition_id = AgentDefinitionId::new("counter").unwrap();
     let definition = content

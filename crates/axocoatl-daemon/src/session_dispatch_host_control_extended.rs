@@ -3,6 +3,7 @@
 use super::*;
 use crate::session_control_plane::SessionTurnControlPlane;
 use axocoatl_session::control_command::FinishMode;
+use axocoatl_session::turn_checks::{group_of, CheckGroup};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HumanContinuationChoice {
@@ -51,11 +52,9 @@ fn capability(result: Result<()>) -> ControlPlaneCapability {
 }
 
 impl DispatchState {
-    fn standing_continue_conditions(&self, selected: &[ConditionId]) -> Result<Vec<ConditionId>> {
-        let Some(work) = self.standing_work()? else {
-            return Ok(selected.to_vec());
-        };
-        standing_continue_conditions(selected, &work.receipt_id, work.required_checks.len())
+    fn check_continue_conditions(&self, selected: &[ConditionId]) -> Result<Vec<ConditionId>> {
+        let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
+        continue_conditions(selected, snapshot.contract().graph().and_then(group_of))
     }
     fn human_successor_input(
         &self,
@@ -357,7 +356,7 @@ impl DispatchState {
                         source_epoch_id: request.execution_epoch_id.clone(),
                         epoch_id: epoch,
                         selections,
-                        condition_runs: self.standing_continue_conditions(&selected.checks)?,
+                        condition_runs: self.check_continue_conditions(&selected.checks)?,
                     },
                     replay_decisions: vec![],
                 })
@@ -467,35 +466,34 @@ impl DispatchState {
                 })
             })())
         };
-        let standing = self.standing_work()?;
-        human_turn_control_choices(
-            contract,
-            standing.as_ref(),
-            |action, continuation, partial| {
-                if action == HumanControlAction::Continue && continuation.is_none() {
-                    capability(Ok(()))
-                } else {
-                    assess(request(action, continuation, partial))
-                }
-            },
-        )
+        human_turn_control_choices(contract, |action, continuation, partial| {
+            if action == HumanControlAction::Continue && continuation.is_none() {
+                capability(Ok(()))
+            } else {
+                assess(request(action, continuation, partial))
+            }
+        })
     }
 }
 
-fn standing_continue_conditions(
+/// Selecting any condition of the graph's check group reruns it between
+/// fresh captures and records readiness again; other commands keep their
+/// results. `group` is the group and its command count.
+fn continue_conditions(
     selected: &[ConditionId],
-    receipt: &str,
-    count: usize,
+    group: Option<(CheckGroup, usize)>,
 ) -> Result<Vec<ConditionId>> {
     let mut conditions = selected.to_vec();
-    let prefix = format!("standing:{receipt}:");
-    if count > 0 && selected.iter().any(|id| id.as_str().starts_with(&prefix)) {
-        for suffix in [
-            "0".to_string(),
-            (count + 1).to_string(),
-            "ready".to_string(),
+    let Some((group, count)) = group else {
+        return Ok(conditions);
+    };
+    if selected.iter().any(|id| group.contains(id)) {
+        for id in [
+            group.condition_id(0),
+            group.condition_id(count + 1),
+            group.ready_id(),
         ] {
-            let id = ConditionId::new(format!("{prefix}{suffix}")).map_err(error)?;
+            let id = ConditionId::new(id).map_err(error)?;
             if !conditions.contains(&id) {
                 conditions.push(id);
             }
@@ -542,7 +540,6 @@ fn human_revision_invalidation(
 
 fn human_turn_control_choices(
     contract: &TurnContract,
-    standing: Option<&crate::bootstrap::native_turn::NativeStandingWork>,
     assess: impl Fn(
         HumanControlAction,
         Option<HumanContinuationSelection>,
@@ -587,37 +584,29 @@ fn human_turn_control_choices(
             }
         }
     }
+    // While a check group is not ready, each of its conditions can be rerun.
+    let group = group_of(graph);
     let check_choices = graph
         .conditions
         .iter()
         .filter(|condition| {
             !contract.condition_satisfied(&condition.condition_id)
-                || standing.as_ref().is_some_and(|work| {
-                    condition
-                        .condition_id
-                        .as_str()
-                        .starts_with(&format!("standing:{}:", work.receipt_id))
-                        && ConditionId::new(format!("standing:{}:ready", work.receipt_id))
+                || group.as_ref().is_some_and(|(group, _)| {
+                    group.contains(&condition.condition_id)
+                        && ConditionId::new(group.ready_id())
                             .is_ok_and(|id| !contract.condition_satisfied(&id))
                 })
         })
         .map(|condition| {
             Ok(HumanCheckChoice {
                 condition_id: condition.condition_id.clone(),
-                required_conditions: standing
-                    .as_ref()
-                    .map(|work| {
-                        standing_continue_conditions(
-                            std::slice::from_ref(&condition.condition_id),
-                            &work.receipt_id,
-                            work.required_checks.len(),
-                        )
-                    })
-                    .transpose()?
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|id| id != &condition.condition_id)
-                    .collect(),
+                required_conditions: continue_conditions(
+                    std::slice::from_ref(&condition.condition_id),
+                    group.clone(),
+                )?
+                .into_iter()
+                .filter(|id| id != &condition.condition_id)
+                .collect(),
                 capability: assess(
                     HumanControlAction::Continue,
                     Some(HumanContinuationSelection {
@@ -673,7 +662,6 @@ impl SessionTurnControlPlane {
     pub(crate) fn expose_closed_turn_controls(
         &mut self,
         snapshot: &DurableTurnSnapshot,
-        standing: Option<&crate::bootstrap::native_turn::NativeStandingWork>,
     ) -> Result<()> {
         if snapshot
             .contract()
@@ -682,7 +670,6 @@ impl SessionTurnControlPlane {
         {
             self.turn_controls = Some(human_turn_control_choices(
                 snapshot.contract(),
-                standing,
                 |_, _, _| {
                     capability(Err(error(
                         "This turn is closed; its recorded outcomes are read-only.",
@@ -699,7 +686,6 @@ impl SessionTurnControlPlane {
     pub(crate) fn expose_recovery_requests(
         &mut self,
         snapshot: &DurableTurnSnapshot,
-        standing: Option<&crate::bootstrap::native_turn::NativeStandingWork>,
     ) -> Result<()> {
         let contract = snapshot.contract();
         if self.superseded_conversation
@@ -713,11 +699,7 @@ impl SessionTurnControlPlane {
             requires_revalidation: true,
             reason: reason.into(),
         };
-        self.turn_controls = Some(human_turn_control_choices(
-            contract,
-            standing,
-            |_, _, _| request(),
-        )?);
+        self.turn_controls = Some(human_turn_control_choices(contract, |_, _, _| request())?);
         for node in &mut self.nodes {
             let Some(latest) = contract
                 .activations()
@@ -747,13 +729,42 @@ impl SessionTurnControlPlane {
 }
 
 #[cfg(test)]
-mod standing_continuation_tests {
+mod check_continuation_tests {
     use super::*;
+    #[test]
+    fn selecting_one_required_check_refreshes_captures_and_readiness() {
+        let group = || Some((CheckGroup::required(), 3));
+        let selected = ConditionId::new("required-check:2").unwrap();
+        let result = continue_conditions(std::slice::from_ref(&selected), group()).unwrap();
+        assert_eq!(
+            result.iter().map(ConditionId::as_str).collect::<Vec<_>>(),
+            vec![
+                "required-check:2",
+                "required-check:0",
+                "required-check:4",
+                "required-check:ready"
+            ]
+        );
+        // Another condition, or a turn without checks, selects only itself.
+        let other = ConditionId::new("review").unwrap();
+        assert_eq!(
+            continue_conditions(std::slice::from_ref(&other), group()).unwrap(),
+            vec![other]
+        );
+        assert_eq!(
+            continue_conditions(std::slice::from_ref(&selected), None).unwrap(),
+            vec![selected]
+        );
+    }
+
     #[test]
     fn selected_check_adds_capture_and_readiness_without_other_commands() {
         let selected = ConditionId::new("standing:receipt:2").unwrap();
-        let result =
-            standing_continue_conditions(std::slice::from_ref(&selected), "receipt", 3).unwrap();
+        let result = continue_conditions(
+            std::slice::from_ref(&selected),
+            Some((CheckGroup::standing("receipt"), 3)),
+        )
+        .unwrap();
         assert_eq!(
             result.iter().map(ConditionId::as_str).collect::<Vec<_>>(),
             vec![
@@ -764,7 +775,11 @@ mod standing_continuation_tests {
             ]
         );
         assert_eq!(
-            standing_continue_conditions(std::slice::from_ref(&selected), "other", 3).unwrap(),
+            continue_conditions(
+                std::slice::from_ref(&selected),
+                Some((CheckGroup::standing("other"), 3))
+            )
+            .unwrap(),
             vec![selected]
         );
     }

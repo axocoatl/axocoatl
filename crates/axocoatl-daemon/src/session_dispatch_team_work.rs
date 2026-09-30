@@ -21,31 +21,7 @@ impl SessionDispatchController {
         allocations: &[axocoatl_session::team_work::DurableTeamWorkAllocation],
         repository: &EvidenceRef,
     ) -> Result<()> {
-        let grants = {
-            let state = self.lock()?;
-            let (_, admission) = state
-                .content
-                .turn_admission(&state.canonical, &state.turn_id)
-                .map_err(error)?
-                .ok_or_else(|| error("Standing work has no canonical admission"))?;
-            admission
-                .nodes
-                .iter()
-                .map(|node| {
-                    match state
-                        .content
-                        .resolve_activation_evidence(&node.grant.evidence)
-                        .map_err(error)?
-                    {
-                        ActivationEvidenceContent::Grant { policy } => Ok(policy.clone()),
-                        _ => Err(error("Standing work grant is unavailable")),
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?
-        };
-        for grant in grants {
-            self.install_grant(grant)?;
-        }
+        self.install_admission_grants()?;
         let mut state = self.lock()?;
         state.ready()?;
         let snapshot = state.canonical.snapshot(&state.turn_id).map_err(error)?;

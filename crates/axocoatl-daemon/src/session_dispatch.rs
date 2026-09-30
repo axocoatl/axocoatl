@@ -103,6 +103,8 @@ mod run;
 mod standing_checks;
 #[path = "session_dispatch_stream.rs"]
 mod stream;
+#[path = "session_dispatch_turn_checks.rs"]
+mod turn_checks;
 pub use conditions::SettledRepositoryCheck;
 pub use driver::{
     AutonomousActivationFactory, AutonomousNodeInput, AutonomousTurnDriver, TurnDriveOutcome,

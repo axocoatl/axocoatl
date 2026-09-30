@@ -301,7 +301,7 @@ mod execution {
         fn begin_started(&mut self, started: usize) {
             let definition = self.content.retain_activation_evidence(ActivationEvidenceContent::Definition {
                 definition_id: AgentDefinitionId::new("shared-coder").unwrap(), revision:8,
-                profile:ExecutionProfile { definition:"shared-coder".into(), provider:"ollama".into(), model:"local-model".into(), isolation:"podman".into(), tools:vec!["file_read".into()] },
+                profile:ExecutionProfile { definition:"shared-coder".into(), provider:"ollama".into(), model:"local-model".into(), isolation:"podman".into(), tools:vec!["file_read".into()], write_scope: None },
                 configuration:json!({"name":"Recorded coder", "role":"autonomous", "system_prompt":"Review exact inputs", "api_key":"DO-NOT-EXPOSE", "provider":{"token":"DO-NOT-EXPOSE-EITHER"}}).to_string(),
             }).unwrap();
             let nodes = ["a", "b"]
@@ -433,7 +433,7 @@ mod execution {
         let mut view =
             SessionTurnControlPlane::from_execution(&snapshot, &fixture.content).unwrap();
         assert!(view.turn_controls.is_none());
-        view.expose_recovery_requests(&snapshot, None).unwrap();
+        view.expose_recovery_requests(&snapshot).unwrap();
         let controls = view.turn_controls.as_ref().unwrap();
         assert_eq!(controls.execution_epoch_id.as_str(), "epoch-a");
         assert!(!controls.continue_turn.enabled);
@@ -471,7 +471,7 @@ mod execution {
         let mut rewound =
             SessionTurnControlPlane::from_execution(&snapshot, &fixture.content).unwrap();
         rewound.mark_conversation_superseded(true);
-        rewound.expose_recovery_requests(&snapshot, None).unwrap();
+        rewound.expose_recovery_requests(&snapshot).unwrap();
         assert!(rewound.turn_controls.is_none());
         assert!(
             !rewound.nodes[0].activations[0]
@@ -485,7 +485,7 @@ mod execution {
         let closed = fixture.snapshot();
         let mut closed_view =
             SessionTurnControlPlane::from_execution(&closed, &fixture.content).unwrap();
-        closed_view.expose_recovery_requests(&closed, None).unwrap();
+        closed_view.expose_recovery_requests(&closed).unwrap();
         assert!(closed_view.turn_controls.is_none());
     }
 

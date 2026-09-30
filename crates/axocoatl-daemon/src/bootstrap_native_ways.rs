@@ -623,6 +623,7 @@ impl AxocoatlDaemon {
                         || config.provider != profile.provider
                         || config.model != profile.model
                         || config.tools != profile.tools
+                        || config.writes != profile.write_scope
                         || policy.holder != node.node_id
                         || policy.id != candidate.grant.grant_id.as_str()
                         || policy.revision != candidate.grant.revision

@@ -5,7 +5,7 @@ use axocoatl_session::execution_content::{
 };
 use base64::Engine as _;
 
-pub(super) const CAPTURE: &str = axocoatl_session::team_work::REPOSITORY_SNAPSHOT_COMMAND;
+pub(super) const CAPTURE: &str = axocoatl_session::execution_content::REPOSITORY_SNAPSHOT_COMMAND;
 
 impl SessionDispatchController {
     pub(crate) async fn capture_activation_repository(
@@ -298,25 +298,35 @@ impl SessionDispatchController {
         Ok(parse_digests(stdout, &paths))
     }
 
-    /// Signal work owns only its route's paths. File tools refuse other paths
-    /// before any effect; a shell can still write anywhere, so the exact Before
-    /// and After captures of the activation decide. Returns why the activation
-    /// must not be accepted, or `None` when every change stayed in scope.
-    /// Ignored files are outside the captures and are not judged.
+    /// An activation with a write scope may change only those paths. File
+    /// tools refuse other paths before any effect; a shell can still write
+    /// anywhere, so the exact Before and After captures of the activation
+    /// decide. Returns why the activation must not be accepted, or `None` when
+    /// every change stayed in scope. A scope that cannot be read is itself a
+    /// reason. Ignored files are outside the captures and are not judged.
     pub(crate) fn write_scope_violation(
         &self,
         activation: &ActivationRef,
     ) -> Result<Option<String>> {
         let state = self.lock()?;
-        let Some(scope) = state.standing_work()?.and_then(|work| work.write_scope) else {
-            return Ok(None);
+        let admitted = state
+            .authority
+            .activation_profile(activation)
+            .map_err(error)
+            .and_then(|profile| {
+                Ok((
+                    profile.tools.iter().any(|tool| tool == "bash"),
+                    state.admitted_write_scope(activation)?,
+                ))
+            });
+        let Ok((shell, scope)) = admitted else {
+            return Ok(Some(
+                "its admitted write scope cannot be read, so its changes cannot be judged; any \
+                 change is kept for review"
+                    .into(),
+            ));
         };
-        let shell = state
-            .bound
-            .get(&activation.activation_id)
-            .filter(|bound| bound.activation == *activation)
-            .is_some_and(|bound| bound.profile.tools.iter().any(|tool| tool == "bash"));
-        if !shell {
+        if scope.is_unrestricted() || !shell {
             return Ok(None);
         }
         let snapshot = state.canonical.snapshot(&state.turn_id).map_err(error)?;
@@ -329,23 +339,19 @@ impl SessionDispatchController {
                 "its repository captures cannot establish which files it changed, so changes \
                  outside the paths this Agent may change ({}) cannot be ruled out; any change \
                  is kept for review",
-                super::repository_activation::owned_paths(&scope)
+                scope.describe()
             )));
         };
         let outside: Vec<String> = changed
             .into_iter()
-            .filter(|path| {
-                !scope
-                    .iter()
-                    .any(|pattern| axocoatl_session::path_scope::pattern_matches(pattern, path))
-            })
+            .filter(|path| !scope.allows(path))
             .collect();
         Ok((!outside.is_empty()).then(|| {
             format!(
                 "it changed {} outside the paths this Agent may change ({}); the change is kept \
                  for review",
                 outside.join(", "),
-                super::repository_activation::owned_paths(&scope)
+                scope.describe()
             )
         }))
     }
@@ -486,14 +492,14 @@ impl DispatchState {
             return None;
         }
         let grant = bound.grant.grant_id.as_str();
-        let pays_checks = self.authority.grant_pays_standing_checks(grant).ok()?;
-        let checks = if pays_checks {
-            self.standing_work().ok().flatten().map_or(0, |work| {
-                u32::try_from(work.required_checks.len()).unwrap_or(u32::MAX)
-            })
-        } else {
-            0
-        };
+        let pays_checks = self.authority.grant_pays_standing_checks(grant).ok()?
+            || self.authority.grant_pays_required_checks(grant).ok()?;
+        let snapshot = self.canonical.snapshot(&self.turn_id).ok()?;
+        let group = snapshot
+            .contract()
+            .graph()
+            .and_then(axocoatl_session::turn_checks::group_of);
+        let checks = paid_checks(pays_checks, group.map(|(_, checks)| checks));
         Some(host_reserve(checks))
     }
 
@@ -520,6 +526,15 @@ impl DispatchState {
             .invocations;
         let used = self.authority.usage(grant).ok()?.invocations;
         reserve_shortfall(used, needed, reserve, limit)
+    }
+}
+
+/// How many of the turn's `checks` commands a grant pays for: all of them
+/// when it is the paying grant, else none.
+fn paid_checks(pays: bool, checks: Option<usize>) -> u32 {
+    match checks {
+        Some(checks) if pays => u32::try_from(checks).unwrap_or(u32::MAX),
+        _ => 0,
     }
 }
 
@@ -715,6 +730,28 @@ mod reserve_tests {
         assert!(provider(5));
         // Only a model that ignores the refusal again runs out.
         assert!(!provider(6));
+    }
+
+    #[test]
+    fn required_checks_reserve_only_on_the_paying_grant() {
+        // Two required checks: the paying grant holds back its After capture,
+        // both captures around the checks and each check.
+        assert_eq!(host_reserve(paid_checks(true, Some(2))), 5);
+        // Every other grant of the turn holds back only its own After capture.
+        assert_eq!(host_reserve(paid_checks(false, Some(2))), 1);
+        // Without checks the payer holds back nothing more either.
+        assert_eq!(host_reserve(paid_checks(true, None)), 1);
+        // With ten invocations and two checks, the payer's Agent may start a
+        // tool call only while three plus five still fit; any other Agent's
+        // grant is unaffected by the checks.
+        let reserve = host_reserve(paid_checks(true, Some(2)));
+        assert!(reserve_shortfall(2, TOOL_CALL_NEEDS, reserve, 10).is_none());
+        assert_eq!(
+            reserve_shortfall(3, TOOL_CALL_NEEDS, reserve, 10),
+            Some(reserve)
+        );
+        let other = host_reserve(paid_checks(false, Some(2)));
+        assert!(reserve_shortfall(6, TOOL_CALL_NEEDS, other, 10).is_none());
     }
 }
 

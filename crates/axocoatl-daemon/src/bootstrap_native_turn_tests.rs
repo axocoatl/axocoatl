@@ -30,6 +30,27 @@ async fn native_fixture() -> NativeFixture {
     native_fixture_with_invocations(0).await
 }
 async fn native_fixture_with_invocations(invocations: u32) -> NativeFixture {
+    native_fixture_with(invocations, "Exact test host approval", [&[], &[]]).await
+}
+/// The team's grants carry the Apply that approved these required checks;
+/// node-0 has no bash and node-1 has.
+async fn native_fixture_with_checks(checks: &[Vec<String>]) -> NativeFixture {
+    let approval = serde_json::json!({
+        "kind": "authenticated_session_team_apply",
+        "edit": {
+            "command_id": "apply-initial-team",
+            "expected_configuration_revision": 0,
+            "slots": [],
+            "dependencies": [],
+            "layout": [],
+            "required_checks": checks,
+        },
+        "templates": [],
+    });
+    native_fixture_with(0, &approval.to_string(), [&["read_file"], &["bash"]]).await
+}
+/// Two slots whose grants `issuer` approved; slot `n` has `tools[n]`.
+async fn native_fixture_with(invocations: u32, issuer: &str, tools: [&[&str]; 2]) -> NativeFixture {
     let mut repository = fixture_with_legacy_turn(Some("legacy-before-native")).await;
     let canonical = repository._canonical.take().unwrap();
     let content = ExecutionContentStore::open_owned(
@@ -57,7 +78,7 @@ async fn native_fixture_with_invocations(invocations: u32) -> NativeFixture {
         .with_session_team_stores(&token, |canonical, content, _| {
             let issuer = content
                 .retain_activation_evidence(ActivationEvidenceContent::Guidance {
-                    text: "Exact test host approval".into(),
+                    text: issuer.into(),
                 })
                 .unwrap()
                 .reference()
@@ -72,11 +93,12 @@ async fn native_fixture_with_invocations(invocations: u32) -> NativeFixture {
                 let conversation_id =
                     NodeConversationId::new(format!("conversation-{index}")).unwrap();
                 let definition_id = AgentDefinitionId::new(format!("definition-{index}")).unwrap();
+                let tools: Vec<String> = tools[index].iter().map(|tool| (*tool).into()).collect();
                 let config = AgentConfig {
                     id: AgentId::new(conversation_id.as_str()),
                     provider: "ollama".into(),
                     model: "test-model".into(),
-                    tools: vec![],
+                    tools: tools.clone(),
                     sampling: SamplingConfig {
                         max_tokens: Some(128),
                         ..Default::default()
@@ -88,7 +110,8 @@ async fn native_fixture_with_invocations(invocations: u32) -> NativeFixture {
                     provider: config.provider.clone(),
                     model: config.model.clone(),
                     isolation: "in-process".into(),
-                    tools: vec![],
+                    tools,
+                    write_scope: None,
                 };
                 let definition = content
                     .retain_activation_evidence(ActivationEvidenceContent::Definition {
@@ -356,6 +379,203 @@ async fn targeted_native_send_uses_only_selected_slot_and_its_own_conversation()
     assert_eq!(
         controller.snapshot().unwrap().contract().graph().unwrap(),
         &setup.content.graph
+    );
+}
+#[tokio::test]
+async fn approved_required_checks_become_turn_conditions_and_survive_exact_retry() {
+    let checks = vec![vec!["sh".into(), "-c".into(), "test -f done.txt".into()]];
+    let f = native_fixture_with_checks(&checks).await;
+    let token = f
+        .registry
+        .session_team_token(f.request.session_id.as_str())
+        .unwrap();
+    let data = SecureDir::open(f.repository._data.path()).unwrap();
+    let source = f.request.source().unwrap();
+    let first = prepare_admission(&f.registry, &token, &data, &f.request, &source).unwrap();
+    let repeat = prepare_admission(&f.registry, &token, &data, &f.request, &source).unwrap();
+    assert_eq!(first.content, repeat.content);
+    let graph = &first.content.graph;
+    assert_eq!(
+        graph
+            .conditions
+            .iter()
+            .map(|condition| condition.condition_id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "required-check:0",
+            "required-check:1",
+            "required-check:2",
+            "required-check:ready"
+        ]
+    );
+    let nodes = vec![
+        TurnNodeId::new("node-0").unwrap(),
+        TurnNodeId::new("node-1").unwrap(),
+    ];
+    assert!(graph
+        .conditions
+        .iter()
+        .all(|condition| condition.nodes == nodes));
+    assert_eq!(
+        axocoatl_session::turn_checks::group_of(graph),
+        Some((axocoatl_session::turn_checks::CheckGroup::required(), 1))
+    );
+    f.registry
+        .with_session_team_stores(&token, |_, content, _| {
+            let ConditionKind::RepositoryCheck { definition } = &graph.conditions[1].kind else {
+                panic!("the command is a repository check")
+            };
+            assert_eq!(
+                content
+                    .resolve_repository_check_definition(definition)
+                    .unwrap()
+                    .argv,
+                checks[0]
+            );
+            let ConditionKind::Review { criterion } = &graph.conditions[3].kind else {
+                panic!("readiness is a review")
+            };
+            assert!(matches!(
+                content.resolve_activation_evidence(criterion).unwrap(),
+                ActivationEvidenceContent::Guidance { text }
+                    if *text == axocoatl_session::turn_checks::readiness_text(&checks)
+            ));
+            Ok(())
+        })
+        .unwrap();
+    let (controller, repository) = begin(&f, &f.request);
+    assert_eq!(
+        controller.snapshot().unwrap().contract().graph(),
+        Some(graph)
+    );
+    let calls = Arc::new(AtomicUsize::new(0));
+    let factory = Arc::new(RefusingFactory(calls.clone()));
+    let bus = crate::stream::StreamBus::new(64);
+    let NativeFirstTurnStart::Prepared(prepared) = finish_owned_setup(
+        &f.registry,
+        controller.clone(),
+        repository.clone(),
+        &source,
+        bus.clone(),
+        factory.clone(),
+    )
+    .unwrap() else {
+        panic!("first owned handoff must prepare")
+    };
+    // The first required Agent that may use bash pays: node-1, not node-0.
+    let pays = |grant: &'static str| {
+        controller
+            .with_team_work_authority(|_, _, authority| {
+                Ok(authority.grant_pays_required_checks(grant).unwrap())
+            })
+            .unwrap()
+    };
+    assert!(!pays("grant-0"));
+    assert!(pays("grant-1"));
+    // An exact retry reattaches without another driver or authorization.
+    assert!(matches!(
+        finish_owned_setup(
+            &f.registry,
+            controller.clone(),
+            repository,
+            &source,
+            bus,
+            factory
+        )
+        .unwrap(),
+        NativeFirstTurnStart::Reattached(_)
+    ));
+    let token = f
+        .registry
+        .session_team_token(f.request.session_id.as_str())
+        .unwrap();
+    let retried = prepare_admission(&f.registry, &token, &data, &f.request, &source).unwrap();
+    assert_eq!(retried.content, first.content);
+    // No Agent was accepted, so no check ran; the turn needs attention.
+    let outcome = prepared.run().await.unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::NeedsAttention)
+    );
+    assert!(outcome.snapshot.contract().condition_runs().is_empty());
+    let view = controller.control_plane().unwrap();
+    assert_eq!(view.required_checks.len(), 1);
+    assert_eq!(view.required_checks[0].argv, checks[0]);
+    assert_eq!(view.required_checks[0].state, "pending");
+    let choices = view.turn_controls.unwrap().check_choices;
+    let choice = choices
+        .iter()
+        .find(|choice| choice.condition_id.as_str() == "required-check:1")
+        .unwrap();
+    assert_eq!(
+        choice
+            .required_conditions
+            .iter()
+            .map(ConditionId::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "required-check:0",
+            "required-check:2",
+            "required-check:ready"
+        ]
+    );
+}
+#[tokio::test]
+async fn targeted_send_keeps_required_checks() {
+    let checks = vec![vec!["sh".into(), "-c".into(), "test -f done.txt".into()]];
+    let f = native_fixture_with_checks(&checks).await;
+    let token = f
+        .registry
+        .session_team_token(f.request.session_id.as_str())
+        .unwrap();
+    let data = SecureDir::open(f.repository._data.path()).unwrap();
+    let target = |index: usize| {
+        let mut request = f.request.clone();
+        request.target_definition =
+            Some(AgentDefinitionId::new(format!("definition-{index}")).unwrap());
+        request.request.target_definition = request.target_definition.clone();
+        request.grants.remove(1 - index);
+        request.node_evidence.remove(1 - index);
+        request
+    };
+    // node-0 cannot use bash, so no Agent of this turn could pay for them.
+    let shell_less = target(0);
+    let refused = prepare_admission(
+        &f.registry,
+        &token,
+        &data,
+        &shell_less,
+        &shell_less.source().unwrap(),
+    )
+    .err()
+    .unwrap()
+    .to_string();
+    assert!(refused.contains("required checks"), "{refused}");
+    let request = target(1);
+    let setup = prepare_admission(
+        &f.registry,
+        &token,
+        &data,
+        &request,
+        &request.source().unwrap(),
+    )
+    .unwrap();
+    let graph = &setup.content.graph;
+    assert_eq!(graph.nodes.len(), 1);
+    assert_eq!(graph.nodes[0].node_id.as_str(), "node-1");
+    assert_eq!(graph.conditions.len(), 4);
+    assert!(graph
+        .conditions
+        .iter()
+        .all(|condition| condition.nodes == vec![graph.nodes[0].node_id.clone()]));
+    assert_eq!(
+        axocoatl_session::turn_checks::group_of(graph),
+        Some((axocoatl_session::turn_checks::CheckGroup::required(), 1))
+    );
+    let (controller, _) = begin(&f, &request);
+    assert_eq!(
+        controller.snapshot().unwrap().contract().graph(),
+        Some(graph)
     );
 }
 #[tokio::test]

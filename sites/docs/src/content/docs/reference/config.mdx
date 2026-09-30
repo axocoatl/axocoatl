@@ -92,6 +92,7 @@ agents:
     model: qwen2.5-coder:14b
     system_prompt: Work in the selected repository and verify changes.
     tools: []
+    writes: [src/, "*.md"]
     depends_on: []
     role: autonomous
     token_budget:
@@ -116,6 +117,11 @@ agents:
 Required Agent fields are `id`, `name`, `provider`, and `model`.
 `system_prompt` and `token_budget` are optional. `role` defaults to
 `autonomous`; other values are `coordinator` and `worker`.
+
+`writes` is optional: up to 64 repository path patterns the Agent may change in a
+native Session. Omit it to allow any file; `[]` makes a read-only helper. Absolute paths,
+`..` segments, empty entries, and repeated entries are rejected. See
+[Limit which files an Agent may change](/configure/agents/#limit-which-files-an-agent-may-change).
 
 A Coordinator must be the `entry_point` of exactly one workflow. A Worker must belong to that
 coordinator-led workflow and cannot execute or restart as a standalone Agent.

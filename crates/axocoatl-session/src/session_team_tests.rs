@@ -66,6 +66,7 @@ impl Fixture {
             model: model.into(),
             isolation: "in-process".into(),
             tools: vec![],
+            write_scope: None,
         };
         // The storage seam consumes retained definition evidence rather than
         // inventing a second AgentConfig schema for team editing.

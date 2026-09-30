@@ -40,6 +40,7 @@ agents:
 | `provider`, `model` | Model target for this Agent |
 | `system_prompt` | Persistent operating instructions |
 | `tools` | Empty inherits the execution path's baseline tools; non-empty is an exact advertisement and dispatch allowlist |
+| `writes` | Repository paths the Agent may change in a native Session. Omit it to allow any file; `[]` makes a read-only helper. See [Limit which files an Agent may change](#limit-which-files-an-agent-may-change) |
 | `depends_on` | Exact direct-parent completion predicate for a multi-Agent Session turn; also seeds legacy Automation edges during first-boot migration |
 | `role` | `autonomous`, `coordinator`, or `worker` |
 | `activation_threshold`, `activation_decay` | Removed in 1.1.0. The daemon warns and ignores them; events never start Agents |
@@ -90,6 +91,69 @@ with finite inference bounds. Axocoatl verifies the actual backend and
 model capabilities; an OpenAI-compatible endpoint is not itself an enforcement
 standard. Local API cost can be known zero while token usage remains incomplete.
 This does not promise a cap on an unrelated provider's bill.
+
+## Limit which files an Agent may change
+
+```yaml
+agents:
+  - id: docs-writer
+    name: Docs writer
+    provider: ollama
+    model: qwen2.5-coder:14b
+    tools: [read_file, write_file, edit_file, list_dir, grep, glob, bash]
+    writes: [docs/, "*.md"]
+  - id: reviewer
+    name: Reviewer
+    provider: ollama
+    model: qwen2.5-coder:14b
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+```
+
+Each entry is a repository path pattern. A trailing `/` covers everything below that
+directory. A pattern without `/`, such as `*.md`, matches that file name in any
+directory; a pattern with `/` starts at the repository root. `*` and `?` stay within one
+path segment and `**` spans segments. Patterns cannot start with `/` or contain `..`, and
+an Agent can name at most 64.
+
+In a native Session:
+
+- `write_file` and `edit_file` refuse any other path before writing and never write
+  through a symbolic link. The Agent is told to leave that file unchanged and describe
+  the change in its answer.
+- A shell can still write anywhere. When the Agent has `bash`, Axocoatl compares the
+  repository before and after its work; a change outside its paths fails that work and
+  is kept for you to review. Ignored files are not checked.
+- With `writes: []` the Agent is not offered `write_file` or `edit_file`. Its own `bash`
+  commands run under the sandbox's kernel write restriction, so they cannot change the
+  repository. Where the runtime cannot apply that restriction, its `bash` commands do
+  not run and the read-only file tools still work.
+
+**Team & budget** offers the same choice for each Agent under **May change**: Any file,
+Only these paths, or Nothing – read-only helper. The review lists what each approved
+profile may change. A Worker cannot change more than its Coordinator: when the
+Coordinator has a list, each of its Workers needs one too, and every path in it must
+appear in the Coordinator's list exactly as written.
+
+## Required checks
+
+A native Session team can have required checks: commands Axocoatl runs in the
+Session's repository after the required Agents of every turn finish. In **Team &
+budget**, open **Required checks** and enter one command per line; each line runs as
+`sh -c <line>`. If the Session has a detected check command, **Add detected** offers
+it, but it runs only after you add it and apply the team.
+
+After the Agents finish, Axocoatl captures the repository, runs each check, and
+captures the repository again. The turn completes only when every check passes and the
+checks leave the repository unchanged. A failing check leaves the turn needing
+attention, with each check's exit code and output in the turn controls. Fix the cause,
+select the check and choose **Continue** to run it again with fresh captures.
+
+Checks run on the allowance of the first required Agent, in graph order, that has the
+`bash` tool; Axocoatl holds back invocations for them from that Agent's allowance. Apply
+is refused when no required Agent has `bash`, and so is a request sent to a single
+Agent without `bash` while the team has checks. Each check may run for up to three
+minutes and keeps up to 768 KiB of output and 256 KiB of errors.
 
 ## Actor token guards
 

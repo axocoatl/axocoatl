@@ -256,84 +256,28 @@ pub(super) fn condition_allowed(
     grant: &GrantRecord,
     policy: &AuthorityGrant,
 ) -> bool {
-    policy
-        .profiles
-        .iter()
-        .any(|profile| profile.tools.iter().any(|tool| tool == "bash"))
+    checks::has_shell(policy)
         && grant.standing.as_ref().is_some_and(|carry| {
-            carry.conditions.iter().any(|permission| {
-                permission.kind
-                    == (ConditionKind::RepositoryCheck {
-                        definition: record.definition.clone(),
-                    })
-                    && permission.repository == record.repository
-                    && permission.isolation == record.isolation
-                    && record
-                        .run
-                        .activations
-                        .iter()
-                        .all(|activation| permission.nodes.contains(&activation.node_id))
-                    && record.timeout_ms <= permission.max_timeout_ms
-                    && record.stdout_bytes <= permission.max_stdout_bytes
-                    && record.stderr_bytes <= permission.max_stderr_bytes
-            })
+            carry
+                .conditions
+                .iter()
+                .any(|permission| checks::permission_covers(permission, record))
         })
 }
 
-/// Follow only the replacement transitions already admitted by this canonical
-/// turn. The original permission remains retained for earlier check receipts.
-/// The derived permission is committed together with its first actual claim.
+/// A standing check's permission derived through canonical replacement; see
+/// [`checks::replaced_permission`].
 pub(super) fn replaced_condition_permission(
     snapshot: &DurableTurnSnapshot,
     record: &ConditionCallRecord,
     grant: &GrantRecord,
 ) -> Option<ConditionPermission> {
-    let contract = snapshot.contract();
-    let graph = contract.graph()?;
-    let condition = graph
-        .conditions
-        .iter()
-        .find(|condition| condition.condition_id == record.run.condition_id)?;
-    let selected = record
-        .run
-        .activations
-        .iter()
-        .map(|activation| &activation.node_id)
-        .collect::<HashSet<_>>();
-    if selected != condition.nodes.iter().collect::<HashSet<_>>() {
-        return None;
-    }
-    for permission in &grant.standing.as_ref()?.conditions {
-        // The same immutable condition had this exact scope in an actual
-        // predecessor graph. An unrelated condition or an added Agent is not
-        // evidence for extending a standing check's authorization.
-        if !contract.graph_history().iter().any(|revision| {
-            revision.previous.conditions.iter().any(|previous| {
-                previous.condition_id == record.run.condition_id
-                    && previous.kind == permission.kind
-                    && previous.nodes == permission.nodes
-            })
-        }) {
-            continue;
-        }
-        let mut derived = permission.clone();
-        for replacement in contract.replaced_nodes() {
-            for node in &mut derived.nodes {
-                if node == &replacement.previous {
-                    *node = replacement.replacement.clone();
-                }
-            }
-        }
-        if derived.nodes == permission.nodes || derived.nodes != condition.nodes {
-            continue;
-        }
-        let mut candidate = grant.clone();
-        candidate.standing.as_mut()?.conditions = vec![derived.clone()];
-        if condition_allowed(record, &candidate, &candidate.policy) {
-            return Some(derived);
-        }
-    }
-    None
+    checks::replaced_permission(
+        snapshot,
+        record,
+        &grant.standing.as_ref()?.conditions,
+        &grant.policy,
+    )
 }
 
 pub(super) fn validate_carry(
@@ -360,33 +304,11 @@ pub(super) fn validate_carry(
             "standing grant carry differs from approved allowance",
         ));
     }
-    if carry.conditions.len() > crate::turn_contract::MAX_COMPLETION_CONDITIONS {
-        return Err(AuthorityError::Capacity);
-    }
-    for (index, permission) in carry.conditions.iter().enumerate() {
-        bounded(&permission.isolation, 128)?;
-        let nodes: HashSet<_> = permission.nodes.iter().collect();
-        if !matches!(permission.kind, ConditionKind::RepositoryCheck { .. })
-            || permission.nodes.is_empty()
-            || permission.nodes.len() > crate::turn_contract::MAX_CONTRACT_NODES
-            || nodes.len() != permission.nodes.len()
-            || permission.max_timeout_ms == 0
-            || permission.max_timeout_ms > 180_000
-            || permission
-                .max_stdout_bytes
-                .saturating_add(permission.max_stderr_bytes)
-                > 1024 * 1024
-            || carry.conditions[..index].contains(permission)
-            || !original
-                .profiles
-                .iter()
-                .any(|profile| profile.tools.iter().any(|tool| tool == "bash"))
-        {
-            return Err(AuthorityError::Invalid(
-                "invalid standing condition permission",
-            ));
-        }
-    }
+    checks::validate_permissions(
+        &carry.conditions,
+        original,
+        "invalid standing condition permission",
+    )?;
     Ok(carry.consumed_before.clone())
 }
 

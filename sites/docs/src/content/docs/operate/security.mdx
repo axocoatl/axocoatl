@@ -140,6 +140,16 @@ host bind. Protected Axocoatl data and lease directories below that bind are
 automatically masked as described above. Keep all other secrets and unrelated data
 outside the Workspace.
 
+An Agent configured with `writes: []` runs its own `bash` commands under a kernel write
+restriction that keeps the repository unchanged while `/tmp` and its home directory stay
+writable. The restriction applies to that Agent's shell only. The host refuses its file
+tools write access before they run, and Axocoatl's own before-and-after repository
+observations run without it. Where the kernel or runtime cannot apply the restriction,
+the shell command does not run. An Agent that may change some paths gets no kernel
+restriction: its shell changes are compared with its paths after the work, which is
+review evidence rather than confinement. See
+[Limit which files an Agent may change](/configure/agents/#limit-which-files-an-agent-may-change).
+
 `network: none` blocks container egress and Preview ports, but does not block
 the host daemon itself from reaching model providers, MCP servers, web search,
 webhooks, a remote sandbox service, or a registry for a Podman image pull. It
