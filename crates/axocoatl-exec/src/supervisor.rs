@@ -861,8 +861,34 @@ mod landlock {
         format!("{what}: {}", io::Error::last_os_error())
     }
 
+    /// The write rights a ruleset handles on a kernel offering Landlock
+    /// `abi`. Before ABI 3 Landlock cannot refuse truncating an existing
+    /// file, which would let a read-only command empty any repository file,
+    /// so such a kernel offers no write restriction at all.
+    pub(super) fn handled_access(abi: i64) -> Result<u64, String> {
+        if abi < 3 {
+            return Err(format!(
+                "Landlock ABI {abi} cannot refuse truncating files; version 3 (Linux 6.2) or \
+                 later is required"
+            ));
+        }
+        Ok(WRITE_FILE
+            | REMOVE_DIR
+            | REMOVE_FILE
+            | MAKE_CHAR
+            | MAKE_DIR
+            | MAKE_REG
+            | MAKE_SOCK
+            | MAKE_FIFO
+            | MAKE_BLOCK
+            | MAKE_SYM
+            | REFER
+            | TRUNCATE)
+    }
+
     /// Create the ruleset in the supervisor. Fails when the kernel or the
-    /// container's seccomp policy does not offer Landlock.
+    /// container's seccomp policy does not offer Landlock, or offers only a
+    /// version that cannot refuse every write.
     pub(super) fn prepare(restriction: &WriteRestriction) -> Result<Ruleset, String> {
         restriction.validate()?;
         // SAFETY: querying the ABI takes no attribute pointer.
@@ -877,22 +903,7 @@ mod landlock {
         if abi < 1 {
             return Err(last_error("Landlock is not available"));
         }
-        let mut handled = WRITE_FILE
-            | REMOVE_DIR
-            | REMOVE_FILE
-            | MAKE_CHAR
-            | MAKE_DIR
-            | MAKE_REG
-            | MAKE_SOCK
-            | MAKE_FIFO
-            | MAKE_BLOCK
-            | MAKE_SYM;
-        if abi >= 2 {
-            handled |= REFER;
-        }
-        if abi >= 3 {
-            handled |= TRUNCATE;
-        }
+        let handled = handled_access(abi)?;
         let attr = RulesetAttr {
             handled_access_fs: handled,
         };
@@ -975,5 +986,24 @@ mod landlock {
             }
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_kernel_that_cannot_refuse_truncation_offers_no_restriction() {
+            for abi in [1, 2] {
+                let refused = handled_access(abi).unwrap_err();
+                assert!(refused.contains("truncating"), "{refused}");
+            }
+            for abi in [3, 4, 6] {
+                let handled = handled_access(abi).unwrap();
+                assert_eq!(handled & TRUNCATE, TRUNCATE);
+                assert_eq!(handled & REFER, REFER);
+                assert_eq!(handled & WRITE_FILE, WRITE_FILE);
+            }
+        }
     }
 }
