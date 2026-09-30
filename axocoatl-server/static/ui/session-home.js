@@ -195,6 +195,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .config-row.wrap { align-items: flex-start; flex-wrap: wrap; }
 .config-label { color: var(--muted); font-size: var(--fs-sm); white-space: nowrap; }
 .config-help { color: var(--muted-2); font-size: var(--fs-xs); }
+.config-help a { color: var(--accent); }
+.config-help a:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.custom-team-validation { flex-basis: 100%; }
+.custom-team-validation.error { color: var(--err); }
 .grow { flex: 1; }
 .input, .select {
   min-width: 0; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--r-sm);
@@ -299,12 +303,89 @@ function sessionSelectableAgents(agents) {
   });
 }
 
+function customTeamSelectionState(agents, selectedAgents) {
+  const selected = new Set(selectedAgents || []);
+  if (!selected.size) return { valid: false, message: 'Pick at least one Agent.' };
+  const records = new Map(sessionSelectableAgents(agents).map((value) => {
+    const agent = typeof value === 'string' ? { id: value } : value;
+    return [agent.id, agent];
+  }));
+  const labelFor = (id) => records.get(id)?.name || id;
+  if (selected.size === 1) {
+    const id = [...selected][0];
+    const role = String(records.get(id)?.role || '').toLowerCase();
+    return {
+      valid: true,
+      message: role === 'coordinator'
+        ? `${labelFor(id)} will run directly and coordinate its own Workers.`
+        : `${labelFor(id)} will run directly.`,
+    };
+  }
+
+  for (const id of selected) {
+    const record = records.get(id);
+    const role = String(record?.role || '').toLowerCase();
+    if (role !== 'autonomous') {
+      return {
+        valid: false,
+        message: role === 'coordinator'
+          ? `${labelFor(id)} is a Coordinator. Select it alone, or choose only autonomous Agents for a coordinated Custom team.`
+          : `${labelFor(id)} is not an autonomous Agent. Multi-Agent Custom teams can contain only autonomous Agents.`,
+      };
+    }
+  }
+
+  for (const id of selected) {
+    const record = records.get(id);
+    for (const dependency of (Array.isArray(record?.depends_on) ? record.depends_on : [])) {
+      if (selected.has(dependency)) continue;
+      return {
+        valid: false,
+        message: `${labelFor(id)} depends on ${labelFor(dependency)}, which is not selected. Select ${labelFor(dependency)} or remove ${labelFor(id)}.`,
+      };
+    }
+  }
+
+  const visiting = new Set();
+  const visited = new Set();
+  const stack = [];
+  let cycle = null;
+  const visit = (id) => {
+    if (cycle || visited.has(id)) return;
+    if (visiting.has(id)) {
+      const start = stack.indexOf(id);
+      cycle = [...stack.slice(Math.max(0, start)), id];
+      return;
+    }
+    visiting.add(id);
+    stack.push(id);
+    const record = records.get(id);
+    for (const dependency of (Array.isArray(record?.depends_on) ? record.depends_on : [])) {
+      if (selected.has(dependency)) visit(dependency);
+    }
+    stack.pop();
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const id of selected) visit(id);
+  if (cycle) {
+    return {
+      valid: false,
+      message: `These dependencies form a cycle: ${cycle.map(labelFor).join(' → ')}. Custom teams need a one-way dependency route.`,
+    };
+  }
+  return {
+    valid: true,
+    message: `${selected.size} autonomous Agents will coordinate by their declared dependencies.`,
+  };
+}
+
 function defaultForm(agents) {
   const first = sessionSelectableAgents(agents)[0];
   return {
     copyFrom: '', enabledSkills: new Set(), exposedPorts: '', imagePreset: '', customImage: '',
     imageTouched: false, modeKind: 'single_agent', agentId: first?.id || first || '',
-    customAgents: new Set(), sessionName: 'Untitled Session',
+    workflowId: '', customAgents: new Set(), sessionName: 'Untitled Session',
     setupCommand: '', setupTouched: false, setupApproved: false,
     runtimeCleanupId: '', runtimeCreationToken: '', runtimeCleanupConfirmed: false,
     workspaceName: '', workspaceNameTouched: false,
@@ -314,6 +395,7 @@ function defaultForm(agents) {
 export class AxSessionHome extends HTMLElement {
   #root;
   #agents = [];
+  #teams = [];
   #workspaces = [];
   #sessions = [];
   #legacyFavorites = loadLegacyFavorites();
@@ -395,6 +477,16 @@ export class AxSessionHome extends HTMLElement {
       );
     }
     this.#renderRows();
+    this.#renderPicker();
+  }
+
+  get teams() { return this.#teams.slice(); }
+  set teams(value) {
+    this.#teams = Array.isArray(value) ? value.slice() : [];
+    if (this.#picker) {
+      const selected = this.#teams.some(team => team.id === this.#picker.form.workflowId);
+      if (!selected) this.#picker.form.workflowId = this.#teams[0]?.id || '';
+    }
     this.#renderPicker();
   }
 
@@ -1014,6 +1106,7 @@ export class AxSessionHome extends HTMLElement {
     this.#menu = null;
     if (!this.#picker) this.#pickerReturnFocus = deepActiveElement();
     const form = defaultForm(this.#agents);
+    form.workflowId = this.#teams[0]?.id || '';
     this.#picker = {
       kind, workspaceId, path: kind === 'session' ? initialPath : '', requestedPath: initialPath || '',
       dirs: [], parent: null, phase: kind === 'session' ? 'ready' : 'loading',
@@ -1152,6 +1245,7 @@ export class AxSessionHome extends HTMLElement {
     this.#setPickerImage(session.image || '', true);
     form.modeKind = session.mode?.kind || 'single_agent';
     form.agentId = session.mode?.agent_id || form.agentId;
+    form.workflowId = session.mode?.workflow_id || this.#teams[0]?.id || '';
     form.customAgents = new Set(session.mode?.agents || []);
     form.enabledSkills = new Set(session.enabled_skills || []);
     form.setupCommand = session.environment?.setup_command || '';
@@ -1166,7 +1260,10 @@ export class AxSessionHome extends HTMLElement {
     const active = this.#root.activeElement;
     const focusWasModal = active?.classList?.contains('modal');
     const focusKey = active && host.contains(active) && !focusWasModal
-      ? { action: active.dataset.action || '', field: active.dataset.field || '', path: active.dataset.path || '' }
+      ? {
+        action: active.dataset.action || '', field: active.dataset.field || '',
+        path: active.dataset.path || '', value: active.value || '',
+      }
       : null;
     host.replaceChildren(); const picker = this.#picker; if (!picker) return;
     const overlay = element('div', 'overlay'); overlay.dataset.action = 'picker-backdrop';
@@ -1244,12 +1341,19 @@ export class AxSessionHome extends HTMLElement {
       ? picker.form.customImage : picker.form.imagePreset).trim();
     const remoteImageConflict = picker.probe?.runtime?.supports_session_image === false
       && Boolean(requestedImage);
+    const customTeamState = picker.kind === 'session' && picker.form.modeKind === 'custom'
+      ? customTeamSelectionState(this.#agents, picker.form.customAgents) : null;
+    const selectedLatticeTeamId = picker.form.workflowId || this.#teams[0]?.id || '';
+    const latticeTeamMissing = picker.kind === 'session' && picker.form.modeKind === 'lattice'
+      && !this.#teams.some((team) => team.id === selectedLatticeTeamId);
     use.disabled = picker.busy || picker.phase !== 'ready' || !picker.path || nameMissing
       || (environmentKind && picker.probePending)
       || projectProbeFailureBlocksCreation
       || malformedDevcontainerBlocksCreation
       || malformedDevcontainerNeedsImageDecision
-      || remoteImageConflict;
+      || remoteImageConflict
+      || latticeTeamMissing
+      || customTeamState?.valid === false;
     foot.append(cancel, use); modal.append(foot); overlay.append(modal); host.append(overlay);
     queueMicrotask(() => {
       if (this.#picker !== picker || !modal.isConnected) return;
@@ -1258,7 +1362,8 @@ export class AxSessionHome extends HTMLElement {
         target = Array.from(modal.querySelectorAll(MODAL_FOCUSABLE)).find((candidate) =>
           (candidate.dataset.action || '') === focusKey.action
           && (candidate.dataset.field || '') === focusKey.field
-          && (candidate.dataset.path || '') === focusKey.path);
+          && (candidate.dataset.path || '') === focusKey.path
+          && (candidate.value || '') === focusKey.value);
       }
       (target || modal).focus();
     });
@@ -1317,22 +1422,59 @@ export class AxSessionHome extends HTMLElement {
 
     const mode = element('div', 'config-row'); mode.append(element('label', 'config-label', 'Mode'));
     const select = element('select', 'select'); select.dataset.field = 'mode';
-    [['single_agent', 'Single agent'], ['lattice', 'Full lattice'], ['custom', 'Custom workflow']]
+    [['single_agent', 'Single agent'], ['lattice', 'Lattice team'], ['custom', 'Custom team']]
       .forEach(([value, label]) => select.append(new Option(label, value)));
     select.value = picker.form.modeKind; mode.append(select, element('span', 'grow'), element('span', 'config-help', this.#modeHint(picker.form.modeKind))); config.append(mode);
+    if (picker.form.modeKind === 'lattice') {
+      const team = element('div', 'config-row');
+      const teamLabel = element('label', 'config-label', 'Team');
+      teamLabel.htmlFor = 'session-lattice-team';
+      team.append(teamLabel);
+      const workflow = element('select', 'select'); workflow.dataset.field = 'workflow';
+      workflow.id = 'session-lattice-team';
+      this.#teams.forEach(value => workflow.append(new Option(value.name || value.id, value.id)));
+      workflow.value = picker.form.workflowId || this.#teams[0]?.id || '';
+      if (!this.#teams.length) workflow.append(new Option('No Lattice teams configured', ''));
+      workflow.disabled = !this.#teams.length;
+      const teamHelp = element('span', 'config-help');
+      if (this.#teams.length) {
+        teamHelp.textContent = 'Multi-Agent autonomous teams snapshot membership and dependencies into each coordinated turn; one-Agent and coordinator-led teams run directly.';
+      } else {
+        teamHelp.append(document.createTextNode(
+          'Add a team to your user configuration, run axocoatl validate, then restart Axocoatl. ',
+        ));
+        const guide = element('a', 'team-setup-link', 'Open team setup guide ↗');
+        guide.href = 'https://docs.axocoatl.ai/configure/agents/#define-a-session-team';
+        guide.target = '_blank';
+        guide.rel = 'noopener';
+        teamHelp.append(guide);
+      }
+      team.append(workflow, element('span', 'grow'), teamHelp);
+      config.append(team);
+    }
     if (picker.form.modeKind === 'custom') {
       const agents = element('div', 'config-row wrap'); agents.append(element('span', 'config-label', 'Agents'));
       const list = element('div', 'check-list');
       const selectableAgents = sessionSelectableAgents(this.#agents);
+      const selectionState = customTeamSelectionState(this.#agents, picker.form.customAgents);
       selectableAgents.forEach((agentValue) => {
         const agent = typeof agentValue === 'string' ? { id: agentValue } : agentValue;
         const label = element('label', 'check'); const input = document.createElement('input');
         input.type = 'checkbox'; input.dataset.field = 'custom-agent'; input.value = agent.id;
+        input.setAttribute('aria-describedby', 'session-custom-team-validation');
         input.checked = picker.form.customAgents.has(agent.id); label.append(input, document.createTextNode(agent.name || agent.id));
         if ((agent.depends_on || []).length) label.append(element('small', '', `← ${agent.depends_on.join(', ')}`)); list.append(label);
       });
       if (!selectableAgents.length) list.append(element('span', 'config-help', 'No Session agents configured.'));
-      agents.append(list); config.append(agents);
+      const validation = element(
+        'span',
+        `config-help custom-team-validation${selectionState.valid ? '' : ' error'}`,
+        selectionState.message,
+      );
+      validation.id = 'session-custom-team-validation';
+      validation.setAttribute('role', selectionState.valid ? 'status' : 'alert');
+      validation.setAttribute('aria-live', 'polite');
+      agents.append(list, validation); config.append(agents);
     }
     return config;
   }
@@ -1621,8 +1763,8 @@ export class AxSessionHome extends HTMLElement {
   }
 
   #modeHint(mode) {
-    if (mode === 'lattice') return 'The full multi-agent lattice runs in topological order.';
-    if (mode === 'custom') return 'Pick the agents; dependencies determine their order.';
+    if (mode === 'lattice') return 'Multi-Agent teams coordinate by dependency; one-Agent and coordinator-led teams run directly.';
+    if (mode === 'custom') return 'Pick the Agents; multi-Agent selections coordinate by exact, inspectable dependencies.';
     return 'One agent builds in the directory.';
   }
 
@@ -1691,9 +1833,18 @@ export class AxSessionHome extends HTMLElement {
       mode = { kind: 'single_agent', agent_id: form.agentId };
     } else if (form.modeKind === 'custom') {
       const agents = [...form.customAgents];
-      if (!agents.length) { picker.error = 'Pick at least one agent.'; this.#renderPicker(); return; }
+      const selectionState = customTeamSelectionState(this.#agents, form.customAgents);
+      if (!selectionState.valid) {
+        picker.error = selectionState.message;
+        this.#renderPicker();
+        return;
+      }
       mode = { kind: 'custom', agents };
-    } else mode = { kind: 'lattice' };
+    } else {
+      const workflowId = form.workflowId || this.#teams[0]?.id || '';
+      if (!workflowId) { picker.error = 'Configure a Lattice team before creating this Session.'; this.#renderPicker(); return; }
+      mode = { kind: 'lattice', workflow_id: workflowId };
+    }
     const ports = form.exposedPorts.trim() ? form.exposedPorts.split(/[,\s]+/)
       .map((value) => Number.parseInt(value, 10)).filter((value) => Number.isFinite(value) && value > 0 && value < 65536) : [];
     const image = (form.imagePreset === '__custom__' ? form.customImage : form.imagePreset).trim() || null;
@@ -1903,8 +2054,15 @@ export class AxSessionHome extends HTMLElement {
     const field = event.target.dataset.field;
     if (field === 'copy-from') { picker.form.copyFrom = event.target.value; if (event.target.value) this.#applyCopiedSession(event.target.value); }
     else if (field === 'skill') event.target.checked ? picker.form.enabledSkills.add(event.target.value) : picker.form.enabledSkills.delete(event.target.value);
-    else if (field === 'custom-agent') event.target.checked ? picker.form.customAgents.add(event.target.value) : picker.form.customAgents.delete(event.target.value);
+    else if (field === 'custom-agent') {
+      event.target.checked
+        ? picker.form.customAgents.add(event.target.value)
+        : picker.form.customAgents.delete(event.target.value);
+      picker.error = '';
+      this.#renderPicker();
+    }
     else if (field === 'agent') picker.form.agentId = event.target.value;
+    else if (field === 'workflow') picker.form.workflowId = event.target.value;
     else if (field === 'setup-approved') picker.form.setupApproved = Boolean(event.target.checked && picker.form.setupCommand.trim());
     else if (field === 'runtime-cleanup-confirmed') {
       picker.form.runtimeCleanupConfirmed = Boolean(event.target.checked);

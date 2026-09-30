@@ -1,0 +1,322 @@
+{
+  "name": "check_only_recovery_preserves_accepted_generations",
+  "steps": [
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-0",
+        "expected_revision": 0,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "begin",
+          "epoch_id": "epoch-1",
+          "graph": {
+            "snapshot_id": "initial-graph",
+            "revision": 1,
+            "nodes": [
+              {
+                "node_id": "a",
+                "slot_id": "slot-a",
+                "definition": {
+                  "definition_id": "shared-coder",
+                  "snapshot": "definition-v1"
+                },
+                "conversation_id": "conversation-a",
+                "starting_savepoint": {
+                  "kind": "empty"
+                },
+                "required": true
+              }
+            ],
+            "dependencies": [],
+            "conditions": [
+              {
+                "condition_id": "review",
+                "kind": {
+                  "kind": "review",
+                  "criterion": "acceptance-rubric"
+                },
+                "nodes": [
+                  "a"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-1",
+        "expected_revision": 1,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "start_activation",
+          "input": {
+            "manifest_id": "input-a-1",
+            "activation": {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-1",
+              "node_id": "a",
+              "generation": 1,
+              "activation_id": "a-1"
+            },
+            "definition": {
+              "definition_id": "shared-coder",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-a",
+            "starting_savepoint": {
+              "kind": "empty"
+            },
+            "parents": [],
+            "guidance": [
+              "original-guidance"
+            ],
+            "attachments": [
+              "source-attachment"
+            ],
+            "repository": {
+              "kind": "recorded",
+              "snapshot": "repository-before-turn"
+            },
+            "budget": "logical-turn-budget",
+            "grant": {
+              "grant_id": "supervisor-grant",
+              "revision": 1,
+              "evidence": "grant-snapshot-1"
+            }
+          }
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-2",
+        "expected_revision": 2,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "accept_activation",
+          "activation": {
+            "session_id": "session-a",
+            "turn_id": "turn-a",
+            "execution_epoch_id": "epoch-1",
+            "node_id": "a",
+            "generation": 1,
+            "activation_id": "a-1"
+          },
+          "checkpoint": {
+            "checkpoint_id": "checkpoint-a-1",
+            "session_id": "session-a",
+            "conversation_id": "conversation-a",
+            "source": {
+              "kind": "accepted",
+              "activation": {
+                "session_id": "session-a",
+                "turn_id": "turn-a",
+                "execution_epoch_id": "epoch-1",
+                "node_id": "a",
+                "generation": 1,
+                "activation_id": "a-1"
+              }
+            }
+          },
+          "output": "output-a-1"
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-3",
+        "expected_revision": 3,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "record_condition",
+          "epoch_id": "epoch-1",
+          "condition_id": "review",
+          "activations": [
+            {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-1",
+              "node_id": "a",
+              "generation": 1,
+              "activation_id": "a-1"
+            }
+          ],
+          "outcome": "failed",
+          "evidence": "review-failed"
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-4",
+        "expected_revision": 4,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "interrupt_epoch",
+          "epoch_id": "epoch-1"
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-5",
+        "expected_revision": 5,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "continue",
+          "plan": {
+            "source_epoch_id": "epoch-1",
+            "epoch_id": "epoch-2",
+            "selections": [
+              {
+                "kind": "retain_accepted",
+                "activation": {
+                  "session_id": "session-a",
+                  "turn_id": "turn-a",
+                  "execution_epoch_id": "epoch-1",
+                  "node_id": "a",
+                  "generation": 1,
+                  "activation_id": "a-1"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "error": "prepare executable work"
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-6",
+        "expected_revision": 5,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "continue",
+          "plan": {
+            "source_epoch_id": "epoch-1",
+            "epoch_id": "epoch-2",
+            "selections": [
+              {
+                "kind": "retain_accepted",
+                "activation": {
+                  "session_id": "session-a",
+                  "turn_id": "turn-a",
+                  "execution_epoch_id": "epoch-1",
+                  "node_id": "a",
+                  "generation": 1,
+                  "activation_id": "a-1"
+                }
+              }
+            ],
+            "condition_runs": [
+              "review"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-7",
+        "expected_revision": 6,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "record_condition",
+          "epoch_id": "epoch-1",
+          "condition_id": "review",
+          "activations": [
+            {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-1",
+              "node_id": "a",
+              "generation": 1,
+              "activation_id": "a-1"
+            }
+          ],
+          "outcome": "passed",
+          "evidence": "late-old-check"
+        }
+      },
+      "error": "stale execution epoch"
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-8",
+        "expected_revision": 6,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "close",
+          "closure": "completed"
+        }
+      },
+      "error": "completion requires"
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-9",
+        "expected_revision": 6,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "record_condition",
+          "epoch_id": "epoch-2",
+          "condition_id": "review",
+          "activations": [
+            {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-1",
+              "node_id": "a",
+              "generation": 1,
+              "activation_id": "a-1"
+            }
+          ],
+          "outcome": "passed",
+          "evidence": "new-epoch-review-passed"
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-10",
+        "expected_revision": 7,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "close",
+          "closure": "completed"
+        }
+      }
+    }
+  ],
+  "expected_revision": 8,
+  "expected_state": "completed",
+  "expected_epochs": [
+    "interrupted",
+    "completed"
+  ]
+}

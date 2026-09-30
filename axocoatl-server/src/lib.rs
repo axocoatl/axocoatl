@@ -76,6 +76,7 @@ pub fn build_router(
         .route("/api/skills/{id}/fire", post(routes::fire_skill))
         .route("/api/events/recent", get(routes::recent_events))
         .route("/api/workflows", get(routes::list_workflows))
+        .route("/api/session-teams", get(routes::list_session_teams))
         .route(
             "/api/workflows/{workflow_id}/execute",
             post(routes::execute_workflow),
@@ -98,6 +99,111 @@ pub fn build_router(
             get(routes::list_workspace_sessions).post(routes::create_workspace_session),
         )
         .route("/api/sessions/{id}/execute", post(routes::execute_session))
+        .route("/api/sessions/{id}/team", get(routes::session_team))
+        .route("/api/sessions/{id}/work", get(routes::session_work))
+        .route(
+            "/api/sessions/{id}/knowledge",
+            get(routes::session_knowledge)
+                .post(routes::create_session_knowledge)
+                .layer(DefaultBodyLimit::max(512 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/knowledge/{note_id}",
+            axum::routing::put(routes::update_session_knowledge)
+                .layer(DefaultBodyLimit::max(512 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/knowledge/index",
+            post(routes::refresh_session_knowledge_index),
+        )
+        .route(
+            "/api/sessions/{id}/knowledge/export",
+            get(routes::export_session_knowledge),
+        )
+        .route(
+            "/api/sessions/{id}/knowledge/import-preview",
+            post(routes::preview_session_knowledge_import).layer(DefaultBodyLimit::max(512 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/knowledge/{note_id}/attach",
+            post(routes::attach_session_knowledge).layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
+            "/api/sessions/{id}/knowledge/proposals/{proposal_id}/accept",
+            post(routes::accept_session_knowledge),
+        )
+        .route(
+            "/api/sessions/{id}/knowledge/proposals/{proposal_id}/reject",
+            post(routes::reject_session_knowledge),
+        )
+        .route(
+            "/api/sessions/{id}/work/bindings",
+            post(routes::configure_session_work).layer(DefaultBodyLimit::max(32 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/work/bindings/{binding}/manual",
+            post(routes::admit_manual_session_work).layer(DefaultBodyLimit::max(32 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/work/bindings/{binding}/webhook",
+            post(routes::admit_signed_session_work).layer(DefaultBodyLimit::max(32 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/work/receipts/{receipt}/run",
+            post(routes::run_session_work),
+        )
+        .route(
+            "/api/sessions/{id}/work/receipts/{receipt}/dismiss",
+            post(routes::dismiss_session_work).layer(DefaultBodyLimit::max(8 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/work/receipts/{receipt}/settle-at-ceiling",
+            post(routes::settle_session_work_at_ceiling),
+        )
+        .route(
+            "/api/sessions/{id}/work/signals",
+            get(routes::session_signals),
+        )
+        .route(
+            "/api/sessions/{id}/work/signals/{binding}/sense",
+            post(routes::sense_session_signals),
+        )
+        .route(
+            "/api/sessions/{id}/work/signals/{binding}/flags",
+            post(routes::flag_session_signal).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/work/signals/{binding}/deposits/{deposit}/withdraw",
+            post(routes::withdraw_session_signal).layer(DefaultBodyLimit::max(8 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/work/signals/{binding}/routes/{slot}/dispatch",
+            post(routes::dispatch_session_signal),
+        )
+        .route(
+            "/api/sessions/{id}/ways-history",
+            get(routes::session_ways_history),
+        )
+        .route(
+            "/api/sessions/{id}/ways-history/configuration",
+            post(routes::configure_session_ways_history),
+        )
+        .route(
+            "/api/sessions/{id}/ways-history/{decision}",
+            get(routes::export_session_ways_decision).delete(routes::delete_session_ways_decision),
+        )
+        .route(
+            "/api/sessions/{id}/team/preview",
+            post(routes::preview_session_team),
+        )
+        .route(
+            "/api/sessions/{id}/team/apply",
+            post(routes::apply_session_team),
+        )
+        .route(
+            "/api/sessions/{id}/team/cancel",
+            post(routes::cancel_session_team),
+        )
         .route("/api/sessions/{id}/messages", get(routes::session_messages))
         .route("/api/sessions/{id}/turns", get(routes::session_turns))
         .route(
@@ -107,6 +213,48 @@ pub fn build_router(
         .route(
             "/api/sessions/{id}/turns/{turn_id}",
             get(routes::session_turn),
+        )
+        .route(
+            "/api/sessions/{id}/turns/{turn_id}/control-plane",
+            get(routes::session_turn_control_plane),
+        )
+        .route(
+            "/api/sessions/{id}/turns/{turn_id}/graph-edits/preview",
+            post(routes::preview_session_graph_edit).layer(DefaultBodyLimit::max(
+                axocoatl_session::control_command::MAX_CONTROL_REQUEST_BYTES,
+            )),
+        )
+        .route(
+            "/api/sessions/{id}/turns/{turn_id}/graph-edits/apply",
+            post(routes::apply_session_graph_edit).layer(DefaultBodyLimit::max(
+                axocoatl_session::control_command::MAX_CONTROL_REQUEST_BYTES,
+            )),
+        )
+        .route(
+            "/api/sessions/{id}/turns/{turn_id}/grants",
+            get(routes::session_control_grants),
+        )
+        .route(
+            "/api/sessions/{id}/turns/{turn_id}/grants/preview",
+            post(routes::preview_session_grant).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/turns/{turn_id}/grants/decide",
+            post(routes::decide_session_grant).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/turns/{turn_id}/grants/revoke",
+            post(routes::revoke_session_grant).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/sessions/{id}/turns/{turn_id}/control-plan",
+            post(routes::plan_session_control).layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/turns/{turn_id}/control-commands",
+            post(routes::submit_session_control_action).layer(DefaultBodyLimit::max(
+                axocoatl_session::control_command::MAX_CONTROL_REQUEST_BYTES,
+            )),
         )
         .route(
             "/api/session-turns/search",
@@ -458,6 +606,7 @@ pub async fn serve_shared(state: AppState, host: &str, port: u16) -> std::io::Re
             });
         }
     };
+    let _standing_work_wakeups = routes::start_standing_work_wakeups(state.clone()).await;
     // Start draining connections as soon as OS or IPC shutdown is requested,
     // while checked runtime cleanup proceeds concurrently. A stuck WebSocket
     // or request gets a bounded grace period; aborting the server then drops

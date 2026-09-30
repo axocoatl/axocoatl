@@ -13,6 +13,51 @@ pub(crate) enum ControlledChat {
     Cancelled,
 }
 
+/// Pure projection of the existing sampling/default/Abort output allowance.
+/// Planning must not install this on a request: compression and paid summaries
+/// can change both its input size and remaining execution allowance. This local
+/// estimate does not replace a provider's canonical whole-call reservation.
+pub(crate) fn projected_output_allowance(
+    explicit_maximum: Option<usize>,
+    provider_default: usize,
+    tracker: Option<&TokenTracker>,
+    estimated_input: usize,
+) -> usize {
+    if let Some(maximum) = explicit_maximum {
+        return maximum;
+    }
+    let Some(tracker) =
+        tracker.filter(|tracker| tracker.budget().overflow_policy == OverflowPolicy::Abort)
+    else {
+        return provider_default;
+    };
+    let execution_remaining = tracker
+        .budget()
+        .per_execution
+        .saturating_sub(tracker.total_used());
+    let call_allowance = tracker.budget().per_call.min(execution_remaining);
+    let budget_safe_output = call_allowance.saturating_sub(estimated_input);
+    if provider_default > 0 {
+        budget_safe_output.min(provider_default)
+    } else {
+        budget_safe_output
+    }
+}
+
+fn context_output_allowance(
+    provider: &dyn LlmProvider,
+    tracker: Option<&TokenTracker>,
+    request: &ChatRequest,
+    provider_default: usize,
+) -> usize {
+    projected_output_allowance(
+        request.max_tokens,
+        provider_default,
+        tracker,
+        provider.count_tokens(request),
+    )
+}
+
 fn request_context_tokens(
     counter: &dyn TokenCounter,
     request: &ChatRequest,
@@ -42,6 +87,7 @@ fn project_request_to_context(
     counter: &dyn TokenCounter,
     request: &mut ChatRequest,
     protected_suffix_start: usize,
+    tracker: Option<&TokenTracker>,
 ) -> Result<(), AgentError> {
     if !provider.model_constraints_known(request) {
         return Ok(());
@@ -51,7 +97,8 @@ fn project_request_to_context(
     if limit == 0 {
         return Ok(());
     }
-    let output_headroom = request.max_tokens.unwrap_or(capabilities.max_output_tokens);
+    let output_headroom =
+        context_output_allowance(provider, tracker, request, capabilities.max_output_tokens);
     let required = request_context_tokens(counter, request, output_headroom);
     if required <= limit {
         return Ok(());
@@ -108,12 +155,16 @@ fn project_request_to_context(
         candidate.extend_from_slice(leading_system);
         candidate.extend_from_slice(&original[cut..]);
         request.messages = candidate;
+        let output_headroom =
+            context_output_allowance(provider, tracker, request, capabilities.max_output_tokens);
         let candidate_required = request_context_tokens(counter, request, output_headroom);
         if candidate_required <= limit {
             return Ok(());
         }
     }
 
+    let output_headroom =
+        context_output_allowance(provider, tracker, request, capabilities.max_output_tokens);
     let protected_required = request_context_tokens(counter, request, output_headroom);
     Err(AgentError::ContextLimitExceeded {
         required: protected_required,
@@ -137,27 +188,18 @@ fn preflight_provider_spend(
         } else {
             0
         };
-    let output_reservation = request.max_tokens.unwrap_or_else(|| {
-        if tracker.budget().overflow_policy != OverflowPolicy::Abort {
-            return provider_default_output;
-        }
-
-        let execution_remaining = tracker
-            .budget()
-            .per_execution
-            .saturating_sub(tracker.total_used());
-        let call_allowance = tracker.budget().per_call.min(execution_remaining);
-        let budget_safe_output = call_allowance.saturating_sub(estimated_input);
-        let safe_output = if provider_default_output > 0 {
-            budget_safe_output.min(provider_default_output)
-        } else {
-            budget_safe_output
-        };
-        if safe_output > 0 {
-            request.max_tokens = Some(safe_output);
-        }
-        safe_output
-    });
+    let output_reservation = projected_output_allowance(
+        request.max_tokens,
+        provider_default_output,
+        Some(tracker),
+        estimated_input,
+    );
+    if request.max_tokens.is_none()
+        && tracker.budget().overflow_policy == OverflowPolicy::Abort
+        && output_reservation > 0
+    {
+        request.max_tokens = Some(output_reservation);
+    }
 
     let requested = estimated_input.saturating_add(output_reservation);
     let checked_requested = if tracker.budget().overflow_policy == OverflowPolicy::Abort
@@ -285,8 +327,28 @@ pub(crate) async fn chat(
     if control.is_some_and(AgentRunControl::is_cancelled) {
         return Ok(ControlledChat::Cancelled);
     }
-    project_request_to_context(provider, counter, &mut request, protected_suffix_start)?;
+    project_request_to_context(
+        provider,
+        counter,
+        &mut request,
+        protected_suffix_start,
+        tracker,
+    )?;
     let estimated_input = preflight_provider_spend(provider, tracker, &mut request)?;
+    // Projection may have changed input and therefore increased the derived
+    // output allowance. Validate the final request after installing that limit.
+    if provider.model_constraints_known(&request) {
+        let capabilities = provider.capabilities_for(&request);
+        let limit = capabilities.max_context_tokens;
+        let required = request_context_tokens(
+            counter,
+            &request,
+            request.max_tokens.unwrap_or(capabilities.max_output_tokens),
+        );
+        if limit > 0 && required > limit {
+            return Err(AgentError::ContextLimitExceeded { required, limit });
+        }
+    }
     let response = match control {
         Some(control) => {
             tokio::select! {
@@ -322,3 +384,6 @@ pub(crate) async fn chat(
     record_provider_usage(tracker, &response.usage)?;
     Ok(ControlledChat::Response(response))
 }
+
+#[cfg(test)]
+mod tests;

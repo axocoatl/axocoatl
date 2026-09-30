@@ -1,7 +1,14 @@
 use std::time::Instant;
 
-/// Signal state for pheromone-gated activation.
-/// Agents activate only when accumulated signal exceeds threshold.
+// Durable evaporation belongs to the signal field; re-exported for callers of
+// the earlier path.
+pub use crate::field::evaporate;
+
+/// In-memory activation counter for the process-wide event lattice.
+///
+/// This is not the Session signal field: it lives in one process, decays by
+/// `Instant`, and does not start Session work. Durable, inspectable signals
+/// with per-owner thresholds are [`crate::field::SignalField`].
 #[derive(Debug, Clone)]
 pub struct SignalState {
     pub intensity: f32,

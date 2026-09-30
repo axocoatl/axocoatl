@@ -69,7 +69,269 @@ held across a run.
 
 ## Session turn ownership and control
 
-`SessionTurnStore` is the canonical user-visible transcript for normal Session execution. Its
+New data roots use the native Session execution controller. Native repository tools and
+checks use the local Podman process supervisor. E2B's compatibility executor does not
+implement this owned process-supervision interface. Existing legacy roots retain
+compatibility execution; startup does not silently convert them. The explicit offline
+`axocoatl session upgrade --confirm` command holds the normal data-root leases, reconciles
+old execution, and prepares and completes source-bound conversion without starting actors
+or providers. Unknown historical roles retain raw checkpoint archives and accounting with
+empty future model context. Ordinary Send, dependent
+Agents, Coordinator children, and native Ways use canonical admission and the shared authority
+boundary. `team_work::TeamWorkInbox` persists bounded event receipts with
+immutable binding, Workspace, Session, team/grant revision, candidate, and evidence identity.
+Reservation names an exact turn; it neither starts execution nor establishes replay safety.
+The live host authenticates ingress, revalidates current authority and repository ownership,
+and routes admitted work through the ordinary Session driver. Explicitly armed bindings
+support manual events, configured signed webhooks, and verified same-Workspace Session
+completion. Required checks consume the shared grant and record the exact checked tree;
+producer-provided candidate labels alone cannot establish readiness. The inbox requires an existing durably provisioned private directory, holds a single-writer
+lock, repairs uncertain writes before acknowledging loaded receipts, and reserves disposition
+space before admitting more work. It has no silent eviction or automatic retry executor.
+
+`turn_contract` decodes and folds a bounded schema-2 logical-turn contract separately from
+the live schema-1 ledger. Immutable manifests bind definitions, conversations, starting
+savepoints, exact accepted parents, repository references, budgets, and grant revisions.
+An initial graph declares distinct team slots and conversations, acyclic dependencies,
+required nodes, and scoped check/review conditions. Continuation covers every declared node,
+including work that never started, and atomically prepares selected generations as Unstarted.
+Accepted revisions explicitly supersede every affected materialized descendant; rebasing must
+select current accepted parents. Completion requires current accepted required nodes, fresh
+passing condition observations, and settled effects. References still require physical
+evidence resolution and executor validation; the fold does not dispatch work.
+
+`execution_store::SessionExecutionStore` persists this v2 history under a retained upgraded
+format guard and a separate Session writer lock. A single atomic journal owns at most one
+unfinished turn, verifies linked predecessors against closed history, and returns the original
+receipt for exact command repeats. Reopening durably interrupts a Running epoch before exposing
+the projection. Admission reserves record and byte capacity for bounded activation/tool
+settlement, condition observations, interruption, and closure. Limits can reject new work;
+retained history is not silently evicted. Opaque durable snapshots bind downstream storage to
+the canonical journal, Workspace, and Session; an ordinary in-memory fold cannot mint them.
+Retained user request references commit atomically with Begin. An immutable legacy history
+frontier can be sealed before the first v2 turn, whose projection retains the legacy predecessor.
+
+`execution_legacy` captures only the existing v1 journal beneath that same held data root.
+Its opaque snapshot records the source inodes, format ownership, byte length, and digest;
+it never creates a missing journal or repairs a partial tail. Capture bounds the shared source
+and the selected Session separately. Retention and the first canonical seal revalidate the
+source. A changed source requires a fresh immutable candidate; an acknowledged seal cannot be
+replaced. An exact seal retry returns the original receipt even if the old source later changes.
+The host must retire in-process legacy writers before conversion. Source checks do not prove
+the absence of checkpoint-only or private actor state.
+
+`execution_namespace` provisions typed component roots under the canonical Session writer.
+Each component and its descendants retain the format guard, Session lock, and component lock.
+Content, activation state, invocation audit, authority, and command stores have owned openers
+that bind their files to the exact canonical journal. A matching Session name alone is insufficient.
+
+`execution_content` retains bounded request text/context, typed activation input evidence,
+partial/final output with explicit usage completeness, and exact tool arguments. Tool admission
+reserves result space; oversized returns retain their observed success/failure, full digest and
+length, and an explicit bounded prefix. The prefix cannot establish replayable result bytes.
+Read projections preserve logical state, accepted output references, and unavailable evidence.
+Activation admission also reserves bounded partial and terminal output slots. A truncated
+final body remains evidence and cannot become an accepted complete answer.
+
+`invocation_audit` retains durable intent and authoritative outcome evidence independently of
+logical closure. Late outcomes do not reopen a turn or replace accepted output. Protected
+argument references are distinct from display previews; host code must verify and resolve
+the actual post-hook bytes. Opaque intent receipts prove persistence, never replay safety.
+The bounded journal reserves space for unresolved invocations' later evidence.
+
+`control_authority` persists grant policies and their prior revisions, exact generation
+registration, revocation, Stop, cumulative budget reservations, and dispatch claims. A fresh
+live scope and opaque generation lease bind preparation to an unresolved intent in its exact
+audit. Stop, revocation, and the final durable dispatch claim share one mutex; external
+execution occurs after its release. Reopening closes old generation gates and preserves
+charges. Settlement matches the exact audit identity and immutable intent, can occur after
+dispatch closure, and does not refund conservative reservations. Provider-specific claims share
+that same gate and budget. They bind the exact request digest/length and executor-enforced
+spend/response limits, reserve terminal metadata, and retain observed usage or an unknown
+subtotal independently of accepted conversation state. Older tool-only registrations cannot
+establish provider accounting coverage. Historical inspection requires an existing matching
+authority with closed gates and establishes durability without rewriting its records.
+Authenticated Team & budget Apply retains the full edit and exact selected-template
+provenance. The native host resolves captured definitions, provider profiles, and repository
+identity before dispatch. Coordinator child allocations reserve from the parent's aggregate
+allowance; child authority is distinct rather than a copy of the parent's grant.
+
+Native provider preparation supports reviewed local Ollama profiles and bounded
+OpenRouter-credit profiles. OpenRouter retains one exact static model and qualified
+endpoint variant, non-reasoning text/tool capabilities, context/output limits, and
+decimal price ceilings. Those metadata are revalidated before each request; the wire
+request pins the endpoint, disables fallbacks, and supplies output and price limits.
+Admission reserves the full context allowance plus bounded output at those rates.
+Streaming retains terminal measured tokens and billed cost independently of accepted
+output; incomplete responses keep the reservation and unknown usage. The normal API
+key stays in daemon configuration, never retained profile evidence.
+`providers.openrouter_billing: credits` explicitly declares an account without
+connected BYOK keys. This is a supported configuration requirement, not detection or
+prevention of external account changes. BYOK execution remains a TODO; an unexpected
+BYOK response is refused and cannot establish complete credit accounting.
+
+`control_command` separates typed requested parameters from trusted source attribution and
+persists Requested, Accepted, Applied, and final receipts. It reserves the bounded remaining
+lifecycle before acknowledging a request. Agent attribution is minted from a current grant
+and activation lease; human attribution is a host authentication boundary, not a JSON tag.
+Source evidence does not authorize the operation. The internal daemon controller joins human
+Stop, Retry, Revise, Continue and Finish receipts to exact canonical transitions;
+delegated controls require an actual live Agent source, an approved operation, and exact
+parent/descendant scope. Human graph edits and Agent child admission share graph validation;
+Agent requests cannot manufacture human attribution. Accepted remains
+pending until the corresponding safe boundary or new generation is durable. A repeated command
+returns its original receipt, and reconstruction repairs evidence without replaying execution.
+
+Memory's `activation_state` binds immutable input manifests and checkpoint bytes to exact
+activation and conversation identities. It takes durable Session snapshots and promotes only
+current accepted generations from immutable closed history. A durable promotion manifest
+precedes conversation pointer changes; recovery completes that decision before restore.
+Newer failed/superseded candidates cannot replace selected accepted state. An owned reservation
+binds one bounded immutable candidate to the exact current input before provider work. Unrelated
+writes cannot consume its metadata/record capacity; late diagnostic staging cannot accept it.
+Normal v1 checkpoint behavior remains unchanged, and Tier 2–4 speculative writes remain disabled.
+Its original strict plain-history importer remains available. An additional versioned ordinary
+autonomous-Agent policy shares the live v1 restart projection in `legacy_conversation`: inline
+code/DOM context, complete native tool-call groups, terminal status filtering, and bounded
+checkpoint construction. It records omitted/superseded/cancelled rows, truncation, tool replay
+policy, and all incurred usage separately from retained model context. A supported projection
+that filters every row has an explicit committed empty checkpoint with provenance. Unsupported
+coordinated/private state, mixed Agents, attempts, unresolved attachment blobs, and unknown
+metadata fail closed. Import requires the current canonical seal and no v2 events. The host
+still has to establish the historical Agent's role and account for state absent from the ledger;
+this does not enable automatic actor migration or restore.
+
+`execution_ownership` acquires the supported legacy external-file, in-root-file, and directory
+locks before durably preparing and atomically exchanging a versioned directory with the old
+mandatory lock pathname. The original lock inode is retained. Unsupported atomic exchange,
+ambiguous manifests, and incomplete shapes fail closed. Reopening validates both sides and
+repairs durability before returning a non-Clone format-ownership guard. Existing storage
+ancestors must already be durably provisioned. This proves format ownership, not settlement of
+orphaned containers or external work. Only the canonical execution store can provision its
+internal Session directories through this guard. `DataRootFormatOwnership` acquires and detects
+the root format while holding the external lease; consuming legacy-to-upgraded handoff retains
+the original lock descriptors throughout. Live bootstrap now uses this format-aware acquisition.
+It selects the matching native or legacy startup path before runtime reconciliation. Native
+startup retains canonical ownership and interrupts an orphaned running epoch; restarting the
+daemon does not authorize replay of uncertain effects. Existing roots are not automatically
+converted.
+
+The actor's optional `ToolExecutionBoundary` awaits admission before each backend invocation,
+including behavior-owned memory tools, and awaits raw outcome persistence before post-hooks.
+Boundary failure is terminal across controlled Coordinator children; already started calls are
+joined before return, while unresolved outcomes remain unknown. Children require distinct host
+provisioning rather than inherited authority.
+Unsupported custom behaviors refuse the optional boundary.
+
+Native `DefaultAgentBehavior` derives its tool-round ceiling from the reviewed
+grant's invocation allowance, clamped to 1–128 rounds. Compatibility construction
+retains the default ten-round ceiling. This is a finite loop guard, not a reservation
+or permission: provider and tool calls still pass their individual durable admission
+boundaries, and the grant may be exhausted before the round ceiling is reached.
+
+The daemon's explicit `session_dispatch` adapter joins the owned stores for that tool boundary.
+It verifies exact current activation, physical input, profile, and grant; reserves protected
+content; persists canonical intent then audit intent; and claims authority before execution.
+Stop closes authority before cooperative cancellation. Late outcomes survive closed turns in
+the audit, and reopening reconciles known evidence without automatically replaying effects.
+
+The native `coordination_control` adapter can reconcile a missing raw return for `submit` or
+`canonical` by reading the retained command receipt. It requires the exact protected request,
+accepted invocation binding, source activation, grant, dispatch scope, and full parameters.
+The resulting evidence is labeled reconciliation and preserves the command's actual receipt
+state; a successful lookup does not imply Applied or Settled. No command or provider call is
+repeated. A rejected or mismatched admission remains unknown, and ordinary shell/tool effects
+remain `ManualOnly`.
+
+Its one-shot autonomous actor port additionally reserves the actual candidate checkpoint and
+terminal output before any provider dispatch. The optional `ActivationCheckpointPort` restores
+only the captured savepoint, excludes legacy latest-file lookup, keeps durable memory read-only,
+and stages the native actor's complete candidate once. Periodic checkpoints stay in memory;
+Stop during final staging cannot escape as successful completion. The host replaces estimated
+actor usage with recorded provider observations across the conversation's exact generations
+and earlier closed turns, plus its immutable legacy baseline once. Missing accounting coverage
+refuses execution. Failed candidates remain diagnostic state.
+
+The provider wrapper covers both streaming and nonstreaming calls, including compaction, within
+the existing actor loop. Every call requires a backend-enforced whole-request bound; approximate
+token counts and output-token request parameters cannot mint this capability. Response payloads,
+including reasoning, tools and native metadata, are bounded. Completion is withheld until
+accounting settles. Dropped calls retain incomplete observed usage and their conservative reserved
+charge. An enforced zero provider API charge remains known zero even when token usage is
+incomplete; a positive reservation does not establish the actual monetary cost. Nonstreaming
+`AccountedChatOutcome` and streaming `UsageObservation` preserve reported subtotals independently
+of response decoding and explicitly distinguish complete measurements from lower bounds.
+Complete output and the
+actual candidate must both persist, and the exact generation must still be current and unstopped,
+before canonical acceptance. Completion then leaves its dispatch gate closed.
+
+`NativeOllamaProvider` supplies an explicit bounded local capability alongside the existing
+compatible adapter. Its profile validates the configured local server's audited Ollama 0.20.6
+version, reported cloud-disabled mode, and local GGUF completion model before inference.
+Native `/api/chat` requests set finite context/prediction limits and disable implicit history
+truncation and shifting. Plain calls reserve context plus prediction capacity; JSON calls reserve
+two full passes because the server may perform a separate thinking pass. The final structured
+response reports only the last pass, so its token measurement remains incomplete. Neither this
+profile nor its zero provider API charge describes hardware/electricity cost or establishes a
+wall-clock GPU execution ceiling. Cancellation closes the request; absent terminal evidence,
+usage remains incomplete and the reservation remains charged.
+
+The autonomous port projects retained text evidence into the actual user message appended by
+the native actor, so provider input and successful checkpoints share the same user content. Rich
+inputs carry versioned, bounded text with ordered guidance references, captured code/browser
+selections, retained attachment text and provenance, exact accepted direct-parent output
+selections, and explicitly superseded revision context. It does not load another node's
+conversation or reopen a captured path/URL. Missing or conflicting text evidence, unsupported
+binary inputs, and aggregate input overflow refuse preparation rather than silently omitting
+context. Physical starting and parent checkpoints still require validation before execution.
+Provider errors preserve the last complete conversation prefix in the diagnostic checkpoint,
+with incurred usage retained separately; failed input remains in its immutable manifest.
+
+The internal autonomous driver schedules child tasks from the canonical graph while the same
+controller continues accepting exact controls. Independent branches can finish when a sibling
+fails; dependent work uses only current accepted parent outputs. Explicit revision supersedes
+affected descendants, and the driver prepares their next generation from the retained input and
+new accepted parents. A lost driver interrupts its epoch and drains owned tasks for late evidence;
+reconstruction requires explicit continuation. An activation stopped before binding receives a
+durable never-dispatched record, not an inference from missing accounting. Prepared generations
+that never started are identified from canonical history even after supersession. Definitive
+grant or budget refusal is local to the activation; uncertain persistence fences the controller.
+
+Closure reserves and completes selective conversation promotion, including empty turns. A
+consuming successor handoff requires predecessor handles to be released, validates committed
+savepoint bytes and preserves canonical format ownership. Normal Finish waits through dependency
+scheduling and requires declared completion conditions; it cannot turn an absent QA result into
+a pass. Human-only `ForcePartial` retains the confirmed accepted-output selection, exact
+running activations to stop, never-started work, and missing completion conditions. It uses the
+same closing owner, waits for safe settlement, and promotes only selected accepted sinks into
+successor conversation state; partial output and incurred usage remain audit evidence. Agents
+cannot authorize this override, and isolated Ways retain their existing Keep/no-Keep flow.
+
+Live bootstrap uses this port for approved native autonomous execution, with repository identity
+and approved checks bound to the same authority boundary. The native factory also runs approved
+Coordinator children through the existing controller and distinct bounded grants. Ordinary
+compatible/hosted adapters that lack the enforced-bound capability are refused by this port.
+The existing tool-only host adapter remains separate and does not establish provider
+accounting coverage.
+
+`session_history` is a versioned read facade. Legacy projections preserve ledger order, literal
+search, visibility, and transcript behavior. Upgraded projections require the canonical seal,
+read only its retained legacy frontier, and append typed v2 entries in Begin order. Lifecycle,
+unknown usage, and unavailable evidence remain explicit; compatibility projections refuse v2
+entries instead of flattening them into v1 rows. Existing daemon History, search, export, and
+message reads use the format-aware facade. Browser projections retain exact activation
+identity and expose controls only through current host capabilities. Pending owned stores can
+resolve exact command retries before provider or repository reacquisition.
+
+The existing Session composer and Agent inspector expose native Guide, exact generation
+controls, reviewed current-turn Add/Replace, and explicit continuation. A request-local planner
+has no tools or repository access and returns one typed proposal for review; Apply still uses
+the ordinary human command handler. Team edits configure future turns separately. Environment
+review, close/reopen, and deletion retain the canonical Session owner through settlement.
+
+### Legacy Session execution
+
+`SessionTurnStore` is the canonical user-visible transcript for legacy Session execution. Its
 versioned JSONL ledger records an idempotent begin event before execution, bounded output and
 execution facts, per-agent output, and one terminal transition. Materialized lifecycle is
 `running`, `completed`, `failed`, `cancelled`, or `interrupted`; bootstrap reconciles an
@@ -148,10 +410,10 @@ Session-store unlink failure keeps the owner and history visible; a retry after 
 finishes any interrupted cleanup. Retained blobs, prior checkpoint files, and other memory tiers
 follow their own retention policies.
 
-The rewind projection spans two durable stores but is not one atomic database transaction. The
-daemon prepares a new checkpoint, commits the append-only ledger boundary, and removes the
-prepared checkpoint if the ledger append returns an error. A `SIGKILL` can interrupt between
-those writes; the next bootstrap treats the ledger as authoritative and deterministically
+The single-agent rewind projection spans two durable stores but is not one atomic database
+transaction. The daemon prepares a new checkpoint, commits the append-only ledger boundary, and
+removes the prepared checkpoint if the ledger append returns an error. A `SIGKILL` can interrupt
+between those writes; the next bootstrap treats the ledger as authoritative and deterministically
 repairs the checkpoint before serving. Startup and every single-agent actor respawn also
 reconcile terminal canonical turns into the checkpoint cache, including hidden code/DOM context
 and complete bounded tool pairs. The canonical ledger remains complete; the recovery cache
@@ -176,7 +438,9 @@ until the current set is kept or discarded. This keeps one decision loop attache
 in the chat spine.
 
 Parallel attempts currently require a single autonomous-Agent Session on the local Podman
-backend. E2B, coordinator Sessions, and other multi-agent modes remain available for normal
+backend. Native attempts require explicit per-attempt grant limits, expiry, output bounds,
+and configured decision-history retention limits. Each attempt has a canonical activation and
+its own repository owner while retaining the existing Ways runner and Keep transaction. E2B, coordinator Sessions, and other multi-agent modes remain available for normal
 Session turns, but the daemon rejects an Attempt-set start there until nested-worker route,
 cost, memory, transcript, and cleanup evidence can be represented honestly.
 
@@ -234,6 +498,19 @@ the actors and containers, joins tasks, removes the set's clones and protected r
 its artifacts and current pointer. Once Keep reaches `applying`, Discard is rejected so it
 cannot erase the evidence needed to finish or diagnose the transaction.
 
+For native Sessions, `WaysDecisionStore` retains a separate bounded decision record and
+protected patch bodies under the canonical Session namespace. Keep and no-Keep reserve and
+retain the decision before runtime cleanup. The record includes all candidate Outcomes,
+Routes, review diffs, Checks, usage, Judge evidence, human choice, and cleanup receipts, with
+explicit unavailable/truncated fields. Retention has caller-configured limits, no silent
+eviction, and blocks cleanup on an unsatisfied storage promise. History reads/export/context
+capture do not reopen candidate runtimes. The existing graph surface renders one decision
+with expandable set/index-keyed candidate subgraphs from the live attempt owner or retained
+record. It has no Keep endpoint of its own; unresolved navigation uses existing Compare,
+while closed records are read-only. Explicit deletion keeps a tombstone and preserves
+patch pins still referenced by another decision. Legacy decisions without this record remain
+unavailable rather than being reconstructed from current repository state.
+
 Per-attempt usage records carry the model, provider, token counts, duration, price, and whether
 that price is known. Ollama at a configured loopback endpoint has a known-zero model API
 charge. A non-loopback Ollama endpoint follows the remote-provider rule: a configured model
@@ -251,8 +528,9 @@ model preflight targets the selected provider/model directly. All three control 
 usage separately from each Way. A failed, timed-out, or invalid Plan/Judge response carries its
 known subtotal and completeness in the error response; timeout first requests cooperative
 cancellation and waits for a bounded safe boundary. Successful Judge usage persists with the
-unresolved Attempt set. Plan and model-preflight detail is request-local; the planning Agent's
-cumulative usage remains in its checkpoint-backed Agent total.
+unresolved Attempt set. Native decision records retain validated shared Plan/model-preflight
+usage once, separately from candidate usage; legacy planning accounting retains its existing
+checkpoint-backed Agent total.
 
 ## Automations
 
@@ -321,11 +599,12 @@ pipeline is described under [Coordinator role](#coordinator-role). On a
    The canonical Session or Chat record remains the transcript authority.
 3. Build the request, injecting the agent's **core-memory blocks** (Tier 3) and
    the top-k **semantic recall** (Tier 4) for the turn.
-4. **Token budget** pre-flight (`abort` / `warn`) reserves locally estimated
+4. **Actor token-budget guard** (`abort` / `warn`) reserves locally estimated
    input plus the bounded completion before every provider call. `abort` stops a
    call that cannot fit and surfaces any provider-reported overrun immediately;
    provider tokenization/reporting can differ, so this is not an absolute remote
-   billing guarantee.
+   billing guarantee. Native Session execution additionally requires the canonical
+   grant reservation and enforced provider bounds described below.
 5. Call the agent's **provider** (Ollama, OpenAI, Anthropic, …).
 6. Run any **tool calls** (built-in or MCP) with hooks, up to 10 iterations.
 7. **Checkpoint** the model-facing conversation and cumulative provider-usage subtotal—with a
@@ -345,11 +624,20 @@ does not expose the Tier 2–4 memory loop in 1.0.
 
 ## Token budgets
 
-Per-agent `token_budget` with `per_call`, `per_execution`, and an
-`overflow_policy`:
+Native Session execution reserves each provider call against its exact current grant
+before dispatch. Admission requires an enforced whole-request token and provider-charge
+bound from the selected adapter; an estimated prompt size or requested output limit is
+insufficient. Unknown usage keeps its conservative reservation charged. The native local
+Ollama profile described above supplies this capability; compatible adapters without it
+cannot enter this execution path. These provider API bounds do not cover electricity,
+hardware, or arbitrary external effects.
+
+The existing per-Agent `token_budget` API remains a separate actor guard, with `per_call`,
+`per_execution`, and an `overflow_policy`. It is the compatibility execution path's token
+guard and can further constrain a native call; it cannot weaken a native grant:
 
 - `abort` — refuse the over-budget call and return a budget error (the default)
-- `warn` — log and continue past the budget
+- `warn` — log and continue past this actor guard; native authority still applies
 
 Before each provider call, Axocoatl makes a local reservation from the estimated
 input plus the explicit or resolved bounded completion. With `abort`, a call is
@@ -369,21 +657,239 @@ are labeled as known subtotals rather than exact totals.
 
 ## Multi-agent sessions and event lattice
 
-A session in `Lattice` mode uses the selected legacy `workflows:` record as an
-agent-membership definition. The daemon spawns session-scoped actors in the
-session's one sandbox and runs them in dependency order. The first agent receives
-the instruction; later agents receive that instruction plus the outputs already
-produced in the turn. `AgentActivated` and `TaskCompleted` frames are streamed
-under the session id so the app can follow the run. This is a bounded session
-execution path, not a background config-owned workflow runner.
+Native Sessions retain their approved whole-team revision and immutable definitions before
+Begin. Their common controller activates exact dependencies, records every generation, and
+admits Coordinator-created Worker instances from explicitly approved reusable templates. Each
+instance has a distinct conversation and authority allocation. The following describes the
+retained legacy configuration-driven coordination path.
+
+A Session retains either a selected legacy `workflows:` ID for `Lattice` mode or
+selected Agent IDs for `Custom` mode. At each all-team request that resolves to more
+than one autonomous Agent, the daemon resolves that selection against current Agent
+configuration and snapshots the validated membership and dependency graph into the
+turn. A Coordinator-led team remains a separate hierarchical direct execution and
+does not receive a synthetic peer graph. Configuration changes therefore affect
+future turns, never a retained turn map. Removing or renaming a referenced Agent or
+team does not quarantine the Session or hide its History; a genuinely new turn is
+rejected before durable Begin and tells the operator to restore the reference or
+create a new Session with an available selection. Roots activate from the accepted user request;
+an Agent with `depends_on` activates only after one distinct completion signal from
+every named parent in that Session graph. A downstream Agent receives the original
+request plus only the direct-parent contributions that caused its activation.
+Unrelated branches remain runnable after one branch fails, while descendants whose
+all-of predicate can no longer be satisfied become explicitly blocked.
+
+Agents share the Session checkout, so ready nodes execute serially in deterministic
+graph order. That is a repository-safety boundary, not a claim that the graph lacks
+parallelism in principle. The internal `coordination_signal` tool is advertised only while
+the exact downstream activation is active, has not spent its one revision request, and has
+at least one eligible upstream target. Its request-local JSON Schema enumerates those exact
+Agent IDs, and the activation prompt names the same set without adding transitive ancestor
+outputs. Advertisement is not authority: execution rechecks the active lease, unspent
+allowance, and eligible target, so a stale or fabricated call fails. The
+target and every completed downstream result derived from it reactivate in dependency
+order, and the requester runs again against
+the newest direct-parent evidence; every Agent is capped at two activations for the
+turn. Targeting one Agent directly, a one-Agent team, and a coordinator-led workflow
+remain direct executions rather than fake coordination graphs.
+
+The immutable graph snapshot, causal signals, activation generations, completion,
+failure, blocked or stopped states, output disposition, summaries, and usage are appended to the
+canonical Session turn ledger before their matching `coordination` WebSocket frame
+is published. An applied revision is one atomic ledger batch: the requester's
+`changes_requested` output, the signal with that requesting activation's usage and
+completeness, every affected output supersession, and every reactivation append together or
+not at all; live frames publish only after that batch is durable.
+Conversation folds that evidence into an inline Coordination card,
+and the existing Agent graph shows the same node states. Reload reconstructs both
+from History. The graph runs in View mode, with a selected-activation inspector for
+retained input, output, partial output, usage, and causal evidence. The versioned
+`GET /api/sessions/{id}/turns/{turn_id}/control-plane` projection binds those reads
+to the exact Session and turn, including ordinary and directly targeted history.
+It distinguishes unknown, missing, unavailable, and unrecorded evidence; current
+Agent settings do not substitute for an absent historical definition. Legacy
+activation identities confer no per-Agent command authority.
+This is bounded foreground Session work, not a background
+config-owned workflow runner.
+
+Every Lattice or Custom Session turn uses a two-phase checkpoint cache boundary, including a
+targeted, one-Agent, or Coordinator-led turn that deliberately bypasses the graph. A SingleAgent
+Session also uses this boundary when its selected Agent is a Coordinator; ordinary autonomous
+SingleAgent Sessions retain their existing canonical-ledger checkpoint repair. A Completed
+ordinary turn may keep its live actor for conversation continuity. After Failed, Cancelled, or
+Interrupted, both an exact retry and the next new turn must first prove any retained actor stopped;
+the replacement is then rebuilt from canonical History rather than reusing ahead-of-ledger state.
+Once canonical
+Begin is fsynced, the daemon creates a turn manifest and gives every transaction-owned actor a scoped
+store. Autonomous Agents, the Coordinator, and its declared Workers can read their own
+latest staged generation during that turn, but unscoped readers see only the prior committed
+checkpoint. After the canonical terminal transition is durable, `Completed` promotes the latest
+checkpoint for each participating identity. `Failed`, `Cancelled`, and `Interrupted` instead
+publish an accounting-only successor: the prior committed transcript remains, private behavior
+or orchestration state is cleared, and the newest staged cumulative usage and completeness are
+retained. Only then are the scoped actors stopped and live turn ownership released.
+
+A pending commit validates the complete staged Agent namespace and identity set, admits checkpoint
+candidates only when their filenames exactly match the canonical zero-padded name emitted by the
+checkpoint store, and decodes the
+selected checkpoint for each Agent before publishing the `Committing` manifest state. Malformed
+staging therefore fails closed while the manifest remains `Pending` and retryable; no actor may
+restore from that unresolved transaction.
+
+Bootstrap first changes orphaned `running` turns to `interrupted`, then resolves every unfinished
+checkpoint manifest from that exact ledger status before any Session actor can spawn. Commit and
+abort phases are idempotent across process death. On first adoption, a per-Session fsynced marker
+guards an exact-prefix migration. Older Lattice and Custom identities become accounting-only. A
+legacy single-Agent Coordinator is different: bootstrap imports checkpoint-only conversation into
+the canonical ledger first, clears unsafe pre-transaction behavior and Worker state, then rebuilds
+that Coordinator's model-facing cache from canonical Completed turns with no orchestration state.
+Cumulative accounting survives both paths. The marker is written only after sanitization and any
+Coordinator rebuild are durable, so a crash safely repeats adoption and later transaction-committed
+checkpoints are never reset on subsequent restarts. This transaction protects model-facing
+continuity only. It does not claim to undo repository, tool, or external side effects.
+The manifest currently transacts Tier-1 conversation/checkpoint state only. Transaction-scoped
+Agents and Coordinator Workers may read existing Tier 2–4 memory and recall, but durable-memory
+mutation is disabled for the whole turn: no semantic auto-store, daily-log archive write,
+personal/shared core edit, or core consolidation is promoted, including after Completed. This
+fail-closed limit remains until those stores gain generation-aware transactional deltas.
+
+The durable fold uses one explicit protocol: `coordination_planned`,
+`coordination_agent_activated`, `coordination_signal`,
+`agent_output_superseded`, `coordination_agent_reactivated`,
+`coordination_agent_completed`, `coordination_agent_failed`,
+`coordination_agent_blocked`, `coordination_agent_cancelled`,
+`coordination_recovery_partial`, then
+`coordination_completed`. `agent_output_superseded` is also a recognized ledger
+operation: it marks the exact earlier Agent generation stale while retaining its
+output as evidence. HTTP turn JSON flattens `RecordTurnExecution` beside its
+operation ID and timestamp; the live frame nests the same execution body under
+`event` and repeats the durable identity in its envelope.
+
+If the daemon restarts during coordinated work, ledger recovery records
+`coordination_agent_cancelled` for every node still waiting or running before it
+terminalizes the turn as Interrupted. A pending reactivation does not pretend
+its next generation started. Any retained turn-wide stream is preserved through
+`coordination_recovery_partial` as explicitly unattributed evidence because
+tool-loop and multi-Agent boundaries cannot be reconstructed safely from text
+lengths after a process death.
 
 `EventLattice` remains the typed event substrate. Skills publish into it; the
 canonical Automation dispatcher matches `OnEvent` and `OnSkill`; configured
 webhooks, the recent-events API, and WebSocket compatibility frames observe the
 same feed. Agent pheromone
 metadata and the reusable lattice primitives remain available to coordination
-code and runnable examples, but the daemon does not consume activated agent ids
-through a second workflow execution loop.
+code and runnable examples. The Session scheduler is deliberately turn-scoped and
+predicate-based; the daemon still does not consume process-wide `EventLattice`
+activation ids through a second workflow execution loop.
+
+### Session signal field
+
+A native Session's standing work can be armed with a `signal_field` source. This is the
+pheromone mechanism applied to a repository, and it replaces the global broadcast above
+for Session work. `axocoatl-coordination::field` holds the pure model; the daemon owns
+observation, admission and retention.
+
+- **Locations, not broadcast.** Each route names one Session team slot, the repository path
+  patterns it watches, optionally the patterns it owns (default: the watched ones; empty
+  makes a read-only slot such as a reviewer), and a threshold. A deposit is left on paths. A slot senses only deposits
+  on paths it watches, never deposits it produced itself, and only until it acts on them.
+- **Deposits come from recorded evidence.** A `finding` or `pitfall` proposal from a closed
+  Completed/Finished turn of the same Session deposits 1.0 on its cited paths. A person's
+  finding note or flag deposits 1.0. A watched file whose bytes changed after a settled turn
+  deposits 0.5, attributed to the latest newly settled turn whose own repository captures
+  show that path changed (its slot, when that turn was signal work); a change no settled turn
+  made is a workspace edit. A required
+  standing check that failed after signal work deposits 1.5 on the paths that turn changed.
+  Redelivery of the same cause is idempotent, not corroboration.
+- **Attribution.** Changes are observed only while no turn is running. A settled turn owns
+  the changes its own captures show; the observation mark moves only through closed turns, so
+  a turn paused for attention owns what it changed until then, but not edits a person makes
+  while it waits.
+- **Durable arithmetic.** Intensity is the sum of `strength × 2^(−age/half-life)` over
+  applicable deposits, computed from recorded wall-clock times, so a restart yields the same
+  field. A source-bound deposit stops counting once any file it recorded changes, is missing,
+  or a person withdraws it or rejects the proposal behind it.
+- **Crossing is a proposal, not authority.** When a slot's intensity reaches its threshold,
+  the host admits one receipt through the ordinary team-work inbox: subject kind
+  `signal_field`, evidence = the contributing deposits, and a deterministic dispatch id so a
+  crash between admission and the dispatch record finds the same receipt. The receipt runs
+  FIFO with other standing work, targets only that slot, reserves only that slot's grant, and
+  counts against the automatic dispatch limit of the current episode. A slot with pending
+  signal work is not dispatched again. A person can send a slot its current deposits below
+  threshold; that dispatch is recorded as manual and releases any hold.
+- **Episodes and holds.** An episode is the work since the field was last quiet; a deposit
+  after quiet starts the next one. Only started work counts toward the episode's dispatch
+  limit and optional token budget (`max_episode_tokens`, from the signal turns' recorded
+  usage). A crossing whose claims and watched file bytes match an earlier dispatch of that
+  slot is held as a repeat; one past the limit or budget is held too, each with its reason,
+  until a person sends it or the next episode starts. Quiet means nothing is crossing,
+  held or running, labelled "on visible checks" only when required checks exist; it is
+  never a claim that the work is correct. One source counts once: several deposits from
+  one turn, check run, note or unattributed observation share one vote.
+- **Recheck before start.** Immediately before a signal receipt begins, the host rehashes the
+  signaled sources. If every contributing deposit has been superseded, the receipt is
+  dismissed without a model call. The Agent receives each live deposit with its kind, paths,
+  cause and finding text as evidence to verify, plus the team's routes.
+- **Ownership.** During signal work the slot's `write_file` and `edit_file` refuse paths
+  outside its owned patterns before any effect, and also refuse `..` and any path through a
+  symbolic link, and tell the Agent to record a finding instead. A read-only slot (`owns:
+  []`) runs every process, its shell included, under a kernel write restriction (Landlock,
+  applied by the in-sandbox execution supervisor between fork and exec): only `/tmp`,
+  `/var/tmp`, `/dev` and the container home are writable, never the repository, and a
+  supervisor that cannot apply it refuses to launch the command. A writer's shell can still
+  write outside its owned paths, so the activation's own Before and After repository
+  captures decide: an equal
+  tree digest means no change; otherwise complete manifests are compared exactly, or the
+  retained patches against the same HEAD file by file. If any non-ignored file outside the
+  owned patterns changed, or the captures cannot establish the change set (an exhausted
+  invocation allowance, a HEAD moved by a commit, a patch over 512 KiB, a submodule or
+  nested checkout), the activation fails and its turn needs attention. The change is not
+  reverted; it stays for the person to keep or undo. Ignored files are not judged.
+- **Findings route by role.** A proposed finding cites sources as `must_change` (the default)
+  or `evidence`. Only must-change paths route the deposit; evidence paths are recorded so a
+  later change there is reported to whoever acts, without retiring the deposit. The propose
+  result names the slots the finding will signal, whether only the proposer watches it, or
+  that nobody does; a finding that names repository files it does not cite is asked once to
+  cite them. An omitted `expected_revision` creates a note and never replaces an existing one.
+  Only published proposals deposit: the exact activation was accepted when its turn closed
+  (and its Way kept), or a person accepted it. Unpublished findings that cite a file that must
+  change are listed for a person to accept or dismiss. A finding records the bytes it is
+  about: once a proposal has passed every check, the host reads each cited file with one fixed,
+  read-only digest observation (admitted on the activation's grant under the same lock as any
+  claim, only while the invocation reserve can spare it) that hashes a path only when it
+  resolves to exactly `<repository>/<path>` as a readable regular file, never through a
+  symbolic link or outside the repository. A digest the model gives is kept only for a file
+  the host could not read; the activation's starting capture is the last fallback. The
+  finding's deposit uses those recorded digests, so a fix made later in the same turn retires
+  it. A proposal whose note could never be published (over the document limit) is refused
+  when proposed.
+- **Bounded activations.** An activation keeps a reserve of invocations for the host's
+  observations: its After capture and, on the grant that pays for required checks, their
+  runs. A tool call must also leave room for the provider call that reads it and one more, so
+  a model whose next tool round is declined can still answer. Calls of one response are
+  counted together before any pre-hook runs, and a call that no longer fits at admission is
+  declined as a tool error rather than failing the activation. A signal activation's requests
+  replace tool output, and long string arguments of the model's own earlier calls (such as a
+  whole-file write), older than its latest three to five tool rounds with a placeholder,
+  moving in steps of three so the request prefix stays stable; if a request would still pass
+  the context threshold, only the latest round stays whole and shorter output is elided too,
+  and as a last resort the Agent's earliest tool rounds (each call with its results) are left
+  out of the request with a one-line note; a person's messages in the turn always stay. The Session history keeps the full content, and `workspace_knowledge` calls are never masked. A provider stream that ends
+  early (for Ollama also one ended by an error record, such as an unparseable tool call) is
+  retried once; its estimated input and the output it had already streamed are
+  charged before the retry.
+
+Observation runs only against an already-running Session runtime and never starts one.
+Required ready work never depends on a threshold: other standing sources, the chat, and
+manual dispatch are unaffected. The Work sources inspector shows each slot's intensity and
+threshold, every deposit with the reason it does or does not count for each slot, a cause
+chain that lists each dispatch with the deposits that caused it, how its work ended and the
+deposits its turn left, and a cause graph of the same links.
+
+The earlier `pheromone::SignalState` counter and the per-Agent `activation_threshold` /
+`activation_decay` keys belong to the process-wide event lattice, which records coordination
+metadata and does not start Session work; those keys are deprecated. `TurnCoordinationScheduler`
+orders one turn's Agents by exact named dependencies and has no thresholds or decay.
 
 The remaining reads of legacy `workflows:` are intentional: Lattice-session
 membership, coordinator worker/HTN selection, validation, and first-boot
@@ -432,7 +938,54 @@ every error path — so no actor or task leaks, and a fully failed worker set
 surfaces an error rather than a hollow result. The underlying primitives
 (`axocoatl-coordination`: lattice, HTN, auction) are independently tested.
 
+## Workspace knowledge
+
+`axocoatl-memory::knowledge` owns versioned Workspace notes separately from
+actor conversation, execution recovery, and compatibility recall. Immutable
+Markdown revision documents retain the note body, typed links, source hashes,
+provenance, and acceptance. An atomically replaced manifest publishes revisions
+and proposal receipts together. Expected revisions prevent a concurrent edit from
+silently overwriting another author; reopening validates referenced documents.
+The authorized Workspace owns the store, and its lifetime spans Sessions.
+
+Native `workspace_knowledge` operations read/search notes, search indexed code,
+expose a bounded observed code map, and stage proposals attributed to the exact
+activation. Publication uses the
+canonical accepted-state boundary or an explicit human decision. Isolated Ways
+additionally require an exact retained Keep selection before automatic publication;
+successful unselected candidates remain pending. Knowledge cannot
+expand a grant, make repository writes, or mark a required check passed. The API
+and Session inspector expose provenance, source links, backlinks, proposal states,
+and explicit editing/export rather than trusting model confidence as evidence.
+
+`knowledge_index` builds a bounded, rebuildable index from caller-supplied source
+under a declared snapshot identity. Pinned Tree-sitter grammars parse Rust,
+JavaScript, TypeScript/TSX, and Python definitions and import syntax. Unsupported,
+partial, and timed-out parsing remain visible. Imports are not resolved call or
+type relationships. The map and search support targeted source reads; they do not
+replace a language server or certify complete repository coverage.
+
+Before durable Begin, bounded lexical retrieval selects accepted notes from the
+request text. The retained context includes their exact revisions, provenance, and
+source applicability from bounded live Session reads. Its code map retains the
+cached index identity and observation timestamp; it is not represented as a fresh
+read of every indexed file.
+
+Freshness compares a note's recorded source hashes with the requesting Session's
+source context. It is not a global stale bit that would invalidate another Session
+still using the original source. Retained revisions remain historical
+evidence when newer source differs. Direct mutation of internal revision files is
+unsupported; explicit edits cross the store's validated revision boundary.
+
 ## Memory tiers
+
+This section describes legacy and compatibility actors. Native Session activations
+use `SessionExecutionStore` for canonical history and `ActivationStateStore` for exact
+input, candidate checkpoints, and accepted-generation promotion. Their actor construction
+in `session_dispatch_run.rs` does not attach daily-log, core-memory, or semantic-memory
+stores, so the Tier 2–4 recall and core-edit capabilities below are not available on that
+path. Legacy coordinated turns may read their attached stores but cannot make speculative
+Tier 2–4 writes or run consolidation.
 
 | Tier | What | Persistence |
 |---|---|---|
@@ -447,7 +1000,7 @@ also caps projected messages at 8 MiB and keeps the newest complete turn segment
 This bounds the cache without truncating canonical Session History. The private Bincode reader
 exists only for the one-time 0.1.x transcript import; current checkpoint writes never use it.
 
-**Transcript ownership.** For a normal Session, `SessionTurnStore` owns the canonical
+**Transcript ownership.** For a legacy Session, `SessionTurnStore` owns the canonical
 user-visible turn history while actor session memory owns the model-facing Tier-1 execution
 conversation and `CheckpointStore` caches it for recovery. Lightweight chats instead treat `ChatStore` as the
 authority for Tier-1 history and execute each turn in `SuppliedHistory` mode from
@@ -567,6 +1120,13 @@ fsyncs `preparing` before starting the sandbox, runs only an exact approved comm
 fsyncs `ready` before publishing the sandbox to Files, Terminal, Preview, tools, or Ways. A
 generation-bound guard owns the unpublished sandbox so cancellation, setup failure, or a
 failed Ready write removes the container and its dependency volume before recording failure.
+When the cancelled or shutdown-interrupted preparation was a local re-preparation of an
+already Ready plan (for example Files or Terminal after a restart), the guard returns the
+Session to Ready at the same generation with its recorded setup evidence once that removal
+succeeds, so a paused turn bound to that generation can continue. A crash mid-preparation
+still reloads as Failed; rebuilding the unchanged plan of a local Failed environment while a
+paused turn waits prepares it again at the same generation instead of refusing the change.
+E2B preparations never take either path.
 Each Attempt repeats the same approved setup inside its own isolated clone and volume.
 
 The daemon's ordered WebSocket stream also owns the browser-side runtime boundary. Explicit
@@ -604,6 +1164,11 @@ lock in the owner-only external lease directory, the retained `.axocoatl-daemon.
 daemon by replacing it. The lease is held for a daemon or direct bootstrap lifetime and is
 acquired before interrupted-runtime reconciliation, so a second CLI/MCP bootstrap cannot pause,
 reconnect, or delete resources owned by the running daemon.
+Acquisition detects the root format under the external lease. Supported prepared conversions
+retain legacy ownership; installed v2 roots retain their native guard before their matching
+recovery path runs. New roots initialize native ownership. The conversion API can consume
+held legacy ownership without a release/reacquire window; legacy roots are not silently
+converted during normal startup.
 
 Before mutable Session or Workspace records are read, the upgrade preflight inspects
 `axo-ses-*` Podman containers. It removes by immutable container id only a non-current container
@@ -638,6 +1203,27 @@ to them. Startup probes the POSIX/Git command surface Axocoatl itself needs, att
 distro-aware provisioning inside the container when commands are missing, and removes the
 container if it still cannot satisfy the probe. With `sandbox.network: none`, the selected
 local image must already contain those commands because provisioning cannot download them.
+
+The host executable embeds first-party Linux x86_64 and aarch64 process-supervisor
+payloads. Normal local Session and attempt startup inspects the approved image, pins its
+immutable identity, and prepares the matching executable in the protected data directory.
+Its read-only container mount preserves the image's configured user. A no-dispatch handshake
+verifies the actual program before repository setup. There is no separate user installation
+or startup download; contributor rebuild instructions are in
+[`EXEC_SUPERVISOR_BUILD.md`](EXEC_SUPERVISOR_BUILD.md).
+
+The internal v2 repository-check port joins exact durable admission to that supervisor and
+retains output, command status, and an opaque process-settlement receipt. Caller cancellation
+does not abandon its result owner. A daemon registry retains canonical ownership through
+retryable cleanup and joins actual agent/tool tasks before transferring the Workspace gate.
+The borrowed daemon shutdown API retains its owner after a failed or cancelled wait;
+pending Agent joins return to the retained registry so the same shutdown can be retried.
+Registered Session cleanup keeps its controller and Workspace gate until the actual
+lifecycle action succeeds. Standalone CLI commands retain the daemon through bounded
+cleanup retries and exit unsuccessfully if shutdown remains incomplete.
+This does not establish complete shared-writer coverage: live v2 ingress, Files/Git/PTY
+integration remain unfinished.
+Ordinary v1 execution keeps its existing dispatch paths.
 
 Files tree, read, and write operations resolve paths and perform I/O through the same Ready
 sandbox handle as Git, agents, terminals, and Preview. They never substitute the host checkout

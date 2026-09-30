@@ -132,3 +132,40 @@ non-goal before turning it into roadmap pressure or a public caveat.
 - Finish the requested scope and verify it. Do not report a phase complete while
   known required behavior is inaccessible, stubbed, or only documented.
 - Prefer precise, direct writing. Explain constraints and tradeoffs without hype.
+
+## Completion and comparative evidence
+
+- Carry the maintainer's requested outcome through every continuation. Before
+  expanding implementation or research, identify the unanswered question and the
+  concrete result that would answer it. Reuse existing experiments and decisions;
+  do not restart completed work because conversational context was lost.
+- Keep implemented, exercised end to end, comparatively evaluated, release-ready,
+  and published separate. Never call a release ready while an agreed product
+  journey or required release gate is unfinished. Passing internal tests cannot
+  substitute for a user successfully completing the intended task.
+- Demonstrate useful behavior early through the actual product path. Report the
+  request, resulting artifact, observed outcome, interventions and failures. Show
+  the evidence in the response; a log directory, plan, screenshot, or test count
+  alone does not establish task completion or useful agent behavior.
+- For Lattice comparisons, distinguish original signal accumulation/decay, native
+  dependency scheduling, and the complete workbench. State which actually ran.
+  Use capable single-agent and ordinary asynchronous-team controls where relevant,
+  with the same task information, tools, model, total resources and acceptance
+  criteria. Attribute memory, retries and isolation separately from coordination.
+- Assess final artifacts against the task contract, not model agreement. Retain
+  all attempted cases, errors, missing outcomes, rejected patches, usage and human
+  interventions. Preserve predeclared scores and report later counterexamples
+  separately. A valid negative result completes an experiment; do not keep
+  changing the benchmark until the preferred architecture wins.
+- Treat product failures as engineering work: reproduce the smallest cause, make
+  a targeted correction, and retry the affected journey. Do not substitute more
+  unrelated tests, documentation, research, or a weaker success definition. Keep
+  necessary correctness and release checks, but report them as supporting evidence.
+- Respect existing authorization and budget limits. Ask only for genuinely
+  missing decisions or required approval; identify the exact blocked action and
+  continue independent authorized work. Do not bypass a tool denial or make it a
+  blanket explanation for unfinished work.
+- Close each substantive update with the decision supported by the evidence and
+  the exact remaining outcome, if any. Never imply background progress after a
+  turn ends, hide incomplete work behind a version number, or require a favorable
+  superiority claim to release an otherwise working, honestly described product.

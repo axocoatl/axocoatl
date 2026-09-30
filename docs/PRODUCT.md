@@ -27,30 +27,39 @@ merely because it exists in the current working directory.
 1. Start Axocoatl and open the local app.
 2. Resume the last session or open a project directory as a named Workspace, then start a
    Session inside it.
-3. Add any files needed as **Once** or **Session** context, then ask for one solution; or
-   turn on **Explore several ways** and choose the agent and model for each attempt.
-4. Watch attempts execute in isolated working copies. While the decision remains unresolved,
-   running, blocked, failed, cancelled, and complete states remain visible even when switching
-   sessions.
+3. Add any files needed as **Once** or **Session** context, then ask the selected Agent or
+   configured team for one result. An autonomous multi-Agent Lattice or Custom turn keeps its
+   causal Coordination map with the conversation. A Coordinator can create Workers from
+   explicitly approved templates and limits; their separate activations and parent ownership
+   remain in the same turn history.
+4. When an implementation decision needs independent evidence, turn on **Explore several
+   ways** and choose the Agent and model for each attempt. Attempts execute in isolated working
+   copies, and their running, blocked, failed, cancelled, and complete states remain visible
+   while the decision is unresolved.
 5. Compare **Outcome** and **Route**, inspect the actual diff and cost, run the repository's
    **Checks**, and use **Judge** when useful.
-6. **Keep this one**. The selected changes return to the session checkout and the other
-   attempts are cleaned up.
+6. If several Ways ran, choose **Keep this one**. The selected changes return to the session
+   checkout and the other attempts are cleaned up.
 7. Review **Last turn** through Git, stage or discard deliberately, and commit.
 
-Ways evidence has the lifetime of the unresolved decision. During that decision, candidate
-Routes, diffs, failures, Checks, cost, and optional Judge remain available after reload. Once
-Keep finishes, durable Session History retains the selected task, output, and turn attribution;
-cleanup removes the attempt set and its candidate review evidence. Finishing without keeping
-removes the set without adding a selected result to History.
+Native Sessions retain a Ways decision after Keep or finishing without keeping. Configure
+explicit History storage limits before starting Ways. The record keeps each candidate's
+bounded Outcome, Route, diff, Checks, usage, optional Judge, human choice, and cleanup state;
+unavailable and truncated evidence remain labeled. Runtime cleanup removes clones and
+containers, not this decision record. History can search, export, or attach the retained
+decision as context. Deleting it is a separate explicit action. The Ways graph groups live and retained
+candidates beneath one decision node; only unresolved work can open the existing
+comparison flow. A closed graph never offers another Keep. Legacy decisions made before
+this retention path do not gain evidence retroactively.
 
 **Last turn** is an attribution filter over the repository's current Git status and diff. It
 shows current changes on paths attributed to the latest durable turn, not a frozen per-turn
 snapshot or a permanent copy of the kept candidate diff.
 
 At any point, **Stop** addresses the exact active turn. **History** keeps completed,
-failed, cancelled, and interrupted work reachable for search, export, or an explicit
-rewind. These are Session actions, not alternate places to work.
+failed, stopped, and interrupted work reachable for search and export. Native turns expose
+exact generation controls and explicit continuation; legacy single-Agent history retains its
+separate rewind behavior. These are Session actions, not alternate places to work.
 
 This loop is the product differentiator. A single answer remains the simple path; parallel
 attempts add confidence when the task merits them.
@@ -143,15 +152,45 @@ has already begun—especially one with filesystem or external side effects—is
 to a safe boundary; cancelled state does not claim that its effects were rolled back.
 
 History can run case-insensitive literal text search over the current Session or all Sessions;
-it is not semantic search. It exports one Session as Markdown or JSON. Rewind marks later
+it is not semantic search. Native turns retain immutable generation history: Guide, Retry,
+Revise, Continue, and Finish use exact current capabilities. Normal Finish requires the
+declared work and checks. **Finish partial result** is a separate human confirmation: select
+the accepted results to keep as context and review the work being stopped, work never started,
+and missing checks. It waits for safe settlement, retains incurred usage and evidence, and
+records a partial finish rather than a successful check or completed request.
+Existing legacy data can be converted explicitly with `axocoatl session upgrade --confirm`
+after stopping the daemon and making a cold backup. The command preserves history and usage.
+When the old Agent role was not recorded, its private state and conversation remain archived;
+future work begins with a reviewed Team & budget instead of guessing that historical role.
+
+The following rewind and legacy
+checkpoint behavior applies only to the compatibility storage format. It exports one Session as Markdown or JSON. Rewind marks later
 canonical turns superseded in the append-only ledger. It is a logical history operation, not
 secure erasure. It currently requires a single-agent Session so the daemon can reconstruct that
 actor's checkpoint from retained turns, and is blocked while a turn or unresolved Attempt set
-owns the Session. It does not roll back tool, filesystem, or external effects. The ledger and
-checkpoint are separate durable stores; checkpoint preparation and ledger commit use
-compensation rather than one cross-store atomic write. A returned ledger error removes the
-prepared checkpoint; if an uncatchable process death lands between the writes, bootstrap
-converges the checkpoint from the authoritative ledger before serving again.
+owns the Session. It does not roll back tool, filesystem, or external effects. For this
+single-Agent rewind, the ledger and checkpoint are separate durable stores: checkpoint
+preparation and ledger commit use compensation rather than one cross-store atomic write. A
+returned ledger error removes the prepared checkpoint; if an uncatchable process death lands
+between the writes, bootstrap converges the checkpoint from the authoritative ledger before
+serving again.
+
+Lattice and Custom Session turns, plus a single-Agent Session whose selected Agent is a
+Coordinator, use a different boundary. After the canonical Begin is durable, every
+Session-owned Agent checkpoint write stages beneath that exact turn, including Coordinator and
+declared Worker state. A durable Completed terminal promotes each Agent's own causal
+transcript. Failed, Cancelled, Interrupted, and restart-recovered turns restore the prior
+committed transcript, clear private behavior or orchestration state, and retain incurred
+cumulative provider usage. Bootstrap reconciles any unfinished checkpoint phase from canonical
+History before an Agent can resume. On the first transaction-aware startup, older Lattice and
+Custom Agent caches become accounting-only. For a legacy single-Agent Coordinator, Axocoatl first
+imports any checkpoint-only conversation into canonical History, clears unsafe private behavior
+and Worker state, then rebuilds only the Coordinator's completed conversation from that History.
+The one-time adoption preserves cumulative usage and is marked durable only after the rebuild.
+In compatibility execution, Tier 2–4 durable memory remains readable during transaction-scoped
+turns, but is mutation read-only: automatic semantic storage, daily-log archive writes, personal or shared core edits,
+and core consolidation are suppressed even for Completed work until those tiers have their own
+transactional promotion.
 
 Turn history also records bounded tool start/result evidence before live broadcast. This keeps
 Route evidence available after reconnect and in exports without allowing an unbounded tool
@@ -162,16 +201,54 @@ The lightweight Chat, Chat attachment, and global FileStore APIs remain for comp
 clients. They do not restore a directoryless Chat destination or a cross-chat Files browser.
 The workbench behavior belongs to the Session chat spine.
 
-A configured Agent is a template, not one memory identity shared by every Workspace. In a normal
+A configured Agent is a template, not one memory identity shared by every Workspace. In a legacy
 Session, an autonomous Agent owns model-facing conversation, checkpoint, daily log, core memory,
 and semantic memory under `{session}:{agent}` and retains them across actor restart. A Coordinator
 owns scoped Tier-1 conversation plus its live orchestration checkpoint; each declared Worker owns
 its own scoped Tier 1–4 identity beneath `{session}:{coordinator}:worker:{worker}`. Ad-hoc Workers
 are run-scoped and ephemeral. Another Session using the same template starts with separate local
 memory; only core blocks explicitly marked `shared: true` cross Agent or Session scopes. Attempt
-memory is set-scoped and removed with the Attempt runtime. A terminal Completed, Cancelled,
-Failed, or Interrupted Coordinator turn never auto-resumes private orchestration state; the next
-turn decomposes fresh.
+memory is set-scoped and removed with the Attempt runtime. Axocoatl records a terminal Completed,
+Cancelled, Failed, or Interrupted Coordinator turn in canonical Session History before reconciling
+its scoped checkpoint transaction. It will not start the next turn until reconciliation durably
+commits the completed checkpoint or clears resumable orchestration state for Cancelled, Failed,
+or Interrupted work. A completed checkpoint is marked nonresumable, so terminal work is never
+silently resumed as a new request.
+
+Native activations retain accepted conversation checkpoints and exact input lineage without
+attaching the compatibility daily, core, or semantic stores. Workspace knowledge supplies a
+separate, versioned cross-Session reference store; its notes and source context are retained in
+native requests under the ordinary authority and acceptance rules.
+
+## Workspace knowledge
+
+**Knowledge** opens around the active Session. It contains versioned Markdown
+notes owned by the Workspace: decisions, architecture, conventions, findings,
+pitfalls, and general context. Another Session in that Workspace can retrieve them
+without inheriting the original conversation. Opening a repository does not create
+or commit a knowledge folder in that repository.
+
+The inspector supports search, note editing, source references, typed links,
+backlinks, proposal review, source navigation, and a focused knowledge graph.
+The graph connects notes and source/evidence references; it is distinct from the
+execution graph's work, dependencies, and controls. Exported Markdown is portable;
+internal immutable revision files are not an ambient filesystem-edit interface.
+
+**Attach to chat** selects an exact note revision for context. **Investigate in
+chat** also prepares a request to examine its evidence; the user still sends that
+request. Native Agents can search/read knowledge and propose revisions through a
+Workspace-scoped tool. Acceptance and expected-revision checks govern publication.
+For isolated Ways, automatic publication additionally requires the exact candidate
+selected by the retained Keep decision. Other successful candidates remain pending
+unless a person explicitly accepts their proposals.
+A stopped or superseded contribution cannot publish automatically, and a conflict
+must not overwrite a newer human decision.
+
+Each Session retains a bounded code index exposing file identities, definitions,
+and import syntax for supported languages. Source freshness is relative to that Session's observed source;
+the user can refresh and open the file. A changed or missing source is a reason to
+review the note, not a verdict that the note is false. Parsed source, human decisions,
+model interpretations, accepted execution, and passing checks remain distinct facts.
 
 ## Product language
 
@@ -199,9 +276,18 @@ The one app does not replace Axocoatl's runtime strengths. It makes them legible
   lifecycle independently of the actor checkpoint cache.
 - Session isolation bounds repository file, shell, and terminal tool execution to the chosen workspace.
 - Heterogeneous providers let each attempt use a different local or remote model.
-- Multi-agent session mode and the coordinator are explicit work paths; the
+- An all-team turn with more than one autonomous Agent in a Lattice or Custom
+  Session owns a bounded coordination lattice: exact named dependencies activate
+  Agents, direct-parent handoffs become durable causal evidence, and one requested
+  revision can reactivate the affected downstream graph. Native Coordinators create
+  distinct child activations from approved Worker templates in that same controller. The process-wide
   event lattice carries typed notifications for Skills, triggers, webhooks, and
   retained API/WebSocket observers.
+- A Session's standing work can be a signal field: each team Agent owns repository paths,
+  findings, changes, failed checks and flags leave evaporating deposits on paths, and an
+  Agent whose own paths cross its threshold receives targeted work through the same inbox,
+  grants and allowance. Work sources makes every deposit, crossing and dispatched turn
+  inspectable; signal strength never substitutes for checks or authority.
 - MCP, Skills, and Automations extend what sessions and agents can do.
 
 These are capabilities of one product. They should not compete as peer navigation

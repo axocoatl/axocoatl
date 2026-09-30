@@ -178,6 +178,21 @@ export class AxEditor extends HTMLElement {
     void this.#mount();
   }
 
+  /** Reveal an indexed symbol in the existing editor without replacing a draft. */
+  async revealLine(path, line) {
+    if (this.#suspendedMode || this.#active !== path || !Number.isSafeInteger(line) || line < 1) return false;
+    const session = this.session;
+    await this.#mount();
+    if (session !== this.session || this.#active !== path || this.#suspendedMode) return false;
+    const model = this.#editor?.getModel();
+    if (!model) return false;
+    const lineNumber = Math.min(line, model.getLineCount());
+    this.#editor.setPosition({lineNumber, column:1});
+    this.#editor.revealLineInCenter(lineNumber);
+    this.#editor.focus();
+    return true;
+  }
+
   /**
    * Close a file and release its model.
    *

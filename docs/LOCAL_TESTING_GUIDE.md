@@ -8,7 +8,9 @@ evidence, not a substitute for exercising that journey.
 ## Prerequisites
 
 - Rust 1.88 or newer.
-- Ollama with `llama3.2` available for the local-provider checks.
+- Ollama with `llama3.2` available for the local-provider checks. Native Sessions
+  require an audited local Ollama profile; see the
+  [provider guide](https://docs.axocoatl.ai/configure/providers/) for the enforced boundary.
 - Podman for directory sessions and parallel attempts.
 - A disposable Git repository for any test that lets an agent change files.
 
@@ -33,11 +35,13 @@ or binary size; both change as the workspace evolves.
 
 ## 2. Start a clean local runtime
 
-Use a fresh data directory so the starter config can perform its one-time legacy
+Use a new child path inside a temporary directory. Axocoatl must create the data root
+itself to select native Session storage; an already-existing empty directory retains
+the compatibility format. The starter config also performs its one-time legacy
 workflow-to-Automation seed:
 
 ```bash
-export AXOCOATL_TEST_DATA="$(mktemp -d)"
+export AXOCOATL_TEST_DATA="$(mktemp -d)/data"
 AXOCOATL_DATA_DIR="$AXOCOATL_TEST_DATA" \
   cargo run -p axocoatl-cli -- dev -c axocoatl.example.yaml
 ```
@@ -68,7 +72,10 @@ Open `http://localhost:8080` and use a disposable Git repository.
    setup. Wait for the durable environment state to become **Ready**.
 4. Before Ready, confirm Conversation Send, Files, Source Control, Terminal,
    Preview, and Ways fail closed rather than reading or executing on the host.
-5. Ask for a small, verifiable file change.
+5. Open **Team & budget**, edit the selected Agent, set an explicit maximum output,
+   activation/invocation/token/cost limits and expiry, then preview and apply the
+   configuration. Confirm Send is refused before approval. Ask for a small,
+   verifiable file change after approval.
 6. Confirm Conversation remains in the main area. From the Session header or
    **More**, open Files/editor, Preview, Source Control, and Agent graph as focused
    tools; Terminal stays in its bottom dock.
@@ -89,7 +96,8 @@ and cost cannot describe a route that did not run.
 
 1. From the session, choose **Explore several ways**. Use the contextual **Ways**
    inspector to configure at least two attempts with deliberately different
-   agent/model selections where available.
+   agent/model selections where available. For native Ways, configure explicit
+   History storage limits and review each attempt's budget before starting.
 2. In the Ways inspector, observe running, completed, failed, blocked, or
    interrupted states without losing the Session conversation.
 3. Open the focused **Attempts** review and run **Checks** after every attempt
@@ -98,10 +106,14 @@ and cost cannot describe a route that did not run.
 5. Choose **Keep this one** only for a passing, non-empty result.
 6. Confirm the selected delta is in the primary working tree, no commit was
    created, and the unresolved attempt set is cleaned up.
+7. In native History, reopen the retained decision after cleanup. Check its
+   bounded Outcome, Route, diff, Checks, usage and human choice; export it and
+   attach it as context. Unavailable or truncated evidence must remain labeled.
 
 Also test **Discard** before Keep begins. Starting a second attempt set or a
 normal session turn while one is unresolved should return a lifecycle conflict,
-not silently replace it.
+not silently replace it. Native decisions that keep nothing remain in History;
+deleting the retained record is a separate explicit action.
 
 ## 5. Exercise the canonical Automation path
 
@@ -145,7 +157,8 @@ cargo run -p axocoatl-cli -- session list
 
 `session new` does not silently approve detected project setup. If its output
 prints a proposed command as **not run**, open the browser, review that exact
-Session environment, and wait for Ready. Only then execute and close it:
+Session environment, and wait for Ready. For native storage, also review and apply
+**Team & budget** in the browser. Only then execute and close it:
 
 ```bash
 cargo run -p axocoatl-cli -- session exec <session-id> "Inspect the repository and report its checks."

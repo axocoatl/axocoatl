@@ -38,6 +38,17 @@ pub trait BuiltinTool: Send + Sync + 'static {
     /// JSON Schema for the tool's parameters.
     fn parameters_schema(&self) -> serde_json::Value;
 
+    /// Return the parameter schema to advertise for the current request.
+    ///
+    /// `None` hides the tool from the model without changing dispatch
+    /// authority. Stateful tools can use this hook to expose only the exact
+    /// capability available at request construction time; `execute` must
+    /// still enforce authorization because a stale or fabricated call can
+    /// reach the executor.
+    fn advertised_parameters_schema(&self) -> Option<serde_json::Value> {
+        Some(self.parameters_schema())
+    }
+
     /// Concurrency contract enforced for a provider's parallel tool-call
     /// group. Read-only tools may keep the safe default; stateful mutators and
     /// process/shell tools must opt into `Exclusive`.

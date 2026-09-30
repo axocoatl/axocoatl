@@ -17,9 +17,9 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/markdown-remark": "^7.2.4",
+    "@astrojs/markdown-remark": "^7.3.1",
     "@astrojs/starlight": "^0.41.7",
-    "astro": "^7.2.4",
-    "sharp": "^0.35.3"
+    "astro": "^7.3.2",
+    "sharp": "^0.35.4"
   }
 }

@@ -1,5 +1,11 @@
 use std::pin::Pin;
 
+mod native;
+pub use native::{
+    observe_native_ollama_context, NativeOllamaConfig, NativeOllamaContextObservation,
+    NativeOllamaProvider,
+};
+
 use reqwest::header::CONTENT_TYPE;
 use tokio_stream::Stream;
 

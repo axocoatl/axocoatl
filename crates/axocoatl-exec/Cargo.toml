@@ -1,0 +1,31 @@
+[package]
+name = "axocoatl-exec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Owned command supervision and bounded execution protocol for Axocoatl sandboxes"
+
+[build-dependencies]
+sha2 = { workspace = true }
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.27"
+
+[[bin]]
+name = "axocoatl-exec-supervisor"
+path = "src/main.rs"

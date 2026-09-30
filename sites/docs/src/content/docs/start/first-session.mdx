@@ -47,10 +47,19 @@ metadata, but the repository remains the authority.
    may edit it or explicitly continue without a setup command. If the daemon
    defaults an exact devcontainer command to checked, that policy is visible;
    your checked or unchecked reviewed choice wins.
-8. Wait for the Session environment to report **Ready**, then send a bounded
-   first request from Conversation.
+8. Wait for the Session environment to report **Ready**.
+9. For a native Session, open **Team & budget**, switch to **Edit**, and select
+   the Agent. Enter its activation, invocation, token, cost, output, and expiry
+   limits. Preview the configuration, review it, and choose **Apply**.
+10. Send a bounded first request from Conversation.
 
 </Steps>
+
+New data roots use native execution; use local Podman for their repository tools
+and required checks. Select a reviewed local Ollama profile or
+an eligible OpenRouter-credit profile for this first Session; the other provider
+adapters remain on compatibility paths. [Providers](/configure/providers/) lists
+the exact requirements. A successful `doctor` check does not replace Team review.
 
 A useful first prompt is:
 

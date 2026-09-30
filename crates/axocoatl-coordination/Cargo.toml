@@ -13,8 +13,8 @@ readme.workspace = true
 description = "Adaptive stigmergic task lattice coordination for Axocoatl multi-agent systems"
 
 [dependencies]
-axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
-axocoatl-llm = { version = "1.0.0", path = "../axocoatl-llm" }
+axocoatl-core = { version = "1.1.0", path = "../axocoatl-core" }
+axocoatl-llm = { version = "1.1.0", path = "../axocoatl-llm" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -29,8 +29,8 @@ async-trait = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros"] }
 # Keep this cyclic test-only edge path-only so it is omitted from published metadata.
 axocoatl-actor = { path = "../axocoatl-actor" }
-axocoatl-llm = { version = "1.0.0", path = "../axocoatl-llm" }
-axocoatl-token = { version = "1.0.0", path = "../axocoatl-token" }
+axocoatl-llm = { version = "1.1.0", path = "../axocoatl-llm" }
+axocoatl-token = { version = "1.1.0", path = "../axocoatl-token" }
 ractor = { workspace = true }
 async-trait = { workspace = true }
 tokio-stream = { workspace = true }

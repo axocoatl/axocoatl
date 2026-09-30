@@ -35,8 +35,8 @@
 
         <h3>Choose the execution shape</h3>
         <div class="grid-3">
-          <article class="card"><span class="card-kicker">Configured team</span><h3>Hand work downstream</h3><p>An architect and reviewer run in dependency order with separate durable outputs in one Custom Session. <a href="#multi-agent">Watch the handoff →</a></p></article>
-          <article class="card"><span class="card-kicker">Decision mode</span><h3>Explore several Ways</h3><p>Independent attempts run common Checks and remain separate while the decision is unresolved. Judge is optional; Keep selects one result, then completed cleanup ends the candidate record. <a href="#ways">Watch the comparison →</a></p></article>
+          <article class="card"><span class="card-kicker">Configured team</span><h3>Follow an ordered handoff</h3><p>The recorded architect and reviewer run in configured dependency order, and their separate outputs remain after reload. <a href="#multi-agent">Watch the handoff →</a></p></article>
+          <article class="card"><span class="card-kicker">Decision mode</span><h3>Explore several Ways</h3><p>Independent attempts run common Checks and remain separate while the decision is unresolved. Judge is optional; the recording follows comparison through Keep and the uncommitted result. <a href="#ways">Watch the comparison →</a></p></article>
           <article class="card"><span class="card-kicker">Repository ownership</span><h3>Review Last turn</h3><p>A kept result returns as uncommitted Git changes. Last turn filters the current diff to attributed paths for ordinary review. <a href="#git-review">Watch the Git handoff →</a></p></article>
         </div>
 
@@ -44,8 +44,8 @@
         <div class="grid-3">
           <article class="card"><span class="card-kicker">Settings</span><h3>Configure one product</h3><p>Agents and their provider/model assignments, Skills, MCP servers, and Automations remain configuration rather than peer work surfaces. <a href="#film-settings-runtime">Watch Settings →</a></p></article>
           <article class="card"><span class="card-kicker">Typed events</span><h3>Trigger an Automation</h3><p>A Skill publishes its declared event and the matching trigger starts a durable Automation run. <a href="#film-event-lattice-automation">Watch the event →</a></p></article>
-          <article class="card"><span class="card-kicker">MCP approval</span><h3>Approve the exact call</h3><p>A Session Turn pauses before a deterministic local MCP tool executes, then retains the result in History. <a href="#film-mcp-approval">Watch the approval →</a></p></article>
-          <article class="card"><span class="card-kicker">Shared core memory</span><h3>Share one block explicitly</h3><p>One Agent writes a shared block and another receives it in a separate Session after restart. <a href="#film-shared-core-memory">Watch the recall →</a></p></article>
+          <article class="card"><span class="card-kicker">MCP approval</span><h3>Approve the exact call</h3><p>A compatibility Session pauses before a deterministic local MCP tool executes, then retains the result in History. <a href="#film-mcp-approval">Watch the approval →</a></p></article>
+          <article class="card"><span class="card-kicker">Workspace knowledge</span><h3>Keep a source-linked decision</h3><p>A saved note, source reference, and backlink remain available in another Session after restart. <a href="#film-workspace-knowledge">Watch the recall →</a></p></article>
           <article class="card"><span class="card-kicker">Operator judgment</span><h3>Pause and resume an Automation</h3><p>A top-level Interrupt retains upstream node state until an operator supplies the next value. <a href="#automation">Watch the Interrupt →</a></p></article>
         </div>
       </div>
@@ -63,8 +63,8 @@
         <div><span class="card-kicker">01 · Ordinary path</span><h3>One Agent, one repository job</h3><p>Start with a concrete behavior and repository Check. The Agent diagnoses the defect, edits the implementation, runs the command, and leaves the result for review without committing.</p></div>
         <ax-product-film
           film="session-workbench"
-          src="/assets/films/session-workbench.mp4"
-          poster="/assets/films/session-workbench.jpg"
+          src="/assets/films/v1.1.0/session-workbench.mp4"
+          poster="/assets/films/v1.1.0/session-workbench.jpg"
           label="An Axocoatl Session with conversation and repository tools"
           caption="Conversation stays central while Files, Source Control, Preview, and Terminal open around the same Session."
         ></ax-product-film>
@@ -74,8 +74,8 @@
         <div><span class="card-kicker">02 · Work units</span><h3>Workspace, Session, Turn</h3><p>An authorized Workspace groups named Sessions. Returning to one restores its accepted Turn instead of creating another disposable conversation.</p></div>
         <ax-product-film
           film="workspace-sessions-turns"
-          src="/assets/films/workspace-sessions-turns.mp4"
-          poster="/assets/films/workspace-sessions-turns.jpg"
+          src="/assets/films/v1.1.0/workspace-sessions-turns.mp4"
+          poster="/assets/films/v1.1.0/workspace-sessions-turns.jpg"
           label="An Axocoatl Workspace with two Sessions and a completed Turn restored after switching Sessions"
           caption="One authorized Workspace groups durable Sessions. Switching away and back restores the selected Session and its accepted Turn."
         ></ax-product-film>
@@ -85,8 +85,8 @@
         <div><span class="card-kicker">03 · Continuity</span><h3>Reconnect to the exact Turn</h3><p>Accepted work does not depend on one browser connection. Reload reconnects to the active Turn, and Stop leaves an honest cancelled state in History.</p></div>
         <ax-product-film
           film="durable-turn"
-          src="/assets/films/durable-turn.mp4"
-          poster="/assets/films/durable-turn.jpg"
+          src="/assets/films/v1.1.0/durable-turn.mp4"
+          poster="/assets/films/v1.1.0/durable-turn.jpg"
           label="An active Axocoatl Session Turn reconnecting after reload and ending in History"
           caption="Reload reconnects to the exact active Turn. Stop preserves an honest cancelled state in History."
         ></ax-product-film>
@@ -96,8 +96,8 @@
         <div><span class="card-kicker">04 · Execution boundary</span><h3>Terminal and Preview share the checkout</h3><p>The Terminal identifies the Session's local Podman sandbox, runs the repository contract, and serves the application opened in Preview through an explicitly published port.</p></div>
         <ax-product-film
           film="sandbox-terminal-preview"
-          src="/assets/films/sandbox-terminal-preview.mp4"
-          poster="/assets/films/sandbox-terminal-preview.jpg"
+          src="/assets/films/v1.1.0/sandbox-terminal-preview.mp4"
+          poster="/assets/films/v1.1.0/sandbox-terminal-preview.jpg"
           label="An Axocoatl Session Terminal identifying its container and Workspace before opening the running application in Preview"
           caption="Terminal runs the repository Check inside the Session's local Podman sandbox. Preview opens the application served from that checkout."
         ></ax-product-film>
@@ -114,24 +114,24 @@
 
       <div class="stack">
       <article class="stack" id="multi-agent">
-        <div><span class="card-kicker">05 · Configured team</span><h3>Architect → reviewer in one Custom Session</h3><p>The Systems Architect runs first. The Critical Reviewer receives that output and returns a separate decision. This is a dependency-ordered Session, not several Ways.</p></div>
+        <div><span class="card-kicker">05 · Configured team</span><h3>Architect → reviewer in one Custom Session</h3><p>This recording shows the Systems Architect and Critical Reviewer running in configured dependency order, with two distinct Agent outputs still present after reload. It demonstrates the ordered team path, not the newer inline Coordination card or revision generations. This is one team result, not several competing Ways.</p></div>
         <ax-product-film
           film="multi-agent-handoff"
-          src="/assets/films/multi-agent-handoff.mp4"
-          poster="/assets/films/multi-agent-handoff.jpg"
+          src="/assets/films/v1.1.0/multi-agent-handoff.mp4"
+          poster="/assets/films/v1.1.0/multi-agent-handoff.jpg"
           label="An Axocoatl Systems Architect handing a design decision to a Critical Reviewer in one Custom Session"
           caption="Architect → Reviewer runs in dependency order inside one Custom Session, with two separate durable outputs."
         ></ax-product-film>
       </article>
 
       <article class="stack" id="ways">
-        <div><span class="card-kicker">06 · Optional decision mode</span><h3>Compare independent Ways</h3><p>Every Way receives the same task and Check command. While the decision is unresolved, Axocoatl keeps completion states, Outcome, Route, changed files, and Check evidence separate. Judge is optional; Keep selects one result and cleanup ends the candidate record.</p></div>
+        <div><span class="card-kicker">06 · Optional decision mode</span><h3>Compare independent Ways</h3><p>Every Way receives the same task and Check command. While the decision is unresolved, Axocoatl keeps completion states, Outcome, Route, changed files, and Check evidence separate. Judge is optional; the recording follows Keep into the uncommitted result. Current native Sessions additionally retain bounded decision evidence after cleanup under explicit storage limits; this older recording does not demonstrate that History flow.</p></div>
         <ax-product-film
           film="several-ways"
-          src="/assets/films/several-ways.mp4"
-          poster="/assets/films/several-ways.jpg"
+          src="/assets/films/v1.1.0/several-ways.mp4"
+          poster="/assets/films/v1.1.0/several-ways.jpg"
           label="Several isolated Ways compared inside one Axocoatl Session"
-          caption="Independent Ways keep Outcome, Route, diffs, Checks, and optional Judge separate while the decision is unresolved. Keep selects one result; completed cleanup ends that candidate record."
+          caption="Independent Ways keep Outcome, Route, diffs, Checks, and optional Judge separate while the decision is unresolved. The recording ends with one kept, uncommitted result."
         ></ax-product-film>
       </article>
 
@@ -139,8 +139,8 @@
         <div><span class="card-kicker">07 · Repository ownership</span><h3>Keep is not commit</h3><p>Keep returns one checked result to the primary Session checkout. Source Control → Last turn filters the current Git diff to paths attributed to the kept Turn before any optional staging or commit; it is not a frozen per-turn diff.</p></div>
         <ax-product-film
           film="git-last-turn"
-          src="/assets/films/git-last-turn.mp4"
-          poster="/assets/films/git-last-turn.jpg"
+          src="/assets/films/v1.1.0/git-last-turn.mp4"
+          poster="/assets/films/v1.1.0/git-last-turn.jpg"
           label="A kept Axocoatl Way shown as uncommitted paths and hunks in Source Control Last turn"
           caption="Keep returns one checked result without committing it. Last turn filters the current Git diff to paths attributed to that Turn before optional staging."
         ></ax-product-film>
@@ -152,7 +152,7 @@
       <div class="section-head">
         <span class="eyebrow">Inspect the runtime underneath</span>
         <h2>Configuration and durable machinery support the workbench.</h2>
-        <p>Agents, Skills, MCP servers, and Automations live in Settings. Typed events, approval gates, shared memory, and operator Interrupts remain explicit instead of turning into hidden magic.</p>
+        <p>Agents, Skills, MCP servers, and Automations live in Settings. Configured Automations retain their own event and Interrupt state. Native Session knowledge and execution evidence remain separately inspectable.</p>
       </div>
 
       <div class="stack">
@@ -160,8 +160,8 @@
         <div><span class="card-kicker">08 · Settings</span><h3>Configure one product</h3><p>Agents and their provider/model assignments, Skills, MCP servers, and Automations stay in Settings rather than becoming peer destinations beside the Session. Configure Axocoatl once for the current OS user; explicit project-local YAML remains an advanced operator path.</p></div>
         <ax-product-film
           film="settings-runtime"
-          src="/assets/films/settings-runtime.mp4"
-          poster="/assets/films/settings-runtime.jpg"
+          src="/assets/films/v1.1.0/settings-runtime.mp4"
+          poster="/assets/films/v1.1.0/settings-runtime.jpg"
           label="Axocoatl Settings for Agents and their provider/model assignments, Skills, MCP servers, and Automations"
           caption="Runtime configuration stays in Settings instead of becoming another work surface."
         ></ax-product-film>
@@ -171,32 +171,32 @@
         <div><span class="card-kicker">09 · Typed events</span><h3>A Skill can trigger an Automation</h3><p>The Skill publishes its declared event. The event lattice carries it to configured observers, and the matching Automation trigger starts an inspectable durable run.</p></div>
         <ax-product-film
           film="event-lattice-automation"
-          src="/assets/films/event-lattice-automation.mp4"
-          poster="/assets/films/event-lattice-automation.jpg"
+          src="/assets/films/v1.1.0/event-lattice-automation.mp4"
+          poster="/assets/films/v1.1.0/event-lattice-automation.jpg"
           label="An Axocoatl Skill publishing a typed event that starts a durable Automation"
           caption="Release candidate ready publishes ReleaseCandidateReady; the matching On Skill trigger starts release-gate review."
         ></ax-product-film>
       </article>
 
       <article class="stack" id="film-mcp-approval">
-        <div><span class="card-kicker">10 · MCP approval</span><h3>A new permission pauses the call</h3><p>With no matching saved decision, a normal Session Turn pauses before a deterministic local MCP tool executes. Deny prevents dispatch; Allow once returns bounded tool evidence and the final answer to History.</p></div>
+        <div><span class="card-kicker">10 · MCP approval</span><h3>A new permission pauses the call</h3><p>With no matching saved decision, a compatibility Session pauses before a deterministic local MCP tool executes. Deny prevents dispatch; Allow once returns bounded tool evidence and the final answer to History. Native Session turns do not expose this configured registry.</p></div>
         <ax-product-film
           film="mcp-approval"
-          src="/assets/films/mcp-approval.mp4"
-          poster="/assets/films/mcp-approval.jpg"
-          label="An Axocoatl Session Agent requesting approval before calling a local MCP tool"
-          caption="The Session Turn pauses before get_weather, then retains the returned value and final answer in History."
+          src="/assets/films/v1.1.0/mcp-approval.mp4"
+          poster="/assets/films/v1.1.0/mcp-approval.jpg"
+          label="An Axocoatl compatibility Session Agent requesting approval before calling a local MCP tool"
+          caption="The compatibility Session pauses before get_weather, then retains the returned value and final answer in History."
         ></ax-product-film>
       </article>
 
-      <article class="stack" id="film-shared-core-memory">
-        <div><span class="card-kicker">11 · Shared core memory</span><h3>Share one block explicitly</h3><p>One configured Agent writes a named shared block through a visible tool call. After daemon restart, another Agent receives the exact value in a separate Session whose transcript remains distinct.</p></div>
+      <article class="stack" id="film-workspace-knowledge">
+        <div><span class="card-kicker">11 · Workspace knowledge</span><h3>Keep a decision across Sessions</h3><p>A source-linked note and its backlink survive restart. A native Agent in a separate Session retrieves the exact accepted revision, while each conversation keeps its own History.</p></div>
         <ax-product-film
-          film="shared-core-memory"
-          src="/assets/films/shared-core-memory.mp4"
-          poster="/assets/films/shared-core-memory.jpg"
-          label="One Axocoatl Agent writing a shared core-memory block and another Agent receiving it in a separate Session"
-          caption="One Agent writes an explicit shared block; a different Agent in another Session receives the exact value while the transcripts remain separate."
+          film="workspace-knowledge"
+          src="/assets/films/v1.1.0/workspace-knowledge.mp4"
+          poster="/assets/films/v1.1.0/workspace-knowledge.jpg"
+          label="Source-linked workspace knowledge, backlinks, and exact revision retrieval in a separate Axocoatl Session after restart"
+          caption="A saved decision retains its source and backlinks. After restart, a separate native Session retrieves the accepted note revision."
         ></ax-product-film>
       </article>
 
@@ -204,8 +204,8 @@
         <div><span class="card-kicker">12 · Operator judgment</span><h3>Pause and resume an Automation</h3><p>A top-level Interrupt parks the run with upstream node state intact. Operator guidance resumes from that checkpoint and the completed Result remains in run history.</p></div>
         <ax-product-film
           film="automation-hitl-recovery"
-          src="/assets/films/automation-hitl-recovery.mp4"
-          poster="/assets/films/automation-hitl-recovery.jpg"
+          src="/assets/films/v1.1.0/automation-hitl-recovery.mp4"
+          poster="/assets/films/v1.1.0/automation-hitl-recovery.jpg"
           label="A durable Axocoatl Automation pausing at an Interrupt and resuming with operator guidance"
           caption="The Automation reaches a top-level Interrupt with its node state intact. Operator guidance resumes it into durable run history."
         ></ax-product-film>

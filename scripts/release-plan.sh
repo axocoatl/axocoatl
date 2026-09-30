@@ -45,8 +45,10 @@ ordered_crates=(
   axocoatl-token
   axocoatl-llm
   axocoatl-config
+  axocoatl-session
   axocoatl-memory
   axocoatl-graph
+  axocoatl-exec
   axocoatl-isolation
   axocoatl-a2a
   axocoatl-llm-openai
@@ -58,7 +60,6 @@ ordered_crates=(
   axocoatl-tools
   axocoatl-coordination
   axocoatl-actor
-  axocoatl-session
   axocoatl-service
   axocoatl-daemon
   axocoatl-server
@@ -100,6 +101,20 @@ for crate in "${ordered_crates[@]}"; do
     ' "$metadata_file" | LC_ALL=C sort -u
   )
   seen+="$crate"$'\n'
+done
+
+# Embedded supervisor source and protocol checks require the exact companion
+# library. A caret requirement could resolve a newer library against old bytes
+# during an otherwise ordinary cargo install.
+supervisor_version=$(jq -er '[.packages[] | select(.name == "axocoatl-exec") | .version]
+  | if length == 1 then .[0] else error("expected one supervisor package") end' "$metadata_file")
+for consumer in axocoatl-isolation axocoatl-daemon; do
+  supervisor_requirement=$(jq -r --arg name "$consumer" '
+    [.packages[] | select(.name == $name) | .dependencies[]
+      | select(.name == "axocoatl-exec" and .kind != "dev") | .req]
+    | if length == 1 then .[0] else "" end' "$metadata_file")
+  [[ "$supervisor_requirement" == "=$supervisor_version" ]] \
+    || fail "$consumer must require exact supervisor version =$supervisor_version"
 done
 
 release_crates=()

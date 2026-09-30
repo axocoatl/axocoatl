@@ -1,0 +1,165 @@
+{
+  "begin": {
+    "turn_id": "legacy-turn-1",
+    "session_id": "session-a",
+    "user_input": "Explain these attached selections and inspect the source.",
+    "agent_id": "coder",
+    "model": "ordinary-model",
+    "context": [
+      {
+        "reference_id": "code-selection-1",
+        "display_name": "source selection",
+        "kind": "code_selection",
+        "scope": "this_turn",
+        "metadata": {
+          "path": "src/main.rs",
+          "start_line": 3,
+          "end_line": 4,
+          "language": "rust",
+          "content": "fn main() {\n    existing();"
+        }
+      },
+      {
+        "reference_id": "browser-selection-1",
+        "display_name": "selected button",
+        "kind": "browser_selection",
+        "scope": "session",
+        "metadata": {
+          "url": "http://localhost:8080/",
+          "selector": "button.save",
+          "html": "<button class=\"save\">Save</button>"
+        }
+      }
+    ],
+    "idempotency_key": "legacy-turn-1",
+    "metadata": {
+      "mode": "single_agent",
+      "target_agent": "coder"
+    }
+  },
+  "execution": {
+    "kind": "run_started",
+    "execution_id": "legacy-turn-1",
+    "attempt_id": null,
+    "metadata": {}
+  },
+  "agent_output": {
+    "agent_id": "coder",
+    "model": "ordinary-model",
+    "output": "Both source files and the selected button were inspected."
+  },
+  "complete": {
+    "status": "completed",
+    "final_output": "Both source files and the selected button were inspected.",
+    "error": null,
+    "metadata": {
+      "input_tokens": 10,
+      "output_tokens": 5,
+      "reasoning_tokens": 2,
+      "total_tokens": 17,
+      "token_usage_known": true
+    }
+  },
+  "tool_events": [
+    {
+      "kind": "tool_started",
+      "execution_id": "call-1",
+      "attempt_id": null,
+      "metadata": {
+        "agent_id": "coder",
+        "tool_name": "read_file",
+        "tool_name_truncated": false,
+        "call_id": "call-1",
+        "call_id_truncated": false,
+        "call_id_sha256": "5d7963c4f471e142f5a72214a9666fb164718f9ba1066a7862ac1c5041887940",
+        "occurrence": 0,
+        "arguments": {
+          "path": "/resolved/src/0.rs"
+        },
+        "arguments_truncated": false,
+        "provider_arguments": {
+          "path": "src/0.rs"
+        },
+        "provider_arguments_truncated": false,
+        "provider_metadata": {
+          "axocoatl.route.slot": "primary",
+          "gemini.thought_signature": "retained-signature"
+        },
+        "provider_metadata_truncated": false,
+        "provider_response_group": 7,
+        "provider_call_index": 0,
+        "provider_call_count": 2,
+        "assistant_content": "I will inspect both files.",
+        "assistant_content_truncated": false
+      }
+    },
+    {
+      "kind": "tool_started",
+      "execution_id": "call-2",
+      "attempt_id": null,
+      "metadata": {
+        "agent_id": "coder",
+        "tool_name": "read_file",
+        "tool_name_truncated": false,
+        "call_id": "call-2",
+        "call_id_truncated": false,
+        "call_id_sha256": "3ba8dced2e729b165dfb4e6a16f08d0f81338b045127b9a57cbc62f0853ec592",
+        "occurrence": 0,
+        "arguments": {
+          "path": "/resolved/src/1.rs"
+        },
+        "arguments_truncated": false,
+        "provider_arguments": {
+          "path": "src/1.rs"
+        },
+        "provider_arguments_truncated": false,
+        "provider_metadata": {
+          "axocoatl.route.slot": "primary",
+          "gemini.thought_signature": "retained-signature"
+        },
+        "provider_metadata_truncated": false,
+        "provider_response_group": 7,
+        "provider_call_index": 1,
+        "provider_call_count": 2
+      }
+    },
+    {
+      "kind": "tool_result",
+      "execution_id": "call-2",
+      "attempt_id": null,
+      "metadata": {
+        "agent_id": "coder",
+        "tool_name": "read_file",
+        "tool_name_truncated": false,
+        "call_id": "call-2",
+        "call_id_truncated": false,
+        "call_id_sha256": "3ba8dced2e729b165dfb4e6a16f08d0f81338b045127b9a57cbc62f0853ec592",
+        "occurrence": 0,
+        "result": {
+          "content": "file 2 contents"
+        },
+        "result_truncated": false,
+        "is_error": false
+      }
+    },
+    {
+      "kind": "tool_result",
+      "execution_id": "call-1",
+      "attempt_id": null,
+      "metadata": {
+        "agent_id": "coder",
+        "tool_name": "read_file",
+        "tool_name_truncated": false,
+        "call_id": "call-1",
+        "call_id_truncated": false,
+        "call_id_sha256": "5d7963c4f471e142f5a72214a9666fb164718f9ba1066a7862ac1c5041887940",
+        "occurrence": 0,
+        "result": {
+          "content": "file 1 contents"
+        },
+        "result_truncated": false,
+        "is_error": false
+      }
+    }
+  ]
+}

@@ -172,6 +172,10 @@ function requireInteger(value, label) {
 export function validatePortfolio(portfolio) {
   requireObject(portfolio, 'portfolio');
   if (portfolio.schema_version !== 1) fail('portfolio.schema_version must be 1.');
+  if (portfolio.recording_version !== undefined && !/^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(portfolio.recording_version)) {
+    fail('portfolio.recording_version must be a canonical vMAJOR.MINOR.PATCH version.');
+  }
+  const recordingPrefix = portfolio.recording_version ? `${portfolio.recording_version}/` : '';
   requireObject(portfolio.media_contract, 'portfolio.media_contract');
   const contract = portfolio.media_contract;
   for (const key of ['width', 'height', 'input_fps', 'output_fps', 'poster_width', 'poster_height']) {
@@ -220,15 +224,15 @@ export function validatePortfolio(portfolio) {
     if (slugs.has(film.slug)) fail(`Duplicate film slug: ${film.slug}`);
     slugs.add(film.slug);
     requireString(film.title, `${base}.title`);
-    if (!['needs_recording', 'ready'].includes(film.status)) fail(`${base}.status must be needs_recording or ready.`);
+    if (!['required', 'needs_recording', 'ready'].includes(film.status)) fail(`${base}.status must be required, needs_recording, or ready.`);
     for (const key of ['scenario', 'fixture', 'shot_contract', 'provenance']) requireString(film[key], `${base}.${key}`);
     requireObject(film.media, `${base}.media`);
-    const expectedMp4 = `sites/marketing/assets/films/${film.slug}.mp4`;
-    const expectedPoster = `sites/marketing/assets/films/${film.slug}.jpg`;
+    const expectedMp4 = `sites/marketing/assets/films/${recordingPrefix}${film.slug}.mp4`;
+    const expectedPoster = `sites/marketing/assets/films/${recordingPrefix}${film.slug}.jpg`;
     if (film.media.mp4 !== expectedMp4 || film.media.poster !== expectedPoster) {
       fail(`${base}.media must be the matching MP4/JPEG pair for ${film.slug}.`);
     }
-    if (film.provenance !== `demo/one-app/films/provenance/${film.slug}.json`) {
+    if (film.provenance !== `demo/one-app/films/provenance/${recordingPrefix}${film.slug}.json`) {
       fail(`${base}.provenance must use the canonical per-film path.`);
     }
     if (film.shot_contract !== `demo/one-app/films/SHOT-MANIFEST.md#${film.slug}`) {
@@ -282,6 +286,11 @@ export function validatePortfolio(portfolio) {
 
 export function loadPortfolio(root = repoRoot) {
   return validatePortfolio(readJson(resolve(root, 'demo/one-app/films/portfolio.json')));
+}
+
+export function filmSourceDirectory(portfolio, slug) {
+  findFilm(portfolio, slug);
+  return resolve(filmsDir, 'source', ...(portfolio.recording_version ? [portfolio.recording_version] : []), slug);
 }
 
 export function findFilm(portfolio, slug) {

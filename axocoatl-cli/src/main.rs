@@ -6,6 +6,29 @@ use clap::{Parser, Subcommand};
 
 mod user_paths;
 
+/// Standalone commands retain a failed daemon until cleanup succeeds or this
+/// process exits unsuccessfully. A failed shutdown must never be followed by
+/// another in-process bootstrap after silently dropping runtime ownership.
+async fn shutdown_owned_daemon(daemon: axocoatl_daemon::AxocoatlDaemon) {
+    let mut result = daemon.shutdown().await;
+    for _ in 0..2 {
+        match result {
+            Ok(()) => return,
+            Err(failure) => {
+                tracing::warn!(error = %failure, "retrying incomplete daemon shutdown");
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                result = daemon.shutdown().await;
+            }
+        }
+    }
+    if let Err(failure) = result {
+        eprintln!("Axocoatl could not finish shutdown: {failure}");
+        // Keep `daemon` alive through process termination. The next startup
+        // must reconcile its persisted runtime ownership before admitting work.
+        std::process::exit(1);
+    }
+}
+
 fn default_config_path_for_clap() -> PathBuf {
     user_paths::UserPaths::discover()
         .map(|paths| paths.config_path)
@@ -157,6 +180,15 @@ enum ServiceCommands {
 
 #[derive(Subcommand)]
 enum SessionCommands {
+    /// Upgrade existing Session storage while the daemon is stopped
+    Upgrade {
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
+        config: PathBuf,
+        /// Confirm a cold backup exists and unproved historical agent context
+        /// will remain archived instead of being resumed
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Create a new directory session
     New {
         /// Working directory the agent will build in
@@ -302,6 +334,25 @@ async fn main() {
             session,
         } => cmd_chat(&config, &agent, session).await,
         Commands::Session { command } => match command {
+            SessionCommands::Upgrade { config, confirm } => {
+                if !confirm {
+                    eprintln!("Stop Axocoatl and make a cold backup first. This upgrades Session storage, preserves history and usage, and archives historical agent state whose role cannot be proved. Future work requires a reviewed Team & budget. Older binaries cannot use the upgraded data. Run again with --confirm to proceed.");
+                    std::process::exit(2);
+                }
+                let result = match load_cli_config(&config).await {
+                    Ok(config) => axocoatl_daemon::AxocoatlDaemon::upgrade_session_storage(config)
+                        .await
+                        .map_err(|error| error.to_string()),
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok(count) => println!("Session storage is upgraded ({count} Sessions converted). Start Axocoatl to inspect history and review future Team & budget."),
+                    Err(error) => {
+                        eprintln!("Session storage upgrade failed: {error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
             SessionCommands::New {
                 directory,
                 agent,
@@ -606,8 +657,9 @@ fn write_user_configuration(
     admit_private_directory(&config_dir)?;
     config_dir.atomic_write("config.yaml", config_yaml.as_bytes())?;
 
-    let data_dir = SecureDir::open_or_create_all(&paths.data_dir)?;
-    admit_private_directory(&data_dir)
+    axocoatl_daemon::AxocoatlDaemon::initialize_data_root(&paths.data_dir)
+        .map_err(std::io::Error::other)?;
+    Ok(())
 }
 
 fn default_data_dir_for_config(config_path: &std::path::Path) -> PathBuf {
@@ -868,7 +920,8 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
 }
 
 fn probe_data_dir(path: &std::path::Path) -> std::io::Result<()> {
-    let data = SecureDir::open_or_create_all(path)?;
+    let data = axocoatl_daemon::AxocoatlDaemon::initialize_data_root(path)
+        .map_err(std::io::Error::other)?;
     #[cfg(unix)]
     {
         unsafe extern "C" {
@@ -904,6 +957,177 @@ fn onboard_completion_text(
         "\n✓ Axocoatl configured for this user.\n  Config: {}\n  Data:   {}\n\n{environment_hint}Next:\n  axocoatl dev\n  Open http://localhost:8080 and choose Open workspace…\n",
         paths.config_path.display(),
         paths.data_dir.display()
+    )
+}
+
+/// A hosted-provider first run keeps the direct Assistant path while also
+/// exposing one small, valid dependency graph to Lattice Session creation.
+/// Provider ids and display names are fixed call-site constants. The model is
+/// serialized here and the secret arrives as an already-quoted YAML scalar.
+fn hosted_onboarding_configuration(
+    provider_name: &str,
+    provider_id: &str,
+    model: &str,
+    secret: &str,
+    per_execution: u32,
+    overflow_policy: &str,
+) -> String {
+    let model_yaml =
+        serde_json::to_string(model).expect("serializing a model identifier cannot fail");
+    let provider_note = if provider_id == "openrouter" {
+        "# OpenRouter uses your normal API key and OpenRouter credits.\n# BYOK is not supported for native Session execution.\n# Choose a model at https://openrouter.ai/models.\n"
+    } else {
+        ""
+    };
+    let billing = if provider_id == "openrouter" {
+        "  openrouter_billing: credits\n"
+    } else {
+        ""
+    };
+    let sampling = if provider_id == "openrouter" {
+        "    sampling:\n      max_tokens: 2048\n"
+    } else {
+        ""
+    };
+    format!(
+        r#"# Axocoatl — {provider_name} setup
+{provider_note}agents:
+  - id: assistant
+    name: "Assistant"
+    provider: {provider_id}
+    model: {model_yaml}
+    system_prompt: "You are a helpful assistant."
+{sampling}    token_budget:
+      per_execution: {per_execution}
+      per_call: 8192
+      overflow_policy: {overflow_policy}
+
+  - id: planner
+    name: "Planner"
+    provider: {provider_id}
+    model: {model_yaml}
+    role: autonomous
+    system_prompt: "Analyze the request and repository. Return a concise implementation plan and risks without modifying files."
+    depends_on: []
+{sampling}    token_budget:
+      per_execution: {per_execution}
+      per_call: 8192
+      overflow_policy: {overflow_policy}
+
+  - id: builder
+    name: "Builder"
+    provider: {provider_id}
+    model: {model_yaml}
+    role: autonomous
+    system_prompt: "Implement the request using the Planner's direct handoff. Run relevant checks and return the verified result."
+    depends_on: [planner]
+{sampling}    token_budget:
+      per_execution: {per_execution}
+      per_call: 8192
+      overflow_policy: {overflow_policy}
+
+workflows:
+  - id: plan-and-build
+    name: "Plan and Build"
+    agents: [planner, builder]
+    entry_point: planner
+
+providers:
+{billing}  {provider_id}:
+    api_key: {secret}
+
+server:
+  port: 8080
+  host: "127.0.0.1"
+"#
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnboardingProvider {
+    Ollama,
+    OpenRouter,
+}
+
+// Onboarding initializes native Session storage. Keep the displayed choices and
+// their configuration dispatch together; compatibility adapters remain available
+// through existing YAML configuration and commands.
+const ONBOARDING_PROVIDERS: [OnboardingProvider; 2] =
+    [OnboardingProvider::Ollama, OnboardingProvider::OpenRouter];
+
+impl std::fmt::Display for OnboardingProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Ollama => "Ollama (local, no API key)",
+            Self::OpenRouter => "OpenRouter (cloud, OpenRouter credits)",
+        })
+    }
+}
+
+impl OnboardingProvider {
+    fn configuration(self, model: &str, key: &str) -> (String, Option<&'static str>) {
+        match self {
+            Self::Ollama => (local_onboarding_configuration(model), None),
+            Self::OpenRouter => (
+                hosted_onboarding_configuration(
+                    "OpenRouter",
+                    "openrouter",
+                    model,
+                    &config_secret(key, "OPENROUTER_API_KEY"),
+                    16000,
+                    "warn",
+                ),
+                key.is_empty().then_some("OPENROUTER_API_KEY"),
+            ),
+        }
+    }
+}
+
+fn local_onboarding_configuration(model: &str) -> String {
+    let model_yaml =
+        serde_json::to_string(model).expect("serializing a model identifier cannot fail");
+
+    format!(
+        r#"# Axocoatl — local Ollama setup
+agents:
+  - id: assistant
+    name: "Assistant"
+    provider: ollama
+    model: {model_yaml}
+    system_prompt: "You are a helpful assistant powered by Axocoatl."
+    token_budget:
+      per_execution: 16000
+      per_call: 8192
+      overflow_policy: warn
+
+  - id: researcher
+    name: "Researcher"
+    provider: ollama
+    model: {model_yaml}
+    system_prompt: "You are a research assistant. Provide detailed, factual answers."
+    depends_on: []
+
+  - id: summarizer
+    name: "Summarizer"
+    provider: ollama
+    model: {model_yaml}
+    system_prompt: "Summarize the input in 1-2 sentences."
+    depends_on: [researcher]
+
+workflows:
+  - id: research-and-summarize
+    name: "Research and Summarize"
+    agents: [researcher, summarizer]
+    entry_point: researcher
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+
+server:
+  port: 8080
+  host: "127.0.0.1"
+"#
     )
 }
 
@@ -961,21 +1185,16 @@ async fn cmd_onboard(install_daemon: bool) {
         return;
     }
 
-    let providers = [
-        "Ollama (local, no API key)",
-        "OpenRouter (cloud, models available to your account)",
-        "Anthropic",
-        "OpenAI",
-    ];
     let provider_idx = Select::new()
-        .with_prompt("Choose your LLM provider")
-        .items(&providers)
+        .with_prompt("Choose your provider for native Sessions")
+        .items(&ONBOARDING_PROVIDERS)
         .default(0)
         .interact()
         .unwrap_or(0);
 
-    let (config_yaml, missing_environment_variable) = match provider_idx {
-        0 => {
+    let provider = ONBOARDING_PROVIDERS[provider_idx];
+    let (model, key) = match provider {
+        OnboardingProvider::Ollama => {
             if which_ollama().is_none() {
                 println!("\nOllama is not installed.");
                 println!("Install it from https://ollama.com/download, then re-run onboard.");
@@ -1008,54 +1227,18 @@ async fn cmd_onboard(install_daemon: bool) {
                     .status();
             }
 
-            let model_yaml =
-                serde_json::to_string(&model).expect("serializing a model identifier cannot fail");
-
-            let cfg = format!(
-                r#"# Axocoatl — local Ollama setup
-agents:
-  - id: assistant
-    name: "Assistant"
-    provider: ollama
-    model: {model_yaml}
-    system_prompt: "You are a helpful assistant powered by Axocoatl."
-    token_budget:
-      per_execution: 16000
-      per_call: 8192
-      overflow_policy: warn
-
-  - id: researcher
-    name: "Researcher"
-    provider: ollama
-    model: {model_yaml}
-    system_prompt: "You are a research assistant. Provide detailed, factual answers."
-    depends_on: []
-
-  - id: summarizer
-    name: "Summarizer"
-    provider: ollama
-    model: {model_yaml}
-    system_prompt: "Summarize the input in 1-2 sentences."
-    depends_on: [researcher]
-
-workflows:
-  - id: research-and-summarize
-    name: "Research and Summarize"
-    agents: [researcher, summarizer]
-    entry_point: researcher
-
-providers:
-  ollama:
-    base_url: "http://localhost:11434"
-
-server:
-  port: 8080
-  host: "127.0.0.1"
-"#
-            );
-            (cfg, None)
+            (model, String::new())
         }
-        1 => {
+        OnboardingProvider::OpenRouter => {
+            if !Confirm::new()
+                .with_prompt("Use OpenRouter credits, with no BYOK provider keys connected? (BYOK support is planned)")
+                .default(true)
+                .interact()
+                .unwrap_or(false)
+            {
+                eprintln!("Native OpenRouter currently requires credit billing. BYOK support remains a TODO; no configuration was written.");
+                return;
+            }
             let key = Password::new()
                 .with_prompt(hosted_key_prompt("OpenRouter"))
                 .allow_empty_password(true)
@@ -1063,80 +1246,13 @@ server:
                 .unwrap_or_default();
             let model: String = Input::new()
                 .with_prompt("Default model (vendor/model)")
-                .default("openai/gpt-4o-mini".to_string())
+                .default("meta-llama/llama-3.3-70b-instruct".to_string())
                 .interact_text()
-                .unwrap_or_else(|_| "openai/gpt-4o-mini".to_string());
-            let model_yaml =
-                serde_json::to_string(&model).expect("serializing a model identifier cannot fail");
-            let secret = config_secret(&key, "OPENROUTER_API_KEY");
-            let cfg = format!(
-                r#"# Axocoatl — OpenRouter setup
-# OpenRouter is OpenAI-compatible. Choose a model ID available to your
-# OpenRouter account; browse the catalog at https://openrouter.ai/models.
-agents:
-  - id: assistant
-    name: "Assistant"
-    provider: openrouter
-    model: {model_yaml}
-    system_prompt: "You are a helpful assistant."
-    token_budget:
-      per_execution: 16000
-      per_call: 8192
-      overflow_policy: warn
-
-providers:
-  openrouter:
-    api_key: {secret}
-
-server:
-  port: 8080
-  host: "127.0.0.1"
-"#
-            );
-            (cfg, key.is_empty().then_some("OPENROUTER_API_KEY"))
-        }
-        2 => {
-            let key = Password::new()
-                .with_prompt(hosted_key_prompt("Anthropic"))
-                .allow_empty_password(true)
-                .interact()
-                .unwrap_or_default();
-            let secret = config_secret(&key, "ANTHROPIC_API_KEY");
-            let cfg = format!(
-                r#"# Axocoatl — Anthropic setup
-agents:
-  - id: assistant
-    name: "Assistant"
-    provider: anthropic
-    model: claude-sonnet-4-6
-    system_prompt: "You are a helpful assistant."
-    token_budget:
-      per_execution: 20000
-      per_call: 8192
-      overflow_policy: summarize
-
-providers:
-  anthropic:
-    api_key: {secret}
-
-server:
-  port: 8080
-  host: "127.0.0.1"
-"#
-            );
-            (cfg, key.is_empty().then_some("ANTHROPIC_API_KEY"))
-        }
-        _ => {
-            let key = Password::new()
-                .with_prompt(hosted_key_prompt("OpenAI"))
-                .allow_empty_password(true)
-                .interact()
-                .unwrap_or_default();
-            let secret = config_secret(&key, "OPENAI_API_KEY");
-            let cfg = TEMPLATE_OPENAI.replace("\"${OPENAI_API_KEY}\"", &secret);
-            (cfg, key.is_empty().then_some("OPENAI_API_KEY"))
+                .unwrap_or_else(|_| "meta-llama/llama-3.3-70b-instruct".to_string());
+            (model, key)
         }
     };
+    let (config_yaml, missing_environment_variable) = provider.configuration(&model, &key);
 
     if install_daemon {
         if let Err(error) = reject_uninherited_service_environment(&config_yaml) {
@@ -1498,7 +1614,7 @@ async fn cmd_tokens_report(config_path: &std::path::Path) {
                 }
             }
         }
-        daemon.shutdown().await;
+        shutdown_owned_daemon(daemon).await;
         Ok(IpcResponse::TokenUsage {
             per_agent,
             total_input: total_in,
@@ -1754,7 +1870,7 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
         if let Err(error) = stdout.flush() {
             eprintln!("chat output error: {error}");
             if let Some(daemon) = daemon {
-                daemon.shutdown().await;
+                shutdown_owned_daemon(daemon).await;
             }
             std::process::exit(1);
         }
@@ -1765,7 +1881,7 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
             Err(error) => {
                 eprintln!("chat input error: {error}");
                 if let Some(daemon) = daemon {
-                    daemon.shutdown().await;
+                    shutdown_owned_daemon(daemon).await;
                 }
                 std::process::exit(1);
             }
@@ -1900,7 +2016,7 @@ async fn cmd_chat(config_path: &std::path::Path, agent_id: &str, session_id: Opt
     println!();
     println!("Goodbye!");
     if let Some(daemon) = daemon {
-        daemon.shutdown().await;
+        shutdown_owned_daemon(daemon).await;
     }
 }
 
@@ -2192,7 +2308,7 @@ async fn cmd_agents_status(config_path: &std::path::Path) {
                 });
             }
         }
-        daemon.shutdown().await;
+        shutdown_owned_daemon(daemon).await;
         (statuses, "in-process")
     };
 
@@ -2347,7 +2463,7 @@ async fn mcp_query(
         },
     };
     drop(reg); // release the read lock before shutting down the daemon
-    daemon.shutdown().await;
+    shutdown_owned_daemon(daemon).await;
     resp
 }
 
@@ -2693,7 +2809,7 @@ async fn cmd_workflow_run(config_path: &std::path::Path, workflow_id: &str, inpu
             );
             if let Some(error) = terminal_error {
                 eprintln!("Workflow error: {error}");
-                daemon.shutdown().await;
+                shutdown_owned_daemon(daemon).await;
                 std::process::exit(1);
             }
         }
@@ -2715,7 +2831,7 @@ async fn cmd_workflow_run(config_path: &std::path::Path, workflow_id: &str, inpu
         }
     }
 
-    daemon.shutdown().await;
+    shutdown_owned_daemon(daemon).await;
 }
 
 async fn cmd_benchmark(name: &str) {
@@ -2882,6 +2998,159 @@ mod tests {
     }
 
     #[test]
+    fn onboarding_choices_generate_only_native_provider_templates() {
+        assert_eq!(
+            ONBOARDING_PROVIDERS,
+            [OnboardingProvider::Ollama, OnboardingProvider::OpenRouter],
+        );
+        let model = "model:quoted\"#with-yaml-punctuation";
+        let key = "sk-test: \"quoted\" #literal";
+        for provider in ONBOARDING_PROVIDERS {
+            let (yaml, missing_variable) = provider.configuration(model, key);
+            let config = axocoatl_config::parse_config(&yaml, std::path::Path::new("config.yaml"))
+                .unwrap_or_else(|error| panic!("{provider} onboarding is invalid: {error}"));
+            let expected_provider = match provider {
+                OnboardingProvider::Ollama => "ollama",
+                OnboardingProvider::OpenRouter => "openrouter",
+            };
+            assert_eq!(missing_variable, None);
+            assert_eq!(config.agents.len(), 3);
+            assert!(config.agents.iter().all(|agent| {
+                agent.provider == expected_provider
+                    && agent.model == model
+                    && matches!(agent.role, axocoatl_config::AgentRoleYaml::Autonomous)
+            }));
+            assert!(config.providers.openai.is_none());
+            assert!(config.providers.anthropic.is_none());
+            assert!(config.providers.gemini.is_none());
+            assert!(config.providers.mistral.is_none());
+            match provider {
+                OnboardingProvider::Ollama => {
+                    assert_eq!(
+                        config.providers.ollama.unwrap().base_url,
+                        "http://localhost:11434",
+                    );
+                    assert!(config.providers.openrouter.is_none());
+                    assert_eq!(config.providers.openrouter_billing, None);
+                    assert_eq!(config.workflows[0].agents, ["researcher", "summarizer"]);
+                }
+                OnboardingProvider::OpenRouter => {
+                    assert!(config.providers.ollama.is_none());
+                    let credentials = config.providers.openrouter.unwrap();
+                    assert_eq!(credentials.api_key.expose_secret(), key);
+                    assert!(credentials.base_url.is_none());
+                    assert!(credentials.fallback.is_none());
+                    assert_eq!(
+                        config.providers.openrouter_billing,
+                        Some(axocoatl_config::OpenRouterBilling::Credits),
+                    );
+                    assert!(config
+                        .agents
+                        .iter()
+                        .all(|agent| { agent.sampling.max_tokens == Some(2048) }));
+                    assert_eq!(config.workflows[0].agents, ["planner", "builder"]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn onboarding_openrouter_missing_key_retains_service_environment_guard() {
+        let (yaml, missing_variable) =
+            OnboardingProvider::OpenRouter.configuration("vendor/model", "");
+        assert_eq!(missing_variable, Some("OPENROUTER_API_KEY"));
+        assert!(reject_uninherited_service_environment(&yaml).is_err());
+
+        let (yaml, missing_variable) =
+            OnboardingProvider::OpenRouter.configuration("vendor/model", "sk-test");
+        assert_eq!(missing_variable, None);
+        assert!(reject_uninherited_service_environment(&yaml).is_ok());
+    }
+
+    #[test]
+    fn hosted_starter_configurations_preserve_direct_agents_and_valid_lattice_teams() {
+        let cases = [
+            ("OpenRouter", "openrouter", "vendor/model:v1", 16000, "warn"),
+            (
+                "Anthropic",
+                "anthropic",
+                "claude-sonnet-4-6",
+                20000,
+                "summarize",
+            ),
+            ("OpenAI", "openai", "gpt-4o", 20000, "summarize"),
+        ];
+
+        for (provider_name, provider_id, model, per_execution, overflow_policy) in cases {
+            let yaml = hosted_onboarding_configuration(
+                provider_name,
+                provider_id,
+                model,
+                &config_secret("sk-test", "UNUSED_API_KEY"),
+                per_execution,
+                overflow_policy,
+            );
+            let config = axocoatl_config::parse_config(&yaml, std::path::Path::new("config.yaml"))
+                .unwrap_or_else(|error| {
+                    panic!("{provider_name} onboarding config is invalid: {error}")
+                });
+
+            assert_eq!(config.agents.len(), 3);
+            if provider_id == "openrouter" {
+                assert!(config
+                    .agents
+                    .iter()
+                    .all(|agent| agent.sampling.max_tokens == Some(2048)));
+            }
+            assert_eq!(
+                config.providers.openrouter_billing,
+                (provider_id == "openrouter")
+                    .then_some(axocoatl_config::OpenRouterBilling::Credits),
+            );
+            let assistant = config
+                .agents
+                .iter()
+                .find(|agent| agent.id == "assistant")
+                .unwrap();
+            assert_eq!(assistant.provider, provider_id);
+            assert_eq!(assistant.model, model);
+            assert!(assistant.depends_on.is_empty());
+
+            let planner = config
+                .agents
+                .iter()
+                .find(|agent| agent.id == "planner")
+                .unwrap();
+            assert!(matches!(
+                planner.role,
+                axocoatl_config::AgentRoleYaml::Autonomous
+            ));
+            assert!(planner.depends_on.is_empty());
+            assert_eq!(planner.provider, provider_id);
+            assert_eq!(planner.model, model);
+
+            let builder = config
+                .agents
+                .iter()
+                .find(|agent| agent.id == "builder")
+                .unwrap();
+            assert!(matches!(
+                builder.role,
+                axocoatl_config::AgentRoleYaml::Autonomous
+            ));
+            assert_eq!(builder.depends_on, ["planner"]);
+            assert_eq!(builder.provider, provider_id);
+            assert_eq!(builder.model, model);
+
+            assert_eq!(config.workflows.len(), 1);
+            let team = &config.workflows[0];
+            assert_eq!(team.id, "plan-and-build");
+            assert_eq!(team.agents, ["planner", "builder"]);
+            assert_eq!(team.entry_point.as_deref(), Some("planner"));
+        }
+    }
+
+    #[test]
     fn plain_commands_default_to_the_user_config_and_explicit_paths_stay_explicit() {
         let expected = user_paths::UserPaths::discover().unwrap().config_path;
         let cli = Cli::try_parse_from(["axocoatl", "dev"]).unwrap();
@@ -2959,6 +3228,10 @@ providers:
             data_dir: root.path().join("data"),
         };
         write_user_configuration(&paths, "agents: []\n").unwrap();
+        assert!(paths.data_dir.join(".axocoatl-daemon.lock").is_dir());
+        assert!(paths.data_dir.join(".axocoatl-daemon.lock.v1").is_file());
+        assert!(!paths.data_dir.join("sessions").exists());
+        assert!(!paths.data_dir.join("workspaces").exists());
 
         assert_eq!(
             std::fs::metadata(&paths.config_dir)

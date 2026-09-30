@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::hooks::{HookAction, HookContext, HookPhase, ToolHook};
+use crate::hooks::{HookAction, HookContext, HookPhase, SharedHookApprovalBoundary, ToolHook};
 
 /// Configuration for hook execution.
 #[derive(Debug, Clone)]
@@ -71,7 +71,18 @@ impl HookRegistry {
         &self,
         tool_name: &str,
         agent_id: &str,
+        arguments: serde_json::Value,
+    ) -> (HookAction, serde_json::Value) {
+        self.run_pre_hooks_with_approval(tool_name, agent_id, arguments, None)
+            .await
+    }
+
+    pub async fn run_pre_hooks_with_approval(
+        &self,
+        tool_name: &str,
+        agent_id: &str,
         mut arguments: serde_json::Value,
+        approval: Option<SharedHookApprovalBoundary>,
     ) -> (HookAction, serde_json::Value) {
         let hooks = self.hooks_for(tool_name, HookPhase::Pre);
 
@@ -87,7 +98,13 @@ impl HookRegistry {
             // owned task so a panic cannot unwind the AgentActor or orphan the
             // enclosing tool-call evidence group.
             let hook_name = hook.name().to_string();
-            let mut task = tokio::spawn(async move { hook.execute(&ctx).await });
+            let approval = approval.clone();
+            let mut task = tokio::spawn(async move {
+                match approval {
+                    Some(boundary) => hook.execute_with_approval(&ctx, boundary).await,
+                    None => hook.execute(&ctx).await,
+                }
+            });
             let action = match tokio::time::timeout(self.config.timeout, &mut task).await {
                 Ok(Ok(action)) => action,
                 Ok(Err(error)) => HookAction::Deny {

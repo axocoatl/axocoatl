@@ -1,0 +1,408 @@
+{
+  "name": "independent_node_identity",
+  "steps": [
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-0",
+        "expected_revision": 0,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "begin",
+          "epoch_id": "epoch-1",
+          "graph": {
+            "snapshot_id": "initial-graph",
+            "revision": 1,
+            "nodes": [
+              {
+                "node_id": "node-a",
+                "slot_id": "slot-node-a",
+                "definition": {
+                  "definition_id": "shared-coder",
+                  "snapshot": "definition-v1"
+                },
+                "conversation_id": "conversation-a",
+                "starting_savepoint": {
+                  "kind": "checkpoint",
+                  "checkpoint": {
+                    "checkpoint_id": "baseline-node-a",
+                    "session_id": "session-a",
+                    "conversation_id": "conversation-a",
+                    "source": {
+                      "kind": "committed",
+                      "evidence": "committed-node-a"
+                    }
+                  }
+                },
+                "required": true
+              },
+              {
+                "node_id": "node-b",
+                "slot_id": "slot-node-b",
+                "definition": {
+                  "definition_id": "shared-coder",
+                  "snapshot": "definition-v1"
+                },
+                "conversation_id": "conversation-b",
+                "starting_savepoint": {
+                  "kind": "checkpoint",
+                  "checkpoint": {
+                    "checkpoint_id": "baseline-node-b",
+                    "session_id": "session-a",
+                    "conversation_id": "conversation-b",
+                    "source": {
+                      "kind": "committed",
+                      "evidence": "committed-node-b"
+                    }
+                  }
+                },
+                "required": true
+              }
+            ],
+            "dependencies": [],
+            "conditions": []
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-1",
+        "expected_revision": 1,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "start_activation",
+          "input": {
+            "manifest_id": "input-node-a-0",
+            "activation": {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-1",
+              "node_id": "node-a",
+              "generation": 0,
+              "activation_id": "node-a-0"
+            },
+            "definition": {
+              "definition_id": "shared-coder",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-a",
+            "starting_savepoint": {
+              "kind": "checkpoint",
+              "checkpoint": {
+                "checkpoint_id": "baseline-node-a",
+                "session_id": "session-a",
+                "conversation_id": "conversation-a",
+                "source": {
+                  "kind": "committed",
+                  "evidence": "committed-node-a"
+                }
+              }
+            },
+            "parents": [],
+            "guidance": [
+              "original-guidance"
+            ],
+            "attachments": [
+              "source-attachment"
+            ],
+            "repository": {
+              "kind": "recorded",
+              "snapshot": "repository-before-turn"
+            },
+            "budget": "logical-turn-budget",
+            "grant": {
+              "grant_id": "supervisor-grant",
+              "revision": 1,
+              "evidence": "grant-snapshot-1"
+            }
+          }
+        }
+      },
+      "error": "retry generation or effect recovery is unresolved"
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-2",
+        "expected_revision": 1,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "start_activation",
+          "input": {
+            "manifest_id": "input-node-a-1",
+            "activation": {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-1",
+              "node_id": "node-a",
+              "generation": 1,
+              "activation_id": "node-a-1"
+            },
+            "definition": {
+              "definition_id": "shared-coder",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-a",
+            "starting_savepoint": {
+              "kind": "checkpoint",
+              "checkpoint": {
+                "checkpoint_id": "baseline-node-a",
+                "session_id": "session-a",
+                "conversation_id": "conversation-a",
+                "source": {
+                  "kind": "committed",
+                  "evidence": "committed-node-a"
+                }
+              }
+            },
+            "parents": [],
+            "guidance": [
+              "original-guidance"
+            ],
+            "attachments": [
+              "source-attachment"
+            ],
+            "repository": {
+              "kind": "recorded",
+              "snapshot": "repository-before-turn"
+            },
+            "budget": "logical-turn-budget",
+            "grant": {
+              "grant_id": "supervisor-grant",
+              "revision": 1,
+              "evidence": "grant-snapshot-1"
+            }
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-3",
+        "expected_revision": 2,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "start_activation",
+          "input": {
+            "manifest_id": "input-node-b-1",
+            "activation": {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-1",
+              "node_id": "node-b",
+              "generation": 1,
+              "activation_id": "node-b-1"
+            },
+            "definition": {
+              "definition_id": "shared-coder",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-a",
+            "starting_savepoint": {
+              "kind": "checkpoint",
+              "checkpoint": {
+                "checkpoint_id": "baseline-node-b",
+                "session_id": "session-a",
+                "conversation_id": "conversation-a",
+                "source": {
+                  "kind": "committed",
+                  "evidence": "committed-node-b"
+                }
+              }
+            },
+            "parents": [],
+            "guidance": [
+              "original-guidance"
+            ],
+            "attachments": [
+              "source-attachment"
+            ],
+            "repository": {
+              "kind": "recorded",
+              "snapshot": "repository-before-turn"
+            },
+            "budget": "logical-turn-budget",
+            "grant": {
+              "grant_id": "supervisor-grant",
+              "revision": 1,
+              "evidence": "grant-snapshot-1"
+            }
+          }
+        }
+      },
+      "error": "activation, manifest, or conversation identity is already owned"
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-4",
+        "expected_revision": 2,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "start_activation",
+          "input": {
+            "manifest_id": "input-node-a-1",
+            "activation": {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-1",
+              "node_id": "node-b",
+              "generation": 1,
+              "activation_id": "node-a-1"
+            },
+            "definition": {
+              "definition_id": "shared-coder",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-b",
+            "starting_savepoint": {
+              "kind": "checkpoint",
+              "checkpoint": {
+                "checkpoint_id": "baseline-node-b",
+                "session_id": "session-a",
+                "conversation_id": "conversation-b",
+                "source": {
+                  "kind": "committed",
+                  "evidence": "committed-node-b"
+                }
+              }
+            },
+            "parents": [],
+            "guidance": [
+              "original-guidance"
+            ],
+            "attachments": [
+              "source-attachment"
+            ],
+            "repository": {
+              "kind": "recorded",
+              "snapshot": "repository-before-turn"
+            },
+            "budget": "logical-turn-budget",
+            "grant": {
+              "grant_id": "supervisor-grant",
+              "revision": 1,
+              "evidence": "grant-snapshot-1"
+            }
+          }
+        }
+      },
+      "error": "activation, manifest, or conversation identity is already owned"
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-5",
+        "expected_revision": 2,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "start_activation",
+          "input": {
+            "manifest_id": "input-node-b-1",
+            "activation": {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-1",
+              "node_id": "node-b",
+              "generation": 1,
+              "activation_id": "node-b-1"
+            },
+            "definition": {
+              "definition_id": "shared-coder",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-b",
+            "starting_savepoint": {
+              "kind": "checkpoint",
+              "checkpoint": {
+                "checkpoint_id": "baseline-node-b",
+                "session_id": "session-a",
+                "conversation_id": "conversation-b",
+                "source": {
+                  "kind": "committed",
+                  "evidence": "committed-node-b"
+                }
+              }
+            },
+            "parents": [],
+            "guidance": [
+              "original-guidance"
+            ],
+            "attachments": [
+              "source-attachment"
+            ],
+            "repository": {
+              "kind": "recorded",
+              "snapshot": "repository-before-turn"
+            },
+            "budget": "logical-turn-budget",
+            "grant": {
+              "grant_id": "supervisor-grant",
+              "revision": 1,
+              "evidence": "grant-snapshot-1"
+            }
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-6",
+        "expected_revision": 3,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "close",
+          "closure": "cancelled"
+        }
+      },
+      "error": "running activations have not settled"
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-7",
+        "expected_revision": 3,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "interrupt_epoch",
+          "epoch_id": "epoch-1"
+        }
+      },
+      "error": null
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-8",
+        "expected_revision": 4,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "close",
+          "closure": "cancelled"
+        }
+      },
+      "error": null
+    }
+  ],
+  "expected_revision": 5,
+  "expected_state": "cancelled",
+  "expected_epochs": [
+    "interrupted"
+  ]
+}

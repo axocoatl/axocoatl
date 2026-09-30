@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "retention_limits_version": 1,
+  "decision_id": "decision-failed-qa",
+  "session_id": "session-client-qa",
+  "source_turn_id": "turn-client-change",
+  "set_id": "ways-client-qa",
+  "task": {
+    "state": "complete",
+    "text": "Check the client change",
+    "sha256": "15896c8f27314dca6d3df8b228921b48ad15bd5490c9f74bb1a6679c6af2fbae"
+  },
+  "starting_repository": {
+    "workspace_id": "workspace-client",
+    "repository_ref": "repository-client",
+    "commit_oid": "1111111111111111111111111111111111111111",
+    "tree_oid": "2222222222222222222222222222222222222222"
+  },
+  "candidates": [
+    {
+      "id": {
+        "set_id": "ways-client-qa",
+        "index": 0
+      },
+      "agent": "qa-agent",
+      "model": {
+        "state": "available",
+        "value": {
+          "provider_id": "ollama",
+          "model_id": "local-fixture",
+          "configuration_ref": "config-qa"
+        }
+      },
+      "isolation": {
+        "state": "available",
+        "value": "podman"
+      },
+      "terminal": "failed",
+      "failure_or_no_change_reason": {
+        "state": "available",
+        "value": {
+          "state": "complete",
+          "text": "Check process was never started",
+          "sha256": "11a08334e4d827f8f9d85fad250320597a7e01c49e50379977d1362a37cf88c2"
+        }
+      },
+      "outcome": {
+        "state": "complete",
+        "text": "Unable to verify the change",
+        "sha256": "1014497bd6e561c2d16a92546115afd197c88646e5fa0710ab69e7bd5633b2dc"
+      },
+      "route": {
+        "state": "complete",
+        "text": "Repository capture failed before check dispatch",
+        "sha256": "440535e561907a65feba5251a23a5420baf294aeb9f4be08d520fce9fc5ff261"
+      },
+      "tools": {
+        "items": [],
+        "original_count": 0
+      },
+      "changed_paths": {
+        "items": [],
+        "original_count": 0
+      },
+      "patch": {
+        "state": "unavailable",
+        "reason": "not_produced"
+      },
+      "reviewable_diff": {
+        "state": "unavailable",
+        "reason": "not_produced",
+        "detail": "No candidate patch was captured"
+      },
+      "checks": [
+        {
+          "check_id": "check-capture-failure",
+          "command": {
+            "state": "available",
+            "value": "cargo test"
+          },
+          "outcome": {
+            "verification_rejected": {
+              "reason": {
+                "state": "complete",
+                "text": "Repository capture failed before dispatch",
+                "sha256": "00d8cbbd12ce50c6b76029afd6071da4c281ec63d37ac2faa11bf0aeeac161e0"
+              }
+            }
+          },
+          "exit_code": {
+            "state": "unavailable",
+            "reason": "not_produced"
+          },
+          "output": {
+            "state": "unavailable",
+            "reason": "not_produced",
+            "detail": "No process was started"
+          },
+          "duration_ms": {
+            "state": "unavailable",
+            "reason": "not_produced"
+          },
+          "checked_patch": {
+            "state": "unavailable",
+            "reason": "not_produced"
+          }
+        }
+      ],
+      "usage": {
+        "measurement_id": "usage-candidate-0",
+        "tokens": {
+          "kind": "unknown",
+          "known_subtotal": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_tokens": null
+          }
+        },
+        "cost_usd_known_subtotal": 0.0,
+        "cost_complete": false
+      }
+    }
+  ],
+  "judge": null,
+  "shared_usage": [],
+  "human_decision": {
+    "decision_intent_id": "intent-no-keep",
+    "decided_at_unix_ms": 1000,
+    "choice": {
+      "kind": "no_keep"
+    }
+  },
+  "application": {
+    "state": "no_keep_recorded",
+    "receipt_ref": "receipt-no-keep",
+    "recorded_at_unix_ms": 2000
+  },
+  "selected_session_turn": null,
+  "cleanup": {
+    "inventory_complete": false,
+    "targets": [],
+    "completed_at_unix_ms": null
+  }
+}

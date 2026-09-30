@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-a2a"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axocoatl-core",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-actor"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-cli"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axocoatl-actor",
@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-config"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "axocoatl-core",
  "regex",
@@ -357,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-coordination"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axocoatl-actor",
@@ -378,7 +378,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "rustix",
  "serde",
@@ -390,13 +390,14 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-daemon"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axocoatl-actor",
  "axocoatl-config",
  "axocoatl-coordination",
  "axocoatl-core",
+ "axocoatl-exec",
  "axocoatl-isolation",
  "axocoatl-llm",
  "axocoatl-llm-anthropic",
@@ -409,6 +410,7 @@ dependencies = [
  "axocoatl-session",
  "axocoatl-token",
  "axocoatl-tools",
+ "base64 0.22.1",
  "hex",
  "hmac",
  "ractor",
@@ -428,8 +430,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "axocoatl-exec"
+version = "1.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "axocoatl-graph"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "axocoatl-core",
  "petgraph",
@@ -441,16 +454,19 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-isolation"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axocoatl-core",
+ "axocoatl-exec",
  "base64 0.22.1",
  "bytes",
  "portable-pty",
  "reqwest 0.12.28",
+ "rustix",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -461,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axocoatl-core",
@@ -478,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm-anthropic"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -496,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm-gemini"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -513,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm-mistral"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -530,12 +546,13 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm-ollama"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-stream",
  "async-trait",
  "axocoatl-core",
  "axocoatl-llm",
+ "base64 0.22.1",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -548,7 +565,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm-openai"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-openai",
  "async-stream",
@@ -569,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-mcp"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axocoatl-core",
@@ -588,9 +605,10 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-memory"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "axocoatl-core",
+ "axocoatl-session",
  "bincode",
  "calamine",
  "candle-core",
@@ -608,13 +626,19 @@ dependencies = [
  "tokenizers",
  "tokio",
  "tracing",
+ "tree-sitter",
+ "tree-sitter-javascript",
+ "tree-sitter-language",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
  "uuid",
  "zip 8.6.0",
 ]
 
 [[package]]
 name = "axocoatl-server"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "axocoatl-a2a",
  "axocoatl-actor",
@@ -648,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-service"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "thiserror 2.0.20",
  "tracing",
@@ -656,19 +680,22 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-session"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "axocoatl-core",
+ "base64 0.22.1",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
+ "unicode-normalization",
  "uuid",
 ]
 
 [[package]]
 name = "axocoatl-token"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axocoatl-core",
@@ -684,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-tools"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "axocoatl-core",
@@ -4026,9 +4053,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "aws-lc-rs",
  "once_cell",
@@ -4286,6 +4313,7 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",
@@ -4528,6 +4556,12 @@ dependencies = [
  "tokio",
  "tokio-stream",
 ]
+
+[[package]]
+name = "streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2231b7c3057d5e4ad0156fb3dc807d900806020c5ffa3ee6ff2c8c76fb8520"
 
 [[package]]
 name = "stringprep"
@@ -5061,6 +5095,66 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "tree-sitter"
+version = "0.25.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78f873475d258561b06f1c595d93308a7ed124d9977cb26b148c2084a4a3cc87"
+dependencies = [
+ "cc",
+ "regex",
+ "regex-syntax",
+ "serde_json",
+ "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-javascript"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68204f2abc0627a90bdf06e605f5c470aa26fdcb2081ea553a04bdad756693f5"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-language"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
+
+[[package]]
+name = "tree-sitter-python"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bf85fd39652e740bf60f46f4cda9492c3a9ad75880575bf14960f775cb74a1c"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-rust"
+version = "0.24.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-typescript"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c5f76ed8d947a75cc446d5fccd8b602ebf0cde64ccf2ffa434d873d7a575eff"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
 ]
 
 [[package]]

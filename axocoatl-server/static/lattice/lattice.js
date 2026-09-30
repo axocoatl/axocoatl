@@ -15,6 +15,7 @@
  * @attr {number}  pan-y             Initial pan-y offset
  * @attr {number}  snap              Snap-to-grid spacing in lattice units; 0 disables
  * @attr {"dots"|"grid"|"none"} background  Background pattern
+ * @attr {"edit"|"view"} mode Interaction mode (default "edit"). View allows inspection only.
  * @attr {boolean} fit-view-on-init  Auto fit-view once after first render
  *
  * @cssprop --ax-bg          Canvas background color
@@ -230,6 +231,7 @@ const ATTR = {
   BACKGROUND: 'background',
   FIT_ON_INIT: 'fit-view-on-init',
   VIRTUALIZE: 'virtualize',
+  MODE: 'mode',
 };
 
 export class AxLatticeElement extends HTMLElement {
@@ -350,9 +352,7 @@ export class AxLatticeElement extends HTMLElement {
     this.#applyBackground();
     // Accessibility: the canvas is an interactive application region.
     if (!this.hasAttribute('role')) this.setAttribute('role', 'application');
-    if (!this.hasAttribute('aria-roledescription')) {
-      this.setAttribute('aria-roledescription', 'graph editor');
-    }
+    this.#applyMode();
     if (!this.hasAttribute('aria-label')) {
       this.setAttribute('aria-label', 'Lattice graph canvas');
     }
@@ -370,6 +370,9 @@ export class AxLatticeElement extends HTMLElement {
 
   attributeChangedCallback(name, _old, val) {
     switch (name) {
+      case ATTR.MODE:
+        this.#applyMode();
+        break;
       case ATTR.ZOOM:
       case ATTR.PAN_X:
       case ATTR.PAN_Y: {
@@ -404,6 +407,39 @@ export class AxLatticeElement extends HTMLElement {
   }
 
   // ── Public API ─────────────────────────────────────────────────────────
+
+  /** View mode disables editing; host DOM updates remain authoritative. */
+  get mode() { return this.getAttribute(ATTR.MODE) === 'view' ? 'view' : 'edit'; }
+  set mode(value) { this.setAttribute(ATTR.MODE, value === 'view' ? 'view' : 'edit'); }
+
+  #applyMode() {
+    const viewing = this.mode === 'view';
+    const description = this.getAttribute('aria-roledescription');
+    if (!description || ['graph editor', 'execution graph'].includes(description)) {
+      this.setAttribute('aria-roledescription', viewing ? 'execution graph' : 'graph editor');
+    }
+    if (viewing) {
+      // Entering View must not let an already-started gesture commit later.
+      if (this.#connect) this.#onConnectEnd({ type: 'pointercancel' });
+      if (this.#moveSnapshot) {
+        for (const [node, position] of this.#moveSnapshot) {
+          node.x = position.x;
+          node.y = position.y;
+        }
+      }
+      this.#moveSnapshot = null;
+      this.#moveDraggedNode = null;
+      this.#pendingCollapse = null;
+    }
+    for (const node of this.#nodes) node._setLatticeView?.(viewing);
+    for (const handle of this.#handles) handle._setLatticeView?.(viewing);
+    this.dispatchEvent(new CustomEvent('mode-change', {
+      detail: { mode: this.mode }, bubbles: true, composed: true,
+    }));
+    this.dispatchEvent(new CustomEvent('history-change', {
+      detail: { canUndo: this.canUndo(), canRedo: this.canRedo() }, bubbles: true, composed: true,
+    }));
+  }
 
   /** @returns {{x:number,y:number,k:number}} */
   getViewport() {
@@ -493,6 +529,16 @@ export class AxLatticeElement extends HTMLElement {
     return ids;
   }
 
+  /** Restore a selection by durable node ids after an authoritative update. */
+  setSelection(ids = []) {
+    const wanted = new Set(ids);
+    const before = new Set(this.#selection);
+    selClear(this.#selection);
+    for (const node of this.#nodes) if (wanted.has(node.id)) selAdd(this.#selection, node);
+    this.#syncSelectedAttr();
+    if (!selEquals(before, this.#selection)) this.#emitSelectionChange();
+  }
+
   /** Select all registered nodes. */
   selectAll() {
     selClear(this.#selection);
@@ -515,6 +561,7 @@ export class AxLatticeElement extends HTMLElement {
    * fires their disconnectedCallback and unregisters them).
    */
   deleteSelected() {
+    if (this.mode === 'view') return;
     if (this.#selection.size === 0) return;
     const ids = this.selectedIds();
     const ev = new CustomEvent('nodes-delete-request', {
@@ -540,6 +587,7 @@ export class AxLatticeElement extends HTMLElement {
   /** Lattice-internal: called by &lt;ax-node&gt; on connect. */
   _registerNode(node) {
     this.#nodes.add(node);
+    node._setLatticeView?.(this.mode === 'view');
     this.#scheduleEdgeRender();
   }
   /** Lattice-internal: called by &lt;ax-node&gt; on disconnect. */
@@ -590,6 +638,7 @@ export class AxLatticeElement extends HTMLElement {
   /** Lattice-internal: called by `<ax-handle>` on connect/disconnect. */
   _registerHandle(handle) {
     this.#handles.add(handle);
+    handle._setLatticeView?.(this.mode === 'view');
     this.#scheduleEdgeRender();
   }
   _unregisterHandle(handle) {
@@ -602,6 +651,7 @@ export class AxLatticeElement extends HTMLElement {
    * @returns {HTMLElement} the created `<ax-edge>`
    */
   addEdge(spec) {
+    if (this.mode === 'view') return null;
     const e = document.createElement('ax-edge');
     e.setAttribute('from', spec.from);
     e.setAttribute('to', spec.to);
@@ -755,6 +805,7 @@ export class AxLatticeElement extends HTMLElement {
 
   /** Delete the currently selected edges (fires cancellable request). */
   deleteSelectedEdges() {
+    if (this.mode === 'view') return;
     if (this.#selectedEdges.size === 0) return;
     const ids = this.selectedEdgeIds();
     const ev = new CustomEvent('edges-delete-request', {
@@ -779,12 +830,13 @@ export class AxLatticeElement extends HTMLElement {
   // ── Undo / redo ───────────────────────────────────────────────────────
 
   /** True iff there is a command to undo. */
-  canUndo() { return this.#history.canUndo(); }
+  canUndo() { return this.mode !== 'view' && this.#history.canUndo(); }
   /** True iff there is a command to redo. */
-  canRedo() { return this.#history.canRedo(); }
+  canRedo() { return this.mode !== 'view' && this.#history.canRedo(); }
 
   /** Undo the most recent operation (move / add / delete / paste). */
   undo() {
+    if (this.mode === 'view') return;
     if (this.#history.undo()) {
       this.#scheduleEdgeRender();
       this.#announce('Undo');
@@ -792,6 +844,7 @@ export class AxLatticeElement extends HTMLElement {
   }
   /** Redo the most recently undone operation. */
   redo() {
+    if (this.mode === 'view') return;
     if (this.#history.redo()) {
       this.#scheduleEdgeRender();
       this.#announce('Redo');
@@ -819,6 +872,7 @@ export class AxLatticeElement extends HTMLElement {
    * the lattice's internal clipboard. Returns the number of nodes copied.
    */
   copy() {
+    if (this.mode === 'view') return 0;
     if (this.#selection.size === 0) return 0;
     const ids = new Set();
     const nodes = [];
@@ -851,6 +905,7 @@ export class AxLatticeElement extends HTMLElement {
    * @returns {HTMLElement[]}
    */
   paste(offset = 28) {
+    if (this.mode === 'view') return [];
     if (!this.#clipboard) return [];
     const idMap = new Map();
     const createdNodes = [];
@@ -908,6 +963,7 @@ export class AxLatticeElement extends HTMLElement {
   // ── Connection drag ───────────────────────────────────────────────────
 
   #onHandleConnectStart = (ev) => {
+    if (this.mode === 'view') return;
     const { handle, pointerId } = ev.detail || {};
     if (!handle) return;
     const srcAnchor = handle.anchor();
@@ -971,7 +1027,7 @@ export class AxLatticeElement extends HTMLElement {
     }
   };
 
-  #onConnectEnd = () => {
+  #onConnectEnd = (event) => {
     if (!this.#connect) return;
     window.removeEventListener('pointermove', this.#onConnectMove, true);
     window.removeEventListener('pointerup', this.#onConnectEnd, true);
@@ -982,7 +1038,7 @@ export class AxLatticeElement extends HTMLElement {
     this.#connect = null;
     if (c.targetHandle) c.targetHandle._setConnectTarget(false);
 
-    if (c.targetHandle) {
+    if (c.targetHandle && this.mode !== 'view' && event?.type !== 'pointercancel') {
       const fromRef = c.sourceHandle.ref;
       const toRef = c.targetHandle.ref;
       const ev = new CustomEvent('edge-connect', {
@@ -1148,6 +1204,7 @@ export class AxLatticeElement extends HTMLElement {
    * @param {{direction?: "LR"|"TB", gapMain?: number, gapCross?: number}} [options]
    */
   autoLayout(options = {}) {
+    if (this.mode === 'view') return;
     if (this.#nodes.size === 0) return;
     const layoutNodes = [];
     for (const n of this.#nodes) {
@@ -1194,7 +1251,7 @@ export class AxLatticeElement extends HTMLElement {
   /**
    * Set a node's execution status by id.
    * @param {string} id
-   * @param {"idle"|"pending"|"running"|"success"|"error"} status
+   * @param {"idle"|"pending"|"running"|"success"|"error"|"blocked"|"cancelled"} status
    */
   setNodeStatus(id, status) {
     const n = this.#nodeById(id);
@@ -1308,6 +1365,7 @@ export class AxLatticeElement extends HTMLElement {
   };
 
   #onNodeMoveStart = (ev) => {
+    if (this.mode === 'view') return;
     const node = /** @type {HTMLElement} */ (ev.target);
     // Make sure the dragged node is in the selection (selection happens just
     // before this in #onPointerDown via node-select, so it usually is).
@@ -1330,6 +1388,7 @@ export class AxLatticeElement extends HTMLElement {
   };
 
   #onNodeMoving = (ev) => {
+    if (this.mode === 'view') return;
     if (this.#moveSnapshot) {
       const { dx, dy } = ev.detail || {};
       if (typeof dx === 'number' && typeof dy === 'number') {
@@ -1632,11 +1691,30 @@ export class AxLatticeElement extends HTMLElement {
       return;
     }
 
+    // View uses directional inspection and lets Tab leave the graph normally.
+    if (this.mode === 'view' && (ev.key.startsWith('Arrow') || ['Home', 'End', 'Enter', ' '].includes(ev.key))) {
+      const nodes = [...this.#nodes];
+      if (!nodes.length) return;
+      const current = nodes.indexOf([...this.#selection][0]);
+      let index = current;
+      if (ev.key === 'Home') index = 0;
+      else if (ev.key === 'End') index = nodes.length - 1;
+      else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowUp') index = current < 0 ? nodes.length - 1 : (current - 1 + nodes.length) % nodes.length;
+      else if (ev.key === 'ArrowRight' || ev.key === 'ArrowDown') index = (current + 1) % nodes.length;
+      else if (current < 0) index = 0;
+      this.setSelection([nodes[index].id]);
+      if (ev.key === 'Enter' || ev.key === ' ') this.dispatchEvent(new CustomEvent('node-inspect', {
+        detail: { id: nodes[index].id }, bubbles: true, composed: true,
+      }));
+      ev.preventDefault();
+      return;
+    }
+
     // ── Arrow keys ──
     // With selection → nudge selected nodes in lattice space.
     // Without → pan the viewport.
     if (ev.key.startsWith('Arrow')) {
-      if (hasSel) {
+      if (hasSel && this.mode !== 'view') {
         const step = ev.shiftKey ? 10 : 1;
         let dx = 0, dy = 0;
         if (ev.key === 'ArrowLeft') dx = -step;
@@ -1662,7 +1740,7 @@ export class AxLatticeElement extends HTMLElement {
     }
 
     // ── Tab / Shift+Tab cycle selection ──
-    if (ev.key === 'Tab' && this.#nodes.size > 0) {
+    if (ev.key === 'Tab' && this.mode !== 'view' && this.#nodes.size > 0) {
       const arr = [...this.#nodes];
       const current = [...this.#selection][0];
       let i = current ? arr.indexOf(current) : -1;

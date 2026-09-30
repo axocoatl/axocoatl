@@ -75,6 +75,7 @@ const CSS = `
 :host([disabled]) .pop { opacity: .72; }
 :host([disabled]) .rows, :host([disabled]) .acts { opacity: .35; }
 .head .x { margin-left: auto; background: none; border: 0; color: var(--muted); cursor: pointer; font-size: var(--fs-lg); line-height: 1; }
+.budget{font-size:var(--fs-xs);padding:6px 8px;border:1px solid var(--border);border-radius:var(--r-sm)}.budget summary{cursor:pointer}.budget-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}.budget label{display:flex;flex-direction:column;gap:4px;min-width:0}.budget input{width:100%;box-sizing:border-box;background:var(--bg-2);color:var(--text);border:1px solid var(--border);border-radius:var(--r-sm);padding:6px;font:inherit}.budget p{font-size:var(--fs-xs)}
 .rows { display: flex; flex-direction: column; gap: var(--sp-1); }
 .row {
   display: flex; align-items: center; gap: var(--sp-2);
@@ -167,7 +168,7 @@ export class AxFanout extends HTMLElement {
       if (this.disabled || this.#lanes.length >= MAX) return;
       // A new row copies the last, because the usual next move is to change one
       // thing about it rather than start from nothing.
-      this.#lanes.push({ ...this.#lanes[this.#lanes.length - 1] });
+      this.#lanes.push(structuredClone(this.#lanes[this.#lanes.length - 1]));
       this.#render(); this.#emit();
     };
     adopt(this.#root, CSS);
@@ -186,12 +187,23 @@ export class AxFanout extends HTMLElement {
   }
 
   /** The configured attempts. Empty when fan-out is off. */
-  get lanes() { return this.enabled && !this.disabled ? this.#lanes.map((l) => ({ ...l })) : []; }
+  get lanes() { return this.enabled && !this.disabled ? this.#lanes.map((l) => structuredClone(l)) : []; }
   set lanes(v) {
-    this.#lanes = Array.isArray(v) && v.length ? v.map((l) => ({ ...l })) : [{}, {}, {}];
+    this.#lanes = Array.isArray(v) && v.length ? v.map((l) => structuredClone(l)) : [{}, {}, {}];
     this.#render();
   }
 
+  validateApprovals() {
+    if (!this.enabled || this.disabled) return true;
+    for (const [index, lane] of this.#lanes.entries()) {
+      const approval=lane.approval;
+      if (!approval || !['activations','invocations','tokens','cost_microunits'].every(key=>Number.isSafeInteger(approval.limits?.[key])&&approval.limits[key]>=(key==='cost_microunits'?0:1)) || !Number.isSafeInteger(approval.max_output_tokens) || approval.max_output_tokens<1 || !Number.isSafeInteger(approval.expires_at_ms) || approval.expires_at_ms<=Date.now()) {
+        this.open=true;const detail=this.#rows.querySelectorAll('details')[index];if(detail)detail.open=true;
+        this.#choiceStatus.textContent=`Enter every explicit budget limit and future expiry for attempt ${index+1}.`;this.#choiceStatus.hidden=false;return false;
+      }
+    }
+    return true;
+  }
   get count() { return this.enabled && !this.disabled ? this.#lanes.length : 1; }
 
   /** Keep the switch and its label showing the truth of the attribute. */
@@ -319,6 +331,7 @@ export class AxFanout extends HTMLElement {
     this.#syncSwitch();
     this.#choiceStatus.textContent = this.#choicesError;
     this.#choiceStatus.hidden = !this.#choicesError;
+    const openBudgets = new Set([...this.#rows.querySelectorAll('details[open]')].map(item=>item.dataset.attempt));
     this.#rows.textContent = '';
     this.#lanes.forEach((lane, i) => {
       this.#ensureModels(lane.agent);
@@ -416,7 +429,20 @@ export class AxFanout extends HTMLElement {
       };
 
       row.append(n, agent, modelField, drop);
-      this.#rows.append(row);
+      const attempt=document.createElement('div');attempt.append(row);
+      const budget=document.createElement('details');budget.className='budget';budget.dataset.attempt=String(i+1);budget.open=openBudgets.has(String(i+1));
+      const summary=document.createElement('summary');summary.textContent=`Attempt ${i+1}: budget and limits`;budget.append(summary);
+      const grid=document.createElement('div');grid.className='budget-grid';budget.append(grid);
+      const ensureApproval=()=>lane.approval ||= {limits:{activations:null,invocations:null,tokens:null,cost_microunits:null},max_output_tokens:null,expires_at_ms:null};
+      for(const[key,label,min]of [['activations','Activation limit',1],['invocations','Invocation limit',1],['tokens','Total token limit',1],['cost_microunits','Cost limit (USD)',0],['max_output_tokens','Maximum output tokens per request',1]]){
+        const wrapper=document.createElement('label');wrapper.textContent=label;const input=document.createElement('input');input.type='number';input.min=String(min);input.step=key==='cost_microunits'?'0.000001':'1';input.setAttribute('aria-label',`Attempt ${i+1}: ${label}`);
+        const value=key==='max_output_tokens'?lane.approval?.[key]:lane.approval?.limits?.[key];input.value=value==null?'':key==='cost_microunits'?value/1e6:value;input.disabled=this.disabled;
+        input.oninput=()=>{const approval=ensureApproval(),value=input.value===''?null:key==='cost_microunits'?Math.round(Number(input.value)*1e6):Number(input.value);if(key==='max_output_tokens')approval[key]=value;else approval.limits[key]=value;this.#emit();};wrapper.append(input);grid.append(wrapper);
+      }
+      const expiryLabel=document.createElement('label');expiryLabel.textContent='Budget expires (your local time)';const expiry=document.createElement('input');expiry.type='datetime-local';expiry.setAttribute('aria-label',`Attempt ${i+1}: Budget expires (your local time)`);expiry.disabled=this.disabled;
+      if(lane.approval?.expires_at_ms){const date=new Date(lane.approval.expires_at_ms);expiry.value=new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);}
+      expiry.oninput=()=>{ensureApproval().expires_at_ms=expiry.value?new Date(expiry.value).getTime():null;this.#emit();};expiryLabel.append(expiry);grid.append(expiryLabel);
+      const explanation=document.createElement('p');explanation.textContent='Sending starts this attempt with these explicit limits. Zero cost is valid for a local model.';budget.append(explanation);attempt.append(budget);this.#rows.append(attempt);
     });
 
     this.#add.disabled = this.disabled || this.#lanes.length >= MAX;

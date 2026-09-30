@@ -197,7 +197,7 @@ test('a Session MCP decision survives reconnect and renders honest denied and ap
       body: JSON.stringify([session]),
     }),
   );
-  await page.route(`**/api/sessions/${session.id}/turns`, (route) => route.fulfill({
+  await page.route(`**/api/sessions/${session.id}/turns*`, (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify(turns),

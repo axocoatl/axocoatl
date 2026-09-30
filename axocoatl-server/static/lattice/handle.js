@@ -37,6 +37,7 @@ const TEMPLATE = `
     z-index: 2;
     transition: transform .1s, box-shadow .1s;
   }
+  :host([data-lattice-view]) { display: none; }
   :host(:hover) {
     transform: scale(1.35);
     box-shadow: 0 0 0 3px rgba(124,92,255,.25);
@@ -158,6 +159,7 @@ export class AxHandleElement extends HTMLElement {
   // ── Internal ───────────────────────────────────────────────────────────
 
   #onPointerDown = (ev) => {
+    if (this.#lattice?.mode === 'view') return;
     if (ev.button !== 0) return;
     // A handle press starts a connection — never a node drag or selection.
     ev.stopPropagation();
@@ -175,6 +177,11 @@ export class AxHandleElement extends HTMLElement {
       bubbles: true, composed: true,
     }));
   };
+
+  /** Hide connection affordances while retaining anchors for existing edges. */
+  _setLatticeView(viewing) {
+    this.toggleAttribute('data-lattice-view', viewing);
+  }
 
   /** Mark/unmark this handle as a valid connect target (lattice-internal). */
   _setConnectTarget(on) {

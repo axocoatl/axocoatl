@@ -1,3 +1,11 @@
+#[path = "routes_session_work.rs"]
+mod session_work_routes;
+pub use session_work_routes::*;
+
+#[path = "routes_session_knowledge.rs"]
+mod session_knowledge_routes;
+pub use session_knowledge_routes::*;
+
 use axum::{
     extract::{
         ws::{Message as AxumWsMessage, WebSocket as AxumWebSocket},
@@ -430,6 +438,41 @@ fn apply_token_budget_patch(
     Ok(())
 }
 
+/// Build and fully validate the next daemon config without mutating the live
+/// instance. This keeps a rejected dependency edit from partially changing an
+/// Agent or reaching the restart boundary.
+fn prepare_agent_config_patch(
+    current: &axocoatl_config::AxocoatlConfig,
+    agent_id: &str,
+    patch: &AgentPatch,
+) -> Result<axocoatl_config::AxocoatlConfig, String> {
+    let mut next = current.clone();
+    let agent = next
+        .agents
+        .iter_mut()
+        .find(|agent| agent.id == agent_id)
+        .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
+
+    let mut next_token_budget = agent.token_budget.clone();
+    apply_token_budget_patch(&mut next_token_budget, patch)?;
+    if let Some(name) = patch.name.as_ref() {
+        agent.name = name.clone();
+    }
+    if let Some(model) = patch.model.as_ref() {
+        agent.model = model.clone();
+    }
+    if let Some(system_prompt) = patch.system_prompt.as_ref() {
+        agent.system_prompt = Some(system_prompt.clone());
+    }
+    if let Some(depends_on) = patch.depends_on.as_ref() {
+        agent.depends_on = depends_on.clone();
+    }
+    agent.token_budget = next_token_budget;
+
+    axocoatl_config::validate_config(&next).map_err(|error| error.to_string())?;
+    Ok(next)
+}
+
 /// Update an agent's in-memory config. The next time the agent is restarted
 /// (or if `restart_now: true`) the new prompt/model/budget take effect.
 /// This is in-memory only for this session — save-to-YAML is a later session.
@@ -438,60 +481,45 @@ pub async fn patch_agent(
     Path(agent_id): Path<String>,
     Json(body): Json<AgentPatch>,
 ) -> Result<Json<AgentPatchResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Update the config in-memory (write lock).
-    {
+    let want_restart = body.restart_now.unwrap_or(true);
+    // Keep exclusive daemon ownership through validation, exact idle Session
+    // actor retirement, config swap, and global restart. Session/Agent turns
+    // retain a read guard while executing, so this cannot open a mid-turn gap
+    // in which an old template is killed or a new turn inherits stale config.
+    let restarted = {
         let mut daemon = state.write().await;
-        let agent = daemon
+        if daemon
             .config
             .agents
-            .iter_mut()
-            .find(|a| a.id == agent_id)
-            .ok_or_else(|| {
+            .iter()
+            .all(|agent| agent.id != agent_id)
+        {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Agent '{agent_id}' not found"),
+                }),
+            ));
+        }
+        let next_config = prepare_agent_config_patch(&daemon.config, &agent_id, &body)
+            .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
+        daemon
+            .apply_agent_config_update(&agent_id, next_config, want_restart)
+            .await
+            .map_err(|error| {
+                let status = if matches!(error, axocoatl_daemon::DaemonError::SessionConflict(_)) {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                };
                 (
-                    StatusCode::NOT_FOUND,
+                    status,
                     Json(ErrorResponse {
-                        error: format!("Agent '{agent_id}' not found"),
+                        error: error.to_string(),
                     }),
                 )
-            })?;
-        // Validate the whole budget transition before mutating any agent
-        // fields so a rejected PATCH cannot partially apply identity edits.
-        let mut next_token_budget = agent.token_budget.clone();
-        apply_token_budget_patch(&mut next_token_budget, &body)
-            .map_err(|error| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error })))?;
-        if let Some(n) = body.name.as_ref() {
-            agent.name = n.clone();
-        }
-        if let Some(m) = body.model.as_ref() {
-            agent.model = m.clone();
-        }
-        if let Some(sp) = body.system_prompt.as_ref() {
-            agent.system_prompt = Some(sp.clone());
-        }
-        if let Some(d) = body.depends_on.as_ref() {
-            agent.depends_on = d.clone();
-        }
-        agent.token_budget = next_token_budget;
-    }
-
-    let want_restart = body.restart_now.unwrap_or(true);
-    let mut restarted = false;
-    if want_restart {
-        let daemon = state.read().await;
-        match daemon.restart_agent(&agent_id).await {
-            Ok(()) => {
-                restarted = true;
-            }
-            Err(e) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Patch saved but restart failed: {e}"),
-                    }),
-                ))
-            }
-        }
-    }
+            })?
+    };
 
     Ok(Json(AgentPatchResponse {
         agent_id: agent_id.clone(),
@@ -652,25 +680,15 @@ pub async fn agent_status(
     Path(agent_id): Path<String>,
 ) -> Result<Json<AgentStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
-    let id = axocoatl_core::AgentId::new(&agent_id);
-
-    match daemon.agent_registry.get(&id).await {
-        Some(actor) => {
-            let status = axocoatl_actor::get_agent_status(&actor)
-                .await
-                .unwrap_or_else(|e| axocoatl_core::AgentStatus::Failed {
-                    error: e,
-                    restarts: 0,
-                });
-            Ok(Json(AgentStatusResponse {
-                agent_id,
-                status: format!("{status:?}"),
-            }))
-        }
-        None => Err((
+    match daemon.configured_agent_status(&agent_id).await {
+        Ok(status) => Ok(Json(AgentStatusResponse {
+            agent_id,
+            status: format!("{status:?}"),
+        })),
+        Err(error) => Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: format!("Agent '{agent_id}' not found"),
+                error: error.to_string(),
             }),
         )),
     }
@@ -684,6 +702,140 @@ pub struct WorkflowInfo {
     pub name: String,
     pub agents: Vec<String>,
     pub entry_point: Option<String>,
+}
+
+/// One config-owned team that a Lattice Session can resolve and snapshot for a turn.
+///
+/// This is intentionally separate from `/api/workflows`: that compatibility
+/// route projects mutable canonical Automations, while Session execution still
+/// resolves its team from the daemon's validated `workflows:` configuration.
+#[derive(Serialize)]
+pub struct SessionTeamInfo {
+    pub id: String,
+    pub name: String,
+    pub agents: Vec<String>,
+    pub entry_point: Option<String>,
+}
+
+fn configured_session_teams(
+    workflows: &[axocoatl_config::WorkflowConfigYaml],
+) -> Vec<SessionTeamInfo> {
+    let mut teams: Vec<SessionTeamInfo> = workflows
+        .iter()
+        .map(|workflow| SessionTeamInfo {
+            id: workflow.id.clone(),
+            name: workflow.name.clone(),
+            agents: workflow.agents.clone(),
+            entry_point: workflow.entry_point.clone(),
+        })
+        .collect();
+    teams.sort_by(|left, right| left.id.cmp(&right.id));
+    teams
+}
+
+pub async fn list_session_teams(State(state): State<AppState>) -> Json<Vec<SessionTeamInfo>> {
+    let daemon = state.read().await;
+    Json(configured_session_teams(&daemon.config.workflows))
+}
+
+pub async fn session_team(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_daemon::SessionTeamView>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .session_team(&id)
+        .await
+        .map(Json)
+        .map_err(attempt_err)
+}
+pub async fn session_ways_history(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<axocoatl_daemon::WaysHistoryView>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .ways_history(&id)
+        .await
+        .map(Json)
+        .map_err(attempt_err)
+}
+pub async fn configure_session_ways_history(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<axocoatl_daemon::WaysHistoryConfiguration>,
+) -> Result<Json<axocoatl_daemon::WaysHistoryView>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .configure_ways_history(&id, request)
+        .await
+        .map(Json)
+        .map_err(attempt_err)
+}
+pub async fn export_session_ways_decision(
+    State(state): State<AppState>,
+    Path((id, decision)): Path<(String, String)>,
+) -> Result<Json<axocoatl_daemon::WaysDecisionExport>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .export_ways_decision(&id, &decision)
+        .await
+        .map(Json)
+        .map_err(attempt_err)
+}
+pub async fn delete_session_ways_decision(
+    State(state): State<AppState>,
+    Path((id, decision)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .delete_ways_decision(&id, &decision)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(attempt_err)
+}
+pub async fn preview_session_team(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<axocoatl_daemon::SessionTeamEdit>,
+) -> Result<Json<axocoatl_daemon::SessionTeamPreview>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .preview_session_team(&id, request)
+        .await
+        .map(Json)
+        .map_err(attempt_err)
+}
+pub async fn apply_session_team(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<axocoatl_daemon::SessionTeamApply>,
+) -> Result<Json<axocoatl_daemon::SessionTeamPreview>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .apply_session_team(&id, request)
+        .await
+        .map(Json)
+        .map_err(attempt_err)
+}
+pub async fn cancel_session_team(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<axocoatl_daemon::SessionTeamCancel>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .cancel_session_team(&id, request)
+        .map_err(attempt_err)?;
+    Ok(Json(serde_json::json!({"cancelled":true})))
 }
 
 pub async fn list_workflows(State(state): State<AppState>) -> Json<Vec<WorkflowInfo>> {
@@ -1528,30 +1680,70 @@ pub async fn create_session(
 pub async fn session_messages(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Vec<axocoatl_memory::session::StoredMessage>>, (StatusCode, Json<ErrorResponse>)> {
+    Query(query): Query<SessionHistoryQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let versioned = versioned_history(query.history_version)?;
     let daemon = state.read().await;
-    daemon.session_messages(&id).await.map(Json).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
+    if versioned {
+        history_json(
+            daemon
+                .versioned_session_transcript(&id)
+                .await
+                .map_err(attempt_err)?,
         )
-    })
+    } else {
+        history_json(
+            daemon
+                .session_messages(&id)
+                .await
+                .map_err(|error| err(StatusCode::BAD_REQUEST, error.to_string()))?,
+        )
+    }
 }
 
 /// GET /api/sessions/{id}/turns — canonical user-visible Session turns.
+#[derive(Default, Deserialize)]
+pub struct SessionHistoryQuery {
+    #[serde(default)]
+    pub history_version: Option<u32>,
+}
+
+fn versioned_history(version: Option<u32>) -> Result<bool, (StatusCode, Json<ErrorResponse>)> {
+    match version {
+        None | Some(1) => Ok(false),
+        Some(2) => Ok(true),
+        _ => Err(err(
+            StatusCode::BAD_REQUEST,
+            "history_version must be 1 or 2",
+        )),
+    }
+}
+
+fn history_json(
+    value: impl Serialize,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    serde_json::to_value(value)
+        .map(Json)
+        .map_err(|error| err(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+}
+
 pub async fn session_turns(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Vec<axocoatl_session::SessionTurn>>, (StatusCode, Json<ErrorResponse>)> {
-    state
-        .read()
-        .await
-        .list_session_turns(&id)
-        .await
-        .map(Json)
-        .map_err(attempt_err)
+    Query(query): Query<SessionHistoryQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let versioned = versioned_history(query.history_version)?;
+    let daemon = state.read().await;
+    if versioned {
+        history_json(
+            daemon
+                .list_versioned_session_turns(&id)
+                .await
+                .map_err(attempt_err)?,
+        )
+    } else {
+        history_json(daemon.list_session_turns(&id).await.map_err(attempt_err)?)
+    }
 }
 
 #[derive(Serialize)]
@@ -1580,11 +1772,47 @@ pub async fn active_session_turn(
 pub async fn session_turn(
     State(state): State<AppState>,
     Path((id, turn_id)): Path<(String, String)>,
-) -> Result<Json<axocoatl_session::SessionTurn>, (StatusCode, Json<ErrorResponse>)> {
+    Query(query): Query<SessionHistoryQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let versioned = versioned_history(query.history_version)?;
+    let daemon = state.read().await;
+    let value = if versioned {
+        daemon
+            .get_versioned_session_turn(&id, &turn_id)
+            .await
+            .map_err(attempt_err)?
+            .map(serde_json::to_value)
+    } else {
+        daemon
+            .get_session_turn(&id, &turn_id)
+            .await
+            .map_err(attempt_err)?
+            .map(serde_json::to_value)
+    };
+    value
+        .ok_or_else(|| {
+            err(
+                StatusCode::NOT_FOUND,
+                format!("turn {turn_id} not found in session {id}"),
+            )
+        })?
+        .map(Json)
+        .map_err(|error| err(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+}
+
+/// GET /api/sessions/{id}/turns/{turn_id}/control-plane — versioned, read-only
+/// graph and evidence for one retained turn. The Session and turn must match.
+pub async fn session_turn_control_plane(
+    State(state): State<AppState>,
+    Path((id, turn_id)): Path<(String, String)>,
+) -> Result<
+    Json<axocoatl_daemon::session_control_plane::SessionTurnControlPlane>,
+    (StatusCode, Json<ErrorResponse>),
+> {
     state
         .read()
         .await
-        .get_session_turn(&id, &turn_id)
+        .session_turn_control_plane(&id, &turn_id)
         .await
         .map_err(attempt_err)?
         .map(Json)
@@ -1596,9 +1824,75 @@ pub async fn session_turn(
         })
 }
 
+pub async fn preview_session_graph_edit(
+    State(state): State<AppState>,
+    Path((id, turn)): Path<(String, String)>,
+    Json(request): Json<axocoatl_daemon::HumanGraphEditRequest>,
+) -> Result<Json<axocoatl_daemon::HumanGraphEditPreview>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .preview_session_graph_edit(&id, &turn, request)
+        .await
+        .map(Json)
+        .map_err(attempt_err)
+}
+
+pub async fn apply_session_graph_edit(
+    State(state): State<AppState>,
+    Path((id, turn)): Path<(String, String)>,
+    Json(request): Json<axocoatl_daemon::HumanGraphEditApply>,
+) -> Result<Json<axocoatl_daemon::HumanGraphEditPreview>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .apply_session_graph_edit(&id, &turn, request)
+        .await
+        .map(Json)
+        .map_err(attempt_err)
+}
+
+/// POST /api/sessions/{id}/turns/{turn_id}/control-commands — exact human
+/// intervention. The outer local request middleware authenticates the channel;
+/// source attribution is constructed by the controller, never browser JSON.
+pub async fn plan_session_control(
+    State(state): State<AppState>,
+    Path((id, turn_id)): Path<(String, String)>,
+    Json(request): Json<axocoatl_daemon::ControlPlannerRequest>,
+) -> Result<Json<axocoatl_daemon::ControlPlannerResult>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .plan_session_control(&id, &turn_id, request)
+        .await
+        .map(Json)
+        .map_err(attempt_err)
+}
+
+pub async fn submit_session_control_action(
+    State(state): State<AppState>,
+    Path((id, turn_id)): Path<(String, String)>,
+    body: axum::body::Bytes,
+) -> Result<
+    Json<axocoatl_session::control_command::CommandReceiptView>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    let request = axocoatl_daemon::session_dispatch::HumanControlActionRequest::decode(&body)
+        .map_err(|error| err(StatusCode::BAD_REQUEST, error.to_string()))?;
+    state
+        .read()
+        .await
+        .submit_session_control_action(&id, &turn_id, request)
+        .await
+        .map(Json)
+        .map_err(attempt_err)
+}
+
 #[derive(Deserialize)]
 pub struct SessionTurnSearchQuery {
     pub q: String,
+    #[serde(default)]
+    pub history_version: Option<u32>,
     #[serde(default)]
     pub session_id: Option<String>,
 }
@@ -1607,18 +1901,30 @@ pub struct SessionTurnSearchQuery {
 pub async fn search_session_turns(
     State(state): State<AppState>,
     Query(query): Query<SessionTurnSearchQuery>,
-) -> Result<Json<Vec<axocoatl_session::SessionTurnSearchHit>>, (StatusCode, Json<ErrorResponse>)> {
-    state
-        .read()
-        .await
-        .search_session_turns(query.session_id.as_deref(), &query.q)
-        .await
-        .map(Json)
-        .map_err(attempt_err)
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let versioned = versioned_history(query.history_version)?;
+    let daemon = state.read().await;
+    if versioned {
+        history_json(
+            daemon
+                .search_versioned_session_turns(query.session_id.as_deref(), &query.q)
+                .await
+                .map_err(attempt_err)?,
+        )
+    } else {
+        history_json(
+            daemon
+                .search_session_turns(query.session_id.as_deref(), &query.q)
+                .await
+                .map_err(attempt_err)?,
+        )
+    }
 }
 
 #[derive(Deserialize)]
 pub struct SessionExportQuery {
+    #[serde(default)]
+    pub history_version: Option<u32>,
     #[serde(default)]
     pub format: Option<String>,
 }
@@ -1629,19 +1935,27 @@ pub async fn export_session(
     Path(id): Path<String>,
     Query(query): Query<SessionExportQuery>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let versioned = versioned_history(query.history_version)?;
     let format = query.format.as_deref().unwrap_or("markdown");
     let daemon = state.read().await;
     let (body, content_type, extension) = match format {
         "json" => (
-            daemon.export_session_json(&id).await.map_err(attempt_err)?,
+            if versioned {
+                daemon.export_versioned_session_json(&id).await
+            } else {
+                daemon.export_session_json(&id).await
+            }
+            .map_err(attempt_err)?,
             "application/json; charset=utf-8",
             "json",
         ),
         "md" | "markdown" => (
-            daemon
-                .export_session_markdown(&id)
-                .await
-                .map_err(attempt_err)?,
+            if versioned {
+                daemon.export_versioned_session_markdown(&id).await
+            } else {
+                daemon.export_session_markdown(&id).await
+            }
+            .map_err(attempt_err)?,
             "text/markdown; charset=utf-8",
             "md",
         ),
@@ -1689,7 +2003,7 @@ pub async fn rewind_session(
     let daemon = state.read().await;
     if body.keep_through_turn_id.is_some() || body.keep.is_none() {
         daemon
-            .rewind_session_to_turn(&id, body.keep_through_turn_id.as_deref())
+            .rewind_versioned_session_to_turn(&id, body.keep_through_turn_id.as_deref())
             .await
             .map(|turns| Json(serde_json::json!({ "ok": true, "turns": turns })))
             .map_err(attempt_err)
@@ -2501,6 +2815,8 @@ fn default_variant_count() -> usize {
 #[derive(serde::Deserialize)]
 pub struct VariantsBody {
     pub input: String,
+    #[serde(default)]
+    pub preparation_refs: Vec<String>,
     /// The task these attempts are solving. Defaults to `input`, which keeps
     /// direct prompts and planned instructions on the same contract.
     #[serde(default)]
@@ -2562,11 +2878,12 @@ pub async fn session_variants(
     Json(body): Json<VariantsBody>,
 ) -> Result<Json<axocoatl_daemon::git::AttemptSet>, (StatusCode, Json<ErrorResponse>)> {
     require_ready_session(&state, &id).await?;
+    let preparation_refs = body.preparation_refs.clone();
     let (task, input, lanes) = body.into_attempt_run();
     let launch = run_request_owned("Ways launch", async move {
         let daemon = state.read().await;
         daemon
-            .execute_session_variants(&id, &task, &input, &lanes)
+            .execute_session_variants_with_evidence(&id, &task, &input, &lanes, &preparation_refs)
             .await
     })
     .await
@@ -2692,6 +3009,8 @@ pub async fn session_variants_judge(
 
 #[derive(serde::Deserialize)]
 pub struct ProbeQuery {
+    #[serde(default)]
+    pub session_id: Option<String>,
     pub provider: String,
     /// Comma-separated model ids — the lane list, checked in one call.
     pub models: String,
@@ -2703,16 +3022,36 @@ pub struct ProbeQuery {
 pub async fn variants_probe(
     State(state): State<AppState>,
     Query(q): Query<ProbeQuery>,
-) -> Result<Json<Vec<axocoatl_daemon::git::ModelProbe>>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<Vec<serde_json::Value>>, (StatusCode, Json<ErrorResponse>)> {
     let daemon = state.read().await;
     let mut out = Vec::new();
     for model in q.models.split(',').map(str::trim).filter(|m| !m.is_empty()) {
-        out.push(
-            daemon
-                .probe_lane_model(&q.provider, model)
-                .await
-                .map_err(attempt_err)?,
-        );
+        let probe = daemon
+            .probe_lane_model(&q.provider, model)
+            .await
+            .map_err(attempt_err)?;
+        let evidence_ref = q
+            .session_id
+            .as_deref()
+            .map(|session| {
+                daemon.retain_ways_preparation(
+                    session,
+                    None,
+                    None,
+                    &q.provider,
+                    model,
+                    &probe.control_usage,
+                )
+            })
+            .transpose()
+            .map_err(attempt_err)?
+            .flatten();
+        let mut value = serde_json::to_value(probe)
+            .map_err(|error| err(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+        if let Some(reference) = evidence_ref {
+            value["evidence_ref"] = reference.into();
+        }
+        out.push(value);
     }
     Ok(Json(out))
 }
@@ -2729,6 +3068,8 @@ pub struct PlanBody {
 /// exactly the text the lanes will receive, rather than reassembling it.
 #[derive(serde::Serialize)]
 pub struct PlanResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_ref: Option<String>,
     #[serde(flatten)]
     pub plan: axocoatl_daemon::git::Plan,
     pub instruction: String,
@@ -2752,7 +3093,17 @@ pub async fn session_variants_plan(
         .await
         .map_err(ways_control_err)?;
     let instruction = plan.render(&body.task);
+    let evidence_ref = daemon
+        .retain_ways_plan_preparation(
+            &id,
+            &body.task,
+            &instruction,
+            &body.agent_id,
+            &control_usage,
+        )
+        .map_err(ways_control_err)?;
     Ok(Json(PlanResponse {
+        evidence_ref,
         plan,
         instruction,
         control_usage,
@@ -3975,6 +4326,7 @@ pub async fn fork_chat(
     let replacement =
         body.replacement_content
             .map(|content| axocoatl_memory::session::StoredMessage {
+                content_parts: None,
                 role: body
                     .replacement_role
                     .unwrap_or(axocoatl_core::MessageRole::User),
@@ -5274,22 +5626,18 @@ async fn dispatch_ws_command(
                 // Resolve the agent actor.
                 let actor = {
                     let daemon = state.read().await;
-                    daemon
-                        .agent_registry
-                        .get(&axocoatl_core::AgentId::new(&chat.agent_id))
-                        .await
+                    daemon.configured_chat_actor(&chat.agent_id).await
                 };
                 let actor = match actor {
-                    Some(a) => a,
-                    None => {
-                        let error = format!("agent '{}' not found", chat.agent_id);
+                    Ok(actor) => actor,
+                    Err(error) => {
                         let _ = out.send(chat_terminal_message(
                             "chat-error",
                             &chat_id,
                             &turn_id,
                             &axocoatl_core::TokenUsageStats::default(),
                             true,
-                            Some(&error),
+                            Some(&error.to_string()),
                         ));
                         return;
                     }
@@ -5341,6 +5689,7 @@ async fn dispatch_ws_command(
                     let _ = store.lock().await.append_message(
                         &chat_id,
                         axocoatl_memory::session::StoredMessage {
+                            content_parts: None,
                             role: axocoatl_core::MessageRole::User,
                             content: text_for_history,
                             timestamp: std::time::SystemTime::now()
@@ -5407,6 +5756,27 @@ async fn dispatch_ws_command(
                                     serde_json::json!({
                                         "kind": "chat-token", "chat_id": chat_id,
                                         "turn_id": turn_id, "delta": d,
+                                    })
+                                }
+                                // The abandoned attempt's text stays visible, so
+                                // mark where it ends in the text and the answer.
+                                axocoatl_actor::AgentStreamChunk::ProviderRetry { reason } => {
+                                    let note = "\n\n[The model provider ended this response \
+                                                early and the Agent retried it. The text \
+                                                before this note is from the abandoned \
+                                                attempt.]\n\n";
+                                    accumulated.lock().await.push_str(note);
+                                    let _ =
+                                        bus_for_chat.send(axocoatl_daemon::StreamFrame::Token {
+                                            workflow: chat_id.clone(),
+                                            agent: agent_for_chat.clone(),
+                                            turn_id: Some(turn_id.clone()),
+                                            delta: note.to_string(),
+                                        });
+                                    serde_json::json!({
+                                        "kind": "chat-token", "chat_id": chat_id,
+                                        "turn_id": turn_id, "delta": note,
+                                        "provider_retry": reason,
                                     })
                                 }
                                 axocoatl_actor::AgentStreamChunk::Reasoning(d) => {
@@ -5517,6 +5887,7 @@ async fn dispatch_ws_command(
                             let _ = store.lock().await.append_message(
                                 &chat_id,
                                 axocoatl_memory::session::StoredMessage {
+                                    content_parts: None,
                                     role: axocoatl_core::MessageRole::Assistant,
                                     content: final_text,
                                     timestamp: std::time::SystemTime::now()
@@ -5562,6 +5933,7 @@ async fn dispatch_ws_command(
                                 let _ = store.lock().await.append_message(
                                     &chat_id,
                                     axocoatl_memory::session::StoredMessage {
+                                        content_parts: None,
                                         role: axocoatl_core::MessageRole::Assistant,
                                         content: partial,
                                         timestamp: std::time::SystemTime::now()
@@ -6961,6 +7333,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_team_projection_is_config_owned_and_deterministic() {
+        let workflows = vec![
+            axocoatl_config::WorkflowConfigYaml {
+                id: "z-team".to_string(),
+                name: "Z team".to_string(),
+                agents: vec!["reviewer".to_string()],
+                entry_point: Some("reviewer".to_string()),
+                htn_methods_file: None,
+            },
+            axocoatl_config::WorkflowConfigYaml {
+                id: "a-team".to_string(),
+                name: "A team".to_string(),
+                agents: vec!["planner".to_string(), "builder".to_string()],
+                entry_point: None,
+                htn_methods_file: None,
+            },
+        ];
+
+        let projected = configured_session_teams(&workflows);
+        assert_eq!(projected[0].id, "a-team");
+        assert_eq!(projected[0].agents, ["planner", "builder"]);
+        assert_eq!(projected[1].id, "z-team");
+        assert_eq!(projected[1].entry_point.as_deref(), Some("reviewer"));
+    }
+
+    #[test]
     fn measured_projection_serializes_numeric_lower_bound_with_reasoning() {
         let response = ExecuteResponse {
             output: "partial".to_string(),
@@ -7794,6 +8192,7 @@ mod tests {
         content: &str,
     ) -> axocoatl_memory::session::StoredMessage {
         axocoatl_memory::session::StoredMessage {
+            content_parts: None,
             role,
             content: content.to_string(),
             timestamp: 1,
@@ -8708,6 +9107,101 @@ mod tests {
         assert!(!patch.restart_now.unwrap());
     }
 
+    fn settings_dependency_config() -> axocoatl_config::AxocoatlConfig {
+        axocoatl_config::parse_config(
+            r#"
+agents:
+  - id: planner
+    name: Planner
+    provider: ollama
+    model: llama3
+  - id: coder
+    name: Coder
+    provider: ollama
+    model: llama3
+    depends_on: [planner]
+  - id: outsider
+    name: Outsider
+    provider: ollama
+    model: llama3
+workflows:
+  - id: feature-team
+    name: Feature team
+    agents: [planner, coder]
+    entry_point: planner
+"#,
+            &std::path::PathBuf::from("settings-agent-test.yaml"),
+        )
+        .expect("base Settings config should be valid")
+    }
+
+    fn configured_dependencies<'a>(
+        config: &'a axocoatl_config::AxocoatlConfig,
+        agent_id: &str,
+    ) -> &'a [String] {
+        &config
+            .agents
+            .iter()
+            .find(|agent| agent.id == agent_id)
+            .expect("test Agent should exist")
+            .depends_on
+    }
+
+    #[test]
+    fn agent_patch_rejects_dependency_cycle_without_mutation_or_restart_authority() {
+        let original = settings_dependency_config();
+        let patch: AgentPatch =
+            serde_json::from_str(r#"{"depends_on":["coder"],"restart_now":true}"#).unwrap();
+        let mut live = original.clone();
+        let mut restart_requested = false;
+
+        let result = prepare_agent_config_patch(&live, "planner", &patch);
+        if let Ok(next) = result.as_ref() {
+            live = next.clone();
+            restart_requested = patch.restart_now.unwrap_or(true);
+        }
+
+        let error = result.unwrap_err();
+        assert!(error.contains("dependency cycle"), "{error}");
+        assert!(configured_dependencies(&live, "planner").is_empty());
+        assert_eq!(configured_dependencies(&live, "coder"), &["planner"]);
+        assert!(configured_dependencies(&original, "planner").is_empty());
+        assert!(!restart_requested);
+    }
+
+    #[test]
+    fn agent_patch_rejects_dependency_outside_the_team() {
+        let original = settings_dependency_config();
+        let patch: AgentPatch =
+            serde_json::from_str(r#"{"depends_on":["outsider"],"restart_now":false}"#).unwrap();
+
+        let error = prepare_agent_config_patch(&original, "coder", &patch).unwrap_err();
+
+        assert!(error.contains("outside workflow 'feature-team'"), "{error}");
+        assert_eq!(configured_dependencies(&original, "coder"), &["planner"]);
+    }
+
+    #[test]
+    fn agent_patch_accepts_one_valid_dependency_update_on_a_cloned_config() {
+        let original = settings_dependency_config();
+        let patch: AgentPatch =
+            serde_json::from_str(r#"{"name":"Coder two","depends_on":[],"restart_now":true}"#)
+                .unwrap();
+
+        let next = prepare_agent_config_patch(&original, "coder", &patch).unwrap();
+
+        assert_eq!(configured_dependencies(&original, "coder"), &["planner"]);
+        assert!(configured_dependencies(&next, "coder").is_empty());
+        assert_eq!(
+            next.agents
+                .iter()
+                .find(|agent| agent.id == "coder")
+                .unwrap()
+                .name,
+            "Coder two"
+        );
+    }
+
     #[test]
     fn runtime_cleanup_body_supports_high_friction_creation_token_confirmation() {
         let body: ConfirmSessionRuntimeCleanupBody = serde_json::from_str(
@@ -8934,3 +9428,9 @@ mod tests {
         assert!(bare.message.is_none());
     }
 }
+
+#[path = "routes_session_grants.rs"]
+mod session_grants;
+pub use session_grants::{
+    decide_session_grant, preview_session_grant, revoke_session_grant, session_control_grants,
+};

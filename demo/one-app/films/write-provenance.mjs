@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
   fail,
-  filmsDir,
+  filmSourceDirectory,
   findFilm,
   loadPortfolio,
   probePoster,
@@ -25,9 +25,9 @@ function usage() {
 
 Options:
   --frames <dir>         exact staged frame sequence used for the encode
-  --capture <path>       capture record (default: films/source/<slug>/capture.json)
-  --timeline <path>      timeline (default: films/source/<slug>/timeline.json)
-  --stage-record <path>  stage record (default: films/source/<slug>/stage.json)
+  --capture <path>       capture record (default: films/source/[recording_version/]<slug>/capture.json)
+  --timeline <path>      timeline (default: films/source/[recording_version/]<slug>/timeline.json)
+  --stage-record <path>  stage record (default: films/source/[recording_version/]<slug>/stage.json)
   --poster-frame <n>     encoded poster frame (default: stage record poster_frame)
   --output <path>        provenance record (default: manifest provenance path)
   --replace              replace an existing provenance record
@@ -248,7 +248,7 @@ if (!binaryPath || !evidencePath || !framesDirectory) {
 
 const portfolio = loadPortfolio();
 const film = findFilm(portfolio, slug);
-const sourceDirectory = resolve(filmsDir, 'source', slug);
+const sourceDirectory = filmSourceDirectory(portfolio, slug);
 capturePath ||= resolve(sourceDirectory, 'capture.json');
 timelinePath ||= resolve(sourceDirectory, 'timeline.json');
 stagePath ||= resolve(sourceDirectory, 'stage.json');

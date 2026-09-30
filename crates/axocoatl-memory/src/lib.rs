@@ -1,3 +1,4 @@
+pub mod activation_state;
 pub mod chat;
 pub mod checkpoint;
 pub mod core_memory;
@@ -5,7 +6,9 @@ pub mod daily_log;
 pub mod error;
 pub mod extract;
 pub mod files;
+pub mod knowledge;
 mod legacy_checkpoint;
+pub mod legacy_conversation;
 #[cfg(feature = "neural-embeddings")]
 pub mod neural;
 pub mod perms;

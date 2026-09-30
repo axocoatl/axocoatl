@@ -586,13 +586,7 @@ async fn handle_client(
             }
             IpcRequest::ListAgents => {
                 let daemon = daemon.read().await;
-                let ids = daemon
-                    .agent_registry
-                    .list_ids()
-                    .await
-                    .into_iter()
-                    .map(|id| id.to_string())
-                    .collect();
+                let ids = daemon.configured_executable_agent_ids();
                 IpcResponse::Agents { ids }
             }
             IpcRequest::ExecuteWorkflow { workflow_id, input } => {
@@ -708,24 +702,30 @@ async fn handle_client(
             }
             IpcRequest::GetAgentStatus { agent_id } => {
                 let daemon = daemon.read().await;
-                let ids = match &agent_id {
-                    Some(id) => vec![axocoatl_core::AgentId::new(id)],
-                    None => daemon.agent_registry.list_ids().await,
+                let exact = agent_id.is_some();
+                let ids = match agent_id {
+                    Some(id) => vec![id],
+                    None => daemon.configured_executable_agent_ids(),
                 };
                 let mut statuses = Vec::new();
+                let mut failure = None;
                 for id in ids {
-                    if let Some(actor) = daemon.agent_registry.get(&id).await {
-                        let status = axocoatl_actor::get_agent_status(&actor)
-                            .await
-                            .map(|s| format!("{s:?}"))
-                            .unwrap_or_else(|e| format!("Unreachable ({e})"));
-                        statuses.push(IpcAgentStatus {
-                            agent_id: id.to_string(),
-                            status,
-                        });
+                    match daemon.configured_agent_status(&id).await {
+                        Ok(status) => statuses.push(IpcAgentStatus {
+                            agent_id: id,
+                            status: format!("{status:?}"),
+                        }),
+                        Err(error) if exact => {
+                            failure = Some(error);
+                            break;
+                        }
+                        Err(error) => statuses.push(IpcAgentStatus {
+                            agent_id: id,
+                            status: format!("Unreachable ({error})"),
+                        }),
                     }
                 }
-                IpcResponse::AgentStatuses { statuses }
+                failure.map_or(IpcResponse::AgentStatuses { statuses }, error_response)
             }
             IpcRequest::RestartAgent { agent_id } => {
                 let daemon = daemon.read().await;

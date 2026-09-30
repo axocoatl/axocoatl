@@ -1,0 +1,108 @@
+---
+title: Workspace knowledge
+description: Retain source-linked decisions, inspect note revisions and evidence, and reuse repository knowledge across Sessions.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Open **Knowledge** beside **Team & budget** above the composer in a repository
+Session to inspect notes shared by Sessions in that Workspace. A note can record a decision, architecture, convention, finding,
+pitfall, or general context. Its Markdown, revision, links, source references, and
+origin remain together.
+
+Knowledge complements [Session History](/workbench/history/). History records
+what happened during execution; knowledge records what a person or Agent wants
+future work to consider. A saved note is attributed information, not a passing
+repository check or an instruction with extra authority.
+
+## Record a decision
+
+1. Open **Knowledge** and choose **New note**.
+2. Give it a title, kind, and Markdown body. Explain the decision and its limits.
+3. Add relevant repository paths under **Source references**. Choosing an indexed
+   path records the observed file hash; an optional symbol narrows the reference.
+4. Add typed links to other notes: `supports`, `depends_on`, `supersedes`, `related`,
+   or `used_by`.
+5. Choose **Save note**. Later edits create another revision. If someone changed
+   the note since you opened it, refresh and review that revision before saving.
+
+Use **Notes** to search and read records. **Backlinks** show the notes that refer
+to the selected record. **Graph** connects notes, source paths, and recorded
+activation evidence; selecting a node opens the corresponding detail.
+
+## Check the source context
+
+The **Code index** view exposes this Session's observed files, hashes, definitions,
+and import syntax. Each Session retains its own cached index; accepted notes are
+shared by the Workspace. The observation timestamp identifies when the map was built.
+Choose **Refresh code index** after repository changes, and open the relevant
+source before relying on a remembered claim.
+
+The parser supports Rust, JavaScript, TypeScript, TSX, and Python. Definitions and
+imports are syntax-level observations. The index does not resolve every reference,
+infer a complete call graph, or replace a language server. Unsupported files and
+partial parses retain explicit status. Indexing and context maps have bounded
+size; they are not a claim that every file in a large repository was included.
+
+A source reference can match the observed file, differ from it, or be unavailable.
+That comparison belongs to this Session's source context. A changed hash means the
+note needs review against the changed source; it does not prove the note is false.
+Refreshing an index does not rewrite an accepted note.
+
+## Use knowledge in a request
+
+When you send a native request, Axocoatl retrieves a bounded selection of accepted
+notes using the request text and retains their exact revisions and provenance with
+that turn. Source applicability is checked against bounded reads from the current
+Session. An available code map is included as a cached observation with its own
+identity and timestamp. This provides continuity across Sessions without treating
+remembered text as instructions or proof.
+
+Choose **Attach to chat** to attach the selected note revision to the Session's
+context. **Investigate in chat** also prepares a request to check its sources and
+propose an evidence-backed update. Review and send the request through ordinary
+chat; opening or attaching a note does not launch an investigation by itself.
+
+Native Agents can use the `workspace_knowledge` tool to search and read notes,
+search indexed symbols and imports, inspect the bounded observed code map, and
+propose a note revision. The tool is scoped to
+the Workspace and exact activation. Repository access, follow-up work, and usage
+remain subject to the Session's grant and normal execution controls.
+
+Agent proposals remain separate from accepted notes. The **Proposals** view shows
+their Markdown, sources, expected revision, and origin. Accepted native work can
+publish its eligible proposals at turn closure. An isolated Way must also be the
+exact candidate retained by **Keep this one**; completing or passing Checks alone
+does not publish its proposals. Other candidates stay pending unless a person
+explicitly accepts them. A concurrent note edit leaves a revision conflict for
+review. Rejected or superseded work does not automatically publish its proposed
+knowledge. Explicit proposal decisions remain visible.
+
+<Aside type="note">
+  Publication records an accepted contribution. It does not establish that a
+  model's explanation is correct. Follow source links and retained checks, and
+  correct the note when the evidence changes.
+</Aside>
+
+## Keep and export the knowledge
+
+Knowledge belongs to the Workspace, so another Session in that Workspace can use
+it without sharing the first Session's entire conversation. A separate Workspace
+does not inherit those notes. Restarting the daemon preserves accepted revisions
+and their provenance.
+
+**Export Markdown** downloads the Workspace's accepted notes as a collection.
+**Export note** saves one note with its metadata for editing in another Markdown
+editor, including Obsidian. To bring that document back, choose **Import Markdown**,
+select the note, review the populated editor, and choose **Save note**. Import is
+a validated edit at the current expected revision; it does not silently replace
+newer work or automatically accept the exported provenance as a new execution fact.
+
+This is explicit import/export, not automatic synchronization with an external
+vault. Editing internal stored revision files directly is not a supported update
+mechanism.
+
+Knowledge lives in Axocoatl's data root rather than being silently added to the
+repository. Include it in a [cold backup of the full data root](/operate/data-backup/).
+The older core-memory and semantic-recall stores remain separate compatibility
+features; see [State and memory](/understand/state/).

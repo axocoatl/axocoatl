@@ -1,0 +1,310 @@
+{
+  "data": {
+    "id": "meta-llama/llama-3.3-70b-instruct",
+    "endpoints": [
+      {
+        "model_id": "meta-llama/llama-3.3-70b-instruct",
+        "provider_name": "DeepInfra",
+        "tag": "deepinfra/turbo",
+        "context_length": 131072,
+        "max_completion_tokens": 16384,
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "frequency_penalty",
+          "presence_penalty",
+          "repetition_penalty",
+          "top_k",
+          "seed",
+          "min_p",
+          "tools",
+          "tool_choice",
+          "logit_bias",
+          "response_format",
+          "structured_outputs"
+        ],
+        "pricing": {
+          "prompt": "0.0000001",
+          "completion": "0.00000032",
+          "discount": 0
+        },
+        "status": 0
+      },
+      {
+        "model_id": "meta-llama/llama-3.3-70b-instruct",
+        "provider_name": "Novita",
+        "tag": "novita/bf16",
+        "context_length": 12288,
+        "max_completion_tokens": 11059,
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "frequency_penalty",
+          "presence_penalty",
+          "seed",
+          "top_k",
+          "repetition_penalty",
+          "tools",
+          "tool_choice",
+          "logprobs",
+          "top_logprobs"
+        ],
+        "pricing": {
+          "prompt": "0.000000135",
+          "completion": "0.0000004",
+          "discount": 0
+        },
+        "status": 0
+      },
+      {
+        "model_id": "meta-llama/llama-3.3-70b-instruct",
+        "provider_name": "AkashML",
+        "tag": "akashml/fp8",
+        "context_length": 131072,
+        "max_completion_tokens": 128000,
+        "supported_parameters": [
+          "temperature",
+          "top_p",
+          "top_k",
+          "stop",
+          "frequency_penalty",
+          "presence_penalty",
+          "repetition_penalty",
+          "seed",
+          "max_tokens",
+          "structured_outputs",
+          "tools",
+          "tool_choice",
+          "response_format",
+          "logprobs",
+          "top_logprobs"
+        ],
+        "pricing": {
+          "prompt": "0.0000002",
+          "completion": "0.00000052",
+          "input_cache_read": "0.0000001",
+          "discount": 0
+        },
+        "status": 0
+      },
+      {
+        "model_id": "meta-llama/llama-3.3-70b-instruct",
+        "provider_name": "Parasail",
+        "tag": "parasail/fp8",
+        "context_length": 131072,
+        "max_completion_tokens": 16384,
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "frequency_penalty",
+          "presence_penalty",
+          "repetition_penalty",
+          "seed",
+          "stop",
+          "top_k",
+          "logit_bias",
+          "structured_outputs",
+          "response_format",
+          "logprobs",
+          "top_logprobs"
+        ],
+        "pricing": {
+          "prompt": "0.00000022",
+          "completion": "0.0000005",
+          "input_cache_read": "0.00000011",
+          "discount": 0
+        },
+        "status": 0
+      },
+      {
+        "model_id": "meta-llama/llama-3.3-70b-instruct",
+        "provider_name": "Cloudflare",
+        "tag": "cloudflare/fp8",
+        "context_length": 24000,
+        "max_completion_tokens": 21600,
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "top_k",
+          "seed",
+          "repetition_penalty",
+          "frequency_penalty",
+          "presence_penalty",
+          "min_p",
+          "stop",
+          "logit_bias",
+          "response_format",
+          "logprobs",
+          "top_logprobs"
+        ],
+        "pricing": {
+          "prompt": "0.000000293",
+          "completion": "0.000002253",
+          "discount": 0
+        },
+        "status": 0
+      },
+      {
+        "model_id": "meta-llama/llama-3.3-70b-instruct",
+        "provider_name": "SambaNova",
+        "tag": "sambanova-turbo",
+        "context_length": 131072,
+        "max_completion_tokens": 3072,
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "top_k",
+          "stop",
+          "response_format",
+          "structured_outputs",
+          "logprobs",
+          "top_logprobs"
+        ],
+        "pricing": {
+          "prompt": "0.00000045",
+          "completion": "0.0000009",
+          "discount": 0.25
+        },
+        "status": 0
+      },
+      {
+        "model_id": "meta-llama/llama-3.3-70b-instruct",
+        "provider_name": "Groq",
+        "tag": "groq",
+        "context_length": 131072,
+        "max_completion_tokens": 32768,
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "seed",
+          "response_format",
+          "tools",
+          "tool_choice"
+        ],
+        "pricing": {
+          "prompt": "0.00000059",
+          "completion": "0.00000079",
+          "input_cache_read": "0.000000295",
+          "discount": 0
+        },
+        "status": 0
+      },
+      {
+        "model_id": "meta-llama/llama-3.3-70b-instruct",
+        "provider_name": "CoreWeave",
+        "tag": "coreweave/fp16",
+        "context_length": 128000,
+        "max_completion_tokens": 115200,
+        "supported_parameters": [
+          "structured_outputs",
+          "response_format",
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "top_k",
+          "repetition_penalty",
+          "frequency_penalty",
+          "presence_penalty",
+          "stop",
+          "seed",
+          "tools",
+          "tool_choice",
+          "logprobs",
+          "top_logprobs"
+        ],
+        "pricing": {
+          "prompt": "0.00000071",
+          "completion": "0.00000071",
+          "input_cache_read": "0.00000071",
+          "discount": 0
+        },
+        "status": 0
+      },
+      {
+        "model_id": "meta-llama/llama-3.3-70b-instruct",
+        "provider_name": "Google",
+        "tag": "google-vertex/us-central1",
+        "context_length": 128000,
+        "max_completion_tokens": 8192,
+        "supported_parameters": [
+          "structured_outputs",
+          "response_format",
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "seed",
+          "top_k",
+          "frequency_penalty",
+          "presence_penalty",
+          "stop",
+          "tools",
+          "tool_choice"
+        ],
+        "pricing": {
+          "prompt": "0.00000072",
+          "completion": "0.00000072",
+          "discount": 0
+        },
+        "status": 0
+      },
+      {
+        "model_id": "meta-llama/llama-3.3-70b-instruct",
+        "provider_name": "Google",
+        "tag": "google-vertex",
+        "context_length": 128000,
+        "max_completion_tokens": 115200,
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "seed",
+          "response_format"
+        ],
+        "pricing": {
+          "prompt": "0.00000072",
+          "completion": "0.00000072",
+          "discount": 0
+        },
+        "status": 0
+      },
+      {
+        "model_id": "meta-llama/llama-3.3-70b-instruct",
+        "provider_name": "Together",
+        "tag": "together",
+        "context_length": 131072,
+        "max_completion_tokens": 2048,
+        "supported_parameters": [
+          "structured_outputs",
+          "response_format",
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "frequency_penalty",
+          "presence_penalty",
+          "top_k",
+          "repetition_penalty",
+          "logit_bias",
+          "min_p",
+          "tools",
+          "tool_choice"
+        ],
+        "pricing": {
+          "prompt": "0.00000104",
+          "completion": "0.00000104",
+          "discount": 0
+        },
+        "status": 0
+      }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 [package]
 name = "axocoatl-cli"
-version = "1.0.1"
+version = "1.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,15 +17,15 @@ name = "axocoatl"
 path = "src/main.rs"
 
 [dependencies]
-axocoatl-core = { version = "1.0.0", path = "../crates/axocoatl-core" }
-axocoatl-config = { version = "1.0.0", path = "../crates/axocoatl-config" }
-axocoatl-daemon = { version = "1.0.0", path = "../crates/axocoatl-daemon" }
-axocoatl-actor = { version = "1.0.0", path = "../crates/axocoatl-actor" }
-axocoatl-server = { version = "1.0.0", path = "../axocoatl-server" }
-axocoatl-memory = { version = "1.0.0", path = "../crates/axocoatl-memory" }
-axocoatl-service = { version = "1.0.0", path = "../crates/axocoatl-service" }
-axocoatl-isolation = { version = "1.0.0", path = "../crates/axocoatl-isolation" }
-axocoatl-mcp = { version = "1.0.0", path = "../crates/axocoatl-mcp" }
+axocoatl-core = { version = "1.1.0", path = "../crates/axocoatl-core" }
+axocoatl-config = { version = "1.1.0", path = "../crates/axocoatl-config" }
+axocoatl-daemon = { version = "1.1.0", path = "../crates/axocoatl-daemon" }
+axocoatl-actor = { version = "1.1.0", path = "../crates/axocoatl-actor" }
+axocoatl-server = { version = "1.1.0", path = "../axocoatl-server" }
+axocoatl-memory = { version = "1.1.0", path = "../crates/axocoatl-memory" }
+axocoatl-service = { version = "1.1.0", path = "../crates/axocoatl-service" }
+axocoatl-isolation = { version = "1.1.0", path = "../crates/axocoatl-isolation" }
+axocoatl-mcp = { version = "1.1.0", path = "../crates/axocoatl-mcp" }
 clap = { workspace = true }
 rmcp = { workspace = true }
 async-trait = { workspace = true }

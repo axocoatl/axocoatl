@@ -13,14 +13,14 @@ scenario can be reset and repeated from a fresh Axocoatl data directory.
 | Session | The durable work context around one workspace: conversation, mode, tools, sandbox, files, terminal, Preview, and Git state. | One model response. |
 | Turn | One accepted request and its durable execution evidence inside a Session. | The whole Session. |
 | Single-agent Session | The ordinary path: one configured Agent works in the Session sandbox and conversation. | A reduced demo mode. It is the default product path. |
-| Multi-agent Session | A fixed set of Agents shares one Session and sandbox. Agents run in dependency order and downstream Agents receive earlier outputs. | Parallel competing solutions. |
+| Multi-agent Session | A Session team shares one work context. Native generations bind accepted upstream outputs; team and turn controls can revise its work. | Parallel competing solutions in isolated repositories. |
 | Agent graph | The visible dependency and live-status view for the Agents in a Session. | The event lattice. |
 | Ways | Independent candidate implementations created from the same repository snapshot and prompt, each in its own repository clone and sandbox. | A multi-agent handoff inside one Session. |
 | Event lattice | Typed events published by Skills and runtime activity, then consumed by Automations, webhooks, and observers. | The Agent graph or a visual workflow editor. |
 | Automation | A durable executable DAG with triggers, inputs, run history, and optional human interrupts. | An Agent Session or a scheduled chat macro. |
-| Coordinator | A separate dynamic path that decomposes work, auctions tasks by capability and budget, runs workers, and synthesizes a result. | The fixed dependency order used by a multi-agent Session. |
+| Coordinator | A configured coordination role can propose work and dependencies inside the native turn contract. | A guarantee of better results or unlimited autonomous execution. |
 
-## 1.0 film portfolio
+## 1.1.0 prospective film portfolio
 
 [`films/portfolio.json`](films/portfolio.json) is the authoritative release
 manifest. It fixes the 12 slugs, complete Showcase order, additional page
@@ -28,13 +28,15 @@ placements, scenario and fixture, beats, evidence, duration, media paths,
 poster beat, and provenance path. The Showcase is the complete directory; Home,
 Concepts, and Why reuse selected films without changing their identity.
 
-All twelve entries are accepted against the 1.0 scenario, media, and provenance
-contracts. The final replacement pass rejected stale, incomplete, duplicate-frame,
-and false-success takes before promoting the coherent Session Workbench,
-Workspace/Sessions/Turns, Several Ways, Git Last turn, and shared-core-memory
-recordings. Older pairs remain reference material only.
+The active entries require new captures of the 1.1.0 release candidate. Their
+`needs_recording` status is deliberate until each journey has been rehearsed and
+the final source-bound take accepted. New source, media, and provenance use
+`v1.1.0` subdirectories; unversioned historical recordings remain untouched.
+Workspace knowledge replaces legacy shared-core-memory in the active slot.
+MCP approval is explicitly a compatibility Session journey; configured
+Automations retain their distinct execution contract.
 
-The 12 provenance files are restored byte-for-byte from their earliest commit
+The 12 historical provenance files are restored byte-for-byte from their earliest commit
 after a history audit found later source and binary rewrites made without
 recapture. Their source and binary fields are first-committed declarations; the
 capture binary bytes are not preserved for independent authentication. The
@@ -66,11 +68,11 @@ filmed-product content. It does not relabel any take as a `v1.0.1` capture.
 | ---: | --- | --- | --- | --- |
 | 8 | **Runtime configuration in Settings** | “Where do Agents, Skills, MCP, and Automations belong?” | All four are reachable inside Settings; the same selected Session remains visible behind the tour; a real completed run exposes Result. | Concepts 4 |
 | 9 | **Skill event to Automation Result** | “How does Axocoatl react to typed events?” | One typed Skill event creates one matching run, crosses its Interrupt, and retains exact `final_content` after reload. | Concepts 5 |
-| 10 | **Session MCP approval** | “Can an Agent safely use an external tool?” | Pending approval survives reload and 30 seconds; Deny dispatches zero calls; a fresh Allow once dispatches exactly one; completed tool evidence persists. | Concepts 6 |
-| 11 | **Shared core memory across Sessions** | “What can deliberately persist across Agents?” | One Agent writes the shared block; another Session/Agent recalls the exact nonce after daemon restart while transcripts remain separate. | Concepts 7 |
+| 10 | **Compatibility Session MCP approval** | “Can an Agent safely use an external tool?” | Pending approval survives reload and 30 seconds; Deny dispatches zero calls; a fresh Allow once dispatches exactly one; completed tool evidence persists. | Concepts 6 |
+| 11 | **Workspace knowledge across Sessions** | “What can my team retain about this project?” | Reviewed note revisions, source hashes, typed backlinks, restart, and native retrieval in another Session agree while chats stay separate. | Concepts 7 |
 | 12 | **Human-in-the-loop Automation recovery** | “Can a durable workflow stop for judgment and recover?” | A top-level Interrupt survives daemon restart, upstream nodes do not replay, Resume continues the same run, and completed history exposes Result. | — |
 
-Coordinator and provider-routing films remain deliberate non-films for 1.0.
+Coordinator and provider-routing films are not selected for this 12-film portfolio.
 They are not missing members of this portfolio and must not appear as empty or
 speculative Showcase cards.
 
@@ -81,10 +83,9 @@ technical capabilities, but they do not yet have a clear first-party journey in
 the browser workbench. They should be demonstrated in documentation or runnable
 examples until a user can discover and complete them in `/`.
 
-The Coordinator film is also held back: Session-scoped coordinators currently
-run as ordinary Session Agents, while Automation coordinator progress and
-Automation completion use different run identities. Until that correlation is
-wired, a film could show activity but not a trustworthy completed journey.
+The absence of a dedicated Coordinator film is a portfolio choice, not a claim
+that native coordination is unavailable. A future film must identify its actual
+Session Turn, generations, accepted dependencies, and final evidence.
 
 ## Fixture set
 

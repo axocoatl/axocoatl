@@ -1,7 +1,9 @@
 # MCP tool discovery and approval
 
 This film proves the safe external-tool boundary through a deterministic local
-MCP server and a normal Session Turn.
+MCP server and a compatibility Session Turn. The prospective 1.1.0 take must
+record that execution owner explicitly; native Session turns do not yet expose
+the compatibility MCP registry.
 
 ## Claim
 
@@ -22,7 +24,12 @@ tool start and result on the Session Turn.
 
 ## Start or reset
 
-After closing prior Sessions and stopping the daemon:
+Use a separate, intentionally retained compatibility data root with the current
+release candidate. Verify the Session's execution ownership before the take.
+Do not relabel a new native Session or alter execution metadata to force this
+scenario. The following historical demo setup is applicable only when it
+preserves that verified compatibility owner. After closing prior Sessions and
+stopping the daemon:
 
 ```bash
 ./demo/one-app/prepare.sh

@@ -13,25 +13,28 @@ readme.workspace = true
 description = "Persistent agent daemon runtime for Axocoatl — bootstraps and orchestrates all subsystems"
 
 [dependencies]
-axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
-axocoatl-config = { version = "1.0.0", path = "../axocoatl-config" }
-axocoatl-llm = { version = "1.0.0", path = "../axocoatl-llm" }
-axocoatl-llm-openai = { version = "1.0.0", path = "../axocoatl-llm-openai" }
-axocoatl-llm-anthropic = { version = "1.0.0", path = "../axocoatl-llm-anthropic" }
-axocoatl-llm-ollama = { version = "1.0.0", path = "../axocoatl-llm-ollama" }
-axocoatl-llm-gemini = { version = "1.0.0", path = "../axocoatl-llm-gemini" }
-axocoatl-llm-mistral = { version = "1.0.0", path = "../axocoatl-llm-mistral" }
-axocoatl-actor = { version = "1.0.0", path = "../axocoatl-actor" }
-axocoatl-token = { version = "1.0.0", path = "../axocoatl-token" }
-axocoatl-memory = { version = "1.0.0", path = "../axocoatl-memory" }
-axocoatl-tools = { version = "1.0.0", path = "../axocoatl-tools" }
-axocoatl-coordination = { version = "1.0.0", path = "../axocoatl-coordination" }
-axocoatl-mcp = { version = "1.0.0", path = "../axocoatl-mcp" }
-axocoatl-session = { version = "1.0.0", path = "../axocoatl-session" }
-axocoatl-isolation = { version = "1.0.0", path = "../axocoatl-isolation" }
+base64 = { workspace = true }
+axocoatl-exec = { version = "=1.1.0", path = "../axocoatl-exec" }
+axocoatl-core = { version = "1.1.0", path = "../axocoatl-core" }
+axocoatl-config = { version = "1.1.0", path = "../axocoatl-config" }
+axocoatl-llm = { version = "1.1.0", path = "../axocoatl-llm" }
+axocoatl-llm-openai = { version = "1.1.0", path = "../axocoatl-llm-openai" }
+axocoatl-llm-anthropic = { version = "1.1.0", path = "../axocoatl-llm-anthropic" }
+axocoatl-llm-ollama = { version = "1.1.0", path = "../axocoatl-llm-ollama" }
+axocoatl-llm-gemini = { version = "1.1.0", path = "../axocoatl-llm-gemini" }
+axocoatl-llm-mistral = { version = "1.1.0", path = "../axocoatl-llm-mistral" }
+axocoatl-actor = { version = "1.1.0", path = "../axocoatl-actor" }
+axocoatl-token = { version = "1.1.0", path = "../axocoatl-token" }
+axocoatl-memory = { version = "1.1.0", path = "../axocoatl-memory" }
+axocoatl-tools = { version = "1.1.0", path = "../axocoatl-tools" }
+axocoatl-coordination = { version = "1.1.0", path = "../axocoatl-coordination" }
+axocoatl-mcp = { version = "1.1.0", path = "../axocoatl-mcp" }
+axocoatl-session = { version = "1.1.0", path = "../axocoatl-session" }
+axocoatl-isolation = { version = "1.1.0", path = "../axocoatl-isolation" }
 uuid = { workspace = true }
 ractor = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
@@ -47,6 +50,5 @@ unicode-normalization = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
-tokio-stream = { workspace = true }
 wiremock = { workspace = true }
 tempfile = "3.27"

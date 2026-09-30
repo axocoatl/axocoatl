@@ -11,7 +11,7 @@ import {
 import { basename, dirname, resolve } from 'node:path';
 import {
   fail,
-  filmsDir,
+  filmSourceDirectory,
   findFilm,
   loadPortfolio,
   probePoster,
@@ -27,7 +27,7 @@ function usage() {
   console.error(`Usage: stage-film.mjs <film-slug> <timeline.json> <frames-dir> [options]
 
 Options:
-  --record <path>  stage record (default: films/source/<slug>/stage.json)
+  --record <path>  stage record (default: films/source/[recording_version/]<slug>/stage.json)
   --replace        replace only frame-NNNN.jpg and the stage record
 `);
 }
@@ -57,7 +57,7 @@ for (let index = 3; index < args.length; index += 1) {
 
 const portfolio = loadPortfolio();
 const film = findFilm(portfolio, slug);
-recordPath ||= resolve(filmsDir, 'source', slug, 'stage.json');
+recordPath ||= resolve(filmSourceDirectory(portfolio, slug), 'stage.json');
 repoRelative(timelinePath);
 repoRelative(recordPath);
 

@@ -18,7 +18,8 @@ description = "4-tier memory system and agent state checkpointing for Axocoatl"
 exclude = ["data/", "data/**"]
 
 [dependencies]
-axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
+axocoatl-core = { version = "1.1.0", path = "../axocoatl-core" }
+axocoatl-session = { version = "1.1.0", path = "../axocoatl-session" }
 tokio = { workspace = true, features = ["fs", "sync"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -31,6 +32,13 @@ uuid = { workspace = true }
 sha2 = { workspace = true }
 pdf-extract = { workspace = true }
 calamine = { workspace = true }
+tree-sitter = "=0.25.10"
+# 0.1.8 raises the transitive MSRV above the workspace's Rust 1.88 contract.
+tree-sitter-language = "=0.1.7"
+tree-sitter-rust = "=0.24.2"
+tree-sitter-javascript = "=0.25.0"
+tree-sitter-typescript = "=0.23.2"
+tree-sitter-python = "=0.25.0"
 
 # Neural sentence embeddings (Tier 4) — pure-Rust inference via Candle, no
 # ONNX/C++. Behind a default-on feature so a lean build can opt out.

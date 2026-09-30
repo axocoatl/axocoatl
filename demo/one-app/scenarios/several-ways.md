@@ -16,50 +16,29 @@ and Route, asks a Judge to rank both passing non-empty survivors, and chooses
 - Ways are not a multi-agent handoff and do not share a writable workspace.
 - Judge is advice, not an automatic merge or release decision.
 - Keep does not merge, commit, push, or deploy.
-- This recording uses one deterministic local Ollama-compatible fixture
-  provider for all four configured roles. It proves the Axocoatl lifecycle,
-  protected evidence, comparison, Judge, and Keep boundaries—not provider
-  diversity, model quality, or a benchmark result.
+- The new take uses real local Ollama calls for each configured strategy. The
+  exact model and budgets are retained. This is a lifecycle demonstration, not
+  evidence of provider diversity or a model benchmark.
 
 ## Start or reset
 
-After closing earlier demo Sessions and stopping the daemon, prepare the
-isolated Harbor root:
+Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
+`harbor-catalog` fixture, a fresh native data path, real local Ollama calls,
+and the exact candidate binary at `http://localhost:8080`. Retain the actual
+workspace path as `$AXO_DEMO_ROOT/workspace` (or record the equivalent isolated
+fixture path). Verify `history_version: execution_v2` and Ready, then explicitly
+review and apply **Team and budget** before sending.
 
-```bash
-export AXO_WAYS_ROOT=/private/tmp/axocoatl-one-app-showcase-harbor-ways-fixture
-AXOCOATL_DEMO_ROOT="$AXO_WAYS_ROOT" \
-  ./demo/one-app/prepare.sh --scenario harbor-catalog
-```
-
-In one terminal, start the capture-only deterministic provider:
-
-```bash
-node demo/one-app/films/fixtures/harbor-ways-provider.mjs
-```
-
-In another, start the exact release binary with the capture configuration:
-
-```bash
-AXOCOATL_DATA_DIR="$AXO_WAYS_ROOT/data" \
-AXOCOATL_SOCKET_PATH="$AXO_WAYS_ROOT/run/axocoatl.sock" \
-RUST_LOG=info \
-  ./target/release/axocoatl dev \
-  -c demo/one-app/films/fixtures/harbor-ways.capture.yaml
-```
-
-The product is at `http://127.0.0.1:18092`; the fixture provider is bound only
-to `127.0.0.1:18110`. Create a **Single agent** Session for
-`$AXO_WAYS_ROOT/workspace` using **Minimal Coder**. Keep the detected demo
-image and `npm run check`. The provider's only model label is the explicit
-`harbor-ways-fixture`—never describe it as qwen or as an Ollama model.
+Use **Minimal Coder**, **Invariant Defender**, **Acceptance Planner**, and
+**Evidence Judge** with the recorded local model. Do not run the historical
+HTTP fixture provider or relabel its responses as real native inference.
 
 ## Browser actions
 
 1. Open **Explore several ways** before entering the task.
 2. Configure exactly two Ways:
-   - **Minimal Coder** / `harbor-ways-fixture`
-   - **Invariant Defender** / `harbor-ways-fixture`
+   - **Minimal Coder** / the configured local Qwen model
+   - **Invariant Defender** / the same local Qwen model
 3. Enable **Plan first** with **Acceptance Planner**.
 4. Paste this exact task into the Ways composer:
 
@@ -107,8 +86,8 @@ image and `npm run check`. The provider's only model label is the explicit
 Before Keep, copy the Session id and inspect the persisted attempt set:
 
 ```bash
-export AXO_DEMO_URL='http://127.0.0.1:18092'
-export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-harbor-ways-fixture'
+export AXO_DEMO_URL='http://localhost:8080'
+export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-harbor-native'
 export AXO_SESSION_ID='ses-paste-the-id-here'
 curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/variants/results"
 find "$AXO_DEMO_ROOT/workspace/.axo-variants" -maxdepth 5 -type f -print
@@ -136,7 +115,7 @@ git -C "$AXO_DEMO_ROOT/workspace" diff
 npm --prefix "$AXO_DEMO_ROOT/workspace" run check
 find "$AXO_DEMO_ROOT/workspace/.axo-variants" \
   -path '*/receipts/keep-*.json' -type f -print
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns"
+curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
 ```
 
 The pre-Keep APIs and manifests prove independent candidates and verdicts. The
@@ -163,11 +142,11 @@ compress idle model time, not lifecycle transitions or evidence.
    Never stop the daemon with live Ways solely to force a visual reset.
 2. Capture the pre/post-Keep evidence and close the Session from
    **All sessions**.
-3. Stop the release daemon and deterministic provider with Ctrl-C.
+3. Stop the release daemon with Ctrl-C; leave the user-owned Ollama service alone.
 4. Reset with:
 
    ```bash
-   AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-harbor-ways-fixture \
+   AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-harbor-native \
      ./demo/one-app/prepare.sh --scenario harbor-catalog
    ```
 
@@ -176,9 +155,6 @@ compress idle model time, not lifecycle transitions or evidence.
 ## Known constraints
 
 - Ways currently require a single-agent Session and the local Podman backend.
-- The deterministic provider is recording infrastructure. It returns two
-  deliberately distinct valid tool routes so the film can verify Axocoatl's
-  decision lifecycle repeatably; it is not included in the product binary.
 - Session attachments, Skills, MCP tools, and configured web search are withheld
   from Ways because their external effects do not yet have attempt-scoped
   rollback semantics.

@@ -22,10 +22,10 @@ We optimize for the unglamorous reality: agents that work against real files, us
 the terminal and preview, keep their context across restarts, expose what they changed,
 and leave the repository under the engineer's control. When a problem has several
 plausible solutions, the same workbench can compare real attempts without turning
-them into unrelated chats. While that decision is unresolved, candidate Routes, diffs,
-failures, Checks, and Judge evidence stay together for comparison. After Keep completes, the
-selected output and turn attribution join durable Session History, and Git shows the current
-diff for the attributed paths. Real workflows. Not demos.
+them into unrelated chats. Candidate Routes, diffs, failures, Checks, and Judge evidence stay together for
+comparison. Native Ways retain the bounded decision record after cleanup under explicit
+storage limits. After Keep, the selected output and turn attribution join durable Session
+History, and Git shows the current diff for the attributed paths. Real workflows. Not demos.
 
 If a piece of copy does not name a fact the code and reachable product can prove,
 the copy is wrong.
@@ -44,8 +44,8 @@ Three pillars. Every page should reinforce one or more:
    Files, editor, Terminal, Preview, context, History, and Git open around it.
 2. **Inspectable execution.** Agents use real tools against the repository. Their
    normal Turns retain bounded tool activity, output, lifecycle, and path attribution in
-   History. An unresolved Ways set retains its candidate Routes, failures, diffs, Checks,
-   cost, and optional Judge until the engineer Keeps one or finishes. Several Ways are an
+   History. Native Ways retain bounded candidate Routes, failures, diffs, Checks,
+   cost, optional Judge, and the human decision beyond runtime cleanup. Several Ways are an
    optional decision mode inside this surface, not the product category.
 3. **Yours and extensible.** Actor-supervised, checkpointed, sandboxed, local-first.
    Bring providers, Agents, Skills, MCP servers, and Automations. No Axocoatl telemetry;

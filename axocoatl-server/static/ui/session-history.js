@@ -1,3 +1,4 @@
+import { historyPresentation, executionHistorySummary } from './execution-history.js';
 import { adopt } from './sheets.js';
 
 /**
@@ -179,6 +180,11 @@ h2 { margin: 0; font-size: var(--fs-lg); font-weight: var(--fw-bold); }
   font-size: var(--fs-xs); font-weight: var(--fw-medium);
 }
 .route summary:hover { background: var(--bg-3); }
+.guidance-list { display: grid; gap: var(--sp-3); padding: 0 var(--sp-3) var(--sp-3); }
+.guidance-evidence { min-width: 0; padding-left: var(--sp-2); border-left: 2px solid var(--border-strong); }
+.guidance-heading { color: var(--muted); font-size: var(--fs-xs); }
+.guidance-instruction { margin: var(--sp-2) 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.guidance-note, .guidance-command { color: var(--muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .tool-list { display: grid; gap: var(--sp-2); padding: 0 var(--sp-3) var(--sp-3); }
 .tool-evidence { display: grid; gap: var(--sp-1); padding: var(--sp-2); border-left: 2px solid var(--border-strong); }
 .tool-evidence.failed { border-left-color: var(--err); }
@@ -319,7 +325,19 @@ function toolEvidence(raw) {
 }
 
 function normalizeTurn(raw, fallbackSessionId = '', matchedFields = []) {
-  const turn = raw?.turn && typeof raw.turn === 'object' ? raw.turn : raw || {};
+  const entry = raw && Object.hasOwn(raw, 'entry') ? raw.entry : raw;
+  const turn = historyPresentation(entry && Object.hasOwn(entry, 'history_version') ? entry
+    : (entry?.turn && typeof entry.turn === 'object' ? entry.turn : entry));
+  if (turn.history_version === 'execution_v2') {
+    const summary = executionHistorySummary(turn.execution);
+    return { id: turn.id, sessionId: turn.session_id, sessionName: '',
+      userInput: summary.userInput, output: summary.output, context: summary.context, guidance: summary.guidance,
+      createdAt: summary.createdAt, updatedAt: 0, model: summary.model,
+      status: turn.status, historyVersion: 'execution_v2',
+      error: '', agentId: '', toolCount: 0, tools: [], superseded: turn.superseded === true,
+      matchedFields: Array.isArray(matchedFields) ? matchedFields.map(String) : [],
+      usageLabel: '', raw: turn };
+  }
   const metadata = turn.metadata && typeof turn.metadata === 'object' ? turn.metadata : {};
   const hasTokenUsage = ['input_tokens', 'output_tokens', 'reasoning_tokens', 'token_usage_known']
     .some((key) => Object.prototype.hasOwnProperty.call(metadata, key));
@@ -383,7 +401,7 @@ function displayText(value, limit) {
 function statusLabel(status) {
   return ({
     running: 'Running', completed: 'Completed', failed: 'Failed',
-    cancelled: 'Cancelled', interrupted: 'Interrupted',
+    cancelled: 'Cancelled', interrupted: 'Interrupted', needs_attention: 'Needs attention', finished: 'Finished',
   })[status] || status || 'Unknown';
 }
 
@@ -458,6 +476,7 @@ export class AxSessionHistory extends HTMLElement {
               <input class="search" type="search" aria-label="Search session turns" placeholder="Search requests, responses, and context" autocomplete="off">
               <button class="button search-submit" type="submit">Search history</button>
             </form>
+            <button class="button ways-decisions" type="button">Ways decisions</button>
             <div class="exports" aria-label="Export this Session">
               <span class="export-label">Export this Session</span>
               <button class="button export-markdown" type="button" data-format="markdown"
@@ -493,6 +512,7 @@ export class AxSessionHistory extends HTMLElement {
       this.#scope = event.target.value === 'all' ? 'all' : 'session';
       void this.#load();
     });
+    this.#root.querySelector('.ways-decisions').addEventListener('click', () => { this.dispatchEvent(new CustomEvent('open-ways-history', {bubbles:true, composed:true, detail:{sessionId:this.sessionId}})); this.hide(); });
     this.#root.querySelector('.exports').addEventListener('click', (event) => {
       const button = event.target.closest('[data-format]');
       if (button) void this.#export(button.dataset.format);
@@ -641,7 +661,7 @@ export class AxSessionHistory extends HTMLElement {
     try {
       let body;
       if (query) {
-        const parameters = new URLSearchParams({ q: query });
+        const parameters = new URLSearchParams({ q: query, history_version: '2' });
         if (this.#scope === 'session' && sessionId) parameters.set('session_id', sessionId);
         body = await this.#request(`/api/session-turns/search?${parameters}`, { signal: controller.signal });
         if (generation !== this.#requestGeneration || controller.signal.aborted) return;
@@ -652,7 +672,7 @@ export class AxSessionHistory extends HTMLElement {
           hit?.matched_fields ?? hit?.matchedFields ?? [],
         ));
       } else {
-        body = await this.#request(`/api/sessions/${encodeURIComponent(sessionId)}/turns`, { signal: controller.signal });
+        body = await this.#request(`/api/sessions/${encodeURIComponent(sessionId)}/turns?history_version=2`, { signal: controller.signal });
         if (generation !== this.#requestGeneration || controller.signal.aborted) return;
         this.#turns = collection(body, ['turns', 'results'])
           .map((turn) => normalizeTurn(turn, sessionId))
@@ -820,6 +840,26 @@ export class AxSessionHistory extends HTMLElement {
     }
     card.append(open);
     if (contextBlock) card.append(contextBlock);
+    if (turn.guidance?.length) {
+      const guidance = document.createElement('details'); guidance.className = 'route guidance';
+      const query = this.#query.toLowerCase();
+      guidance.open = turn.guidance.length <= 3 || (query && turn.guidance.some(item => item.text.toLowerCase().includes(query)));
+      const summary = document.createElement('summary'); summary.textContent = `Guidance · ${turn.guidance.length} ${turn.guidance.length === 1 ? 'instruction' : 'instructions'}`; guidance.append(summary);
+      const list = document.createElement('div'); list.className = 'guidance-list';
+      for (const item of turn.guidance) {
+        const evidence = document.createElement('section'); evidence.className = 'guidance-evidence';
+        evidence.dataset.commandId = item.commandId; evidence.dataset.evidenceRef = item.reference;
+        evidence.dataset.activationId = item.activation.activation_id; evidence.dataset.epochId = item.activation.execution_epoch_id;
+        evidence.dataset.generation = String(item.activation.generation); evidence.dataset.guidanceDelivery = item.status;
+        const heading = document.createElement('div'); heading.className = 'guidance-heading'; heading.textContent = `${item.label} · guidance · ${item.disposition}`;
+        const instruction = document.createElement('p'); instruction.className = 'guidance-instruction'; instruction.textContent = item.text;
+        const note = document.createElement('div'); note.className = 'guidance-note'; note.textContent = item.note;
+        const command = document.createElement('div'); command.className = 'guidance-command'; command.textContent = `Command ${item.commandId}`;
+        if (item.contextNote) { const context = document.createElement('div'); context.className = 'guidance-note'; context.textContent = item.contextNote; evidence.append(context); }
+        evidence.append(heading, instruction, note, command); list.append(evidence);
+      }
+      guidance.append(list); card.append(guidance);
+    }
     if (turn.tools.length) {
       const route = document.createElement('details'); route.className = 'route';
       // Most turns use only a few tools. Keep that durable evidence visible;
@@ -870,12 +910,12 @@ export class AxSessionHistory extends HTMLElement {
     if (!this.#query && turn.sessionId === this.sessionId && this.rewindEnabled) {
       const index = this.#turns.findIndex((candidate) => candidate.id === turn.id);
       const laterCount = index < 0 ? 0 : this.#turns.length - index - 1;
-      const hasRunningTurn = this.#turns.some((candidate) => candidate.status === 'running');
+      const hasRunningTurn = this.#turns.some((candidate) => ['running', 'needs_attention'].includes(candidate.status));
       const rewind = document.createElement('button'); rewind.type = 'button'; rewind.className = 'text-button rewind';
       rewind.dataset.action = 'rewind'; rewind.textContent = 'Rewind history here';
       rewind.disabled = laterCount === 0 || hasRunningTurn;
       rewind.title = hasRunningTurn
-        ? 'Stop the running turn before rewinding'
+        ? 'Stop or finish the unfinished turn before rewinding'
         : laterCount === 0
           ? 'This is already the latest turn'
           : `Supersede ${laterCount} later ${laterCount === 1 ? 'turn' : 'turns'}; files and tool effects are not undone`;
@@ -910,7 +950,8 @@ export class AxSessionHistory extends HTMLElement {
   #askRewind(turn, returnFocus) {
     const index = this.#turns.findIndex((candidate) => candidate.id === turn.id);
     const laterCount = index < 0 ? 0 : this.#turns.length - index - 1;
-    if (!turn.id || !this.sessionId || turn.sessionId !== this.sessionId || laterCount <= 0) return;
+    if (!this.rewindEnabled || this.#turns.some(candidate => ['running', 'needs_attention'].includes(candidate.status))
+        || !turn.id || !this.sessionId || turn.sessionId !== this.sessionId || laterCount <= 0) return;
     this.#confirm = {
       sessionId: String(this.sessionId),
       sessionName: String(this.sessionName || this.sessionId),
@@ -1002,7 +1043,7 @@ export class AxSessionHistory extends HTMLElement {
     const sessionName = String(this.sessionName || this.sessionId);
     this.#exporting = format; this.#announce('', ''); this.#render();
     try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/export?format=${encodeURIComponent(format)}`);
+      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/export?format=${encodeURIComponent(format)}&history_version=2`);
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Error(body?.error || `Export failed (HTTP ${response.status})`);

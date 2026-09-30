@@ -69,6 +69,31 @@ impl From<ApprovalContext> for PendingMcpApproval {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum StreamFrame {
+    /// Read invalidation after a durable exact-activation blocker/control change.
+    /// This is neither lifecycle evidence nor permission; reload the retained
+    /// projection. The same canonical revision may notify a later receipt ack.
+    ActivationControlChanged {
+        activation: axocoatl_session::turn_contract::ActivationRef,
+        blocker_id: axocoatl_session::turn_contract::BlockerId,
+        canonical_command_id: axocoatl_session::turn_contract::CommandId,
+        turn_revision: u64,
+    },
+    /// One bounded exact-activation observation, published only after the
+    /// canonical content store acknowledges it. It does not alter legacy run
+    /// identities; reconnect resolves its retained reference from that controller.
+    ActivationStream {
+        event: axocoatl_session::execution_content::ActivationStreamView,
+    },
+    /// One durable Session coordination event. The frame is published only
+    /// after the matching turn-ledger record is fsynced, so live folding and
+    /// reconnect hydration observe the same event shape and order.
+    Coordination {
+        session: String,
+        turn_id: String,
+        operation_id: String,
+        recorded_at: u64,
+        event: axocoatl_session::RecordTurnExecution,
+    },
     /// A lattice coordination event (agent activation, completion, skill fire…).
     Event {
         #[serde(rename = "type")]
@@ -111,6 +136,11 @@ pub enum StreamFrame {
         /// durable event identity by itself.
         #[serde(default)]
         occurrence: u64,
+        /// One-based activation generation for an autonomous coordinated
+        /// Session Agent. Absent for direct, single-Agent, Coordinator-led,
+        /// Workflow, and legacy frames.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        coordination_generation: Option<u32>,
         name: String,
         phase: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,6 +190,16 @@ pub enum StreamFrame {
     },
     /// A durable session turn was accepted before execution started.
     SessionAccepted { session: String, turn_id: String },
+    /// This execution epoch ended, but the logical turn remains open for an
+    /// explicit intervention. This never claims completion or cancellation.
+    SessionNeedsAttention {
+        session: String,
+        turn_id: String,
+        input_tokens: u64,
+        output_tokens: u64,
+        reasoning_tokens: u64,
+        token_usage_known: bool,
+    },
     /// A directory-session run finished.
     SessionDone {
         session: String,
@@ -197,6 +237,13 @@ pub enum StreamFrame {
         reasoning_tokens: u64,
         #[serde(default)]
         token_usage_known: bool,
+    },
+    /// A Session request was rejected before it acquired lifecycle ownership.
+    /// Unlike `SessionError`, this never terminalizes the addressed live turn.
+    SessionRequestRejected {
+        session: String,
+        turn_id: String,
+        error: String,
     },
     /// A Stop command could not be applied (for example the addressed turn
     /// completed just before the command arrived). This is a control response,
@@ -437,6 +484,9 @@ pub struct StreamBus {
 }
 
 impl StreamBus {
+    pub(crate) fn same_bus(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
     pub fn new(capacity: usize) -> Self {
         let (sender, _) = tokio::sync::broadcast::channel(capacity);
         Self {
@@ -772,6 +822,72 @@ pub fn apply_frame(runs: &mut std::collections::HashMap<String, RunState>, frame
         })
     }
     match frame {
+        StreamFrame::Coordination {
+            session,
+            turn_id,
+            event,
+            ..
+        } => {
+            let Some(run) = runs.get_mut(session) else {
+                return;
+            };
+            if run.turn_id.as_ref() != Some(turn_id) {
+                return;
+            }
+            let agent_id = event
+                .metadata
+                .get("agent_id")
+                .and_then(serde_json::Value::as_str);
+            let Some(agent_id) = agent_id else {
+                return;
+            };
+            let agent = run.agent_mut(agent_id);
+            let clear_stale = |agent: &mut RunAgent, status: &str| {
+                agent.status = status.to_string();
+                agent.output.clear();
+                agent.thinking.clear();
+                agent.tokens = 0;
+            };
+            match event.kind.as_str() {
+                "coordination_agent_activated" => clear_stale(agent, "running"),
+                "coordination_agent_reactivated" | "agent_output_superseded" => {
+                    clear_stale(agent, "waiting")
+                }
+                "coordination_agent_completed" => {
+                    agent.status = "done".to_string();
+                    if let Some(summary) = event
+                        .metadata
+                        .get("summary")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        if summary.len() >= agent.output.len() {
+                            agent.output = summary.to_string();
+                        }
+                    }
+                    if let Some(tokens) = event
+                        .metadata
+                        .get("usage")
+                        .and_then(|usage| usage.get("total_tokens"))
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        agent.tokens = tokens;
+                    }
+                }
+                "coordination_agent_failed" => {
+                    clear_stale(agent, "error");
+                    if let Some(summary) = event
+                        .metadata
+                        .get("summary")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        agent.output = summary.to_string();
+                    }
+                }
+                "coordination_agent_blocked" => clear_stale(agent, "blocked"),
+                "coordination_agent_cancelled" => clear_stale(agent, "cancelled"),
+                _ => {}
+            }
+        }
         // Blocked-on-human is folded into run state, not merely announced, so a
         // client that connects after the prompt fired still sees the lane is
         // waiting rather than watching a row that appears idle forever.
@@ -960,6 +1076,9 @@ pub fn apply_frame(runs: &mut std::collections::HashMap<String, RunState>, frame
         }
         #[allow(clippy::collapsible_match)]
         StreamFrame::SessionCancelled {
+            session, turn_id, ..
+        }
+        | StreamFrame::SessionNeedsAttention {
             session, turn_id, ..
         } => {
             if runs.get(session).and_then(|run| run.turn_id.as_ref()) == Some(turn_id) {
@@ -1160,6 +1279,30 @@ impl axocoatl_actor::CoordinatorReporter for CoordinatorStreamReporter {
 #[cfg(test)]
 mod supervision_tests {
     use super::*;
+
+    fn durable_coordination(
+        session: &str,
+        turn_id: &str,
+        agent_id: &str,
+        operation_id: &str,
+        kind: &str,
+        metadata: serde_json::Value,
+    ) -> StreamFrame {
+        let mut metadata = metadata.as_object().cloned().unwrap_or_default();
+        metadata.insert("agent_id".to_string(), serde_json::json!(agent_id));
+        StreamFrame::Coordination {
+            session: session.to_string(),
+            turn_id: turn_id.to_string(),
+            operation_id: operation_id.to_string(),
+            recorded_at: 1_700_000_000_000,
+            event: axocoatl_session::RecordTurnExecution {
+                kind: kind.to_string(),
+                execution_id: Some(turn_id.to_string()),
+                attempt_id: None,
+                metadata,
+            },
+        }
+    }
 
     #[tokio::test]
     async fn reconnect_cursor_partitions_snapshot_from_queued_frames_exactly_once() {
@@ -1378,6 +1521,261 @@ mod supervision_tests {
         assert_eq!(agent.tokens, 41);
     }
 
+    #[test]
+    fn durable_coordination_frames_clear_stale_snapshot_results_and_settle_agents() {
+        let bus = StreamBus::new(32);
+        let _receiver = bus.subscribe();
+        bus.send(StreamFrame::SessionAccepted {
+            session: "session-a".to_string(),
+            turn_id: "turn-a".to_string(),
+        })
+        .unwrap();
+        for agent in ["source", "reviewer"] {
+            bus.send(StreamFrame::Event {
+                event_type: "AgentActivated".to_string(),
+                agent: Some(agent.to_string()),
+                task: None,
+                name: None,
+                output: None,
+                tokens: None,
+                workflow: Some("session-a".to_string()),
+            })
+            .unwrap();
+            bus.send(StreamFrame::Token {
+                workflow: "session-a".to_string(),
+                agent: agent.to_string(),
+                turn_id: Some("turn-a".to_string()),
+                delta: format!("stale {agent} output"),
+            })
+            .unwrap();
+            bus.send(StreamFrame::Event {
+                event_type: "TaskCompleted".to_string(),
+                agent: Some(agent.to_string()),
+                task: None,
+                name: None,
+                output: None,
+                tokens: Some(9),
+                workflow: Some("session-a".to_string()),
+            })
+            .unwrap();
+            bus.send(durable_coordination(
+                "session-a",
+                "turn-a",
+                agent,
+                &format!("complete-{agent}"),
+                "coordination_agent_completed",
+                serde_json::json!({
+                    "summary": "short",
+                    "usage": {"total_tokens": 9},
+                }),
+            ))
+            .unwrap();
+        }
+        let (_, completed_runs) = bus.snapshot();
+        let completed = completed_runs
+            .iter()
+            .find(|run| run.workflow == "session-a")
+            .unwrap();
+        assert!(completed
+            .agents
+            .iter()
+            .all(|agent| agent.output.starts_with("stale ")));
+
+        bus.send(durable_coordination(
+            "session-a",
+            "turn-a",
+            "source",
+            "supersede-source",
+            "agent_output_superseded",
+            serde_json::json!({"superseded_by_generation": 2}),
+        ))
+        .unwrap();
+        bus.send(durable_coordination(
+            "session-a",
+            "turn-a",
+            "reviewer",
+            "reactivate-reviewer",
+            "coordination_agent_reactivated",
+            serde_json::json!({"generation": 2, "cause_signal_ids": ["feedback-1"]}),
+        ))
+        .unwrap();
+
+        let (_, runs) = bus.snapshot();
+        let run = runs.iter().find(|run| run.workflow == "session-a").unwrap();
+        for agent in &run.agents {
+            assert_eq!(agent.status, "waiting");
+            assert!(agent.output.is_empty());
+            assert_eq!(agent.tokens, 0);
+        }
+
+        bus.send(durable_coordination(
+            "session-a",
+            "turn-a",
+            "source",
+            "block-source",
+            "coordination_agent_blocked",
+            serde_json::json!({"generation": 2}),
+        ))
+        .unwrap();
+        bus.send(durable_coordination(
+            "session-a",
+            "turn-a",
+            "reviewer",
+            "cancel-reviewer",
+            "coordination_agent_cancelled",
+            serde_json::json!({"generation": 2, "reason": "turn_stop"}),
+        ))
+        .unwrap();
+        let (_, runs) = bus.snapshot();
+        let run = runs.iter().find(|run| run.workflow == "session-a").unwrap();
+        assert_eq!(
+            run.agents
+                .iter()
+                .find(|agent| agent.agent == "source")
+                .unwrap()
+                .status,
+            "blocked"
+        );
+        assert_eq!(
+            run.agents
+                .iter()
+                .find(|agent| agent.agent == "reviewer")
+                .unwrap()
+                .status,
+            "cancelled"
+        );
+    }
+
+    #[test]
+    fn stale_coordination_from_an_old_turn_cannot_mutate_the_new_turn() {
+        let bus = StreamBus::new(16);
+        let _receiver = bus.subscribe();
+        bus.send(StreamFrame::SessionAccepted {
+            session: "session-a".to_string(),
+            turn_id: "turn-old".to_string(),
+        })
+        .unwrap();
+        bus.send(durable_coordination(
+            "session-a",
+            "turn-old",
+            "builder",
+            "old-activate",
+            "coordination_agent_activated",
+            serde_json::json!({"generation": 1}),
+        ))
+        .unwrap();
+
+        bus.send(StreamFrame::SessionAccepted {
+            session: "session-a".to_string(),
+            turn_id: "turn-new".to_string(),
+        })
+        .unwrap();
+        bus.send(durable_coordination(
+            "session-a",
+            "turn-new",
+            "builder",
+            "new-activate",
+            "coordination_agent_activated",
+            serde_json::json!({"generation": 1}),
+        ))
+        .unwrap();
+        let before = serde_json::to_value(bus.run("session-a")).unwrap();
+
+        bus.send(durable_coordination(
+            "session-a",
+            "turn-old",
+            "builder",
+            "late-old-failure",
+            "coordination_agent_failed",
+            serde_json::json!({"summary": "stale failure"}),
+        ))
+        .unwrap();
+
+        let after = serde_json::to_value(bus.run("session-a")).unwrap();
+        assert_eq!(after, before);
+        let run = bus.run("session-a").unwrap();
+        assert_eq!(run.turn_id.as_deref(), Some("turn-new"));
+        assert_eq!(run.agents[0].status, "running");
+    }
+
+    #[test]
+    fn matching_coordination_after_terminal_cleanup_cannot_resurrect_the_run() {
+        let bus = StreamBus::new(16);
+        let _receiver = bus.subscribe();
+        bus.send(StreamFrame::SessionAccepted {
+            session: "session-a".to_string(),
+            turn_id: "turn-a".to_string(),
+        })
+        .unwrap();
+        bus.send(durable_coordination(
+            "session-a",
+            "turn-a",
+            "reviewer",
+            "activate",
+            "coordination_agent_activated",
+            serde_json::json!({"generation": 1}),
+        ))
+        .unwrap();
+        bus.send(StreamFrame::SessionDone {
+            session: "session-a".to_string(),
+            turn_id: Some("turn-a".to_string()),
+            input_tokens: 1,
+            output_tokens: 1,
+            reasoning_tokens: 0,
+            token_usage_known: true,
+        })
+        .unwrap();
+        assert!(bus.run("session-a").is_none());
+
+        bus.send(durable_coordination(
+            "session-a",
+            "turn-a",
+            "reviewer",
+            "late-complete",
+            "coordination_agent_completed",
+            serde_json::json!({"summary": "late", "usage": {"total_tokens": 2}}),
+        ))
+        .unwrap();
+        assert!(bus.run("session-a").is_none());
+    }
+
+    #[test]
+    fn coordination_for_the_exact_current_turn_still_folds() {
+        let bus = StreamBus::new(16);
+        let _receiver = bus.subscribe();
+        bus.send(StreamFrame::SessionAccepted {
+            session: "session-a".to_string(),
+            turn_id: "turn-a".to_string(),
+        })
+        .unwrap();
+        bus.send(durable_coordination(
+            "session-a",
+            "turn-a",
+            "reviewer",
+            "activate",
+            "coordination_agent_activated",
+            serde_json::json!({"generation": 1}),
+        ))
+        .unwrap();
+        bus.send(durable_coordination(
+            "session-a",
+            "turn-a",
+            "reviewer",
+            "complete",
+            "coordination_agent_completed",
+            serde_json::json!({"summary": "verified", "usage": {"total_tokens": 17}}),
+        ))
+        .unwrap();
+
+        let run = bus.run("session-a").unwrap();
+        assert_eq!(run.turn_id.as_deref(), Some("turn-a"));
+        assert_eq!(run.agents.len(), 1);
+        assert_eq!(run.agents[0].agent, "reviewer");
+        assert_eq!(run.agents[0].status, "done");
+        assert_eq!(run.agents[0].output, "verified");
+        assert_eq!(run.agents[0].tokens, 17);
+    }
+
     #[tokio::test]
     async fn coordinator_worker_terminals_are_distinct_and_never_remain_running() {
         let bus = StreamBus::new(16);
@@ -1577,6 +1975,40 @@ mod supervision_tests {
     }
 
     #[test]
+    fn coordination_frame_carries_the_exact_durable_event_identity() {
+        let frame = serde_json::to_value(StreamFrame::Coordination {
+            session: "session-a".into(),
+            turn_id: "turn-a".into(),
+            operation_id: "coordination:turn-a:2:agent-activated".into(),
+            recorded_at: 1_700_000_000_000,
+            event: axocoatl_session::RecordTurnExecution {
+                kind: "coordination_agent_activated".into(),
+                execution_id: Some("turn-a".into()),
+                attempt_id: None,
+                metadata: serde_json::json!({
+                    "agent_id": "reviewer",
+                    "generation": 1,
+                    "cause_signal_ids": ["source-1"],
+                })
+                .as_object()
+                .cloned()
+                .unwrap(),
+            },
+        })
+        .unwrap();
+        assert_eq!(frame["kind"], "coordination");
+        assert_eq!(frame["session"], "session-a");
+        assert_eq!(frame["turn_id"], "turn-a");
+        assert_eq!(
+            frame["operation_id"],
+            "coordination:turn-a:2:agent-activated"
+        );
+        assert_eq!(frame["recorded_at"], 1_700_000_000_000_u64);
+        assert_eq!(frame["event"]["kind"], "coordination_agent_activated");
+        assert_eq!(frame["event"]["metadata"]["agent_id"], "reviewer");
+    }
+
+    #[test]
     fn a_late_terminal_for_an_old_turn_does_not_remove_the_new_turn() {
         let mut runs = std::collections::HashMap::new();
         apply_frame(
@@ -1705,6 +2137,42 @@ mod supervision_tests {
     }
 
     #[test]
+    fn request_rejection_serializes_and_never_terminalizes_the_live_run() {
+        let mut runs = std::collections::HashMap::new();
+        apply_frame(
+            &mut runs,
+            &StreamFrame::SessionAccepted {
+                session: "session-a".to_string(),
+                turn_id: "turn-a".to_string(),
+            },
+        );
+        let rejection = StreamFrame::SessionRequestRejected {
+            session: "session-a".to_string(),
+            turn_id: "turn-a".to_string(),
+            error: "request shape changed".to_string(),
+        };
+        apply_frame(&mut runs, &rejection);
+        apply_frame(
+            &mut runs,
+            &StreamFrame::Token {
+                workflow: "session-a".to_string(),
+                agent: "coder".to_string(),
+                turn_id: Some("turn-a".to_string()),
+                delta: "still live".to_string(),
+            },
+        );
+
+        let encoded = serde_json::to_value(rejection).unwrap();
+        assert_eq!(encoded["kind"], "session-request-rejected");
+        assert_eq!(encoded["session"], "session-a");
+        assert_eq!(encoded["turn_id"], "turn-a");
+        assert_eq!(encoded["error"], "request shape changed");
+        let run = &runs["session-a"];
+        assert_eq!(run.turn_id.as_deref(), Some("turn-a"));
+        assert_eq!(run.agents[0].output, "still live");
+    }
+
+    #[test]
     fn provider_local_call_ids_get_distinct_fifo_occurrences() {
         let mut occurrences = ToolCallOccurrences::default();
         let first = occurrences.start("call_0");
@@ -1728,6 +2196,29 @@ mod supervision_tests {
         let finished_b = occurrences.finish("");
         assert_eq!(positions.get(&(String::new(), finished_a)), Some(&4));
         assert_eq!(positions.get(&(String::new(), finished_b)), Some(&5));
+    }
+
+    #[test]
+    fn tool_call_generation_is_optional_and_serialized_for_coordination() {
+        let frame = |coordination_generation| StreamFrame::ToolCall {
+            workflow: "session-a".to_string(),
+            agent: "builder".to_string(),
+            turn_id: Some("turn-a".to_string()),
+            call_id: "call_0".to_string(),
+            occurrence: 0,
+            coordination_generation,
+            name: "read_file".to_string(),
+            phase: "start".to_string(),
+            arguments: Some(serde_json::json!({"path": "src/lib.rs"})),
+            result: None,
+            is_error: false,
+        };
+
+        let coordinated = serde_json::to_value(frame(Some(2))).unwrap();
+        assert_eq!(coordinated["kind"], "tool-call");
+        assert_eq!(coordinated["coordination_generation"], 2);
+        let direct = serde_json::to_value(frame(None)).unwrap();
+        assert!(direct.get("coordination_generation").is_none());
     }
 
     #[test]

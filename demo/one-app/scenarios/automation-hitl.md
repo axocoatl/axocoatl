@@ -1,5 +1,10 @@
 # Human-in-the-loop Automation
 
+The prospective 1.1.0 take uses the existing configured Automation/runtime
+surface. Its run evidence is separate from native Session activation evidence;
+showing Settings or an Automation does not establish native Session MCP or
+legacy memory support.
+
 This film demonstrates a durable executable DAG that pauses for judgment and
 continues from the operator boundary.
 
@@ -106,7 +111,7 @@ export AXO_RUN_ID='paste-the-run-uuid-here'
 curl -sS \
   "$AXO_DEMO_URL/api/automations/spec-review-demo/runs/$AXO_RUN_ID"
 sed -n '1,320p' \
-  "$AXO_DEMO_ROOT/data/runs/spec-review-demo/$AXO_RUN_ID.json"
+  "$AXO_DEMO_ROOT/data/automation/runs-v1/spec-review-demo/$AXO_RUN_ID.json"
 ```
 
 Capture the run JSON immediately before stopping the daemon and again after

@@ -21,8 +21,8 @@
       </div>
       <ax-product-film
         film="workspace-sessions-turns"
-        src="/assets/films/workspace-sessions-turns.mp4"
-        poster="/assets/films/workspace-sessions-turns.jpg"
+        src="/assets/films/v1.1.0/workspace-sessions-turns.mp4"
+        poster="/assets/films/v1.1.0/workspace-sessions-turns.jpg"
         label="An Axocoatl Workspace with two Sessions and a completed Turn restored after switching Sessions"
         caption="One authorized Workspace groups durable Sessions. Switching away and back restores the selected Session and its accepted Turn."
       ></ax-product-film>
@@ -44,8 +44,8 @@
       </div>
       <ax-product-film
         film="durable-turn"
-        src="/assets/films/durable-turn.mp4"
-        poster="/assets/films/durable-turn.jpg"
+        src="/assets/films/v1.1.0/durable-turn.mp4"
+        poster="/assets/films/v1.1.0/durable-turn.jpg"
         label="An active Axocoatl Session turn reconnecting after reload and ending in History"
         caption="Reloading reconnects to the exact active turn. Stop preserves an honest cancelled state in History."
       ></ax-product-film>
@@ -56,13 +56,13 @@
       <div class="grid-3">
         <article class="card"><span class="card-kicker">Repository</span><h3>Files and Source Control</h3><p>Inspect the working tree, open files in the editor, and review the current turn through normal Git changes.</p></article>
         <article class="card"><span class="card-kicker">Execution</span><h3>Terminal and Preview</h3><p>Use the docked Terminal for commands and bring the running application into Preview without leaving the Session.</p></article>
-        <article class="card"><span class="card-kicker">Continuity</span><h3>Context and History</h3><p>Attach bounded context to one turn or the Session, then search or export the durable conversation. An autonomous single-Agent Session can also rewind at a turn boundary.</p></article>
+        <article class="card"><span class="card-kicker">Continuity</span><h3>Context and History</h3><p>Attach bounded context to one turn or the Session, then search or export the durable conversation. Native turns retain exact generation controls; legacy single-Agent history supports rewind at a turn boundary.</p></article>
       </div>
       <div class="callout"><p><strong>Detection is not consent:</strong> before repository tools become Ready, Axocoatl shows the proposed runtime image and exact setup command for review. An unchecked detected command does not run merely because it was found.</p></div>
       <ax-product-film
         film="sandbox-terminal-preview"
-        src="/assets/films/sandbox-terminal-preview.mp4"
-        poster="/assets/films/sandbox-terminal-preview.jpg"
+        src="/assets/films/v1.1.0/sandbox-terminal-preview.mp4"
+        poster="/assets/films/v1.1.0/sandbox-terminal-preview.jpg"
         label="An Axocoatl Session Terminal identifying its container and workspace before opening the running application in Preview"
         caption="The Terminal runs the repository check inside the Session's local Podman sandbox. Preview opens the application served from that checkout through its explicitly published port."
       ></ax-product-film>
@@ -72,10 +72,10 @@
       <div class="section-head"><span class="eyebrow">Execution shapes</span><h2>Use the structure the work needs.</h2><p>Axocoatl starts with one Agent in one Session. A configured team and several Ways are explicit alternatives for different kinds of work.</p></div>
       <div class="grid-3">
         <article class="card"><span class="card-kicker">Default</span><h3>One Agent</h3><p>One configured Agent works through the repository and conversation. Repository file and shell execution runs inside the Session sandbox; integrations retain their explicitly configured boundaries. <a href="/showcase/#single-agent">Watch ordinary repository work →</a></p></article>
-        <article class="card"><span class="card-kicker">Configured team</span><h3>Agent graph</h3><p>Several roles share one Session. Dependency edges determine which Agent runs first and which outputs reach downstream Agents. <a href="/showcase/#multi-agent">Watch the handoff →</a></p></article>
+        <article class="card"><span class="card-kicker">Autonomous team</span><h3>Coordination map</h3><p>Exact named dependencies activate each role. Agents receive only the handoffs that caused them to run, and the causal map stays with the Session turn. Native Coordinators create Workers from approved templates and limits, with their parent ownership recorded in the same turn. <a href="/showcase/#multi-agent">Watch the handoff →</a></p></article>
         <article class="card"><span class="card-kicker">Decision mode</span><h3>Ways</h3><p>Independent attempts start from the same task and repository state, then run in separate working copies and sandboxes. <a href="/showcase/#ways">Watch the comparison →</a></p></article>
       </div>
-      <div class="callout"><p><strong>The structures are different.</strong> The Agent graph orders roles inside one Session. Ways isolate competing implementations. The event lattice carries typed notifications. An Automation graph executes a durable workflow outside the canonical Session transcript.</p></div>
+      <div class="callout"><p><strong>The structures are different.</strong> An autonomous multi-Agent turn-scoped lattice coordinates cooperating roles inside one Session and leaves a durable map. A native Coordinator creates scoped Worker activations within that recorded turn. Ways isolate competing implementations. The process-wide event lattice carries typed notifications. An Automation graph executes durable work outside the canonical Session transcript.</p></div>
     </section>
 
     <section class="container section section-rule" id="ways-model">
@@ -98,8 +98,8 @@
       </div>
       <ax-product-film
         film="settings-runtime"
-        src="/assets/films/settings-runtime.mp4"
-        poster="/assets/films/settings-runtime.jpg"
+        src="/assets/films/v1.1.0/settings-runtime.mp4"
+        poster="/assets/films/v1.1.0/settings-runtime.jpg"
         label="Axocoatl Settings for Agents, Skills, MCP servers, and Automations"
         caption="Runtime configuration stays in Settings instead of becoming another work surface."
       ></ax-product-film>
@@ -112,8 +112,8 @@
       </div>
       <ax-product-film
         film="event-lattice-automation"
-        src="/assets/films/event-lattice-automation.mp4"
-        poster="/assets/films/event-lattice-automation.jpg"
+        src="/assets/films/v1.1.0/event-lattice-automation.mp4"
+        poster="/assets/films/v1.1.0/event-lattice-automation.jpg"
         label="An Axocoatl Skill publishing a typed event that starts a durable Automation"
         caption="Firing Release candidate ready publishes ReleaseCandidateReady; the matching On Skill trigger starts release-gate review."
       ></ax-product-film>
@@ -129,34 +129,41 @@
 <span class="code-key">execute</span> approved call
        ↓
 <span class="code-key">record</span> result on the Turn</code></pre></div>
-        <div class="stack"><span class="eyebrow">External tools</span><h2>New MCP permissions wait for approval.</h2><p>A Session Agent can discover a configured MCP tool, but discovery is not permission. A call with no matching saved decision pauses the exact Session Turn before dispatch; a saved allow or deny decision is applied without prompting again.</p><p>After an allowed call, the returned value, bounded tool evidence, and final answer remain together on the durable Turn. This film uses a deterministic local MCP server, so it demonstrates the approval path without relying on a third-party service.</p></div>
+        <div class="stack"><span class="eyebrow">External tools</span><h2>New MCP permissions wait for approval.</h2><p>A compatibility Session Agent can discover a configured MCP tool, but discovery is not permission. A call with no matching saved decision pauses the exact Session Turn before dispatch; a saved allow or deny decision is applied without prompting again.</p><p>After an allowed call, the returned value, bounded tool evidence, and final answer remain together on the durable Turn. This film uses a deterministic local MCP server and compatibility execution. Native Session turns do not currently expose this configured MCP registry.</p></div>
       </div>
       <ax-product-film
         film="mcp-approval"
-        src="/assets/films/mcp-approval.mp4"
-        poster="/assets/films/mcp-approval.jpg"
-        label="An Axocoatl Session Agent requesting approval before calling a local MCP tool"
-        caption="The Session Turn pauses before get_weather, then retains the returned value and final answer in History."
+        src="/assets/films/v1.1.0/mcp-approval.mp4"
+        poster="/assets/films/v1.1.0/mcp-approval.jpg"
+        label="An Axocoatl compatibility Session Agent requesting approval before calling a local MCP tool"
+        caption="The compatibility Session pauses before get_weather, then retains the returned value and final answer in History."
       ></ax-product-film>
     </section>
 
-    <section class="container section section-rule" id="shared-core-memory">
+    <section class="container section section-rule" id="workspace-knowledge">
+      <div class="split">
+        <div class="stack"><span class="eyebrow">Workspace knowledge</span><h2>Remember the decision and its source.</h2><p>Native Sessions share accepted Markdown knowledge inside their Workspace. Notes retain versions, source hashes, typed links, and origin. The Knowledge inspector offers editing, proposal review, backlinks, a code index, and a graph linking notes to source and execution evidence.</p><p>Agents can retrieve relevant notes and propose revisions. Automatic publication requires accepted work; an isolated Way also requires its retained Keep selection. A concurrent edit produces a conflict. A saved interpretation remains something to check against its sources.</p><p><a href="https://docs.axocoatl.ai/workbench/knowledge/">Inspect and maintain knowledge →</a></p></div>
+        <ol class="step-list"><li><div><h3>Record what matters</h3><p>Keep a decision, convention, finding, or pitfall with its source references and links to other notes.</p></div></li><li><div><h3>Recheck changed evidence</h3><p>Refresh the observed source index. Rust, JavaScript, TypeScript, TSX, and Python definitions and import syntax help locate relevant code; this is not a complete call graph.</p></div></li><li><div><h3>Use it in the next Session</h3><p>Attach the selected revision or prepare an investigation in chat. Knowledge is Workspace-owned, while each Session keeps its own conversation and execution history.</p></div></li></ol>
+      </div>
+    </section>
+
+    <section class="container section section-rule" id="durable-runtime">
       <div class="section-head"><span class="eyebrow">Runtime underneath</span><h2>Durable where durability matters.</h2></div>
       <div class="grid-3">
         <article class="card"><span class="card-kicker">Actors</span><h3>Supervised execution</h3><p>Configured agents run as actors inside one Rust daemon. The daemon owns providers, tools, events, and sandbox lifecycle.</p></article>
-        <article class="card"><span class="card-kicker">History</span><h3>Canonical Session ledger</h3><p>Accepted turns, bounded tool evidence, output, failure, cancellation, and interruption remain in canonical History across reconnects. After a daemon restart, a Turn that was still running is retained as Interrupted rather than resumed.</p></article>
-        <article class="card"><span class="card-kicker">Isolation</span><h3>Your sandbox choice</h3><p>Rootless Podman is local by default. E2B Cloud is an explicit remote option for normal Session work.</p></article>
+        <article class="card"><span class="card-kicker">History</span><h3>Canonical Session ledger</h3><p>Accepted turns, bounded tool evidence, output, failure, cancellation, and interruption remain in canonical History across reconnects. After a daemon restart, interrupted work remains visible. Native work requires explicit continuation; it is not silently replayed.</p></article>
+        <article class="card"><span class="card-kicker">Isolation</span><h3>Your sandbox choice</h3><p>Rootless Podman is local by default. E2B Cloud is an explicit remote option for compatibility execution; native repository tools currently require Podman.</p></article>
       </div>
       <div class="split" style="margin-top:var(--s-6)">
-        <div class="stack"><span class="eyebrow">Shared core memory</span><h2>Share one block explicitly.</h2><p>Configured Agents can opt into the same small shared core-memory block. One Agent can update it through a visible tool call; another configured Agent can receive the saved block in a different Session.</p><p>The shared block is durable, but the Session transcripts remain separate. This is explicit shared core memory, not semantic search or a claim that every Agent shares every memory.</p></div>
-        <ol class="step-list"><li><div><h3>Write visibly</h3><p>The first Agent updates the named shared block through <code>core_memory_set</code>.</p></div></li><li><div><h3>Keep Sessions separate</h3><p>The writer and reader remain distinct named Sessions with separate transcripts.</p></div></li><li><div><h3>Recall separately</h3><p>A different configured Agent receives the exact saved value without reading files, searching History, or calling a tool.</p></div></li></ol>
+        <div class="stack"><span class="eyebrow">Workspace knowledge</span><h2>Keep a decision across Sessions.</h2><p>Save a note with its source hash and a typed link to another note. After restart, a separate Session can retrieve the same accepted revision through the native knowledge tool. The two conversations remain separate.</p><p>Backlinks make the relationship discoverable. Source context remains something to recheck: retaining a note does not make every interpretation current or correct.</p></div>
+        <ol class="step-list"><li><div><h3>Record the source</h3><p>Write a note with the relevant repository path and observed hash.</p></div></li><li><div><h3>Connect the decision</h3><p>Add a typed link and inspect the resulting backlink.</p></div></li><li><div><h3>Reuse the exact revision</h3><p>Restart and open another Session in the Workspace. Its native Agent can retrieve the saved note with its origin.</p></div></li></ol>
       </div>
       <ax-product-film
-        film="shared-core-memory"
-        src="/assets/films/shared-core-memory.mp4"
-        poster="/assets/films/shared-core-memory.jpg"
-        label="One Axocoatl Agent writing a shared core-memory block and another Agent receiving it in a separate Session"
-        caption="One Agent writes an explicit shared block; a different Agent in another Session receives the exact value while the transcripts remain separate."
+        film="workspace-knowledge"
+        src="/assets/films/v1.1.0/workspace-knowledge.mp4"
+        poster="/assets/films/v1.1.0/workspace-knowledge.jpg"
+        label="Source-linked workspace knowledge, backlinks, and exact revision retrieval in a separate Axocoatl Session after restart"
+        caption="A saved decision retains its source and backlinks. After restart, a separate native Session retrieves the accepted note revision."
       ></ax-product-film>
     </section>
 

@@ -39,19 +39,62 @@ agents:
 | `provider`, `model` | Model target for this Agent |
 | `system_prompt` | Persistent operating instructions |
 | `tools` | Empty inherits the execution path's baseline tools; non-empty is an exact advertisement and dispatch allowlist |
-| `depends_on` | Dependency metadata for legacy workflow projection and multi-agent ordering |
+| `depends_on` | Exact direct-parent completion predicate for a multi-Agent Session turn; also sets the default threshold of the process-wide pheromone primitive and seeds legacy Automation edges during first-boot migration |
 | `role` | `autonomous`, `coordinator`, or `worker` |
-| `activation_threshold`, `activation_decay` | Optional lattice activation tuning |
+| `activation_threshold`, `activation_decay` | Deprecated; the daemon warns when either is set. They tune the process-wide event lattice, which does not start Session work. The Session turn lattice uses exact named dependencies, and threshold-triggered work is set per route on a [signal field](/understand/coordination/) |
 | `sampling` | Optional request-generation controls for autonomous Agents, Coordinators, and declared Workers |
 | `memory` | Tier 1–4 tuning for autonomous Agents and declared Workers; a Coordinator itself uses Tier 1 plus orchestration checkpointing |
 
-A Coordinator must be the `entry_point` of exactly one workflow. Giving the same Coordinator
-multiple workflow definitions is rejected because worker membership and HTN selection would be
-ambiguous. A Worker must belong to that coordinator-led workflow and cannot run directly.
+A Coordinator must be the `entry_point` of exactly one workflow and must appear in that
+workflow's roster. Every other member must be a Worker, and each Worker can belong to only that
+one coordinator-led workflow. Unknown, duplicate, empty, or out-of-roster identities are rejected
+because worker membership and HTN selection would otherwise be ambiguous. A Worker cannot run
+directly.
 
-## Set token budgets
+## Define a Session team
 
-Budgets are local preflight controls. Before each model call, Axocoatl reserves
+`Lattice` Sessions select a config-owned team by ID. Workflow IDs are unique,
+non-empty stable identities; human-readable punctuation and spaces are allowed. An autonomous
+team is an exact, non-empty roster of autonomous Agents. Its `depends_on` graph must be closed
+inside that roster, contain no duplicate or self dependency, and be acyclic, so every declared
+Agent can actually become ready:
+
+```yaml
+workflows:
+  - id: feature-team
+    name: Feature team
+    agents: [planner, coder, reviewer]
+    entry_point: planner
+```
+
+A legacy Session stores `feature-team`, then resolves current Agent membership and
+dependencies when each all-team turn begins. When the roster contains more than one
+autonomous Agent, that exact turn graph remains in History even if configuration changes
+later. A Coordinator-led team uses its separate hierarchical direct path and does not
+fabricate a peer Coordination map. The Automation editor and the
+compatibility `/api/workflows` routes operate on the separate canonical
+Automation store; editing an Automation does not edit a Session team.
+
+## Native authority and budgets
+
+In a native Session, **Team & budget** captures the selected Agent configuration
+and requires explicit activation, invocation, token, cost, and expiry limits.
+Those limits govern cumulative reservations before dispatch. A Worker allocation
+consumes its Coordinator's approved aggregate allowance; events do not refill it.
+Current authority and expansion requests are reviewed from the Agent inspector.
+
+The enforced native provider boundary currently accepts reviewed local Ollama
+profiles and eligible [OpenRouter-credit profiles](/configure/providers/#configure-openrouter)
+with finite inference bounds. Axocoatl verifies the actual backend and
+model capabilities; an OpenAI-compatible endpoint is not itself an enforcement
+standard. Local API cost can be known zero while token usage remains incomplete.
+This does not promise a cap on an unrelated provider's bill.
+
+## Actor token guards
+
+The YAML `token_budget` is a local guard on actor calls. It also applies when a
+native activation uses that actor, but cannot weaken the separately approved
+native allowance. Budgets are local preflight controls. Before each model call, Axocoatl reserves
 the estimated input plus the explicit or resolved bounded completion and
 compares that reservation with both limits:
 
@@ -113,7 +156,12 @@ An omitted or empty core block list creates the default `persona`, `human`, and
 `project` blocks. A non-empty list replaces that default set. See
 [State and memory](/understand/state/) before changing retention behavior.
 
-This memory block config applies to an autonomous Agent or a declared Worker. In a normal
+Native execution restores exact activation state. Its current actor factory does
+not attach daily-log, core-memory, or semantic-recall stores, so those settings do
+not enable native recall or shared-memory writes. The following scope rules apply
+to compatibility execution.
+
+This memory block config applies to an autonomous Agent or a declared Worker. In a legacy
 Session those stores are scoped under the Session runtime identity and survive actor restart;
 only labels explicitly marked `shared: true` cross scopes. A Coordinator's provider loop does
 not expose core/daily/semantic memory tools in 1.0. Its declared Workers apply their own

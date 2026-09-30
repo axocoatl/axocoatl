@@ -307,6 +307,8 @@ sandbox:
         // config-level trust is resolved into the Session record, never passed
         // to SessionSandbox as a second implicit post-create execution path.
         let policy = SandboxPolicy {
+            supervisor_program: None,
+            supervisor_installation: None,
             allow_post_create: false,
             allow_untrusted_image: sc.allow_untrusted_images,
             network: match sc.network.as_str() {

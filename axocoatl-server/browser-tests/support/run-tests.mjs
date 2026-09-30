@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { REPOSITORY_ROOT, TEST_ROOT } from './daemon.mjs';
@@ -27,6 +27,7 @@ if (arguments_.length > 0 && !skipBuild) {
   process.exit(2);
 }
 
+let ownedModelCache = null;
 try {
   const entries = await readdir(path.join(TEST_ROOT, 'tests'), { withFileTypes: true });
   const testFiles = entries
@@ -40,6 +41,13 @@ try {
   if (!skipBuild) {
     await run(cargo, ['build', '--locked', '-p', 'axocoatl-cli'], REPOSITORY_ROOT);
   }
+  if (!process.env.AXOCOATL_E2E_MODEL_CACHE) {
+    ownedModelCache = await mkdtemp(path.join(tmpdir(), 'axocoatl-browser-model-cache-'));
+    process.env.AXOCOATL_E2E_MODEL_CACHE = ownedModelCache;
+  }
+  // One genuinely cold daemon downloads and verifies the pinned embedding
+  // model. Subsequent isolated fixtures copy artifacts, never control state.
+  process.env.AXOCOATL_E2E_STARTUP_TIMEOUT_MS ||= '300000';
   await run(
     process.execPath,
     ['--test', '--test-concurrency=1', ...testFiles],
@@ -48,4 +56,6 @@ try {
 } catch (error) {
   console.error(error.message || error);
   process.exitCode = 1;
+} finally {
+  if (ownedModelCache) await rm(ownedModelCache, {recursive:true,force:true});
 }

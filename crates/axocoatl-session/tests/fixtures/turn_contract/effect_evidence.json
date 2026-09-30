@@ -1,0 +1,45 @@
+[
+  {
+    "evidence": {
+      "kind": "no_intent",
+      "instrumented": true
+    },
+    "expected": "dispatch_not_authorized"
+  },
+  {
+    "evidence": {
+      "kind": "no_intent",
+      "instrumented": false
+    },
+    "expected": "outcome_unknown"
+  },
+  {
+    "evidence": {
+      "kind": "intent"
+    },
+    "expected": "outcome_unknown"
+  },
+  {
+    "evidence": {
+      "kind": "cancelled_before_dispatch",
+      "evidence": "gate-cancellation-receipt"
+    },
+    "expected": "not_dispatched"
+  },
+  {
+    "evidence": {
+      "kind": "outcome",
+      "outcome": "failed",
+      "evidence": "tool-failure"
+    },
+    "expected": "outcome_recorded"
+  },
+  {
+    "evidence": {
+      "kind": "outcome",
+      "outcome": "succeeded",
+      "evidence": "tool-success"
+    },
+    "expected": "outcome_recorded"
+  }
+]

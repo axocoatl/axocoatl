@@ -2009,3 +2009,6 @@
     #session-cockpit .cockpit-tool-toggles { order: 3; padding-left: 3px; }
     #session-cockpit .cockpit-tool-toggles .cockpit-view-btn { padding-inline: 5px; }
   }
+
+/* Session-owned inspectors stay reachable in the conversation-only layout. */
+.session-context-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

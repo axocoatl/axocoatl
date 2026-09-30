@@ -11,6 +11,8 @@ import {
   sha256File,
 } from './film-lib.mjs';
 
+export const historicalPortfolioPath = 'demo/one-app/films/compatibility/v1.0.1-portfolio.json';
+
 const sha1Pattern = /^[0-9a-f]{40}$/;
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const classifications = new Set([
@@ -552,8 +554,8 @@ export function verifyReleaseCompatibilityDocument(attestation, { releaseRoot, c
     'release portfolio bytes changed.',
   );
   assert(
-    sha256File(releasePath(control, attestation.portfolio.path)) === attestation.portfolio.sha256,
-    'control portfolio bytes changed.',
+    sha256File(releasePath(control, historicalPortfolioPath)) === attestation.portfolio.sha256,
+    'historical control portfolio bytes changed.',
   );
 
   const expectedProvenancePaths = portfolio.films.map(film => film.provenance)

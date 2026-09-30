@@ -61,6 +61,10 @@ pub struct StoredMessage {
     /// For a `Tool` result: the id of the originating tool call.
     #[serde(default)]
     pub tool_call_id: Option<String>,
+    /// Exact multimodal body; content remains its readable text projection.
+    /// Checkpoint envelope v3 distinguishes this from the earlier wire shape.
+    #[serde(default)]
+    pub content_parts: Option<Vec<axocoatl_core::ContentPart>>,
 }
 
 impl SessionMemory {
@@ -77,6 +81,7 @@ impl SessionMemory {
         let content = content.into();
         self.token_count += token_count;
         self.messages.push(StoredMessage {
+            content_parts: None,
             role,
             content,
             timestamp: now_timestamp(),
@@ -100,6 +105,7 @@ impl SessionMemory {
         let content = content.into();
         self.token_count += token_count;
         self.messages.push(StoredMessage {
+            content_parts: None,
             role: MessageRole::Assistant,
             content,
             timestamp: now_timestamp(),
@@ -126,6 +132,7 @@ impl SessionMemory {
         let content = content.into();
         self.token_count += token_count;
         self.messages.push(StoredMessage {
+            content_parts: None,
             role: MessageRole::Tool,
             content,
             timestamp: now_timestamp(),
@@ -143,7 +150,11 @@ impl SessionMemory {
             .iter()
             .map(|m| ChatMessage {
                 role: m.role.clone(),
-                content: MessageContent::Text(m.content.clone()),
+                content: m
+                    .content_parts
+                    .as_ref()
+                    .map(|parts| MessageContent::Parts(parts.clone()))
+                    .unwrap_or_else(|| MessageContent::Text(m.content.clone())),
                 name: m.name.clone(),
                 tool_calls: m
                     .tool_calls
@@ -153,6 +164,41 @@ impl SessionMemory {
                 tool_call_id: m.tool_call_id.clone(),
             })
             .collect()
+    }
+
+    /// Retain the exact user content actually admitted to the provider, including
+    /// images and extracted file text, so the accepted checkpoint can continue it.
+    pub fn replace_last_user_content(&mut self, content: &MessageContent, token_count: usize) {
+        let Some(message) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|message| matches!(message.role, MessageRole::User))
+        else {
+            return;
+        };
+        self.token_count = self
+            .token_count
+            .saturating_sub(message.token_count)
+            .saturating_add(token_count);
+        message.token_count = token_count;
+        match content {
+            MessageContent::Text(text) => {
+                message.content = text.clone();
+                message.content_parts = None;
+            }
+            MessageContent::Parts(parts) => {
+                message.content = parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        axocoatl_core::ContentPart::Text(text) => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                message.content_parts = Some(parts.clone());
+            }
+        }
     }
 
     /// Total tokens in current session.
@@ -217,6 +263,10 @@ impl SessionMemory {
                 };
                 let token_count = count(&content);
                 StoredMessage {
+                    content_parts: match &m.content {
+                        MessageContent::Parts(parts) => Some(parts.clone()),
+                        _ => None,
+                    },
                     role: m.role.clone(),
                     content,
                     timestamp: now_timestamp(),

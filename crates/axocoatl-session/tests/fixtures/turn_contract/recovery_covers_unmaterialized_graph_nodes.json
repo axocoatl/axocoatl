@@ -1,0 +1,452 @@
+{
+  "name": "recovery_covers_unmaterialized_graph_nodes",
+  "steps": [
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-0",
+        "expected_revision": 0,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "begin",
+          "epoch_id": "epoch-1",
+          "graph": {
+            "snapshot_id": "initial-graph",
+            "revision": 1,
+            "nodes": [
+              {
+                "node_id": "a",
+                "slot_id": "slot-a",
+                "definition": {
+                  "definition_id": "shared-coder",
+                  "snapshot": "definition-v1"
+                },
+                "conversation_id": "conversation-a",
+                "starting_savepoint": {
+                  "kind": "empty"
+                },
+                "required": true
+              },
+              {
+                "node_id": "b",
+                "slot_id": "slot-b",
+                "definition": {
+                  "definition_id": "shared-coder",
+                  "snapshot": "definition-v1"
+                },
+                "conversation_id": "conversation-b",
+                "starting_savepoint": {
+                  "kind": "empty"
+                },
+                "required": true
+              },
+              {
+                "node_id": "c",
+                "slot_id": "slot-c",
+                "definition": {
+                  "definition_id": "shared-coder",
+                  "snapshot": "definition-v1"
+                },
+                "conversation_id": "conversation-c",
+                "starting_savepoint": {
+                  "kind": "empty"
+                },
+                "required": true
+              }
+            ],
+            "dependencies": [
+              {
+                "parent": "a",
+                "child": "b"
+              }
+            ],
+            "conditions": []
+          }
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-1",
+        "expected_revision": 1,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "start_activation",
+          "input": {
+            "manifest_id": "input-a-1",
+            "activation": {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-1",
+              "node_id": "a",
+              "generation": 1,
+              "activation_id": "a-1"
+            },
+            "definition": {
+              "definition_id": "shared-coder",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-a",
+            "starting_savepoint": {
+              "kind": "empty"
+            },
+            "parents": [],
+            "guidance": [
+              "original-guidance"
+            ],
+            "attachments": [
+              "source-attachment"
+            ],
+            "repository": {
+              "kind": "recorded",
+              "snapshot": "repository-before-turn"
+            },
+            "budget": "logical-turn-budget",
+            "grant": {
+              "grant_id": "supervisor-grant",
+              "revision": 1,
+              "evidence": "grant-snapshot-1"
+            }
+          }
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-2",
+        "expected_revision": 2,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "interrupt_epoch",
+          "epoch_id": "epoch-1"
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-3",
+        "expected_revision": 3,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "continue",
+          "plan": {
+            "source_epoch_id": "epoch-1",
+            "epoch_id": "epoch-2",
+            "selections": [
+              {
+                "kind": "retry",
+                "previous": {
+                  "session_id": "session-a",
+                  "turn_id": "turn-a",
+                  "execution_epoch_id": "epoch-1",
+                  "node_id": "a",
+                  "generation": 1,
+                  "activation_id": "a-1"
+                },
+                "input": {
+                  "manifest_id": "input-a-2",
+                  "activation": {
+                    "session_id": "session-a",
+                    "turn_id": "turn-a",
+                    "execution_epoch_id": "epoch-2",
+                    "node_id": "a",
+                    "generation": 2,
+                    "activation_id": "a-2"
+                  },
+                  "definition": {
+                    "definition_id": "shared-coder",
+                    "snapshot": "definition-v1"
+                  },
+                  "conversation_id": "conversation-a",
+                  "starting_savepoint": {
+                    "kind": "empty"
+                  },
+                  "parents": [],
+                  "guidance": [
+                    "original-guidance"
+                  ],
+                  "attachments": [
+                    "source-attachment"
+                  ],
+                  "repository": {
+                    "kind": "recorded",
+                    "snapshot": "repository-before-turn"
+                  },
+                  "budget": "logical-turn-budget",
+                  "grant": {
+                    "grant_id": "supervisor-grant",
+                    "revision": 1,
+                    "evidence": "grant-snapshot-1"
+                  }
+                }
+              },
+              {
+                "kind": "await_dependencies",
+                "node_id": "b"
+              }
+            ]
+          }
+        }
+      },
+      "error": "every graph node"
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-4",
+        "expected_revision": 3,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "continue",
+          "plan": {
+            "source_epoch_id": "epoch-1",
+            "epoch_id": "epoch-2",
+            "selections": [
+              {
+                "kind": "retry",
+                "previous": {
+                  "session_id": "session-a",
+                  "turn_id": "turn-a",
+                  "execution_epoch_id": "epoch-1",
+                  "node_id": "a",
+                  "generation": 1,
+                  "activation_id": "a-1"
+                },
+                "input": {
+                  "manifest_id": "input-a-2",
+                  "activation": {
+                    "session_id": "session-a",
+                    "turn_id": "turn-a",
+                    "execution_epoch_id": "epoch-2",
+                    "node_id": "a",
+                    "generation": 2,
+                    "activation_id": "a-2"
+                  },
+                  "definition": {
+                    "definition_id": "shared-coder",
+                    "snapshot": "definition-v1"
+                  },
+                  "conversation_id": "conversation-a",
+                  "starting_savepoint": {
+                    "kind": "empty"
+                  },
+                  "parents": [],
+                  "guidance": [
+                    "original-guidance"
+                  ],
+                  "attachments": [
+                    "source-attachment"
+                  ],
+                  "repository": {
+                    "kind": "recorded",
+                    "snapshot": "repository-before-turn"
+                  },
+                  "budget": "logical-turn-budget",
+                  "grant": {
+                    "grant_id": "supervisor-grant",
+                    "revision": 1,
+                    "evidence": "grant-snapshot-1"
+                  }
+                }
+              },
+              {
+                "kind": "await_dependencies",
+                "node_id": "b"
+              },
+              {
+                "kind": "leave_unmaterialized_blocked",
+                "node_id": "c",
+                "blocker": "user-hold"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-5",
+        "expected_revision": 4,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "start_activation",
+          "input": {
+            "manifest_id": "input-c-1",
+            "activation": {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-2",
+              "node_id": "c",
+              "generation": 1,
+              "activation_id": "c-1"
+            },
+            "definition": {
+              "definition_id": "shared-coder",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-c",
+            "starting_savepoint": {
+              "kind": "empty"
+            },
+            "parents": [],
+            "guidance": [
+              "original-guidance"
+            ],
+            "attachments": [
+              "source-attachment"
+            ],
+            "repository": {
+              "kind": "recorded",
+              "snapshot": "repository-before-turn"
+            },
+            "budget": "logical-turn-budget",
+            "grant": {
+              "grant_id": "supervisor-grant",
+              "revision": 1,
+              "evidence": "grant-snapshot-1"
+            }
+          }
+        }
+      },
+      "error": "explicitly left this node blocked"
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-6",
+        "expected_revision": 4,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "pause_epoch",
+          "epoch_id": "epoch-2"
+        }
+      }
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-7",
+        "expected_revision": 5,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "continue",
+          "plan": {
+            "source_epoch_id": "epoch-2",
+            "epoch_id": "epoch-3",
+            "selections": [
+              {
+                "kind": "retry",
+                "previous": {
+                  "session_id": "session-a",
+                  "turn_id": "turn-a",
+                  "execution_epoch_id": "epoch-2",
+                  "node_id": "a",
+                  "generation": 2,
+                  "activation_id": "a-2"
+                },
+                "input": {
+                  "manifest_id": "input-a-3",
+                  "activation": {
+                    "session_id": "session-a",
+                    "turn_id": "turn-a",
+                    "execution_epoch_id": "epoch-3",
+                    "node_id": "a",
+                    "generation": 3,
+                    "activation_id": "a-3"
+                  },
+                  "definition": {
+                    "definition_id": "shared-coder",
+                    "snapshot": "definition-v1"
+                  },
+                  "conversation_id": "conversation-a",
+                  "starting_savepoint": {
+                    "kind": "empty"
+                  },
+                  "parents": [],
+                  "guidance": [
+                    "original-guidance"
+                  ],
+                  "attachments": [
+                    "source-attachment"
+                  ],
+                  "repository": {
+                    "kind": "recorded",
+                    "snapshot": "repository-before-turn"
+                  },
+                  "budget": "logical-turn-budget",
+                  "grant": {
+                    "grant_id": "supervisor-grant",
+                    "revision": 1,
+                    "evidence": "grant-snapshot-1"
+                  }
+                }
+              },
+              {
+                "kind": "await_dependencies",
+                "node_id": "b"
+              },
+              {
+                "kind": "prepare_unmaterialized",
+                "input": {
+                  "manifest_id": "input-c-1",
+                  "activation": {
+                    "session_id": "session-a",
+                    "turn_id": "turn-a",
+                    "execution_epoch_id": "epoch-3",
+                    "node_id": "c",
+                    "generation": 1,
+                    "activation_id": "c-1"
+                  },
+                  "definition": {
+                    "definition_id": "shared-coder",
+                    "snapshot": "definition-v1"
+                  },
+                  "conversation_id": "conversation-c",
+                  "starting_savepoint": {
+                    "kind": "empty"
+                  },
+                  "parents": [],
+                  "guidance": [
+                    "original-guidance"
+                  ],
+                  "attachments": [
+                    "source-attachment"
+                  ],
+                  "repository": {
+                    "kind": "recorded",
+                    "snapshot": "repository-before-turn"
+                  },
+                  "budget": "logical-turn-budget",
+                  "grant": {
+                    "grant_id": "supervisor-grant",
+                    "revision": 1,
+                    "evidence": "grant-snapshot-1"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "expected_revision": 6,
+  "expected_state": "running",
+  "expected_epochs": [
+    "interrupted",
+    "paused",
+    "running"
+  ]
+}

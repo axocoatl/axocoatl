@@ -3,6 +3,11 @@ pub enum AgentError {
     #[error("LLM provider error: {0}")]
     Provider(String),
 
+    /// The provider stream closed before its completion event. No tool call
+    /// from that response was released; its usage is unknown.
+    #[error("LLM provider stream ended early: {0}")]
+    IncompleteProviderStream(String),
+
     #[error("Token budget exceeded: used {used}, budget {budget}")]
     TokenBudgetExceeded { used: usize, budget: usize },
 

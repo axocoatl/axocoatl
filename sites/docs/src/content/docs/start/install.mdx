@@ -44,6 +44,13 @@ musl-based distributions such as Alpine; use the Cargo or source path there.
   </TabItem>
 </Tabs>
 
+All three paths install one `axocoatl` executable. Cargo and source builds compile
+the host application and include Axocoatl's prebuilt Linux process supervisor for
+its sandbox. There is no separate supervisor installation or startup download.
+The [supervisor source](https://github.com/axocoatl/axocoatl/tree/main/crates/axocoatl-exec)
+and [explicit rebuild instructions](https://github.com/axocoatl/axocoatl/blob/main/docs/EXEC_SUPERVISOR_BUILD.md)
+are available for contributors who want to rebuild those embedded bytes.
+
 Verify that your shell can find the binary:
 
 ```sh

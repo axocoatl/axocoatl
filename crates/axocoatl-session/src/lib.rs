@@ -10,9 +10,25 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod control_authority;
+pub mod control_command;
 pub mod devcontainer;
+pub mod execution_content;
+pub mod execution_legacy;
+pub mod execution_namespace;
+pub mod execution_ownership;
+pub mod execution_store;
+pub mod invocation_audit;
+pub mod native_history;
+pub mod provider_run;
 pub mod session_attachment;
+pub mod session_history;
+pub mod session_team;
+pub mod team_work;
+pub mod turn_contract;
 pub mod turn_ledger;
+pub mod ways_decision;
+pub mod ways_decision_store;
 pub mod workspace;
 pub use devcontainer::{DevContainer, DevContainerError};
 pub use session_attachment::{
@@ -22,9 +38,11 @@ pub use session_attachment::{
 };
 pub use turn_ledger::{
     AppendTurnOutput, BeginSessionTurn, RecordTurnExecution, SessionTranscriptMessage,
-    SessionTranscriptRole, SessionTurn, SessionTurnAgentOutput, SessionTurnContextReference,
-    SessionTurnError, SessionTurnExecutionEvent, SessionTurnLifecycle, SessionTurnSearchHit,
-    SessionTurnStore, TransitionSessionTurn, TurnContextScope, TurnSearchField,
+    SessionTranscriptRole, SessionTurn, SessionTurnAgentOutput, SessionTurnAgentOutputDisposition,
+    SessionTurnAgentOutputIdentity, SessionTurnAgentOutputSupersession, SessionTurnAtomicMutation,
+    SessionTurnAtomicOperation, SessionTurnContextReference, SessionTurnError,
+    SessionTurnExecutionEvent, SessionTurnLifecycle, SessionTurnSearchHit, SessionTurnStore,
+    TransitionSessionTurn, TurnContextScope, TurnSearchField,
 };
 pub use workspace::{Workspace, WorkspaceError, WorkspaceStore};
 
@@ -50,15 +68,16 @@ pub enum SessionError {
     DevContainer(#[from] DevContainerError),
 }
 
-/// Who works in a session — the per-session choice of single agent vs lattice.
+/// Who works in a Session — one Agent or a config-owned/custom team.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionMode {
     /// A single capable agent builds in the directory.
     SingleAgent { agent_id: String },
-    /// The full agent lattice coordinates in the directory.
+    /// A config-owned team coordinates in the directory.
     Lattice {
-        /// Workflow to run; `None` = the default stigmergic lattice cascade.
+        /// Team definition to resolve for each turn. `None` is retained only
+        /// for older records and resolves the first configured team.
         #[serde(default)]
         workflow_id: Option<String>,
     },
@@ -210,6 +229,23 @@ pub struct SessionEnvironment {
     pub error: Option<String>,
     #[serde(default)]
     pub prepared_at: Option<u64>,
+    /// Present while an already Ready plan is being prepared again, such as the
+    /// first use after a daemon restart. Interrupting that preparation (a
+    /// dropped request, shutdown or crash) is not a failure of the approved
+    /// plan: once its runtime is removed the Session returns to Ready without a
+    /// live runtime, exactly as after a restart, instead of Failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_ready: Option<ResumedReadyEnvironment>,
+}
+
+/// Evidence of the Ready plan being prepared again, restored if that
+/// preparation is interrupted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumedReadyEnvironment {
+    #[serde(default)]
+    pub effective_image: Option<String>,
+    #[serde(default)]
+    pub setup_results: Vec<SessionSetupResult>,
 }
 
 /// Cleanup authority recoverable from a canonical Session file even when an
@@ -263,6 +299,7 @@ impl Default for SessionEnvironment {
             setup_results: Vec::new(),
             error: None,
             prepared_at: None,
+            resume_ready: None,
         }
     }
 }
@@ -355,6 +392,23 @@ pub(crate) fn is_canonical_persisted_id(id: &str, prefix: &str) -> bool {
 }
 
 impl Session {
+    /// Whether a requested runtime plan is exactly the one already approved,
+    /// using the same normalization as `configure_environment`.
+    pub fn environment_plan_matches(
+        &self,
+        image: Option<&str>,
+        setup_command: Option<&str>,
+        setup_approved: bool,
+        setup_reviewed: bool,
+    ) -> bool {
+        let image = image.map(str::trim).filter(|image| !image.is_empty());
+        self.image.as_deref() == image
+            && self.environment.setup_command
+                == normalize_command(setup_command.map(str::to_string))
+            && self.environment.setup_approved == setup_approved
+            && self.environment.setup_reviewed == setup_reviewed
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn new(
         name: String,
@@ -553,6 +607,12 @@ impl SessionStore {
                     // actionable instead of leaving a permanently spinning
                     // Session after restart.
                     if session.environment.state == SessionEnvironmentState::Preparing {
+                        // An interrupted setup may have left a partial
+                        // dependency volume, so even a local re-preparation
+                        // fails here; startup reconcile then removes the
+                        // runtime and its dependencies, and a paused turn's
+                        // unchanged plan can be rebuilt at its generation.
+                        session.environment.resume_ready = None;
                         session.environment.state = SessionEnvironmentState::Failed;
                         session.environment.error = Some(
                             "environment preparation was interrupted; rebuild the environment"
@@ -913,6 +973,9 @@ impl SessionStore {
         }
         candidate.environment.setup_results = setup_results;
         candidate.environment.error = error;
+        if state != SessionEnvironmentState::Preparing {
+            candidate.environment.resume_ready = None;
+        }
         candidate.environment.prepared_at = matches!(
             state,
             SessionEnvironmentState::Ready | SessionEnvironmentState::Failed
@@ -948,6 +1011,9 @@ impl SessionStore {
         candidate.environment.runtime = runtime;
         candidate.environment.setup_results = setup_results;
         candidate.environment.error = error;
+        if state != SessionEnvironmentState::Preparing {
+            candidate.environment.resume_ready = None;
+        }
         candidate.environment.prepared_at = matches!(
             state,
             SessionEnvironmentState::Ready | SessionEnvironmentState::Failed
@@ -1212,6 +1278,92 @@ impl SessionStore {
             setup_results,
             Some(error),
         )
+    }
+
+    /// Publish Preparing for a new preparation of this generation. A local
+    /// plan that was already Ready records its Ready evidence so an
+    /// interruption can return to it; a remote runtime cannot be trusted
+    /// half-provisioned, so it never does. One write, like `set_environment`.
+    pub fn begin_environment_preparation(
+        &mut self,
+        id: &str,
+        runtime: Option<SessionRuntimeIdentity>,
+    ) -> Result<Session, SessionError> {
+        let mut candidate = self
+            .sessions
+            .get(id)
+            .cloned()
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let local = runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.backend == "podman");
+        candidate.environment.resume_ready = (local
+            && candidate.environment.state == SessionEnvironmentState::Ready)
+            .then(|| ResumedReadyEnvironment {
+                effective_image: candidate.environment.effective_image.clone(),
+                setup_results: candidate.environment.setup_results.clone(),
+            });
+        candidate.environment.state = SessionEnvironmentState::Preparing;
+        candidate.environment.effective_image = None;
+        candidate.environment.runtime = runtime;
+        if candidate.environment.runtime.is_some() {
+            candidate.environment.runtime_creation = None;
+        }
+        candidate.environment.setup_results = Vec::new();
+        candidate.environment.error = None;
+        candidate.environment.prepared_at = None;
+        self.persist(&candidate)?;
+        self.sessions.insert(id.to_string(), candidate.clone());
+        Ok(candidate)
+    }
+
+    /// Settle a preparation that stopped without a result of its own: its
+    /// request disappeared or the daemon shut down, and the caller has removed
+    /// the runtime and its dependency volume. A local re-preparation of a
+    /// Ready plan returns to Ready without a live runtime; any other
+    /// preparation fails with `error`, as before. Acts only for the exact
+    /// Preparing generation.
+    pub fn settle_interrupted_preparation(
+        &mut self,
+        id: &str,
+        generation: u64,
+        runtime: Option<SessionRuntimeIdentity>,
+        setup_results: Vec<SessionSetupResult>,
+        effective_image: Option<String>,
+        error: String,
+    ) -> Result<Session, SessionError> {
+        let current = self
+            .sessions
+            .get(id)
+            .cloned()
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        if current.environment.state != SessionEnvironmentState::Preparing
+            || current.environment.generation != generation
+        {
+            return Ok(current);
+        }
+        let local = runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.backend == "podman")
+            && current.environment.runtime_creation.is_none();
+        match current.environment.resume_ready.clone() {
+            Some(ready) if local => self.set_environment(
+                id,
+                SessionEnvironmentState::Ready,
+                ready.effective_image,
+                runtime,
+                ready.setup_results,
+                None,
+            ),
+            _ => self.set_environment(
+                id,
+                SessionEnvironmentState::Failed,
+                effective_image,
+                runtime,
+                setup_results,
+                Some(error),
+            ),
+        }
     }
 
     pub fn rename(
@@ -2265,6 +2417,242 @@ mod tests {
 
     use super::*;
     use tempfile::tempdir;
+
+    fn resumable_session(
+        backend: &str,
+    ) -> (tempfile::TempDir, tempfile::TempDir, SessionStore, Session) {
+        let data = tempdir().unwrap();
+        let work = tempdir().unwrap();
+        let mut store = SessionStore::new(data.path().join("sessions")).unwrap();
+        let session = store
+            .create_with_environment(
+                "Resumable",
+                "wsp-node",
+                work.path(),
+                SessionMode::SingleAgent {
+                    agent_id: "coder".into(),
+                },
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                false,
+                true,
+            )
+            .unwrap();
+        let runtime = SessionRuntimeIdentity {
+            backend: backend.into(),
+            id: session.id.clone(),
+            remote_root: None,
+            control_plane: None,
+            data_plane_domain: None,
+            authority_fingerprint: None,
+            ownership_token: None,
+            cleanup_confirmed: true,
+        };
+        let evidence = vec![SessionSetupResult {
+            command: "npm ci".into(),
+            exit_code: 0,
+            stdout: "installed".into(),
+            stderr: String::new(),
+            completed_at: 7,
+        }];
+        let ready = store
+            .set_environment(
+                &session.id,
+                SessionEnvironmentState::Ready,
+                Some("localhost/demo:latest".into()),
+                Some(runtime),
+                evidence,
+                None,
+            )
+            .unwrap();
+        (data, work, store, ready)
+    }
+
+    #[test]
+    fn interrupted_repreparation_of_a_ready_plan_returns_to_ready_without_a_runtime() {
+        let (data, _work, mut store, ready) = resumable_session("podman");
+        let preparing = store
+            .begin_environment_preparation(&ready.id, ready.environment.runtime.clone())
+            .unwrap();
+        assert_eq!(
+            preparing.environment.state,
+            SessionEnvironmentState::Preparing
+        );
+        assert_eq!(
+            preparing.environment.generation,
+            ready.environment.generation
+        );
+        assert!(preparing.environment.resume_ready.is_some());
+        // A stale generation never settles a newer preparation.
+        let stale = store
+            .settle_interrupted_preparation(
+                &ready.id,
+                ready.environment.generation + 1,
+                None,
+                Vec::new(),
+                None,
+                "cancelled".into(),
+            )
+            .unwrap();
+        assert_eq!(stale.environment.state, SessionEnvironmentState::Preparing);
+        let settled = store
+            .settle_interrupted_preparation(
+                &ready.id,
+                ready.environment.generation,
+                ready.environment.runtime.clone(),
+                Vec::new(),
+                None,
+                "cancelled".into(),
+            )
+            .unwrap();
+        assert_eq!(settled.environment.state, SessionEnvironmentState::Ready);
+        assert_eq!(settled.environment.error, None);
+        assert_eq!(
+            settled.environment.effective_image,
+            ready.environment.effective_image
+        );
+        assert_eq!(
+            settled.environment.setup_results,
+            ready.environment.setup_results
+        );
+        assert!(settled.environment.resume_ready.is_none());
+        drop(store);
+        let mut reopened = SessionStore::new(data.path().join("sessions")).unwrap();
+        reopened.load_all().unwrap();
+        assert_eq!(
+            reopened.get(&ready.id).unwrap().environment,
+            settled.environment
+        );
+    }
+
+    #[test]
+    fn interrupted_first_preparation_and_later_transitions_do_not_resume() {
+        let (_data, _work, mut store, ready) = resumable_session("podman");
+        store
+            .set_environment(
+                &ready.id,
+                SessionEnvironmentState::Failed,
+                None,
+                None,
+                Vec::new(),
+                Some("image missing".into()),
+            )
+            .unwrap();
+        let preparing = store
+            .begin_environment_preparation(&ready.id, None)
+            .unwrap();
+        assert!(preparing.environment.resume_ready.is_none());
+        let failed = store
+            .settle_interrupted_preparation(
+                &ready.id,
+                preparing.environment.generation,
+                None,
+                Vec::new(),
+                None,
+                "environment preparation was cancelled; rebuild the environment".into(),
+            )
+            .unwrap();
+        assert_eq!(failed.environment.state, SessionEnvironmentState::Failed);
+        // A genuine outcome clears the Ready evidence of a re-preparation.
+        store
+            .set_environment(
+                &ready.id,
+                SessionEnvironmentState::Ready,
+                None,
+                None,
+                Vec::new(),
+                None,
+            )
+            .unwrap();
+        store
+            .begin_environment_preparation(&ready.id, None)
+            .unwrap();
+        let failed = store
+            .set_environment(
+                &ready.id,
+                SessionEnvironmentState::Failed,
+                None,
+                None,
+                Vec::new(),
+                Some("setup exited 1".into()),
+            )
+            .unwrap();
+        assert!(failed.environment.resume_ready.is_none());
+    }
+
+    #[test]
+    fn remote_or_unidentified_interruptions_never_resume() {
+        // Production begins an E2B preparation without a runtime id; a
+        // retained E2B identity is equally untrusted half-provisioned.
+        for runtime in [None, Some("e2b")] {
+            let (_data, _work, mut store, ready) = resumable_session("e2b");
+            let runtime = runtime.and(ready.environment.runtime.clone());
+            let preparing = store
+                .begin_environment_preparation(&ready.id, runtime.clone())
+                .unwrap();
+            assert!(preparing.environment.resume_ready.is_none());
+            let settled = store
+                .settle_interrupted_preparation(
+                    &ready.id,
+                    preparing.environment.generation,
+                    runtime,
+                    Vec::new(),
+                    None,
+                    "cancelled".into(),
+                )
+                .unwrap();
+            assert_eq!(settled.environment.state, SessionEnvironmentState::Failed);
+        }
+        // A local settle must still name the runtime it removed.
+        let (_data, _work, mut store, ready) = resumable_session("podman");
+        let preparing = store
+            .begin_environment_preparation(&ready.id, ready.environment.runtime.clone())
+            .unwrap();
+        assert!(preparing.environment.resume_ready.is_some());
+        let settled = store
+            .settle_interrupted_preparation(
+                &ready.id,
+                preparing.environment.generation,
+                None,
+                Vec::new(),
+                None,
+                "cancelled".into(),
+            )
+            .unwrap();
+        assert_eq!(settled.environment.state, SessionEnvironmentState::Failed);
+        assert!(settled.environment.resume_ready.is_none());
+    }
+
+    #[test]
+    fn crash_during_repreparation_reloads_failed_for_every_backend() {
+        // A crash can leave a partial dependency volume, so reload never
+        // trusts the Ready evidence; startup reconcile removes both.
+        for backend in ["podman", "e2b"] {
+            let (data, _work, mut store, ready) = resumable_session(backend);
+            let mut runtime = ready.environment.runtime.clone().unwrap();
+            runtime.cleanup_confirmed = false;
+            store
+                .begin_environment_preparation(&ready.id, Some(runtime))
+                .unwrap();
+            drop(store);
+            let mut reopened = SessionStore::new(data.path().join("sessions")).unwrap();
+            reopened.load_all().unwrap();
+            let environment = reopened.get(&ready.id).unwrap().environment;
+            assert_eq!(
+                environment.state,
+                SessionEnvironmentState::Failed,
+                "{backend}"
+            );
+            assert_eq!(environment.generation, ready.environment.generation);
+            assert!(environment.resume_ready.is_none());
+            assert!(environment
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("interrupted")));
+        }
+    }
 
     #[test]
     fn load_rejects_embedded_id_that_does_not_match_filename_before_repair() {

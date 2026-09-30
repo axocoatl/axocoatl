@@ -1,0 +1,63 @@
+{
+  "data": {
+    "id": "qwen/qwen-2.5-72b-instruct",
+    "endpoints": [
+      {
+        "model_id": "qwen/qwen-2.5-72b-instruct",
+        "provider_name": "DeepInfra",
+        "tag": "deepinfra/fp8",
+        "context_length": 32768,
+        "max_completion_tokens": 16384,
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "frequency_penalty",
+          "presence_penalty",
+          "repetition_penalty",
+          "top_k",
+          "seed",
+          "min_p",
+          "tools",
+          "tool_choice",
+          "logit_bias",
+          "structured_outputs",
+          "response_format"
+        ],
+        "pricing": {
+          "prompt": "0.00000036",
+          "completion": "0.0000004",
+          "discount": 0
+        },
+        "status": 0
+      },
+      {
+        "model_id": "qwen/qwen-2.5-72b-instruct",
+        "provider_name": "Novita",
+        "tag": "novita/bf16",
+        "context_length": 32000,
+        "max_completion_tokens": 8192,
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "frequency_penalty",
+          "presence_penalty",
+          "seed",
+          "top_k",
+          "repetition_penalty",
+          "tools",
+          "tool_choice"
+        ],
+        "pricing": {
+          "prompt": "0.00000038",
+          "completion": "0.0000004",
+          "discount": 0
+        },
+        "status": 0
+      }
+    ]
+  }
+}

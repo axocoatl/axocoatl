@@ -68,6 +68,7 @@ These commands require a running daemon and use its already-loaded config:
 | `axocoatl session list` | List directory Sessions from the running daemon |
 | `axocoatl session exec <SESSION_ID> <INPUT>` | Execute one instruction and print the completed output |
 | `axocoatl session close <SESSION_ID>` | Soft-close the Session and stop its sandbox |
+| `axocoatl session upgrade [-c, --config PATH] --confirm` | Convert supported legacy Session storage while the daemon is stopped; preserves history and archives unproved historical Agent state. See [Upgrade](/operate/upgrade/). |
 
 CLI Session creation does not expose the browser form's Skills, image, port,
 or multi-Agent mode options. It also does not approve detected repository

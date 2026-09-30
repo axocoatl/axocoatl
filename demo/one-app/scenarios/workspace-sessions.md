@@ -19,41 +19,24 @@ restores the same Turn.
   the same working tree.
 - This scenario does not prove cloud sync, multi-user collaboration, or a
   cross-device account service.
-- The deterministic local fixture provider makes this hierarchy/reload proof
-  repeatable. It is not evidence of model quality or provider diversity.
+- This take uses the real local Ollama model named in its capture evidence.
+  It demonstrates hierarchy and reload, not model quality or provider diversity.
 
 ## Start or reset
 
-Close every Session owned by an earlier demo from **All sessions**, stop the
-daemon with Ctrl-C, then prepare a fresh Harbor Catalog root:
+Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
+`harbor-catalog` fixture, a fresh native data path, real local Ollama calls,
+and the exact candidate binary at `http://localhost:8080`. Retain the actual
+workspace path as `$AXO_DEMO_ROOT/workspace` (or record the equivalent isolated
+fixture path). Verify `history_version: execution_v2` and Ready, then explicitly
+review and apply **Team and budget** before sending.
 
-```bash
-export AXO_WORKSPACE_FILM_ROOT=/private/tmp/axocoatl-one-app-showcase-workspace-film
-AXOCOATL_DEMO_ROOT="$AXO_WORKSPACE_FILM_ROOT" \
-  ./demo/one-app/prepare.sh --scenario harbor-catalog
-```
-
-Start the capture-only provider and exact release binary in separate terminals:
-
-```bash
-node demo/one-app/films/fixtures/harbor-ways-provider.mjs
-```
-
-```bash
-AXOCOATL_DATA_DIR="$AXO_WORKSPACE_FILM_ROOT/data" \
-AXOCOATL_SOCKET_PATH="$AXO_WORKSPACE_FILM_ROOT/run/axocoatl.sock" \
-RUST_LOG=info \
-  ./target/release/axocoatl dev \
-  -c demo/one-app/films/fixtures/harbor-ways.capture.yaml
-```
-
-The app is at `http://127.0.0.1:18092`. If preparation reports a surviving
-`axo-ses-*` container, restart its owning demo daemon and close that Session;
-do not remove an unidentified container.
+Use **Minimal Coder** for the first Session and **Invariant Defender** for the
+second. Both belong to the same prepared Workspace; avoid source edits.
 
 ## Browser actions
 
-1. Open `http://127.0.0.1:18092` and choose **Open workspace…** from the
+1. Open `http://localhost:8080` and choose **Open workspace…** from the
    Workspace switcher.
 2. Choose the prepared `workspace` directory and name the Workspace
    `Harbor Catalog`.
@@ -90,24 +73,22 @@ do not remove an unidentified container.
 In a second terminal:
 
 ```bash
-export AXO_DEMO_URL='http://127.0.0.1:18092'
+export AXO_DEMO_URL='http://localhost:8080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-workspace-film'
 curl -sS "$AXO_DEMO_URL/api/sessions"
 ls -l "$AXO_DEMO_ROOT/data/sessions"
-grep -F 'report its npm scripts' \
-  "$AXO_DEMO_ROOT/data/session-history/turns.v1.jsonl"
+curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
 ```
 
 Copy the `ses-...` id for `Catalog orientation` from the first response, then:
 
 ```bash
 export AXO_SESSION_ID='ses-paste-the-id-here'
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns"
+curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
 ```
 
 The Session JSON files prove two durable owners. The turn endpoint and JSONL
-ledger prove that the reopened transcript is backed by the canonical Turn
-store rather than browser state.
+ledger prove that the reopened transcript is backed by the native execution records rather than browser state.
 
 ## Recording beats
 
@@ -125,7 +106,7 @@ path readable; the persistence reveal is the point of the film.
 
 1. Capture the API and ledger evidence before changing ownership state.
 2. In **All sessions**, use each Session's context menu and choose **Close**.
-3. Stop the release daemon and deterministic provider with Ctrl-C.
+3. Stop the release daemon with Ctrl-C; leave the user-owned Ollama service alone.
 4. The next `AXOCOATL_DEMO_ROOT="$AXO_WORKSPACE_FILM_ROOT"
    ./demo/one-app/prepare.sh --scenario harbor-catalog` moves this marked root
    to a timestamped backup and creates a fresh one. Do not delete the root or

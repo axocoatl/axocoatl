@@ -53,12 +53,18 @@
     return String(s).replace(/[^\w-]/g, c => '\\' + c);
   }
 
+  function applicationClasses(el) {
+    return el?.classList ? Array.from(el.classList).filter(name =>
+      name !== 'axo-tap-hover' && name !== 'axo-tap-locked') : [];
+  }
+
   function shortLabel(el) {
     if (!el || el.nodeType !== 1) return '';
     let s = el.tagName.toLowerCase();
     if (el.id) s += '#' + el.id;
-    if (el.classList && el.classList.length) {
-      s += '.' + Array.from(el.classList).slice(0, 3).join('.');
+    const classes = applicationClasses(el);
+    if (classes.length) {
+      s += '.' + classes.slice(0, 3).join('.');
     }
     return s;
   }
@@ -74,8 +80,9 @@
     while (cur && cur.nodeType === 1 && depth < 5) {
       let part = cur.tagName.toLowerCase();
       if (cur.id) { parts.unshift('#' + cssEscape(cur.id)); break; }
-      if (cur.classList && cur.classList.length) {
-        part += '.' + Array.from(cur.classList).slice(0, 2).map(cssEscape).join('.');
+      const classes = applicationClasses(cur);
+      if (classes.length) {
+        part += '.' + classes.slice(0, 2).map(cssEscape).join('.');
       } else if (cur.parentElement) {
         const idx = Array.prototype.indexOf.call(cur.parentElement.children, cur) + 1;
         part += `:nth-child(${idx})`;
@@ -89,7 +96,19 @@
 
   function snippetFor(el) {
     if (!el) return '';
-    let html = el.outerHTML || '';
+    const copy = el.cloneNode(true);
+    for (const node of [copy, ...copy.querySelectorAll('[class]')]) {
+      // Removing the last highlight can leave an empty class attribute behind.
+      if (node.hasAttribute('class') && !node.classList.length) {
+        node.removeAttribute('class');
+        continue;
+      }
+      if (!node.classList?.contains('axo-tap-hover') && !node.classList?.contains('axo-tap-locked')) continue;
+      const classes = applicationClasses(node);
+      if (classes.length) node.setAttribute('class', classes.join(' '));
+      else node.removeAttribute('class');
+    }
+    let html = copy.outerHTML || '';
     if (html.length > 1500) html = html.slice(0, 1500) + '\n…';
     return html;
   }
@@ -108,7 +127,7 @@
     return arr.map(node => ({
       tag: node.tagName ? node.tagName.toLowerCase() : '',
       id: node.id || '',
-      classes: node.classList ? Array.from(node.classList) : [],
+      classes: applicationClasses(node),
       label: shortLabel(node),
       selector: selectorFor(node),
     }));

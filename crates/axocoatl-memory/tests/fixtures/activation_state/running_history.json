@@ -1,0 +1,76 @@
+[
+  {
+    "schema_version": 2,
+    "command_id": "command-0",
+    "expected_revision": 0,
+    "session_id": "capacity-session",
+    "turn_id": "capacity-turn",
+    "event": {
+      "kind": "begin",
+      "epoch_id": "epoch-1",
+      "graph": {
+        "snapshot_id": "graph",
+        "revision": 1,
+        "nodes": [
+          {
+            "node_id": "node-a",
+            "slot_id": "slot-a",
+            "definition": {
+              "definition_id": "template",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-a",
+            "starting_savepoint": {
+              "kind": "empty"
+            },
+            "required": true
+          }
+        ],
+        "dependencies": [],
+        "conditions": []
+      },
+      "predecessor": null
+    }
+  },
+  {
+    "schema_version": 2,
+    "command_id": "command-1",
+    "expected_revision": 1,
+    "session_id": "capacity-session",
+    "turn_id": "capacity-turn",
+    "event": {
+      "kind": "start_activation",
+      "input": {
+        "manifest_id": "input-a",
+        "activation": {
+          "session_id": "capacity-session",
+          "turn_id": "capacity-turn",
+          "execution_epoch_id": "epoch-1",
+          "node_id": "node-a",
+          "generation": 1,
+          "activation_id": "activation-a"
+        },
+        "definition": {
+          "definition_id": "template",
+          "snapshot": "definition-v1"
+        },
+        "conversation_id": "conversation-a",
+        "starting_savepoint": {
+          "kind": "empty"
+        },
+        "parents": [],
+        "guidance": [
+          "guidance"
+        ],
+        "attachments": [],
+        "repository": {
+          "kind": "recorded",
+          "snapshot": "repository"
+        },
+        "budget": "budget",
+        "grant": null,
+        "revision_context": null
+      }
+    }
+  }
+]

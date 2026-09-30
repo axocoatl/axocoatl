@@ -26,7 +26,8 @@ renaming the folder. A **Session** is durable conversation and runtime state own
 by that Workspace. On local Podman, several Sessions bind the same Workspace
 checkout while retaining separate transcripts, modes, dependency volumes, and
 runtime configuration. An E2B-backed Session instead operates on its remote
-clone of a committed ref. Closing and reopening a tool does not create another
+clone of a committed ref; its repository execution currently uses the compatibility
+path. Native repository tools require local Podman. Closing and reopening a tool does not create another
 conversation; the Session remains the shared context.
 
 The Workspace switcher is global. Once a Workspace is selected, the rail lists
@@ -47,16 +48,18 @@ configure how work runs. They are not peer destinations beside Sessions.
 
 Ordinary single-Agent work does not require Attempts. After its reviewed
 environment is Ready, Conversation, Files, Terminal, Preview, and Source
-Control remain available for direct iteration.
+Control remain available for direct iteration. Native execution additionally
+requires a reviewed **Team & budget** configuration with explicit allowances.
 
 ## State owners are intentionally distinct
 
 | State | Authority | Important boundary |
 | --- | --- | --- |
 | Session turn History | Durable Session ledger | Records accepted request, context, output, and terminal status |
-| Agent conversation | Actor memory and checkpoint | Model-facing cache; not the complete product transcript |
+| Agent conversation | Accepted native activation state; legacy actor memory and checkpoint | Model-facing state; not the complete product transcript |
 | Session files | Ready sandbox working tree: local Workspace bind mount or E2B clone | Git represents file state, not every external effect; Files never bypasses the sandbox |
 | Attempt set | Attempt manifest, clones, and containers | One unresolved set per Session; requires explicit Keep or cleanup |
+| Retained Ways decision | Native decision-history store | Bounded candidate evidence and the human choice survive runtime cleanup under explicit storage limits |
 | Automations | Canonical JSON store and run records | Independent background/manual DAG lifecycle |
 | MCP permissions | Durable permission store | Separate from MCP server definitions in YAML/live registry |
 

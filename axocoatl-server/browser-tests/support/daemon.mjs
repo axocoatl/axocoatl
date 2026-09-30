@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import {
   access,
+  copyFile,
   mkdtemp,
   mkdir,
   readFile,
@@ -52,7 +54,11 @@ async function waitForHealth(baseUrl, child, logs) {
   // macOS bootstrap may run three sequential, individually bounded 15-second
   // Podman readiness probes before HTTP binds. Keep a finite margin above
   // that 45-second backend contract; a process exit still fails immediately.
-  const deadline = Date.now() + 75_000;
+  const configuredTimeout = Number(process.env.AXOCOATL_E2E_STARTUP_TIMEOUT_MS || 75_000);
+  if (!Number.isSafeInteger(configuredTimeout) || configuredTimeout < 1 || configuredTimeout > 300_000) {
+    throw new Error('AXOCOATL_E2E_STARTUP_TIMEOUT_MS must be an integer from 1 to 300000.');
+  }
+  const deadline = Date.now() + configuredTimeout;
   let lastError = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
@@ -141,18 +147,62 @@ async function seedWorkspace(baseUrl, projectPath, name, sessionNames) {
   return { workspace, sessions };
 }
 
+// Match the immutable artifacts required by axocoatl-memory/src/neural.rs.
+const EMBEDDING_MODEL_FILES = [
+  ['config.json', 612, '953f9c0d463486b10a6871cc2fd59f223b2c70184f49815e7efbcab5d8908b41'],
+  ['tokenizer.json', 466247, 'be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037'],
+  ['model.safetensors', 90868376, '53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db'],
+];
+async function completeModelCache(directory) {
+  if (!directory) return false;
+  try { await Promise.all(EMBEDDING_MODEL_FILES.map(([name]) => access(path.join(directory, name)))); return true; }
+  catch { return false; }
+}
+async function retainVerifiedFixtureModel(dataDirectory, cache) {
+  if (!cache || await completeModelCache(cache)) return;
+  const model = path.join(dataDirectory, 'models', 'all-MiniLM-L6-v2');
+  if (!await completeModelCache(model)) return;
+  const verified = [];
+  for (const [name, size, digest] of EMBEDDING_MODEL_FILES) {
+    const bytes = await readFile(path.join(model, name));
+    if (bytes.length !== size || createHash('sha256').update(bytes).digest('hex') !== digest) return;
+    verified.push([name, bytes]);
+  }
+  await mkdir(cache, {recursive:true});
+  for (const [name, bytes] of verified) {
+    try { await writeFile(path.join(cache, name), bytes, {flag:'wx'}); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+  }
+}
+
 export async function launchTestDaemon({
+  nativeDataRoot = false,
   allowPostCreateCommand = false,
   ollamaBaseUrl = 'http://127.0.0.1:9',
   skills = [],
+  agentTools = [],
+  port: requestedPort = Number(process.env.AXOCOATL_E2E_PORT) || 0,
 } = {}) {
   const runRoot = await mkdtemp(path.join(tmpdir(), 'axocoatl-browser-e2e-'));
   const dataDirectory = path.join(runRoot, 'data');
   const projectsDirectory = path.join(runRoot, 'projects');
-  await mkdir(dataDirectory, { recursive: true });
+  if (!nativeDataRoot) {
+    await mkdir(dataDirectory, { recursive: true });
+    // Isolated legacy fixtures may reuse the immutable model artifacts. The
+    // daemon still verifies every byte; no Session or authority state is copied.
+    // Native first-install fixtures must keep their data root genuinely absent.
+    const modelCache = process.env.AXOCOATL_E2E_MODEL_CACHE;
+    if (await completeModelCache(modelCache)) {
+      const destination = path.join(dataDirectory, 'models', 'all-MiniLM-L6-v2');
+      await mkdir(destination, { recursive: true });
+      for (const [name] of EMBEDDING_MODEL_FILES) {
+        await copyFile(path.join(modelCache, name), path.join(destination, name));
+      }
+    }
+  }
   await mkdir(projectsDirectory, { recursive: true });
 
-  const port = Number(process.env.AXOCOATL_E2E_PORT) || await freeLoopbackPort();
+  const port = requestedPort || await freeLoopbackPort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const configPath = path.join(runRoot, 'axocoatl.e2e.yaml');
   const socketPath = path.join(runRoot, 'axocoatl.sock');
@@ -177,6 +227,7 @@ agents:
     model: browser-test-model
     system_prompt: Browser regression fixture. No turns are executed.
     depends_on: []
+    tools: ${JSON.stringify(agentTools)}
 
 providers:
   ollama:
@@ -220,6 +271,7 @@ consolidation:
     child.stdout.on('data', (chunk) => { stdout = boundedLog(stdout, chunk); });
     child.stderr.on('data', (chunk) => { stderr = boundedLog(stderr, chunk); });
     await waitForHealth(baseUrl, child, logs);
+    await retainVerifiedFixtureModel(dataDirectory, process.env.AXOCOATL_E2E_MODEL_CACHE);
   };
   const logs = () => `stdout:\n${stdout}\nstderr:\n${stderr}`;
 

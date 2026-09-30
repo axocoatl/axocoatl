@@ -13,10 +13,13 @@ readme.workspace = true
 description = "Durable workspace, session, context-attachment, and turn-history storage for Axocoatl"
 
 [dependencies]
-axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
+axocoatl-core = { version = "1.1.0", path = "../axocoatl-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
 thiserror = { workspace = true }
+unicode-normalization = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]

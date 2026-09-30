@@ -42,12 +42,22 @@ use crate::default_behavior::{
 };
 use crate::error::AgentError;
 use crate::frontier_resolver::LlmFrontierResolver;
-use crate::provider_budget::{self, ControlledChat};
+use crate::provider_budget::ControlledChat;
 use crate::run_control::{AgentRunControl, AgentRunOutcome};
 
 /// Auction scalar for a worker with no enforced token budget. Execution is also
 /// unbounded in that case, so the bid must not invent a finite enforcement cap.
 pub const DEFAULT_WORKER_BUDGET: usize = usize::MAX;
+
+#[cfg(not(test))]
+const WORKER_GRACEFUL_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(test)]
+const WORKER_GRACEFUL_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+#[cfg(not(test))]
+const WORKER_FORCE_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+#[cfg(test)]
+const WORKER_FORCE_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+const WORKER_SHUTDOWN_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5);
 
 fn executor_tools_for_worker(
     configured: &[String],
@@ -68,12 +78,17 @@ fn callable_tools_for_declared_worker(
     configured: &[String],
     inherited: &HashSet<String>,
     has_persistent_memory: bool,
+    durable_memory_read_only: bool,
 ) -> Vec<String> {
     let mut tools = executor_tools_for_worker(configured, inherited);
     if has_persistent_memory {
         tools.extend([
             crate::recall::RECALL_SEARCH.to_string(),
             crate::recall::RECALL_TIMEFRAME.to_string(),
+        ]);
+    }
+    if has_persistent_memory && !durable_memory_read_only {
+        tools.extend([
             crate::core_memory_tools::CORE_MEMORY_APPEND.to_string(),
             crate::core_memory_tools::CORE_MEMORY_REPLACE.to_string(),
             crate::core_memory_tools::CORE_MEMORY_SET.to_string(),
@@ -256,6 +271,19 @@ struct OrchestrationItem {
 enum CoordinatorRunOutcome {
     Completed(AgentOutput),
     Cancelled(AgentOutput),
+}
+
+fn include_worker_shutdown_result(
+    run: Result<CoordinatorRunOutcome, AgentError>,
+    shutdown: Result<(), AgentError>,
+) -> Result<CoordinatorRunOutcome, AgentError> {
+    match (run, shutdown) {
+        (result, Ok(())) => result,
+        (Ok(_), Err(shutdown_error)) => Err(shutdown_error),
+        (Err(run_error), Err(shutdown_error)) => Err(AgentError::Internal(format!(
+            "{run_error}; additionally {shutdown_error}"
+        ))),
+    }
 }
 
 struct CoordinatorRequestContext {
@@ -560,7 +588,9 @@ async fn forward_worker_tool_stream(
                     is_error,
                 }
             }
-            AgentStreamChunk::Text(_) | AgentStreamChunk::Reasoning(_) => continue,
+            AgentStreamChunk::Text(_)
+            | AgentStreamChunk::Reasoning(_)
+            | AgentStreamChunk::ProviderRetry { .. } => continue,
         };
         if parent.send(forwarded).is_err() {
             break;
@@ -671,13 +701,15 @@ pub struct CoordinatorBehavior {
     worker_logical_ids: HashMap<AgentId, String>,
     /// Active workers and their actor refs.
     active_workers: HashMap<AgentId, ractor::ActorRef<AgentMessage>>,
-    /// JoinHandles for worker actors.
-    worker_handles: Vec<tokio::task::JoinHandle<()>>,
+    /// JoinHandles for worker actors, retained with their logical runtime ids
+    /// so teardown failures remain attributable.
+    worker_handles: HashMap<AgentId, tokio::task::JoinHandle<()>>,
     /// Collected results from workers.
     worker_results: Vec<WorkerResult>,
     /// Optional HTN planner. When set, decompose_task tries symbolic
     /// decomposition (no LLM call) before falling back to the LLM.
     htn_planner: Option<HtnPlanner>,
+    planning_task: Option<String>,
     /// Monotonic run counter — scopes worker actor names per run so repeated
     /// executions of the same coordinator never collide in ractor's registry.
     run_seq: u64,
@@ -685,6 +717,9 @@ pub struct CoordinatorBehavior {
     /// first-class agent (checkpointed, with core + semantic memory and the
     /// global hook registry), not a bare provider+tools shell.
     checkpoint_store: Option<Arc<CheckpointStore>>,
+    activation_checkpoint_port: Option<Arc<dyn crate::ActivationCheckpointPort>>,
+    activation_checkpoint_candidate: Option<AgentCheckpoint>,
+    activation_checkpoint_used: bool,
     /// Shared core-memory blocks handed to each worker (opt-in team memory).
     shared_blocks: std::collections::HashMap<String, axocoatl_memory::SharedBlock>,
     hook_registry: Option<Arc<HookRegistry>>,
@@ -702,6 +737,24 @@ pub struct CoordinatorBehavior {
     /// Parent execution sink. Worker text remains isolated, while tool
     /// start/result evidence is occurrence-safely forwarded into this stream.
     stream_sink: Option<StreamSink>,
+    stream_observer: Option<Arc<dyn crate::AgentStreamObserver>>,
+    host_worker_tools: Option<Vec<String>>,
+    host_control_tools: Vec<(String, Arc<dyn axocoatl_tools::BuiltinTool>)>,
+    control_call_sequence: std::sync::atomic::AtomicU64,
+}
+
+async fn wait_for_worker_statuses(
+    workers: &[(AgentId, Option<String>, ractor::ActorRef<AgentMessage>)],
+    timeout: std::time::Duration,
+) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while workers
+        .iter()
+        .any(|(_, _, actor)| actor.get_status() != ractor::ActorStatus::Stopped)
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(WORKER_SHUTDOWN_POLL_INTERVAL).await;
+    }
 }
 
 impl CoordinatorBehavior {
@@ -731,11 +784,15 @@ impl CoordinatorBehavior {
             worker_configs: Vec::new(),
             worker_logical_ids: HashMap::new(),
             active_workers: HashMap::new(),
-            worker_handles: Vec::new(),
+            worker_handles: HashMap::new(),
             worker_results: Vec::new(),
             htn_planner: None,
+            planning_task: None,
             run_seq: 0,
             checkpoint_store: None,
+            activation_checkpoint_port: None,
+            activation_checkpoint_candidate: None,
+            activation_checkpoint_used: false,
             shared_blocks: std::collections::HashMap::new(),
             hook_registry: None,
             data_root: None,
@@ -743,6 +800,10 @@ impl CoordinatorBehavior {
             resumed_state: None,
             reporter: None,
             stream_sink: None,
+            stream_observer: None,
+            host_worker_tools: None,
+            host_control_tools: Vec::new(),
+            control_call_sequence: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -829,6 +890,59 @@ impl CoordinatorBehavior {
     pub fn with_checkpoint_store(mut self, store: Arc<CheckpointStore>) -> Self {
         self.checkpoint_store = Some(store);
         self
+    }
+
+    /// Bind this one Coordinator execution to the same immutable activation
+    /// checkpoint contract as native Workers. No latest-file restore is used.
+    pub fn with_activation_checkpoint_port(
+        mut self,
+        port: Arc<dyn crate::ActivationCheckpointPort>,
+    ) -> Self {
+        self.activation_checkpoint_port = Some(port);
+        self
+    }
+
+    /// The host retains the semantic task separately from its structured
+    /// context projection, so configured HTN patterns keep their exact meaning.
+    pub fn with_planning_task(mut self, task: String) -> Self {
+        self.planning_task = Some(task);
+        self
+    }
+
+    pub fn with_stream_observer(mut self, observer: Arc<dyn crate::AgentStreamObserver>) -> Self {
+        self.stream_observer = Some(observer);
+        self
+    }
+
+    /// Attach the exact activation-bound workspace memory port.
+    pub fn with_host_knowledge_tool(mut self, tool: Arc<dyn axocoatl_tools::BuiltinTool>) -> Self {
+        self.host_control_tools
+            .push(("workspace_knowledge".into(), tool));
+        self
+    }
+
+    pub fn with_host_control_tool(mut self, tool: Arc<dyn axocoatl_tools::BuiltinTool>) -> Self {
+        self.host_control_tools
+            .push(("coordination_control".into(), tool));
+        self
+    }
+
+    pub fn with_host_worker_tools(mut self, tools: Vec<String>) -> Self {
+        self.host_worker_tools = Some(tools);
+        self
+    }
+
+    fn emit_text(&self, text: &str) -> Result<(), AgentError> {
+        let chunk = AgentStreamChunk::Text(text.to_owned());
+        if let Some(observer) = &self.stream_observer {
+            observer.observe(&chunk).map_err(|error| {
+                AgentError::Internal(format!("Coordinator stream persistence: {error}"))
+            })?;
+        }
+        if let Some(sink) = &self.stream_sink {
+            let _ = sink.send(chunk);
+        }
+        Ok(())
     }
 
     pub fn with_shared_blocks(
@@ -1076,8 +1190,8 @@ impl CoordinatorBehavior {
         .await
         .map_err(|e| AgentError::Internal(format!("Failed to spawn worker: {e}")))?;
 
-        // Store handle so we can await termination
-        self.worker_handles.push(handle);
+        // Store the handle so checked teardown can prove the worker task ended.
+        self.worker_handles.insert(config.id.clone(), handle);
         self.active_workers.insert(config.id.clone(), actor_ref);
         tracing::info!(
             coordinator = %self.agent_id,
@@ -1088,40 +1202,117 @@ impl CoordinatorBehavior {
         Ok(config.id.clone())
     }
 
-    /// Stop all active workers and await full teardown so their actor names are
-    /// released from ractor's registry before the next run, then join the
-    /// spawned actor tasks so nothing is left running.
-    async fn stop_all_workers(&mut self) {
-        for (id, actor) in self.active_workers.drain() {
-            let _ = actor
-                .stop_and_wait(None, Some(std::time::Duration::from_secs(10)))
-                .await;
-            tracing::debug!(worker = %id, "Stopped worker");
+    /// Stop all active workers within one bounded ownership boundary. A worker
+    /// that cannot reach graceful shutdown is force-killed, and that fact (or
+    /// any failed join/registry release) poisons the coordinator outcome rather
+    /// than being hidden behind an apparently successful outer actor stop.
+    async fn stop_all_workers(&mut self) -> Result<(), AgentError> {
+        let workers = self
+            .active_workers
+            .drain()
+            .map(|(id, actor)| (id, actor.get_name(), actor))
+            .collect::<Vec<_>>();
+        let mut handles = std::mem::take(&mut self.worker_handles);
+        if workers.is_empty() && handles.is_empty() {
+            return Ok(());
         }
-        for handle in self.worker_handles.drain(..) {
+
+        for (_, _, actor) in &workers {
+            actor.stop(Some("coordinator worker teardown".to_string()));
+        }
+        wait_for_worker_statuses(&workers, WORKER_GRACEFUL_SHUTDOWN_TIMEOUT).await;
+
+        let mut errors = Vec::new();
+        let forced = workers
+            .iter()
+            .filter(|(_, _, actor)| actor.get_status() != ractor::ActorStatus::Stopped)
+            .map(|(id, _, actor)| {
+                errors.push(format!(
+                    "worker '{id}' did not stop within the graceful shutdown boundary"
+                ));
+                actor.kill();
+                id.clone()
+            })
+            .collect::<HashSet<_>>();
+        if !forced.is_empty() {
+            wait_for_worker_statuses(&workers, WORKER_FORCE_SHUTDOWN_TIMEOUT).await;
+        }
+
+        let join_deadline = tokio::time::Instant::now() + WORKER_FORCE_SHUTDOWN_TIMEOUT;
+        for (id, actor_name, actor) in &workers {
+            if actor.get_status() != ractor::ActorStatus::Stopped {
+                errors.push(format!("worker '{id}' remained live after forced shutdown"));
+            }
+            let Some(mut handle) = handles.remove(id) else {
+                errors.push(format!("worker '{id}' had no owned actor task handle"));
+                continue;
+            };
+            let remaining = join_deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, &mut handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => errors.push(format!(
+                    "worker '{id}' actor task ended without a clean join: {error}"
+                )),
+                Err(_) => {
+                    handle.abort();
+                    let _ = handle.await;
+                    errors.push(format!(
+                        "worker '{id}' actor task exceeded the forced join boundary and was aborted"
+                    ));
+                }
+            }
+            if let Some(name) = actor_name {
+                if ractor::registry::where_is(name.clone()).is_some() {
+                    errors.push(format!(
+                        "worker '{id}' retained registered actor ownership after shutdown"
+                    ));
+                }
+            }
+            if forced.contains(id) {
+                tracing::warn!(worker = %id, "Force-killed unresponsive coordinator worker");
+            } else {
+                tracing::debug!(worker = %id, "Stopped worker");
+            }
+        }
+        for (id, handle) in handles {
+            handle.abort();
             let _ = handle.await;
+            errors.push(format!(
+                "orphan worker handle '{id}' had no active actor ownership and was aborted"
+            ));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(AgentError::Internal(format!(
+                "coordinator worker teardown failed: {}",
+                errors.join("; ")
+            )))
         }
     }
 
     /// Persist the current orchestration state to the coordinator's checkpoint
     /// so a crash/restart can resume the run. No-op when no checkpoint store is
     /// configured (lightweight/embedded use).
-    async fn checkpoint_orchestration(&mut self, state: &OrchestrationState) {
-        let Some(store) = self.checkpoint_store.clone() else {
-            return;
-        };
+    async fn checkpoint_orchestration(
+        &mut self,
+        state: &OrchestrationState,
+    ) -> Result<(), AgentError> {
+        let store = self.checkpoint_store.clone();
+        if store.is_none() && self.activation_checkpoint_port.is_none() {
+            return Ok(());
+        }
         self.checkpoint_version += 1;
         let checkpoint_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let behavior_state = match serde_json::to_string(state) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                tracing::warn!(coordinator = %self.agent_id, error = %e, "failed to serialize orchestration state");
-                return;
-            }
-        };
+        let behavior_state = Some(serde_json::to_string(state).map_err(|error| {
+            AgentError::Internal(format!(
+                "failed to serialize coordinator orchestration checkpoint: {error}"
+            ))
+        })?);
         let ckpt = AgentCheckpoint {
             version: self.checkpoint_version,
             agent_id: self.agent_id.clone(),
@@ -1131,26 +1322,41 @@ impl CoordinatorBehavior {
             cumulative_token_usage_known: self.cumulative_token_usage_known(),
             behavior_state,
         };
-        if let Err(e) = store.save(&ckpt).await {
-            tracing::warn!(coordinator = %self.agent_id, error = %e, "failed to checkpoint orchestration");
+        if self.activation_checkpoint_port.is_some() {
+            self.activation_checkpoint_candidate = Some(ckpt);
+            return Ok(());
         }
+        store
+            .ok_or_else(|| AgentError::Internal("checkpoint store is unavailable".into()))?
+            .save(&ckpt)
+            .await
+            .map_err(|error| {
+                AgentError::Internal(format!(
+                    "failed to persist coordinator orchestration checkpoint: {error}"
+                ))
+            })
     }
 
     /// Clear resumable actor-internal orchestration after a terminal failure.
     /// Canonical Session history remains authoritative; this only tombstones
     /// the coordinator's behavior cache so a later turn cannot silently resume
     /// work that the Session already terminalized as failed/interrupted.
-    async fn clear_orchestration_state(&mut self) {
-        self.resumed_state = None;
+    async fn clear_orchestration_state(&mut self) -> Result<(), AgentError> {
+        if self.activation_checkpoint_port.is_some() {
+            self.resumed_state = None;
+            self.checkpoint_accounting_only().await?;
+            return Ok(());
+        }
         let Some(store) = self.checkpoint_store.clone() else {
-            return;
+            self.resumed_state = None;
+            return Ok(());
         };
         self.checkpoint_version = self.checkpoint_version.saturating_add(1);
         let checkpoint_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let checkpoint = AgentCheckpoint {
+        let mut checkpoint = AgentCheckpoint {
             version: self.checkpoint_version,
             agent_id: self.agent_id.clone(),
             checkpoint_time,
@@ -1159,13 +1365,42 @@ impl CoordinatorBehavior {
             cumulative_token_usage_known: self.cumulative_token_usage_known(),
             behavior_state: None,
         };
-        if let Err(error) = store.save(&checkpoint).await {
-            tracing::warn!(
-                coordinator = %self.agent_id,
-                %error,
-                "failed to clear terminal coordinator behavior state"
-            );
+        if let Err(first_error) = store.save(&checkpoint).await {
+            // A second writer can advance the Agent version between this
+            // actor's restore and its terminal tombstone. Resolve that narrow
+            // optimistic-concurrency race once; all other storage failures
+            // remain visible to the caller, which must not acknowledge a
+            // terminal boundary while resumable state is still durable.
+            let latest = store
+                .load_latest(&AgentId::new(self.agent_id.clone()))
+                .await
+                .map_err(|load_error| {
+                    AgentError::Internal(format!(
+                        "failed to persist terminal coordinator checkpoint: {first_error}; \
+                         additionally failed to reload its durable version: {load_error}"
+                    ))
+                })?;
+            let Some(latest) = latest.filter(|latest| latest.version >= checkpoint.version) else {
+                return Err(AgentError::Internal(format!(
+                    "failed to persist terminal coordinator checkpoint: {first_error}"
+                )));
+            };
+            self.checkpoint_version = latest.version.checked_add(1).ok_or_else(|| {
+                AgentError::Internal(
+                    "failed to persist terminal coordinator checkpoint: version exhausted"
+                        .to_string(),
+                )
+            })?;
+            checkpoint.version = self.checkpoint_version;
+            store.save(&checkpoint).await.map_err(|retry_error| {
+                AgentError::Internal(format!(
+                    "failed to persist terminal coordinator checkpoint after version \
+                     reconciliation: {retry_error}"
+                ))
+            })?;
         }
+        self.resumed_state = None;
+        Ok(())
     }
 
     /// Persist lifetime accounting for request-local coordinator executions
@@ -1176,9 +1411,10 @@ impl CoordinatorBehavior {
     /// coordinator's canonical actor transcript and any pre-existing resumable
     /// ActorSession state unchanged while advancing only lifetime accounting.
     async fn checkpoint_accounting_only(&mut self) -> Result<(), AgentError> {
-        let Some(store) = self.checkpoint_store.clone() else {
+        let store = self.checkpoint_store.clone();
+        if store.is_none() && self.activation_checkpoint_port.is_none() {
             return Ok(());
-        };
+        }
         self.checkpoint_version = self.checkpoint_version.saturating_add(1);
         let checkpoint_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1203,11 +1439,19 @@ impl CoordinatorBehavior {
             cumulative_token_usage_known: self.cumulative_token_usage_known(),
             behavior_state,
         };
-        store.save(&checkpoint).await.map_err(|error| {
-            AgentError::Internal(format!(
-                "failed to persist coordinator usage accounting: {error}"
-            ))
-        })
+        if self.activation_checkpoint_port.is_some() {
+            self.activation_checkpoint_candidate = Some(checkpoint);
+            return Ok(());
+        }
+        store
+            .ok_or_else(|| AgentError::Internal("checkpoint store is unavailable".into()))?
+            .save(&checkpoint)
+            .await
+            .map_err(|error| {
+                AgentError::Internal(format!(
+                    "failed to persist coordinator usage accounting: {error}"
+                ))
+            })
     }
 
     fn build_provider_request(
@@ -1266,14 +1510,17 @@ impl CoordinatorBehavior {
     /// primitive. Only when no planner is configured does it decompose the whole
     /// goal with the LLM. Either way, an empty decomposition is an error.
     async fn decompose_task(
-        &self,
+        &mut self,
         task: &str,
-        request_context: &CoordinatorRequestContext,
+        request_context: &mut CoordinatorRequestContext,
         control: Option<&AgentRunControl>,
     ) -> Result<(Vec<Subtask>, TokenUsageStats), AgentError> {
         if let Some(planner) = &self.htn_planner {
             let root = HtnTask {
-                name: task.to_string(),
+                name: self
+                    .planning_task
+                    .clone()
+                    .unwrap_or_else(|| task.to_string()),
                 parameters: HashMap::new(),
                 task_type: HtnTaskType::Compound,
             };
@@ -1352,7 +1599,7 @@ impl CoordinatorBehavior {
             "You decompose tasks into subtasks. Return only valid JSON.",
             decompose_prompt,
         );
-        let response = match provider_budget::chat(
+        let response = match crate::host_control_chat::chat_with_tools(
             self.provider.as_ref(),
             self.counter.as_ref(),
             self.tracker.as_ref(),
@@ -1360,6 +1607,15 @@ impl CoordinatorBehavior {
             request,
             protected_suffix_start,
             control,
+            &self.host_control_tools,
+            &self.agent_id.to_string(),
+            &self.control_call_sequence,
+            crate::host_control_chat::GuidanceTranscript {
+                history: &mut request_context.history,
+                session: (request_context.conversation_mode == ConversationMode::ActorSession)
+                    .then_some(&mut self.session),
+                final_boundary: false,
+            },
         )
         .await?
         {
@@ -1452,8 +1708,34 @@ impl AgentBehavior for CoordinatorBehavior {
 
         // Restore an incomplete orchestration so the next run can resume it
         // (same model as a normal agent restoring its session on restart).
-        if let Some(store) = &self.checkpoint_store {
-            if let Ok(Some(ckpt)) = store.load_latest(&config.id).await {
+        if self.activation_checkpoint_port.is_some() && self.checkpoint_store.is_some() {
+            return Err(AgentError::InitFailed(
+                "Coordinator cannot mix activation and latest checkpoint ownership".into(),
+            ));
+        }
+        let checkpoint = if let Some(port) = &self.activation_checkpoint_port {
+            if port.maximum_checkpoint_bytes() == 0 {
+                return Err(AgentError::InitFailed(
+                    "Coordinator checkpoint reservation is empty".into(),
+                ));
+            }
+            port.restore().await.map_err(|error| {
+                AgentError::InitFailed(format!("failed to restore Coordinator activation: {error}"))
+            })?
+        } else if let Some(store) = &self.checkpoint_store {
+            store.load_latest(&config.id).await.map_err(|error| {
+                AgentError::InitFailed(format!("failed to restore coordinator checkpoint: {error}"))
+            })?
+        } else {
+            None
+        };
+        {
+            if let Some(ckpt) = checkpoint {
+                if ckpt.agent_id != self.agent_id {
+                    return Err(AgentError::InitFailed(
+                        "Coordinator checkpoint belongs to another conversation".into(),
+                    ));
+                }
                 self.checkpoint_version = ckpt.version;
                 self.lifetime_token_usage = ckpt.cumulative_token_usage.clone();
                 self.lifetime_token_usage_known = ckpt.cumulative_token_usage_known;
@@ -1477,11 +1759,11 @@ impl AgentBehavior for CoordinatorBehavior {
                             self.resumed_state = Some(state);
                         }
                         Ok(_) => {}
-                        Err(e) => tracing::warn!(
-                            coordinator = %self.agent_id,
-                            error = %e,
-                            "ignoring unparseable orchestration checkpoint"
-                        ),
+                        Err(error) => {
+                            return Err(AgentError::InitFailed(format!(
+                                "failed to restore coordinator orchestration state: {error}"
+                            )));
+                        }
                     }
                 }
             }
@@ -1510,15 +1792,28 @@ impl AgentBehavior for CoordinatorBehavior {
     }
 
     async fn execute(&mut self, input: AgentInput) -> Result<AgentOutput, AgentError> {
+        if self.activation_checkpoint_port.is_some() {
+            return Err(AgentError::Internal(
+                "native Coordinator requires controlled execution".into(),
+            ));
+        }
         // Run one coordination pass, then ALWAYS tear the workers down — on
         // success and on every error path — so no worker actor or task leaks.
         let persist_actor_session =
             input.effective_conversation_mode() == ConversationMode::ActorSession;
-        let result = self.run_once(input, None).await;
-        self.stop_all_workers().await;
-        if result.is_err() && persist_actor_session {
-            self.clear_orchestration_state().await;
-        }
+        let run_result = self.run_once(input, None).await;
+        let result = include_worker_shutdown_result(run_result, self.stop_all_workers().await);
+        let result = match result {
+            Err(run_error) if persist_actor_session => {
+                match self.clear_orchestration_state().await {
+                    Ok(()) => Err(run_error),
+                    Err(clear_error) => Err(AgentError::Internal(format!(
+                        "{run_error}; additionally {clear_error}"
+                    ))),
+                }
+            }
+            result => result,
+        };
         self.finalize_active_run_usage();
         if !persist_actor_session {
             if let Err(checkpoint_error) = self.checkpoint_accounting_only().await {
@@ -1542,16 +1837,35 @@ impl AgentBehavior for CoordinatorBehavior {
         input: AgentInput,
         control: AgentRunControl,
     ) -> Result<AgentRunOutcome, AgentError> {
+        if self.activation_checkpoint_port.is_some() {
+            if self.activation_checkpoint_used
+                || control.execution_boundary().is_none()
+                || input.effective_conversation_mode() != ConversationMode::ActorSession
+            {
+                return Err(AgentError::Internal(
+                    "native Coordinator requires its single owned controlled activation".into(),
+                ));
+            }
+            self.activation_checkpoint_used = true;
+        }
         let run_id = control.id().clone();
         let persist_actor_session =
             input.effective_conversation_mode() == ConversationMode::ActorSession;
-        let result = self.run_once(input, Some(&control)).await;
+        let run_result = self.run_once(input, Some(&control)).await;
         // Cleanup is deliberately outside every cancellation race. Once a
         // worker exists, its actor and task are always joined before returning.
-        self.stop_all_workers().await;
-        if result.is_err() && persist_actor_session {
-            self.clear_orchestration_state().await;
-        }
+        let result = include_worker_shutdown_result(run_result, self.stop_all_workers().await);
+        let result = match result {
+            Err(run_error) if persist_actor_session => {
+                match self.clear_orchestration_state().await {
+                    Ok(()) => Err(run_error),
+                    Err(clear_error) => Err(AgentError::Internal(format!(
+                        "{run_error}; additionally {clear_error}"
+                    ))),
+                }
+            }
+            result => result,
+        };
         self.finalize_active_run_usage();
         if !persist_actor_session {
             if let Err(checkpoint_error) = self.checkpoint_accounting_only().await {
@@ -1562,6 +1876,28 @@ impl AgentBehavior for CoordinatorBehavior {
                     ))),
                 };
             }
+        }
+        if let Some(port) = self.activation_checkpoint_port.clone() {
+            if self.activation_checkpoint_candidate.is_none() {
+                self.checkpoint_accounting_only().await?;
+            }
+            let checkpoint = self.activation_checkpoint_candidate.take().ok_or_else(|| {
+                AgentError::Internal("Coordinator activation candidate is missing".into())
+            })?;
+            let size = axocoatl_memory::encoded_checkpoint_size(&checkpoint)
+                .map_err(|error| AgentError::Internal(error.to_string()))?;
+            if size
+                > port
+                    .maximum_checkpoint_bytes()
+                    .min(axocoatl_memory::MAX_CHECKPOINT_BYTES)
+            {
+                return Err(AgentError::Internal(
+                    "Coordinator activation candidate exceeds its reservation".into(),
+                ));
+            }
+            port.stage(&checkpoint).await.map_err(|error| {
+                AgentError::Internal(format!("Coordinator activation candidate: {error}"))
+            })?;
         }
         result.map(|outcome| match outcome {
             CoordinatorRunOutcome::Completed(output) => AgentRunOutcome::Completed(output),
@@ -1577,7 +1913,7 @@ impl AgentBehavior for CoordinatorBehavior {
     }
 
     async fn on_stop(&mut self) -> Result<(), AgentError> {
-        self.stop_all_workers().await;
+        self.stop_all_workers().await?;
         tracing::info!(coordinator = %self.agent_id, "Coordinator stopped");
         Ok(())
     }
@@ -1591,19 +1927,14 @@ impl CoordinatorBehavior {
         outputs: &[Option<AgentOutput>],
         token_usage: TokenUsageStats,
         persist_actor_session: bool,
-    ) -> CoordinatorRunOutcome {
+    ) -> Result<CoordinatorRunOutcome, AgentError> {
         // A cancelled actor-owned run is terminal, not resumable. Persist a
         // completed tombstone after every started worker has reached its safe
         // boundary so actor replacement cannot silently resume stopped work.
         // Supplied/stateless calls never mutate actor-owned orchestration state.
-        if persist_actor_session {
-            self.resumed_state = None;
-        }
         let partial_output = cancelled_coordinator_output(items, outputs, token_usage.clone());
         if !partial_output.content.is_empty() {
-            if let Some(sink) = &self.stream_sink {
-                let _ = sink.send(AgentStreamChunk::Text(partial_output.content.clone()));
-            }
+            self.emit_text(&partial_output.content)?;
             if persist_actor_session {
                 let tokens = self.counter.count_text(&partial_output.content);
                 self.session
@@ -1611,9 +1942,9 @@ impl CoordinatorBehavior {
             }
         }
         if persist_actor_session {
-            self.clear_orchestration_state().await;
+            self.clear_orchestration_state().await?;
         }
-        CoordinatorRunOutcome::Cancelled(partial_output)
+        Ok(CoordinatorRunOutcome::Cancelled(partial_output))
     }
 
     /// One coordination pass: decompose, assign each subtask to a worker by
@@ -1667,7 +1998,7 @@ impl CoordinatorBehavior {
             self.session
                 .replace_with_chat_messages(&history, |text| self.counter.count_text(text));
         }
-        let request_context = CoordinatorRequestContext {
+        let mut request_context = CoordinatorRequestContext {
             history,
             system: input
                 .system_override
@@ -1697,7 +2028,7 @@ impl CoordinatorBehavior {
                 }
                 None => Vec::new(),
             };
-            return Ok(self
+            return self
                 .finish_cancelled_run(
                     &goal,
                     &resumed_items,
@@ -1705,7 +2036,7 @@ impl CoordinatorBehavior {
                     total_usage,
                     persist_actor_session,
                 )
-                .await);
+                .await;
         }
 
         // 1. Build the work list: resume an incomplete checkpointed run for the
@@ -1736,22 +2067,24 @@ impl CoordinatorBehavior {
                     self.finalize_active_run_usage();
                 }
                 self.set_active_run_usage(TokenUsageStats::default());
-                let (subtasks, decomposition_usage) =
-                    match self.decompose_task(&goal, &request_context, control).await {
-                        Ok(result) => result,
-                        Err(_) if control.is_some_and(AgentRunControl::is_cancelled) => {
-                            return Ok(self
-                                .finish_cancelled_run(
-                                    &goal,
-                                    &[],
-                                    &[],
-                                    total_usage,
-                                    persist_actor_session,
-                                )
-                                .await);
-                        }
-                        Err(error) => return Err(error),
-                    };
+                let (subtasks, decomposition_usage) = match self
+                    .decompose_task(&goal, &mut request_context, control)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(_) if control.is_some_and(AgentRunControl::is_cancelled) => {
+                        return self
+                            .finish_cancelled_run(
+                                &goal,
+                                &[],
+                                &[],
+                                total_usage,
+                                persist_actor_session,
+                            )
+                            .await;
+                    }
+                    Err(error) => return Err(error),
+                };
                 total_usage.merge(&decomposition_usage);
                 self.run_provider_usage.merge(&decomposition_usage);
                 tracing::info!(
@@ -1786,7 +2119,7 @@ impl CoordinatorBehavior {
             })
             .collect();
         if control.is_some_and(AgentRunControl::is_cancelled) {
-            return Ok(self
+            return self
                 .finish_cancelled_run(
                     &goal,
                     &items,
@@ -1794,7 +2127,7 @@ impl CoordinatorBehavior {
                     total_usage,
                     persist_actor_session,
                 )
-                .await);
+                .await;
         }
 
         // Persist the plan so a crash after decomposition doesn't re-decompose.
@@ -1809,7 +2142,7 @@ impl CoordinatorBehavior {
             completed: false,
         };
         if persist_actor_session {
-            self.checkpoint_orchestration(&state).await;
+            self.checkpoint_orchestration(&state).await?;
         }
 
         // 2. Assign each PENDING subtask to a worker by auction (best fit by tool
@@ -1847,23 +2180,34 @@ impl CoordinatorBehavior {
         let coord_project_root = self.project_instructions_root.clone();
         let worker_logical_ids = self.worker_logical_ids.clone();
         let inherited_executor_tools: HashSet<String> = self
-            .tool_executor
-            .as_ref()
-            .map(|executor| executor.tool_names())
-            .unwrap_or_default()
+            .host_worker_tools
+            .clone()
+            .unwrap_or_else(|| {
+                self.tool_executor
+                    .as_ref()
+                    .map(|executor| executor.tool_names())
+                    .unwrap_or_default()
+            })
             .into_iter()
             .collect();
         let declared_workers_have_memory = persist_actor_session && self.data_root.is_some();
+        let durable_memory_read_only = self
+            .checkpoint_store
+            .as_ref()
+            .is_some_and(|store| store.is_session_turn_scoped());
         let mut assignments: Vec<(usize, AgentId, String)> = Vec::new();
         let mut assigned_workers: Vec<Option<AgentId>> = vec![None; items.len()];
         let mut assigned_reporter_ids: Vec<Option<String>> = vec![None; items.len()];
+        let mut assigned_controls: Vec<Option<AgentRunControl>> = vec![None; items.len()];
+        let mut assigned_executions: Vec<Option<Box<dyn crate::AdmittedChildExecution>>> =
+            (0..items.len()).map(|_| None).collect();
         // The auction outcome per subtask, reported to observers (the dashboard
         // run view) once the whole plan is assigned.
         let mut plan: Vec<ReportedSubtask> = Vec::new();
 
         for &idx in &pending {
             if control.is_some_and(AgentRunControl::is_cancelled) {
-                return Ok(self
+                return self
                     .finish_cancelled_run(
                         &goal,
                         &items,
@@ -1871,7 +2215,7 @@ impl CoordinatorBehavior {
                         total_usage,
                         persist_actor_session,
                     )
-                    .await);
+                    .await;
             }
             let item = &items[idx];
             let required_tools = &item.required_tools;
@@ -1922,6 +2266,7 @@ impl CoordinatorBehavior {
                             &wc.tools,
                             &inherited_executor_tools,
                             declared_workers_have_memory,
+                            durable_memory_read_only,
                         );
                         let ac = AgentConfig {
                             id: wc.id.clone(),
@@ -1947,6 +2292,9 @@ impl CoordinatorBehavior {
                     })
                     .collect();
                 match run_auction(bids).and_then(|id| available.iter().position(|w| w.id == id)) {
+                    Some(pos) if self.activation_checkpoint_port.is_some() => {
+                        available[pos].clone()
+                    }
                     Some(pos) => available.remove(pos),
                     None => {
                         tracing::warn!(
@@ -1959,9 +2307,82 @@ impl CoordinatorBehavior {
                     }
                 }
             };
-            let worker_id = self
-                .spawn_worker(&worker_config, adhoc, persist_actor_session && !adhoc)
-                .await?;
+            let worker_control = if let Some(parent) = control {
+                if let Some(boundary) = parent.execution_boundary() {
+                    let child = parent.child(crate::run_control::AgentRunId::new(format!(
+                        "{}:child:{}:{idx}",
+                        parent.id(),
+                        self.run_seq
+                    )));
+                    let request = crate::execution_boundary::ChildExecutionRequest {
+                        actor_id: worker_config.id.to_string(),
+                        logical_worker_id: if adhoc {
+                            format!("adhoc-{idx}")
+                        } else {
+                            worker_logical_ids
+                                .get(&worker_config.id)
+                                .cloned()
+                                .unwrap_or_else(|| worker_config.id.to_string())
+                        },
+                        subtask_index: idx,
+                        task_name: item.name.clone(),
+                        task_input: worker_task_content(
+                            &request_context.history,
+                            &item.description,
+                        ),
+                        tools: if adhoc {
+                            worker_config.tools.clone()
+                        } else {
+                            callable_tools_for_declared_worker(
+                                &worker_config.tools,
+                                &inherited_executor_tools,
+                                declared_workers_have_memory,
+                                durable_memory_read_only,
+                            )
+                        },
+                        provider_id: worker_config
+                            .provider
+                            .as_ref()
+                            .unwrap_or(&self.provider)
+                            .provider_id()
+                            .to_string(),
+                        model: worker_config.model.clone(),
+                        attachments: request_context.attachments.clone(),
+                    };
+                    assigned_executions[idx] = boundary
+                        .schedule_child(&request, child.clone())
+                        .await
+                        .map_err(|error| {
+                            AgentError::Internal(format!(
+                                "child activation admission failed: {error}"
+                            ))
+                        })?;
+                    if assigned_executions[idx].is_some() {
+                        Some(child)
+                    } else {
+                        let child_boundary = boundary
+                            .provision_child(&request, child.clone())
+                            .await
+                            .map_err(|error| {
+                                AgentError::Internal(format!(
+                                    "child activation admission failed: {error}"
+                                ))
+                            })?;
+                        Some(child.with_execution_boundary(child_boundary))
+                    }
+                } else {
+                    Some(parent.clone())
+                }
+            } else {
+                None
+            };
+            assigned_controls[idx] = worker_control;
+            let worker_id = if assigned_executions[idx].is_some() {
+                worker_config.id.clone()
+            } else {
+                self.spawn_worker(&worker_config, adhoc, persist_actor_session && !adhoc)
+                    .await?
+            };
             let reporter_worker_id = if adhoc {
                 format!("adhoc-{idx}")
             } else {
@@ -1989,7 +2410,7 @@ impl CoordinatorBehavior {
         }
 
         if control.is_some_and(AgentRunControl::is_cancelled) {
-            return Ok(self
+            return self
                 .finish_cancelled_run(
                     &goal,
                     &items,
@@ -1997,7 +2418,7 @@ impl CoordinatorBehavior {
                     total_usage,
                     persist_actor_session,
                 )
-                .await);
+                .await;
         }
 
         // Report the decomposition + auction outcome before the workers run, so
@@ -2006,7 +2427,7 @@ impl CoordinatorBehavior {
             reporter.plan(&workflow_id, &coord_id, &goal, &plan);
         }
         if control.is_some_and(AgentRunControl::is_cancelled) {
-            return Ok(self
+            return self
                 .finish_cancelled_run(
                     &goal,
                     &items,
@@ -2014,7 +2435,7 @@ impl CoordinatorBehavior {
                     total_usage,
                     persist_actor_session,
                 )
-                .await);
+                .await;
         }
 
         // 3. Delegate the pending subtasks to workers IN PARALLEL.
@@ -2033,7 +2454,8 @@ impl CoordinatorBehavior {
             let name = items[idx].name.clone();
             let wid = worker_id.clone();
             let worker_source = reporter_worker_id.clone();
-            let worker_control = control.cloned();
+            let worker_control = assigned_controls[idx].take();
+            let native_execution = assigned_executions[idx].take();
             let parent_sink = self.stream_sink.clone();
             let next_group = next_provider_group.clone();
             let run_seq = self.run_seq;
@@ -2052,7 +2474,9 @@ impl CoordinatorBehavior {
                     }
                 }
                 .with_attachments(worker_attachments);
-                let result = if let Some(actor_ref) = actor {
+                let result = if let Some(execution) = native_execution {
+                    execution.run().await
+                } else if let Some(actor_ref) = actor {
                     if let Some(parent_sink) = parent_sink {
                         let (child_sink, receiver) = tokio::sync::mpsc::unbounded_channel();
                         let forwarder = tokio::spawn(forward_worker_tool_stream(
@@ -2206,7 +2630,7 @@ impl CoordinatorBehavior {
             state.token_usage_known = self.active_run_usage_known();
             state.coordinator_provider_usage = self.run_provider_usage.clone();
             if persist_actor_session {
-                self.checkpoint_orchestration(&state).await;
+                self.checkpoint_orchestration(&state).await?;
             }
         }
 
@@ -2237,8 +2661,12 @@ impl CoordinatorBehavior {
             *terminal = true;
         }
 
+        if let Some(error) = control.and_then(AgentRunControl::execution_boundary_failure) {
+            return Err(AgentError::Internal(error));
+        }
+
         if control.is_some_and(AgentRunControl::is_cancelled) {
-            return Ok(self
+            return self
                 .finish_cancelled_run(
                     &goal,
                     &items,
@@ -2246,7 +2674,7 @@ impl CoordinatorBehavior {
                     total_usage,
                     persist_actor_session,
                 )
-                .await);
+                .await;
         }
 
         // 4. Aggregate outcomes across ALL items (including any restored from a
@@ -2270,6 +2698,15 @@ impl CoordinatorBehavior {
                 _ => None,
             })
             .collect();
+
+        // Native children are required canonical work. A partial synthesis must
+        // not become an accepted parent that survives a later child retry.
+        if self.activation_checkpoint_port.is_some() && !failed.is_empty() {
+            return Err(AgentError::Internal(format!(
+                "{} required child task(s) have no accepted result; continue or retry the interrupted work before synthesis",
+                failed.len()
+            )));
+        }
 
         // If nothing succeeded there is nothing to synthesize — surface failure.
         if succeeded.is_empty() {
@@ -2300,7 +2737,7 @@ impl CoordinatorBehavior {
             "You are a helpful coordinator. Synthesize worker outcomes into the final answer.",
             synthesis_prompt,
         );
-        let response = match provider_budget::chat(
+        let response = match crate::host_control_chat::chat_with_tools(
             self.provider.as_ref(),
             self.counter.as_ref(),
             self.tracker.as_ref(),
@@ -2308,12 +2745,20 @@ impl CoordinatorBehavior {
             request,
             protected_suffix_start,
             control,
+            &self.host_control_tools,
+            &self.agent_id.to_string(),
+            &self.control_call_sequence,
+            crate::host_control_chat::GuidanceTranscript {
+                history: &mut request_context.history,
+                session: persist_actor_session.then_some(&mut self.session),
+                final_boundary: true,
+            },
         )
         .await?
         {
             ControlledChat::Response(response) => response,
             ControlledChat::Cancelled => {
-                return Ok(self
+                return self
                     .finish_cancelled_run(
                         &goal,
                         &items,
@@ -2321,15 +2766,13 @@ impl CoordinatorBehavior {
                         total_usage,
                         persist_actor_session,
                     )
-                    .await);
+                    .await;
             }
         };
         total_usage.merge(&response.usage);
         self.run_provider_usage.merge(&response.usage);
 
-        if let Some(sink) = &self.stream_sink {
-            let _ = sink.send(AgentStreamChunk::Text(response.content.clone()));
-        }
+        self.emit_text(&response.content)?;
         if persist_actor_session {
             let output_tokens = self.counter.count_text(&response.content);
             self.session
@@ -2344,7 +2787,7 @@ impl CoordinatorBehavior {
         state.coordinator_provider_usage = self.run_provider_usage.clone();
         state.completed = true;
         if persist_actor_session {
-            self.checkpoint_orchestration(&state).await;
+            self.checkpoint_orchestration(&state).await?;
         }
 
         Ok(CoordinatorRunOutcome::Completed(AgentOutput {
@@ -2357,6 +2800,7 @@ impl CoordinatorBehavior {
 
 #[cfg(test)]
 mod tests {
+    include!("coordinator_boundary_tests.rs");
     use super::*;
     use async_trait::async_trait;
     use axocoatl_core::{AgentRole, ChatMessage};
@@ -2366,6 +2810,21 @@ mod tests {
     use axocoatl_token::TokenCounter;
     use std::pin::Pin;
     use tokio_stream::Stream;
+
+    #[test]
+    fn transaction_scoped_workers_are_not_auctioned_as_core_memory_editors() {
+        let inherited = HashSet::from(["repo_read".to_string()]);
+        let read_only = callable_tools_for_declared_worker(&[], &inherited, true, true);
+        assert!(read_only.contains(&"repo_read".to_string()));
+        assert!(read_only.contains(&crate::recall::RECALL_SEARCH.to_string()));
+        assert!(read_only.contains(&crate::recall::RECALL_TIMEFRAME.to_string()));
+        assert!(!read_only
+            .iter()
+            .any(|tool| tool.starts_with("core_memory_")));
+
+        let writable = callable_tools_for_declared_worker(&[], &inherited, true, false);
+        assert!(writable.contains(&crate::core_memory_tools::CORE_MEMORY_APPEND.to_string()));
+    }
 
     #[test]
     fn extract_json_array_reads_reasoning_wrapped_output() {
@@ -2826,6 +3285,107 @@ mod tests {
         }
     }
 
+    /// A normal one-worker provider that creates an exact-version race just
+    /// before coordinator synthesis returns. The final completed checkpoint
+    /// must surface that conflict instead of reporting a successful run with
+    /// the prior incomplete checkpoint still resumable.
+    struct FinalCheckpointConflictLlm {
+        store: Arc<CheckpointStore>,
+        injected: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait]
+    impl LlmProvider for FinalCheckpointConflictLlm {
+        fn provider_id(&self) -> &str {
+            "final-checkpoint-conflict"
+        }
+
+        fn model_id(&self) -> &str {
+            "final-checkpoint-conflict-model"
+        }
+
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            if !self
+                .injected
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                self.store
+                    .save(&pending_orchestration_checkpoint(
+                        3,
+                        "final checkpoint goal",
+                    ))
+                    .await
+                    .unwrap();
+            }
+            Ok(ChatResponse {
+                content: "synthesized answer".to_string(),
+                tool_calls: Vec::new(),
+                finish_reason: FinishReason::Stop,
+                usage: TokenUsageStats::new(1, 1),
+                model: self.model_id().to_string(),
+                provider: self.provider_id().to_string(),
+            })
+        }
+
+        async fn chat_stream(
+            &self,
+            _: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            Ok(Box::pin(tokio_stream::iter(vec![
+                Ok(StreamEvent::TextDelta {
+                    delta: "worker output".to_string(),
+                }),
+                Ok(StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                }),
+            ])))
+        }
+    }
+
+    struct HangingWorkerLlm {
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for HangingWorkerLlm {
+        fn provider_id(&self) -> &str {
+            "hanging-worker"
+        }
+
+        fn model_id(&self) -> &str {
+            "hanging-worker-model"
+        }
+
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                streaming: true,
+                ..Default::default()
+            }
+        }
+
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            std::future::pending().await
+        }
+
+        async fn chat_stream(
+            &self,
+            _: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            self.started.notify_one();
+            std::future::pending().await
+        }
+    }
+
     struct CoordinatorWindowCounter;
 
     impl TokenCounter for CoordinatorWindowCounter {
@@ -3146,6 +3706,33 @@ mod tests {
         }
     }
 
+    fn pending_orchestration_checkpoint(version: u64, goal: &str) -> AgentCheckpoint {
+        let state = OrchestrationState {
+            goal: goal.to_string(),
+            items: vec![OrchestrationItem {
+                name: "work".to_string(),
+                description: "finish the work".to_string(),
+                required_tools: Vec::new(),
+                outcome: None,
+            }],
+            lifetime_usage_before_run: TokenUsageStats::default(),
+            lifetime_usage_before_run_known: true,
+            token_usage: TokenUsageStats::default(),
+            token_usage_known: true,
+            coordinator_provider_usage: TokenUsageStats::default(),
+            completed: false,
+        };
+        AgentCheckpoint {
+            version,
+            agent_id: "lead".to_string(),
+            checkpoint_time: version,
+            session_messages: Vec::new(),
+            cumulative_token_usage: TokenUsageStats::default(),
+            cumulative_token_usage_known: true,
+            behavior_state: Some(serde_json::to_string(&state).unwrap()),
+        }
+    }
+
     fn request_context() -> CoordinatorRequestContext {
         CoordinatorRequestContext {
             history: Vec::new(),
@@ -3189,13 +3776,13 @@ mod tests {
             ChatMessage::user("CURRENT USER TURN"),
         ];
         let history_before = serde_json::to_string(&history).unwrap();
-        let context = CoordinatorRequestContext {
+        let mut context = CoordinatorRequestContext {
             history,
             ..request_context()
         };
 
         let (subtasks, _) = coordinator
-            .decompose_task("CURRENT USER TURN", &context, None)
+            .decompose_task("CURRENT USER TURN", &mut context, None)
             .await
             .unwrap();
 
@@ -3240,7 +3827,7 @@ mod tests {
             size: 8_000,
             extracted_text: Some("protected attachment ".repeat(400)),
         };
-        let context = CoordinatorRequestContext {
+        let mut context = CoordinatorRequestContext {
             history: vec![ChatMessage::user("CURRENT ATTACHMENT TURN")],
             attachments: vec![attachment],
             ..request_context()
@@ -3248,7 +3835,7 @@ mod tests {
         let history_before = serde_json::to_string(&context.history).unwrap();
 
         let error = coordinator
-            .decompose_task("CURRENT ATTACHMENT TURN", &context, None)
+            .decompose_task("CURRENT ATTACHMENT TURN", &mut context, None)
             .await
             .unwrap_err();
 
@@ -4331,6 +4918,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unresponsive_worker_is_force_stopped_with_a_bounded_propagated_error() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let provider = Arc::new(HangingWorkerLlm {
+            started: started.clone(),
+        });
+        let mut coordinator = CoordinatorBehavior::new(provider, Arc::new(UnitCounter));
+        coordinator.on_start(&coord_config()).await.unwrap();
+        coordinator.run_seq = 41;
+        let worker = WorkerConfig {
+            id: AgentId::new("hung-worker"),
+            name: "Hung worker".to_string(),
+            system_prompt: "worker".to_string(),
+            tools: Vec::new(),
+            model: "hanging-worker-model".to_string(),
+            provider: None,
+            token_budget: None,
+            sampling: SamplingConfig::default(),
+            memory: MemoryConfig::default(),
+            session_context: None,
+            project_instructions_root: None,
+        };
+        let worker_id = coordinator
+            .spawn_worker(&worker, false, false)
+            .await
+            .unwrap();
+        let actor = coordinator.active_workers[&worker_id].clone();
+        let execution = tokio::spawn(async move {
+            execute_agent_measured(&actor, AgentInput::text("never finishes")).await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+            .await
+            .expect("worker never entered the hanging provider call");
+
+        let began = tokio::time::Instant::now();
+        let error = coordinator.stop_all_workers().await.unwrap_err();
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(1),
+            "worker teardown exceeded its bounded test deadline"
+        );
+        assert!(error.to_string().contains("did not stop within"));
+        assert!(coordinator.active_workers.is_empty());
+        assert!(coordinator.worker_handles.is_empty());
+        assert!(
+            ractor::ActorRef::<AgentMessage>::where_is("hung-worker#41".to_string()).is_none(),
+            "forced teardown must release the worker's global actor name"
+        );
+        let execution_error = tokio::time::timeout(std::time::Duration::from_secs(1), execution)
+            .await
+            .expect("worker execution reply stayed detached after forced teardown")
+            .unwrap()
+            .unwrap_err();
+        assert!(execution_error
+            .to_string()
+            .contains("dropped reply channel"));
+    }
+
+    #[tokio::test]
     async fn coordinator_cancellation_waits_for_started_tool_and_stops_followup() {
         use crate::run_control::AgentRunId;
 
@@ -4455,7 +5099,9 @@ mod tests {
             | AgentStreamChunk::ToolCallResult { source_agent, .. } => {
                 source_agent.as_deref() == Some("writer")
             }
-            AgentStreamChunk::Text(_) | AgentStreamChunk::Reasoning(_) => true,
+            AgentStreamChunk::Text(_)
+            | AgentStreamChunk::Reasoning(_)
+            | AgentStreamChunk::ProviderRetry { .. } => true,
         }));
         let checkpoint = checkpoint_store
             .load_latest(&AgentId::new("lead"))
@@ -4484,6 +5130,281 @@ mod tests {
                 .direct_calls
                 .load(std::sync::atomic::Ordering::SeqCst),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn final_checkpoint_failure_poisoned_run_and_left_no_resumable_state() {
+        let methods = r#"
+- task_pattern: "final checkpoint goal"
+  preconditions: []
+  subtasks:
+    - name: "work"
+      parameters: {}
+      task_type: Primitive
+"#;
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CheckpointStore::new(
+            temp.path(),
+            axocoatl_memory::CheckpointPolicy::Manual,
+        ));
+        let provider = Arc::new(FinalCheckpointConflictLlm {
+            store: store.clone(),
+            injected: std::sync::atomic::AtomicBool::new(false),
+        });
+        let worker = || WorkerConfig {
+            id: AgentId::new("final-writer"),
+            name: "Writer".to_string(),
+            system_prompt: "worker".to_string(),
+            tools: Vec::new(),
+            model: "worker-model".to_string(),
+            provider: None,
+            token_budget: None,
+            sampling: SamplingConfig::default(),
+            memory: MemoryConfig::default(),
+            session_context: None,
+            project_instructions_root: None,
+        };
+        let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
+            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
+            .with_checkpoint_store(store.clone())
+            .add_worker_config(worker());
+        coordinator.on_start(&coord_config()).await.unwrap();
+
+        let error = coordinator
+            .execute(AgentInput::text("final checkpoint goal"))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to persist coordinator orchestration checkpoint"),
+            "the final durable-save failure must poison completion: {error}"
+        );
+        let terminal = store
+            .load_latest(&AgentId::new("lead"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(terminal.version, 4);
+        assert!(terminal.behavior_state.is_none());
+
+        let mut restored = CoordinatorBehavior::new(provider, Arc::new(UnitCounter))
+            .with_checkpoint_store(store)
+            .add_worker_config(worker());
+        restored.on_start(&coord_config()).await.unwrap();
+        assert!(
+            restored.resumed_state.is_none(),
+            "a failed final save must not leave a stale completed:false run resumable"
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_restore_error_fails_start_before_any_provider_or_worker_execution() {
+        let temp = tempfile::tempdir().unwrap();
+        let checkpoint_root = temp.path().join("checkpoint-root");
+        std::fs::write(&checkpoint_root, b"not a directory").unwrap();
+        let store = Arc::new(CheckpointStore::new(
+            checkpoint_root,
+            axocoatl_memory::CheckpointPolicy::Manual,
+        ));
+        let provider = Arc::new(CoordinatorBudgetLlm::new(Vec::new(), Vec::new()));
+        let reporter = Arc::new(RecordingCoordinatorReporter::default());
+        let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
+            .with_checkpoint_store(store)
+            .with_reporter(reporter.clone())
+            .add_worker_config(WorkerConfig {
+                id: AgentId::new("restore-error-worker"),
+                name: "Restore error worker".to_string(),
+                system_prompt: "worker".to_string(),
+                tools: Vec::new(),
+                model: "worker-model".to_string(),
+                provider: None,
+                token_budget: None,
+                sampling: SamplingConfig::default(),
+                memory: MemoryConfig::default(),
+                session_context: None,
+                project_instructions_root: None,
+            });
+
+        let error = coordinator.on_start(&coord_config()).await.unwrap_err();
+        assert!(matches!(error, AgentError::InitFailed(_)));
+        assert!(error.to_string().contains("coordinator checkpoint"));
+        assert_eq!(
+            provider
+                .direct_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(
+            provider
+                .stream_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert!(reporter.started.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelled_run_reconciles_a_tombstone_version_race_before_restart() {
+        let methods = r#"
+- task_pattern: "cancelled same goal"
+  preconditions: []
+  subtasks:
+    - name: "work"
+      parameters: {}
+      task_type: Primitive
+"#;
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CheckpointStore::new(
+            temp.path(),
+            axocoatl_memory::CheckpointPolicy::Manual,
+        ));
+        store
+            .save(&pending_orchestration_checkpoint(1, "cancelled same goal"))
+            .await
+            .unwrap();
+        let provider = Arc::new(CoordinatorBudgetLlm::new(
+            vec!["fresh synthesis"],
+            vec![TokenUsageStats::new(1, 1)],
+        ));
+        let reporter = Arc::new(RecordingCoordinatorReporter::default());
+        let worker = || WorkerConfig {
+            id: AgentId::new("cancel-writer"),
+            name: "Writer".to_string(),
+            system_prompt: "worker".to_string(),
+            tools: Vec::new(),
+            model: "worker-model".to_string(),
+            provider: None,
+            token_budget: None,
+            sampling: SamplingConfig::default(),
+            memory: MemoryConfig::default(),
+            session_context: None,
+            project_instructions_root: None,
+        };
+        let mut coordinator = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
+            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
+            .with_checkpoint_store(store.clone())
+            .with_reporter(reporter.clone())
+            .add_worker_config(worker());
+        coordinator.on_start(&coord_config()).await.unwrap();
+        // The actor restored v1. A concurrent v2 forces its first tombstone
+        // write to fail at exactly the cancellation boundary.
+        store
+            .save(&pending_orchestration_checkpoint(2, "cancelled same goal"))
+            .await
+            .unwrap();
+        let control =
+            AgentRunControl::new(crate::run_control::AgentRunId::new("cancel-before-run"));
+        control.cancel();
+        let outcome = coordinator
+            .execute_controlled(AgentInput::text("cancelled same goal"), control)
+            .await
+            .unwrap();
+        assert!(matches!(outcome, AgentRunOutcome::Cancelled { .. }));
+        assert_eq!(
+            store
+                .load_latest(&AgentId::new("lead"))
+                .await
+                .unwrap()
+                .unwrap()
+                .version,
+            3
+        );
+
+        let mut restored = CoordinatorBehavior::new(provider.clone(), Arc::new(UnitCounter))
+            .with_htn_methods(HtnPlanner::from_methods_yaml(methods).unwrap())
+            .with_checkpoint_store(store)
+            .with_reporter(reporter.clone())
+            .add_worker_config(worker());
+        restored.on_start(&coord_config()).await.unwrap();
+        assert!(restored.resumed_state.is_none());
+        restored
+            .execute(AgentInput::text("cancelled same goal"))
+            .await
+            .unwrap();
+        assert_eq!(&*reporter.started.lock().unwrap(), &["cancel-writer"]);
+        assert_eq!(
+            provider
+                .stream_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the same goal after restart must decompose and dispatch fresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_run_reconciles_a_tombstone_version_race_before_restart() {
+        let methods = r#"
+- task_pattern: "failed same goal"
+  preconditions: []
+  subtasks:
+    - name: "work"
+      parameters: {}
+      task_type: Primitive
+"#;
+        let temp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CheckpointStore::new(
+            temp.path(),
+            axocoatl_memory::CheckpointPolicy::Manual,
+        ));
+        store
+            .save(&pending_orchestration_checkpoint(1, "failed same goal"))
+            .await
+            .unwrap();
+        let reporter = Arc::new(RecordingCoordinatorReporter::default());
+        let worker = || WorkerConfig {
+            id: AgentId::new("fail-writer"),
+            name: "Writer".to_string(),
+            system_prompt: "worker".to_string(),
+            tools: Vec::new(),
+            model: "worker-model".to_string(),
+            provider: None,
+            token_budget: None,
+            sampling: SamplingConfig::default(),
+            memory: MemoryConfig::default(),
+            session_context: None,
+            project_instructions_root: None,
+        };
+        let planner = HtnPlanner::from_methods_yaml(methods).unwrap();
+        let mut coordinator = CoordinatorBehavior::new(Arc::new(FailingLlm), Arc::new(UnitCounter))
+            .with_htn_methods(planner.clone())
+            .with_checkpoint_store(store.clone())
+            .with_reporter(reporter.clone())
+            .add_worker_config(worker());
+        coordinator.on_start(&coord_config()).await.unwrap();
+        // The resumed run writes v2 (plan) and v3 (failed outcome). This v4
+        // makes only the first terminal tombstone attempt conflict.
+        store
+            .save(&pending_orchestration_checkpoint(4, "failed same goal"))
+            .await
+            .unwrap();
+        let error = coordinator
+            .execute(AgentInput::text("failed same goal"))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("nothing to synthesize"));
+        let terminal = store
+            .load_latest(&AgentId::new("lead"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(terminal.version, 5);
+        assert!(terminal.behavior_state.is_none());
+
+        let mut restored = CoordinatorBehavior::new(Arc::new(FailingLlm), Arc::new(UnitCounter))
+            .with_htn_methods(planner)
+            .with_checkpoint_store(store)
+            .with_reporter(reporter.clone())
+            .add_worker_config(worker());
+        restored.on_start(&coord_config()).await.unwrap();
+        assert!(restored.resumed_state.is_none());
+        let second = restored.execute(AgentInput::text("failed same goal")).await;
+        assert!(second.is_err());
+        assert_eq!(
+            reporter.started.lock().unwrap().len(),
+            2,
+            "the failed same goal after restart must dispatch fresh instead of resuming"
         );
     }
 
@@ -4856,9 +5777,9 @@ mod tests {
             .await
             .unwrap();
 
-        let context = request_context();
+        let mut context = request_context();
         let (_, usage) = coordinator
-            .decompose_task("first", &context, None)
+            .decompose_task("first", &mut context, None)
             .await
             .unwrap();
         assert_eq!(usage.input_tokens, 10);
@@ -4866,7 +5787,7 @@ mod tests {
         assert_eq!(usage.reasoning_tokens, None);
         assert_eq!(coordinator.tracker.as_ref().unwrap().total_used(), 11);
         let error = coordinator
-            .decompose_task("second", &context, None)
+            .decompose_task("second", &mut context, None)
             .await
             .unwrap_err();
         assert!(matches!(error, AgentError::TokenBudgetExceeded { .. }));
@@ -4906,7 +5827,7 @@ mod tests {
             .unwrap();
 
         let error = coordinator
-            .decompose_task("root", &request_context(), None)
+            .decompose_task("root", &mut request_context(), None)
             .await
             .unwrap_err();
         assert!(matches!(error, AgentError::TokenBudgetExceeded { .. }));
@@ -4932,7 +5853,7 @@ mod tests {
             .unwrap();
 
         let (_, usage) = coordinator
-            .decompose_task("warn", &request_context(), None)
+            .decompose_task("warn", &mut request_context(), None)
             .await
             .unwrap();
         assert_eq!(usage.total(), usize::MAX);

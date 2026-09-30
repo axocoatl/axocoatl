@@ -1,0 +1,69 @@
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { after, before, test } from 'node:test';
+import { launchTestDaemon } from '../support/daemon.mjs';
+
+let runtime, modelServer, unavailable=false;
+const observed=[];
+const model='browser-test-model:latest',digest='a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72';
+before(async()=>{
+  modelServer=createServer(async(req,res)=>{
+    let raw='';for await(const chunk of req)raw+=chunk;observed.push({path:req.url,body:raw?JSON.parse(raw):null});
+    if(unavailable){res.writeHead(503);res.end('{}');return;}
+    const responses={
+      '/api/version':{version:'0.20.6'},'/api/status':{cloud:{disabled:true}},
+      '/api/show':{details:{format:'gguf'},capabilities:['completion']},
+      '/api/tags':{models:[{name:model,model,digest}]},
+      '/api/ps':{models:[{name:model,model,digest,details:{format:'gguf'},context_length:2048}]},
+      '/api/generate':{model,created_at:'2026-09-15T00:00:00Z',response:'',done:true,done_reason:'load'},
+    };
+    res.writeHead(responses[req.url]?200:404,{'content-type':'application/json'});res.end(JSON.stringify(responses[req.url]||{}));
+  });
+  await new Promise(resolve=>modelServer.listen(0,'127.0.0.1',resolve));
+  runtime=await launchTestDaemon({nativeDataRoot:true,ollamaBaseUrl:`http://127.0.0.1:${modelServer.address().port}`});
+});
+after(async()=>{await runtime?.stop();await new Promise(resolve=>modelServer?.close(resolve));});
+async function call(session,suffix='',body,headers={}){
+  const response=await fetch(`${runtime.baseUrl}/api/sessions/${session}/team${suffix}`,{method:body?'POST':'GET',headers:{...(body?{'content-type':'application/json'}:{}),...headers},body:body?JSON.stringify(body):undefined});const text=await response.text();return{status:response.status,value:text?JSON.parse(text):null};
+}
+test('actual Session team routes authenticate whole-graph Apply, retain exact retries and leave Cancel unchanged',async()=>{
+  const id=runtime.fixtures.alpha.sessions[0].id,peer=runtime.fixtures.beta.sessions[0].id;
+  const current=await call(id);assert.equal(current.status,200,JSON.stringify(current.value));assert.equal(current.value.history_version,'execution_v2');assert.equal(current.value.configuration_revision,0);assert.equal(current.value.approved,false);assert.equal(current.value.slots[0].template_id,'browser-test-coder');assert.equal(current.value.slots[0].limits,null);
+  const edit={command_id:'team-route-approved',expected_configuration_revision:0,slots:current.value.slots.map(slot=>({...slot,max_output_tokens:128,limits:{activations:2,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),dependencies:current.value.dependencies,layout:current.value.layout};
+  const forbidden=await call(id,'/preview',edit,{origin:'https://foreign.invalid'});assert.ok(forbidden.status>=400);
+  const preview=await call(id,'/preview',edit);assert.equal(preview.status,200,JSON.stringify(preview.value));assert.equal(preview.value.applies_to,'future_turns');assert.equal((await call(id)).value.configuration_revision,0,'Preview cannot authorize a future turn');
+  const apply={edit,review_digest:preview.value.review_digest};const foreign=await call(peer,'/apply',apply);assert.ok(foreign.status>=400);assert.equal((await call(peer)).value.configuration_revision,0);
+  const applied=await call(id,'/apply',apply);assert.equal(applied.status,200,JSON.stringify(applied.value));assert.equal(applied.value.configuration_revision,1);
+  const saved=await call(id);assert.equal(saved.value.approved,true);assert.equal(saved.value.slots[0].template_id,null,'current slot preserves its captured definition rather than re-reading a template');
+  unavailable=true;const before=observed.length;
+  const repeated=await call(id,'/apply',apply);assert.equal(repeated.status,200,JSON.stringify(repeated.value));assert.equal(repeated.value.review_digest,preview.value.review_digest);assert.equal(observed.length,before,'saved Apply is resolved before model availability checks');
+  const conflict=await call(id,'/apply',{...apply,edit:{...edit,slots:edit.slots.map(slot=>({...slot,instructions:'Different instructions under the same command'}))}});assert.equal(conflict.status,409);assert.equal(observed.length,before);
+  const stale=await call(id,'/preview',{...edit,command_id:'stale-team-edit'});assert.equal(stale.status,409);assert.equal(observed.length,before);
+  assert.equal((await call(id,'/cancel',{command_id:'cancel-team-draft'})).status,200);assert.deepEqual((await call(id)).value,saved.value,'Cancel cannot change saved team or grant');
+  assert.equal(observed.filter(request=>request.path==='/api/chat').length,0,'Preview and Apply never perform inference');
+  for(const request of observed.filter(request=>request.path==='/api/generate'))assert.equal(request.body.prompt??'','','native preparation may only load/observe context');
+});
+
+
+test('native Team preview rejects unsupported repository tools before provider observation', async () => {
+  const invalid = await launchTestDaemon({nativeDataRoot:true, agentTools:['read_file','list_files'],
+    ollamaBaseUrl:`http://127.0.0.1:${modelServer.address().port}`});
+  try {
+    const id = invalid.fixtures.alpha.sessions[0].id;
+    const teamUrl = `${invalid.baseUrl}/api/sessions/${id}/team`;
+    const current = await (await fetch(teamUrl)).json();
+    const edit = {command_id:'invalid-tool-preview', expected_configuration_revision:0,
+      slots:current.slots.map(slot=>({...slot,max_output_tokens:128,
+        limits:{activations:1,invocations:2,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),
+      dependencies:[],layout:[]};
+    const before = observed.length;
+    const response = await fetch(`${teamUrl}/preview`, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(edit)});
+    const value = await response.json();
+    assert.ok(response.status >= 400, JSON.stringify(value));
+    assert.match(value.error, /native Session repository tool 'list_files'/);
+    assert.match(value.error, /list_dir/);
+    assert.equal(observed.length,before,'Invalid tool names must fail before model metadata or load calls');
+    assert.equal((await (await fetch(teamUrl)).json()).configuration_revision,0);
+    assert.deepEqual(await (await fetch(`${invalid.baseUrl}/api/sessions/${id}/turns?history_version=2`)).json(),[]);
+  } finally { await invalid.stop(); }
+});

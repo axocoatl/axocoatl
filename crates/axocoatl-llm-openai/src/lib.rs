@@ -1,4 +1,8 @@
 mod convert;
+pub mod native_openrouter;
+pub use native_openrouter::{
+    observe_native_openrouter_profiles, NativeOpenRouterObservation, NativeOpenRouterProvider,
+};
 
 use std::pin::Pin;
 

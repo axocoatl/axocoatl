@@ -37,13 +37,27 @@ lies below it, is rejected.
 
 ## What is stored
 
-The data root can contain:
+New roots use native Session storage with a format-ownership marker, canonical
+journals, and owned component directories for input/output evidence, activation
+state, grants, commands, approved teams, and retained Ways decisions. Preserve the
+whole root and its directory structure. A Session name or a copied journal alone
+does not establish ownership of its other stores.
+
+Workspace knowledge includes accepted Markdown revisions, its publication manifest,
+proposals, and rebuildable source indexes. Include the complete store in the cold
+backup. A Markdown export is useful for portability but does not replace a full
+backup of revision history, receipts, and Session execution evidence. Do not edit
+stored immutable revision files directly; use the Knowledge inspector or an explicit
+Markdown import to create a validated revision.
+
+Existing legacy roots are not silently converted. Shared and compatibility paths
+can include:
 
 | Current path | State |
 | --- | --- |
 | `workspaces/*.json` | Durable Workspace ids, names, canonical paths, and activity timestamps |
 | `sessions/*.json` | Workspace-owned, folder-anchored Session records |
-| `session-history/turns.v1.jsonl` | Canonical Session turn ledger |
+| `session-history/turns.v1.jsonl` | Legacy Session turn ledger |
 | `session-history/session-attachments.v1.json` | Session attachment relations and pins |
 | `checkpoints/v1/<agent-key>/<version>.ckpt` | Current Agent conversation checkpoint caches |
 | `memory/daily_log/v1/<agent-key>/YYYY-MM-DD.jsonl` | Current dated activity records |

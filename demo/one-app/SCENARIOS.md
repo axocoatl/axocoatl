@@ -73,7 +73,7 @@ decide whether an implementation is acceptable.
 ### Harbor Catalog — multi-agent design handoff
 
 ```text
-Architect: write exactly one sentence proposing how to prevent stale catalog cache reads after mutations; do not speak for the reviewer. Reviewer: assess only the architect sentence in exactly one sentence and end with SHIP or BLOCK. No tools, files, or edits.
+Architect: write exactly one sentence proposing how to prevent stale catalog cache reads after mutations; do not speak for the reviewer. Reviewer: assess only the architect sentence in exactly one sentence, and the reviewer's final review must end with SHIP or BLOCK. No repository tools, files, or edits.
 ```
 
 Create the **Film · Handoff sequence** Custom Session with exactly Systems Architect and

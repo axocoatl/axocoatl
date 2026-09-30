@@ -487,6 +487,7 @@ mod tests {
 
     fn msg(role: MessageRole, content: &str) -> StoredMessage {
         StoredMessage {
+            content_parts: None,
             role,
             content: content.into(),
             timestamp: now_secs(),

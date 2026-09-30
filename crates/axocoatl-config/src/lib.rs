@@ -23,6 +23,97 @@ fn is_filesystem_safe_identifier(value: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+fn validate_autonomous_workflow_graph(
+    workflow: &WorkflowConfigYaml,
+    agents_by_id: &std::collections::HashMap<&str, &AgentConfigYaml>,
+    member_ids: &std::collections::HashSet<&str>,
+) -> Result<(), ConfigError> {
+    let mut indegree = workflow
+        .agents
+        .iter()
+        .map(|agent_id| (agent_id.as_str(), 0_usize))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut children = std::collections::HashMap::<&str, Vec<&str>>::new();
+    for agent_id in &workflow.agents {
+        let agent = agents_by_id[agent_id.as_str()];
+        let mut dependencies = std::collections::HashSet::new();
+        for dependency in &agent.depends_on {
+            if !dependencies.insert(dependency.as_str()) {
+                return Err(ConfigError::InvalidField {
+                    field: format!("agents[{}].depends_on", agent.id),
+                    value: format!("{:?}", agent.depends_on),
+                    reason: format!(
+                        "Agent '{}' repeats dependency '{}' in workflow '{}'",
+                        agent.id, dependency, workflow.id
+                    ),
+                    suggestion: "List each dependency exactly once".to_string(),
+                });
+            }
+            if dependency == &agent.id {
+                return Err(ConfigError::InvalidField {
+                    field: format!("agents[{}].depends_on", agent.id),
+                    value: format!("{:?}", agent.depends_on),
+                    reason: format!("Agent '{}' cannot depend on itself", agent.id),
+                    suggestion: "Remove the self dependency".to_string(),
+                });
+            }
+            if !member_ids.contains(dependency.as_str()) {
+                return Err(ConfigError::InvalidField {
+                    field: format!("agents[{}].depends_on", agent.id),
+                    value: format!("{:?}", dependency),
+                    reason: format!(
+                        "Agent '{}' depends on '{}', which is outside workflow '{}'",
+                        agent.id, dependency, workflow.id
+                    ),
+                    suggestion: format!(
+                        "Add '{dependency}' to workflow '{}' or remove the dependency",
+                        workflow.id
+                    ),
+                });
+            }
+            *indegree
+                .get_mut(agent_id.as_str())
+                .expect("workflow members initialize indegree") += 1;
+            children
+                .entry(dependency.as_str())
+                .or_default()
+                .push(agent_id.as_str());
+        }
+    }
+
+    let mut ready = workflow
+        .agents
+        .iter()
+        .filter(|agent_id| indegree[agent_id.as_str()] == 0)
+        .map(String::as_str)
+        .collect::<std::collections::VecDeque<_>>();
+    let mut visited = 0_usize;
+    while let Some(agent_id) = ready.pop_front() {
+        visited += 1;
+        if let Some(dependents) = children.get(agent_id) {
+            for dependent in dependents {
+                let remaining = indegree
+                    .get_mut(dependent)
+                    .expect("workflow dependent initializes indegree");
+                *remaining -= 1;
+                if *remaining == 0 {
+                    ready.push_back(dependent);
+                }
+            }
+        }
+    }
+    if visited != workflow.agents.len() {
+        return Err(ConfigError::InvalidField {
+            field: format!("workflows[{}].agents", workflow.id),
+            value: format!("{:?}", workflow.agents),
+            reason: format!("Workflow '{}' contains a dependency cycle", workflow.id),
+            suggestion: "Remove at least one dependency so the team forms a directed acyclic graph"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Load and validate config from a YAML file.
 pub async fn load_config(path: &Path) -> Result<AxocoatlConfig, ConfigError> {
     let raw = tokio::fs::read_to_string(path)
@@ -60,7 +151,12 @@ pub fn interpolate_env_vars(input: &str) -> String {
 }
 
 /// Validate a parsed config, returning actionable errors.
-fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
+///
+/// Runtime configuration editors must call this before replacing the daemon's
+/// validated configuration. Parsing is not the only mutation boundary: an
+/// in-memory Agent dependency edit can otherwise create a team graph that a
+/// fresh config load would reject.
+pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     let mut seen_ids = std::collections::HashSet::new();
     let mut seen_shared_labels = std::collections::HashMap::<String, String>::new();
 
@@ -159,28 +255,179 @@ fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
         }
     }
 
+    // Workflow ids are durable Session references. Resolve the whole roster at
+    // load time so a later Session cannot silently choose the first duplicate,
+    // ignore an unknown member, or collapse a malformed coordinator team.
+    let agents_by_id = config
+        .agents
+        .iter()
+        .map(|agent| (agent.id.as_str(), agent))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut seen_workflow_ids = std::collections::HashSet::new();
+    let mut worker_owners = std::collections::HashMap::<&str, &str>::new();
+    for (index, workflow) in config.workflows.iter().enumerate() {
+        if workflow.id.trim().is_empty() {
+            return Err(ConfigError::InvalidField {
+                field: format!("workflows[{index}].id"),
+                value: format!("{:?}", workflow.id),
+                reason: "Workflow ID cannot be empty".to_string(),
+                suggestion: "Set a stable unique team identifier, for example: id: feature-team"
+                    .to_string(),
+            });
+        }
+        if !seen_workflow_ids.insert(workflow.id.as_str()) {
+            return Err(ConfigError::DuplicateId {
+                field: "workflows[].id".to_string(),
+                id: workflow.id.clone(),
+            });
+        }
+        if workflow.agents.is_empty() {
+            return Err(ConfigError::InvalidField {
+                field: format!("workflows[{}].agents", workflow.id),
+                value: "[]".to_string(),
+                reason: format!("Workflow '{}' has no Agent roster", workflow.id),
+                suggestion: "Add at least one configured Agent to this workflow".to_string(),
+            });
+        }
+
+        let mut seen_members = std::collections::HashSet::new();
+        for member_id in &workflow.agents {
+            if !seen_members.insert(member_id.as_str()) {
+                return Err(ConfigError::InvalidField {
+                    field: format!("workflows[{}].agents", workflow.id),
+                    value: format!("{:?}", workflow.agents),
+                    reason: format!(
+                        "Workflow '{}' repeats Agent '{}' in its roster",
+                        workflow.id, member_id
+                    ),
+                    suggestion: "List every team member exactly once".to_string(),
+                });
+            }
+            if !agents_by_id.contains_key(member_id.as_str()) {
+                return Err(ConfigError::InvalidField {
+                    field: format!("workflows[{}].agents", workflow.id),
+                    value: format!("{:?}", member_id),
+                    reason: format!(
+                        "Workflow '{}' member '{}' is not a configured Agent",
+                        workflow.id, member_id
+                    ),
+                    suggestion: format!(
+                        "Define Agent '{member_id}' or remove it from this workflow"
+                    ),
+                });
+            }
+        }
+
+        let entry = workflow
+            .entry_point
+            .as_deref()
+            .map(|entry_id| {
+                agents_by_id
+                    .get(entry_id)
+                    .copied()
+                    .ok_or_else(|| ConfigError::InvalidField {
+                        field: format!("workflows[{}].entry_point", workflow.id),
+                        value: format!("{entry_id:?}"),
+                        reason: format!(
+                            "Workflow '{}' entry point '{}' is not a configured Agent",
+                            workflow.id, entry_id
+                        ),
+                        suggestion: format!(
+                            "Define Agent '{entry_id}' or choose a configured entry point"
+                        ),
+                    })
+            })
+            .transpose()?;
+
+        if let Some(entry) = entry {
+            if !seen_members.contains(entry.id.as_str()) {
+                let reason = if matches!(entry.role, AgentRoleYaml::Coordinator) {
+                    format!(
+                        "Coordinator entry point '{}' is not included in workflow '{}'",
+                        entry.id, workflow.id
+                    )
+                } else {
+                    format!(
+                        "Workflow '{}' entry point '{}' is not included in its Agent roster",
+                        workflow.id, entry.id
+                    )
+                };
+                return Err(ConfigError::InvalidField {
+                    field: format!("workflows[{}].agents", workflow.id),
+                    value: format!("{:?}", workflow.agents),
+                    reason,
+                    suggestion: format!("Add '{}' to this workflow's agents", entry.id),
+                });
+            }
+        }
+
+        if let Some(entry) = entry.filter(|entry| matches!(entry.role, AgentRoleYaml::Coordinator))
+        {
+            for member_id in &workflow.agents {
+                if member_id == &entry.id {
+                    continue;
+                }
+                let member = agents_by_id[member_id.as_str()];
+                if !matches!(member.role, AgentRoleYaml::Worker) {
+                    return Err(ConfigError::InvalidField {
+                        field: format!("workflows[{}].agents", workflow.id),
+                        value: format!("{:?}", member_id),
+                        reason: format!(
+                            "Coordinator-led workflow '{}' may contain only its Coordinator and Worker Agents; '{}' is {:?}",
+                            workflow.id, member_id, member.role
+                        ),
+                        suggestion: format!(
+                            "Change '{member_id}' to role: worker or remove it from this coordinator-led workflow"
+                        ),
+                    });
+                }
+                if let Some(existing_owner) = worker_owners.insert(member_id, &workflow.id) {
+                    return Err(ConfigError::InvalidField {
+                        field: format!("workflows[{}].agents", workflow.id),
+                        value: format!("{:?}", member_id),
+                        reason: format!(
+                            "Worker '{}' belongs to both coordinator-led workflows '{}' and '{}'",
+                            member_id, existing_owner, workflow.id
+                        ),
+                        suggestion: "Give each Coordinator an exclusive Worker Agent identity"
+                            .to_string(),
+                    });
+                }
+            }
+        } else {
+            if entry.is_some_and(|entry| matches!(entry.role, AgentRoleYaml::Worker)) {
+                return Err(ConfigError::InvalidField {
+                    field: format!("workflows[{}].entry_point", workflow.id),
+                    value: format!("{:?}", workflow.entry_point),
+                    reason: "A Worker cannot be a workflow entry point".to_string(),
+                    suggestion: "Use an autonomous Agent or the owning Coordinator as entry_point"
+                        .to_string(),
+                });
+            }
+            for member_id in &workflow.agents {
+                let member = agents_by_id[member_id.as_str()];
+                if !matches!(member.role, AgentRoleYaml::Autonomous) {
+                    return Err(ConfigError::InvalidField {
+                        field: format!("workflows[{}].agents", workflow.id),
+                        value: format!("{:?}", member_id),
+                        reason: format!(
+                            "Non-coordinator workflow '{}' may contain autonomous Agents only; '{}' is {:?}",
+                            workflow.id, member_id, member.role
+                        ),
+                        suggestion:
+                            "Use only autonomous Agents, or make the workflow's Coordinator its entry_point"
+                                .to_string(),
+                    });
+                }
+            }
+            validate_autonomous_workflow_graph(workflow, &agents_by_id, &seen_members)?;
+        }
+    }
+
     // Role invariants: coordinators and workers only make sense inside a
     // workflow — a worker is spawned and driven by its workflow's coordinator,
     // never standalone. Reject a role with no workflow to back it so a
     // half-wired multi-agent setup fails loudly at load time instead of at run.
-    let coordinator_ids: std::collections::HashSet<&str> = config
-        .agents
-        .iter()
-        .filter(|a| matches!(a.role, AgentRoleYaml::Coordinator))
-        .map(|a| a.id.as_str())
-        .collect();
-    // Agents in a workflow whose entry_point is a coordinator — the only
-    // workflows whose workers actually get managed (and thus spawned).
-    let coordinator_led_members: std::collections::HashSet<&str> = config
-        .workflows
-        .iter()
-        .filter(|w| {
-            w.entry_point
-                .as_deref()
-                .is_some_and(|ep| coordinator_ids.contains(ep))
-        })
-        .flat_map(|w| w.agents.iter().map(String::as_str))
-        .collect();
     let workflow_entry_points: std::collections::HashSet<&str> = config
         .workflows
         .iter()
@@ -199,7 +446,7 @@ fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
                         suggestion: "Remove depends_on from this worker agent.".to_string(),
                     });
                 }
-                if !coordinator_led_members.contains(agent.id.as_str()) {
+                if !worker_owners.contains_key(agent.id.as_str()) {
                     return Err(ConfigError::InvalidField {
                         field: format!("agents[{}].role", agent.id),
                         value: "worker".to_string(),
@@ -435,6 +682,11 @@ agents:
     fn worker_with_depends_on_rejected() {
         let yaml = r#"
 agents:
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: llama3
+    role: coordinator
   - id: w
     name: "W"
     provider: ollama
@@ -444,7 +696,7 @@ agents:
 workflows:
   - id: wf
     name: "WF"
-    agents: [w]
+    agents: [lead, w]
     entry_point: lead
 "#;
         let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
@@ -534,6 +786,392 @@ workflows:
             ConfigError::InvalidField { ref reason, .. }
                 if reason.contains("entry_point of exactly one workflow")
         ));
+    }
+
+    #[test]
+    fn workflow_ids_must_be_nonempty_and_unique() {
+        let empty = parse_config(
+            r#"
+workflows:
+  - id: "  "
+    name: "Unnamed"
+    agents: []
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(empty.contains("Workflow ID cannot be empty"), "{empty}");
+
+        let duplicate = parse_config(
+            r#"
+agents:
+  - id: known
+    name: "Known"
+    provider: ollama
+    model: llama3
+workflows:
+  - id: repeated
+    name: "First"
+    agents: [known]
+    entry_point: known
+  - id: repeated
+    name: "Second"
+    agents: [known]
+    entry_point: known
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            duplicate,
+            ConfigError::DuplicateId { ref field, ref id }
+                if field == "workflows[].id" && id == "repeated"
+        ));
+    }
+
+    #[test]
+    fn workflow_ids_may_use_human_or_punctuated_config_keys() {
+        let config = parse_config(
+            r#"
+agents:
+  - id: known
+    name: "Known"
+    provider: ollama
+    model: llama3
+workflows:
+  - id: review.v1
+    name: "Review"
+    agents: [known]
+    entry_point: known
+  - id: Release Team
+    name: "Release"
+    agents: [known]
+    entry_point: known
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap();
+        assert_eq!(config.workflows[0].id, "review.v1");
+        assert_eq!(config.workflows[1].id, "Release Team");
+    }
+
+    #[test]
+    fn workflow_roster_cannot_be_empty() {
+        let error = parse_config(
+            r#"
+workflows:
+  - id: empty-team
+    name: "Empty"
+    agents: []
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("has no Agent roster"), "{error}");
+    }
+
+    #[test]
+    fn workflow_members_and_entry_points_must_resolve_exactly() {
+        let unknown_member = parse_config(
+            r#"
+agents:
+  - id: known
+    name: "Known"
+    provider: ollama
+    model: llama3
+workflows:
+  - id: team
+    name: "Team"
+    agents: [known, missing]
+    entry_point: known
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(unknown_member.contains("member 'missing' is not a configured Agent"));
+
+        let unknown_entry = parse_config(
+            r#"
+agents:
+  - id: known
+    name: "Known"
+    provider: ollama
+    model: llama3
+workflows:
+  - id: team
+    name: "Team"
+    agents: [known]
+    entry_point: missing
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(unknown_entry.contains("entry point 'missing' is not a configured Agent"));
+
+        let repeated_member = parse_config(
+            r#"
+agents:
+  - id: known
+    name: "Known"
+    provider: ollama
+    model: llama3
+workflows:
+  - id: team
+    name: "Team"
+    agents: [known, known]
+    entry_point: known
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(repeated_member.contains("repeats Agent 'known'"));
+
+        let out_of_roster_entry = parse_config(
+            r#"
+agents:
+  - id: member
+    name: "Member"
+    provider: ollama
+    model: llama3
+  - id: entry
+    name: "Entry"
+    provider: ollama
+    model: llama3
+workflows:
+  - id: team
+    name: "Team"
+    agents: [member]
+    entry_point: entry
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(out_of_roster_entry.contains("entry point 'entry' is not included"));
+    }
+
+    #[test]
+    fn autonomous_workflow_dependency_graph_must_be_closed_and_acyclic() {
+        let outside = parse_config(
+            r#"
+agents:
+  - { id: root, name: "Root", provider: ollama, model: llama3 }
+  - { id: omitted, name: "Omitted", provider: ollama, model: llama3 }
+  - id: child
+    name: "Child"
+    provider: ollama
+    model: llama3
+    depends_on: [omitted]
+workflows:
+  - id: team
+    name: "Team"
+    agents: [root, child]
+    entry_point: root
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(outside.contains("depends on 'omitted', which is outside workflow 'team'"));
+
+        let duplicate = parse_config(
+            r#"
+agents:
+  - { id: root, name: "Root", provider: ollama, model: llama3 }
+  - id: child
+    name: "Child"
+    provider: ollama
+    model: llama3
+    depends_on: [root, root]
+workflows:
+  - id: team
+    name: "Team"
+    agents: [root, child]
+    entry_point: root
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(duplicate.contains("repeats dependency 'root'"));
+
+        let self_dependency = parse_config(
+            r#"
+agents:
+  - id: self
+    name: "Self"
+    provider: ollama
+    model: llama3
+    depends_on: [self]
+workflows:
+  - id: team
+    name: "Team"
+    agents: [self]
+    entry_point: self
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(self_dependency.contains("cannot depend on itself"));
+
+        let cycle = parse_config(
+            r#"
+agents:
+  - id: one
+    name: "One"
+    provider: ollama
+    model: llama3
+    depends_on: [two]
+  - id: two
+    name: "Two"
+    provider: ollama
+    model: llama3
+    depends_on: [one]
+workflows:
+  - id: team
+    name: "Team"
+    agents: [one, two]
+    entry_point: one
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(cycle.contains("contains a dependency cycle"));
+
+        let diamond = parse_config(
+            r#"
+agents:
+  - { id: root, name: "Root", provider: ollama, model: llama3 }
+  - id: left
+    name: "Left"
+    provider: ollama
+    model: llama3
+    depends_on: [root]
+  - id: right
+    name: "Right"
+    provider: ollama
+    model: llama3
+    depends_on: [root]
+  - id: sink
+    name: "Sink"
+    provider: ollama
+    model: llama3
+    depends_on: [left, right]
+workflows:
+  - id: diamond
+    name: "Diamond"
+    agents: [root, left, right, sink]
+    entry_point: root
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap();
+        assert_eq!(diamond.workflows[0].agents.len(), 4);
+    }
+
+    #[test]
+    fn coordinator_workflow_roster_is_exact_and_worker_ownership_is_exclusive() {
+        let missing_coordinator = parse_config(
+            r#"
+agents:
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: llama3
+    role: coordinator
+  - id: worker
+    name: "Worker"
+    provider: ollama
+    model: llama3
+    role: worker
+workflows:
+  - id: team
+    name: "Team"
+    agents: [worker]
+    entry_point: lead
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            missing_coordinator.contains("Coordinator entry point 'lead' is not included"),
+            "{missing_coordinator}"
+        );
+
+        for (other_role, expected_agent) in [("", "autonomous"), ("coordinator", "other-lead")] {
+            let yaml = format!(
+                r#"
+agents:
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: llama3
+    role: coordinator
+  - id: {expected_agent}
+    name: "Other"
+    provider: ollama
+    model: llama3
+    {role_line}
+workflows:
+  - id: team
+    name: "Team"
+    agents: [lead, {expected_agent}]
+    entry_point: lead
+"#,
+                role_line = if other_role.is_empty() {
+                    String::new()
+                } else {
+                    format!("role: {other_role}")
+                }
+            );
+            let error = parse_config(&yaml, &PathBuf::from("test.yaml"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("may contain only its Coordinator and Worker Agents"));
+            assert!(error.contains(expected_agent));
+        }
+
+        let shared_worker = parse_config(
+            r#"
+agents:
+  - id: lead-one
+    name: "Lead one"
+    provider: ollama
+    model: llama3
+    role: coordinator
+  - id: lead-two
+    name: "Lead two"
+    provider: ollama
+    model: llama3
+    role: coordinator
+  - id: worker
+    name: "Worker"
+    provider: ollama
+    model: llama3
+    role: worker
+workflows:
+  - id: team-one
+    name: "Team one"
+    agents: [lead-one, worker]
+    entry_point: lead-one
+  - id: team-two
+    name: "Team two"
+    agents: [lead-two, worker]
+    entry_point: lead-two
+"#,
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(shared_worker.contains("belongs to both coordinator-led workflows"));
     }
 
     #[test]

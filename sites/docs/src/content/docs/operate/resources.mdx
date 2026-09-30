@@ -70,13 +70,15 @@ Account for:
 - Session- and Attempt-owned root `node_modules` volumes for Node projects;
 - every Workspace repository and its build artifacts;
 - `.axo-variants/` clones and manifests during unresolved Attempts;
-- the full Axocoatl data root and attachments;
+- the full Axocoatl data root, attachments, and retained native Ways decisions;
 - local model weights and embedding downloads;
 - backups.
 
 Git clones can share object storage in some layouts, but build outputs and
 untracked files can still multiply. Finish Attempt cleanup and confirm
-`.axo-variants/` state before assuming the space has been reclaimed.
+`.axo-variants/` state before assuming the space has been reclaimed. Native Ways
+decision evidence has separate explicit storage limits and deletion controls in
+History; runtime cleanup does not reclaim that retained evidence.
 
 ## Plan ports and networking
 

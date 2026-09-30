@@ -1,0 +1,36 @@
+{
+  "command_id": "intent-command-a",
+  "expected_revision": 0,
+  "intent": {
+    "invocation_id": "invocation-a",
+    "activation": {
+      "session_id": "session-a",
+      "turn_id": "turn-a",
+      "execution_epoch_id": "epoch-a",
+      "node_id": "node-a",
+      "generation": 1,
+      "activation_id": "activation-a"
+    },
+    "dispatch_scope": "live-dispatch-scope-a",
+    "tool_name": "write_file",
+    "arguments": {
+      "evidence_ref": "protected-post-hook-arguments-a",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "byte_len": 2
+    },
+    "redacted_preview": "write_file with approved protected arguments",
+    "authority": {
+      "grant_id": "grant-a",
+      "grant_revision": 3,
+      "approval_ref": "approval-a"
+    },
+    "replay_policy": {"kind": "manual_only"},
+    "provider_replay": {
+      "adapter_id": "native-tools",
+      "adapter_version": "1",
+      "provider_run_ref": "provider-run-a",
+      "native_call_id": "provider-call-a",
+      "response_group_id": "response-group-a"
+    }
+  }
+}

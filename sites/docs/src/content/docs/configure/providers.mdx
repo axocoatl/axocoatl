@@ -1,6 +1,6 @@
 ---
 title: Providers
-description: Configure supported model providers, per-Agent models, compatible endpoints, and one-target rate-limit fallback.
+description: Configure native Ollama and OpenRouter profiles, compatibility adapters, per-Agent models, and legacy fallback.
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -10,7 +10,7 @@ live under `providers:` in the active YAML configuration. `axocoatl onboard`
 creates the current user's configuration; it does not create a project or a
 repository-level `.env` file.
 
-## Supported provider IDs
+## Provider adapters
 
 | `provider:` | Adapter |
 | --- | --- |
@@ -21,16 +21,23 @@ repository-level `.env` file.
 | `mistral` | Mistral Chat API |
 | `openrouter` | OpenRouter through its OpenAI-compatible endpoint |
 
-The onboarding wizard offers Ollama, OpenRouter, Anthropic, and OpenAI. Gemini
-and Mistral are supported but must currently be added to YAML manually.
+The onboarding wizard offers Ollama and OpenRouter for native Sessions.
+OpenAI, Anthropic, Gemini, and Mistral are configured manually for their
+supported compatibility paths.
 
-## Configure a hosted provider
+New data roots use native Session execution, whose enforced budget boundary supports
+reviewed local Ollama profiles and eligible OpenRouter-credit profiles. The remaining
+adapters serve their existing compatibility paths; an API-compatible endpoint alone
+does not establish native budget enforcement.
 
-For the normal installed-product flow, run `axocoatl onboard`. The credential
-prompt is masked. A key entered there is written literally to the owner-only
-user configuration (`0600` on supported Unix hosts). Leaving it blank keeps an
-environment placeholder, so the value must be present in the process that
-starts Axocoatl.
+## Configure a compatibility hosted provider
+
+The direct Anthropic example below configures compatibility execution. For a new
+native Session, use [OpenRouter](#configure-openrouter) or [Ollama](#configure-ollama)
+instead. OpenRouter onboarding masks the credential prompt and writes a supplied
+key to the owner-only user configuration (`0600` on supported Unix hosts). For
+manual compatibility configuration, the environment-placeholder form below keeps
+the key out of YAML; its value must be present in the process that starts Axocoatl.
 
 The following is the equivalent manual YAML form:
 
@@ -62,7 +69,53 @@ Axocoatl does not create or load a `.env` file. Use process-environment or
 service-manager injection when you choose a placeholder rather than the
 owner-only user configuration.
 
+## Configure OpenRouter
+
+Use your normal OpenRouter API key and OpenRouter credits. Onboarding asks you to
+confirm that the account has no connected BYOK provider keys. BYOK is not supported
+by native Session execution. No separate account or management key is required.
+
+```yaml
+agents:
+  - id: coder
+    name: Coder
+    provider: openrouter
+    model: meta-llama/llama-3.3-70b-instruct
+    sampling:
+      max_tokens: 2048
+
+providers:
+  openrouter_billing: credits
+  openrouter:
+    api_key: "${OPENROUTER_API_KEY}"
+```
+
+This declaration must match the account's billing configuration. Do not connect
+BYOK provider keys while using this execution path; Axocoatl cannot prevent changes
+made in your OpenRouter account.
+
+Before Send, review **Team & budget**. Axocoatl selects a qualifying endpoint for
+the exact model and retains its capabilities, context/output limits, and prices.
+Each request reserves the full input-context allowance plus bounded output, uses
+enforced output and price ceilings, and disables automatic retries and fallbacks.
+If the approved allowance cannot cover that reservation, the request does not start.
+Final measured usage and cost are retained; a missing final response stays unknown
+and does not release the reservation.
+
+Currently eligible profiles require an exact endpoint variant, text output, tool
+calling, an enforced output limit, and complete bounded pricing. Reasoning models,
+dynamic router aliases, and custom OpenRouter endpoints are unsupported. Model and
+endpoint availability can change; Axocoatl rechecks the retained contract before
+inference and refuses changed or unsupported profiles.
+
 ## Configure Ollama
+
+Native execution requires a loopback Ollama **0.20.6** server that reports
+cloud-disabled mode and a local GGUF completion model. Axocoatl checks the exact
+model identity, loaded context, and capabilities during Team review and before
+inference. Other versions, remote routing, and a generic compatible server do
+not satisfy this native contract. The broader Ollama adapter remains available
+for compatibility execution.
 
 ```yaml
 agents:
@@ -86,9 +139,9 @@ route must still be Ollama; response text from other providers remains text
 because Axocoatl cannot safely invent their native call ids, signatures, or
 content-block sequence.
 
-## Use an OpenAI-compatible endpoint
+## Use a compatibility endpoint
 
-The `openai` adapter honors `base_url`. Include the API-version suffix expected
+For compatibility execution, the `openai` adapter honors `base_url`. Include the API-version suffix expected
 by the server, commonly `/v1`.
 
 ```yaml
@@ -120,8 +173,10 @@ agents:
   - { id: implement, name: Implement, provider: openai, model: gpt-5 }
 ```
 
-A per-turn model override in Conversation changes the model for that request
-within the Agent's provider. It does not supply another provider's credentials.
+Native Sessions retain exact approved models. Conversation displays those models
+read-only; change them through **Team & budget**, then preview and apply the revised
+team. Compatibility Sessions allow a per-turn model override within the Agent's
+provider. That override does not supply another provider's credentials.
 
 ## Configure one rate-limit fallback
 
@@ -140,7 +195,8 @@ Axocoatl retries once only when the primary request is rate-limited before a
 stream is established. It does not traverse a fallback chain and does not
 switch providers for non-rate-limit or mid-stream failures.
 
-This fallback applies to ordinary Session and global Agent execution. Explore several ways
+This fallback applies to legacy Session and global Agent execution. Native Sessions
+require their retained primary route and reject configured OpenRouter fallbacks. Explore several ways
 uses each Way's configured primary provider/model directly for now; a rate limit fails that
 Way so its retained provider/model and cost evidence cannot silently describe the wrong route.
 

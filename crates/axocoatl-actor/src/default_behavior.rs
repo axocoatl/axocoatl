@@ -245,12 +245,28 @@ fn structured_compaction_archive(messages: &[ChatMessage]) -> (Vec<serde_json::V
 struct StreamChatResult {
     response: axocoatl_llm::ChatResponse,
     cancelled: bool,
-    /// True when the stream produced a terminal Done or an exact Usage event.
-    /// A cancelled nonterminal stream may carry a useful local numeric
-    /// estimate, but its remote total remains incomplete.
+    /// Explicit usage observations require Done and their completeness flag.
+    /// Legacy streams retain their existing Done/exact-Usage behavior.
     usage_complete: bool,
+    /// An explicit observation, including known zero, must not be replaced by
+    /// the legacy fallback estimate merely because its numeric total is zero.
+    usage_estimate_allowed: bool,
     provider_tool_names: ProviderToolNameMap,
     provider_route: axocoatl_core::ProviderMetadata,
+}
+
+fn usage_regressed(previous: &TokenUsageStats, next: &TokenUsageStats) -> bool {
+    next.input_tokens < previous.input_tokens
+        || next.output_tokens < previous.output_tokens
+        || next.reasoning_tokens.unwrap_or(0) < previous.reasoning_tokens.unwrap_or(0)
+}
+
+fn retain_usage_highwater(usage: &mut TokenUsageStats, observed: &TokenUsageStats) {
+    usage.input_tokens = usage.input_tokens.max(observed.input_tokens);
+    usage.output_tokens = usage.output_tokens.max(observed.output_tokens);
+    if let Some(reasoning) = observed.reasoning_tokens {
+        usage.reasoning_tokens = Some(usage.reasoning_tokens.unwrap_or(0).max(reasoning));
+    }
 }
 
 fn merge_provider_metadata(
@@ -294,13 +310,24 @@ pub struct DefaultAgentBehavior {
     configured_model: Option<String>,
     session: SessionMemory,
     checkpoint_store: Option<Arc<CheckpointStore>>,
+    activation_checkpoint_port: Option<Arc<dyn crate::ActivationCheckpointPort>>,
+    activation_checkpoint_ready: bool,
+    activation_checkpoint_used: bool,
+    /// Would-be legacy saves are captured in memory. Only controlled exit
+    /// consumes the host's single durable candidate reservation.
+    activation_checkpoint_candidate: Option<AgentCheckpoint>,
+    /// Transaction-scoped Tier 1 can be committed or rolled back with the
+    /// canonical Session turn. The longer-lived memory tiers do not yet have
+    /// that transaction boundary, so coordinated activations may read them but
+    /// must not mutate them.
+    durable_memory_read_only: bool,
     checkpoint_version: u64,
     agent_id: String,
     tool_executor: Option<Arc<ToolExecutor>>,
-    /// Canonical executor-tool allowlist. `None` inherits the full executor;
-    /// `Some`, including an empty set, is an exact allowlist. Agent-scoped
-    /// recall/core-memory tools are intrinsic and are intentionally separate.
-    executor_tool_allowlist: Option<std::collections::HashSet<String>>,
+    /// Canonical tool allowlist across executor, recall, and core-memory tools.
+    /// `None` inherits every tool available on this execution path; `Some`,
+    /// including an empty set, is exact for both advertisement and dispatch.
+    canonical_tool_allowlist: Option<std::collections::HashSet<String>>,
     hook_registry: Option<Arc<HookRegistry>>,
     /// Optional append-only daily-log cache. When configured, compaction writes
     /// a bounded structured projection here before summarizing. Canonical
@@ -315,6 +342,7 @@ pub struct DefaultAgentBehavior {
     shared_blocks: std::collections::HashMap<String, axocoatl_memory::SharedBlock>,
     /// Agent-scoped core-memory edit tools (append / replace / set), built in `on_start`.
     core_memory_tools: Vec<(String, Arc<dyn axocoatl_tools::BuiltinTool>)>,
+    host_control_tools: Vec<(String, Arc<dyn axocoatl_tools::BuiltinTool>)>,
     /// Standing system-prompt line telling the agent its core-memory blocks exist
     /// and to keep them current. Set when a core-memory store is attached.
     core_capability_hint: Option<String>,
@@ -350,6 +378,7 @@ pub struct DefaultAgentBehavior {
     /// Set by the actor before a streaming execution — receives output chunks
     /// as the LLM generates them.
     stream_sink: Option<crate::behavior::StreamSink>,
+    stream_observer: Option<Arc<dyn crate::behavior::AgentStreamObserver>>,
     /// Caller-owned control for the active execution, when the daemon needs a
     /// reconnect-safe Stop action. Agent actors serialize their executions.
     active_run_control: Option<AgentRunControl>,
@@ -358,6 +387,14 @@ pub struct DefaultAgentBehavior {
     /// Per-agent sampling controls (temperature, top_p, max_tokens, response
     /// format), applied to every ChatRequest this agent builds.
     sampling: axocoatl_core::SamplingConfig,
+    /// Secondary loop guard. Native execution derives this from its reviewed
+    /// invocation allowance; durable admission remains authoritative per call.
+    tool_round_limit: usize,
+    /// Request-only masking of tool output older than the last few rounds.
+    stale_tool_results: Option<crate::tool_result_masking::StaleToolResultMasking>,
+    /// Estimated output a provider streamed before it ended early without
+    /// reporting usage; charged with the retry so the budget sees it.
+    abandoned_output_tokens: std::sync::atomic::AtomicUsize,
 }
 
 impl DefaultAgentBehavior {
@@ -373,15 +410,21 @@ impl DefaultAgentBehavior {
             configured_model: None,
             session: SessionMemory::new(),
             checkpoint_store: None,
+            activation_checkpoint_port: None,
+            activation_checkpoint_ready: false,
+            activation_checkpoint_used: false,
+            activation_checkpoint_candidate: None,
+            durable_memory_read_only: false,
             checkpoint_version: 0,
             agent_id: String::new(),
             tool_executor: None,
-            executor_tool_allowlist: None,
+            canonical_tool_allowlist: None,
             hook_registry: None,
             daily_log: None,
             core_memory: None,
             shared_blocks: std::collections::HashMap::new(),
             core_memory_tools: Vec::new(),
+            host_control_tools: Vec::new(),
             core_capability_hint: None,
             semantic_memory: None,
             semantic_context: String::new(),
@@ -394,10 +437,24 @@ impl DefaultAgentBehavior {
             session_context: None,
             project_instructions: None,
             stream_sink: None,
+            stream_observer: None,
             active_run_control: None,
             active_run_cancelled: false,
             sampling: axocoatl_core::SamplingConfig::default(),
+            tool_round_limit: 10,
+            stale_tool_results: None,
+            abandoned_output_tokens: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// Attach a host's durable observation boundary. It runs before the optional
+    /// legacy display sink, and a failed acknowledgement stops further work.
+    pub fn with_stream_observer(
+        mut self,
+        observer: Arc<dyn crate::behavior::AgentStreamObserver>,
+    ) -> Self {
+        self.stream_observer = Some(observer);
+        self
     }
 
     /// Set the per-agent sampling controls applied to every LLM call.
@@ -406,11 +463,94 @@ impl DefaultAgentBehavior {
         self
     }
 
+    /// Bound native tool iteration by already-approved invocation capacity.
+    /// This does not authorize any invocation or replace host accounting. The
+    /// ceiling also bounds a misbehaving provider with an unusually large grant.
+    pub fn with_tool_round_limit(mut self, limit: u32) -> Self {
+        self.tool_round_limit = limit.clamp(1, 128) as usize;
+        self
+    }
+
+    /// Replace tool output older than the last `keep_rounds` tool-call rounds
+    /// with a short placeholder in outgoing requests. Session history keeps
+    /// the full output; tools named in `exempt` are never masked.
+    pub fn with_stale_tool_result_masking(
+        mut self,
+        keep_rounds: usize,
+        exempt: impl IntoIterator<Item = String>,
+    ) -> Self {
+        self.stale_tool_results = Some(crate::tool_result_masking::StaleToolResultMasking::new(
+            keep_rounds,
+            exempt,
+        ));
+        self
+    }
+
     /// Consume the provider's token stream — forwarding each text/reasoning
     /// delta to the stream sink (if attached) — and assemble the equivalent
     /// `ChatResponse`. Used in place of the blocking `provider.chat()` so
     /// every agent call is live by default.
     async fn stream_chat(
+        &self,
+        request: ChatRequest,
+        provider_tool_names: ProviderToolNameMap,
+    ) -> Result<StreamChatResult, AgentError> {
+        // A stream that closed before its completion event released no tool
+        // call, so nothing it proposed ran. Retry it once as a new, separately
+        // admitted and budgeted provider call, with sampling nudged away from
+        // an identical degenerate continuation. The first call stays recorded
+        // with unknown usage.
+        let retry = request.clone();
+        let names = provider_tool_names.clone();
+        let before = self.execution_usage.usage_snapshot();
+        match self.stream_chat_once(request, provider_tool_names).await {
+            Err(AgentError::IncompleteProviderStream(reason))
+                if !self
+                    .active_run_control
+                    .as_ref()
+                    .is_some_and(AgentRunControl::is_cancelled) =>
+            {
+                tracing::warn!(%reason, "provider stream ended early; retrying once");
+                let mut retry = retry;
+                // A failed attempt that reported nothing still consumed its
+                // input; charge an estimate so the retry cannot exceed the
+                // execution budget unnoticed.
+                let abandoned_output = self
+                    .abandoned_output_tokens
+                    .swap(0, std::sync::atomic::Ordering::Relaxed);
+                if !Self::usage_changed(&before, &self.execution_usage.usage_snapshot()) {
+                    let estimated_input = self.provider.count_tokens(&retry);
+                    self.record_provider_usage(
+                        &TokenUsageStats::new(estimated_input, abandoned_output),
+                        false,
+                    )?;
+                }
+                // The first preflight may have fixed max_tokens from the budget
+                // left then; recompute it from what is left now, never above
+                // the first attempt's cap.
+                let first_max = retry.max_tokens;
+                if self.sampling.max_tokens.is_none() {
+                    retry.max_tokens = None;
+                }
+                self.preflight_provider_spend(&mut retry)?;
+                if let (Some(first), Some(now)) = (first_max, retry.max_tokens) {
+                    retry.max_tokens = Some(now.min(first));
+                }
+                // Raise only an explicitly low temperature; an unset one
+                // already samples at the model's default.
+                if let Some(temperature) = retry.temperature {
+                    retry.temperature = Some(temperature.max(0.2));
+                }
+                self.emit_stream(crate::behavior::AgentStreamChunk::ProviderRetry {
+                    reason: reason.clone(),
+                })?;
+                self.stream_chat_once(retry, names).await
+            }
+            other => other,
+        }
+    }
+
+    async fn stream_chat_once(
         &self,
         request: ChatRequest,
         provider_tool_names: ProviderToolNameMap,
@@ -439,6 +579,7 @@ impl DefaultAgentBehavior {
                 response: empty_response(),
                 cancelled: true,
                 usage_complete: true,
+                usage_estimate_allowed: true,
                 provider_tool_names,
                 provider_route,
             });
@@ -455,6 +596,7 @@ impl DefaultAgentBehavior {
                         response: empty_response(),
                         cancelled: true,
                         usage_complete: true,
+                        usage_estimate_allowed: true,
                         provider_tool_names,
                         provider_route,
                     });
@@ -473,9 +615,16 @@ impl DefaultAgentBehavior {
         let mut content = String::new();
         let mut usage = TokenUsageStats::default();
         let mut saw_usage = false;
+        let mut explicit_usage_observation = false;
+        let mut observed_usage_complete = true;
         macro_rules! fail_stream {
             ($error:expr) => {
-                return Err(self.account_reported_stream_usage_on_error(&usage, saw_usage, $error))
+                return Err(self.account_reported_stream_usage_on_error(
+                    &usage,
+                    saw_usage,
+                    !explicit_usage_observation,
+                    $error,
+                ))
             };
         }
         let mut finish_reason = FinishReason::Stop;
@@ -494,6 +643,10 @@ impl DefaultAgentBehavior {
 
         let mut cancelled = false;
         let mut saw_done = false;
+        // What this attempt streamed, in case it ends early without usage.
+        let mut streamed_output_tokens = 0usize;
+        self.abandoned_output_tokens
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         loop {
             let next = if let Some(control) = &control {
                 tokio::select! {
@@ -511,10 +664,23 @@ impl DefaultAgentBehavior {
             let event = match ev {
                 Ok(event) => event,
                 Err(error) => {
+                    let error = match error {
+                        axocoatl_llm::ProviderError::IncompleteStream { .. } => {
+                            if !saw_usage {
+                                self.abandoned_output_tokens.store(
+                                    streamed_output_tokens,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                            }
+                            AgentError::IncompleteProviderStream(error.to_string())
+                        }
+                        error => AgentError::Provider(error.to_string()),
+                    };
                     return Err(self.account_reported_stream_usage_on_error(
                         &usage,
                         saw_usage,
-                        AgentError::Provider(error.to_string()),
+                        !explicit_usage_observation,
+                        error,
                     ));
                 }
             };
@@ -528,14 +694,22 @@ impl DefaultAgentBehavior {
                     provider_route = metadata;
                 }
                 StreamEvent::TextDelta { delta } => {
-                    if let Some(sink) = &self.stream_sink {
-                        let _ = sink.send(crate::behavior::AgentStreamChunk::Text(delta.clone()));
+                    streamed_output_tokens =
+                        streamed_output_tokens.saturating_add(self.counter.count_text(&delta));
+                    if let Err(error) =
+                        self.emit_stream(crate::behavior::AgentStreamChunk::Text(delta.clone()))
+                    {
+                        fail_stream!(error);
                     }
                     content.push_str(&delta);
                 }
                 StreamEvent::ReasoningDelta { delta } => {
-                    if let Some(sink) = &self.stream_sink {
-                        let _ = sink.send(crate::behavior::AgentStreamChunk::Reasoning(delta));
+                    streamed_output_tokens =
+                        streamed_output_tokens.saturating_add(self.counter.count_text(&delta));
+                    if let Err(error) =
+                        self.emit_stream(crate::behavior::AgentStreamChunk::Reasoning(delta))
+                    {
+                        fail_stream!(error);
                     }
                 }
                 StreamEvent::ToolCallDelta {
@@ -544,6 +718,8 @@ impl DefaultAgentBehavior {
                     name,
                     args_delta,
                 } => {
+                    streamed_output_tokens =
+                        streamed_output_tokens.saturating_add(self.counter.count_text(&args_delta));
                     let name = name.filter(|name| !name.is_empty());
                     if index.is_none() && id.is_empty() && name.is_none() {
                         fail_stream!(AgentError::Provider(
@@ -631,13 +807,39 @@ impl DefaultAgentBehavior {
                         "provider changed streamed metadata for one tool call",
                     )
                     .map_err(|error| {
-                        self.account_reported_stream_usage_on_error(&usage, saw_usage, error)
+                        self.account_reported_stream_usage_on_error(
+                            &usage,
+                            saw_usage,
+                            !explicit_usage_observation,
+                            error,
+                        )
                     })?;
                 }
                 StreamEvent::Usage(u) => {
+                    if explicit_usage_observation && usage_regressed(&usage, &u) {
+                        retain_usage_highwater(&mut usage, &u);
+                        fail_stream!(AgentError::Provider(
+                            "provider cumulative usage observation decreased".to_string(),
+                        ));
+                    }
                     usage = u;
                     saw_usage = true;
+                    observed_usage_complete = true;
                 }
+                StreamEvent::UsageObservation(observation) => {
+                    explicit_usage_observation = true;
+                    if saw_usage && usage_regressed(&usage, &observation.usage) {
+                        retain_usage_highwater(&mut usage, &observation.usage);
+                        fail_stream!(AgentError::Provider(
+                            "provider cumulative usage observation decreased".to_string(),
+                        ));
+                    }
+                    usage = observation.usage;
+                    observed_usage_complete = observation.complete;
+                    saw_usage = true;
+                }
+                // The Session provider boundary owns monetary accounting.
+                StreamEvent::CostObservation { .. } => {}
                 StreamEvent::Done { finish_reason: fr } => {
                     finish_reason = fr;
                     saw_done = true;
@@ -649,7 +851,11 @@ impl DefaultAgentBehavior {
         }
 
         if !cancelled && !saw_done {
-            fail_stream!(AgentError::Provider(
+            if !saw_usage {
+                self.abandoned_output_tokens
+                    .store(streamed_output_tokens, std::sync::atomic::Ordering::Relaxed);
+            }
+            fail_stream!(AgentError::IncompleteProviderStream(
                 "provider stream ended before its completion event".to_string(),
             ));
         }
@@ -696,7 +902,12 @@ impl DefaultAgentBehavior {
                 })
                 .collect::<Result<Vec<_>, AgentError>>()
                 .map_err(|error| {
-                    self.account_reported_stream_usage_on_error(&usage, saw_usage, error)
+                    self.account_reported_stream_usage_on_error(
+                        &usage,
+                        saw_usage,
+                        !explicit_usage_observation,
+                        error,
+                    )
                 })?
         };
         if !cancelled && matches!(finish_reason, FinishReason::ToolUse) && tool_calls.is_empty() {
@@ -730,7 +941,12 @@ impl DefaultAgentBehavior {
                 provider: selected_provider,
             },
             cancelled,
-            usage_complete: saw_done || saw_usage,
+            usage_complete: if explicit_usage_observation {
+                saw_done && observed_usage_complete
+            } else {
+                saw_done || saw_usage
+            },
+            usage_estimate_allowed: !explicit_usage_observation,
             provider_tool_names,
             provider_route,
         })
@@ -755,6 +971,71 @@ impl DefaultAgentBehavior {
             .is_some_and(AgentRunControl::is_cancelled)
     }
 
+    /// Called only with no in-flight provider stream and a complete native tool
+    /// group. A completed answer is retained before guidance starts a successor
+    /// provider request inside this same activation; no partial state is dropped.
+    fn consume_safe_boundary_guidance(
+        &mut self,
+        final_response: Option<&str>,
+    ) -> Result<bool, AgentError> {
+        let Some(control) = self.active_run_control.clone() else {
+            return Ok(false);
+        };
+        let Some(boundary) = control.execution_boundary().cloned() else {
+            return Ok(false);
+        };
+        if self.observe_cancellation() {
+            return Ok(false);
+        }
+        let mut consumed = false;
+        loop {
+            let delivery = match boundary.take_guidance(!consumed && final_response.is_some()) {
+                Ok(delivery) => delivery,
+                Err(reason) => {
+                    control.fail_execution_boundary(reason.clone());
+                    return Err(AgentError::Internal(reason));
+                }
+            };
+            let Some(delivery) = delivery else {
+                return Ok(consumed);
+            };
+            if !consumed {
+                if let Some(response) = final_response {
+                    self.session.append(
+                        MessageRole::Assistant,
+                        response,
+                        self.counter.count_text(response),
+                    );
+                }
+            }
+            // No await or fallible operation between the acknowledged handoff
+            // and the actual actor input append. The following acknowledgement
+            // persists delivery before any later provider request is built.
+            self.session.append(
+                MessageRole::User,
+                &delivery.text,
+                self.counter.count_text(&delivery.text),
+            );
+            if !delivery.attachments.is_empty() {
+                let mut request = ChatRequest::simple(&delivery.text);
+                attach_to_last_user_message(&mut request, &delivery.attachments);
+                if let Some(message) = request.messages.last() {
+                    let tokens = self.counter.count_messages(std::slice::from_ref(message));
+                    self.session
+                        .replace_last_user_content(&message.content, tokens);
+                }
+            }
+            if let Err(reason) = delivery.acknowledgement.acknowledge() {
+                control.fail_execution_boundary(reason.clone());
+                return Err(AgentError::Internal(reason));
+            }
+            consumed = true;
+            if self.observe_cancellation() {
+                return Ok(consumed);
+            }
+        }
+    }
+
     fn observe_cancellation(&mut self) -> bool {
         if self.cancellation_requested() {
             self.active_run_cancelled = true;
@@ -766,7 +1047,30 @@ impl DefaultAgentBehavior {
 
     /// Enable checkpointing with a shared checkpoint store.
     pub fn with_checkpoint_store(mut self, store: Arc<CheckpointStore>) -> Self {
+        if store.is_session_turn_scoped() {
+            self.durable_memory_read_only = true;
+        }
         self.checkpoint_store = Some(store);
+        self
+    }
+
+    /// Select exact host-owned restore/staging for one controlled ActorSession
+    /// execution. Startup refuses a simultaneous legacy checkpoint store.
+    pub fn with_activation_checkpoint_port(
+        mut self,
+        port: Arc<dyn crate::ActivationCheckpointPort>,
+    ) -> Self {
+        self.activation_checkpoint_port = Some(port);
+        self.durable_memory_read_only = true;
+        self
+    }
+
+    /// Keep durable memory available for prompt context and recall while
+    /// disabling Tier 2-4 mutation. Transaction-scoped checkpoint stores turn
+    /// this on automatically because only Tier 1 currently participates in
+    /// the Session-turn transaction.
+    pub fn with_durable_memory_read_only(mut self) -> Self {
+        self.durable_memory_read_only = true;
         self
     }
 
@@ -776,12 +1080,12 @@ impl DefaultAgentBehavior {
         self
     }
 
-    /// Set an exact canonical-name allowlist for executor tools. Unlike
-    /// `AgentConfig.tools`, an empty list here explicitly denies every executor
-    /// tool; coordinator-created ad-hoc workers use this to avoid inheriting the
-    /// whole Session executor when their task requires no tools.
+    /// Set an exact canonical-name allowlist for every callable tool. Unlike an
+    /// empty `AgentConfig.tools` (which inherits the execution path), an empty
+    /// builder override explicitly denies executor, recall, and core-memory
+    /// tools. Coordinator-created ad-hoc workers use this exact-empty form.
     pub fn with_executor_tool_allowlist(mut self, tools: impl IntoIterator<Item = String>) -> Self {
-        self.executor_tool_allowlist = Some(tools.into_iter().collect());
+        self.canonical_tool_allowlist = Some(tools.into_iter().collect());
         self
     }
 
@@ -793,14 +1097,15 @@ impl DefaultAgentBehavior {
 
     /// Provide the optional append-only daily-log cache used to retain a
     /// bounded structured projection before context compaction summarizes it.
+    /// Transaction-scoped actors retain read access without appending.
     pub fn with_daily_log(mut self, log: Arc<axocoatl_memory::DailyLogMemory>) -> Self {
         self.daily_log = Some(log);
         self
     }
 
     /// Attach this agent's core memory (Tier 3): its per-agent block store plus
-    /// any shared blocks it may edit. Rendered into the prompt and maintained via
-    /// the core-memory tools (built in `on_start`).
+    /// any shared blocks it may edit. It is rendered into the prompt; edit tools
+    /// are omitted when durable memory is read-only.
     pub fn with_core_memory(
         mut self,
         store: Arc<tokio::sync::RwLock<axocoatl_memory::CoreMemoryStore>>,
@@ -812,8 +1117,9 @@ impl DefaultAgentBehavior {
     }
 
     /// Enable semantic memory (Tier 4) — relevant past exchanges are retrieved
-    /// by vector similarity and injected into the system prompt each turn, and
-    /// each new exchange is stored for future cross-session recall.
+    /// by vector similarity and injected into the system prompt each turn.
+    /// Successful exchanges are stored for future recall unless durable memory
+    /// is read-only for a transaction-scoped activation.
     pub fn with_semantic_memory(mut self, memory: Arc<axocoatl_memory::SemanticMemory>) -> Self {
         self.semantic_memory = Some(memory);
         self
@@ -885,10 +1191,20 @@ impl DefaultAgentBehavior {
     }
 
     /// Forward a chunk to the streaming sink, if one is attached.
-    fn emit_stream(&self, chunk: crate::behavior::AgentStreamChunk) {
+    fn emit_stream(&self, chunk: crate::behavior::AgentStreamChunk) -> Result<(), AgentError> {
+        if let Some(observer) = &self.stream_observer {
+            if let Err(reason) = observer.observe(&chunk) {
+                let reason = format!("activation stream acknowledgement failed: {reason}");
+                if let Some(control) = &self.active_run_control {
+                    control.fail_execution_boundary(reason.clone());
+                }
+                return Err(AgentError::Internal(reason));
+            }
+        }
         if let Some(sink) = &self.stream_sink {
             let _ = sink.send(chunk);
         }
+        Ok(())
     }
 
     /// Retrieve semantically-relevant past memories for `query`. Best-effort:
@@ -947,41 +1263,72 @@ impl DefaultAgentBehavior {
         axocoatl_memory::render_blocks(blocks.iter())
     }
 
-    /// Get tool definitions from the executor (if any) for sending to the LLM.
+    /// Attach the exact activation-bound workspace memory port.
+    pub fn with_host_knowledge_tool(mut self, tool: Arc<dyn axocoatl_tools::BuiltinTool>) -> Self {
+        self.host_control_tools
+            .push(("workspace_knowledge".into(), tool));
+        self
+    }
+
+    pub fn with_host_control_tool(mut self, tool: Arc<dyn axocoatl_tools::BuiltinTool>) -> Self {
+        self.host_control_tools
+            .push(("coordination_control".into(), tool));
+        self
+    }
+
     fn tool_definitions(&self) -> Vec<axocoatl_llm::ToolDefinition> {
         let mut defs = self
             .tool_executor
             .as_ref()
             .map(|exec| exec.as_llm_tools())
             .unwrap_or_default();
-        if let Some(allowlist) = &self.executor_tool_allowlist {
+        if let Some(allowlist) = &self.canonical_tool_allowlist {
             defs.retain(|definition| allowlist.contains(&definition.name));
         }
         // Agent-scoped recall tools are advertised alongside the executor's.
         // The set is deterministic per agent, so the tool list is stable turn to
         // turn. They're read-only, hence `Safe`.
         for (name, tool) in &self.recall_tools {
+            if !self.tool_allowed(name) {
+                continue;
+            }
+            let Some(parameters) = tool.advertised_parameters_schema() else {
+                continue;
+            };
             defs.push(axocoatl_llm::ToolDefinition {
                 name: name.clone(),
                 description: tool.description().to_string(),
-                parameters: tool.parameters_schema(),
+                parameters,
                 concurrency: tool.concurrency_policy(),
             });
         }
         // Core-memory edit tools — mutating, so advertised Exclusive.
-        for (name, tool) in &self.core_memory_tools {
+        for (name, tool) in self
+            .core_memory_tools
+            .iter()
+            .chain(self.host_control_tools.iter())
+        {
+            if !self.tool_allowed(name) {
+                continue;
+            }
+            let Some(parameters) = tool.advertised_parameters_schema() else {
+                continue;
+            };
             defs.push(axocoatl_llm::ToolDefinition {
                 name: name.clone(),
                 description: tool.description().to_string(),
-                parameters: tool.parameters_schema(),
+                parameters,
                 concurrency: tool.concurrency_policy(),
             });
         }
         defs
     }
 
-    fn executor_tool_allowed(&self, name: &str) -> bool {
-        self.executor_tool_allowlist
+    fn tool_allowed(&self, name: &str) -> bool {
+        if self.host_control_tools.iter().any(|(key, _)| key == name) {
+            return true;
+        }
+        self.canonical_tool_allowlist
             .as_ref()
             .is_none_or(|allowlist| allowlist.contains(name))
     }
@@ -999,13 +1346,16 @@ impl DefaultAgentBehavior {
     /// Any agent-scoped tool the behavior services itself (recall + core memory),
     /// rather than the shared executor.
     fn is_behavior_tool(&self, name: &str) -> bool {
-        self.is_recall_tool(name) || self.is_core_memory_tool(name)
+        self.is_recall_tool(name)
+            || self.is_core_memory_tool(name)
+            || self.host_control_tools.iter().any(|(key, _)| key == name)
     }
 
     fn behavior_tool(&self, name: &str) -> Option<Arc<dyn axocoatl_tools::BuiltinTool>> {
         self.recall_tools
             .iter()
             .chain(self.core_memory_tools.iter())
+            .chain(self.host_control_tools.iter())
             .find(|(tool_name, _)| tool_name == name)
             .map(|(_, tool)| tool.clone())
     }
@@ -1020,6 +1370,9 @@ impl DefaultAgentBehavior {
         name: &str,
         arguments: serde_json::Value,
     ) -> Result<serde_json::Value, axocoatl_tools::ToolError> {
+        if !self.tool_allowed(name) {
+            return Err(axocoatl_tools::ToolError::NotFound(name.to_string()));
+        }
         let Some(tool) = self.behavior_tool(name) else {
             return Err(axocoatl_tools::ToolError::NotFound(name.to_string()));
         };
@@ -1096,7 +1449,41 @@ impl DefaultAgentBehavior {
         request: &ChatRequest,
         capabilities: &axocoatl_llm::ProviderCapabilities,
     ) -> usize {
-        request.max_tokens.unwrap_or(capabilities.max_output_tokens)
+        crate::provider_budget::projected_output_allowance(
+            request.max_tokens,
+            capabilities.max_output_tokens,
+            self.tracker.as_ref(),
+            self.provider.count_tokens(request),
+        )
+    }
+
+    /// Plan with the provider-visible tool names and the existing attachment
+    /// estimate, without installing a limit that could become stale after a
+    /// paid summary or message projection. Final spend/context checks use the
+    /// complete encoded request, including its actual attachments.
+    fn planning_output_headroom_tokens(
+        &self,
+        request: &ChatRequest,
+        capabilities: &axocoatl_llm::ProviderCapabilities,
+        attachment_tokens: usize,
+    ) -> Result<usize, AgentError> {
+        if request.max_tokens.is_some()
+            || !self
+                .tracker
+                .as_ref()
+                .is_some_and(|tracker| tracker.budget().overflow_policy == OverflowPolicy::Abort)
+        {
+            return Ok(request.max_tokens.unwrap_or(capabilities.max_output_tokens));
+        }
+        let (wire, _) = Self::encode_provider_request(request.clone())?;
+        Ok(crate::provider_budget::projected_output_allowance(
+            None,
+            capabilities.max_output_tokens,
+            self.tracker.as_ref(),
+            self.provider
+                .count_tokens(&wire)
+                .saturating_add(attachment_tokens),
+        ))
     }
 
     /// Reserve the locally estimated input plus the maximum completion the
@@ -1117,31 +1504,18 @@ impl DefaultAgentBehavior {
             } else {
                 0
             };
-        let output_reservation = request.max_tokens.unwrap_or_else(|| {
-            if tracker.budget().overflow_policy != OverflowPolicy::Abort {
-                return provider_default_output;
-            }
-
-            // An unset sampling maximum delegates to the provider default. For
-            // an enforced budget, replace that open-ended default with the
-            // largest completion that fits both local caps, additionally
-            // bounded by an authoritative provider maximum when known.
-            let execution_remaining = tracker
-                .budget()
-                .per_execution
-                .saturating_sub(tracker.total_used());
-            let call_allowance = tracker.budget().per_call.min(execution_remaining);
-            let budget_safe_output = call_allowance.saturating_sub(estimated_input);
-            let safe_output = if provider_default_output > 0 {
-                budget_safe_output.min(provider_default_output)
-            } else {
-                budget_safe_output
-            };
-            if safe_output > 0 {
-                request.max_tokens = Some(safe_output);
-            }
-            safe_output
-        });
+        let output_reservation = crate::provider_budget::projected_output_allowance(
+            request.max_tokens,
+            provider_default_output,
+            Some(tracker),
+            estimated_input,
+        );
+        if request.max_tokens.is_none()
+            && tracker.budget().overflow_policy == OverflowPolicy::Abort
+            && output_reservation > 0
+        {
+            request.max_tokens = Some(output_reservation);
+        }
 
         // A chat call needs room for at least one output token. Treat an
         // unknown/default limit with no remaining allowance as a local budget
@@ -1193,8 +1567,8 @@ impl DefaultAgentBehavior {
             self.cumulative_token_usage.record_provider_response(usage);
             self.execution_usage.record_provider_response(usage);
         } else {
-            // Retain the useful local numeric estimate while leaving the
-            // activation explicitly incomplete.
+            // Retain an observed lower bound (or a legacy local estimate)
+            // while leaving the activation explicitly incomplete.
             self.cumulative_token_usage.merge(usage);
             self.execution_usage.merge(usage);
         }
@@ -1286,20 +1660,20 @@ impl DefaultAgentBehavior {
         before.complete != after.complete || Self::usage_changed(&before.usage, &after.usage)
     }
 
-    /// A provider stream can report exact usage and then fail protocol
-    /// validation (for example malformed tool arguments). Charge only usage
-    /// that was actually received; an EOF/transport failure without a Usage
-    /// event must not invent remote spend.
+    /// A provider stream can report usage and then fail protocol validation.
+    /// Retain only the received subtotal, preserving incomplete observations;
+    /// an EOF/transport failure without usage must not invent remote spend.
     fn account_reported_stream_usage_on_error(
         &self,
         usage: &TokenUsageStats,
         saw_usage: bool,
+        usage_complete: bool,
         error: AgentError,
     ) -> AgentError {
         if !saw_usage {
             return error;
         }
-        match self.record_provider_usage(usage, true) {
+        match self.record_provider_usage(usage, usage_complete) {
             Ok(()) => error,
             Err(budget_error) => budget_error,
         }
@@ -1309,10 +1683,16 @@ impl DefaultAgentBehavior {
         &mut self,
         session_messages: Vec<StoredMessage>,
     ) -> Result<(), AgentError> {
-        let Some(store) = self.checkpoint_store.clone() else {
+        if self.checkpoint_store.is_none() && self.activation_checkpoint_port.is_none() {
             return Ok(());
+        }
+        self.checkpoint_version = if self.activation_checkpoint_port.is_some() {
+            self.checkpoint_version.checked_add(1).ok_or_else(|| {
+                AgentError::Internal("activation checkpoint version exhausted".to_string())
+            })?
+        } else {
+            self.checkpoint_version.saturating_add(1)
         };
-        self.checkpoint_version = self.checkpoint_version.saturating_add(1);
         let checkpoint = AgentCheckpoint {
             version: self.checkpoint_version,
             agent_id: self.agent_id.clone(),
@@ -1325,11 +1705,72 @@ impl DefaultAgentBehavior {
             cumulative_token_usage_known: self.cumulative_token_usage_measurement().complete,
             behavior_state: None,
         };
-        store.save(&checkpoint).await.map_err(|error| {
-            AgentError::Internal(format!(
-                "checkpoint save for {} failed: {error}",
-                self.agent_id
+        if self.activation_checkpoint_port.is_some() {
+            self.activation_checkpoint_candidate = Some(checkpoint);
+            Ok(())
+        } else if let Some(store) = &self.checkpoint_store {
+            store.save(&checkpoint).await.map_err(|error| {
+                AgentError::Internal(format!(
+                    "checkpoint save for {} failed: {error}",
+                    self.agent_id
+                ))
+            })
+        } else {
+            Err(AgentError::Internal(
+                "checkpoint storage is unavailable".to_string(),
             ))
+        }
+    }
+
+    fn validate_activation_checkpoint(
+        &self,
+        checkpoint: &AgentCheckpoint,
+        port: &dyn crate::ActivationCheckpointPort,
+    ) -> Result<(), AgentError> {
+        if checkpoint.agent_id != self.agent_id || checkpoint.behavior_state.is_some() {
+            return Err(AgentError::Internal(
+                "activation checkpoint has a foreign conversation or unsupported behavior state"
+                    .to_string(),
+            ));
+        }
+        let limit = port
+            .maximum_checkpoint_bytes()
+            .min(axocoatl_memory::MAX_CHECKPOINT_BYTES);
+        let size = axocoatl_memory::encoded_checkpoint_size(checkpoint)
+            .map_err(|error| AgentError::Internal(format!("activation checkpoint: {error}")))?;
+        if size > limit {
+            return Err(AgentError::Internal(format!(
+                "activation checkpoint is {size} bytes; reserved limit is {limit}"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn stage_activation_checkpoint(
+        &mut self,
+        starting_messages: Vec<StoredMessage>,
+        succeeded: bool,
+    ) -> Result<(), AgentError> {
+        let port = self.activation_checkpoint_port.clone().ok_or_else(|| {
+            AgentError::Internal("activation checkpoint port is unavailable".to_string())
+        })?;
+        if self.activation_checkpoint_candidate.is_none() {
+            // Paid runs already captured the final success or complete error
+            // prefix. A provider-free success still needs its actual state;
+            // an error before a paid call must retain the initial prefix.
+            let messages = if succeeded {
+                self.session.messages().to_vec()
+            } else {
+                starting_messages
+            };
+            self.save_checkpoint_snapshot(messages).await?;
+        }
+        let checkpoint = self.activation_checkpoint_candidate.take().ok_or_else(|| {
+            AgentError::Internal("activation checkpoint candidate is unavailable".to_string())
+        })?;
+        self.validate_activation_checkpoint(&checkpoint, port.as_ref())?;
+        port.stage(&checkpoint).await.map_err(|error| {
+            AgentError::Internal(format!("activation checkpoint staging failed: {error}"))
         })
     }
 
@@ -1471,18 +1912,41 @@ impl DefaultAgentBehavior {
     ) -> Result<ChatRequest, AgentError> {
         let (mut request, session_message_start) =
             self.uncompressed_request_from_session(system_override, model_override);
+        if let Some(masking) = &self.stale_tool_results {
+            let masked = masking.apply(&mut request.messages);
+            if masked > 0 {
+                tracing::debug!(masked, "Masked stale tool output in follow-up request");
+            }
+        }
         let Some((capabilities, _)) = self.request_constraints(&request) else {
             return Ok(request);
         };
         let fixed_tokens = self
             .tool_definition_tokens(&request.tools)
-            .saturating_add(self.output_headroom_tokens(&request, &capabilities))
+            .saturating_add(self.planning_output_headroom_tokens(
+                &request,
+                &capabilities,
+                attachment_tokens,
+            )?)
             .saturating_add(attachment_tokens);
         let pipeline = axocoatl_token::CompressionPipeline::new(
             self.counter.clone(),
             capabilities.max_context_tokens,
         );
 
+        // A long tool loop can outgrow a small context even with stale output
+        // masked; mask harder before compressing, which cannot touch this
+        // turn's own messages.
+        if let Some(masking) = &self.stale_tool_results {
+            if pipeline.needs_compression(&request.messages, fixed_tokens) {
+                let masked = masking.apply_tight(&mut request.messages);
+                tracing::info!(masked, "Masked tool output tightly to fit the context");
+            }
+            if pipeline.needs_compression(&request.messages, fixed_tokens) {
+                let dropped = masking.drop_stale_rounds(&mut request.messages, 2);
+                tracing::info!(dropped, "Removed earlier tool rounds to fit the context");
+            }
+        }
         // Check if compression is needed (stages 1-2 only, pure computation)
         if pipeline.needs_compression(&request.messages, fixed_tokens) {
             tracing::info!(
@@ -1570,14 +2034,21 @@ impl DefaultAgentBehavior {
         } else {
             self.preflight_provider_spend(&mut request)?
         };
+        if !self.cancellation_requested() {
+            self.ensure_request_fits_context(&request)?;
+        }
         let streamed = self.stream_chat(request, provider_tool_names).await?;
         let provider_cancelled = streamed.cancelled;
         let usage_complete = streamed.usage_complete;
+        let usage_estimate_allowed = streamed.usage_estimate_allowed;
         if provider_cancelled {
             self.active_run_cancelled = true;
         }
         let mut response = streamed.response;
-        if response.usage.total() == 0 && (!provider_cancelled || !response.content.is_empty()) {
+        if usage_estimate_allowed
+            && response.usage.total() == 0
+            && (!provider_cancelled || !response.content.is_empty())
+        {
             response.usage =
                 TokenUsageStats::new(est_input, self.estimated_response_output_tokens(&response));
         }
@@ -1610,7 +2081,11 @@ impl DefaultAgentBehavior {
         let fixed_tokens = self
             .message_segment_tokens(&request.messages[..session_message_start])
             .saturating_add(self.tool_definition_tokens(&request.tools))
-            .saturating_add(self.output_headroom_tokens(&request, &capabilities))
+            .saturating_add(self.planning_output_headroom_tokens(
+                &request,
+                &capabilities,
+                attachment_tokens,
+            )?)
             .saturating_add(attachment_tokens);
         let pipeline = axocoatl_token::CompressionPipeline::new(
             self.counter.clone(),
@@ -1629,39 +2104,47 @@ impl DefaultAgentBehavior {
         // it fails, Tier 1 remains untouched and no summarizer call is made.
         // Without Tier 2, the caller-owned canonical Session/Chat ledger still
         // owns the exact transcript, so compaction remains available.
-        if let Some(daily_log) = &self.daily_log {
-            let (archived_messages, omitted_messages) = structured_compaction_archive(&messages);
-            let archive_truncated = omitted_messages > 0
-                || archived_messages.iter().any(|message| {
-                    message
-                        .get("archive_truncated")
-                        .and_then(serde_json::Value::as_bool)
-                        == Some(true)
-                });
-            let entry = axocoatl_memory::LogEntry {
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                entry_type: axocoatl_memory::LogEntryType::Conversation,
-                content: serde_json::json!({
-                    "reason": "context_compaction",
-                    "target_threshold": target_threshold,
-                    "messages": archived_messages,
-                    "archive_truncated": archive_truncated,
-                    "omitted_messages": omitted_messages,
-                    "original_message_count": messages.len(),
-                }),
-            };
-            daily_log.append(entry).await.map_err(|error| {
-                AgentError::Internal(format!(
-                    "failed to archive structured transcript before compaction: {error}"
-                ))
-            })?;
+        if !self.durable_memory_read_only {
+            if let Some(daily_log) = &self.daily_log {
+                let (archived_messages, omitted_messages) =
+                    structured_compaction_archive(&messages);
+                let archive_truncated = omitted_messages > 0
+                    || archived_messages.iter().any(|message| {
+                        message
+                            .get("archive_truncated")
+                            .and_then(serde_json::Value::as_bool)
+                            == Some(true)
+                    });
+                let entry = axocoatl_memory::LogEntry {
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    entry_type: axocoatl_memory::LogEntryType::Conversation,
+                    content: serde_json::json!({
+                        "reason": "context_compaction",
+                        "target_threshold": target_threshold,
+                        "messages": archived_messages,
+                        "archive_truncated": archive_truncated,
+                        "omitted_messages": omitted_messages,
+                        "original_message_count": messages.len(),
+                    }),
+                };
+                daily_log.append(entry).await.map_err(|error| {
+                    AgentError::Internal(format!(
+                        "failed to archive structured transcript before compaction: {error}"
+                    ))
+                })?;
+            } else {
+                tracing::warn!(
+                    agent = %self.agent_id,
+                    "compacting actor context without optional Tier-2 archive; canonical Session/Chat history remains owned by its caller"
+                );
+            }
         } else {
-            tracing::warn!(
+            tracing::debug!(
                 agent = %self.agent_id,
-                "compacting actor context without optional Tier-2 archive; canonical Session/Chat history remains owned by its caller"
+                "compacting transaction-scoped actor context without mutating read-only Tier-2 memory"
             );
         }
 
@@ -1707,7 +2190,7 @@ impl DefaultAgentBehavior {
         // Single, overwritten-each-compaction hint pointing the agent at the
         // summary it can now see and telling it the detail behind it is
         // searchable. Only when recall is actually available.
-        self.recall_toc_hint = if self.semantic_memory.is_some() {
+        self.recall_toc_hint = if self.is_recall_tool(crate::recall::RECALL_SEARCH) {
             Some(
                 "## Earlier context\nOlder turns in this conversation were summarized above to \
                  save space. Use `recall_search` to retrieve specifics that aren't in the summary."
@@ -1770,7 +2253,11 @@ pub(crate) fn attach_to_last_user_message(
     let mut text_with_files = original_text.clone();
 
     for a in attachments {
-        let is_image = a.mime.starts_with("image/");
+        let is_image = a
+            .mime
+            .split('/')
+            .next()
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("image"));
 
         if is_image {
             // Always base64-inline images for vision-capable models. The
@@ -1846,6 +2333,16 @@ impl AgentBehavior for DefaultAgentBehavior {
     }
 
     async fn on_start(&mut self, config: &AgentConfig) -> Result<(), AgentError> {
+        if self.activation_checkpoint_port.is_some()
+            && (self.checkpoint_store.is_some()
+                || self.activation_checkpoint_ready
+                || self.activation_checkpoint_used)
+        {
+            return Err(AgentError::InitFailed(
+                "activation checkpoint startup requires an unused port and no legacy checkpoint store"
+                    .to_string(),
+            ));
+        }
         self.system_prompt = config.system_prompt.clone();
         self.configured_model = if config.model.is_empty() {
             None
@@ -1858,8 +2355,8 @@ impl AgentBehavior for DefaultAgentBehavior {
         // inheriting the execution path's baseline executor. A non-empty list
         // is an exact canonical allowlist. An explicit builder override (used
         // by ad-hoc coordinator workers) wins, including exact-empty.
-        if self.executor_tool_allowlist.is_none() && !config.tools.is_empty() {
-            self.executor_tool_allowlist = Some(config.tools.iter().cloned().collect());
+        if self.canonical_tool_allowlist.is_none() && !config.tools.is_empty() {
+            self.canonical_tool_allowlist = Some(config.tools.iter().cloned().collect());
         }
 
         self.cumulative_token_usage
@@ -1870,8 +2367,34 @@ impl AgentBehavior for DefaultAgentBehavior {
         self.token_budget = config.token_budget.clone();
         self.tracker = None;
 
-        // Restore from checkpoint if available
-        if let Some(store) = &self.checkpoint_store {
+        // The host port selects the exact starting state, including Empty. It
+        // never falls through to a legacy latest-file lookup.
+        if let Some(port) = &self.activation_checkpoint_port {
+            if port.maximum_checkpoint_bytes() == 0 {
+                return Err(AgentError::InitFailed(
+                    "activation checkpoint capacity is zero".to_string(),
+                ));
+            }
+            let checkpoint = port.restore().await.map_err(|error| {
+                AgentError::InitFailed(format!("activation checkpoint restore failed: {error}"))
+            })?;
+            self.session = SessionMemory::new();
+            self.checkpoint_version = 0;
+            if let Some(checkpoint) = checkpoint {
+                self.validate_activation_checkpoint(&checkpoint, port.as_ref())?;
+                if checkpoint.version == u64::MAX {
+                    return Err(AgentError::InitFailed(
+                        "activation checkpoint version is exhausted".to_string(),
+                    ));
+                }
+                self.cumulative_token_usage.set(
+                    checkpoint.cumulative_token_usage,
+                    checkpoint.cumulative_token_usage_known,
+                );
+                self.session.restore(checkpoint.session_messages);
+                self.checkpoint_version = checkpoint.version;
+            }
+        } else if let Some(store) = &self.checkpoint_store {
             match store
                 .load_latest(&config.id)
                 .await
@@ -1907,7 +2430,11 @@ impl AgentBehavior for DefaultAgentBehavior {
         // and a standing capability hint that names only the available ones.
         self.recall_tools.clear();
         let mut available: Vec<&str> = Vec::new();
-        if let Some(sem) = &self.semantic_memory {
+        if let Some(sem) = self
+            .semantic_memory
+            .as_ref()
+            .filter(|_| self.tool_allowed(crate::recall::RECALL_SEARCH))
+        {
             self.recall_tools.push((
                 crate::recall::RECALL_SEARCH.to_string(),
                 Arc::new(crate::recall::RecallSearchTool::new(
@@ -1918,7 +2445,11 @@ impl AgentBehavior for DefaultAgentBehavior {
             ));
             available.push("`recall_search` to look up past sessions and earlier context");
         }
-        if let Some(log) = &self.daily_log {
+        if let Some(log) = self
+            .daily_log
+            .as_ref()
+            .filter(|_| self.tool_allowed(crate::recall::RECALL_TIMEFRAME))
+        {
             self.recall_tools.push((
                 crate::recall::RECALL_TIMEFRAME.to_string(),
                 Arc::new(crate::recall::RecallTimeframeTool::new(log.clone()))
@@ -1945,25 +2476,31 @@ impl AgentBehavior for DefaultAgentBehavior {
                 store: store.clone(),
                 shared: self.shared_blocks.clone(),
             };
-            self.core_memory_tools = vec![
-                (
-                    crate::core_memory_tools::CORE_MEMORY_APPEND.to_string(),
-                    Arc::new(crate::core_memory_tools::CoreMemoryAppendTool::new(
-                        handles.clone(),
-                    )) as Arc<dyn axocoatl_tools::BuiltinTool>,
-                ),
-                (
-                    crate::core_memory_tools::CORE_MEMORY_REPLACE.to_string(),
-                    Arc::new(crate::core_memory_tools::CoreMemoryReplaceTool::new(
-                        handles.clone(),
-                    )) as Arc<dyn axocoatl_tools::BuiltinTool>,
-                ),
-                (
-                    crate::core_memory_tools::CORE_MEMORY_SET.to_string(),
-                    Arc::new(crate::core_memory_tools::CoreMemorySetTool::new(handles))
-                        as Arc<dyn axocoatl_tools::BuiltinTool>,
-                ),
-            ];
+            if !self.durable_memory_read_only {
+                let candidates = vec![
+                    (
+                        crate::core_memory_tools::CORE_MEMORY_APPEND.to_string(),
+                        Arc::new(crate::core_memory_tools::CoreMemoryAppendTool::new(
+                            handles.clone(),
+                        )) as Arc<dyn axocoatl_tools::BuiltinTool>,
+                    ),
+                    (
+                        crate::core_memory_tools::CORE_MEMORY_REPLACE.to_string(),
+                        Arc::new(crate::core_memory_tools::CoreMemoryReplaceTool::new(
+                            handles.clone(),
+                        )) as Arc<dyn axocoatl_tools::BuiltinTool>,
+                    ),
+                    (
+                        crate::core_memory_tools::CORE_MEMORY_SET.to_string(),
+                        Arc::new(crate::core_memory_tools::CoreMemorySetTool::new(handles))
+                            as Arc<dyn axocoatl_tools::BuiltinTool>,
+                    ),
+                ];
+                self.core_memory_tools = candidates
+                    .into_iter()
+                    .filter(|(name, _)| self.tool_allowed(name))
+                    .collect();
+            }
             let mut labels: Vec<String> = store
                 .read()
                 .await
@@ -1972,21 +2509,47 @@ impl AgentBehavior for DefaultAgentBehavior {
                 .map(|b| b.label.clone())
                 .collect();
             labels.extend(self.shared_blocks.keys().cloned());
-            self.core_capability_hint = Some(format!(
-                "## Core memory\nYou maintain editable memory blocks ({}). When you learn a \
-                 durable fact about yourself, the user, or the project, update the relevant block \
-                 with `core_memory_append` / `core_memory_replace`. Keep them accurate and \
-                 concise; don't store ephemeral, task-scoped detail.",
-                labels.join(", "),
-            ));
+            self.core_capability_hint = if self.core_memory_tools.is_empty() {
+                Some(format!(
+                    "## Core memory\nCore-memory blocks ({}) are available as read-only context \
+                     for this activation.",
+                    labels.join(", "),
+                ))
+            } else {
+                let available_tools = self
+                    .core_memory_tools
+                    .iter()
+                    .map(|(name, _)| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(" / ");
+                Some(format!(
+                    "## Core memory\nYou maintain editable memory blocks ({}). When you learn a \
+                     durable fact about yourself, the user, or the project, update the relevant block \
+                     with {available_tools}. Keep them accurate and \
+                     concise; don't store ephemeral, task-scoped detail.",
+                    labels.join(", "),
+                ))
+            };
         } else {
             self.core_capability_hint = None;
         }
 
+        self.activation_checkpoint_ready = self.activation_checkpoint_port.is_some();
         Ok(())
     }
 
     async fn execute(&mut self, input: AgentInput) -> Result<AgentOutput, AgentError> {
+        if self.activation_checkpoint_port.is_some()
+            && (!self.activation_checkpoint_ready
+                || self.active_run_control.is_none()
+                || !self.activation_checkpoint_used
+                || input.effective_conversation_mode() != ConversationMode::ActorSession)
+        {
+            return Err(AgentError::Internal(
+                "activation checkpoint execution requires its single controlled ActorSession run"
+                    .to_string(),
+            ));
+        }
         // One shared tracker covers compaction, the initial provider call, and
         // every tool follow-up in this activation. A later Execute starts with
         // fresh headroom; lifetime usage remains durable/reportable separately.
@@ -2113,6 +2676,8 @@ impl AgentBehavior for DefaultAgentBehavior {
             );
         }
 
+        self.consume_safe_boundary_guidance(None)?;
+
         // Build from the active transcript. Supplied history was copied into a
         // request-local SessionMemory above; actor mode uses the durable session.
         // `input.system_override` (when Some, for example from the retained
@@ -2142,6 +2707,10 @@ impl AgentBehavior for DefaultAgentBehavior {
         // provider can route them as vision content / inline blobs.
         if !self.active_run_cancelled && !input.attachments.is_empty() {
             attach_to_last_user_message(&mut request, &input.attachments);
+            if let Some(message) = request.messages.iter().rev().find(|message| matches!(message.role, MessageRole::User)) {
+                let tokens = self.counter.count_messages(std::slice::from_ref(message));
+                self.session.replace_last_user_content(&message.content, tokens);
+            }
         }
         let (mut request, provider_tool_names) = Self::encode_provider_request(request)?;
         if !self.active_run_cancelled {
@@ -2154,10 +2723,14 @@ impl AgentBehavior for DefaultAgentBehavior {
         } else {
             self.preflight_provider_spend(&mut request)?
         };
+        if !self.cancellation_requested() {
+            self.ensure_request_fits_context(&request)?;
+        }
         let StreamChatResult {
             mut response,
             cancelled: provider_cancelled,
             usage_complete,
+            usage_estimate_allowed,
             provider_tool_names,
             provider_route,
         } = self.stream_chat(request, provider_tool_names).await?;
@@ -2166,7 +2739,7 @@ impl AgentBehavior for DefaultAgentBehavior {
         }
         // Some providers' streams omit a final Usage event — fall back to a
         // local estimate so token accounting stays correct.
-        if response.usage.total() == 0
+        if usage_estimate_allowed && response.usage.total() == 0
             && (!provider_cancelled || !response.content.is_empty())
         {
             response.usage = TokenUsageStats::new(
@@ -2253,11 +2826,12 @@ impl AgentBehavior for DefaultAgentBehavior {
         let mut unresolved_tool_count = 0_usize;
         let mut last_tool_error: Option<(String, String)> = None;
         let mut loop_count = 0;
-        const MAX_TOOL_LOOPS: usize = 10;
+        let tool_round_limit = self.tool_round_limit;
 
+        loop {
         while !self.active_run_cancelled
             && !response.tool_calls.is_empty()
-            && loop_count < MAX_TOOL_LOOPS
+            && loop_count < tool_round_limit
         {
             // No assistant tool-call turn has been recorded yet, so stopping at
             // this boundary cannot leave orphaned tool messages in history.
@@ -2302,6 +2876,7 @@ impl AgentBehavior for DefaultAgentBehavior {
                     axocoatl_tools::ToolResult,
                     bool,
                 )> = Vec::new();
+                let mut passed_preadmission = 0u32;
                 for (call_index, tc) in response.tool_calls.iter().enumerate() {
                     if self.cancellation_requested() {
                         self.active_run_cancelled = true;
@@ -2316,9 +2891,7 @@ impl AgentBehavior for DefaultAgentBehavior {
                         );
                         break;
                     }
-                    if !self.is_behavior_tool(&tc.name)
-                        && !self.executor_tool_allowed(&tc.name)
-                    {
+                    if !self.tool_allowed(&tc.name) {
                         // Defense in depth: request-time advertisement already
                         // excludes this name, but never let an unexpected model
                         // call reach policy hooks or the dispatcher.
@@ -2336,9 +2909,64 @@ impl AgentBehavior for DefaultAgentBehavior {
                         ));
                         continue;
                     }
+                    // A call the host will decline before admission never
+                    // reaches policy hooks, so nobody approves it for nothing.
+                    // Earlier calls of this response that passed count too.
+                    let refusal = self
+                        .active_run_control
+                        .as_ref()
+                        .and_then(|control| control.execution_boundary())
+                        .and_then(|boundary| {
+                            boundary.preadmission_refusal(
+                                &crate::execution_boundary::ToolInvocationRequest {
+                                    actor_id: self.agent_id.clone(),
+                                    provider_id: response.provider.clone(),
+                                    model_id: response.model.clone(),
+                                    provider_response_group: loop_count as u64,
+                                    provider_call_index: call_index,
+                                    provider_call_count: response.tool_calls.len(),
+                                    tool_call: tc.clone(),
+                                },
+                                passed_preadmission,
+                            )
+                        });
+                    if refusal.is_none() {
+                        passed_preadmission = passed_preadmission.saturating_add(1);
+                    }
+                    if let Some(reason) = refusal {
+                        surfaced_calls.push((call_index, tc.clone()));
+                        deferred_results.push((
+                            call_index,
+                            axocoatl_tools::ToolResult {
+                                seq: call_index,
+                                tool_call: tc.clone(),
+                                result: Err(axocoatl_tools::ToolError::ExecutionFailed {
+                                    tool: tc.name.clone(),
+                                    reason,
+                                }),
+                            },
+                            false,
+                        ));
+                        continue;
+                    }
                     if let Some(hooks) = &self.hook_registry {
+                        let approval = self.active_run_control.as_ref()
+                            .and_then(|control| control.execution_boundary()).map(|boundary| {
+                                Arc::new(crate::execution_boundary::InvocationHookApproval {
+                                    boundary: boundary.clone(),
+                                    request: crate::execution_boundary::ToolInvocationRequest {
+                                        actor_id: self.agent_id.clone(), provider_id: response.provider.clone(),
+                                        model_id: if response.model.is_empty() {
+                                            input.model_override.clone().or_else(|| self.configured_model.clone())
+                                                .unwrap_or_else(|| self.provider.model_id().into())
+                                        } else { response.model.clone() }, provider_response_group: loop_count as u64,
+                                        provider_call_index: call_index, provider_call_count: response.tool_calls.len(),
+                                        tool_call: tc.clone(),
+                                    },
+                                }) as axocoatl_tools::SharedHookApprovalBoundary
+                            });
                         let (action, transformed_args) = hooks
-                            .run_pre_hooks(&tc.name, &self.agent_id, tc.arguments.clone())
+                            .run_pre_hooks_with_approval(&tc.name, &self.agent_id, tc.arguments.clone(), approval)
                             .await;
                         match action {
                             axocoatl_tools::HookAction::Deny { reason } => {
@@ -2399,7 +3027,7 @@ impl AgentBehavior for DefaultAgentBehavior {
                         provider_response_group: loop_count as u64,
                         provider_call_index: *provider_call_index,
                         provider_call_count: response.tool_calls.len(),
-                    });
+                    })?;
                 }
 
                 // Phase 2: plan across BOTH agent-scoped and executor backends.
@@ -2419,7 +3047,71 @@ impl AgentBehavior for DefaultAgentBehavior {
                         == axocoatl_llm::ConcurrencyPolicy::Exclusive
                 });
 
-                if has_exclusive {
+                if let Some(control) = self
+                    .active_run_control
+                    .as_ref()
+                    .filter(|control| control.execution_boundary().is_some())
+                    .cloned()
+                {
+                    use crate::execution_boundary::{
+                        dispatch_acknowledged, InvocationBackend, PendingToolInvocation,
+                        ToolInvocationRequest,
+                    };
+                    let boundary = control.execution_boundary().unwrap().clone();
+                    let mut pending = Vec::new();
+                    for (call, provider_call_index) in
+                        approved_calls.iter().zip(&approved_call_indexes)
+                    {
+                        let backend = if let Some(tool) = self.behavior_tool(&call.name) {
+                            InvocationBackend::Behavior(tool)
+                        } else if let Some(executor) = &executor {
+                            InvocationBackend::Executor(executor.clone())
+                        } else {
+                            indexed.push((
+                                *provider_call_index,
+                                axocoatl_tools::ToolResult {
+                                    seq: *provider_call_index,
+                                    tool_call: call.clone(),
+                                    result: Err(axocoatl_tools::ToolError::NotFound(
+                                        call.name.clone(),
+                                    )),
+                                },
+                                false,
+                            ));
+                            continue;
+                        };
+                        let policy = self.behavior_tool_policy(&call.name)
+                            .or_else(|| executor.as_ref().and_then(|executor| {
+                                executor.get_concurrency_policy(&call.name)
+                            }))
+                            .unwrap_or(axocoatl_llm::ConcurrencyPolicy::Exclusive);
+                        pending.push(PendingToolInvocation {
+                            request: ToolInvocationRequest {
+                                actor_id: self.agent_id.to_string(),
+                                provider_id: response.provider.clone(),
+                                model_id: if response.model.is_empty() {
+                                    input.model_override.clone()
+                                        .or_else(|| self.configured_model.clone())
+                                        .unwrap_or_else(|| self.provider.model_id().to_string())
+                                } else {
+                                    response.model.clone()
+                                },
+                                provider_response_group: loop_count as u64,
+                                provider_call_index: *provider_call_index,
+                                provider_call_count: response.tool_calls.len(),
+                                tool_call: call.clone(),
+                            },
+                            backend,
+                            policy,
+                        });
+                    }
+                    let results = dispatch_acknowledged(pending, boundary, control)
+                        .await
+                        .map_err(AgentError::Internal)?;
+                    for result in results {
+                        indexed.push((result.result.seq, result.result, result.run_post_hooks));
+                    }
+                } else if has_exclusive {
                     for (call, provider_call_index) in
                         approved_calls.iter().zip(&approved_call_indexes)
                     {
@@ -2604,7 +3296,7 @@ impl AgentBehavior for DefaultAgentBehavior {
                         name: tc.name.clone(),
                         result: result.clone(),
                         is_error,
-                    });
+                    })?;
 
                     let result_str = serde_json::to_string(&result).unwrap_or_default();
                     let tool_tokens = self.counter.count_text(&result_str);
@@ -2620,29 +3312,31 @@ impl AgentBehavior for DefaultAgentBehavior {
                     break;
                 }
 
+                self.consume_safe_boundary_guidance(None)?;
+                if self.observe_cancellation() { response.tool_calls.clear(); break; }
+
                 // Make follow-up LLM call with tool results — streamed too.
                 // Same overrides apply as the original turn.
-                let mut followup = self.build_request_from_session(
+                let followup = self.build_request_from_session(
                     input.system_override.as_deref(),
                     input.model_override.clone(),
                     turn_start_session_index,
-                    attachment_tokens,
+                    0,
                 )?;
-                if !input.attachments.is_empty() {
-                    attach_to_last_user_message(&mut followup, &input.attachments);
-                }
                 let (mut followup, provider_tool_names) =
                     Self::encode_provider_request(followup)?;
                 self.ensure_request_fits_context(&followup)?;
                 let est = self.preflight_provider_spend(&mut followup)?;
+                self.ensure_request_fits_context(&followup)?;
                 let streamed = self.stream_chat(followup, provider_tool_names).await?;
                 let provider_cancelled = streamed.cancelled;
                 let usage_complete = streamed.usage_complete;
+                let usage_estimate_allowed = streamed.usage_estimate_allowed;
                 if provider_cancelled {
                     self.active_run_cancelled = true;
                 }
                 response = streamed.response;
-                if response.usage.total() == 0
+                if usage_estimate_allowed && response.usage.total() == 0
                     && (!provider_cancelled || !response.content.is_empty())
                 {
                     response.usage = TokenUsageStats::new(
@@ -2681,14 +3375,14 @@ impl AgentBehavior for DefaultAgentBehavior {
                         provider_response_group: loop_count as u64,
                         provider_call_index,
                         provider_call_count: response.tool_calls.len(),
-                    });
+                    })?;
                     self.emit_stream(crate::behavior::AgentStreamChunk::ToolCallResult {
                         source_agent: None,
                         id: tc.id.clone(),
                         name: tc.name.clone(),
                         result: result.clone(),
                         is_error: true,
-                    });
+                    })?;
                     tool_records.push(axocoatl_core::ToolCallRecord {
                         tool_name: tc.name.clone(),
                         arguments: tc.arguments.clone(),
@@ -2699,8 +3393,35 @@ impl AgentBehavior for DefaultAgentBehavior {
             }
         }
 
+        // A guidance command accepted during a final provider stream must
+        // either extend this exact generation or be explicitly failed by the
+        // controller. The atomic final empty poll prevents a completion race.
+        if self.active_run_cancelled || !response.tool_calls.is_empty()
+            || !self.consume_safe_boundary_guidance(Some(&response.content))? { break; }
+        if self.observe_cancellation() { break; }
+        let followup = self.build_request_from_session(
+            input.system_override.as_deref(), input.model_override.clone(),
+            turn_start_session_index, 0,
+        )?;
+        let (mut followup, provider_tool_names) = Self::encode_provider_request(followup)?;
+        self.ensure_request_fits_context(&followup)?;
+        let est = self.preflight_provider_spend(&mut followup)?;
+        let streamed = self.stream_chat(followup, provider_tool_names).await?;
+        let provider_cancelled = streamed.cancelled;
+        if provider_cancelled { self.active_run_cancelled = true; }
+        response = streamed.response;
+        if streamed.usage_estimate_allowed && response.usage.total() == 0
+            && (!provider_cancelled || !response.content.is_empty()) {
+            response.usage = TokenUsageStats::new(est, self.estimated_response_output_tokens(&response));
+        }
+        execution_usage.merge(&response.usage);
+        if !provider_cancelled || response.usage.total() > 0 || !response.content.is_empty() {
+            self.record_provider_usage(&response.usage, streamed.usage_complete)?;
+        }
+        }
+
         if !self.active_run_cancelled
-            && loop_count == MAX_TOOL_LOOPS
+            && loop_count == tool_round_limit
             && !response.tool_calls.is_empty()
         {
             let mut pending = response
@@ -2719,7 +3440,7 @@ impl AgentBehavior for DefaultAgentBehavior {
             return Err(AgentError::ToolFailed {
                 tool: "agent tool loop".to_string(),
                 reason: format!(
-                    "the model still requested tools after the safety limit of {MAX_TOOL_LOOPS} rounds (pending: {pending}); those pending calls were not executed. Retry with a more capable model or narrow the task"
+                    "the model still requested tools after the safety limit of {tool_round_limit} rounds (pending: {pending}); those pending calls were not executed. Retry with a more capable model or narrow the task"
                 ),
             });
         }
@@ -2752,12 +3473,14 @@ impl AgentBehavior for DefaultAgentBehavior {
 
         // Persist this exchange to semantic memory for future cross-session
         // recall. Best-effort — a store failure is logged, never fatal.
-        if !self.active_run_cancelled {
+        if !self.active_run_cancelled && !self.durable_memory_read_only {
             if let Some(mem) = &self.semantic_memory {
-            let exchange = format!("User: {}\nAssistant: {}", input.content, response.content);
-            if let Err(e) = mem.store(&exchange, serde_json::json!({ "agent": self.agent_id })) {
-                tracing::debug!(error = %e, "semantic memory store failed");
-            }
+                let exchange =
+                    format!("User: {}\nAssistant: {}", input.content, response.content);
+                if let Err(e) = mem.store(&exchange, serde_json::json!({ "agent": self.agent_id }))
+                {
+                    tracing::debug!(error = %e, "semantic memory store failed");
+                }
             }
         }
 
@@ -2827,13 +3550,47 @@ impl AgentBehavior for DefaultAgentBehavior {
         input: AgentInput,
         control: AgentRunControl,
     ) -> Result<AgentRunOutcome, AgentError> {
+        let starting_messages = if self.activation_checkpoint_port.is_some() {
+            if !self.activation_checkpoint_ready
+                || self.activation_checkpoint_used
+                || self.active_run_control.is_some()
+                || input.effective_conversation_mode() != ConversationMode::ActorSession
+            {
+                return Err(AgentError::Internal(
+                    "activation checkpoint port accepts exactly one controlled ActorSession run"
+                        .to_string(),
+                ));
+            }
+            self.activation_checkpoint_used = true;
+            Some(self.session.messages().to_vec())
+        } else {
+            None
+        };
         debug_assert!(self.active_run_control.is_none());
         let run_id = control.id().clone();
         self.active_run_cancelled = false;
-        self.active_run_control = Some(control);
+        self.active_run_control = Some(control.clone());
 
-        let result = self.execute(input).await;
-        let cancelled = self.active_run_cancelled;
+        let mut result = self.execute(input).await;
+        if let Some(starting_messages) = starting_messages {
+            if let Err(checkpoint_error) = self
+                .stage_activation_checkpoint(starting_messages, result.is_ok())
+                .await
+            {
+                control.fail_execution_boundary(checkpoint_error.to_string());
+                result = Err(match result {
+                    Ok(_) => checkpoint_error,
+                    Err(run_error) => AgentError::Internal(format!(
+                        "{run_error}; additionally {checkpoint_error}"
+                    )),
+                });
+            }
+        }
+        // A port's durable staging can outlast the provider loop. Stop remains
+        // observable through that final acknowledgement, while legacy runs keep
+        // their established provider-completion cancellation boundary.
+        let cancelled = self.active_run_cancelled
+            || (self.activation_checkpoint_port.is_some() && control.is_cancelled());
         self.active_run_control = None;
         self.active_run_cancelled = false;
 
@@ -2853,6 +3610,9 @@ impl AgentBehavior for DefaultAgentBehavior {
     /// promotes durable facts from recent Tier-4 activity into the curated core
     /// blocks and tidies them. Promotion-only — it reads Tier 4, never evicts it.
     async fn on_consolidate(&mut self) -> Result<crate::behavior::ConsolidationReport, AgentError> {
+        if self.durable_memory_read_only {
+            return Ok(crate::behavior::ConsolidationReport::skipped());
+        }
         // Consolidation is its own paid activation and must not inherit the
         // previous turn's tracker or consume the next turn's headroom.
         self.begin_budgeted_operation();
@@ -3134,6 +3894,10 @@ fn extract_top_level_json(text: &str) -> Result<Vec<serde_json::Value>, AgentErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("default_behavior_boundary_tests.rs");
+    include!("default_behavior_steering_tests.rs");
+    include!("default_behavior_checkpoint_tests.rs");
+    include!("default_behavior_usage_tests.rs");
     use axocoatl_core::{AgentConfig, AgentId, OverflowPolicy, TokenBudget, TokenUsageStats};
     use axocoatl_llm::{
         ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError, StreamEvent,
@@ -3417,6 +4181,200 @@ mod tests {
             };
             Ok(Box::pin(tokio_stream::iter(events)))
         }
+    }
+
+    /// Calls `echo` with a long argument for `rounds` rounds, then answers.
+    struct RepeatedEchoLlm {
+        rounds: usize,
+        calls: std::sync::atomic::AtomicUsize,
+        captured: Arc<std::sync::Mutex<Vec<ChatRequest>>>,
+        /// A known context window, when the test needs one.
+        context: usize,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for RepeatedEchoLlm {
+        fn provider_id(&self) -> &str {
+            "repeated-echo"
+        }
+        fn model_id(&self) -> &str {
+            "repeated-echo-model"
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                streaming: true,
+                tool_calling: true,
+                max_context_tokens: self.context,
+                max_output_tokens: if self.context > 0 { 64 } else { 0 },
+                ..Default::default()
+            }
+        }
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            unimplemented!("masking test uses chat_stream")
+        }
+        async fn chat_stream(
+            &self,
+            request: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            self.captured.lock().unwrap().push(request);
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let events = if n < self.rounds {
+                vec![
+                    Ok(StreamEvent::ToolCallDelta {
+                        index: Some(0),
+                        id: format!("call_{n}"),
+                        name: Some("echo".to_string()),
+                        args_delta: serde_json::json!({"text": format!("{n}{}", "x".repeat(600))})
+                            .to_string(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::ToolUse,
+                    }),
+                ]
+            } else {
+                vec![
+                    Ok(StreamEvent::TextDelta {
+                        delta: "done".to_string(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    }),
+                ]
+            };
+            Ok(Box::pin(tokio_stream::iter(events)))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_loop_that_outgrows_a_small_context_is_masked_tightly_instead_of_failing() {
+        use axocoatl_tools::{EchoTool, ToolExecutor};
+
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(RepeatedEchoLlm {
+            rounds: 8,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            captured: captured.clone(),
+            context: 900,
+        });
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("echo", Arc::new(EchoTool));
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter())
+            .with_tool_executor(Arc::new(executor))
+            .with_stale_tool_result_masking(3, []);
+        behavior.on_start(&AgentConfig::default()).await.unwrap();
+
+        let output = behavior
+            .execute(AgentInput::text("echo"))
+            .await
+            .expect("tight masking keeps the loop inside the context");
+        assert_eq!(output.content, "done");
+        let requests = captured.lock().unwrap();
+        let last = &requests.last().unwrap().messages;
+        let whole: Vec<_> = last
+            .iter()
+            .filter(|message| message.role == MessageRole::Tool)
+            .filter(|message| {
+                !message
+                    .text_content()
+                    .unwrap_or("")
+                    .starts_with("[earlier ")
+            })
+            .collect();
+        assert_eq!(whole.len(), 1, "only the latest round stays whole");
+    }
+
+    #[tokio::test]
+    async fn a_loop_too_long_even_for_tight_masking_drops_its_earliest_rounds() {
+        use axocoatl_tools::{EchoTool, ToolExecutor};
+
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(RepeatedEchoLlm {
+            rounds: 12,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            captured: captured.clone(),
+            context: 600,
+        });
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("echo", Arc::new(EchoTool));
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter())
+            .with_tool_round_limit(20)
+            .with_tool_executor(Arc::new(executor))
+            .with_stale_tool_result_masking(3, []);
+        behavior.on_start(&AgentConfig::default()).await.unwrap();
+
+        let output = behavior
+            .execute(AgentInput::text("echo"))
+            .await
+            .expect("dropping earlier rounds keeps the loop inside the context");
+        assert_eq!(output.content, "done");
+        let requests = captured.lock().unwrap();
+        let last = &requests.last().unwrap().messages;
+        assert!(last.iter().any(|message| message
+            .text_content()
+            .is_some_and(|text| text.contains("earlier tool rounds in this task were removed"))));
+        assert_eq!(
+            last.iter()
+                .filter(|message| message.role == MessageRole::Tool)
+                .count(),
+            2,
+            "only the latest two rounds remain"
+        );
+        // The session keeps everything.
+        assert_eq!(
+            behavior
+                .session()
+                .as_chat_messages()
+                .iter()
+                .filter(|message| message.role == MessageRole::Tool)
+                .count(),
+            12
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_tool_output_is_masked_in_requests_but_kept_in_the_session() {
+        use axocoatl_tools::{EchoTool, ToolExecutor};
+
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(RepeatedEchoLlm {
+            rounds: 3,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            captured: captured.clone(),
+            context: 0,
+        });
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("echo", Arc::new(EchoTool));
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter())
+            .with_tool_executor(Arc::new(executor))
+            .with_stale_tool_result_masking(1, []);
+        behavior.on_start(&AgentConfig::default()).await.unwrap();
+
+        let output = behavior.execute(AgentInput::text("echo")).await.unwrap();
+        assert_eq!(output.content, "done");
+
+        let results = |messages: &[ChatMessage]| -> Vec<String> {
+            messages
+                .iter()
+                .filter(|message| message.role == MessageRole::Tool)
+                .map(|message| message.text_content().unwrap_or_default().to_string())
+                .collect()
+        };
+        let requests = captured.lock().unwrap();
+        let last = results(&requests.last().unwrap().messages);
+        assert_eq!(last.len(), 3);
+        assert!(last[0].starts_with("[earlier echo output"), "{}", last[0]);
+        assert!(last[1].starts_with("[earlier echo output"), "{}", last[1]);
+        assert!(
+            last[2].contains(&"x".repeat(600)),
+            "the latest round is kept"
+        );
+
+        let kept = results(&behavior.session().as_chat_messages());
+        assert_eq!(kept.len(), 3);
+        assert!(kept.iter().all(|text| text.contains(&"x".repeat(600))));
     }
 
     struct ParallelPanicThenTextLlm {
@@ -6580,13 +7538,171 @@ mod tests {
                 .execute(AgentInput::text("run the dangerous tool"))
                 .await
                 .expect_err("invalid streamed call must fail closed");
-            assert!(matches!(error, AgentError::Provider(_)), "{error:?}");
+            assert!(
+                matches!(
+                    error,
+                    AgentError::Provider(_) | AgentError::IncompleteProviderStream(_)
+                ),
+                "{error:?}"
+            );
             assert_eq!(
                 executions.load(std::sync::atomic::Ordering::SeqCst),
                 0,
                 "no malformed, empty, non-object, unnamed, undeclared, or incoherent call may dispatch"
             );
         }
+    }
+
+    /// First stream closes without its completion event; the second completes.
+    struct RecoveringStreamLlm {
+        temperatures: std::sync::Mutex<Vec<Option<f32>>>,
+        max_tokens: std::sync::Mutex<Vec<Option<usize>>>,
+        always_incomplete: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for RecoveringStreamLlm {
+        fn provider_id(&self) -> &str {
+            "recovering-stream"
+        }
+
+        fn model_id(&self) -> &str {
+            "recovering-stream-model"
+        }
+
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                streaming: true,
+                ..Default::default()
+            }
+        }
+
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            unreachable!("recovery tests use chat_stream")
+        }
+
+        async fn chat_stream(
+            &self,
+            request: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            let mut temperatures = self.temperatures.lock().unwrap();
+            temperatures.push(request.temperature);
+            self.max_tokens.lock().unwrap().push(request.max_tokens);
+            let events = if temperatures.len() == 1 || self.always_incomplete {
+                vec![
+                    Ok(StreamEvent::TextDelta {
+                        delta: "11111111".to_string(),
+                    }),
+                    Err(ProviderError::IncompleteStream {
+                        provider: "recovering-stream".into(),
+                        message: "EOF before native terminal".into(),
+                    }),
+                ]
+            } else {
+                vec![
+                    Ok(StreamEvent::TextDelta {
+                        delta: "recovered answer".to_string(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    }),
+                ]
+            };
+            Ok(Box::pin(tokio_stream::iter(events)))
+        }
+    }
+
+    #[tokio::test]
+    async fn an_incomplete_stream_is_retried_once_with_nudged_sampling() {
+        let provider = Arc::new(RecoveringStreamLlm {
+            temperatures: std::sync::Mutex::new(Vec::new()),
+            max_tokens: std::sync::Mutex::new(Vec::new()),
+            always_incomplete: false,
+        });
+        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+        let mut config = AgentConfig::default();
+        config.sampling.temperature = Some(0.0);
+        behavior.on_start(&config).await.unwrap();
+        let output = behavior
+            .execute(AgentInput::text("answer"))
+            .await
+            .expect("the retry completes");
+        assert_eq!(output.content, "recovered answer");
+        let temperatures = provider.temperatures.lock().unwrap().clone();
+        assert_eq!(temperatures.len(), 2);
+        assert!(temperatures[1].is_some_and(|value| value >= 0.2));
+
+        // A second incomplete stream is not retried again.
+        let provider = Arc::new(RecoveringStreamLlm {
+            temperatures: std::sync::Mutex::new(Vec::new()),
+            max_tokens: std::sync::Mutex::new(Vec::new()),
+            always_incomplete: true,
+        });
+        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+        behavior.on_start(&AgentConfig::default()).await.unwrap();
+        let error = behavior
+            .execute(AgentInput::text("answer"))
+            .await
+            .expect_err("two incomplete streams fail");
+        assert!(
+            matches!(error, AgentError::IncompleteProviderStream(_)),
+            "{error:?}"
+        );
+        // An unset temperature stays unset: the model default already samples.
+        assert_eq!(*provider.temperatures.lock().unwrap(), vec![None, None]);
+    }
+
+    #[tokio::test]
+    async fn the_abandoned_attempt_output_is_charged_with_the_retry() {
+        let provider = Arc::new(RecoveringStreamLlm {
+            temperatures: std::sync::Mutex::new(Vec::new()),
+            max_tokens: std::sync::Mutex::new(Vec::new()),
+            always_incomplete: false,
+        });
+        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+        behavior.on_start(&AgentConfig::default()).await.unwrap();
+        let output = behavior
+            .execute(AgentInput::text("answer"))
+            .await
+            .expect("the retry completes");
+        // Neither attempt reported usage. The retry's own output is estimated
+        // on success; "11111111" streamed before the early end is charged to
+        // the cumulative usage the budget reads, not to the answer's usage.
+        let abandoned = simple_counter().count_text("11111111");
+        let recovered = simple_counter().count_text("recovered answer");
+        assert_eq!(output.token_usage.output_tokens, recovered);
+        assert_eq!(
+            behavior.cumulative_token_usage_snapshot().output_tokens,
+            abandoned + recovered
+        );
+    }
+
+    #[tokio::test]
+    async fn a_retry_under_a_binding_budget_recomputes_its_output_allowance() {
+        let provider = Arc::new(RecoveringStreamLlm {
+            temperatures: std::sync::Mutex::new(Vec::new()),
+            max_tokens: std::sync::Mutex::new(Vec::new()),
+            always_incomplete: false,
+        });
+        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+        behavior
+            .on_start(&test_config_with_budget(2_000))
+            .await
+            .unwrap();
+        let output = behavior
+            .execute(AgentInput::text("answer"))
+            .await
+            .expect("the retry fits what the first attempt left");
+        assert_eq!(output.content, "recovered answer");
+        let caps = provider.max_tokens.lock().unwrap().clone();
+        assert_eq!(caps.len(), 2, "{caps:?}");
+        assert!(
+            caps[1].unwrap() < caps[0].unwrap(),
+            "the retry asks only for what is left: {caps:?}"
+        );
     }
 
     #[tokio::test]
@@ -6909,7 +8025,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executor_tool_allowlist_inherits_filters_and_supports_exact_empty() {
+    async fn canonical_tool_allowlist_inherits_filters_and_supports_exact_empty() {
         use axocoatl_tools::{EchoTool, ToolExecutor};
 
         let make_executor = || {
@@ -6952,6 +8068,150 @@ mod tests {
                 .with_executor_tool_allowlist(Vec::new());
         exact_empty.on_start(&AgentConfig::default()).await.unwrap();
         assert!(exact_empty.tool_definitions().is_empty());
+    }
+
+    fn behavior_with_executor_recall_and_core(dir: &std::path::Path) -> DefaultAgentBehavior {
+        use axocoatl_tools::{EchoTool, ToolExecutor};
+
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("echo", Arc::new(EchoTool));
+        behavior_with_core(Arc::new(MockLlm::new("x", 1, 1)), dir)
+            .with_tool_executor(Arc::new(executor))
+            .with_semantic_memory(hashed_semantic(
+                &dir.join("semantic"),
+                "the deploy key is stored in the vault",
+            ))
+    }
+
+    #[tokio::test]
+    async fn canonical_tool_allowlist_covers_executor_recall_and_core_tools() {
+        let inherited_dir = tempfile::tempdir().unwrap();
+        let mut inherited = behavior_with_executor_recall_and_core(inherited_dir.path());
+        inherited.on_start(&AgentConfig::default()).await.unwrap();
+        let mut inherited_names = inherited
+            .tool_definitions()
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect::<Vec<_>>();
+        inherited_names.sort();
+        assert_eq!(
+            inherited_names,
+            vec![
+                "core_memory_append",
+                "core_memory_replace",
+                "core_memory_set",
+                "echo",
+                "recall_search",
+            ]
+        );
+
+        let filtered_dir = tempfile::tempdir().unwrap();
+        let mut filtered = behavior_with_executor_recall_and_core(filtered_dir.path());
+        filtered
+            .on_start(&AgentConfig {
+                tools: vec!["echo".to_string()],
+                ..AgentConfig::default()
+            })
+            .await
+            .unwrap();
+        let filtered_names = filtered
+            .tool_definitions()
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect::<Vec<_>>();
+        assert_eq!(filtered_names, vec!["echo"]);
+        let filtered_context = filtered.memory_context();
+        assert!(!filtered_context.contains("recall_search"));
+        assert!(!filtered_context.contains("core_memory_append"));
+        assert!(matches!(
+            filtered
+                .execute_behavior_tool(
+                    "recall_search",
+                    serde_json::json!({"query": "deploy key"}),
+                )
+                .await,
+            Err(axocoatl_tools::ToolError::NotFound(name)) if name == "recall_search"
+        ));
+        assert!(matches!(
+            filtered
+                .execute_behavior_tool(
+                    "core_memory_append",
+                    serde_json::json!({"block": "human", "text": "must not run"}),
+                )
+                .await,
+            Err(axocoatl_tools::ToolError::NotFound(name)) if name == "core_memory_append"
+        ));
+
+        let exact_empty_dir = tempfile::tempdir().unwrap();
+        let mut exact_empty = behavior_with_executor_recall_and_core(exact_empty_dir.path())
+            .with_executor_tool_allowlist(Vec::new());
+        exact_empty
+            .on_start(&AgentConfig {
+                tools: vec![
+                    "echo".to_string(),
+                    "recall_search".to_string(),
+                    "core_memory_append".to_string(),
+                ],
+                ..AgentConfig::default()
+            })
+            .await
+            .unwrap();
+        assert!(exact_empty.tool_definitions().is_empty());
+        let exact_empty_context = exact_empty.memory_context();
+        assert!(!exact_empty_context.contains("recall_search"));
+        assert!(!exact_empty_context.contains("core_memory_append"));
+        assert!(matches!(
+            exact_empty
+                .execute_behavior_tool(
+                    "recall_search",
+                    serde_json::json!({"query": "deploy key"}),
+                )
+                .await,
+            Err(axocoatl_tools::ToolError::NotFound(name)) if name == "recall_search"
+        ));
+    }
+
+    #[tokio::test]
+    async fn behavior_tools_honor_dynamic_advertisement_without_treating_it_as_authority() {
+        struct DynamicallyHiddenBehaviorTool;
+
+        #[async_trait::async_trait]
+        impl axocoatl_tools::BuiltinTool for DynamicallyHiddenBehaviorTool {
+            fn description(&self) -> &str {
+                "test-only dynamically hidden behavior tool"
+            }
+
+            fn parameters_schema(&self) -> serde_json::Value {
+                serde_json::json!({"type": "object"})
+            }
+
+            fn advertised_parameters_schema(&self) -> Option<serde_json::Value> {
+                None
+            }
+
+            async fn execute(
+                &self,
+                _arguments: serde_json::Value,
+            ) -> Result<serde_json::Value, axocoatl_tools::ToolError> {
+                Ok(serde_json::json!({"executed": true}))
+            }
+        }
+
+        let mut behavior =
+            DefaultAgentBehavior::new(Arc::new(MockLlm::new("x", 1, 1)), simple_counter());
+        behavior.recall_tools.push((
+            "dynamic_behavior".to_string(),
+            Arc::new(DynamicallyHiddenBehaviorTool),
+        ));
+
+        assert!(behavior.tool_definitions().is_empty());
+        assert_eq!(
+            behavior
+                .execute_behavior_tool("dynamic_behavior", serde_json::json!({}))
+                .await
+                .unwrap(),
+            serde_json::json!({"executed": true})
+        );
     }
 
     #[tokio::test]
@@ -7156,6 +8416,134 @@ mod tests {
             .tool_definitions()
             .iter()
             .any(|d| d.name.starts_with("core_memory")));
+    }
+
+    #[tokio::test]
+    async fn transaction_scoped_checkpoint_makes_durable_memory_read_only_but_recallable() {
+        use axocoatl_memory::{
+            CheckpointPolicy, CheckpointStore, LogEntry, LogEntryType, SharedBlockRegistry,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let semantic = hashed_semantic(
+            &dir.path().join("semantic"),
+            "the production deploy key is in the vault",
+        );
+        let semantic_before = semantic.recent(20).unwrap();
+
+        let daily = Arc::new(axocoatl_memory::DailyLogMemory::new(
+            "transaction-reader",
+            dir.path().join("daily"),
+        ));
+        let today = chrono::Local::now().date_naive();
+        daily
+            .append_at(
+                today,
+                LogEntry {
+                    timestamp: 1,
+                    entry_type: LogEntryType::Note,
+                    content: serde_json::json!("prior daily fact"),
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut core = axocoatl_memory::CoreMemoryStore::new(
+            "transaction-reader",
+            dir.path().join("core.json"),
+        );
+        let mut human = axocoatl_memory::MemoryBlock::new("human", 0);
+        human.set("name: Alice").unwrap();
+        core.ensure_block(human);
+        let core = Arc::new(tokio::sync::RwLock::new(core));
+
+        let mut shared_registry = SharedBlockRegistry::new(dir.path().join("shared"));
+        let mut shared_seed = axocoatl_memory::MemoryBlock::new("project", 0);
+        shared_seed.set("release train: stable").unwrap();
+        let shared = shared_registry.ensure(shared_seed).await;
+        let shared_value_before = shared.block.read().await.value.clone();
+        let shared_blocks = std::collections::HashMap::from([("project".to_string(), shared)]);
+
+        let checkpoint_store =
+            CheckpointStore::new(dir.path().join("checkpoints"), CheckpointPolicy::Manual);
+        checkpoint_store
+            .begin_session_turn("session-read-only", "turn-1")
+            .await
+            .unwrap();
+        let scoped =
+            Arc::new(checkpoint_store.scoped_to_session_turn("session-read-only", "turn-1"));
+        assert!(scoped.is_session_turn_scoped());
+
+        let config = AgentConfig {
+            id: AgentId::new("transaction-reader"),
+            ..AgentConfig::default()
+        };
+        let mut behavior =
+            DefaultAgentBehavior::new(Arc::new(MockLlm::new("completed", 2, 1)), simple_counter())
+                .with_semantic_memory(semantic.clone())
+                .with_daily_log(daily.clone())
+                .with_core_memory(core.clone(), shared_blocks.clone())
+                .with_checkpoint_store(scoped);
+        assert!(behavior.durable_memory_read_only);
+        behavior.on_start(&config).await.unwrap();
+
+        let context = behavior.memory_context();
+        assert!(context.contains("name: Alice"));
+        assert!(context.contains("release train: stable"));
+        assert!(context.contains("read-only context"));
+        assert!(!context.contains("core_memory_append"));
+        assert!(!behavior
+            .tool_definitions()
+            .iter()
+            .any(|definition| definition.name.starts_with("core_memory_")));
+        assert!(behavior.behavior_tool("core_memory_append").is_none());
+        assert!(behavior
+            .execute_behavior_tool(
+                "core_memory_append",
+                serde_json::json!({"block": "human", "text": "must not persist"}),
+            )
+            .await
+            .is_err());
+
+        let semantic_recall = behavior
+            .execute_behavior_tool(
+                "recall_search",
+                serde_json::json!({"query": "production deploy key vault"}),
+            )
+            .await
+            .unwrap();
+        assert!(semantic_recall["count"].as_u64().unwrap_or_default() > 0);
+        let daily_recall = behavior
+            .execute_behavior_tool(
+                "recall_timeframe",
+                serde_json::json!({"date": today.format("%Y-%m-%d").to_string()}),
+            )
+            .await
+            .unwrap();
+        assert!(daily_recall.to_string().contains("prior daily fact"));
+
+        behavior
+            .execute(AgentInput::text(
+                "This completed generation must not become memory",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(semantic.recent(20).unwrap(), semantic_before);
+        assert_eq!(
+            core.read().await.block("human").unwrap().value,
+            "name: Alice"
+        );
+        assert_eq!(
+            shared_blocks["project"].block.read().await.value,
+            shared_value_before
+        );
+
+        let consolidation = behavior.on_consolidate().await.unwrap();
+        assert!(consolidation.skipped);
+        assert_eq!(
+            core.read().await.block("human").unwrap().value,
+            "name: Alice"
+        );
     }
 
     #[tokio::test]
@@ -8428,6 +9816,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transaction_scoped_compaction_summarizes_without_mutating_daily_log() {
+        use axocoatl_memory::{CheckpointPolicy, CheckpointStore, LogEntry, LogEntryType};
+
+        let provider = Arc::new(CompressionProbeLlm {
+            chat_calls: std::sync::atomic::AtomicUsize::new(0),
+            stream_calls: std::sync::atomic::AtomicUsize::new(0),
+            max_context_tokens: 400,
+        });
+        let data = tempfile::tempdir().unwrap();
+        let daily_log = Arc::new(axocoatl_memory::DailyLogMemory::new(
+            "read-only-compaction",
+            data.path().join("daily"),
+        ));
+        let today = chrono::Local::now().date_naive();
+        daily_log
+            .append_at(
+                today,
+                LogEntry {
+                    timestamp: 1,
+                    entry_type: LogEntryType::Note,
+                    content: serde_json::json!("pre-existing daily memory"),
+                },
+            )
+            .await
+            .unwrap();
+
+        let checkpoint_store =
+            CheckpointStore::new(data.path().join("checkpoints"), CheckpointPolicy::Manual);
+        let scoped =
+            Arc::new(checkpoint_store.scoped_to_session_turn("read-only-compaction", "turn-1"));
+        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter())
+            .with_daily_log(daily_log.clone())
+            .with_checkpoint_store(scoped);
+        assert!(behavior.durable_memory_read_only);
+
+        let mut messages = Vec::new();
+        for index in 0..20 {
+            messages.push(ChatMessage::user(format!(
+                "old-user-{index} {}",
+                "x".repeat(600)
+            )));
+            messages.push(ChatMessage::assistant(format!(
+                "old-answer-{index} {}",
+                "y".repeat(600)
+            )));
+        }
+        let old_boundary = messages.len();
+        messages.extend(active_compression_suffix());
+        behavior
+            .session
+            .replace_with_chat_messages(&messages, |text| text.len() / 4 + 1);
+
+        let (new_boundary, _) = behavior
+            .compact_session(old_boundary, None, None, 0)
+            .await
+            .unwrap();
+        assert!(new_boundary < old_boundary, "compaction must still run");
+        assert!(
+            provider
+                .chat_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0,
+            "the summarizer provider must still run"
+        );
+        let entries = daily_log.read_range(today, today).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "pre-existing daily memory");
+    }
+
+    #[tokio::test]
     async fn configured_archive_failure_keeps_session_and_skips_summarizer_provider() {
         let provider = Arc::new(CompressionProbeLlm {
             chat_calls: std::sync::atomic::AtomicUsize::new(0),
@@ -9425,5 +10883,258 @@ mod tests {
             assert_eq!(behavior.session().len(), 6); // 4 restored + 2 new
             assert_eq!(behavior.checkpoint_version, 3);
         }
+    }
+    struct OutputAllowanceLlm {
+        context: usize,
+        output: usize,
+        paid_summary_usage: TokenUsageStats,
+        calls: std::sync::Mutex<Vec<(bool, ChatRequest)>>,
+    }
+
+    impl OutputAllowanceLlm {
+        fn new(context: usize, output: usize) -> Self {
+            Self {
+                context,
+                output,
+                paid_summary_usage: TokenUsageStats::new(900, 100),
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for OutputAllowanceLlm {
+        fn provider_id(&self) -> &str {
+            "output-allowance-fixture"
+        }
+        fn model_id(&self) -> &str {
+            "observed-context-fixture"
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                streaming: true,
+                max_context_tokens: self.context,
+                max_output_tokens: self.output,
+                ..Default::default()
+            }
+        }
+        fn count_tokens(&self, request: &ChatRequest) -> usize {
+            // The summary probe has its own measured request estimate. It lets
+            // this fixture exercise the real paid compaction/usage join without
+            // turning its summary's representation size into new model policy.
+            if request
+                .messages
+                .first()
+                .and_then(ChatMessage::text_content)
+                .is_some_and(|text| text.starts_with("You compress a conversation transcript"))
+            {
+                return 10;
+            }
+            simple_counter().count_messages(&request.messages)
+                + request
+                    .tools
+                    .iter()
+                    .map(|tool| {
+                        simple_counter().count_tool_definition(&serde_json::to_value(tool).unwrap())
+                    })
+                    .sum::<usize>()
+        }
+        async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            self.calls.lock().unwrap().push((false, request));
+            Ok(ChatResponse {
+                content: "retained compact summary".into(),
+                tool_calls: Vec::new(),
+                finish_reason: FinishReason::Stop,
+                usage: self.paid_summary_usage.clone(),
+                model: self.model_id().into(),
+                provider: self.provider_id().into(),
+            })
+        }
+        async fn chat_stream(
+            &self,
+            request: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            self.calls.lock().unwrap().push((true, request));
+            Ok(Box::pin(tokio_stream::iter(vec![
+                Ok(StreamEvent::TextDelta {
+                    delta: "finished".into(),
+                }),
+                Ok(StreamEvent::Usage(TokenUsageStats::new(7, 4))),
+                Ok(StreamEvent::Done {
+                    finish_reason: FinishReason::Stop,
+                }),
+            ])))
+        }
+    }
+
+    fn output_allowance_config(per_call: usize, per_execution: usize) -> AgentConfig {
+        AgentConfig {
+            token_budget: Some(TokenBudget {
+                per_call,
+                per_execution,
+                overflow_policy: OverflowPolicy::Abort,
+            }),
+            ..AgentConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn abort_derived_output_prevents_false_context_rejection_or_paid_compaction() {
+        for stateless in [false, true] {
+            let provider = Arc::new(OutputAllowanceLlm::new(1000, 800));
+            let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+            behavior
+                .on_start(&output_allowance_config(800, 800))
+                .await
+                .unwrap();
+            let input = "current protected input ".repeat(16);
+            behavior
+                .execute(AgentInput::text(&input).with_stateless(stateless))
+                .await
+                .unwrap();
+            let calls = provider.calls.lock().unwrap();
+            assert_eq!(
+                calls.len(),
+                1,
+                "context planning must not summon a paid summary"
+            );
+            assert!(calls[0].0);
+            let request = &calls[0].1;
+            let estimated = provider.count_tokens(request);
+            assert!(
+                estimated + provider.output > 850,
+                "fixture must expose the old ordering"
+            );
+            assert_eq!(request.max_tokens, Some(800 - estimated));
+            assert_eq!(
+                request.messages.last().unwrap().text_content(),
+                Some(input.as_str())
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn compressible_supplied_history_gets_final_allowance_after_pure_projection() {
+        let provider = Arc::new(OutputAllowanceLlm::new(1000, 800));
+        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+        behavior
+            .on_start(&output_allowance_config(800, 800))
+            .await
+            .unwrap();
+        let history: Vec<_> = (0..20)
+            .flat_map(|index| {
+                [
+                    ChatMessage::user(format!("old user {index} {}", "u".repeat(120))),
+                    ChatMessage::assistant(format!("old answer {index} {}", "a".repeat(120))),
+                ]
+            })
+            .collect();
+        let history_bytes = serde_json::to_vec(&history).unwrap();
+        let input = "CURRENT_USER_STAYS_EXACT";
+        let mut before = ChatRequest::simple(input);
+        before.messages.splice(0..0, history.clone());
+        assert!(provider.count_tokens(&before) > 800);
+        behavior
+            .execute(AgentInput::text(input).with_supplied_history(history.clone()))
+            .await
+            .unwrap();
+        let calls = provider.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].0, "pure history projection does not buy a summary");
+        let request = &calls[0].1;
+        assert!(request.messages.len() < history.len() + 1);
+        assert_eq!(request.messages.last().unwrap().text_content(), Some(input));
+        assert_eq!(
+            request.max_tokens,
+            Some(800 - provider.count_tokens(request))
+        );
+        assert_eq!(serde_json::to_vec(&history).unwrap(), history_bytes);
+        assert!(
+            behavior.session().is_empty(),
+            "supplied-history projection must not mutate actor history"
+        );
+    }
+
+    #[tokio::test]
+    async fn paid_compaction_recomputes_output_from_reduced_input_and_incurred_usage() {
+        let provider = Arc::new(OutputAllowanceLlm::new(400, 1024));
+        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+        behavior
+            .on_start(&output_allowance_config(1300, 1300))
+            .await
+            .unwrap();
+        seed_large_completed_prefix(&mut behavior);
+        let input = "current user survives paid compaction";
+        let before = behavior.uncompressed_request_from_session(None, None).0;
+        assert!(
+            provider.count_tokens(&before) > 1300,
+            "moving the rejecting spend preflight before compression would fail this journey"
+        );
+        let output = behavior.execute(AgentInput::text(input)).await.unwrap();
+        let calls = provider.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(!calls[0].0, "the actual LLM summarizer must run");
+        assert_eq!(
+            calls[0].1.max_tokens,
+            Some(1024),
+            "preserve existing explicit summarizer limit"
+        );
+        assert!(calls[1].0);
+        let main = &calls[1].1;
+        let estimated = provider.count_tokens(main);
+        assert_eq!(
+            main.max_tokens,
+            Some(300 - estimated),
+            "the 1000 recorded summary tokens reduce the original 1300 allowance"
+        );
+        assert_eq!(main.messages.last().unwrap().text_content(), Some(input));
+        assert!(main.messages.iter().any(|message| message
+            .text_content()
+            .is_some_and(|text| text.contains("retained compact summary"))));
+        assert_eq!(output.token_usage, TokenUsageStats::new(907, 104));
+    }
+
+    #[tokio::test]
+    async fn output_projection_preserves_explicit_sampling_warn_and_no_budget_requests() {
+        for mode in 0..3 {
+            let provider = Arc::new(OutputAllowanceLlm::new(2000, 800));
+            let mut config = output_allowance_config(5, 5);
+            match mode {
+                0 => {
+                    config = output_allowance_config(800, 800);
+                    config.sampling.max_tokens = Some(64);
+                }
+                1 => config.token_budget.as_mut().unwrap().overflow_policy = OverflowPolicy::Warn,
+                _ => config.token_budget = None,
+            }
+            let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+            behavior.on_start(&config).await.unwrap();
+            behavior
+                .execute(AgentInput::text("same input").with_stateless(true))
+                .await
+                .unwrap();
+            let calls = provider.calls.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(
+                calls[0].1.max_tokens,
+                if mode == 0 { Some(64) } else { None }
+            );
+        }
+        let provider = Arc::new(OutputAllowanceLlm::new(1000, 800));
+        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter());
+        behavior
+            .on_start(&output_allowance_config(0, 0))
+            .await
+            .unwrap();
+        assert!(matches!(
+            behavior
+                .execute(AgentInput::text("no room").with_stateless(true))
+                .await,
+            Err(AgentError::TokenBudgetExceeded { .. })
+        ));
+        assert!(provider.calls.lock().unwrap().is_empty());
     }
 }

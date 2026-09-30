@@ -10,6 +10,7 @@ import {
   assertSourceBinaryOnlyRewrite,
   canonicalDeltaDigest,
   filmArtifactSet,
+  historicalPortfolioPath,
   gitDiffEntries,
   revisionIdentity,
   sourceContentDigestAtRevision,
@@ -138,9 +139,9 @@ test('v1.0.1 incident compatibility restores first-committed declarations and bi
 
   const tamperedControl = join(mkdtempSync(join(tmpdir(), 'axocoatl-v101-film-control-')), 'control');
   t.after(() => rmSync(dirname(tamperedControl), { recursive: true, force: true }));
-  const controlPortfolio = resolve(tamperedControl, attestation.portfolio.path);
+  const controlPortfolio = resolve(tamperedControl, historicalPortfolioPath);
   mkdirSync(dirname(controlPortfolio), { recursive: true });
-  writeFileSync(controlPortfolio, readFileSync(resolve(repoRoot, attestation.portfolio.path)));
+  writeFileSync(controlPortfolio, readFileSync(resolve(repoRoot, historicalPortfolioPath)));
   const blobMismatch = structuredClone(attestation);
   blobMismatch.first_committed_provenance.binary.version = 'tampered-declaration';
   for (const file of blobMismatch.first_committed_provenance.files) {

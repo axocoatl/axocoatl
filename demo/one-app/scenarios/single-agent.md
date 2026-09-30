@@ -18,17 +18,15 @@ Files, Preview, Terminal, Source Control, and the durable conversation.
 
 ## Start or reset
 
-After closing prior demo Sessions and stopping their daemon:
+Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
+`northstar-storefront` fixture, a fresh native data path, real local Ollama calls,
+and the exact candidate binary at `http://localhost:8080`. Retain the actual
+workspace path as `$AXO_DEMO_ROOT/workspace` (or record the equivalent isolated
+fixture path). Verify `history_version: execution_v2` and Ready, then explicitly
+review and apply **Team and budget** before sending.
 
-```bash
-./demo/one-app/prepare.sh
-./demo/one-app/start.sh
-```
-
-Open `http://127.0.0.1:18080`, create a **Single agent** Session for
-`/private/tmp/axocoatl-one-app-showcase/workspace`, and select
-**Minimal Coder**. Keep the detected
-`localhost/axocoatl-one-app-demo:latest` image and exposed port `8765`.
+Use **Minimal Coder**, the detected demo image, and the explicitly published
+Preview port `8765`. Keep repository checks as `npm run check`.
 
 ## Browser actions
 
@@ -71,7 +69,7 @@ Open `http://127.0.0.1:18080`, create a **Single agent** Session for
 ## Durable evidence
 
 ```bash
-export AXO_DEMO_URL='http://127.0.0.1:18080'
+export AXO_DEMO_URL='http://localhost:8080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase'
 git -C "$AXO_DEMO_ROOT/workspace" status --short
 git -C "$AXO_DEMO_ROOT/workspace" diff -- lib/orders.js
@@ -83,12 +81,11 @@ Copy the Session id, then inspect its canonical Turns and Git projection:
 
 ```bash
 export AXO_SESSION_ID='ses-paste-the-id-here'
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns"
+curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
 curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/git/status"
 curl -sS \
   "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/git/diff?path=lib%2Forders.js"
-grep -F "$AXO_SESSION_ID" \
-  "$AXO_DEMO_ROOT/data/session-history/turns.v1.jsonl"
+curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
 ```
 
 ## Recording beats

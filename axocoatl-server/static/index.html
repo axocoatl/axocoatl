@@ -42,6 +42,21 @@
     color: var(--muted); font: var(--fs-xs)/1.45 var(--font-mono);
     white-space: pre-wrap; overflow-wrap: anywhere;
   }
+  .session-graph-layout { display: flex; width: 100%; height: 100%; min-height: 0; gap: 12px; }
+  .session-graph-layout > ax-lattice {
+    flex: 1 1 0; min-width: 0; --ax-bg: var(--bg); --ax-fg: var(--text);
+    --ax-grid: var(--border); --ax-accent: var(--accent); --ax-accent-2: var(--accent-2);
+    --ax-node-bg: var(--panel); --ax-node-fg: var(--text); --ax-node-border: var(--border-strong);
+    --ax-node-shadow: var(--shadow-sm); --ax-node-shadow-sel: var(--focus-ring);
+    --ax-edge-color: var(--muted-2); --ax-edge-color-sel: var(--accent);
+  }
+  .session-graph-layout > ax-activation-inspector { flex: 0 1 360px; overflow: auto; }
+  .chat-ref button.chip-text { color: inherit; background: none; border: 0; padding: 0; font: inherit; cursor: pointer; text-align: left; }
+  .chat-ref button.chip-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .session-graph-notice { color: var(--warn); font-size: var(--fs-xs); padding: 8px; }
+  #session-lattice-host { display: flex; flex-direction: column; }
+  .session-turn-controls { align-self: flex-start; flex: 0 0 auto; margin-bottom: 8px; }
+  @media(max-width:720px) { .session-graph-layout > ax-activation-inspector { flex: 0 0 0; } }
 </style>
 <!-- App UI modules. Transitional bridge: this document is still a classic
      script, so the module graph is loaded here and the one helper the classic
@@ -49,6 +64,7 @@
      becomes a module. -->
 <script type="module">
   import { iconForFile } from '/ui/file-tree.js';
+  import { foldCoordinationEvents, foldControlPlane } from '/ui/coordination-turn.js';
   import '/ui/rail.js';
   import '/ui/launcher.js';
   import '/ui/attempts.js';
@@ -59,7 +75,13 @@
   import '/ui/mcp-approval.js';
   import '/ui/session-home.js';
   import '/ui/session-context.js';
+  import '/ui/session-team.js';
+  import '/ui/session-guidance.js';
+  import '/ui/session-work.js';
+  import '/ui/session-knowledge.js';
   import '/ui/session-history.js';
+  import '/ui/ways-history.js';
+  import { historyPresentation, renderExecutionHistoryTurn, createExecutionHistoryInvalidator } from '/ui/execution-history.js';
   import '/ui/settings-agents.js';
   import '/ui/settings-skills.js';
   import '/ui/settings-mcp.js';
@@ -83,6 +105,11 @@
   addEventListener('error', (e) => window.__bootErrors.push(String(e.message)));
   addEventListener('unhandledrejection', (e) => window.__bootErrors.push('reject: ' + (e.reason?.message || e.reason)));
   window.iconForFile = iconForFile;
+  window.foldCoordinationEvents = foldCoordinationEvents;
+  window.foldControlPlane = foldControlPlane;
+  window.historyPresentation = historyPresentation;
+  window.renderExecutionHistoryTurn = renderExecutionHistoryTurn;
+  window.createExecutionHistoryInvalidator = createExecutionHistoryInvalidator;
 </script>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <script src="/vendor/highlight.min.js"></script>
@@ -118,6 +145,7 @@
   </ax-settings>
   <ax-mcp-approval id="mcp-approval"></ax-mcp-approval>
   <ax-session-history id="session-history"></ax-session-history>
+  <ax-ways-history id="ways-history"></ax-ways-history>
   <!-- Navigation, health, activity, and waiting-interrupt state live in the
        session rail. Settings owns the product configuration surfaces. -->
   <span hidden id="cnt-sessions">—</span><span hidden id="cnt-automations">—</span>
@@ -253,6 +281,12 @@
             <div class="chat-refs" id="chat-refs"></div>
             <div class="session-input">
               <ax-session-context id="session-context"></ax-session-context>
+              <div class="session-context-tools">
+                <ax-session-team id="session-team"></ax-session-team>
+                <ax-session-work id="session-work"></ax-session-work>
+                <ax-session-knowledge id="session-knowledge"></ax-session-knowledge>
+              </div>
+              <ax-session-guidance id="session-guidance" hidden></ax-session-guidance>
               <div class="session-input-row">
                 <textarea class="input" id="session-text" placeholder="Tell the agents what to build — Enter to send, Shift+Enter for newline"></textarea>
               </div>
@@ -288,8 +322,8 @@
                 title="Select a page element as context for the next turn">Inspect element</button>
             </div>
             <div class="bx-suggest hide" id="bx-suggest"></div>
-            <ax-browser id="browser"></ax-browser>
             <div class="browser-body" id="browser-body">
+              <ax-browser id="browser"></ax-browser>
               <div class="dom-hier hide" id="dom-hier">
                 <div class="dom-hier-head">
                   <span>Element hierarchy</span>
@@ -462,7 +496,7 @@ const escHtml = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;'
 
 
 let S = {
-  agents: [], workflows: [], schedules: [], skills: [], mcpServers: [], mcpTools: [],
+  agents: [], workflows: [], sessionTeams: [], schedules: [], skills: [], mcpServers: [], mcpTools: [],
   workspaces: [], sessions: [], selectedWorkspaceId: '', activeSession: null,
   tokensTotal: 0,
   // The one coordinator run currently shown in the run view (Layer-2 tree).
@@ -989,8 +1023,9 @@ S.liveConnection = S.liveConnection || 'connecting'; // 'connecting' | 'connecte
 function activeSessionPearlText() {
   if (!S.session || !S.session.id) return null;
   const name = S.session.name || S.session.id.slice(0, 8);
-  const agentCount = (S.session.agents || []).length;
-  return agentCount > 0 ? `${name} · ${agentCount} agents` : name;
+  const agentCount = S.session.currentTeam?.approved
+    ? S.session.currentTeam.slots.length : (S.session.agents || []).length;
+  return agentCount > 0 ? `${name} · ${agentCount} ${agentCount === 1 ? 'agent' : 'agents'}` : name;
 }
 
 function renderStatusPearls() {
@@ -1081,14 +1116,17 @@ function renderStatusPearls() {
 }
 
 async function loadAll() {
-  const [wfs, agents, schedules, skills] = await Promise.all([
+  const [wfs, sessionTeams, agents, schedules, skills] = await Promise.all([
     fetch('/api/workflows').then(r => r.json()),
+    fetch('/api/session-teams').then(r => r.json()),
     fetch('/api/agents').then(r => r.json()),
     fetch('/api/schedules').then(r => r.json()).catch(() => []),
     fetch('/api/skills').then(r => r.json()).catch(() => []),
   ]);
-  S.workflows = wfs; S.agents = agents; S.schedules = schedules; S.skills = skills;
-  const home = $('#session-home'); if (home) home.agents = agents;
+  S.workflows = wfs; S.sessionTeams = sessionTeams; S.agents = agents;
+  S.schedules = schedules; S.skills = skills;
+  const home = $('#session-home');
+  if (home) { home.agents = agents; home.teams = sessionTeams; }
   await refreshTopStats();
   // A Session can be restored before the slower configuration reads finish.
   // In that case its Agent graph was necessarily built without depends_on
@@ -1097,6 +1135,8 @@ async function loadAll() {
   if (S.session.id
       && (S.session.mode?.kind === 'lattice' || S.session.mode?.kind === 'custom')) {
     void sessionLatticeBuild(S.session);
+    populateSessionAgentTarget(S.session);
+    void populateSessionModelPicker(S.session);
   }
 }
 
@@ -1105,6 +1145,10 @@ S.session = {
   id: null, workspaceId: '', dir: '', name: '', mode: null, streamEl: null, streamBuf: '', toolCards: {},
   environment: { state: 'unprepared' },
   liveStreams: new Map(), historyState: 'idle', historyError: '', historyGeneration: 0,
+  controlPlaneTurns: new Map(), controlPlaneLatestTurnId: '',
+  coordinationCards: new Map(), coordinationEvents: new Map(), coordinationLatestEvents: [],
+  coordinationLatestTurnId: '', coordinationGraphTurnId: '', graphAgents: [],
+  activeTurnTargetAgent: null,
 };
 // Session live ownership is global browser state. It is updated for every
 // Session frame, not only the currently visible one, so switching away and
@@ -1313,6 +1357,8 @@ function applyCockpitLayout() {
   cockpit?.classList.toggle('two-up', paired);
   cockpit?.setAttribute('data-center-surface', centerSurface());
   syncSessionViewNav(visible);
+  const graphInspector = $('#session-lattice-host')?.querySelector('ax-activation-inspector');
+  if (graphInspector) graphInspector.suspended = !visible.includes('trace');
   persistLayout();
   // After the grid relayouts, tell embedded editors to remeasure.  Without
   // this Monaco renders at the old container size (visually broken file
@@ -1368,14 +1414,49 @@ function syncAttemptsDock(options = {}) {
 }
 
 // Re-fit the session's agent-graph (lattice) when the trace surface is
-// visible.  The lattice is built on cockpit open into a host that may be
-// hidden (size 0), so it needs an autoLayout once it actually has room.
+// visible. The lattice can be built while its host is hidden, so its camera
+// needs to fit the authoritative layout once the canvas has room.
 function relayoutTrace() {
   const lat = S.session && S.session.lattice;
   if (!lat) return;
   const pane = document.querySelector('#cockpit-trace');
   if (!pane || getComputedStyle(pane).display === 'none') return;
-  try { if (typeof lat.autoLayout === 'function') lat.autoLayout({ direction: 'LR' }); } catch {}
+  try {
+    if (lat.mode === 'view') {
+      if (lat.dataset.viewReady !== 'true' && lat.clientWidth && lat.clientHeight) {
+        lat.fitView(); lat.dataset.viewReady = 'true';
+      }
+      keepSessionGraphSelectionVisible(lat);
+    } else if (typeof lat.autoLayout === 'function') lat.autoLayout({ direction: 'LR' });
+  } catch {}
+}
+
+// Opening the inspector changes the graph's available width. Keep the selected
+// node in the remaining canvas without changing its recorded layout or resetting
+// the user's zoom when a small camera adjustment is sufficient.
+function keepSessionGraphSelectionVisible(lat) {
+  requestAnimationFrame(() => {
+    if (!lat?.isConnected || !lat.clientWidth || !lat.clientHeight) return;
+    const ids = lat.selectedIds();
+    if (ids.length !== 1) return;
+    const node = Array.from(lat.querySelectorAll('ax-node')).find(item => item.id === ids[0]);
+    if (!node) return;
+    const canvas = lat.getBoundingClientRect();
+    const bounds = node.getBoundingClientRect();
+    const padding = 24;
+    if (bounds.width > canvas.width - padding * 2 || bounds.height > canvas.height - padding * 2) {
+      lat.fitView({ padding });
+      return;
+    }
+    const dx = bounds.left < canvas.left + padding ? canvas.left + padding - bounds.left
+      : bounds.right > canvas.right - padding ? canvas.right - padding - bounds.right : 0;
+    const dy = bounds.top < canvas.top + padding ? canvas.top + padding - bounds.top
+      : bounds.bottom > canvas.bottom - padding ? canvas.bottom - padding - bounds.bottom : 0;
+    if (dx || dy) {
+      const viewport = lat.getViewport();
+      lat.setViewport({ ...viewport, x: viewport.x + dx, y: viewport.y + dy });
+    }
+  });
 }
 
 // Keep exactly `n` resizer handles in the grid (create + wire as needed).
@@ -1674,6 +1755,15 @@ if (!customElements.get('ax-toggle')) customElements.define('ax-toggle', AxToggl
 // overflow clipping and opens upward above the composer. Shadow-DOM styled,
 // reading the page's CSS custom properties so it stays on-theme.
 class AxSelect extends HTMLElement {
+  static get observedAttributes() { return ['disabled']; }
+  attributeChangedCallback() {
+    if (!this._trig) return;
+    this._trig.setAttribute('aria-disabled', String(this.disabled));
+    this._trig.tabIndex = this.disabled ? -1 : 0;
+    if (this.disabled) this.close();
+  }
+  get disabled() { return this.hasAttribute('disabled'); }
+  set disabled(value) { this.toggleAttribute('disabled', Boolean(value)); }
   constructor() {
     super();
     this._value = null;
@@ -1688,6 +1778,7 @@ class AxSelect extends HTMLElement {
         'color:var(--text,#ececec);font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;' +
         'padding:4px 9px;cursor:pointer;outline:none;user-select:none;transition:border-color .15s}' +
       '.trig:hover{border-color:var(--border-strong,#444)}' +
+      ':host([disabled]) .trig{cursor:default}:host([disabled]) .chev{display:none}' +
       ':host(.open) .trig,.trig:focus-visible{border-color:var(--accent,#4ade80)}' +
       '.lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
       '.chev{flex-shrink:0;opacity:.55;font-size:9px;transition:transform .15s}' +
@@ -1718,6 +1809,7 @@ class AxSelect extends HTMLElement {
     this._trig.setAttribute('aria-expanded', 'false');
     this._trig.addEventListener('click', () => this.toggleOpen());
     this._trig.addEventListener('keydown', (e) => {
+      if (this.disabled) return;
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.toggleOpen(); }
       else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
@@ -1735,6 +1827,7 @@ class AxSelect extends HTMLElement {
     this._mo = new MutationObserver(() => this._scheduleSync());
   }
   connectedCallback() {
+    this.attributeChangedCallback();
     this._mo.observe(this, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['value', 'selected'] });
     this._sync();
   }
@@ -1790,6 +1883,7 @@ class AxSelect extends HTMLElement {
     this.title = cur ? cur.label : '';
   }
   _select(v) {
+    if (this.disabled) return;
     const changed = v !== this._value;
     this._value = v;
     this._renderMenu();
@@ -1799,7 +1893,7 @@ class AxSelect extends HTMLElement {
   }
   toggleOpen() { this._open ? this.close() : this.open(); }
   open() {
-    if (this._open || !this._opts.length) return;
+    if (this.disabled || this._open || !this._opts.length) return;
     this._open = true;
     this.classList.add('open');
     this._menu.classList.add('show');
@@ -2257,6 +2351,8 @@ function syncSessionLifecycleChrome() {
     state = 'stopping'; label = 'stopping'; detail = 'stopping after a safe boundary…';
   } else if (running) {
     state = 'running'; label = 'running'; detail = 'running…';
+  } else if (S.session.waysStoragePending) {
+    state = 'starting'; label = 'preparing'; detail = 'checking Ways storage…';
   } else if (pending) {
     state = 'starting'; label = 'starting'; detail = 'starting turn…';
   }
@@ -2526,6 +2622,10 @@ function openCockpit(s) {
     mode: s.mode || null,
     environment: s.environment || { state: 'unprepared' },
     streamEl: null, streamBuf: '', toolCards: {}, liveStreams: new Map(),
+    controlPlaneTurns: new Map(), controlPlaneLatestTurnId: '',
+  coordinationCards: new Map(), coordinationEvents: new Map(), coordinationLatestEvents: [],
+    coordinationLatestTurnId: '', coordinationGraphTurnId: '', graphAgents: [],
+    activeTurnTargetAgent: null,
     historyState: 'loading', historyError: '', historyGeneration: 0, historyController: null,
     refs: [],
     attemptPlan: null,
@@ -2644,6 +2744,11 @@ function openCockpit(s) {
 
 function bindSessionComponents(s) {
   if (!s?.id) return;
+  $('#session-team')?.setAttribute('session', s.id);
+  S.session.currentTeam = null;
+  void refreshSessionTeamCapabilities(s.id);
+  $('#session-work')?.setAttribute('session', s.id);
+  $('#session-knowledge')?.setAttribute('session', s.id);
   const bindings = ['compare', 'attempts'];
   for (const id of bindings) {
     const component = $('#' + id);
@@ -2943,6 +3048,7 @@ function closeCockpit(options = {}) {
   const compare = $('#compare'); if (compare) compare.session = '';
   const sourceControl = $('#source-control'); if (sourceControl) sourceControl.session = '';
   const sessionContext = $('#session-context'); if (sessionContext) sessionContext.session = '';
+  $('#session-knowledge')?.removeAttribute('session');
   const sessionHistory = $('#session-history'); if (sessionHistory) sessionHistory.hide?.();
   teardownXterms();
   S.session.runtimeActivationController?.abort?.();
@@ -3125,13 +3231,14 @@ function setBrowserPicking(on) {
 }
 
 function toggleBrowserPick() {
-  if (!S.browser.url) {
+  const url = $('#browser')?.url || '';
+  if (!url) {
     toast('Open a page first', 'Enter a URL above, then choose Inspect element.', 'err');
     return;
   }
   // The picker is injected only into Session-proxied local applications.
   try {
-    const u = new URL(S.browser.url);
+    const u = new URL(url);
     const isLocal = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '0.0.0.0';
     if (!isLocal) {
       toast('Picker only works on local URLs', 'External pages do not receive the Session element-picker script.', 'err');
@@ -3201,7 +3308,7 @@ function confirmDomHier() {
   if (!h) return;
   addRef({
     kind: 'dom',
-    url: h.url || S.browser.url || '',
+    url: h.url || $('#browser')?.url || '',
     selector: h.selector || '',
     html: h.html || '',
     preview: h.selector || '(element)',
@@ -3216,7 +3323,7 @@ window.addEventListener('message', (e) => {
   if (!frame?.contentWindow || !expectedOrigin || e.source !== frame.contentWindow || e.origin !== expectedOrigin) return;
   const d = e.data || {};
   if (d.kind === 'axo-tap:picked') {
-    openDomHier(d.chain || [], d.selectedIndex || 0, d.url || S.browser.url || '', d.selector || '', d.html || '');
+    openDomHier(d.chain || [], d.selectedIndex || 0, d.url || $('#browser')?.url || '', d.selector || '', d.html || '');
   } else if (d.kind === 'axo-tap:level') {
     const h = S.browser.hier;
     if (h && typeof d.level === 'number') {
@@ -3745,6 +3852,7 @@ function openModule(id) {
   L.center = id;
   applyCockpitLayout();
   if (id === 'compare') refreshCompare(S.session.id);
+  if (id === 'trace' && S.session.id) void sessionLatticeBuild(S.session);
   renderPanesMenu();
   syncLauncherState();
 }
@@ -3764,6 +3872,7 @@ function sessionHome() { return $('#session-home'); }
     const home = sessionHome(); if (!home || home._wired) return;
     home._wired = true;
     home.agents = S.agents || [];
+    home.teams = S.sessionTeams || [];
     home.addEventListener('session-open', (e) => openCockpit(e.detail.session));
     home.addEventListener('workspace-open', (e) => void activateWorkspace(e.detail.workspace));
     home.addEventListener('session-open-new', (e) => {
@@ -4859,17 +4968,27 @@ function renderToolResult(name, result) {
   }
   return '<pre>' + escHtml(JSON.stringify(r, null, 2)) + '</pre>';
 }
-function sessionToolKey(turnId, agentId, callId, occurrence = 0) {
-  return JSON.stringify([
+function sessionToolKey(turnId, agentId, callId, occurrence = 0, coordinationGeneration = null) {
+  const identity = [
     String(turnId || S.session.activeTurnId || ''),
     String(agentId || 'agent'),
     String(callId || ''),
     Number(occurrence) || 0,
-  ]);
+  ];
+  // Provider-local call ids and their occurrence counters restart when a
+  // coordinated Agent is reactivated. Keep the legacy identity unchanged for
+  // ordinary/older frames, and extend it only when the runtime supplies the
+  // activation generation.
+  if (coordinationGeneration !== null && coordinationGeneration !== undefined) {
+    identity.push(String(coordinationGeneration));
+  }
+  return JSON.stringify(identity);
 }
 function sessionToolStart(d) {
   setThinking($('#session-msgs'), false);
-  const key = sessionToolKey(d.turn_id, d.agent, d.call_id, d.occurrence);
+  const key = sessionToolKey(
+    d.turn_id, d.agent, d.call_id, d.occurrence, d.coordination_generation,
+  );
   // Reconnect hydration may rebuild this durable start before the queued live
   // frame arrives. The per-turn occurrence identity makes replay idempotent.
   if (S.session.toolCards[key]) return;
@@ -4877,12 +4996,17 @@ function sessionToolStart(d) {
   card.dataset.turnId = d.turn_id || S.session.activeTurnId || '';
   card.dataset.agentId = d.agent || 'agent';
   card.dataset.occurrence = String(d.occurrence || 0);
+  if (d.coordination_generation !== null && d.coordination_generation !== undefined) {
+    card.dataset.coordinationGeneration = String(d.coordination_generation);
+  }
   S.session.toolCards[key] = { card, body };
   appendSessionEl(card);
 }
 function sessionToolResult(d) {
   const tc = S.session.toolCards[
-    sessionToolKey(d.turn_id, d.agent, d.call_id, d.occurrence)
+    sessionToolKey(
+      d.turn_id, d.agent, d.call_id, d.occurrence, d.coordination_generation,
+    )
   ];
   if (!tc) return;
   if (tc.card.dataset.resultApplied === 'true') return;
@@ -4913,6 +5037,37 @@ function sessionLiveStream(agentId = 'agent') {
     S.session.liveStreams.set(key, live);
   }
   return live;
+}
+function resetSessionLiveStreamForRevision(agentId, turnId = S.session.activeTurnId) {
+  const key = String(agentId || 'agent');
+  const activeTurnId = String(turnId || '');
+  const cachedRun = _liveSessionRuns.get(S.session.id);
+  if (cachedRun?.turn_id === activeTurnId && Array.isArray(cachedRun.agents)) {
+    const cachedAgent = cachedRun.agents.find(agent => agent?.agent === key);
+    if (cachedAgent) {
+      cachedAgent.status = 'pending';
+      cachedAgent.output = '';
+      cachedAgent.thinking = '';
+      cachedAgent.tokens = 0;
+      // mergeLiveSessionRun treats this WebSocket-observed activation boundary
+      // as newer than an in-flight HTTP/RunState projection of the old
+      // generation. AgentActivated keeps the marker while filling generation
+      // N+1, so an older HTTP body cannot win again later in the same turn.
+      cachedAgent.resetOutput = true;
+      cachedAgent.coordinationRevisionReset = true;
+    }
+  }
+  const live = S.session.liveStreams instanceof Map
+    ? S.session.liveStreams.get(key) : null;
+  live?.streamEl?.closest?.('.smsg')?.remove?.();
+  live?.reasoningEl?.closest?.('details')?.remove?.();
+  if (S.session.liveStreams instanceof Map) S.session.liveStreams.delete(key);
+  for (const row of document.querySelectorAll('#session-msgs .smsg[data-turn-id][data-agent-id]')) {
+    if (row.dataset.turnId === activeTurnId && row.dataset.agentId === key) row.remove();
+  }
+  for (const reasoning of document.querySelectorAll('#session-msgs details.chat-reasoning[data-turn-id][data-agent-id]')) {
+    if (reasoning.dataset.turnId === activeTurnId && reasoning.dataset.agentId === key) reasoning.remove();
+  }
 }
 function sessionAppendText(delta, agentId = 'agent') {
   setThinking($('#session-msgs'), false);
@@ -4955,6 +5110,8 @@ function sessionAppendReasoning(delta, agentId = 'agent') {
   if (!live.reasoningEl) {
     const det = document.createElement('details');
     det.className = 'chat-reasoning';
+    det.dataset.turnId = S.session.activeTurnId || '';
+    det.dataset.agentId = agentId;
     const sum = document.createElement('summary');
     sum.textContent = 'Thinking…';
     det.appendChild(sum);
@@ -4973,6 +5130,71 @@ function sessionAppendReasoning(delta, agentId = 'agent') {
 // The cockpit's Activity feed is otherwise ephemeral; on reopen we fetch the
 // canonical turns and rebuild it so the conversation isn't lost — including
 // multi-agent output and structured context — and so rewind uses durable ids.
+let _executionHistoryInvalidator = null;
+let _executionHistoryModuleLoad = null;
+let _pendingExecutionHistoryFrame = null;
+function observeExecutionHistoryFrame(frame) {
+  const event = frame?.event?.content;
+  const control = frame?.kind === 'activation-control-changed';
+  const exact = control ? frame.activation : event?.activation;
+  const validEvent = control ? typeof frame.blocker_id === 'string' && frame.blocker_id.length
+    && typeof frame.canonical_command_id === 'string' && frame.canonical_command_id.length
+    && Number.isSafeInteger(frame.turn_revision) && frame.turn_revision > 0 : event?.schema_version === 1;
+  if (!validEvent || exact?.session_id !== S.session.id
+      || !['turn_id', 'execution_epoch_id', 'node_id', 'activation_id'].every(key => typeof exact[key] === 'string' && exact[key].length)
+      || !Number.isSafeInteger(exact.generation) || exact.generation < 1) return;
+  S.session.executionHistoryTurnIds ||= new Set(); S.session.executionHistoryTurnIds.add(exact.turn_id);
+  scheduleSessionGuidanceRefresh(exact.turn_id);
+  if (!_executionHistoryInvalidator) {
+    // The socket opens before unrelated module loads. Retain one invalidation
+    // while this small renderer is loading instead of losing the first frame.
+    _pendingExecutionHistoryFrame = {session: S.session, frame};
+    if (!_executionHistoryModuleLoad) {
+      _executionHistoryModuleLoad = import('/ui/execution-history.js').then(module => {
+        _executionHistoryInvalidator ||= module.createExecutionHistoryInvalidator({getSession: () => S.session,
+          reload: (sessionId, options) => reloadSessionTranscript(sessionId, options)});
+        const pending = _pendingExecutionHistoryFrame; _pendingExecutionHistoryFrame = null;
+        if (pending?.session === S.session) observeExecutionHistoryFrame(pending.frame);
+      }).catch(() => { _executionHistoryModuleLoad = null; });
+    }
+    return;
+  }
+  const turnId = _executionHistoryInvalidator(frame);
+  if (turnId) {
+    S.session.executionHistoryTurnIds ||= new Set(); S.session.executionHistoryTurnIds.add(turnId);
+    if (control && S.session.coordinationGraphTurnId === turnId) scheduleCoordinationGraphRefresh(turnId);
+  }
+}
+
+function observeAttemptHistoryResults(results) {
+  const session = S.session;
+  if (results?.attempt_set?.session_id !== session.id
+      || (!sessionHasExecutionHistory(session) && session.currentTeam?.history_version !== 'execution_v2')) return;
+  if (_executionHistoryInvalidator) {
+    _executionHistoryInvalidator.attemptResults(results);
+    return;
+  }
+  void import('/ui/execution-history.js').then(module => {
+    if (S.session !== session) return;
+    _executionHistoryInvalidator ||= module.createExecutionHistoryInvalidator({getSession: () => S.session,
+      reload: (sessionId, options) => reloadSessionTranscript(sessionId, options)});
+    _executionHistoryInvalidator.attemptResults(results);
+  });
+}
+
+function isExecutionHistoryTurn(turnId, turns = null) {
+  if (!turnId) return false;
+  const turn = Array.isArray(turns) ? turns.find(item => item.id === turnId) : S.session.controlPlaneTurns?.get(turnId);
+  if (turn?.history_version === 'execution_v2' || S.session.executionHistoryTurnIds?.has(turnId) === true) return true;
+  // A native turn can wait for approval before emitting any output. Its live
+  // ownership and exact control-plane read are sufficient to open its graph;
+  // a transcript repaint is not an execution-identity prerequisite.
+  const envelope = $('#session-guidance')?.envelope;
+  return (turnId === S.session.activeTurnId && S.session.currentTeam?.history_version === 'execution_v2')
+    || (envelope?.schema_version === 1 && envelope.history_version === 'execution_v2'
+      && envelope.session_id === S.session.id && envelope.turn_id === turnId && Array.isArray(envelope.nodes));
+}
+
 async function reloadSessionTranscript(expectedSessionId = S.session.id, options = {}) {
   if (!expectedSessionId || S.session.id !== expectedSessionId) return null;
   const sessionState = S.session;
@@ -4985,15 +5207,18 @@ async function reloadSessionTranscript(expectedSessionId = S.session.id, options
   sessionState.historyError = '';
   syncSessionComposerState();
   try {
-    const r = await fetch('/api/sessions/' + encodeURIComponent(expectedSessionId) + '/turns', {
+    const r = await fetch('/api/sessions/' + encodeURIComponent(expectedSessionId) + '/turns?history_version=2', {
       signal: controller.signal,
     });
     if (!r.ok) {
       const detail = await r.json().catch(() => ({}));
       throw new Error(detail.error || ('HTTP ' + r.status));
     }
-    const turns = await r.json();
-    if (!Array.isArray(turns)) throw new Error('Turn history response is not a list');
+    const entries = await r.json();
+    if (!Array.isArray(entries)) throw new Error('Turn history response is not a list');
+    const historyRenderer = await import('/ui/execution-history.js');
+    window.renderExecutionHistoryTurn = historyRenderer.renderExecutionHistoryTurn;
+    const turns = entries.map(historyRenderer.historyPresentation);
     if (S.session !== sessionState || generation !== sessionState.historyGeneration) return null;
     // A History request can be slower than the live WebSocket. Reconcile with
     // the cache at render time—not when the request started—so frames that
@@ -5030,7 +5255,8 @@ async function reloadSessionTranscript(expectedSessionId = S.session.id, options
       return turns;
     }
     renderSessionTurns(turns, { ...options, preserveLive, liveRun });
-    for (const frame of (Array.isArray(liveRun?.toolFrames) ? liveRun.toolFrames : [])) {
+    restoreDurableActiveTurnTarget(liveRun, turns);
+    for (const frame of (!isExecutionHistoryTurn(liveRun?.turn_id, turns) && Array.isArray(liveRun?.toolFrames) ? liveRun.toolFrames : [])) {
       if (frame.phase === 'start') sessionToolStart(frame);
       else if (frame.phase === 'result') sessionToolResult(frame);
     }
@@ -5127,6 +5353,32 @@ async function readStableActiveSessionTurn(sessionId) {
   throw new Error('Current turn ownership kept changing while Axocoatl reconnected');
 }
 
+function durableTargetAgentForTurn(turns, turnId) {
+  const turn = (Array.isArray(turns) ? turns : []).find((candidate) => candidate?.id === turnId);
+  if (!turn) return null;
+  const metadata = turn.metadata && typeof turn.metadata === 'object' ? turn.metadata : {};
+  const target = typeof metadata.target_agent === 'string' ? metadata.target_agent.trim() : '';
+  if (!target || !sessionActiveAgentIds(S.session).includes(target)) return null;
+  return target;
+}
+
+function projectDirectTargetGraph(targetAgent) {
+  if (!targetAgent) return;
+  const agents = (S.session.graphAgents || []).length
+    ? S.session.graphAgents : sessionActiveAgentIds(S.session);
+  for (const agent of agents) sessionLatticeStatus(agent, 'idle');
+  sessionLatticeStatus(targetAgent, 'running');
+}
+
+function restoreDurableActiveTurnTarget(run, turns) {
+  if (!run?.turn_id) return null;
+  const durableTarget = durableTargetAgentForTurn(turns, run.turn_id);
+  if (!durableTarget) return null;
+  S.session.activeTurnTargetAgent = durableTarget;
+  projectDirectTargetGraph(durableTarget);
+  return durableTarget;
+}
+
 function applyOpenSessionLiveRun(run, turns = null) {
   if (!S.session.id) return;
   if (run?.turn_id) {
@@ -5138,14 +5390,15 @@ function applyOpenSessionLiveRun(run, turns = null) {
       setSessionTurnPending(false);
     }
     setSessionTurnRunning(run.turn_id, true);
+    restoreDurableActiveTurnTarget(run, turns);
     if (Array.isArray(turns) && turns.some((turn) => turn?.id === run.turn_id)) {
       renderSessionTurns(turns, { preserveLive: true, liveRun: run });
     }
-    for (const frame of (Array.isArray(run.toolFrames) ? run.toolFrames : [])) {
+    for (const frame of (!isExecutionHistoryTurn(run.turn_id, turns) && Array.isArray(run.toolFrames) ? run.toolFrames : [])) {
       if (frame.phase === 'start') sessionToolStart(frame);
       else if (frame.phase === 'result') sessionToolResult(frame);
     }
-    restoreCoordinatorRunView(run, { open: true });
+    if (!isExecutionHistoryTurn(run.turn_id, turns)) restoreCoordinatorRunView(run, { open: true });
   } else {
     if (S.session.activeTurnId) setSessionTurnRunning(S.session.activeTurnId, false);
   }
@@ -5188,15 +5441,193 @@ function resolvePendingSessionTurn(sessionId, pending, turns) {
   setSessionTurnPending(false);
 }
 
+const COORDINATION_EXECUTION_KINDS = new Set([
+  'coordination_planned',
+  'coordination_signal',
+  'coordination_agent_activated',
+  'coordination_agent_reactivated',
+  'coordination_agent_completed',
+  'coordination_agent_failed',
+  'coordination_agent_blocked',
+  'coordination_agent_cancelled',
+  'coordination_recovery_partial',
+  'coordination_completed',
+  'agent_output_superseded',
+]);
+
+function coordinationEventsForTurn(turn) {
+  return (Array.isArray(turn?.execution_events) ? turn.execution_events : [])
+    .filter(event => COORDINATION_EXECUTION_KINDS.has(event?.kind));
+}
+
+function coordinationRevisionPendingAgents(events) {
+  const pending = new Set();
+  for (const event of (Array.isArray(events) ? events : [])) {
+    const metadata = event?.metadata && typeof event.metadata === 'object'
+      ? event.metadata : {};
+    const agent = metadata.agent_id || metadata.agent || '';
+    if (!agent) continue;
+    if (event.kind === 'agent_output_superseded'
+        || event.kind === 'coordination_agent_reactivated') {
+      pending.add(agent);
+    } else if (event.kind === 'coordination_agent_activated') {
+      // Reactivation is a two-step boundary: queued/revision-pending first,
+      // then an actual new activation. A reconnect RunState may still carry
+      // the prior generation until this durable activation exists.
+      pending.delete(agent);
+    }
+  }
+  return pending;
+}
+
+function coordinationEventIdentity(event) {
+  if (event?.operation_id) return event.operation_id;
+  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+  return [event?.kind || '', event?.execution_id || '', metadata.agent_id || '',
+    metadata.generation || '', metadata.signal_id || ''].join(':');
+}
+
+function setCoordinationEvents(turnId, events) {
+  const unique = [];
+  const seen = new Set();
+  for (const event of (Array.isArray(events) ? events : [])) {
+    if (!COORDINATION_EXECUTION_KINDS.has(event?.kind)) continue;
+    const key = coordinationEventIdentity(event);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(event);
+  }
+  S.session.coordinationEvents.set(turnId, unique);
+  return unique;
+}
+
+function mountCoordinationCard(turn, userElement, events) {
+  const turnId = typeof turn === 'string' ? turn : turn?.id || '';
+  if (!turnId || !userElement || !events.some(event => event.kind === 'coordination_planned')) {
+    return null;
+  }
+  let card = S.session.coordinationCards.get(turnId);
+  if (!card?.isConnected) {
+    card = document.createElement('ax-coordination-turn');
+    card.dataset.turnId = turnId;
+    card.addEventListener('open-agent-graph', event => {
+      const selectedTurnId = event.detail?.turnId || turnId;
+      openModule('trace');
+      void showCoordinationGraph(selectedTurnId);
+    });
+    userElement.insertAdjacentElement('afterend', card);
+    S.session.coordinationCards.set(turnId, card);
+  }
+  card.turn = typeof turn === 'object' && turn
+    ? { ...card.turn, ...turn, session_id: S.session.id, execution_events: events }
+    : { id: turnId, execution_events: events };
+  return card;
+}
+
+function applyCoordinationGraphEvent(event) {
+  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+  if (event.kind === 'coordination_planned') {
+    for (const agent of (S.session.graphAgents || [])) sessionLatticeStatus(agent, 'idle');
+    return;
+  }
+  const agent = metadata.agent_id || metadata.agent || null;
+  if (!agent) return;
+  if (event.kind === 'coordination_agent_activated') sessionLatticeStatus(agent, 'running');
+  else if (event.kind === 'coordination_agent_reactivated') sessionLatticeStatus(agent, 'pending');
+  else if (event.kind === 'agent_output_superseded') sessionLatticeStatus(agent, 'pending');
+  else if (event.kind === 'coordination_agent_completed') sessionLatticeStatus(agent, 'success');
+  else if (event.kind === 'coordination_agent_failed') sessionLatticeStatus(agent, 'error');
+  else if (event.kind === 'coordination_agent_blocked') sessionLatticeStatus(agent, 'blocked');
+  else if (event.kind === 'coordination_agent_cancelled') sessionLatticeStatus(agent, 'cancelled');
+}
+
+function onSessionCoordinationFrame(frame) {
+  if (!S.session.id || frame?.session !== S.session.id
+      || !frame.turn_id || frame.turn_id !== S.session.activeTurnId) return;
+  const body = frame.event?.event && typeof frame.event.event === 'object'
+    ? frame.event.event : frame.event;
+  const raw = body && typeof body === 'object'
+    ? { ...body, operation_id: frame.operation_id || body.operation_id,
+      recorded_at: frame.recorded_at ?? body.recorded_at }
+    : null;
+  if (!raw || !COORDINATION_EXECUTION_KINDS.has(raw.kind)) return;
+  if (raw.kind === 'coordination_agent_reactivated') {
+    const metadata = raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {};
+    if (metadata.agent_id) resetSessionLiveStreamForRevision(metadata.agent_id, frame.turn_id);
+  }
+  const prior = S.session.coordinationEvents.get(frame.turn_id) || [];
+  const events = setCoordinationEvents(frame.turn_id, [...prior, raw]);
+  const userElement = Array.from(document.querySelectorAll('#session-msgs .smsg.user'))
+    .find(element => element.dataset.turnId === frame.turn_id);
+  const userInput = userElement?.querySelector('.smsg-body')?.textContent || '';
+  mountCoordinationCard({ id: frame.turn_id, user_input: userInput }, userElement, events);
+  S.session.coordinationLatestEvents = events;
+  S.session.coordinationLatestTurnId = frame.turn_id;
+  if (raw.kind === 'coordination_planned') {
+    S.session.coordinationGraphTurnId = frame.turn_id;
+    void sessionLatticeBuild(S.session, events, frame.turn_id);
+  } else if (S.session.coordinationGraphTurnId === frame.turn_id) {
+    applyCoordinationGraphEvent(raw);
+    scheduleCoordinationGraphRefresh(frame.turn_id);
+  }
+}
+
+async function showCoordinationGraph(turnId) {
+  S.session.waysGraph = null;
+  const events = S.session.coordinationEvents.get(turnId) || [];
+  if (!events.some(event => event.kind === 'coordination_planned')
+      && !S.session.controlPlaneTurns?.has(turnId) && !isExecutionHistoryTurn(turnId)) return;
+  S.session.coordinationGraphTurnId = turnId;
+  await sessionLatticeBuild(S.session, events, turnId);
+}
+
+function agentOutputDispositionLabel(disposition) {
+  const value = String(disposition || '').trim().toLowerCase();
+  if (!value || value === 'completed') return '';
+  if (value === 'failed') return 'failed · partial output';
+  if (value === 'cancelled' || value === 'canceled') return 'stopped · partial output';
+  if (value === 'changes_requested') return 'changes requested · incomplete output';
+  return `${value.replaceAll('_', ' ')} · incomplete output`;
+}
+
 function renderSessionTurns(turns, options = {}) {
+  const previouslyInspectedTurn = S.session.coordinationGraphTurnId;
   const host = $('#session-msgs');
+  const liveCoordinationTurnId = options.preserveLive
+    ? (options.liveRun?.turn_id || S.session.activeTurnId || '') : '';
+  const liveCoordinationEvents = liveCoordinationTurnId
+    ? (S.session.coordinationEvents.get(liveCoordinationTurnId) || []).slice() : [];
   host.innerHTML = '';
   S.session.toolCards = {};
+  S.session.coordinationCards = new Map();
+  S.session.coordinationEvents = new Map();
+  S.session.coordinationLatestEvents = [];
+  S.session.coordinationLatestTurnId = '';
+  S.session.coordinationGraphTurnId = '';
+  S.session.graphAgents = [];
   S.session.streamEl = null;
   S.session.reasoningEl = null;
   S.session.liveStreams = new Map();
   const visible = Array.isArray(turns) ? turns : [];
+  S.session.controlPlaneTurns = new Map(visible.filter(turn => turn.id).map(turn => [turn.id, turn]));
+  S.session.controlPlaneLatestTurnId = visible.filter(turn => turn.superseded !== true).at(-1)?.id || '';
   visible.forEach((turn, index) => {
+    if (turn.history_version === 'execution_v2') {
+      $('#session-guidance')?.observeRetainedTurn?.(turn.execution);
+      const fragment = window.renderExecutionHistoryTurn(turn.execution, {
+        renderMarkdown: mdRender,
+        onGraph: () => { openModule('trace'); void showCoordinationGraph(turn.id); },
+        onReference: reference => { void openCoordinationReference(reference); },
+      });
+      const request = turn.execution.request?.status === 'available' ? turn.execution.request.content : null;
+      if (request) fragment.querySelector('.smsg.user')?.append(sessionActionRow({
+        role: 'user', text: request.display_input || '',
+        keepThroughTurnId: index > 0 ? visible[index - 1].id : null,
+        hasContext: Boolean(request.context?.length),
+      }));
+      host.append(fragment);
+      return;
+    }
     const priorTurnId = index > 0 ? visible[index - 1].id : null;
     const user = el('div', 'smsg user');
     user.dataset.turnId = turn.id || '';
@@ -5224,6 +5655,19 @@ function renderSessionTurns(turns, options = {}) {
     }));
     host.appendChild(user);
 
+    const durableCoordinationEvents = coordinationEventsForTurn(turn);
+    const coordinationEvents = setCoordinationEvents(
+      turn.id || '',
+      turn.id === liveCoordinationTurnId
+        ? [...durableCoordinationEvents, ...liveCoordinationEvents]
+        : durableCoordinationEvents,
+    );
+    mountCoordinationCard(turn, user, coordinationEvents);
+    if (coordinationEvents.length) {
+      S.session.coordinationLatestEvents = coordinationEvents;
+      S.session.coordinationLatestTurnId = turn.id || '';
+    }
+
     // Tool route evidence is part of the canonical turn ledger, not only the
     // live WebSocket. Rebuild the same cards after reload/restart so a user can
     // still inspect how the answer was produced and whether a tool failed.
@@ -5235,15 +5679,22 @@ function renderSessionTurns(turns, options = {}) {
       const callId = execution.execution_id || metadata.call_id || execution.operation_id || '';
       const agentId = metadata.agent_id || turn.agent_id || 'agent';
       const occurrence = Number(metadata.occurrence) || 0;
-      const toolKey = sessionToolKey(turn.id, agentId, callId, occurrence);
+      const coordinationGeneration = metadata.generation ?? null;
+      const toolKey = sessionToolKey(
+        turn.id, agentId, callId, occurrence, coordinationGeneration,
+      );
       const name = metadata.tool_name || 'tool';
       if (execution.kind === 'tool_started') {
         const built = buildToolCard({
           name, arguments: metadata.arguments || {}, call_id: callId, agent: agentId, occurrence,
+          coordination_generation: coordinationGeneration,
         });
         built.card.dataset.turnId = turn.id || '';
         built.card.dataset.agentId = agentId;
         built.card.dataset.occurrence = String(occurrence);
+        if (coordinationGeneration !== null) {
+          built.card.dataset.coordinationGeneration = String(coordinationGeneration);
+        }
         toolCards.set(toolKey, built.card);
         S.session.toolCards[toolKey] = built;
         host.appendChild(built.card);
@@ -5252,10 +5703,14 @@ function renderSessionTurns(turns, options = {}) {
         if (!card) {
           const built = buildToolCard({
             name, arguments: {}, call_id: callId, agent: agentId, occurrence,
+            coordination_generation: coordinationGeneration,
           });
           built.card.dataset.turnId = turn.id || '';
           built.card.dataset.agentId = agentId;
           built.card.dataset.occurrence = String(occurrence);
+          if (coordinationGeneration !== null) {
+            built.card.dataset.coordinationGeneration = String(coordinationGeneration);
+          }
           card = built.card;
           toolCards.set(toolKey, card);
           S.session.toolCards[toolKey] = built;
@@ -5269,26 +5724,34 @@ function renderSessionTurns(turns, options = {}) {
       }
     }
 
-    const agentOutputs = Array.isArray(turn.agent_outputs) ? turn.agent_outputs : [];
-    const outputs = agentOutputs.length
-      ? agentOutputs.map(output => ({ agent: output.agent_id || 'agent', content: output.output || '' }))
+    const coordinatedTurn = coordinationEvents.some(event => event.kind === 'coordination_planned');
+    const recordedAgentOutputs = Array.isArray(turn.agent_outputs) ? turn.agent_outputs : [];
+    const agentOutputs = recordedAgentOutputs.filter(output => output?.superseded !== true);
+    const outputs = coordinatedTurn || recordedAgentOutputs.length
+      ? agentOutputs.map(output => ({
+        agent: output.agent_id || 'agent',
+        content: output.output || '',
+        generation: Number(output.activation_generation) || null,
+        disposition: output.disposition || null,
+      }))
       : [{ agent: turn.agent_id || 'agent', content: turn.final_output || turn.partial_output || '' }];
-    if (agentOutputs.length && turn.partial_output) {
-      const completedLength = agentOutputs.reduce(
-        (total, output) => total + String(output.output || '').length, 0,
-      );
-      const tail = turn.partial_output.slice(Math.min(completedLength, turn.partial_output.length));
-      if (tail.trim()) {
-        const liveAgent = options.liveRun?.agents?.find?.(agent => agent?.status === 'running');
-        outputs.push({ agent: liveAgent?.agent || turn.agent_id || 'agent', content: tail });
-      }
-    }
     for (const output of outputs) {
       if (!output.content.trim()) continue;
       const assistant = el('div', 'smsg');
       assistant.dataset.turnId = turn.id || '';
       assistant.dataset.agentId = output.agent;
-      assistant.appendChild(el('div', 'smsg-role', output.agent));
+      if (output.generation) assistant.dataset.generation = String(output.generation);
+      const generationLabel = output.generation > 1 ? ` · revision ${output.generation - 1}` : '';
+      const disposition = String(output.disposition || '').trim().toLowerCase();
+      const dispositionLabel = agentOutputDispositionLabel(disposition);
+      if (dispositionLabel) {
+        assistant.dataset.disposition = disposition;
+        assistant.classList.add('incomplete-output');
+      }
+      assistant.appendChild(el(
+        'div', 'smsg-role',
+        output.agent + generationLabel + (dispositionLabel ? ` · ${dispositionLabel}` : ''),
+      ));
       const body = el('div', 'smsg-body prose');
       body.innerHTML = mdRender(output.content);
       assistant.appendChild(body);
@@ -5323,31 +5786,41 @@ function renderSessionTurns(turns, options = {}) {
     }
   });
   if (options.preserveLive) {
-    const running = visible.find(turn => turn.status === 'running');
+    const running = visible.find(turn => turn.status === 'running' && turn.history_version !== 'execution_v2');
     if (running && running.id === S.session.activeTurnId) {
+      const runningCoordinationEvents = S.session.coordinationEvents.get(running.id)
+        || coordinationEventsForTurn(running);
+      const runningIsCoordinated = runningCoordinationEvents
+        .some(event => event.kind === 'coordination_planned');
+      const pendingRevisionAgents = coordinationRevisionPendingAgents(runningCoordinationEvents);
       const liveAgents = Array.isArray(options.liveRun?.agents) ? options.liveRun.agents : [];
-      const replayAgents = liveAgents.length ? liveAgents : [{
-        agent: running.agent_id || 'agent',
-        output: running.agent_outputs?.length ? '' : running.partial_output || '',
-        status: 'running',
-      }];
+      const replayAgents = liveAgents.length
+        ? liveAgents
+        : runningIsCoordinated
+          ? []
+          : [{
+            agent: running.agent_id || 'agent',
+            output: running.partial_output || '',
+            status: 'running',
+          }];
       for (const liveAgent of replayAgents) {
         const liveAgentId = liveAgent?.agent || running.agent_id || 'agent';
+        if (pendingRevisionAgents.has(liveAgentId)) {
+          // History is durable evidence for the revision boundary. Do not let
+          // a stale reconnect snapshot recreate the superseded output or its
+          // terminal status while this Agent is queued for a later generation.
+          resetSessionLiveStreamForRevision(liveAgentId, running.id);
+          continue;
+        }
         const liveOutput = liveAgent?.output || '';
         const completedOutputs = Array.isArray(running.agent_outputs)
           ? running.agent_outputs : [];
-        const completed = completedOutputs.find(output =>
+        const currentOutputs = completedOutputs.filter(output => output?.superseded !== true);
+        const completed = [...currentOutputs].reverse().find(output =>
           (output.agent_id || 'agent') === liveAgentId);
         let canonicalOutput = completed?.output || '';
-        if (!completedOutputs.length) {
+        if (!completedOutputs.length && !runningIsCoordinated) {
           canonicalOutput = running.partial_output || '';
-        } else if (!canonicalOutput && liveAgent?.status === 'running') {
-          const completedLength = completedOutputs.reduce(
-            (total, output) => total + String(output.output || '').length, 0,
-          );
-          canonicalOutput = String(running.partial_output || '').slice(
-            Math.min(completedLength, String(running.partial_output || '').length),
-          );
         }
         const mergedOutput = canonicalOutput.startsWith(liveOutput)
           ? canonicalOutput
@@ -5382,6 +5855,12 @@ function renderSessionTurns(turns, options = {}) {
         if (liveAgent?.thinking) sessionAppendReasoning(liveAgent.thinking, liveAgentId);
       }
     }
+  }
+  const inspectedTurnId = S.session.controlPlaneTurns.has(previouslyInspectedTurn)
+    ? previouslyInspectedTurn : S.session.controlPlaneLatestTurnId;
+  if (inspectedTurnId) {
+    S.session.coordinationGraphTurnId = inspectedTurnId;
+    void sessionLatticeBuild(S.session, S.session.coordinationEvents.get(inspectedTurnId) || [], inspectedTurnId);
   }
   host.scrollTop = host.scrollHeight;
 }
@@ -5447,7 +5926,8 @@ function sessionActionRow(opts) {
   // Closed Sessions mount as a durable, read-only recovery surface. Copying
   // transcript evidence remains available, but changing its canonical
   // boundary requires the explicit Reopen transition first.
-  const canRewind = sessionSupportsRewind() && S.session.status !== 'closed';
+  const canRewind = sessionSupportsRewind() && S.session.status !== 'closed'
+    && !Array.from(S.session.controlPlaneTurns?.values?.() || []).some(turn => ['running', 'needs_attention'].includes(turn.status));
   if (opts.role === 'user' && canRewind && Object.hasOwn(opts, 'keepThroughTurnId')) {
     const rewind = el('button', 'smsg-act', '⤺ Rewind');
     rewind.title = opts.hasContext
@@ -5686,8 +6166,8 @@ function threadVariantFrameMatches(run) {
     && announcedSetId === authoritativeSetId);
 }
 
-function sendSessionMessage() {
-  if (!S.session.id) return;
+async function sendSessionMessage() {
+  if (!S.session.id || S.session.waysStoragePending) return;
   const text = ($('#session-text').value || '').trim(); if (!text) return;
   if (!sessionEnvironmentReady()) {
     presentSessionEnvironmentGate('Agent work');
@@ -5730,6 +6210,23 @@ function sendSessionMessage() {
     return;
   }
   if (configuredAttemptLanes.length > 1) {
+    if (!$('#fanout')?.validateApprovals?.()) return;
+    const archiveSessionId = S.session.id;
+    const storageRequest = {text, lanes:JSON.stringify(configuredAttemptLanes)};
+    S.session.waysStoragePending = storageRequest;
+    syncSessionComposerState();
+    try {
+      const response = await fetch('/api/sessions/' + encodeURIComponent(archiveSessionId) + '/ways-history');
+      const archive = await response.json();
+      if (S.session.id !== archiveSessionId) return;
+      if (text !== ($('#session-text').value || '').trim() || !S.session.fanoutOn
+          || storageRequest.lanes !== JSON.stringify(S.session.fanoutLanes)
+          || S.session.activeTurnId || S.session.pendingTurn || S.threadVariants?.sessionId === archiveSessionId
+          || !sessionEnvironmentReady() || !sessionRuntimeSurfaceReady()) return;
+      if (!response.ok) throw new Error(archive.error || 'Decision history is unavailable');
+      if (archive.supports_retention !== false && !archive.limits) { await $('#ways-history')?.show({sessionId:archiveSessionId, configure:true}); return; }
+    } catch (error) { toast('Ways storage needs attention', error.message, 'warn'); return; }
+    finally { if (S.session.waysStoragePending === storageRequest) { S.session.waysStoragePending = null; syncSessionComposerState(); } }
     const dirtyFiles = axEditor().files.filter((file) => file.dirty);
     if (dirtyFiles.length) {
       toast(
@@ -5748,7 +6245,8 @@ function sendSessionMessage() {
   // uploads are immutable Session attachment ids carried separately so the
   // durable turn records exactly which bytes it used.
   const refs = S.session.refs || [];
-  const fullText = refs.length ? (buildRefsContext(refs) + '\n\n' + text) : text;
+  const inlineTextRefs = refs.filter(ref => ref.kind === 'code' || ref.kind === 'dom');
+  const fullText = inlineTextRefs.length ? (buildRefsContext(inlineTextRefs) + '\n\n' + text) : text;
   const sessionContext = $('#session-context');
   const reference_ids = sessionContext?.selectedReferenceIds?.() || [];
   const planned = S.session.attemptPlan?.instruction === text ? S.session.attemptPlan : null;
@@ -5769,13 +6267,13 @@ function sendSessionMessage() {
   // nothing.
   const laneCfg = configuredAttemptLanes;
   if (laneCfg.length > 1) {
-    if (reference_ids.length) {
+    if (reference_ids.length || refs.some(ref => ref.kind === 'coordination')) {
       $('#session-text').value = text;
       S.session.refs = refs;
       renderChatRefs();
       wrap.remove();
-      toast('Attachments need one normal turn',
-        'Turn off Explore several ways before sending files. Attempts do not share Session attachments yet.',
+      toast('Attached evidence needs one normal turn',
+        'Turn off Explore several ways before sending these attachments and recorded references.',
         'warn', 7000);
       $('#session-text').focus();
       return;
@@ -5795,12 +6293,11 @@ function sendSessionMessage() {
   // Per-turn pickers: model override + (optional) agent target.
   const modelSel  = $('#session-model');
   const targetSel = $('#session-target');
-  const model_override = (modelSel && !modelSel.classList.contains('hide')
-    && modelSel.value && modelSel.value !== '__default__')
-    ? modelSel.value : undefined;
+  const model_override = sessionComposerModelOverride(S.session, modelSel);
   const target_agent = (targetSel && !targetSel.classList.contains('hide') && targetSel.value && targetSel.value !== '__all__')
     ? targetSel.value : undefined;
   const turn_id = 'turn-' + crypto.randomUUID();
+  wrap.dataset.turnId = turn_id;
   const payload = {
     cmd: 'session', id: S.session.id, turn_id,
     idempotency_key: turn_id, reference_ids, input: fullText, display_input: text,
@@ -5823,6 +6320,7 @@ function sendSessionMessage() {
     S.session.pendingTurn = {
       id: turn_id, referenceIds: reference_ids, userEl: wrap,
       composerText: text, inlineRefs: refs.map((ref) => ({ ...ref })),
+      targetAgent: target_agent || null,
     };
     _pendingSessionTurns.set(S.session.id, S.session.pendingTurn);
     setSessionTurnPending(true);
@@ -5842,6 +6340,7 @@ function setSessionTurnRunning(turnId, running) {
   if (!running) {
     S.session.liveStreams = new Map();
     S.session.stopPending = false;
+    S.session.activeTurnTargetAgent = null;
   }
   syncSessionComposerState();
 }
@@ -5855,6 +6354,10 @@ function syncSessionComposerState() {
   const runtimeReady = sessionRuntimeSurfaceReady();
   const running = Boolean(S.session.activeTurnId);
   const pending = Boolean(S.session.pendingTurn);
+  const guidance = $('#session-guidance');
+  const guidanceTurnId = S.session.activeTurnId || S.session.controlPlaneLatestTurnId || '';
+  const nativeGuidance = S.session.currentTeam?.history_version === 'execution_v2' || isExecutionHistoryTurn(guidanceTurnId);
+  guidance?.setIdentity?.(S.session.id, nativeGuidance ? guidanceTurnId : '');
   const history = $('#session-history');
   if (history && S.session.id) {
     history.setAttribute('rewind-enabled',
@@ -5865,14 +6368,17 @@ function syncSessionComposerState() {
   // the explicit Reopen action in the environment banner.
   composer?.toggleAttribute('inert', S.session.status === 'closed');
   composer?.setAttribute('aria-disabled', String(S.session.status === 'closed'));
-  if (context) context.disabled = !historyReady || !runtimeReady || running || pending;
+  if (context) context.disabled = !historyReady || !runtimeReady || pending;
   syncSessionLifecycleChrome();
   if (!send) return;
   if (running) {
-    send.disabled = true;
-    send.textContent = S.session.stopPending ? 'Stopping…' : 'Working…';
+    send.disabled = !guidance?.canSend || !runtimeReady || S.session.stopPending;
+    send.textContent = S.session.stopPending ? 'Stopping…' : guidance?.mode === 'running' ? 'Guide current work' : 'Working…';
     send.classList.remove('danger');
     send.title = 'Use the Stop control in the Session header to stop this exact turn';
+  } else if (S.session.waysStoragePending) {
+    send.disabled = true; send.textContent = 'Checking Ways storage…';
+    send.classList.remove('danger'); send.title = '';
   } else if (pending) {
     send.disabled = true;
     send.textContent = 'Starting…';
@@ -5899,6 +6405,10 @@ function syncSessionComposerState() {
     send.textContent = S.session.historyState === 'error' ? 'Retry history' : 'Loading…';
     send.classList.remove('danger');
     send.title = S.session.historyError || 'Confirming canonical Session state';
+  } else if (guidance?.mode === 'needs_attention') {
+    send.disabled = true;
+    send.textContent = 'Needs attention';
+    send.title = 'Open Turn controls to inspect blockers and choose Continue or Finish';
   } else {
     send.disabled = false;
     send.textContent = 'Send';
@@ -5918,7 +6428,16 @@ function stopSessionTurn() {
   syncSessionComposerState();
 }
 
-function activateSessionComposer() {
+async function activateSessionComposer() {
+  const guidance = $('#session-guidance');
+  if (S.session.activeTurnId && guidance?.mode === 'running') {
+    const text = $('#session-text').value;
+    const sessionId = S.session.id;
+    const context = {references: canonicalInlineReferences(ensureRefs()), attachment_ids: $('#session-context')?.selectedReferenceIds?.() || []};
+    if (await guidance.send(text, context) && S.session.id === sessionId && $('#session-text').value === text) { $('#session-text').value = ''; S.session.refs = []; renderChatRefs(); }
+    return;
+  }
+  if (guidance?.mode === 'needs_attention') { guidance.shadowRoot.querySelector('.controls').click(); return; }
   sendSessionMessage();
 }
 
@@ -5931,10 +6450,52 @@ function activateSessionComposer() {
 // ceiling and the per-attempt configuration live in <ax-fanout>.
 const FANOUT_RECOMMENDED = 3;
 
+async function refreshSessionTeamCapabilities(sessionId) {
+  try {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/team`);
+    if (!response.ok) return;
+    const team = await response.json();
+    if (S.session.id !== sessionId) return;
+    S.session.currentTeam = team;
+    renderSessionActive(S.session); renderStatusPearls();
+    refreshSessionTeamComposer();
+    syncSessionRoleCapabilities();
+    syncSessionComposerState();
+  } catch { /* The ordinary pre-Team path remains available; admission rechecks authority. */ }
+}
+document.addEventListener('session-team-applied', event => { if (event.detail?.session_id === S.session.id) void refreshSessionTeamCapabilities(S.session.id); });
+document.addEventListener('session-team-loaded', event => {
+  if (event.detail?.session_id !== S.session.id) return;
+  S.session.currentTeam = event.detail.team;
+  renderSessionActive(S.session); renderStatusPearls();
+  refreshSessionTeamComposer();
+  syncSessionRoleCapabilities();
+  syncSessionComposerState();
+});
+
+function refreshSessionTeamComposer() {
+  populateSessionAgentTarget(S.session);
+  void populateSessionModelPicker(S.session);
+  if (!S.session.coordinationGraphTurnId && !S.session.controlPlaneLatestTurnId
+      && !S.session.waysGraph && visibleSurfaces().includes('trace')) {
+    void sessionLatticeBuild(S.session);
+  }
+}
+
 function sessionSupportsAttempts(session = S.session) {
   if (session?.mode?.kind !== 'single_agent') return false;
+  if (session.currentTeam?.approved) {
+    const slots = session.currentTeam.slots;
+    // SessionTeamSlotEdit omits its default Autonomous role on the wire.
+    return Array.isArray(slots) && slots.length === 1 && String(slots[0].role === undefined ? 'autonomous' : slots[0].role).toLowerCase() === 'autonomous';
+  }
   const agent = (S.agents || []).find((candidate) => candidate.id === session.mode.agent_id);
   return String(agent?.role || '').toLowerCase() === 'autonomous';
+}
+
+function sessionHasExecutionHistory(session = S.session) {
+  return Boolean(session?.executionHistoryTurnIds?.size)
+    || Array.from(session?.controlPlaneTurns?.values?.() || []).some(turn => turn.history_version === 'execution_v2');
 }
 
 function sessionSupportsRewind(session = S.session) {
@@ -5942,6 +6503,8 @@ function sessionSupportsRewind(session = S.session) {
 }
 
 function sessionAttemptsUnavailableReason(session = S.session) {
+  if (session.currentTeam?.approved && session.currentTeam.slots?.length !== 1) return 'Explore several ways requires one approved autonomous Agent in this Session team';
+  if (session.currentTeam?.approved && String(session.currentTeam.slots?.[0]?.role === undefined ? 'autonomous' : session.currentTeam.slots[0].role).toLowerCase() !== 'autonomous') return 'Explore several ways requires an approved autonomous Agent; Coordinator and Worker teams use normal Session turns';
   if (session?.mode?.kind !== 'single_agent') {
     return 'Explore several ways currently requires a single-agent Session';
   }
@@ -6141,6 +6704,7 @@ function closeFanoutPop() {
         task: String(detail.task || instruction),
         instruction,
         plan: detail.plan || null,
+        evidence_ref: detail.evidence_ref || null,
       };
       const input = $('#session-text');
       if (input) {
@@ -6321,7 +6885,7 @@ async function startThreadVariants(task, input, lanes, pendingTurn = null) {
     const set = await attemptJson(
       '/api/sessions/' + encodeURIComponent(sessionId) + '/variants', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ task, input, lanes: requested }),
+        body: JSON.stringify({ task, input, lanes: requested, preparation_refs: [...new Set([pendingTurn?.plan?.evidence_ref, ...($('#attempts')?.preparationReferences?.() || [])].filter(Boolean))] }),
       });
     if (!set || !set.id || !Array.isArray(set.lanes) || set.session_id !== sessionId) {
       throw new Error('The daemon did not return an attempt set.');
@@ -6571,7 +7135,7 @@ function renderVariantFoot() {
 function threadVariantToken(i, delta) {
   const tv = S.threadVariants;
   const variant = tv?.variants.find(v => v.index === i);
-  if (!tv || !variant) return;
+  if (!tv || !variant || isAttemptTerminal(variant.authoritativeState)) return;
   variant.buf += delta;
   if (i === tv.active) {
     tv.bodyEl.innerHTML = mdRender(variant.buf);
@@ -6581,7 +7145,7 @@ function threadVariantToken(i, delta) {
 function threadVariantStatus(i, status) {
   const tv = S.threadVariants;
   const variant = tv?.variants.find(v => v.index === i);
-  if (!tv || !variant) return;
+  if (!tv || !variant || isAttemptTerminal(variant.authoritativeState)) return;
   variant.laneState = status === 'done' ? 'completed' : (status === 'error' ? 'failed' : status);
   variant.dot.className = 'vt-pill-dot ' + attemptVisualState(variant.laneState);
   syncVariantAccessibility(tv);
@@ -6651,12 +7215,13 @@ function applyThreadVariantResults(results) {
   const set = results?.attempt_set;
   if (!tv || !set || !applyThreadAttemptSet(set)) return false;
   tv.results = results;
+  observeAttemptHistoryResults(results);
   const laneStates = Array.isArray(results.lane_states) ? results.lane_states : [];
   const verdicts = Array.isArray(results.verdicts) ? results.verdicts : [];
   const outputs = Array.isArray(results.outputs) ? results.outputs : [];
   for (const variant of tv.variants) {
     const fact = laneStates.find(item => item.index === variant.index);
-    if (fact?.state) variant.laneState = fact.state;
+    if (fact?.state) { variant.laneState = fact.state; variant.authoritativeState = fact.state; }
     else if (['ready', 'checking', 'verified', 'judged'].includes(set.state)) variant.laneState = 'completed';
     else if (set.state === 'failed') variant.laneState = 'failed';
     else if (set.state === 'discarding') variant.laneState = 'discarding';
@@ -6766,7 +7331,8 @@ function restoreThreadVariantResults(sessionId, results) {
     keptIndex: set.kept_index,
   });
   applyThreadVariantResults(results);
-  openModule('stream');
+  // A read or uncertain decision must not dismiss the current review/error.
+  // Explicit launch and decision completion own navigation to Conversation.
   setAttemptsDock(true);
   refreshCompare(sessionId);
   refreshAttempts(sessionId);
@@ -7155,6 +7721,84 @@ function addRef(ref) {
   renderChatRefs();
 }
 
+document.addEventListener('open-ways-history', event => { if (event.detail.sessionId) $('#ways-history')?.show(event.detail); });
+document.addEventListener('open-ways-graph', event => {
+  const detail = event.detail;
+  if (!detail?.setId || detail.sessionId !== S.session.id) return;
+  S.session.waysGraph = {sessionId:detail.sessionId,setId:detail.setId,record:detail.record || null};
+  openModule('trace');
+});
+document.addEventListener('close-ways-graph', () => { S.session.waysGraph = null; void sessionLatticeBuild(S.session); });
+document.addEventListener('review-ways-decision', async event => {
+  const {sessionId,setId} = event.detail || {};
+  if (sessionId !== S.session.id || S.session.waysGraph?.setId !== setId) return;
+  try {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/variants/results`);
+    const results = await response.json();
+    if (!response.ok || results.attempt_set?.id !== setId || results.attempt_set?.session_id !== sessionId) throw new Error('This Ways decision is no longer available for comparison.');
+    if (S.session.id !== sessionId || S.session.waysGraph?.setId !== setId) return;
+    const compare = $('#compare'); if (compare) { compare.session = sessionId; compare.view = 'outcome'; }
+    openModule('compare');
+  } catch (error) { toast('Comparison unavailable',String(error?.message || error),'err'); }
+});
+document.addEventListener('attach-ways-decision', event => attachCoordinationReference(event.detail));
+document.addEventListener('knowledge-attached', async event => {
+  const {session_id, instruction, note} = event.detail || {};
+  if (session_id !== S.session.id) return;
+  await $('#session-context')?.refresh?.();
+  if (session_id !== S.session.id) return;
+  if (instruction) {
+    const composer = $('#session-text');
+    composer.value = composer.value.trim() ? `${composer.value}\n\n${instruction}` : instruction;
+    composer.dispatchEvent(new Event('input', {bubbles:true}));
+  }
+  openModule('stream'); $('#session-text')?.focus();
+  toast('Knowledge attached', `${note.title} · revision ${note.revision}`, 'ok');
+});
+document.addEventListener('knowledge-open-source', async event => {
+  const {session_id, path, line} = event.detail || {};
+  if (session_id !== S.session.id || typeof path !== 'string') return;
+  await openFile(path);
+  if (session_id === S.session.id) await axEditor().revealLine?.(path, line);
+});
+document.addEventListener('knowledge-open-evidence', async event => {
+  const {session_id, activation} = event.detail || {};
+  if (session_id !== S.session.id || !activation?.session_id || !activation?.turn_id) return;
+  if (activation.session_id !== S.session.id) {
+    const source = sessionHome()?.session?.(activation.session_id)
+      || (S.sessions || []).find(session => session.id === activation.session_id);
+    if (!source) { toast('Source Session unavailable','The retained note still records its exact source activation.','warn'); return; }
+    openCockpit(source);
+  }
+  await reloadSessionTranscript(activation.session_id);
+  if (S.session.id !== activation.session_id) return;
+  await openCoordinationReference({kind:'coordination_reference',metadata:{history_version:'execution_v2',
+    source_session_id:activation.session_id,source_turn_id:activation.turn_id,node_id:activation.node_id,
+    generation:activation.generation,execution_epoch_id:activation.execution_epoch_id,activation_id:activation.activation_id}});
+});
+function attachCoordinationReference({ reference, preview }) {
+  if (!['coordination_reference', 'ways_decision'].includes(reference?.kind) || reference.metadata?.source_session_id !== S.session.id) {
+    toast('Reference belongs to another Session', 'Open the original Session before attaching this evidence.', 'warn');
+    return;
+  }
+  const identity = JSON.stringify(reference.metadata);
+  if (!ensureRefs().some(ref => ref.kind === 'coordination' && JSON.stringify(ref.reference.metadata) === identity)) {
+    addRef({ kind: 'coordination', reference: structuredClone(reference), preview: preview || '' });
+  }
+  $('#session-lattice-host')?.querySelector('ax-activation-inspector')?.close();
+  openModule('stream');
+  $('#session-text')?.focus();
+}
+async function openCoordinationReference(reference) {
+  if (reference?.kind === 'ways_decision') { await $('#ways-history')?.show({sessionId:S.session.id, decisionId:reference.reference_id}); return; }
+  const metadata = reference?.metadata;
+  if (!metadata || metadata.source_session_id !== S.session.id) return;
+  S.session.pendingGraphReference = structuredClone(metadata);
+  S.session.coordinationGraphTurnId = metadata.source_turn_id;
+  openModule('trace');
+  await sessionLatticeBuild(S.session, S.session.coordinationEvents.get(metadata.source_turn_id) || [], metadata.source_turn_id);
+}
+
 function removeRef(i) {
   const r = ensureRefs();
   r.splice(i, 1);
@@ -7170,10 +7814,17 @@ function renderChatRefs() {
     chip.title = r.preview || '';
     chip.appendChild(el('span', 'chip-icon', r.kind === 'dom' ? '🎯' : '⌖'));
     const label =
+      r.kind === 'coordination' ? r.reference.display_name :
       r.kind === 'code' ? `${r.path}:${r.startLine}${r.endLine !== r.startLine ? '-' + r.endLine : ''}` :
       r.kind === 'dom'  ? (r.selector || '(element)') :
       '(reference)';
-    chip.appendChild(el('span', 'chip-text', label));
+    const chipLabel = el(r.kind === 'coordination' ? 'button' : 'span', 'chip-text', label);
+    if (r.kind === 'coordination') {
+      chipLabel.type = 'button';
+      chipLabel.setAttribute('aria-label', `Inspect ${label}`);
+      chipLabel.addEventListener('click', () => void openCoordinationReference(r.reference));
+    }
+    chip.appendChild(chipLabel);
     const x = el('button', 'chip-x', '×');
     x.type = 'button';
     x.setAttribute('aria-label', `Remove ${label} from this turn`);
@@ -7208,6 +7859,7 @@ function buildRefsContext(refs) {
 
 function canonicalInlineReferences(refs) {
   return (refs || []).map((ref, index) => {
+    if (ref.kind === 'coordination') return structuredClone(ref.reference);
     const code = ref.kind === 'code';
     const start = Number(ref.startLine) || 1;
     const end = Number(ref.endLine) || start;
@@ -7291,8 +7943,19 @@ function sessionActiveAgentIds(session) {
   }
   if (session.mode.kind === 'lattice') {
     const wfId = session.mode.workflow_id;
-    const wf = (S.workflows || []).find(w => w.id === wfId) || (S.workflows || [])[0];
-    return wf ? (wf.agents || []).slice() : [];
+    const wf = wfId
+      ? (S.sessionTeams || []).find(w => w.id === wfId)
+      : (S.sessionTeams || [])[0];
+    if (!wf) return [];
+    const entryPoint = wf.entry_point || '';
+    const entryAgent = (S.agents || []).find(agent => agent.id === entryPoint);
+    // A Coordinator owns its declared Workers internally. The daemon enters
+    // only that Coordinator for this workflow, so the Session target picker and
+    // Agent graph must not present its Workers as peer execution targets.
+    if (entryPoint && String(entryAgent?.role || '').toLowerCase() === 'coordinator') {
+      return [entryPoint];
+    }
+    return (wf.agents || []).slice();
   }
   return [];
 }
@@ -7302,6 +7965,13 @@ function sessionActiveAgentIds(session) {
 // the browser graph on that same contract: a dependency configured on an agent
 // outside the active Full/Custom set is not part of this Session's route.
 function sessionAgentDependencyEdges(session, agentIds) {
+  const team = session?.currentTeam;
+  if (team?.history_version === 'execution_v2' && team.approved) {
+    const activeAgentIds = new Set(agentIds);
+    return (team.dependencies || [])
+      .filter(edge => activeAgentIds.has(edge.parent) && activeAgentIds.has(edge.child))
+      .map(edge => ({from: edge.parent, to: edge.child}));
+  }
   if (!session?.mode
       || (session.mode.kind !== 'lattice' && session.mode.kind !== 'custom')) return [];
   const activeAgentIds = new Set(agentIds);
@@ -7316,6 +7986,22 @@ function sessionAgentDependencyEdges(session, agentIds) {
     });
   });
   return dependencies;
+}
+
+// Before a turn exists, use the approved Session definition rather than its
+// original templates. Once a turn exists, retained execution evidence wins.
+function sessionConfiguredGraphAgents(session) {
+  const team = session?.currentTeam;
+  const slots = team?.history_version === 'execution_v2' && team.approved
+    ? team.slots : null;
+  const ids = Array.isArray(slots) ? slots.map(slot => slot.slot_id) : sessionActiveAgentIds(session);
+  const dependencies = sessionAgentDependencyEdges(session, ids);
+  return ids.map(id => ({
+    id,
+    label: slots ? slots.find(slot => slot.slot_id === id)?.name || id
+      : (S.agents || []).find(agent => agent.id === id)?.name || id,
+    dependsOn: dependencies.filter(edge => edge.to === id).map(edge => edge.from),
+  }));
 }
 
 function sessionEnvironmentState(session = S.session) {
@@ -7763,16 +8449,17 @@ function applySessionEnvironmentUpdate(
 function renderSessionActive(session) {
   const host = $('#session-active'); if (!host) return;
   host.innerHTML = '';
-  const ids = sessionActiveAgentIds(session);
-  if (ids.length === 0) return;
+  const approved = session.currentTeam?.approved;
+  const roster = approved ? session.currentTeam.slots.map(slot => ({id:slot.slot_id, name:slot.name, model:slot.model}))
+    : sessionActiveAgentIds(session).map(id => (S.agents || []).find(agent => agent.id === id) || {id});
+  if (roster.length === 0) return;
   host.appendChild(el('span', 'sa-eyebrow', 'active'));
-  ids.forEach(aid => {
-    const ag = (S.agents || []).find(a => a.id === aid) || { id: aid };
+  roster.forEach(ag => {
     const chip = el('div', 'sa-chip');
     chip.appendChild(el('span', 'sa-dot'));
     chip.appendChild(el('span', 'sa-kind', 'agent'));
-    chip.appendChild(document.createTextNode(ag.id));
-    if (ag.model) chip.title = `${ag.id} · ${ag.model}`;
+    chip.appendChild(document.createTextNode(approved ? ag.name || ag.id : ag.id));
+    if (ag.model) chip.title = `${ag.name || ag.id} · ${ag.model}`;
     host.appendChild(chip);
     // Skills attached to the agent — render as paired chips.
     (ag.skills || []).forEach(sid => {
@@ -7786,8 +8473,22 @@ function renderSessionActive(session) {
 
 let _sessionModelPickerReadId = 0;
 
+function sessionComposerAgentIds(session) {
+  return session?.currentTeam?.history_version === 'execution_v2'
+    ? (session.currentTeam.slots || []).map(slot => slot.slot_id)
+    : sessionActiveAgentIds(session);
+}
+
+function sessionComposerModelOverride(session, picker) {
+  // Native provider profiles are immutable approved Session configuration.
+  // Never forward a stale legacy picker value as a native per-turn override.
+  if (session?.currentTeam?.history_version === 'execution_v2') return undefined;
+  return picker && !picker.classList.contains('hide') && picker.value
+    && picker.value !== '__default__' ? picker.value : undefined;
+}
+
 function sessionModelOverrideAgentId(session) {
-  const ids = sessionActiveAgentIds(session);
+  const ids = sessionComposerAgentIds(session);
   if (ids.length === 1) return ids[0];
   const target = $('#session-target');
   const selected = target && !target.classList.contains('hide') ? target.value : null;
@@ -7805,6 +8506,19 @@ async function populateSessionModelPicker(session) {
   if (!sessionId || S.session.id !== sessionId) return;
   const agentId = sessionModelOverrideAgentId(session);
   sel.innerHTML = '';
+  const team = session.currentTeam;
+  sel.disabled = team?.history_version === 'execution_v2';
+  if (sel.disabled) {
+    const slots = (team.slots || []).filter(slot => !agentId || slot.slot_id === agentId);
+    const models = [...new Set(slots.map(slot => slot.model).filter(Boolean))];
+    const option = document.createElement('option');
+    option.value = '__default__';
+    option.textContent = `model · ${models.join(', ') || 'not configured'} · ${team.approved ? 'approved' : 'review in Team and budget'}`;
+    sel.appendChild(option);
+    sel.value = '__default__';
+    sel.classList.remove('hide');
+    return;
+  }
   if (!agentId) {
     sel.classList.add('hide');
     return;
@@ -7853,7 +8567,8 @@ async function populateSessionModelPicker(session) {
 // agent (no choice to make); otherwise shows "all agents" + each id.
 function populateSessionAgentTarget(session) {
   const sel = $('#session-target'); if (!sel) return;
-  const ids = sessionActiveAgentIds(session);
+  const previous = sel.value;
+  const ids = sessionComposerAgentIds(session);
   sel.innerHTML = '';
   if (ids.length <= 1) {
     sel.classList.add('hide');
@@ -7863,14 +8578,15 @@ function populateSessionAgentTarget(session) {
   sel.classList.remove('hide');
   const opt0 = document.createElement('option');
   opt0.value = '__all__';
-  opt0.textContent = 'send to · all · agent defaults';
+  opt0.textContent = session.currentTeam?.history_version === 'execution_v2'
+    ? 'send to · all · Session team' : 'send to · all · agent defaults';
   sel.appendChild(opt0);
   ids.forEach(aid => {
     const opt = document.createElement('option');
     opt.value = aid; opt.textContent = 'send to · ' + aid;
     sel.appendChild(opt);
   });
-  sel.value = '__all__';
+  sel.value = ids.includes(previous) ? previous : '__all__';
 }
 
 (function wireSessionModelTarget() {
@@ -7882,56 +8598,372 @@ function populateSessionAgentTarget(session) {
   });
 })();
 
-async function sessionLatticeBuild(session) {
+let _sessionLatticeBuildId = 0;
+let _coordinationReadId = 0;
+let _coordinationInFlight = null;
+let _coordinationRefreshTimer = null;
+
+const _coordinationCommands = new Map();
+function coordinationCommandHistory(sessionId, turnId) {
+  const key = `${sessionId}:${turnId}`;
+  if (!_coordinationCommands.has(key)) {
+    let records = [];
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(`axocoatl:control-commands:${key}`) || '[]');
+      if (Array.isArray(saved)) records = saved.filter(record => record?.request?.session_id === sessionId
+        && record.request.turn_id === turnId && record.request.command_id
+        && ['stop', 'retry', 'guide', 'resume', 'revise', 'continue', 'finish'].includes(record.request.action))
+        .map(record => ({ ...record, sending: false }));
+    } catch {}
+    _coordinationCommands.set(key, records);
+  }
+  return _coordinationCommands.get(key);
+}
+function hydrateCoordinationCommands(envelope) {
+  if (envelope.commands?.status !== 'available' || !Array.isArray(envelope.commands.value)) return;
+  const records = coordinationCommandHistory(envelope.session_id, envelope.turn_id);
+  for (const receipt of envelope.commands.value) {
+    const canonical = receipt.request;
+    const revisions = canonical?.parameters?.kind === 'continue_turn'
+      ? (canonical.parameters.plan?.selections || []).filter(selection => selection.kind === 'revise') : [];
+    const revised = revisions.length === 1 ? revisions[0] : null;
+    const activation = canonical?.parameters?.activation || revised?.previous;
+    const action = revised ? 'revise' : { stop_activation: 'stop', retry_activation: 'retry', steer_activation: 'guide', resume_blocked: 'resume', revise_activation: 'revise', continue_turn: 'continue', finish_turn: 'finish' }[canonical?.parameters?.kind];
+    if (!action || (['stop', 'retry', 'guide', 'resume', 'revise'].includes(action) && !activation) || canonical.session_id !== envelope.session_id || canonical.turn_id !== envelope.turn_id) continue;
+    let record = records.find(candidate => candidate.request.command_id === canonical.command_id);
+    if (!record) {
+      record = { request: { schema_version: canonical.schema_version, command_id: canonical.command_id,
+        session_id: canonical.session_id, turn_id: canonical.turn_id, execution_epoch_id: canonical.execution_epoch_id,
+        expected_turn_revision: canonical.expected_turn_revision, expected_graph_revision: canonical.expected_graph_revision,
+        ...(activation ? { activation } : {}), ...(action === 'resume' ? {blocker_id: canonical.parameters.blocker_id} : {}), action }, canResubmit: receipt.source?.kind === 'human' && ['stop', 'retry'].includes(action) };
+      records.push(record);
+    }
+    if (!record.receipt || receipt.revision >= record.receipt.revision) {
+      record.receipt = receipt; record.error = '';
+    }
+  }
+  publishCoordinationCommands(envelope.session_id, envelope.turn_id);
+}
+function publishCoordinationCommands(sessionId, turnId) {
+  const records = coordinationCommandHistory(sessionId, turnId);
+  try { sessionStorage.setItem(`axocoatl:control-commands:${sessionId}:${turnId}`, JSON.stringify(records)); } catch {}
+  if (S.session.id === sessionId && S.session.coordinationGraphTurnId === turnId) {
+    const inspector = $('#session-lattice-host')?.querySelector('ax-activation-inspector');
+    if (inspector) inspector.commandHistory = records;
+  }
+}
+async function submitCoordinationCommand({ kind, reference, model, instruction, context, includePreviousOutput, continuation, partialFinish, blockerId, humanResponse, request: retainedRequest }) {
+  const envelope = model?.controlPlane;
+  let request = retainedRequest;
+  if (!request) {
+    const exact = reference?.kind === 'exact' ? reference.activation : null;
+    const turnRevision = envelope?.turn_revision;
+    const graphRevision = envelope?.graph_revision;
+    const turnAction = ['continue', 'finish'].includes(kind);
+    const currentEpoch = envelope?.turn_controls?.execution_epoch_id;
+    if (envelope?.history_version !== 'execution_v2'
+        || (!turnAction && (!exact || exact.session_id !== envelope.session_id || exact.turn_id !== envelope.turn_id))
+        || turnRevision?.status !== 'available' || graphRevision?.status !== 'available'
+        || !['stop', 'retry', 'guide', 'resume', 'revise', 'continue', 'finish'].includes(kind)
+        || ((turnAction || kind === 'revise') && !currentEpoch)) throw new Error('The exact current command identity is unavailable. Refresh this turn.');
+    request = { schema_version: 1, command_id: `human-${crypto.randomUUID()}`,
+      session_id: envelope.session_id, turn_id: envelope.turn_id,
+      execution_epoch_id: turnAction || kind === 'revise' ? currentEpoch : exact.execution_epoch_id,
+      expected_turn_revision: turnRevision.value, expected_graph_revision: graphRevision.value,
+      ...(turnAction ? {} : {activation: structuredClone(exact)}), action: kind };
+    if (kind === 'revise' || kind === 'guide') {
+      if (typeof instruction !== 'string' || !instruction.trim()) throw new Error('Enter an instruction.');
+      request.instruction = instruction;
+      if (context && (context.references?.length || context.attachment_ids?.length)) request.context = structuredClone(context);
+      if (kind === 'revise' && includePreviousOutput === true) request.include_previous_output = true;
+    }
+    if (kind === 'continue') request.continuation = structuredClone(continuation);
+    if (kind === 'finish' && partialFinish) request.partial_finish = structuredClone(partialFinish);
+    if (kind === 'resume') {
+      if (typeof blockerId !== 'string' || !blockerId || !humanResponse
+          || !['approval', 'decline'].includes(humanResponse.kind)
+          || (humanResponse.kind === 'decline' && (typeof humanResponse.reason !== 'string' || !humanResponse.reason.trim()))) {
+        throw new Error('Choose a response to the exact waiting request. Declining requires a reason.');
+      }
+      request.blocker_id = blockerId;
+      request.human_response = humanResponse.kind === 'approval' ? {kind: 'approval'} : {kind: 'decline', reason: humanResponse.reason};
+    }
+
+  }
+  if (S.session.id !== request.session_id || ![S.session.coordinationGraphTurnId, S.session.activeTurnId, S.session.controlPlaneLatestTurnId].includes(request.turn_id)) {
+    throw new Error('Open this command’s Session and turn before checking it.');
+  }
+  const records = coordinationCommandHistory(request.session_id, request.turn_id);
+  let record = records.find(candidate => candidate.request.command_id === request.command_id);
+  if (!record && ['stop', 'retry'].includes(request.action)) {
+    // A transport retry is the same exact request, including its revisions.
+    record = records.find(candidate => candidate.request.action === request.action
+      && candidate.request.activation?.activation_id === request.activation?.activation_id
+      && !['settled', 'rejected', 'failed'].includes(candidate.receipt?.state));
+  }
+  if (!record) { record = { request, receipt: null, error: '' }; records.push(record); }
+  request = record.request;
+  if (record.sending) return;
+  record.sending = true; record.error = ''; record.errorStatus = null;
+  publishCoordinationCommands(request.session_id, request.turn_id);
+  try {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(request.session_id)}/turns/${encodeURIComponent(request.turn_id)}/control-commands`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request),
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) { record.errorStatus = response.status; throw new Error(result?.error || result?.message || `Command receipt unavailable (${response.status}).`); }
+    if (result?.request?.command_id !== request.command_id
+        || result.request.session_id !== request.session_id || result.request.turn_id !== request.turn_id
+        || !['requested', 'accepted', 'applied', 'settled', 'rejected', 'failed'].includes(result.state)) {
+      throw new Error('The server returned an unrecognized command receipt.');
+    }
+    if (!record.receipt || result.revision >= record.receipt.revision) record.receipt = result;
+  } catch (error) { record.error = error.message || String(error); }
+  finally {
+    record.sending = false;
+    publishCoordinationCommands(request.session_id, request.turn_id);
+    if (S.session.id === request.session_id && S.session.coordinationGraphTurnId === request.turn_id) {
+      await refreshCoordinationControlPlane(request.session_id, request.turn_id);
+    }
+  }
+  scheduleSessionGuidanceRefresh(request.turn_id);
+  return record;
+}
+
+let _sessionGuidanceRefresh = null;
+function scheduleSessionGuidanceRefresh(turnId) {
+  const guidance = $('#session-guidance');
+  if (!guidance || guidance.sessionId !== S.session.id || guidance.turnId !== turnId) return;
+  clearTimeout(_sessionGuidanceRefresh);
+  _sessionGuidanceRefresh = setTimeout(() => { if (guidance.sessionId === S.session.id && guidance.turnId === turnId) void guidance.refresh?.(); }, 100);
+}
+
+document.addEventListener('session-graph-changed', (event) => {
+  if (event.detail?.session_id === S.session?.id && event.detail?.turn_id) {
+    scheduleCoordinationGraphRefresh(event.detail.turn_id);
+  }
+});
+
+function scheduleCoordinationGraphRefresh(turnId, delay = 100) {
+  const sessionId = S.session.id;
+  clearTimeout(_coordinationRefreshTimer);
+  _coordinationReadId++;
+  _coordinationRefreshTimer = setTimeout(() => {
+    if (S.session.id === sessionId && S.session.coordinationGraphTurnId === turnId
+        && (delay === 100 || visibleSurfaces().includes('trace'))) {
+      void sessionLatticeBuild(S.session, S.session.coordinationEvents.get(turnId) || [], turnId);
+    }
+  }, delay);
+}
+
+function coordinationControlStillSettling(envelope) {
+  if (envelope.history_version !== 'execution_v2' || envelope.state !== 'running'
+      || envelope.commands?.status !== 'available') return false;
+  const key = value => JSON.stringify([value?.session_id, value?.turn_id, value?.execution_epoch_id,
+    value?.node_id, value?.generation, value?.activation_id]);
+  return envelope.commands.value.some(receipt => {
+    const request = receipt.request;
+    if (request?.session_id !== envelope.session_id || request.turn_id !== envelope.turn_id) return false;
+    if (['requested', 'accepted', 'applied'].includes(receipt.state)) return true;
+    if (receipt.state !== 'settled' || request.parameters?.kind !== 'stop_activation') return false;
+    const target = key(request.parameters.activation);
+    return envelope.nodes.some(node => node.activations.some(activation => activation.state === 'running'
+      && activation.reference?.kind === 'exact' && key(activation.reference.activation) === target));
+  });
+}
+
+function refreshCoordinationControlPlane(sessionId, turnId) {
+  const previous = _coordinationInFlight;
+  if (previous?.sessionId === sessionId && previous.turnId === turnId) {
+    previous.dirty = true;
+    return previous.promise;
+  }
+  previous?.controller.abort();
+  const read = {sessionId, turnId, dirty:false, controller:new AbortController()};
+  _coordinationInFlight = read;
+  read.promise = readCoordinationControlPlane(sessionId, turnId, read.controller.signal).finally(() => {
+    if (_coordinationInFlight !== read) return;
+    _coordinationInFlight = null;
+    if (read.dirty && S.session.id === sessionId && S.session.coordinationGraphTurnId === turnId) scheduleCoordinationGraphRefresh(turnId);
+  });
+  return read.promise;
+}
+
+async function readCoordinationControlPlane(sessionId, turnId, signal) {
+  const requestId = ++_coordinationReadId;
+  const host = $('#session-lattice-host');
+  try {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/control-plane`, {signal});
+    if (!response.ok) throw new Error(`Execution evidence could not be refreshed (${response.status}).`);
+    const envelope = await response.json();
+    if (requestId !== _coordinationReadId || S.session.id !== sessionId
+        || S.session.coordinationGraphTurnId !== turnId) return;
+    if (envelope.schema_version !== 1 || envelope.session_id !== sessionId || envelope.turn_id !== turnId
+        || !Array.isArray(envelope.nodes)) throw new Error('Execution evidence has an unsupported identity or format.');
+    if (isExecutionHistoryTurn(turnId) && envelope.history_version !== 'execution_v2') {
+      throw new Error('Retained execution history requires its exact execution graph.');
+    }
+    if (envelope.history_version === 'execution_v2') {
+      S.session.executionHistoryTurnIds ||= new Set();
+      S.session.executionHistoryTurnIds.add(turnId);
+    }
+    hydrateCoordinationCommands(envelope);
+    $('#session-guidance')?.acceptEnvelope?.(envelope);
+    const card = S.session.coordinationCards.get(turnId);
+    if (card) card.controlPlane = envelope;
+    await sessionLatticeBuild(S.session, S.session.coordinationEvents.get(turnId) || [], turnId, envelope);
+    // Stop acknowledgement can precede the actor's final safe-boundary result.
+    // A silent independent branch must not leave this exact target stale.
+    if (visibleSurfaces().includes('trace') && coordinationControlStillSettling(envelope)) {
+      scheduleCoordinationGraphRefresh(turnId, 1000);
+    }
+  } catch (error) {
+    if (signal.aborted || requestId !== _coordinationReadId || S.session.id !== sessionId
+        || S.session.coordinationGraphTurnId !== turnId) return;
+    if (isExecutionHistoryTurn(turnId)) { host?.replaceChildren(); S.session.lattice = null; S.session.graphAgents = []; }
+    let notice = host?.querySelector('.session-graph-notice');
+    if (!notice && host) { notice = mkDiv('session-graph-notice'); notice.setAttribute('role', 'status'); host.prepend(notice); }
+    if (notice) notice.textContent = isExecutionHistoryTurn(turnId)
+      ? error.message : `${error.message} Showing retained conversation evidence.`;
+  }
+}
+
+async function sessionLatticeBuild(session, coordinationEvents = null, coordinationTurnId = '', envelope = null) {
   const host = $('#session-lattice-host');
   if (!host) return;
-  const agents = sessionActiveAgentIds(session);
-  const dependencies = sessionAgentDependencyEdges(session, agents);
-  S.session.agents = agents;
-  host.innerHTML = '';
-  if (!agents.length) {
-    host.innerHTML = '<div class="empty small">No agents for this session.</div>';
+  const buildId = ++_sessionLatticeBuildId;
+  const sessionId = session?.id;
+  if (S.session.waysGraph?.sessionId === sessionId) {
+    const selection = S.session.waysGraph;
+    const existing = host.querySelector('ax-ways-graph');
+    if (existing?.setId === selection.setId && existing.sessionId === sessionId) return;
+    await import('/ui/ways-graph.js');
+    if (buildId !== _sessionLatticeBuildId || S.session.id !== sessionId || S.session.waysGraph !== selection) return;
+    const graph = document.createElement('ax-ways-graph');
+    S.session.lattice = null; S.session.graphAgents = [];
+    host.replaceChildren(graph);
+    try { await graph.show(selection); } catch (error) { graph.shadowRoot.querySelector('.status').textContent = String(error?.message || error); }
     return;
   }
+  S.session.waysGraph = null;
+  const turnId = coordinationTurnId || S.session.coordinationGraphTurnId || S.session.controlPlaneLatestTurnId || '';
+  const previous = S.session.lattice;
+  const sameIdentity = previous?.dataset.sessionId === sessionId && previous?.dataset.turnId === turnId;
+  const selected = sameIdentity ? previous.selectedIds() : [];
+  const viewport = sameIdentity && previous.dataset.viewReady === 'true' ? previous.getViewport() : null;
+  const oldInspector = sameIdentity ? host.querySelector('ax-activation-inspector') : null;
+  const activeAgents = sessionActiveAgentIds(session);
+  S.session.agents = activeAgents;
+  const selectedEvents = Array.isArray(coordinationEvents) ? coordinationEvents
+    : (turnId ? S.session.coordinationEvents.get(turnId) || [] : []);
+  const card = S.session.coordinationCards.get(turnId);
+  const turn = card?.turn || S.session.controlPlaneTurns?.get(turnId)
+    || { id: turnId, session_id: sessionId, execution_events: selectedEvents };
+  if (isExecutionHistoryTurn(turnId) && envelope === null) {
+    if (!sameIdentity) { host.replaceChildren(); S.session.lattice = null; S.session.graphAgents = []; }
+    host.querySelector('.session-graph-notice')?.remove();
+    const loading = document.createElement('div'); loading.className = 'session-graph-notice';
+    loading.setAttribute('role', 'status'); loading.textContent = 'Loading retained execution graph…';
+    host.append(loading);
+    await refreshCoordinationControlPlane(sessionId, turnId);
+    return;
+  }
+  const folded = typeof window.foldControlPlane === 'function'
+    ? window.foldControlPlane(envelope ?? turn, selectedEvents) : null;
+  if (folded?.unsupported) {
+    const notice = mkDiv('session-graph-notice', folded.warnings[0]);
+    notice.setAttribute('role', 'status');
+    host.replaceChildren(notice);
+    S.session.lattice = null;
+    S.session.graphAgents = [];
+    return;
+  }
+  if (isExecutionHistoryTurn(turnId) && (!folded || folded.unsupported || !folded.nodes?.length || !folded.agents?.length)) {
+    host.replaceChildren();
+    S.session.lattice = null; S.session.graphAgents = [];
+    const notice = document.createElement('div'); notice.className = 'session-graph-notice'; notice.setAttribute('role', 'status');
+    notice.textContent = 'The retained execution graph is unavailable.'; host.append(notice); return;
+  }
+  const hasSnapshot = Boolean(folded?.nodes?.length && folded.agents?.length);
+  const agentRecords = hasSnapshot ? folded.agents : sessionConfiguredGraphAgents(session);
+  const agents = agentRecords.map(agent => agent.id);
+  const dependencies = agentRecords.flatMap(agent => (agent.dependsOn || []).map(from => ({ from, to: agent.id })));
+  S.session.graphAgents = agents;
+  if (turnId) S.session.coordinationGraphTurnId = turnId;
+  if (!agents.length) { host.innerHTML = '<div class="empty small">No agents for this session.</div>'; return; }
+  let layeredLayout;
   try {
     await import('/lattice/index.js');
+    ({ layeredLayout } = await import('/lattice/layout.js'));
     await customElements.whenDefined('ax-lattice');
-  } catch (e) { host.innerHTML = '<div class="empty small">lattice unavailable</div>'; return; }
+  } catch (e) { host.innerHTML = '<div class="empty small">Agent graph unavailable.</div>'; return; }
+  if (buildId !== _sessionLatticeBuildId || S.session.id !== sessionId) return;
   const lat = document.createElement('ax-lattice');
+  lat.mode = 'view';
+  lat.dataset.sessionId = sessionId || '';
+  lat.dataset.turnId = turnId;
   lat.setAttribute('background', 'dots');
-  lat.setAttribute('fit-view-on-init', '');
-  lat.setAttribute('aria-roledescription', 'agent dependency graph');
-  lat.setAttribute(
-    'aria-label',
-    `Agent dependency graph for ${session.name || 'this Session'}: `
-      + `${agents.length} agents and ${dependencies.length} configured `
-      + (dependencies.length === 1 ? 'dependency' : 'dependencies'),
-  );
-  host.innerHTML = '';
-  host.appendChild(lat);
+  lat.setAttribute('tabindex', '0');
+  lat.setAttribute('aria-label', `${turnId ? 'Agent execution graph' : 'Configured Agent graph'} for ${session.name || 'this Session'}: ${agents.length} agents. ${turnId ? 'Select an agent to inspect recorded evidence.' : 'No turn selected.'}`);
+  const layout = oldInspector?.parentElement || mkDiv('session-graph-layout');
+  const inspector = oldInspector || document.createElement('ax-activation-inspector');
+  if (!oldInspector) inspector.hidden = true;
+  inspector.suspended = !visibleSurfaces().includes('trace');
+  inspector.commandHandler = envelope?.history_version === 'execution_v2' ? submitCoordinationCommand : null;
+  inspector.receiptRefreshHandler = () => refreshCoordinationControlPlane(sessionId, turnId);
+  inspector.commandHistory = coordinationCommandHistory(sessionId, turnId);
+  inspector.model = hasSnapshot ? folded : { ...folded, sessionId, turnId,
+    nodes: agentRecords.map(agent => ({ node_id: agent.id, label: agent.label, definition: { status: 'not_recorded' },
+      dependencies: agent.dependsOn, activations: [] })),
+  };
+  if (!oldInspector) {
+    inspector.addEventListener('close-inspector', (event) => {
+      S.session.lattice?.deselectAll();
+      if (!event.detail?.focusRestored) S.session.lattice?.focus();
+    });
+    inspector.addEventListener('open-coordinator-details', (event) => openCoordinatorRunView(event.detail.agentId));
+    inspector.addEventListener('attach-coordination-reference', event => attachCoordinationReference(event.detail));
+  }
+  if (oldInspector) {
+    previous.replaceWith(lat);
+    host.querySelector('.session-graph-notice')?.remove();
+  } else {
+    layout.append(lat, inspector);
+    host.replaceChildren(layout);
+  }
+  host.querySelector('.session-turn-controls')?.remove();
+  if (envelope?.history_version === 'execution_v2') {
+    const controls = document.createElement('button'); controls.type = 'button';
+    controls.className = 'session-turn-controls btn btn-sm'; controls.textContent = 'Turn controls';
+    controls.addEventListener('click', () => { lat.deselectAll(); inspector.showTurnControls(); });
+    host.prepend(controls);
+  }
   lat.addEventListener('selection-change', (event) => {
     const ids = event.detail?.ids || [];
-    if (ids.length !== 1 || !ids[0].startsWith('sl-')) return;
-    const agentId = ids[0].slice(3);
+    const agentId = ids.length === 1 && ids[0].startsWith('sl-') ? ids[0].slice(3) : '';
     const agent = (S.agents || []).find((candidate) => candidate.id === agentId);
-    if (String(agent?.role || '').toLowerCase() === 'coordinator') openCoordinatorRunView(agentId);
+    const isCoordinator = String(agent?.role || '').toLowerCase() === 'coordinator';
+    const inspectorWasHidden = inspector.hidden;
+    inspector.coordinatorAgentId = isCoordinator ? agentId : '';
+    inspector.nodeId = agentId;
+    if (inspectorWasHidden && !inspector.hidden) requestAnimationFrame(() => {
+      if (lat.isConnected && lat.clientWidth && lat.clientHeight) lat.fitView();
+    });
+    keepSessionGraphSelectionVisible(lat);
   });
-  agents.forEach((a, i) => {
+  lat.addEventListener('node-inspect', () => inspector.focusInspector());
+  const positions = layeredLayout(agentRecords.map(agent => ({ id: agent.id, width: 160, height: 78 })), dependencies, { direction: 'LR' });
+  const status = { working: 'running', running: 'running', completed: 'success', succeeded: 'success', failed: 'error',
+    blocked: 'blocked', interrupted: 'cancelled', stopped: 'cancelled', cancelled: 'cancelled', waiting: 'pending', planned: 'pending' };
+  agentRecords.forEach((agent, i) => {
     const node = document.createElement('ax-node');
-    node.id = 'sl-' + a;
-    node.setAttribute('data-x', String(60 + (i % 2) * 150));
-    node.setAttribute('data-y', String(40 + i * 78));
-    node.setAttribute('status', 'idle');
-    const incoming = dependencies
-      .filter(dependency => dependency.to === a)
-      .map(dependency => dependency.from);
-    node.setAttribute(
-      'aria-label',
-      incoming.length
-        ? `Agent ${a}; depends on ${incoming.join(', ')}`
-        : `Agent ${a}; no configured dependencies in this Session`,
-    );
-    node.append(mkDiv('sn-title', a));
+    const position = positions.get(agent.id) || { x: 60 + i * 180, y: 40 };
+    node.id = 'sl-' + agent.id;
+    node.setAttribute('data-x', String(position.x));
+    node.setAttribute('data-y', String(position.y));
+    node.setAttribute('status', status[agent.state] || 'idle');
+    node.setAttribute('aria-label', `${agent.label || agent.id}; ${agent.state || 'configured'}; ${agent.dependsOn?.length ? `depends on ${agent.dependsOn.join(', ')}` : 'no configured dependencies'}`);
+    node.append(mkDiv('sn-title', agent.label));
     node.append(mkHandle('target', 'in', 'left'), mkHandle('source', 'out', 'right'));
     lat.appendChild(node);
   });
@@ -7943,8 +8975,30 @@ async function sessionLatticeBuild(session) {
     lat.appendChild(edge);
   });
   S.session.lattice = lat;
-  setTimeout(() => { try { lat.autoLayout({ direction: 'LR' }); } catch {} }, 60);
+  const pendingReference = S.session.pendingGraphReference;
+  const referenceMatches = pendingReference?.source_session_id === sessionId && pendingReference?.source_turn_id === turnId;
+  lat.setSelection(referenceMatches ? ['sl-' + pendingReference.node_id] : selected);
+  if (referenceMatches && hasSnapshot) {
+    inspector.activationReference = pendingReference.history_version === 'execution_v2'
+      ? { kind: 'exact', activation: { session_id: sessionId, turn_id: turnId, node_id: pendingReference.node_id,
+        generation: pendingReference.generation, execution_epoch_id: pendingReference.execution_epoch_id,
+        activation_id: pendingReference.activation_id } }
+      : { kind: 'legacy', session_id: sessionId, turn_id: turnId, node_id: pendingReference.node_id, generation: pendingReference.generation };
+    if (envelope) S.session.pendingGraphReference = null;
+  }
+  if (viewport) { lat.setViewport(viewport); lat.dataset.viewReady = 'true'; }
+  else requestAnimationFrame(() => {
+    if (lat.isConnected && lat.clientWidth && lat.clientHeight) {
+      lat.fitView(); lat.dataset.viewReady = 'true';
+    }
+  });
+  keepSessionGraphSelectionVisible(lat);
+  // Configured graphs preserve the existing hierarchical Coordinator view.
+  if (S.session.activeTurnId && (!turnId || turnId === S.session.activeTurnId)
+      && S.session.activeTurnTargetAgent && !isExecutionHistoryTurn(turnId)) projectDirectTargetGraph(S.session.activeTurnTargetAgent);
+  if (turnId && !envelope && visibleSurfaces().includes('trace')) void refreshCoordinationControlPlane(sessionId, turnId);
 }
+
 function sessionLatticeStatus(agent, status) {
   const lat = S.session.lattice;
   if (lat && typeof lat.setNodeStatus === 'function') {
@@ -7954,15 +9008,26 @@ function sessionLatticeStatus(agent, status) {
 function sessionLatticeEvent(d) {
   if (d.type === 'AgentActivated' && d.agent) sessionLatticeStatus(d.agent, 'running');
   else if (d.type === 'TaskCompleted' && d.agent) sessionLatticeStatus(d.agent, 'success');
-  else if (['AgentFailed', 'AgentCancelled', 'AgentPanicked'].includes(d.type) && d.agent) {
-    // ax-lattice intentionally has one terminal error state. The Coordinator
-    // run view below preserves the more precise cancelled/panicked distinction.
-    sessionLatticeStatus(d.agent, 'error');
-  }
+  else if (d.type === 'AgentCancelled' && d.agent) sessionLatticeStatus(d.agent, 'cancelled');
+  else if (['AgentFailed', 'AgentPanicked'].includes(d.type) && d.agent) sessionLatticeStatus(d.agent, 'error');
 }
 
 if ($('#cockpit-back')) $('#cockpit-back').addEventListener('click', closeCockpit);
 if ($('#session-send')) $('#session-send').addEventListener('click', activateSessionComposer);
+document.addEventListener('open-session-work-source-turn', event => { $('#session-history')?.dispatchEvent(new CustomEvent('session-turn-open', {detail:event.detail})); });
+document.addEventListener('open-session-work-turn', async event => { if (event.detail.session_id !== S.session.id) return; openModule('trace'); await showCoordinationGraph(event.detail.turn_id); $('#session-lattice-host')?.querySelector('ax-activation-inspector')?.showTurnControls(); });
+customElements.whenDefined('ax-session-guidance').then(() => {
+  const guidance = $('#session-guidance');
+  guidance.commandHandler = submitCoordinationCommand;
+  guidance.addEventListener('guidance-state-change', syncSessionComposerState);
+  guidance.addEventListener('plan-current-work', () => guidance.openPlanner($('#session-text').value, {references:canonicalInlineReferences(ensureRefs()),attachment_ids:$('#session-context')?.selectedReferenceIds?.() || []}));
+  guidance.addEventListener('open-current-turn-controls', async event => {
+    if (event.detail.sessionId !== S.session.id) return;
+    openModule('trace'); await showCoordinationGraph(event.detail.turnId);
+    $('#session-lattice-host')?.querySelector('ax-activation-inspector')?.showTurnControls();
+  });
+  syncSessionComposerState();
+});
 if ($('#session-text')) $('#session-text').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); activateSessionComposer(); }
 });
@@ -8262,7 +9327,7 @@ function clearAttemptRunOwnership(sessionId, clearAnnouncements = false) {
 
 function attemptFrameRun(frame) {
   if (['token', 'reasoning', 'tool-call'].includes(frame?.kind)) return frame.workflow || null;
-  if (['session-start', 'session-done', 'session-error', 'session-cancelled'].includes(frame?.kind)) {
+  if (['session-start', 'session-done', 'session-error', 'session-cancelled', 'session-needs-attention'].includes(frame?.kind)) {
     return frame.session || null;
   }
   return null;
@@ -8464,10 +9529,15 @@ function liveAgentStatusRank(status) {
 }
 
 function liveToolFrameKey(frame) {
-  return JSON.stringify([
+  const identity = [
     frame?.turn_id || '', frame?.agent || 'agent', frame?.call_id || '',
     Number(frame?.occurrence) || 0, frame?.phase || '',
-  ]);
+  ];
+  if (frame?.coordination_generation !== null
+      && frame?.coordination_generation !== undefined) {
+    identity.push(String(frame.coordination_generation));
+  }
+  return JSON.stringify(identity);
 }
 
 function mergeLiveSessionRun(snapshot, cached, { preferCachedTurn = true } = {}) {
@@ -8483,6 +9553,16 @@ function mergeLiveSessionRun(snapshot, cached, { preferCachedTurn = true } = {})
     const current = merged.agents.find(agent => agent?.agent === cachedAgent.agent);
     if (!current) {
       merged.agents.push(structuredClone(cachedAgent));
+      continue;
+    }
+    if (cachedAgent.resetOutput === true
+        && cachedAgent.coordinationRevisionReset === true) {
+      current.output = String(cachedAgent.output || '');
+      current.thinking = String(cachedAgent.thinking || '');
+      current.status = cachedAgent.status || 'pending';
+      current.tokens = Number(cachedAgent.tokens || 0);
+      current.resetOutput = true;
+      current.coordinationRevisionReset = true;
       continue;
     }
     current.output = longerStreamProjection(current.output, cachedAgent.output);
@@ -8595,7 +9675,7 @@ function cacheSessionRunFrame(frame) {
     }
     return;
   }
-  if (['session-done', 'session-cancelled', 'session-error'].includes(frame.kind)
+  if (['session-done', 'session-cancelled', 'session-error', 'session-needs-attention'].includes(frame.kind)
       && frame.turn_id) {
     const current = _liveSessionRuns.get(frame.session);
     if (current?.turn_id === frame.turn_id) {
@@ -8661,15 +9741,14 @@ function replaceSessionEnvironmentTransitions(items) {
   }
   if (!S.session.id) return;
   if (_sessionEnvironmentTransitions.has(S.session.id)) {
-    if (S.session.status !== 'closed') {
-      // A Snapshot is a new authoritative observation point. Rebind even when
-      // its numeric environment generation matches an older Close/Reopen/Close
-      // cycle, because status-only lifecycle changes need not advance it.
-      _sessionEnvironmentRetireOwners.set(S.session.id, S.session);
-    } else if (_sessionEnvironmentRetireOwners.get(S.session.id) !== S.session) {
-      _sessionEnvironmentRetireOwners.delete(S.session.id);
-    }
-    markSessionRuntimeActivationRequired(S.session.id);
+    // A reconnect snapshot is the same authoritative changing edge as a live
+    // frame. Rebind cockpit retirement, while preserving the request which
+    // may itself own cold reconstruction. Aborting that POST here cancels its
+    // preparation and turns a recoverable Ready Session into Failed.
+    beginRemoteSessionEnvironmentChange({
+      session: S.session.id,
+      generation: _sessionEnvironmentTransitions.get(S.session.id),
+    });
   } else {
     // The socket may have been offline for the entire change. Re-read the
     // durable generation even when this snapshot contains no active owner.
@@ -8746,6 +9825,9 @@ function replaceWorkspaceAttemptOwnerships(items) {
 
 function handleWsFrame(d) {
   $('#settings-automations')?.handleFrame?.(d);
+  if (['token', 'reasoning', 'tool-call', 'event', 'coordination', 'coordinator-plan'].includes(d.kind)
+      && (d.workflow === S.session.id || d.session === S.session.id)
+      && isExecutionHistoryTurn(d.turn_id || S.session.activeTurnId)) return;
   cacheSessionRunFrame(d);
   if (queueUnownedAttemptFrame(d)) return;
   // Attribute every lane-scoped frame before the per-kind handling, so the rail
@@ -8900,7 +9982,7 @@ function handleWsFrame(d) {
             setSessionTurnPending(false);
           }
           setSessionTurnRunning(activeSessionRun.turn_id, true);
-          restoreCoordinatorRunView(activeSessionRun, { open: true });
+          if (!isExecutionHistoryTurn(activeSessionRun.turn_id)) restoreCoordinatorRunView(activeSessionRun, { open: true });
           void reloadSessionTranscript(S.session.id, {
             preserveLive: true,
             liveRun: activeSessionRun,
@@ -8931,6 +10013,17 @@ function handleWsFrame(d) {
       if (S.session.id && d.workflow === S.session.id) sessionLatticeEvent(d);
       break;
     }
+
+    // A persisted, turn-scoped coordination transition. The inline card and
+    // focused Agent graph consume the same event shape Session History uses,
+    // so a live view and a reloaded view cannot tell different stories.
+    case 'activation-stream':
+    case 'activation-control-changed':
+      observeExecutionHistoryFrame(d);
+      break;
+    case 'coordination':
+      onSessionCoordinationFrame(d);
+      break;
 
     // A streamed token / reasoning chunk — routed to the session cockpit when
     // the run id matches the open session. Workflows fire silently from the
@@ -8992,18 +10085,22 @@ function handleWsFrame(d) {
       if (S.session.id === d.session) {
         const pending = S.session.pendingTurn;
         if (pending && pending.id === d.turn_id) {
+          S.session.activeTurnTargetAgent = pending.targetAgent || null;
           $('#session-context')?.consumeAccepted?.(pending.referenceIds || []);
           S.session.pendingTurn = null;
           _pendingSessionTurns.delete(d.session);
         }
         setSessionTurnPending(false);
         setSessionTurnRunning(d.turn_id, true);
+        // Begin is durable before this frame. Show its request and graph entry
+        // even when the first provider action waits for approval without text.
+        if (isExecutionHistoryTurn(d.turn_id)) void reloadSessionTranscript(d.session, {preserveLive:true});
       }
       break;
     case 'session-start':
       // Single-agent sessions emit no AgentActivated events — drive the one
       // node from the run lifecycle instead.
-      if (S.session.id === d.session && (S.session.agents || []).length === 1) {
+      if (S.session.id === d.session && !isExecutionHistoryTurn(d.turn_id || S.session.activeTurnId) && (S.session.agents || []).length === 1) {
         sessionLatticeStatus(S.session.agents[0], 'running');
       }
       break;
@@ -9023,12 +10120,21 @@ function handleWsFrame(d) {
           S.runView.tokenUsageKnown = d.token_usage_known === true;
           renderRunView();
         }
-        setSessionTurnRunning(d.turn_id || S.session.activeTurnId, false);
+        const terminalTurnId = d.turn_id || S.session.activeTurnId;
+        const terminalTarget = S.session.activeTurnTargetAgent;
+        const coordinated = (S.session.coordinationEvents.get(terminalTurnId) || [])
+          .some(event => event.kind === 'coordination_planned');
+        setSessionTurnRunning(terminalTurnId, false);
         S.session.pendingTurn = null;
         setSessionTurnPending(false);
         S.session.streamEl = null;
         setThinking($('#session-msgs'), false);
-        (S.session.agents || []).forEach(a => sessionLatticeStatus(a, 'success'));
+        if (!coordinated && !isExecutionHistoryTurn(terminalTurnId)) {
+          if (terminalTarget) sessionLatticeStatus(terminalTarget, 'success');
+          else if ((S.session.agents || []).length === 1) {
+            sessionLatticeStatus(S.session.agents[0], 'success');
+          }
+        }
         $('#cockpit-status').textContent = `done · ${d.token_usage_known === true ? '' : '≥'}`
           + (d.input_tokens || 0) + ' in / ' + (d.output_tokens || 0) + ' out / '
           + (d.reasoning_tokens || 0) + ' reasoning'
@@ -9057,12 +10163,21 @@ function handleWsFrame(d) {
           S.runView.tokenUsageKnown = d.token_usage_known === true;
           renderRunView();
         }
-        setSessionTurnRunning(d.turn_id || S.session.activeTurnId, false);
+        const terminalTurnId = d.turn_id || S.session.activeTurnId;
+        const terminalTarget = S.session.activeTurnTargetAgent;
+        const coordinated = (S.session.coordinationEvents.get(terminalTurnId) || [])
+          .some(event => event.kind === 'coordination_planned');
+        setSessionTurnRunning(terminalTurnId, false);
         S.session.pendingTurn = null;
         setSessionTurnPending(false);
         S.session.streamEl = null;
         setThinking($('#session-msgs'), false);
-        (S.session.agents || []).forEach(a => sessionLatticeStatus(a, 'idle'));
+        if (!coordinated && !isExecutionHistoryTurn(terminalTurnId)) {
+          if (terminalTarget) sessionLatticeStatus(terminalTarget, 'cancelled');
+          else if ((S.session.agents || []).length === 1) {
+            sessionLatticeStatus(S.session.agents[0], 'cancelled');
+          }
+        }
         const stoppedTokens = (d.input_tokens || 0) + (d.output_tokens || 0)
           + (d.reasoning_tokens || 0);
         $('#cockpit-status').textContent = `stopped · ${d.token_usage_known === true ? '' : '≥'}`
@@ -9070,6 +10185,32 @@ function handleWsFrame(d) {
         setCockpitLive('idle', 'stopped');
         void reloadSessionTranscript(d.session);
       }
+      break;
+    }
+    case 'session-request-rejected': {
+      if (S.session.id !== d.session) break;
+      const rejected = S.session.pendingTurn;
+      // This frame rejects one request, not the turn that already owns the
+      // Session. Ignore delayed or unrelated rejections instead of letting
+      // them disturb live ownership, output, or Agent graph state.
+      if (!rejected || !d.turn_id || rejected.id !== d.turn_id) break;
+      S.session.pendingTurn = null;
+      _pendingSessionTurns.delete(d.session);
+      setSessionTurnPending(false);
+      rejected.userEl?.remove?.();
+      if (!$('#session-text').value) $('#session-text').value = rejected.composerText || '';
+      if (Array.isArray(rejected.inlineRefs) && !(S.session.refs || []).length) {
+        S.session.refs = rejected.inlineRefs;
+        renderChatRefs();
+      }
+      const message = d.error || 'This request was not accepted';
+      const notice = el('div', 'smsg session-request-rejection');
+      notice.dataset.rejectedTurnId = d.turn_id;
+      notice.setAttribute('role', 'alert');
+      notice.appendChild(el('div', 'smsg-role', 'not sent'));
+      notice.appendChild(el('div', 'smsg-body', message));
+      appendSessionEl(notice);
+      toast('Couldn’t send', message, 'err');
       break;
     }
     case 'session-error': {
@@ -9121,6 +10262,19 @@ function handleWsFrame(d) {
         setCockpitLive('error', 'error');
         void reconcileSessionAfterRuntimeFailure(d.session, S.session);
       }
+      break;
+    }
+    case 'session-needs-attention': {
+      if (S.session.id !== d.session || (S.session.activeTurnId && S.session.activeTurnId !== d.turn_id)) break;
+      setSessionTurnRunning(d.turn_id, false);
+      S.session.streamEl = null;
+      setThinking($('#session-msgs'), false);
+      $('#cockpit-status').textContent = 'Needs attention';
+      setCockpitLive('Needs attention', 'warn');
+      // Canonical History retains the open turn and its explicit Continue,
+      // Retry and Finish controls. This frame closes only the live epoch UI.
+      void reloadSessionTranscript(d.session);
+      scheduleCoordinationGraphRefresh(d.turn_id);
       break;
     }
     case 'session-stop-rejected': {

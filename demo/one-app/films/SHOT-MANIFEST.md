@@ -3,8 +3,9 @@
 [`portfolio.json`](portfolio.json) is the authority for the 12-film release
 portfolio, placement order, duration bounds, poster beat, scenarios, fixtures,
 media paths, and evidence requirements. This document defines the visible edit
-contract for each manifest beat. A film is accepted only when its manifest
-status is `ready` and strict verification passes.
+contract for each manifest beat. The stable manifest status `required` means a
+recording is required; it never declares a capture accepted. Acceptance comes
+from reviewed media, passed per-beat evidence, provenance, and strict verification.
 
 Every source image must be a real reachable state from the linked scenario.
 Repeating a screenshot for a readable hold is allowed. A fake cursor, invented
@@ -48,32 +49,69 @@ attempt, run, checkout, or binary is not.
   or raw payload wall as a poster.
 - Durable API/filesystem evidence is required in addition to visible keyframes.
 
+The active portfolio is the prospective `v1.1.0` take set. Its entries remain
+`required` before and after capture. Release-strict verification requires all
+12 actual recordings and their complete evidence. Sources, provenance, and media
+use the versioned paths declared by `recording_version`. Historical unversioned
+assets and their declarations remain intact.
+
+Freeze the complete product source and immutable film contract before building
+the capture binary. Record the source digest and binary hash, restart that exact
+binary, and capture into a new take directory. Inspect every screenshot and the
+durable outcome before writing passed per-beat evidence. Then record the capture,
+stage, encode, and write provenance while the frozen source digest remains
+unchanged. These outputs live only in the four existing recording-output trees;
+do not change a manifest status to accept them. Run strict source/binary checks
+after all 12 pass. A failed take stays unaccepted and can be recaptured against
+the same frozen source; a product or contract change requires a new source freeze.
+Legacy `ready` and `needs_recording` declarations remain supported, but even
+`--allow-needs-recording` fully verifies every new `required` recording.
+
+`capture-live.mjs` can drive a reviewed sequence of actual browser actions and
+retain same-origin API GET responses alongside screenshots. It uses the locked
+browser-test Playwright dependency, never mocks responses, refuses to overwrite
+a take directory, and leaves acceptance as `not_reviewed`. Provide a JSON plan
+with `film`, `base_url`, `theme`, optional `start_path`, and ordered `shots`.
+Each shot has `beat`, `hold_frames`, `steps`, and `evidence`. Steps use `action`
+(`click`, `fill`, `select`, `press`, `wait_visible`, `wait_text`, `reload`, `goto`,
+or a bounded `wait`) and an observed `selector` or accessible `role`/`name`.
+Evidence entries contain a filename-safe `name` and same-origin `/api/...` path.
+The helper does not restart the daemon or manufacture filesystem evidence;
+retain those observed transitions separately before acceptance.
+
+```bash
+PLAYWRIGHT_CHROMIUM_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  node demo/one-app/films/capture-live.mjs \
+  /private/tmp/reviewed-take-plan.json /private/tmp/new-take-directory
+```
+
 The repeatable manual-capture path from the repository root is:
 
 ```bash
 node demo/one-app/films/record-capture.mjs \
   session-workbench \
-  /private/tmp/axocoatl-v1-film-capture/session-workbench \
-  --captured-at 2026-08-20T19:30:00.000Z
+  /private/tmp/axocoatl-v1.1.0-film-capture/session-workbench \
+  --captured-at "$AXO_CAPTURED_AT" \
+  --url http://localhost:8080/
 
 node demo/one-app/films/stage-film.mjs \
   session-workbench \
-  demo/one-app/films/source/session-workbench/timeline.json \
-  /private/tmp/axocoatl-v1-film-stage/session-workbench \
+  demo/one-app/films/source/v1.1.0/session-workbench/timeline.json \
+  /private/tmp/axocoatl-v1.1.0-film-stage/session-workbench \
   --replace
 
 ./demo/one-app/films/encode-film.sh \
   session-workbench \
-  /private/tmp/axocoatl-v1-film-stage/session-workbench \
-  sites/marketing/assets/films \
-  "$(node -p 'require("./demo/one-app/films/source/session-workbench/stage.json").poster_frame')" \
+  /private/tmp/axocoatl-v1.1.0-film-stage/session-workbench \
+  sites/marketing/assets/films/v1.1.0 \
+  "$(node -p 'require("./demo/one-app/films/source/v1.1.0/session-workbench/stage.json").poster_frame')" \
   --replace
 
 node demo/one-app/films/write-provenance.mjs \
   session-workbench \
   --binary "$PWD/target/release/axocoatl" \
-  --frames /private/tmp/axocoatl-v1-film-stage/session-workbench \
-  --evidence demo/one-app/films/source/session-workbench/evidence.json \
+  --frames /private/tmp/axocoatl-v1.1.0-film-stage/session-workbench \
+  --evidence demo/one-app/films/source/v1.1.0/session-workbench/evidence.json \
   --replace
 ```
 
@@ -116,7 +154,10 @@ node /path/to/control/demo/one-app/films/verify-film-set.mjs \
   --release-root /path/to/frozen-v1.0.1-checkout
 ```
 
-The control checkout supplies the restored first-committed provenance files. The
+The control checkout supplies the restored first-committed provenance files and
+the exact historical manifest at `compatibility/v1.0.1-portfolio.json`, verified
+against the attested portfolio hash. The active prospective portfolio may
+therefore advance without altering that historical declaration. The
 frozen checkout must retain Git history and tags; an extracted archive is
 insufficient because the verifier proves tag, commit, tree, first provenance
 commit, and all 55 diff object identities. The normal `--source-bound` command
@@ -162,7 +203,7 @@ checkout identifiers appropriate to that scenario. Run
 ## `workspace-sessions-turns`
 
 - **Placement:** Concepts 1; Why 1; Showcase 2.
-- **Scenario:** [`workspace-sessions.md`](../scenarios/workspace-sessions.md), Harbor Catalog with the deterministic local `harbor-ways-fixture` provider.
+- **Scenario:** [`workspace-sessions.md`](../scenarios/workspace-sessions.md), Harbor Catalog with real local Ollama Qwen calls.
 - **Target:** 25–35 seconds. **Poster beat:** `restored-turn`.
 
 | Beat | Required visible evidence | Edit rule |
@@ -182,8 +223,8 @@ checkout identifiers appropriate to that scenario. Run
 | --- | --- | --- |
 | `context` | Accepted Once and Session context retain their historical attachment relation. | Consumption must follow acceptance; do not imply secure erasure. |
 | `reload` | Reload reconnects to the exact active Turn with honest partial output and Stop. | Play the reload at normal speed. |
-| `cancelled-history` | Stop settles as `Stopped by you` and History retains partial evidence. | Stop is cancellation, not rollback. |
-| `clean-next-turn` | A new Turn replies exactly `CLEAN NEXT TURN.` without stale tools or output. | This beat proves actor cleanup; it is not optional acceptance polish. |
+| `cancelled-history` | Stop settles as `Cancelled` in native History, which retains partial evidence. | Stop is cancellation, not rollback. |
+| `clean-next-turn` | A new Turn replies exactly `CLEAN NEXT TURN.` without stale tools or output. | This beat proves independent next-Turn ownership; it is not optional acceptance polish. |
 
 ## `sandbox-terminal-preview`
 
@@ -214,7 +255,7 @@ checkout identifiers appropriate to that scenario. Run
 ## `several-ways`
 
 - **Placement:** Showcase 6.
-- **Scenario:** [`several-ways.md`](../scenarios/several-ways.md), Harbor Catalog with the deterministic local `harbor-ways-fixture` provider.
+- **Scenario:** [`several-ways.md`](../scenarios/several-ways.md), Harbor Catalog with real local Ollama Qwen calls.
 - **Target:** 55–75 seconds. **Poster beat:** `comparison`.
 
 | Beat | Required visible evidence | Edit rule |
@@ -229,14 +270,14 @@ checkout identifiers appropriate to that scenario. Run
 ## `git-last-turn`
 
 - **Placement:** Showcase 7; Why 2.
-- **Scenario:** [`git-last-turn.md`](../scenarios/git-last-turn.md), Northstar Storefront.
+- **Scenario:** [`git-last-turn.md`](../scenarios/git-last-turn.md), the same Harbor Catalog Session and Keep decision as `several-ways`.
 - **Target:** 20–30 seconds. **Poster beat:** `last-turn`.
 
 | Beat | Required visible evidence | Edit rule |
 | --- | --- | --- |
-| `kept-decision` | History shows the completed canonical Turn produced by the kept checked Way; durable evidence names its Keep receipt. | Establish the accepted result without pretending the cleared attempt set still exists. |
+| `kept-decision` | History shows the completed canonical Turn from the same `several-ways` Keep; durable evidence names the matching attempt set and Keep receipt. | Both Ways must have passed the six common checks and received unique Judge ranks before the operator chose. |
 | `uncommitted` | Source Control opens immediately with the kept change unstaged. | Do not send another Agent Turn first. |
-| `last-turn` | The exact kept path and meaningful hunk are readable. | Use actual diff evidence, not an attempt summary. |
+| `last-turn` | The kept `lib/catalog.js` path and meaningful hunk are readable. | Use actual diff evidence, not an attempt summary. |
 | `restart` | Reload or daemon restart rehydrates the same Last turn scope. | Do not use a reset or new Keep between states. |
 | `ownership` | Staging remains optional and HEAD stays at `demo-seed`. | Never commit merely to make the film look finished. |
 
@@ -257,6 +298,9 @@ checkout identifiers appropriate to that scenario. Run
 
 ## `event-lattice-automation`
 
+This is the configured Automation runtime; its run identity is separate from a
+native Session Turn. The same release binary serves the Settings journey.
+
 - **Placement:** Concepts 5; Showcase 9.
 - **Scenario:** [`event-lattice.md`](../scenarios/event-lattice.md), Signal Desk.
 - **Target:** 30–45 seconds. **Poster beat:** `result`.
@@ -270,8 +314,11 @@ checkout identifiers appropriate to that scenario. Run
 
 ## `mcp-approval`
 
+This take demonstrates the supported compatibility Session runtime, not native
+Session MCP parity. Record the owner in durable evidence and label the placement.
+
 - **Placement:** Concepts 6; Showcase 10.
-- **Scenario:** [`mcp-approval.md`](../scenarios/mcp-approval.md), Northstar Storefront with deterministic `mcp-bridge`.
+- **Scenario:** [`mcp-approval.md`](../scenarios/mcp-approval.md), Northstar Storefront with deterministic `mcp-bridge` and a verified compatibility Session owner.
 - **Target:** 25–35 seconds. **Poster beat:** `pending-approval`.
 
 | Beat | Required visible evidence | Edit rule |
@@ -282,18 +329,19 @@ checkout identifiers appropriate to that scenario. Run
 | `allow` | A fresh request is allowed once and produces exactly one dispatch. | Show deterministic city-dependent output. |
 | `durable-result` | Reload restores tool start, result, and final answer. | Allow once must not create a saved permission rule. |
 
-## `shared-core-memory`
+## `workspace-knowledge`
 
 - **Placement:** Concepts 7; Showcase 11.
-- **Scenario:** [`shared-core-memory.md`](../scenarios/shared-core-memory.md), Signal Desk.
+- **Scenario:** [`workspace-knowledge.md`](../scenarios/workspace-knowledge.md), Signal Desk with real local Ollama Qwen calls.
 - **Target:** 35–50 seconds. **Poster beat:** `recall`.
 
 | Beat | Required visible evidence | Edit rule |
 | --- | --- | --- |
-| `write` | `core_memory_set` succeeds for the shared team block and exact nonce. | A conversational promise to remember is a failed take. |
-| `restart` | Daemon restarts against the same data root. | Never run preparation or reset between states. |
-| `separate-sessions` | Writer and reader Sessions and Agent identities are distinct. | Their transcripts must remain separate. |
-| `recall` | The second Agent quotes the exact nonce without file, History, or tool call. | Claim shared core memory only, not semantic or universal recall. |
+| `write` | Knowledge saves a reviewed note with exact source path/hash and revision. | A conversational promise to remember is insufficient. |
+| `backlinks` | A second note supports the first; backlink and graph show the same relationship. | Do not imply inferred semantic or call-graph links. |
+| `restart` | The same notes and revisions survive daemon restart. | Never run preparation or reset between states. |
+| `separate-sessions` | A different Session in the same Workspace sees the accepted notes while chat histories remain separate. | Do not imply global cross-workspace sharing. |
+| `recall` | A real native turn retrieves the same note ID/revision through `workspace_knowledge` and accurately quotes its decision. | Show the retained tool result; do not substitute the legacy core-memory path or a manually attached answer. |
 
 ## `automation-hitl-recovery`
 

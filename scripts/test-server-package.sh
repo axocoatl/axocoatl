@@ -23,7 +23,7 @@ fail() {
   exit 1
 }
 
-for AXO_PACKAGE_TOOL in cargo cmp git jq mktemp sort tar tr wc; do
+for AXO_PACKAGE_TOOL in cargo cmp git jq mktemp python3 sort tar tr wc; do
   command -v "$AXO_PACKAGE_TOOL" >/dev/null 2>&1 \
     || fail "required tool is missing: $AXO_PACKAGE_TOOL"
 done
@@ -84,6 +84,24 @@ if [[ "$AXO_PACKAGE_IS_DIRTY" == yes ]]; then
 else
   package_workspace
 fi
+
+# This same packaging pass contains the real Cargo-normalized supervisor and
+# isolation crates. Check their source and embedded payloads before compiling
+# the server archive; no second full-workspace package pass is needed.
+AXO_PACKAGE_EXEC_VERSION="$(
+  jq -er '[.packages[] | select(.name == "axocoatl-exec") | .version]
+    | if length == 1 then .[0] else error("expected one axocoatl-exec package") end' \
+    <<<"$AXO_PACKAGE_METADATA"
+)"
+AXO_PACKAGE_ISOLATION_VERSION="$(
+  jq -er '[.packages[] | select(.name == "axocoatl-isolation") | .version]
+    | if length == 1 then .[0] else error("expected one axocoatl-isolation package") end' \
+    <<<"$AXO_PACKAGE_METADATA"
+)"
+python3 "$AXO_PACKAGE_SCRIPT_DIR/test-exec-supervisor-artifact.py" verify-packages \
+  "$AXO_PACKAGE_TARGET/package/axocoatl-exec-$AXO_PACKAGE_EXEC_VERSION.crate" \
+  "$AXO_PACKAGE_TARGET/package/axocoatl-isolation-$AXO_PACKAGE_ISOLATION_VERSION.crate" \
+  --source-root "$AXO_PACKAGE_REPO_ROOT"
 
 AXO_PACKAGE_ARCHIVE="$AXO_PACKAGE_TARGET/package/axocoatl-server-$AXO_PACKAGE_SERVER_VERSION.crate"
 [[ -f "$AXO_PACKAGE_ARCHIVE" ]] \

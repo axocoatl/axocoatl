@@ -1,5 +1,10 @@
 # Runtime configuration stays in Settings
 
+The prospective 1.1.0 take uses the existing configured Automation/runtime
+surface. Its run evidence is separate from native Session activation evidence;
+showing Settings or an Automation does not establish native Session MCP or
+legacy memory support.
+
 This film is a short orientation through the configuration that extends one
 Axocoatl workbench. The same selected Session remains visible behind Settings,
 so configuration never looks like a second product.

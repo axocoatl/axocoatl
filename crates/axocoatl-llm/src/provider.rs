@@ -5,7 +5,7 @@ use axocoatl_token::{ApproximateCounter, TokenCounter};
 use serde::{Deserialize, Serialize};
 use tokio_stream::Stream;
 
-use axocoatl_core::{ChatMessage, ProviderMetadata, TokenUsageStats};
+use axocoatl_core::{ChatMessage, MeasuredTokenUsage, ProviderMetadata, TokenUsageStats};
 
 use crate::error::ProviderError;
 use crate::tools::{ToolCall, ToolDefinition};
@@ -298,8 +298,37 @@ pub trait LlmProvider: Send + Sync + 'static {
         validate_provider_request(request, self.provider_id())
     }
 
+    /// Hard bounds this executor enforces for this exact request, including
+    /// failed/interrupted calls and any internal retry or fallback. Estimates,
+    /// approximate token counts and a requested output limit are insufficient.
+    /// A bounded Session controller refuses dispatch when this is unavailable.
+    /// Ordinary provider callers retain their existing behavior.
+    fn execution_bounds(&self, _request: &ChatRequest) -> Option<ProviderExecutionBounds> {
+        None
+    }
+
     /// Non-streaming chat completion.
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError>;
+
+    /// Complete one request while retaining accounting independently of response
+    /// decoding. Older adapters expose no completeness bit: their numeric
+    /// counters are lower bounds, even when nonzero. Implementations may report
+    /// complete usage only from authoritative terminal metadata, and must keep
+    /// observed subtotals when subsequent response decoding fails.
+    async fn chat_with_accounting(&self, request: ChatRequest) -> AccountedChatOutcome {
+        let response = self.chat(request).await;
+        let usage = MeasuredTokenUsage::lower_bound(
+            response
+                .as_ref()
+                .map(|response| response.usage.clone())
+                .unwrap_or_default(),
+        );
+        AccountedChatOutcome {
+            response,
+            usage,
+            cost_microunits: None,
+        }
+    }
 
     /// Streaming chat completion.
     /// Returns a stream of events — caller consumes until `StreamEvent::Done`.
@@ -338,6 +367,17 @@ pub trait LlmProvider: Send + Sync + 'static {
         }
         total
     }
+}
+
+/// An executor capability, not a price estimate. Implementations must account
+/// for the entire request (input, output and reasoning), enforce the monetary
+/// ceiling, and bound every response payload, including tool/native metadata.
+/// Wrappers that retry or change backends must establish their own total bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderExecutionBounds {
+    pub token_limit: u64,
+    pub cost_microunits: u64,
+    pub response_bytes: usize,
 }
 
 /// What a specific provider+model combination can do.
@@ -418,6 +458,18 @@ pub struct ChatResponse {
     pub provider: String,
 }
 
+/// A nonstreaming result and independently observed accounting. A failed
+/// response can still carry incurred usage. On success, `response.usage` must
+/// equal `usage.usage`; the latter additionally records whether it is complete.
+#[derive(Debug)]
+pub struct AccountedChatOutcome {
+    /// Authoritative cumulative charge in millionths of a US dollar. This is
+    /// never an estimate; a failed exchange leaves its completeness unknown.
+    pub cost_microunits: Option<u64>,
+    pub response: Result<ChatResponse, ProviderError>,
+    pub usage: MeasuredTokenUsage,
+}
+
 /// Estimate generated response tokens when a provider omits usage metadata.
 ///
 /// The estimate includes assistant text plus structured tool-call identity,
@@ -493,6 +545,13 @@ pub enum StreamEvent {
     },
     /// Final usage statistics (emitted before Done).
     Usage(TokenUsageStats),
+    /// Cumulative observed usage, possibly only a lower bound. A complete
+    /// observation still requires a valid Done before stream accounting is
+    /// terminal; interruption makes even that observation incomplete.
+    UsageObservation(MeasuredTokenUsage),
+    /// Authoritative cumulative charge. Only a validated terminal establishes
+    /// that this is the complete charge; interruption retains the reservation.
+    CostObservation { cost_microunits: u64 },
     /// Stream complete.
     Done { finish_reason: FinishReason },
 }
@@ -500,6 +559,74 @@ pub enum StreamEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn legacy_nonstream_accounting_calls_once_and_never_infers_completeness() {
+        struct LegacyProvider {
+            calls: std::sync::atomic::AtomicUsize,
+            usage: TokenUsageStats,
+            failed: bool,
+        }
+
+        #[async_trait::async_trait]
+        impl LlmProvider for LegacyProvider {
+            fn provider_id(&self) -> &str {
+                "legacy"
+            }
+            fn model_id(&self) -> &str {
+                "legacy-model"
+            }
+            fn capabilities(&self) -> ProviderCapabilities {
+                ProviderCapabilities::default()
+            }
+            async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if self.failed {
+                    return Err(ProviderError::Network("lost response".into()));
+                }
+                Ok(ChatResponse {
+                    content: "answer".into(),
+                    tool_calls: vec![],
+                    finish_reason: FinishReason::Stop,
+                    usage: self.usage.clone(),
+                    model: self.model_id().into(),
+                    provider: self.provider_id().into(),
+                })
+            }
+            async fn chat_stream(
+                &self,
+                _: ChatRequest,
+            ) -> Result<
+                Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+                ProviderError,
+            > {
+                unreachable!("nonstreaming accounting must never switch interfaces")
+            }
+        }
+
+        for (input, output, failed) in
+            [(0, 0, false), (12, 0, false), (12, 4, false), (12, 4, true)]
+        {
+            let provider = LegacyProvider {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                usage: TokenUsageStats::new(input, output),
+                failed,
+            };
+            let result = provider
+                .chat_with_accounting(ChatRequest::simple("input"))
+                .await;
+            assert_eq!(result.response.is_err(), failed);
+            assert_eq!(
+                result.usage,
+                MeasuredTokenUsage::lower_bound(if failed {
+                    TokenUsageStats::default()
+                } else {
+                    provider.usage.clone()
+                })
+            );
+            assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
 
     #[test]
     fn chat_request_simple() {

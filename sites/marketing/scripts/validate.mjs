@@ -225,6 +225,11 @@ if (!isRecord(portfolio.media_contract)) {
   }
 }
 
+const recordingVersion = portfolio.recording_version;
+if (recordingVersion !== undefined && !/^v\d+\.\d+\.\d+$/.test(recordingVersion)) {
+  fail('demo/one-app/films/portfolio.json', 'recording_version must be vMAJOR.MINOR.PATCH');
+}
+const recordingPrefix = recordingVersion === undefined ? '' : `${recordingVersion}/`;
 const films = Array.isArray(portfolio.films) ? portfolio.films : [];
 if (!Array.isArray(portfolio.films)) fail('demo/one-app/films/portfolio.json', 'films must be an array');
 if (films.length !== 12) fail('demo/one-app/films/portfolio.json', `expected exactly 12 films, found ${films.length}`);
@@ -234,7 +239,7 @@ const expectedFilmsByPage = new Map();
 const mediaPaths = new Set();
 
 function filmIssue(film, file, message) {
-  if (strictFilms || film.status === 'ready') fail(file, message);
+  if (strictFilms || ['ready', 'required'].includes(film.status)) fail(file, message);
   else warn(file, message);
 }
 
@@ -254,7 +259,7 @@ for (const [filmIndex, film] of films.entries()) {
 
   if (!isNonEmptyString(film.title)) fail(location, 'title must be a non-empty string');
   if (!isNonEmptyString(film.fixture)) fail(location, 'fixture must be a non-empty string');
-  if (!['needs_recording', 'ready'].includes(film.status)) fail(location, 'status must be needs_recording or ready');
+  if (!['needs_recording', 'ready', 'required'].includes(film.status)) fail(location, 'status must be needs_recording, ready, or required');
   else if (film.status === 'needs_recording') filmIssue(film, film.slug, 'film is marked needs_recording');
 
   const scenario = repositoryPath(film.scenario, `${film.slug} scenario`);
@@ -285,7 +290,7 @@ for (const [filmIndex, film] of films.entries()) {
     }
   }
 
-  const expectedProvenance = `demo/one-app/films/provenance/${film.slug}.json`;
+  const expectedProvenance = `demo/one-app/films/provenance/${recordingPrefix}${film.slug}.json`;
   if (film.provenance !== expectedProvenance) {
     fail(film.slug, `provenance must be ${expectedProvenance}`);
   }
@@ -325,8 +330,8 @@ for (const [filmIndex, film] of films.entries()) {
   if (!isRecord(film.media)) {
     fail(film.slug, 'media must be an object');
   } else {
-    const expectedMp4 = `sites/marketing/assets/films/${film.slug}.mp4`;
-    const expectedPoster = `sites/marketing/assets/films/${film.slug}.jpg`;
+    const expectedMp4 = `sites/marketing/assets/films/${recordingPrefix}${film.slug}.mp4`;
+    const expectedPoster = `sites/marketing/assets/films/${recordingPrefix}${film.slug}.jpg`;
     if (film.media.mp4 !== expectedMp4) fail(film.slug, `media.mp4 must be ${expectedMp4}`);
     if (film.media.poster !== expectedPoster) fail(film.slug, `media.poster must be ${expectedPoster}`);
     for (const mediaPath of [film.media.mp4, film.media.poster]) {
@@ -366,7 +371,7 @@ for (const [filmIndex, film] of films.entries()) {
 if (filmBySlug.size !== 12) fail('demo/one-app/films/portfolio.json', `expected 12 unique film slugs, found ${filmBySlug.size}`);
 if (mediaPaths.size !== 24) fail('demo/one-app/films/portfolio.json', `expected 24 unique media paths, found ${mediaPaths.size}`);
 
-const filmAssetDirectory = join(root, 'assets/films');
+const filmAssetDirectory = join(root, 'assets/films', recordingPrefix);
 if (!existsSync(filmAssetDirectory)) {
   fail('assets/films', 'missing film asset directory');
 } else {
@@ -374,7 +379,7 @@ if (!existsSync(filmAssetDirectory)) {
     .filter((name) => /\.(?:mp4|jpg)$/i.test(name))
     .sort();
   const declaredMedia = [...mediaPaths]
-    .map((path) => path.slice('sites/marketing/assets/films/'.length))
+    .map((path) => path.slice(`sites/marketing/assets/films/${recordingPrefix}`.length))
     .sort();
   if (shippedMedia.join('\n') !== declaredMedia.join('\n')) {
     const undeclared = shippedMedia.filter((name) => !declaredMedia.includes(name));
@@ -446,8 +451,8 @@ for (const page of pages) {
     if (film) {
       seenFilms.push(film);
       if (!filmBySlug.has(film)) fail(page, `product film ${film} is not declared in the authoritative portfolio`);
-      if (src !== `/assets/films/${film}.mp4`) fail(page, `product film ${film} must use its matching MP4`);
-      if (poster !== `/assets/films/${film}.jpg`) fail(page, `product film ${film} must use its matching JPEG poster`);
+      if (src !== `/assets/films/${recordingPrefix}${film}.mp4`) fail(page, `product film ${film} must use its matching MP4`);
+      if (poster !== `/assets/films/${recordingPrefix}${film}.jpg`) fail(page, `product film ${film} must use its matching JPEG poster`);
     }
   }
 
@@ -555,7 +560,7 @@ const productFilm = readRequired(join(root, 'components/ax-product-film.js'), 'c
 if (productFilm) {
   for (const [capability, marker] of [
     ['stable film identity', "this.getAttribute('film')"],
-    ['matching MP4/JPEG pair', '`/assets/films/${film}.mp4`'],
+    ['matching MP4/JPEG pair', '`${mediaDirectory}${film}.mp4`'],
     ['muted playback', 'video.muted = true'],
     ['inline playback', 'video.playsInline = true'],
     ['explicit Play control', "control.addEventListener('click'"],
@@ -588,7 +593,7 @@ if (baseCss) {
 const ffprobeCheck = spawnSync('ffprobe', ['-version'], { encoding: 'utf8' });
 const ffprobeAvailable = !ffprobeCheck.error && ffprobeCheck.status === 0;
 if (!ffprobeAvailable) {
-  const requiresProbe = strictFilms || films.some((film) => film.status === 'ready');
+  const requiresProbe = strictFilms || films.some((film) => ['ready', 'required'].includes(film.status));
   (requiresProbe ? fail : warn)('film portfolio', 'ffprobe is required to verify the exact film media contract');
 }
 

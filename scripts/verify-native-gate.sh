@@ -22,6 +22,8 @@ command -v cargo >/dev/null 2>&1 || {
 
 cargo audit -D warnings
 cargo fetch --locked --manifest-path axocoatl-cli/Cargo.toml
+python3 scripts/test-exec-supervisor-artifact.py self-test
+python3 scripts/test-exec-supervisor-artifact.py verify-embedded "$repo_root"
 ./scripts/sync-server-embedded-assets.sh --check
 ./scripts/check-third-party-licenses.sh
 ./scripts/test-install.sh
@@ -37,7 +39,9 @@ cargo fetch --locked --manifest-path axocoatl-cli/Cargo.toml
 cargo +1.88.0 check --locked --workspace --all-targets --all-features --jobs 1
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets --all-features --jobs 1 -- -D warnings
-cargo test --locked --workspace --jobs 1
+# Unrelated test subprocesses can inherit live flock descriptors until exec.
+# Serialize libtest cases; concurrency owned and exercised inside tests remains.
+cargo test --locked --workspace --jobs 1 -- --test-threads=1
 cargo test --locked --doc --workspace --jobs 1
 cargo build --locked --release -p axocoatl-cli --jobs 1
 ./scripts/test-server-package.sh

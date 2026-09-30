@@ -40,7 +40,10 @@ cost can record the effective fallback route instead of mislabeling it as the pr
 4. Optionally choose **Plan first**. One autonomous Agent proposes a shared plan; edit the
    resulting instruction before applying it to every way.
 5. Choose **Check models** to preflight the selected provider/model targets.
-6. Start the attempts only after the task and every target are correct.
+6. For a native Session, enter each Attempt's explicit activation, invocation, token,
+   cost, output, and expiry limits. Open **History** and configure the explicit Ways
+   storage limits when prompted. No numerical allowance is inferred for you.
+7. Start the attempts only after the task and every target are correct.
 
 </Steps>
 
@@ -111,12 +114,29 @@ It does not create a commit. Review the applied diff in Source Control and run
 the check again in the main Session when the repository or environment makes
 that prudent.
 
-<Aside type="caution" title="Keep ends the candidate record">
-Routes, candidate diffs, Checks, Judge ranking, and cost evidence remain available
-while the Ways decision is unresolved. After Keep and cleanup, durable History keeps
-the selected task, output, and turn attribution; it does not keep the losing Ways or
-the candidate comparison record. Review the current Git diff before committing.
-</Aside>
+## Inspect the Ways graph
+
+Choose **Open Ways graph** in Attempts. One decision node groups the candidates;
+expand an Attempt to inspect its Agent, model, isolation, Outcome, Route, diff,
+Checks, and usage. **Open comparison** returns to the existing comparison and Keep
+flow. From retained History, **Open decision graph** shows the same evidence as a
+read-only decision, with its actual kept or no-Keep outcome.
+
+## Review a finished decision
+
+In native Sessions, **History** retains the bounded Ways comparison after runtime
+cleanup, whether you Keep an Attempt or finish without keeping. Open a decision to
+inspect each candidate's Outcome, Route, diff, Checks, usage, Judge evidence, human
+choice, and cleanup state. Missing evidence and truncated text are labeled.
+
+Search the retained decisions, export a record with its protected patches, or add
+one to the composer as context. **Delete retained evidence…** is a separate explicit
+action; cleaning up clones does not delete the decision. Storage limits are explicit
+and capacity errors preserve the unresolved recovery evidence.
+
+Legacy decisions made before native retention do not gain candidate evidence
+retroactively. **Last turn** still shows the current attributed Git diff, so review
+it before committing.
 
 ## Recover an interrupted decision
 
@@ -133,13 +153,14 @@ being presented as empty successes.
 
 Choose **Finish without keeping** to remove every Attempt and leave the Session
 working tree unchanged. During running Checks, the control becomes **Stop
-checks & finish without keeping**. Candidate review evidence is removed with the
-set and no selected result is added to Session History.
+checks & finish without keeping**. Native History retains the bounded decision
+with a no-Keep outcome; no selected result is added to the conversation. In legacy
+execution, candidate review evidence is removed with the set.
 
 Attempt pricing covers the Ways where tracked usage is complete and configured prices are
 known. **Plan first**, **Check models**, and **Judge** calls are shown separately and excluded
 from each Way's execution total. A successful Judge record remains with the unresolved Attempt
-set. Plan and model-check details are request-local; the selected planning Agent's cumulative
+set and is included in the native retained decision. Plan and model-check details are request-local; the selected planning Agent's cumulative
 usage also remains visible in Settings. A failed call that returns no terminal usage is labeled
 as an incomplete lower bound, and remote usage without price data is unknown rather than zero.
 

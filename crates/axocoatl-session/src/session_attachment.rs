@@ -43,7 +43,9 @@ pub enum SessionAttachmentError {
         reference_id: String,
         session_id: String,
     },
-    #[error("attachment {reference_id} belongs to session {actual_session_id}, not {expected_session_id}")]
+    #[error(
+        "attachment {reference_id} belongs to session {actual_session_id}, not {expected_session_id}"
+    )]
     SessionMismatch {
         reference_id: String,
         expected_session_id: String,

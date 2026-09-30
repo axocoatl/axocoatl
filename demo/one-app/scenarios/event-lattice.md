@@ -1,5 +1,10 @@
 # Skill, event lattice, and Automation
 
+The prospective 1.1.0 take uses the existing configured Automation/runtime
+surface. Its run evidence is separate from native Session activation evidence;
+showing Settings or an Automation does not establish native Session MCP or
+legacy memory support.
+
 This film shows Axocoatl reacting to a typed event without turning the event
 substrate into another product destination.
 
@@ -85,7 +90,7 @@ export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-signal-desk'
 curl -sS "$AXO_DEMO_URL/api/events/recent"
 curl -sS "$AXO_DEMO_URL/api/automations/release-gate-review/runs"
 curl -sS "$AXO_DEMO_URL/api/interrupts"
-find "$AXO_DEMO_ROOT/data/runs/release-gate-review" \
+find "$AXO_DEMO_ROOT/data/automation/runs-v1/release-gate-review" \
   -maxdepth 1 -type f -print
 ```
 
@@ -96,7 +101,7 @@ export AXO_RUN_ID='paste-the-run-uuid-here'
 curl -sS \
   "$AXO_DEMO_URL/api/automations/release-gate-review/runs/$AXO_RUN_ID"
 sed -n '1,260p' \
-  "$AXO_DEMO_ROOT/data/runs/release-gate-review/$AXO_RUN_ID.json"
+  "$AXO_DEMO_ROOT/data/automation/runs-v1/release-gate-review/$AXO_RUN_ID.json"
 ```
 
 The recent-events response should contain `ReleaseCandidateReady` produced by

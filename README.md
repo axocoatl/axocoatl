@@ -32,6 +32,10 @@ access keep the work durable and extensible.
 
 ## Quickstart
 
+The execution contracts below describe the 1.1.0 source tree. The installer and
+`cargo install` select published releases; see the [changelog](CHANGELOG.md)
+for versioned changes.
+
 ```bash
 # 1. Install (no Rust toolchain required)
 curl -fsSL https://axocoatl.ai/install.sh | sh
@@ -54,6 +58,11 @@ binary.
 
 Prefer Cargo? `cargo install axocoatl-cli` (requires Rust 1.88+).
 
+Cargo and source builds compile the host application and include Axocoatl's prebuilt
+Linux process supervisor inside the same executable. It needs no separate installation
+or startup download. Its source and [explicit rebuild procedure](docs/EXEC_SUPERVISOR_BUILD.md)
+are included in this repository.
+
 `axocoatl onboard` creates no project, repository, Workspace, or Session. It
 writes one owner-only user configuration and platform data directory. Repositories
 become Workspaces only when you authorize them through **Open workspace…**.
@@ -67,13 +76,18 @@ become Workspaces only when you authorize them through **Open workspace…**.
 ## From request to reviewed change
 
 1. Open or resume a Workspace Session.
-2. Ask one Agent for a solution, or turn on **Explore several ways** and choose
-   an Agent and model for each attempt.
-3. Compare Outcome and Route, inspect changed paths and diffs, then run Checks
+2. Ask one Agent for a solution, or use a Lattice or Custom team when the work
+   needs several cooperating roles. An autonomous multi-Agent team's causal
+   Coordination map stays with the Turn. A Coordinator can create bounded Workers
+   from approved templates inside the same recorded turn. In a native Session,
+   review and apply **Team & budget** before the first Send.
+3. When an implementation decision needs independent evidence, turn on
+   **Explore several ways** and choose an Agent and model for each attempt.
+4. Compare Outcome and Route, inspect changed paths and diffs, then run Checks
    and an optional Judge.
-4. Choose **Keep this one** to apply one candidate to the primary checkout
-   without committing it.
-5. Open **Last turn** in Source Control, review the current attributed diff,
+5. If you explored Ways, choose **Keep this one** to apply one candidate to the
+   primary checkout without committing it.
+6. Open **Last turn** in Source Control, review the current attributed diff,
    stage what you want, and commit deliberately.
 
 ## One workbench, from request to review
@@ -86,21 +100,54 @@ become Workspaces only when you authorize them through **Open workspace…**.
   explicit running, completed, failed, cancelled, or interrupted states. Reopen a
   Session, search its History, export Markdown or JSON, and keep bounded context tied
   to the work it informed.
+- **Knowledge carries into the next Session.** Keep versioned Markdown decisions,
+  conventions, and findings in the Workspace. Open **Knowledge** to inspect their
+  sources, backlinks, proposals, and graph, or attach an exact note revision to chat.
+  Native Agents can retrieve notes and propose updates; accepted publication remains
+  separate from speculative work. A bounded code map exposes observed definitions
+  and imports, with source changes and unavailable evidence kept visible.
+- **Teams retain their execution history.** Native turns bind each Agent activation
+  to an immutable definition, input, conversation, and approved budget. Dependencies
+  carry exact accepted handoffs. The Agent graph exposes generations, output, usage,
+  and causal evidence, with missing details labeled. **Team & budget** reviews future
+  turns; current-turn controls act on exact recorded generations. Coordinators use
+  explicitly approved Worker templates and bounded delegated authority.
 - **Explore several ways before you choose.** Give the same request and repository
   snapshot to different Agent/model pairs. Each attempt gets an independent checkout
   and sandbox. Compare Outcome and Route, inspect changed paths and diffs, run Checks
   and an optional Judge, and see usage and known cost before you Keep one.
 - **Keep is a Git decision, not an automatic commit.** **Keep this one** applies the
   selected candidate to the primary checkout, records its output and turn attribution
-  in durable Session History, and removes the unresolved attempt set. **Last turn**
+  in durable Session History, and removes the unresolved runtime set. Native Ways also
+  retain the bounded candidate comparison and human decision after cleanup, including
+  decisions that keep nothing. Set explicit History storage limits before starting Ways.
+  **Last turn**
   filters the current Git diff to paths attributed to that turn so you can review,
   stage, and commit deliberately.
 - **Execution and providers remain your choice.** Rootless Podman is the local
-  default; E2B Cloud is an explicit remote option for normal Session work. Axocoatl
-  supports Ollama, OpenAI, OpenRouter, Anthropic, Gemini, Mistral, and one
-  OpenAI-compatible endpoint.
+  default. Native repository tools and checks require its process supervisor;
+  E2B Cloud remains an explicit remote option on the compatibility path. Provider
+  adapters include Ollama, OpenAI, OpenRouter, Anthropic, Gemini, Mistral, and one
+  OpenAI-compatible endpoint, subject to the execution contracts below.
 
-## What the v1 contract covers
+## Execution contracts
+
+New data roots use the native Session controller. **Team & budget** requires explicit
+limits and expiry before execution. Its enforced provider boundary currently supports
+reviewed local Ollama profiles and eligible OpenRouter text/tool endpoints paid with
+OpenRouter credits. OpenRouter requires `providers.openrouter_billing: credits`, a
+normal API key, and an account with no connected BYOK provider keys. BYOK support is
+a TODO. A compatible HTTP API alone does not establish a bound.
+The onboarding wizard offers Ollama and OpenRouter for native Sessions.
+Direct OpenAI and Anthropic configurations remain available through manual YAML
+on their supported compatibility paths.
+The other configured provider adapters remain available through their supported legacy
+and compatibility paths. Existing legacy roots are not silently converted. After
+stopping the daemon and making a cold backup, use `axocoatl session upgrade --confirm`
+to convert the existing data. History and usage remain; historical Agent state whose
+role was not recorded stays archived instead of becoming future model context.
+
+### Recovery and compatibility boundaries
 
 - **Durable turn identity and lifecycle.** Axocoatl records a request and immutable
   context references before execution. Exact Stop targets one active turn; cooperative
@@ -109,12 +156,12 @@ become Workspaces only when you authorize them through **Open workspace…**.
   unchecked proposal, not consent. Repository tools remain unavailable until the
   Session environment is durably Ready. Axocoatl can provision required commands in
   an approved sandbox, but it does not install Podman or create its VM.
-- **Honest Ways recovery.** Unresolved lifecycle, output, Route, failure, usage, cost,
+- **Legacy Ways recovery.** Unresolved lifecycle, output, Route, failure, usage, cost,
   optional Judge, and protected Check evidence rehydrate. Before Checks protects a
   candidate identity, a restart cannot restore its live changed-path or diff evidence.
   In v1, Ways requires an autonomous single-Agent Session on local Podman; attachments,
   Skills, MCP tools, and web search are withheld from candidate attempts.
-- **An explicit post-Keep boundary.** The kept task, output, and turn attribution join
+- **Legacy post-Keep history.** The kept task, output, and turn attribution join
   canonical Session History. Candidate Routes, diffs, Checks, Judge ranking, and
   cost do not. **Last turn** is a filter over the current working tree, not a frozen
   per-turn patch.
@@ -133,17 +180,39 @@ and [the security guide](https://docs.axocoatl.ai/operate/security/).
 
 **One Session, with the repository around it.**
 
-[![An Axocoatl Session with conversation, Files, Source Control, Preview, and Terminal](sites/marketing/assets/films/session-workbench.jpg)](https://axocoatl.ai/assets/films/session-workbench.mp4)
+[![An Axocoatl Session with conversation, Files, Source Control, Preview, and Terminal](sites/marketing/assets/films/v1.1.0/session-workbench.jpg)](https://axocoatl.ai/assets/films/v1.1.0/session-workbench.mp4)
 
 **Several Ways, compared on evidence.**
 
-[![Several Axocoatl Ways compared by Outcome, Route, diff, Checks, cost, and Judge](sites/marketing/assets/films/several-ways.jpg)](https://axocoatl.ai/assets/films/several-ways.mp4)
+[![Several Axocoatl Ways compared by Outcome, Route, diff, Checks, cost, and Judge](sites/marketing/assets/films/v1.1.0/several-ways.jpg)](https://axocoatl.ai/assets/films/v1.1.0/several-ways.mp4)
 
 **One kept result, returned to normal Git review.**
 
-[![A kept Axocoatl result shown as uncommitted paths and hunks in Source Control](sites/marketing/assets/films/git-last-turn.jpg)](https://axocoatl.ai/assets/films/git-last-turn.mp4)
+[![A kept Axocoatl result shown as uncommitted paths and hunks in Source Control](sites/marketing/assets/films/v1.1.0/git-last-turn.jpg)](https://axocoatl.ai/assets/films/v1.1.0/git-last-turn.mp4)
 
 ---
+
+## Workspace knowledge
+
+The Knowledge inspector shares accepted notes across Sessions in one Workspace.
+Notes retain their revision, origin, source hashes, and typed links. Edit them in
+the workbench or explicitly import/export Markdown for another editor; no vault is silently added
+to your repository. Native requests retain a bounded selection of relevant note
+revisions with their origin and source applicability. Search and the cached code
+map help an Agent choose what to read next.
+
+Each Session retains its own source index, which parses Rust, JavaScript, TypeScript, TSX, and Python definitions
+and import syntax. It is a bounded observed index, not a complete reference or call
+graph. Refresh it after source changes and inspect the current files before relying
+on a remembered explanation. A changed hash signals that its evidence needs review.
+
+Model proposals do not become accepted knowledge just because a tool call finished.
+Publication checks accepted activation state and expected note revisions. For an
+isolated Way, automatic publication also requires its exact retained Keep decision;
+other candidates stay pending for explicit human review. Human edits and conflicts
+remain explicit. **Investigate in chat** attaches a selected
+note and prepares a follow-up request under ordinary Session authority and budgets.
+Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
 
 ## Core concepts
 
@@ -155,32 +224,48 @@ and [the security guide](https://docs.axocoatl.ai/operate/security/).
 - **Attempt** — a candidate solution, optionally run in parallel with different
   agents and models, verified and resolved to one kept result.
 - **Agents** — configured templates for a provider, model, tools, memory policy, role, and
-  token budget. An autonomous Agent is instantiated under each normal Session's durable
-  Tier 1–4 identity. A Coordinator owns scoped Tier-1 conversation plus orchestration
-  checkpointing; its declared Workers own scoped Tier 1–4 identities beneath it. The global
+  token budget. Native activations retain exact input, accepted conversation checkpoints,
+  and usage; their execution path does not attach Tier 2–4 memory stores. On the legacy
+  path, an autonomous Agent has a Session-scoped Tier 1–4 identity. A Coordinator owns
+  scoped Tier-1 conversation plus orchestration checkpointing; its declared Workers
+  own scoped Tier 1–4 identities beneath it. The global
   compatibility actor remains separate, and ad-hoc Workers are run-scoped and ephemeral.
-- **Hybrid memory recall** — relevant past exchanges are injected each turn, and
+- **Legacy hybrid memory recall** — relevant past exchanges are injected each turn, and
   the Agent can also pull on demand: `recall_search` (semantic search within that
   Agent instance's scope) and `recall_timeframe` (read its dated activity log). Tunable
   for autonomous Agents and declared Workers, retained across actor restart in the same
   Session. The Coordinator provider loop itself does not expose Tier 2–4 recall in 1.0.
-- **Agent-managed core memory** — editable blocks (`persona`, `human`, `project`,
+- **Legacy agent-managed core memory** — editable blocks (`persona`, `human`, `project`,
   …) the agent curates via tools and that render into its prompt each turn (the
   MemGPT/Letta model). Available to autonomous Agents and declared Workers, scoped to their
   Session runtime identity by default; only blocks marked `shared: true` cross Agent or
   Session scopes. A
   configured background "sleep-time" pass consolidates registered idle autonomous
   Agents' memory. Declared Coordinator Workers are not polled by that loop.
+  Legacy coordinated turns can read these stores, but their speculative execution
+  cannot write them or run core-memory consolidation.
 - **Event lattice** — Skills and runtime components publish typed events;
   Automation triggers, webhooks, and retained API/WebSocket observers consume
-  the shared notification feed. The coordination crate also exposes signal
-  primitives for library users.
+  the shared notification feed. Separately, each legacy all-team turn with more than one
+  autonomous Agent in a Lattice or Custom Session owns a scoped predicate lattice
+  whose signals activate exact dependencies and are retained as Session evidence.
+  Native turns use their canonical dependency graph and accepted-generation evidence.
+  The coordination crate exposes both signal models to library users.
+- **Signal field** — stigmergic Session work: each team Agent watches repository path
+  patterns and owns some of them (or none, as a read-only reviewer); findings, source
+  changes, failed checks and flags leave evaporating deposits on paths, and the Agent
+  whose watched paths cross its threshold receives one targeted work item through the
+  ordinary inbox, grants and allowance. During signal work its file tools refuse paths
+  it does not own, a read-only reviewer's commands cannot write the repository at all,
+  and any other change outside owned paths fails that work for review, so problems
+  elsewhere become findings that signal their owners. Work sources shows each deposit, why it counts,
+  and the dispatched turns it caused.
 - **Coordinator role** — for explicit hierarchical work, an agent with
   `role: coordinator` decomposes a goal into subtasks (HTN or LLM), auctions them
   to worker agents, runs them in parallel, and synthesizes the results. Internal
-  checkpoints protect the live orchestration boundary. Once a Session turn is
-  Completed, Cancelled, Failed, or Interrupted, a later turn decomposes fresh rather
-  than silently resuming that terminal work.
+  checkpoints protect the live orchestration boundary. On the legacy path, once a Session
+  turn is Completed, Cancelled, Failed, or Interrupted, a later turn decomposes fresh
+  rather than silently resuming that terminal work.
 - **Workflow compatibility** — workflow commands and routes project manual
   Automation records; legacy YAML seeds those records only on first boot.
 - **Automations** — explicit DAGs created, inspected, edited, and run in
@@ -216,6 +301,7 @@ axocoatl init <name>             Scaffold an explicit project-local config
 axocoatl validate <config>       Validate a config file
 axocoatl dev | serve             Run daemon (+ IPC) / production server
 axocoatl chat -a <agent>         Interactive chat
+axocoatl session upgrade --confirm  Convert stopped legacy Session storage after backup
 axocoatl workflow list | run     Compatibility view/run for manual Automations
 axocoatl agents list|status|restart
 axocoatl tokens report           Per-agent token usage

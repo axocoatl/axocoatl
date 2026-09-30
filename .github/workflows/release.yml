@@ -728,6 +728,7 @@ jobs:
           done
           # Stable Cargo verifies the selected release package set against its
           # temporary registry before any irreversible upload.
+          python3 scripts/test-exec-supervisor-artifact.py verify-embedded .
           cargo package --locked "${package_args[@]}"
           for c in "${release_crates[@]}"; do
             archive="target/package/${c}-${version}.crate"
@@ -736,6 +737,11 @@ jobs:
               exit 1
             }
           done
+          if printf '%s\n' "${release_crates[@]}" | grep -Fxq axocoatl-isolation; then
+            python3 scripts/test-exec-supervisor-artifact.py verify-packages \
+              "target/package/axocoatl-exec-${version}.crate" \
+              "target/package/axocoatl-isolation-${version}.crate" --source-root .
+          fi
           if printf '%s\n' "${release_crates[@]}" | grep -Fxq axocoatl-server; then
             server_archive="target/package/axocoatl-server-${version}.crate"
             server_prefix="axocoatl-server-${version}"

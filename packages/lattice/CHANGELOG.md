@@ -5,6 +5,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [S
 
 ## [Unreleased]
 
+### Added
+- Explicit `mode="view"` execution graphs keep selection and camera controls while
+  disabling all editing gestures and public editing methods, hiding handles and
+  history controls, and cancelling unfinished editing gestures on mode changes.
+- `setSelection(ids)` restores selection after authoritative updates; View keyboard
+  inspection emits `node-inspect` and lets Tab leave the canvas.
+- `blocked` and `cancelled` node execution states, including distinct canvas
+  and minimap styling, so durable coordination outcomes do not collapse into
+  the generic `error` state.
+
 ## [1.1.0] — 2026-05
 
 Live execution state — a native "run" dimension.

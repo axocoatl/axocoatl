@@ -7,8 +7,10 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 Every Session executes repository tools inside a sandbox selected by
 `sandbox.backend`. The default is a local rootless Podman container. A remote
-E2B Cloud backend is available for ordinary Sessions, with different
-network and trust implications.
+E2B Cloud backend is available for compatibility Session execution, with different
+network and trust implications. Native repository tools and required checks
+currently require local Podman; E2B does not implement their supervised command
+boundary.
 
 ## Local Podman
 
@@ -135,8 +137,12 @@ before authorizing sensitive code.
 ## Backend capability boundary
 
 <Tabs>
-  <TabItem label="Ordinary Sessions">
-    Use either configured backend for normal single-agent or multi-agent work,
+  <TabItem label="Native Sessions">
+    Use local Podman for repository tools and required checks. E2B does not
+    implement the native supervised command boundary.
+  </TabItem>
+  <TabItem label="Compatibility Sessions">
+    Use either configured backend for single-agent or multi-agent work,
     subject to that backend's connection and repository requirements.
   </TabItem>
   <TabItem label="Explore several ways">
@@ -152,7 +158,7 @@ before authorizing sensitive code.
 | Default local development | Podman, bridge network, trust flags off |
 | Review untrusted code without Session egress | Podman, `network: none`, an image already containing required commands, trust flags off, limits required if the host supports them; account separately for host-side image pulls |
 | Run a local web app in Preview | Podman bridge plus an exposed Session port |
-| Remote isolated compute | E2B Cloud with scoped credentials and an approved template; no Axocoatl Preview ports |
+| Remote compatibility execution | E2B Cloud with scoped credentials and an approved template; no Axocoatl Preview ports |
 | Several isolated Ways | Local Podman |
 
 Sandboxing reduces risk; it does not make prompts, dependencies, images, MCP

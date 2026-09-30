@@ -3,21 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Axocoatl v1 — agent work that holds up</title>
+  <title>Axocoatl v1.1 — agent work that holds up</title>
   <meta name="description" content="An open-source, local-first coding workbench for durable repository Sessions, inspectable execution, several checked Ways, and deliberate Git review.">
   <meta name="theme-color" content="#3E7C5C">
   <link rel="canonical" href="https://axocoatl.ai/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Axocoatl">
   <meta property="og:url" content="https://axocoatl.ai/">
-  <meta property="og:title" content="Axocoatl v1 — agent work that holds up">
+  <meta property="og:title" content="Axocoatl v1.1 — agent work that holds up">
   <meta property="og:description" content="One durable repository Session. One Agent or several checked Ways. One result returned to normal Git review.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Axocoatl: the local-first workbench for coding agents">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Axocoatl v1 — agent work that holds up">
+  <meta name="twitter:title" content="Axocoatl v1.1 — agent work that holds up">
   <meta name="twitter:description" content="One durable repository Session. One Agent or several checked Ways. One result returned to normal Git review.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
@@ -40,9 +40,9 @@
 
   <main id="main-content">
     <section class="container hero">
-      <span class="hero-note">Axocoatl v1 · open source · local-first</span>
+      <span class="hero-note">Axocoatl v1.1 · open source · local-first</span>
       <h1>Agent work<br>that holds up.</h1>
-      <p class="lede">Axocoatl is the local-first coding workbench for real repositories. One durable Session keeps conversation, repository tools, execution evidence, and Git review together. Start with one Agent or a configured team; when the decision needs evidence, compare several checked Ways from the same task and snapshot, then Keep one result as uncommitted Git changes.</p>
+      <p class="lede">Axocoatl is the local-first coding workbench for real repositories. One durable Session keeps conversation, repository tools, execution evidence, and Git review together. Workspace knowledge retains the decisions, sources, and findings the next Session needs. Start with one Agent, or select an autonomous multi-Agent team and keep its coordination map with the turn. When a decision needs evidence, compare several checked Ways from the same task and snapshot, then Keep one result as uncommitted Git changes.</p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="/install">Install →</a>
         <a class="btn btn-ghost" href="https://github.com/axocoatl/axocoatl">View the source →</a>
@@ -51,8 +51,8 @@
       <ax-product-film
         class="product-film-hero"
         film="session-workbench"
-        src="/assets/films/session-workbench.mp4"
-        poster="/assets/films/session-workbench.jpg"
+        src="/assets/films/v1.1.0/session-workbench.mp4"
+        poster="/assets/films/v1.1.0/session-workbench.jpg"
         label="An Axocoatl Session with conversation and repository tools"
         caption="Conversation stays central while Files, Source Control, Preview, and Terminal open around the same Session."
         preload="metadata"
@@ -60,8 +60,18 @@
       ></ax-product-film>
 
       <div class="trust-row" aria-label="Product facts">
-        <span>Released v1</span><span>One executable + your browser</span><span>Local Podman by default</span><span>No Axocoatl account or telemetry</span>
+        <span>Version 1.1</span><span>One executable + your browser</span><span>Local Podman by default</span><span>No Axocoatl account or telemetry</span>
       </div>
+    </section>
+
+    <section class="container section section-rule" id="workspace-knowledge">
+      <div class="section-head"><span class="eyebrow">Workspace knowledge</span><h2>Keep decisions with their evidence.</h2><p>Retain Markdown decisions, conventions, and findings across Sessions. Open Knowledge to inspect each note's revision, source links, and origin before putting it back to work.</p></div>
+      <div class="grid-3">
+        <article class="card"><span class="card-kicker">Remember</span><h3>Build a shared record</h3><p>Edit notes, follow backlinks, and inspect their connections in a focused graph. Agents propose updates; acceptance and revision checks govern publication.</p></article>
+        <article class="card"><span class="card-kicker">Inspect</span><h3>Check the source</h3><p>A bounded code index exposes observed definitions and file identities. Changed or unavailable sources tell you which remembered claims need another look.</p></article>
+        <article class="card"><span class="card-kicker">Continue</span><h3>Bring evidence into chat</h3><p>Attach an exact note revision or prepare an investigation from it. Follow-up uses the same Session, tools, grants, and repository checks.</p></article>
+      </div>
+      <p><a href="https://docs.axocoatl.ai/workbench/knowledge/">Use workspace knowledge →</a></p>
     </section>
 
     <section class="container section section-rule">
@@ -77,11 +87,38 @@
       </div>
       <ax-product-film
         film="durable-turn"
-        src="/assets/films/durable-turn.mp4"
-        poster="/assets/films/durable-turn.jpg"
+        src="/assets/films/v1.1.0/durable-turn.mp4"
+        poster="/assets/films/v1.1.0/durable-turn.jpg"
         label="An active Axocoatl Session turn reconnecting after reload and ending in History"
         caption="Reloading reconnects to the exact active turn. Stop preserves an honest cancelled state in History."
       ></ax-product-film>
+    </section>
+
+    <section class="container section section-rule">
+      <div class="split reverse">
+        <div class="code-pane">
+          <div class="code-pane-head">one coordinated Turn</div>
+          <pre><code><span class="code-comment">request + exact dependencies</span>
+       │
+       ├── <span class="code-key">architect</span> ─────┐
+       └── <span class="code-key">test analyst</span> ───┤
+                              ↓
+                           <span class="code-key">builder</span>
+                              ↓
+                           <span class="code-key">reviewer</span>
+
+<span class="code-comment">reviewer → builder · changes requested</span>
+<span class="code-comment">builder g2 → reviewer g2 · verified</span>
+<span class="code-comment">map + handoffs retained in History</span></code></pre>
+        </div>
+        <div class="stack">
+          <span class="eyebrow">One result, several roles</span>
+          <h2>Keep the coordination.</h2>
+          <p>Select an autonomous multi-Agent Lattice team or assemble an autonomous Custom team inside the Session. For native work, review its configuration and explicit limits in Team &amp; budget. Axocoatl retains the accepted dependencies for that Turn. Roots start from the request; each downstream Agent receives the request plus only its latest direct-parent handoffs.</p>
+          <p>Independent branches continue when they can. Dependent work blocks honestly. Approved revisions retain the earlier generation and the affected route before verification. The graph, handoffs, generations, failures, and final state remain attached to the conversation. Native Coordinators create distinct Worker activations from approved templates and limits in the same recorded turn.</p>
+          <a href="/concepts/#execution-shapes">See the execution shapes →</a>
+        </div>
+      </div>
     </section>
 
     <section class="container section section-rule">
@@ -90,7 +127,7 @@
           <span class="eyebrow">When the decision needs evidence</span>
           <h2>Compare real Ways.</h2>
           <p>One Agent or a configured team remains the direct path. When the implementation is genuinely uncertain, the same Session can give one task and repository snapshot to several Agent/model pairs. Each Way works in an isolated checkout and sandbox.</p>
-          <p>Run the same repository Check. Compare Outcome, Route, available diff, cost, and an optional Judge while the decision is open. Keep one passing, non-empty result for Git review, or finish without keeping any of them.</p>
+          <p>Run the same repository Check. Compare Outcome, Route, available diff, cost, and an optional Judge while the decision is open. Keep one passing, non-empty result for Git review, or finish without keeping any of them. Native History retains the bounded decision after cleanup under explicit storage limits.</p>
           <a href="/showcase">See when several Ways help →</a>
         </div>
         <div class="code-pane">

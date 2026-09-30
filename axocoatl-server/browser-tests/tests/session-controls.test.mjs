@@ -231,7 +231,7 @@ async function openControlledSession({ turns, attachments = [] } = {}) {
     });
   });
   if (turns) {
-    await page.route(`**/api/sessions/${session.id}/turns`, (route) => route.fulfill({
+    await page.route(`**/api/sessions/${session.id}/turns*`, (route) => route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify(turns.value),
@@ -666,7 +666,8 @@ test('History searches and exports the durable ledger, then Rewind restores tran
     const jsonPath = await json.path();
     assert.ok(jsonPath);
     const exportedTurns = JSON.parse(await readFile(jsonPath, 'utf8'));
-    assert.deepEqual(exportedTurns.map((turn) => turn.status), ['completed', 'cancelled', 'failed']);
+    assert.deepEqual(exportedTurns.map((entry) => entry.history_version), ['legacy_v1', 'legacy_v1', 'legacy_v1']);
+    assert.deepEqual(exportedTurns.map((entry) => entry.turn.status), ['completed', 'cancelled', 'failed']);
     await page.locator('#session-history .close').click();
 
     const failedTurn = page.locator('#session-msgs .smsg.user').nth(2);

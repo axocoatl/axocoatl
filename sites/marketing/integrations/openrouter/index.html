@@ -10,11 +10,11 @@
 <body>
   <ax-site-nav></ax-site-nav>
   <main id="main-content">
-    <header class="container hero"><span class="eyebrow">Provider integration</span><h1>Use OpenRouter with your agents.</h1><p class="lede">Add one provider credential, then assign any model identifier available to your OpenRouter account to the configured agents that work inside your Sessions.</p><div class="hero-actions"><a class="btn btn-primary" href="https://openrouter.ai/keys">Create an API key →</a><a class="btn btn-ghost" href="/install">Install Axocoatl</a></div></header>
+    <header class="container hero"><span class="eyebrow">Provider integration</span><h1>Use OpenRouter with your agents.</h1><p class="lede">Add your OpenRouter API key, use OpenRouter credits, and assign eligible text and tool models to the agents that work inside your Sessions.</p><div class="hero-actions"><a class="btn btn-primary" href="https://openrouter.ai/keys">Create an API key →</a><a class="btn btn-ghost" href="/install">Install Axocoatl</a></div></header>
 
     <section class="container section section-rule">
       <div class="split">
-        <div class="stack"><span class="eyebrow">First run</span><h2>Configure OpenRouter once.</h2><p>Run <code>axocoatl onboard</code> and choose OpenRouter. The API-key prompt is masked. A supplied key is stored with the provider and starting Agent in the current user's owner-only Axocoatl configuration.</p><p>Onboarding creates no project folder or repository. After <code>axocoatl dev</code> opens the workbench, choose <strong>Open workspace…</strong> and select the repository you want to use. Model availability, pricing, routing, and account access remain controlled by OpenRouter.</p></div>
+        <div class="stack"><span class="eyebrow">First run</span><h2>Configure OpenRouter once.</h2><p>Run <code>axocoatl onboard</code> and choose OpenRouter. Confirm credit billing with no connected BYOK provider keys. BYOK support is deferred. The API-key prompt is masked. A supplied key is stored with the provider and starting Agent in the current user's owner-only Axocoatl configuration.</p><p>Onboarding creates no project folder or repository. After <code>axocoatl dev</code> opens the workbench, choose <strong>Open workspace…</strong> and select the repository you want to use. Model availability, pricing, routing, and account access remain controlled by OpenRouter.</p></div>
         <div class="code-pane"><div class="code-pane-head">first run</div><pre><code><span class="code-key">axocoatl onboard</span>  <span class="code-comment"># choose OpenRouter</span>
 <span class="code-key">axocoatl doctor</span>   <span class="code-comment"># verify configuration</span>
 <span class="code-key">axocoatl dev</span>      <span class="code-comment"># open the workbench</span></code></pre></div>
@@ -22,26 +22,29 @@
     </section>
 
     <section class="container section section-rule">
-      <div class="section-head"><span class="eyebrow">Use it in the workbench</span><h2>Choose the model for the job.</h2><p>Agents are configuration records. Assign OpenRouter, a direct hosted provider, or Ollama to each role, then select the right Agent from the Session.</p></div>
-      <div class="grid-3"><article class="card"><span class="card-kicker">Roles</span><h3>Different agents, different models</h3><p>Use a focused model for a narrow builder and a larger model for a coordinator or difficult repository task.</p></article><article class="card"><span class="card-kicker">Hybrid</span><h3>Local and hosted together</h3><p>Keep one Agent on Ollama and another on OpenRouter. Optional Ways can compare configured agents when the decision merits it.</p></article><article class="card"><span class="card-kicker">Cost</span><h3>Configure prices honestly</h3><p>Within Ways, when remote pricing is not configured, Axocoatl marks the known subtotal as incomplete instead of treating the call as free.</p></article></div>
+      <div class="section-head"><span class="eyebrow">Use it in the workbench</span><h2>Choose the model for the job.</h2><p>Agents are configuration records. Native Sessions accept reviewed local Ollama and eligible OpenRouter-credit profiles. Select the Agent and review its explicit limits in Team &amp; budget before execution; other hosted adapters remain on compatibility paths.</p></div>
+      <div class="grid-3"><article class="card"><span class="card-kicker">Roles</span><h3>Different agents, different models</h3><p>Use a focused model for a narrow builder and a larger model for a coordinator or difficult repository task.</p></article><article class="card"><span class="card-kicker">Hybrid</span><h3>Local and hosted together</h3><p>Keep one Agent on Ollama and another on OpenRouter. Optional Ways can compare configured agents when the decision merits it.</p></article><article class="card"><span class="card-kicker">Cost</span><h3>Approve the budget</h3><p>Native Sessions reserve each call against the approved allowance using the retained endpoint’s token and price limits. Missing final usage stays unknown.</p></article></div>
     </section>
 
     <section class="container section section-rule">
       <div class="split">
         <div class="stack"><span class="eyebrow">Advanced configuration</span><h2>Keep environment injection explicit.</h2><p>If you prefer process-environment injection, leave the key blank during onboarding or manage an explicit YAML configuration. Export <code>OPENROUTER_API_KEY</code> in the process that starts Axocoatl and pass an explicit configuration path when it is not the user default.</p><p>Axocoatl does not load dotenv files automatically. Protect environment files, explicit configurations, shell history, and backups as secrets.</p></div>
         <div class="code-pane"><div class="code-pane-head">advanced axocoatl.yaml</div><pre><code><span class="code-key">providers:</span>
+  <span class="code-key">openrouter_billing:</span> <span class="code-string">credits</span>
   <span class="code-key">openrouter:</span>
     <span class="code-key">api_key:</span> <span class="code-string">"${OPENROUTER_API_KEY}"</span>
 
 <span class="code-key">agents:</span>
   - <span class="code-key">id:</span> <span class="code-string">builder</span>
     <span class="code-key">provider:</span> <span class="code-string">openrouter</span>
-    <span class="code-key">model:</span> <span class="code-string">"${OPENROUTER_MODEL}"</span></code></pre></div>
+    <span class="code-key">model:</span> <span class="code-string">"${OPENROUTER_MODEL}"</span>
+    <span class="code-key">sampling:</span>
+      <span class="code-key">max_tokens:</span> 2048</code></pre></div>
       </div>
     </section>
 
     <section class="container-narrow section section-rule">
-      <div class="stack"><span class="eyebrow">Attribution</span><h2>The client identifies Axocoatl.</h2><p>Calls to the OpenRouter endpoint include <code>HTTP-Referer: https://axocoatl.ai</code> and <code>X-Title: Axocoatl</code>. These headers identify the calling application. They do not imply a directory listing, rank, partnership, or endorsement.</p></div>
+      <div class="stack"><span class="eyebrow">Attribution</span><h2>The client identifies Axocoatl.</h2><p>Calls to the OpenRouter endpoint include <code>HTTP-Referer: https://axocoatl.ai</code> and an Axocoatl application-title header. These headers identify the calling application. They do not imply a directory listing, rank, partnership, or endorsement.</p></div>
     </section>
 
     <section class="container section section-rule"><div class="cta-strip"><div><h2>Configure a model, then test it.</h2><p>Run <code>axocoatl doctor</code> after setup and start the local workbench with <code>axocoatl dev</code>.</p></div><div class="cta-actions"><a class="btn btn-primary" href="https://openrouter.ai/keys">OpenRouter key →</a><a class="btn btn-ghost" href="https://docs.axocoatl.ai/configure/providers/">Provider docs</a></div></div></section>

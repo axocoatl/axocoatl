@@ -110,6 +110,9 @@ pub enum AgentStreamChunk {
     Text(String),
     /// Reasoning / "thinking" token(s) — extended-thinking models.
     Reasoning(String),
+    /// The provider response ended before completing and one retry starts.
+    /// Earlier text in this round belongs to the abandoned attempt.
+    ProviderRetry { reason: String },
     /// A tool call is about to run — surfaced so the UI can render a live
     /// tool-call card.
     ToolCallStarted {
@@ -154,6 +157,14 @@ pub enum AgentStreamChunk {
         result: serde_json::Value,
         is_error: bool,
     },
+}
+
+/// Synchronous acknowledged observation of actor output. A host can persist an
+/// exact activation event before any live publication without an unbounded
+/// forwarding queue. Failure is fatal to this activation; an observation is not
+/// invocation admission, an authoritative raw tool outcome, or acceptance.
+pub trait AgentStreamObserver: Send + Sync {
+    fn observe(&self, chunk: &AgentStreamChunk) -> Result<(), String>;
 }
 
 /// Where an agent forwards its streamed output. The daemon attaches one of
@@ -244,6 +255,12 @@ pub trait AgentBehavior: Send + Sync + 'static {
         input: AgentInput,
         control: AgentRunControl,
     ) -> Result<AgentRunOutcome, AgentError> {
+        if control.execution_boundary().is_some() {
+            return Err(AgentError::Internal(
+                "this custom behavior does not implement the requested execution boundary"
+                    .to_string(),
+            ));
+        }
         if control.is_cancelled() {
             return Ok(AgentRunOutcome::Cancelled {
                 run_id: control.id().clone(),

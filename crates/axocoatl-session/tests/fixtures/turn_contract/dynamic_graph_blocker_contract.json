@@ -1,0 +1,243 @@
+[
+  {
+    "schema_version": 2,
+    "command_id": "fixture-0",
+    "expected_revision": 0,
+    "session_id": "session-a",
+    "turn_id": "turn-a",
+    "event": {
+      "kind": "begin",
+      "epoch_id": "epoch-1",
+      "graph": {
+        "snapshot_id": "graph-1",
+        "revision": 1,
+        "nodes": [
+          {
+            "node_id": "a",
+            "slot_id": "slot-a",
+            "definition": {
+              "definition_id": "qa",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-a",
+            "starting_savepoint": {
+              "kind": "empty"
+            },
+            "required": true
+          },
+          {
+            "node_id": "b",
+            "slot_id": "slot-b",
+            "definition": {
+              "definition_id": "qa",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-b",
+            "starting_savepoint": {
+              "kind": "empty"
+            },
+            "required": true
+          }
+        ],
+        "dependencies": [
+          {
+            "parent": "a",
+            "child": "b"
+          }
+        ],
+        "conditions": [
+          {
+            "condition_id": "check-b",
+            "kind": {
+              "kind": "repository_check",
+              "definition": "check-definition"
+            },
+            "nodes": [
+              "b"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "schema_version": 2,
+    "command_id": "fixture-1",
+    "expected_revision": 1,
+    "session_id": "session-a",
+    "turn_id": "turn-a",
+    "event": {
+      "kind": "revise_graph",
+      "epoch_id": "epoch-1",
+      "previous_graph": "graph-1",
+      "graph": {
+        "snapshot_id": "graph-2",
+        "revision": 2,
+        "nodes": [
+          {
+            "node_id": "a",
+            "slot_id": "slot-a",
+            "definition": {
+              "definition_id": "qa",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-a",
+            "starting_savepoint": {
+              "kind": "empty"
+            },
+            "required": true
+          },
+          {
+            "node_id": "b",
+            "slot_id": "slot-b",
+            "definition": {
+              "definition_id": "qa",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-b",
+            "starting_savepoint": {
+              "kind": "empty"
+            },
+            "required": true
+          },
+          {
+            "node_id": "c",
+            "slot_id": "slot-c",
+            "definition": {
+              "definition_id": "qa",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-c",
+            "starting_savepoint": {
+              "kind": "empty"
+            },
+            "required": true
+          }
+        ],
+        "dependencies": [
+          {
+            "parent": "a",
+            "child": "b"
+          },
+          {
+            "parent": "a",
+            "child": "c"
+          }
+        ],
+        "conditions": [
+          {
+            "condition_id": "check-b",
+            "kind": {
+              "kind": "repository_check",
+              "definition": "check-definition"
+            },
+            "nodes": [
+              "b"
+            ]
+          }
+        ]
+      },
+      "mutation": {
+        "kind": "add",
+        "node_id": "c"
+      },
+      "admission_evidence": "approved-add-c"
+    }
+  },
+  {
+    "schema_version": 2,
+    "command_id": "fixture-2",
+    "expected_revision": 2,
+    "session_id": "session-a",
+    "turn_id": "turn-a",
+    "event": {
+      "kind": "start_activation",
+      "input": {
+        "manifest_id": "input-a-1",
+        "activation": {
+          "session_id": "session-a",
+          "turn_id": "turn-a",
+          "execution_epoch_id": "epoch-1",
+          "node_id": "a",
+          "generation": 1,
+          "activation_id": "activation-a-1"
+        },
+        "definition": {
+          "definition_id": "qa",
+          "snapshot": "definition-v1"
+        },
+        "conversation_id": "conversation-a",
+        "starting_savepoint": {
+          "kind": "empty"
+        },
+        "parents": [],
+        "guidance": [],
+        "attachments": [],
+        "repository": {
+          "kind": "unavailable"
+        },
+        "budget": "budget-a",
+        "grant": null
+      }
+    }
+  },
+  {
+    "schema_version": 2,
+    "command_id": "fixture-3",
+    "expected_revision": 3,
+    "session_id": "session-a",
+    "turn_id": "turn-a",
+    "event": {
+      "kind": "open_blocker",
+      "blocker": {
+        "schema_version": 1,
+        "blocker_id": "machine-wait-a",
+        "activation": {
+          "session_id": "session-a",
+          "turn_id": "turn-a",
+          "execution_epoch_id": "epoch-1",
+          "node_id": "a",
+          "generation": 1,
+          "activation_id": "activation-a-1"
+        },
+        "kind": {
+          "kind": "machine",
+          "blocker_type": "fixture-only-type",
+          "definition": "trusted-type-definition",
+          "response_schema": "response-schema"
+        },
+        "command_id": "requested-command-a",
+        "invocation_id": null,
+        "grant": null,
+        "parameters": "exact-parameters",
+        "evidence": "wait-created",
+        "safe_boundary": "safe-boundary-a"
+      }
+    }
+  },
+  {
+    "schema_version": 2,
+    "command_id": "fixture-4",
+    "expected_revision": 4,
+    "session_id": "session-a",
+    "turn_id": "turn-a",
+    "event": {
+      "kind": "resolve_blocker",
+      "blocker_id": "machine-wait-a",
+      "activation": {
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "execution_epoch_id": "epoch-1",
+        "node_id": "a",
+        "generation": 1,
+        "activation_id": "activation-a-1"
+      },
+      "response": {
+        "kind": "machine_evidence",
+        "definition": "trusted-type-definition",
+        "response_schema": "response-schema",
+        "evidence": "retained-response"
+      }
+    }
+  }
+]

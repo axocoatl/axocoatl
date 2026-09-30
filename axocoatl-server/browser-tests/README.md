@@ -1,7 +1,9 @@
 # Embedded workbench browser regressions
 
-These tests exercise the actual browser app embedded in the `axocoatl` binary.
-They do not inspect source strings or mount UI components in a synthetic DOM.
+These tests combine real workbench and HTTP-route journeys with focused browser
+component fixtures served from the actual `axocoatl` binary. A few focused seam
+tests extract existing handlers from that binary's `/` page. Component checks
+complement the visible workbench journeys; they do not replace them.
 
 The harness builds `axocoatl-cli`, starts a fresh daemon on a free loopback
 port, assigns it a unique data directory and IPC socket, creates two temporary
@@ -36,6 +38,17 @@ page. The no-build command still discovers every `tests/*.test.mjs` file in
 sorted order and fails when the suite is empty, so adding a test file cannot
 silently leave it outside the gate.
 
+The runner creates one disposable embedding-model cache for the run. A healthy
+fixture publishes only files matching the daemon's pinned sizes and SHA-256
+hashes. Later legacy fixtures copy those model files into their own data roots;
+Session state and authority are never shared. Native first-install fixtures
+retain a genuinely absent data root and perform their own cold bootstrap.
+The runner allows up to five minutes for that cold startup. Individual test-file
+runs retain the shorter default unless `AXOCOATL_E2E_STARTUP_TIMEOUT_MS` is set
+(maximum `300000`). `AXOCOATL_E2E_MODEL_CACHE` can point to an existing directory
+containing the three pinned model files; an externally supplied cache is not
+removed by the runner.
+
 ## CI gate
 
 The `Product browser regressions` job in `.github/workflows/ci.yml` uses Node
@@ -45,8 +58,11 @@ against that binary. The main Rust job also verifies that the lockfile, runner,
 and product regression file are present in the checkout, preventing an omitted
 untracked suite from producing a green build.
 
-No Podman service, Ollama model, provider credential, or external application
-server is needed. The harness starts only a fresh loopback Axocoatl daemon; its
+The default suite needs no running Podman service, Ollama model, provider
+credential, or external application server. The optional compatibility reference
+journey requires a real Podman runtime image selected with
+`AXOCOATL_REFERENCE_RUNTIME_IMAGE`. A cold embedding cache can require downloading
+the pinned local embedding model. The harness starts only a fresh loopback Axocoatl daemon; its
 Sessions remain at environment review, while controlled browser responses mock
 the Preview and failure paths called out below.
 
@@ -119,5 +135,6 @@ classification and limits, and mode-aware credential/Host forwarding observed
 by a real loopback upstream. A live sandbox/dev-server transport remains part of
 the separate full Session/Attempt acceptance journey.
 
-The suite does not approve `npm ci`, start Podman, execute a successful Agent
-turn, or mutate a project repository.
+The default suite does not approve `npm ci`, start Podman, execute a successful
+Agent turn, or mutate a project repository. The opt-in compatibility reference journey
+executes controlled work inside its disposable runtime.

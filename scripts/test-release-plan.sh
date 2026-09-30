@@ -20,7 +20,15 @@ command -v cargo >/dev/null 2>&1 || fail "cargo is required"
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 
 metadata="$work_dir/metadata.json"
-(cd "$repo_root" && cargo metadata --locked --offline --no-deps --format-version 1) > "$metadata"
+current_metadata="$work_dir/current-metadata.json"
+(cd "$repo_root" && cargo metadata --locked --offline --no-deps --format-version 1) > "$current_metadata"
+# Exercise the historical CLI-only shape independently of the checkout's next
+# coordinated version. Keep the real dependency inventory and exact supervisor
+# constraint, then separately prove the actual current release below.
+jq '(.packages[] | select(.source == null and .publish == null) | .version) = "1.0.0"
+    | (.packages[] | select(.name == "axocoatl-cli") | .version) = "1.0.1"
+    | (.packages[].dependencies[] | select(.name == "axocoatl-exec") | .req) = "=1.0.0"' \
+  "$current_metadata" > "$metadata"
 empty_changes="$work_dir/empty-changes.txt"
 notice_changes="$work_dir/notice-changes.txt"
 bad_changes="$work_dir/bad-changes.txt"
@@ -74,13 +82,23 @@ coordinated="$work_dir/coordinated.json"
 jq '(.packages[] | select(.source == null and .publish == null) | .version) = "1.0.0"' \
   "$metadata" > "$coordinated"
 expected_all=$(printf '%s\n' \
-  axocoatl-core axocoatl-token axocoatl-llm axocoatl-config axocoatl-memory \
-  axocoatl-graph axocoatl-isolation axocoatl-a2a axocoatl-llm-openai \
+  axocoatl-core axocoatl-token axocoatl-llm axocoatl-config axocoatl-session \
+  axocoatl-memory \
+  axocoatl-graph axocoatl-exec axocoatl-isolation axocoatl-a2a axocoatl-llm-openai \
   axocoatl-llm-anthropic axocoatl-llm-ollama axocoatl-llm-mistral \
   axocoatl-llm-gemini axocoatl-mcp axocoatl-tools axocoatl-coordination \
-  axocoatl-actor axocoatl-session axocoatl-service axocoatl-daemon \
+  axocoatl-actor axocoatl-service axocoatl-daemon \
   axocoatl-server axocoatl-cli)
 expect_pass coordinated "$expected_all" v1.0.0 1.0.0 "$coordinated" "$empty_changes"
+
+current_version=$(jq -r '.packages[] | select(.name == "axocoatl-cli") | .version' "$current_metadata")
+workspace_version=$(jq -r '.packages[] | select(.name == "axocoatl-core") | .version' "$current_metadata")
+current_expected=axocoatl-cli
+if [[ "$current_version" == "$workspace_version" ]]; then
+  current_expected=$expected_all
+fi
+expect_pass current-tree "$current_expected" "v$current_version" "$workspace_version" \
+  "$current_metadata" "$empty_changes"
 
 coordinated_missing="$work_dir/coordinated-missing.json"
 jq '(.packages[] | select(.name == "axocoatl-core") | .version) = "0.9.9"' \
@@ -100,8 +118,15 @@ jq '(.packages[] | select(.name == "axocoatl-core") | .dependencies) += [{"name"
 expect_fail dependency-order 'appears before local dependency axocoatl-cli' \
   v1.0.1 1.0.0 "$bad_order" "$empty_changes"
 
+bad_supervisor_requirement="$work_dir/bad-supervisor-requirement.json"
+jq '(.packages[] | select(.name == "axocoatl-isolation") | .dependencies[]
+    | select(.name == "axocoatl-exec") | .req) = "^1.0.0"' \
+  "$metadata" > "$bad_supervisor_requirement"
+expect_fail supervisor-requirement 'must require exact supervisor version' \
+  v1.0.1 1.0.0 "$bad_supervisor_requirement" "$empty_changes"
+
 printf '%s\n' 'not-json' > "$work_dir/malformed.json"
 expect_fail malformed-metadata 'not valid Cargo metadata' \
   v1.0.1 1.0.0 "$work_dir/malformed.json" "$empty_changes"
 
-echo 'Release plan contract: PASS (11 positive and negative simulations)'
+echo 'Release plan contract: PASS (13 positive and negative simulations)'

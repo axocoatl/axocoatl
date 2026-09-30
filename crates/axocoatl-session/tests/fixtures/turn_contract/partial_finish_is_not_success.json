@@ -1,0 +1,326 @@
+{
+  "name": "partial_finish_is_not_success",
+  "steps": [
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-0",
+        "expected_revision": 0,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "begin",
+          "epoch_id": "epoch-1",
+          "graph": {
+            "snapshot_id": "initial-graph",
+            "revision": 1,
+            "nodes": [
+              {
+                "node_id": "node-a",
+                "slot_id": "slot-node-a",
+                "definition": {
+                  "definition_id": "shared-coder",
+                  "snapshot": "definition-v1"
+                },
+                "conversation_id": "conversation-a",
+                "starting_savepoint": {
+                  "kind": "checkpoint",
+                  "checkpoint": {
+                    "checkpoint_id": "baseline-node-a",
+                    "session_id": "session-a",
+                    "conversation_id": "conversation-a",
+                    "source": {
+                      "kind": "committed",
+                      "evidence": "committed-node-a"
+                    }
+                  }
+                },
+                "required": true
+              }
+            ],
+            "dependencies": [],
+            "conditions": []
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-1",
+        "expected_revision": 1,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "start_activation",
+          "input": {
+            "manifest_id": "input-node-a-1",
+            "activation": {
+              "session_id": "session-a",
+              "turn_id": "turn-a",
+              "execution_epoch_id": "epoch-1",
+              "node_id": "node-a",
+              "generation": 1,
+              "activation_id": "node-a-1"
+            },
+            "definition": {
+              "definition_id": "shared-coder",
+              "snapshot": "definition-v1"
+            },
+            "conversation_id": "conversation-a",
+            "starting_savepoint": {
+              "kind": "checkpoint",
+              "checkpoint": {
+                "checkpoint_id": "baseline-node-a",
+                "session_id": "session-a",
+                "conversation_id": "conversation-a",
+                "source": {
+                  "kind": "committed",
+                  "evidence": "committed-node-a"
+                }
+              }
+            },
+            "parents": [],
+            "guidance": [
+              "original-guidance"
+            ],
+            "attachments": [
+              "source-attachment"
+            ],
+            "repository": {
+              "kind": "recorded",
+              "snapshot": "repository-before-turn"
+            },
+            "budget": "logical-turn-budget",
+            "grant": {
+              "grant_id": "supervisor-grant",
+              "revision": 1,
+              "evidence": "grant-snapshot-1"
+            }
+          }
+        }
+      },
+      "error": null
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-2",
+        "expected_revision": 2,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "fail_activation",
+          "activation": {
+            "session_id": "session-a",
+            "turn_id": "turn-a",
+            "execution_epoch_id": "epoch-1",
+            "node_id": "node-a",
+            "generation": 1,
+            "activation_id": "node-a-1"
+          },
+          "evidence": "failed-check"
+        }
+      },
+      "error": null
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-3",
+        "expected_revision": 3,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "close",
+          "closure": "completed"
+        }
+      },
+      "error": "completion requires required graph nodes"
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-4",
+        "expected_revision": 3,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "pause_epoch",
+          "epoch_id": "epoch-1"
+        }
+      },
+      "error": null
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-5",
+        "expected_revision": 4,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "continue",
+          "plan": {
+            "source_epoch_id": "epoch-1",
+            "epoch_id": "epoch-1",
+            "selections": [
+              {
+                "kind": "retry",
+                "previous": {
+                  "session_id": "session-a",
+                  "turn_id": "turn-a",
+                  "execution_epoch_id": "epoch-1",
+                  "node_id": "node-a",
+                  "generation": 1,
+                  "activation_id": "node-a-1"
+                },
+                "input": {
+                  "manifest_id": "input-node-a-2",
+                  "activation": {
+                    "session_id": "session-a",
+                    "turn_id": "turn-a",
+                    "execution_epoch_id": "epoch-2",
+                    "node_id": "node-a",
+                    "generation": 2,
+                    "activation_id": "node-a-2"
+                  },
+                  "definition": {
+                    "definition_id": "shared-coder",
+                    "snapshot": "definition-v1"
+                  },
+                  "conversation_id": "conversation-a",
+                  "starting_savepoint": {
+                    "kind": "checkpoint",
+                    "checkpoint": {
+                      "checkpoint_id": "baseline-node-a",
+                      "session_id": "session-a",
+                      "conversation_id": "conversation-a",
+                      "source": {
+                        "kind": "committed",
+                        "evidence": "committed-node-a"
+                      }
+                    }
+                  },
+                  "parents": [],
+                  "guidance": [
+                    "original-guidance"
+                  ],
+                  "attachments": [
+                    "source-attachment"
+                  ],
+                  "repository": {
+                    "kind": "recorded",
+                    "snapshot": "repository-before-turn"
+                  },
+                  "budget": "logical-turn-budget",
+                  "grant": {
+                    "grant_id": "supervisor-grant",
+                    "revision": 1,
+                    "evidence": "grant-snapshot-1"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "error": "continuation requires the exact settled epoch and a new epoch"
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-6",
+        "expected_revision": 4,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "close",
+          "closure": "finished"
+        }
+      },
+      "error": null
+    },
+    {
+      "envelope": {
+        "schema_version": 2,
+        "command_id": "command-7",
+        "expected_revision": 5,
+        "session_id": "session-a",
+        "turn_id": "turn-a",
+        "event": {
+          "kind": "continue",
+          "plan": {
+            "source_epoch_id": "epoch-1",
+            "epoch_id": "epoch-2",
+            "selections": [
+              {
+                "kind": "retry",
+                "previous": {
+                  "session_id": "session-a",
+                  "turn_id": "turn-a",
+                  "execution_epoch_id": "epoch-1",
+                  "node_id": "node-a",
+                  "generation": 1,
+                  "activation_id": "node-a-1"
+                },
+                "input": {
+                  "manifest_id": "input-node-a-2",
+                  "activation": {
+                    "session_id": "session-a",
+                    "turn_id": "turn-a",
+                    "execution_epoch_id": "epoch-2",
+                    "node_id": "node-a",
+                    "generation": 2,
+                    "activation_id": "node-a-2"
+                  },
+                  "definition": {
+                    "definition_id": "shared-coder",
+                    "snapshot": "definition-v1"
+                  },
+                  "conversation_id": "conversation-a",
+                  "starting_savepoint": {
+                    "kind": "checkpoint",
+                    "checkpoint": {
+                      "checkpoint_id": "baseline-node-a",
+                      "session_id": "session-a",
+                      "conversation_id": "conversation-a",
+                      "source": {
+                        "kind": "committed",
+                        "evidence": "committed-node-a"
+                      }
+                    }
+                  },
+                  "parents": [],
+                  "guidance": [
+                    "original-guidance"
+                  ],
+                  "attachments": [
+                    "source-attachment"
+                  ],
+                  "repository": {
+                    "kind": "recorded",
+                    "snapshot": "repository-before-turn"
+                  },
+                  "budget": "logical-turn-budget",
+                  "grant": {
+                    "grant_id": "supervisor-grant",
+                    "revision": 1,
+                    "evidence": "grant-snapshot-1"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "error": "closed turns are immutable"
+    }
+  ],
+  "expected_revision": 5,
+  "expected_state": "finished",
+  "expected_epochs": [
+    "paused"
+  ]
+}

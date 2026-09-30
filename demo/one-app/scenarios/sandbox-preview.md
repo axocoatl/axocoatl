@@ -22,12 +22,15 @@ Preview of the process running from the current checkout.
 
 ## Start or reset
 
-Complete the verified repair in [`single-agent.md`](single-agent.md), then keep
-that Northstar root, Ready Session, and uncommitted `lib/orders.js` change
-open. This supporting film deliberately starts from the same accepted green
-checkout rather than resetting to the original defect. Keep the
-project-detected base image `localhost/axocoatl-one-app-demo:latest` and
-exposed port `8765`.
+Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
+`northstar-storefront` fixture, a fresh native data path, real local Ollama calls,
+and the exact candidate binary at `http://localhost:8080`. Retain the actual
+workspace path as `$AXO_DEMO_ROOT/workspace` (or record the equivalent isolated
+fixture path). Verify `history_version: execution_v2` and Ready, then explicitly
+review and apply **Team and budget** before sending.
+
+Use **Minimal Coder**, the detected demo image, and the explicitly published
+Preview port `8765`. Keep repository checks as `npm run check`.
 
 ## Browser actions
 
@@ -74,7 +77,7 @@ exposed port `8765`.
 ## Durable, filesystem, and runtime evidence
 
 ```bash
-export AXO_DEMO_URL='http://127.0.0.1:18080'
+export AXO_DEMO_URL='http://localhost:8080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase'
 curl -sS "$AXO_DEMO_URL/api/sessions"
 ```

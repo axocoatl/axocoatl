@@ -67,7 +67,7 @@ and have no YAML override. See [Data and backup](/operate/data-backup/) and
 | `agents` | list | Agent identities, providers/models, prompts, tools, budgets, memory, coordination |
 | `workflows` | list | Legacy manual graph seed and coordinator/multi-Agent membership metadata |
 | `mcp_servers` | list | MCP connections established at bootstrap |
-| `providers` | object | Provider credentials, endpoints, and fallback targets |
+| `providers` | object | Provider credentials, endpoints, native OpenRouter billing declaration, and compatibility fallback targets |
 | `server` | object | HTTP bind, auth, CORS, and rate limiting |
 | `sandbox` | object | Daemon-global Session backend and trust/network policy |
 | `hooks` | list | Experimental parsed configuration; not executed |
@@ -135,6 +135,7 @@ Sampling fields are optional and adapter support varies. `response_format` is
 
 ```yaml
 providers:
+  openrouter_billing: credits
   ollama:
     base_url: "http://127.0.0.1:11434"
     model: llama3.2
@@ -155,7 +156,7 @@ providers:
 Hosted credential blocks accept `api_key`, optional `base_url`, and optional
 one-target `fallback`. The OpenAI adapter uses `base_url` for compatible
 servers. OpenRouter's runtime endpoint is fixed. Empty hosted keys prevent that
-provider from registering. For ordinary Session and global Agent execution,
+provider from registering. For legacy Session and global Agent execution,
 fallback is attempted once only for a pre-stream rate limit. Ways use their selected
 primary provider directly until effective-route cost evidence can name and price a fallback
 honestly. Any retained tool transaction pins the exact selected
@@ -163,6 +164,13 @@ slot/provider/model across later turns and restart until the complete transactio
 leaves model history. Missing, conflicting, or stale route markers fail closed.
 A known smaller fallback rejects an already oversized request locally, while
 unknown custom-model constraints remain endpoint-validated.
+
+Native Sessions accept reviewed local Ollama profiles or eligible OpenRouter-credit
+profiles. `openrouter_billing: credits` declares credit billing with no connected
+BYOK provider keys; it does not change the account. Native OpenRouter also rejects
+custom endpoints and configured fallback. Review the full
+[provider requirements](/configure/providers/) before applying **Team & budget**;
+YAML token guards do not replace its explicit Session authority.
 
 ## Server
 
@@ -230,7 +238,9 @@ host operation.
 
 `backend` is `podman` or `e2b`; `network` is `bridge` or `none` for Podman.
 Axocoatl rejects `network: none` with E2B because the remote backend cannot
-prove that policy. For E2B:
+prove that policy. Native repository tools and required checks need local Podman. E2B supports
+compatibility execution; it does not implement the native supervised command boundary.
+For E2B:
 
 ```yaml
 sandbox:
@@ -328,7 +338,9 @@ proactive:
 
 Proactive trigger types are `schedule` with `every`, or `on_event` with
 `event`. These three sections seed the canonical Automation store only when its
-file does not exist. Once created, Settings/API records are authoritative.
+file does not exist. Once created, Settings/API records are authoritative for
+Automations. `workflows` still supplies config-owned Session team selections;
+editing an Automation does not edit that roster or a native Session's applied team.
 
 ## Web search and consolidation
 
@@ -365,7 +377,8 @@ a durable queue.
 
 ## Attempt pricing
 
-Pricing is keyed by the exact model string:
+Compatibility Attempt pricing is keyed by the exact model string. Native provider
+reservations use validated retained provider bounds, which this table cannot replace:
 
 ```yaml
 pricing:

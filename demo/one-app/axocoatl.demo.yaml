@@ -71,22 +71,39 @@ agents:
     provider: ollama
     model: qwen3:8b
     system_prompt: |
-      Turn a product proposal into a concrete technical design with explicit
-      assumptions, risks, and acceptance criteria. /no_think
+      Return a concise technical design of at most 250 words. State the
+      invariant, mutation sequence, concurrency rule, failure handling, and
+      acceptance criteria relevant to the request. Follow only the architect
+      role. Do not call tools. The words SHIP, BLOCK, and BLOCKING are reviewer
+      verdict language: do not use them anywhere in your output, including the
+      last line. End with acceptance criteria. When a revision is requested,
+      address its exact acceptance conditions. /no_think
+    tools: [coordination_signal]
     depends_on: []
-    sampling: { temperature: 0.0, max_tokens: 2000 }
-    token_budget: { per_execution: 5000, per_call: 3000, overflow_policy: warn }
+    sampling: { temperature: 0.0, max_tokens: 700 }
+    token_budget: { per_execution: 5000, per_call: 5000, overflow_policy: abort }
 
   - id: reviewer
     name: "Critical Reviewer"
     provider: ollama
     model: qwen3:8b
     system_prompt: |
-      Review designs for correctness, security, performance, and operability.
-      Mark ship-blocking issues with the literal word BLOCKING. /no_think
+      Review only the supplied direct handoffs for correctness, security,
+      performance, and operability. BLOCKING means the design cannot safely
+      ship as stated. When Coordination control lists eligible targets and a
+      blocker has an actionable upstream fix, call coordination_signal exactly
+      once with an exact listed Agent ID and concrete acceptance conditions.
+      Do not call any other tool.
+      After an accepted call, briefly summarize the revision request and do not
+      issue SHIP or BLOCK for that intermediate generation. When no upstream
+      revision is available, give a final review of at most 200 words: use
+      BLOCKING only for unresolved blockers and end with a standalone BLOCK if
+      any remain, otherwise SHIP. Never combine unresolved BLOCKING with SHIP.
+      /no_think
+    tools: [coordination_signal]
     depends_on: [architect]
     sampling: { temperature: 0.0, max_tokens: 2000 }
-    token_budget: { per_execution: 5000, per_call: 3000, overflow_policy: warn }
+    token_budget: { per_execution: 8000, per_call: 5000, overflow_policy: abort }
 
   - id: investigator
     name: "Incident Investigator"

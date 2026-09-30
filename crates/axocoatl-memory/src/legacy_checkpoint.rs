@@ -68,6 +68,7 @@ struct LegacyStoredMessageV0_1_0 {
 impl From<LegacyStoredMessageV0_1_0> for StoredMessage {
     fn from(message: LegacyStoredMessageV0_1_0) -> Self {
         Self {
+            content_parts: None,
             role: message.role.into(),
             content: message.content,
             timestamp: message.timestamp,
@@ -155,6 +156,7 @@ fn convert_v0_1_1(checkpoint: LegacyAgentCheckpoint<LegacyStoredMessageV0_1_1>) 
             });
         }
         session_messages.push(StoredMessage {
+            content_parts: None,
             role,
             content: message.content,
             timestamp: message.timestamp,

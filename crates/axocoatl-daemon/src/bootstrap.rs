@@ -1,8 +1,57 @@
 //! Daemon bootstrap: config → providers → agents → coordination.
 //! This is the integration point that wires all subsystems together.
 
+#[path = "bootstrap_control_planner.rs"]
+pub(crate) mod control_planner;
+
+#[path = "bootstrap_coordination_reference.rs"]
+mod coordination_reference;
+
+#[path = "bootstrap_native_activation.rs"]
+mod native_activation;
+#[path = "bootstrap_session_send.rs"]
+mod native_send;
+#[path = "bootstrap_native_turn.rs"]
+pub(crate) mod native_turn;
+#[path = "bootstrap_native_ways.rs"]
+pub(crate) mod native_ways;
+#[path = "bootstrap_session_control_execution.rs"]
+mod session_control_execution;
+#[path = "bootstrap_session_graph.rs"]
+pub(crate) mod session_graph;
+#[path = "bootstrap_session_knowledge.rs"]
+pub(crate) mod session_knowledge;
+#[path = "bootstrap_session_team.rs"]
+pub(crate) mod session_team;
+#[path = "bootstrap_session_team_work.rs"]
+pub(crate) mod session_team_work;
+#[path = "bootstrap_ways_history.rs"]
+pub(crate) mod ways_history;
+
+#[allow(dead_code)]
+#[path = "bootstrap_session_migration.rs"]
+pub(crate) mod session_migration;
+
+#[path = "bootstrap_session_history.rs"]
+mod session_history;
+use session_history::HistoryMutation;
+
+#[path = "bootstrap_session_dispatch.rs"]
+pub(crate) mod session_dispatch;
+#[path = "bootstrap_session_native_lifecycle.rs"]
+mod session_native_lifecycle;
+#[path = "bootstrap_session_recovery.rs"]
+mod session_recovery;
+#[path = "bootstrap_session_repository.rs"]
+pub mod session_repository;
+#[path = "bootstrap_session_writers.rs"]
+mod session_writers;
+
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::future::Future;
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -12,7 +61,10 @@ use axocoatl_actor::{
     CoordinatorBehavior, DefaultAgentBehavior, WorkerConfig,
 };
 use axocoatl_config::{AgentRoleYaml, AxocoatlConfig};
-use axocoatl_coordination::{EventLattice, LatticeEvent};
+use axocoatl_coordination::{
+    EventLattice, LatticeEvent, TurnAgentGraph, TurnAgentNode, TurnAgentState,
+    TurnCoordinationEventKind, TurnCoordinationScheduler, TurnSignalKind,
+};
 use axocoatl_core::{AgentId, AgentRole, SecureDir, SecureEntryType, SecureLeaf};
 use axocoatl_isolation::session_sandbox::{ExecResult, Sandbox, SessionSandbox};
 use axocoatl_llm::ProviderRegistry;
@@ -21,15 +73,22 @@ use axocoatl_mcp::permissions::McpPermissionStore;
 use axocoatl_mcp::{McpToolRegistry, McpTransportType};
 use axocoatl_memory::chat::ChatStore;
 use axocoatl_memory::files::FileStore;
-use axocoatl_memory::{CheckpointPolicy, CheckpointStore};
+use axocoatl_memory::legacy_conversation::checkpoint_visible_matches;
+#[cfg(test)]
+use axocoatl_memory::legacy_conversation::{
+    checkpoint_turn_minimum_bytes, SESSION_CHECKPOINT_MESSAGE_CAP,
+};
+use axocoatl_memory::{CheckpointPolicy, CheckpointStore, CheckpointTransactionResolution};
+use axocoatl_session::session_history::{HistoryVisibility, SessionHistory, SessionHistoryCatalog};
 use axocoatl_session::{
     migrate_sessions_to_workspaces, BeginSessionTurn, CreateSessionAttachmentRef,
     RecordTurnExecution, Session, SessionAttachmentRef, SessionAttachmentStore,
     SessionEnvironmentState, SessionMode, SessionRuntimeCreationAttempt, SessionRuntimeIdentity,
     SessionRuntimeRecoveryRecord, SessionSetupResult, SessionStore, SessionTranscriptMessage,
-    SessionTranscriptRole, SessionTurn, SessionTurnContextReference, SessionTurnLifecycle,
-    SessionTurnSearchHit, SessionTurnStore, TransitionSessionTurn, TurnContextScope, Workspace,
-    WorkspaceStore,
+    SessionTranscriptRole, SessionTurn, SessionTurnAgentOutputDisposition,
+    SessionTurnAgentOutputIdentity, SessionTurnAtomicMutation, SessionTurnAtomicOperation,
+    SessionTurnContextReference, SessionTurnLifecycle, SessionTurnSearchHit, SessionTurnStore,
+    TransitionSessionTurn, TurnContextScope, Workspace, WorkspaceStore,
 };
 use axocoatl_token::{ApproximateCounter, TokenCounter};
 use axocoatl_tools::ToolExecutor;
@@ -53,6 +112,9 @@ const ATTEMPT_ACTOR_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 // VM round-trip overhead; removal itself explicitly requests `--time 0`.
 const ATTEMPT_CONTAINER_STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const ATTEMPT_OPERATION_RELEASE_TIMEOUT: Duration = Duration::from_secs(15);
+/// Join a cancelled repository check and, if needed, its exact local runtime
+/// cleanup before a lifecycle action acquires the Workspace operation.
+const SESSION_DISPATCH_CLEANUP_TIMEOUT: Duration = Duration::from_secs(60);
 /// Podman Desktop's macOS bind mount can briefly expose the old directory
 /// entry after an atomic host rename. Ways keeps its nofollow host write, then
 /// proves the replacement is consumable from the already-running container
@@ -61,10 +123,13 @@ const ATTEMPT_GIT_BIND_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(5);
 const ATTEMPT_GIT_BIND_VISIBILITY_RETRY: Duration = Duration::from_millis(50);
 const SESSION_TOOL_EVENT_VALUE_CAP: usize = 16 * 1024;
 const SESSION_TOOL_EVENT_PREVIEW_CAP: usize = 8 * 1024;
-/// Keep canonical-ledger repair comfortably below the 64 MiB checkpoint file
-/// ceiling. The full Session ledger remains authoritative; this is only the
-/// recent, protocol-complete model-facing recovery tail.
-const SESSION_CHECKPOINT_MESSAGE_CAP: usize = 8 * 1024 * 1024;
+const SESSION_CHECKPOINT_ADOPTION_ROOT: &str = "checkpoint-adoptions/session-turn-v1";
+const SESSION_CHECKPOINT_ADOPTION_MARKER_MAX_BYTES: usize = 4 * 1024;
+const PERSISTED_WORKFLOW_REFERENCE_MAX_BYTES: usize = 4 * 1024;
+/// A Coordinator can register a Worker while its own stop is racing. Drain the
+/// exact Session prefix repeatedly, but fail closed instead of allowing an
+/// unbounded spawn/stop loop to hold admission forever.
+const SESSION_ACTOR_DRAIN_ROUNDS: usize = 8;
 const SESSION_SETUP_OUTPUT_CAP: usize = 16 * 1024;
 const SESSION_SETUP_TIMEOUT: Duration = Duration::from_secs(900);
 const SESSION_FILE_READ_CAP: u64 = 512 * 1024;
@@ -673,93 +738,6 @@ fn failed_setup_message(results: &[SessionSetupResult]) -> Option<String> {
     ))
 }
 
-fn inline_context_block(context: &[SessionTurnContextReference]) -> Option<String> {
-    let mut lines = vec!["## Context the user attached:".to_string()];
-    let mut included = false;
-    for reference in context {
-        match reference.kind.as_str() {
-            "code_selection" => {
-                included = true;
-                let path = reference
-                    .metadata
-                    .get("path")
-                    .and_then(serde_json::Value::as_str)
-                    .or(reference.origin.as_deref())
-                    .unwrap_or(reference.display_name.as_str());
-                let start = reference
-                    .metadata
-                    .get("start_line")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(1);
-                let end = reference
-                    .metadata
-                    .get("end_line")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(start);
-                let range = if start == end {
-                    start.to_string()
-                } else {
-                    format!("{start}-{end}")
-                };
-                let language = reference
-                    .metadata
-                    .get("language")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default();
-                let content = reference
-                    .metadata
-                    .get("content")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default();
-                lines.push(format!("\n### File: `{path}` (lines {range})"));
-                lines.push(format!("```{language}"));
-                lines.push(content.to_string());
-                lines.push("```".to_string());
-            }
-            "browser_selection" => {
-                included = true;
-                let url = reference
-                    .metadata
-                    .get("url")
-                    .and_then(serde_json::Value::as_str)
-                    .or(reference.origin.as_deref())
-                    .unwrap_or("(unknown)");
-                let selector = reference
-                    .metadata
-                    .get("selector")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default();
-                let html = reference
-                    .metadata
-                    .get("html")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default();
-                lines.push(format!("\n### DOM element on {url}"));
-                if !selector.is_empty() {
-                    lines.push(format!("Selector: `{selector}`"));
-                }
-                if !html.is_empty() {
-                    lines.push("```html".to_string());
-                    lines.push(html.to_string());
-                    lines.push("```".to_string());
-                }
-            }
-            _ => {}
-        }
-    }
-    included.then(|| {
-        lines.push(String::new());
-        lines.join("\n")
-    })
-}
-
-fn checkpoint_user_content(turn: &SessionTurn) -> String {
-    inline_context_block(&turn.context).map_or_else(
-        || turn.user_input.clone(),
-        |context| format!("{context}\n\n{}", turn.user_input),
-    )
-}
-
 /// Project canonical Session history into route-portable context for a Way.
 ///
 /// A Way can deliberately select a different provider or model from the
@@ -848,488 +826,16 @@ fn project_way_provider_history(
     Ok(projected)
 }
 
-fn checkpoint_token_count(counter: &dyn TokenCounter, text: &str) -> usize {
-    const CHUNK_BYTES: usize = 32 * 1024;
-    if text.len() <= CHUNK_BYTES {
-        return counter.count_text(text);
-    }
-    let mut total = 0_usize;
-    let mut start = 0_usize;
-    while start < text.len() {
-        let mut end = (start + CHUNK_BYTES).min(text.len());
-        while end > start && !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        if end == start {
-            end = text[start..]
-                .char_indices()
-                .nth(1)
-                .map_or(text.len(), |(offset, _)| start + offset);
-        }
-        total = total.saturating_add(counter.count_text(&text[start..end]));
-        start = end;
-    }
-    total
-}
-
-fn checkpoint_turn_minimum_bytes(turn: &SessionTurn) -> usize {
-    let assistant_bytes = if turn.agent_outputs.is_empty() {
-        turn.final_output
-            .as_ref()
-            .map_or(turn.partial_output.len(), String::len)
-    } else {
-        turn.agent_outputs
-            .iter()
-            .map(|output| output.output.len())
-            .sum()
-    };
-    turn.user_input.len().saturating_add(assistant_bytes)
-}
-
 #[cfg(test)]
 fn checkpoint_projection(
     counter: &dyn TokenCounter,
     turns: &[SessionTurn],
 ) -> Vec<axocoatl_memory::StoredMessage> {
-    checkpoint_projection_with_policy(counter, turns, true)
-}
-
-fn checkpoint_projection_with_policy(
-    counter: &dyn TokenCounter,
-    turns: &[SessionTurn],
-    replay_tool_transactions: bool,
-) -> Vec<axocoatl_memory::StoredMessage> {
-    let mut projected = Vec::new();
-    for turn in turns {
-        // Cancelled work remains fully durable in the canonical turn ledger
-        // and visible Route, but it is not conversation context. Replaying its
-        // user request and completed tool pairs invites a newly spawned model
-        // to resume an explicitly stopped edit plan instead of following the
-        // next prompt.
-        if turn.status == SessionTurnLifecycle::Cancelled {
-            continue;
-        }
-        let user_content = checkpoint_user_content(turn);
-        projected.push(axocoatl_memory::StoredMessage {
-            role: axocoatl_core::MessageRole::User,
-            token_count: checkpoint_token_count(counter, &user_content),
-            content: user_content,
-            timestamp: turn.created_at / 1_000,
-            name: None,
-            tool_calls: Vec::new(),
-            tool_call_id: None,
-        });
-
-        // Rebuild one provider assistant message per original response, followed
-        // by every correlated result. Parallel calls must stay grouped: Anthropic
-        // replay metadata on the first call describes the complete native block
-        // array, and splitting that response makes the next request invalid.
-        // Incomplete, legacy, malformed, or bounded/truncated groups remain
-        // visible in Route evidence but are omitted atomically from provider
-        // history instead of replaying an orphaned or protocol-invalid call.
-        let mut projected_groups = HashSet::new();
-        for started in turn
-            .execution_events
-            .iter()
-            .filter(|_| replay_tool_transactions)
-        {
-            if started.event.kind != "tool_started" {
-                continue;
-            }
-            let Some(agent_id) = started
-                .event
-                .metadata
-                .get("agent_id")
-                .and_then(serde_json::Value::as_str)
-            else {
-                continue;
-            };
-            let Some(response_group) = started
-                .event
-                .metadata
-                .get("provider_response_group")
-                .and_then(serde_json::Value::as_u64)
-            else {
-                continue;
-            };
-            if !projected_groups.insert((agent_id.to_string(), response_group)) {
-                continue;
-            }
-
-            let mut group_starts = turn
-                .execution_events
-                .iter()
-                .enumerate()
-                .filter(|(_, event)| {
-                    event.event.kind == "tool_started"
-                        && event
-                            .event
-                            .metadata
-                            .get("agent_id")
-                            .and_then(serde_json::Value::as_str)
-                            == Some(agent_id)
-                        && event
-                            .event
-                            .metadata
-                            .get("provider_response_group")
-                            .and_then(serde_json::Value::as_u64)
-                            == Some(response_group)
-                })
-                .collect::<Vec<_>>();
-            if group_starts.is_empty() {
-                continue;
-            }
-            let Some(provider_call_count) = group_starts
-                .first()
-                .and_then(|(_, event)| event.event.metadata.get("provider_call_count"))
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|count| usize::try_from(count).ok())
-                .filter(|count| *count > 0 && *count == group_starts.len())
-            else {
-                continue;
-            };
-            group_starts.sort_by_key(|(_, event)| {
-                event
-                    .event
-                    .metadata
-                    .get("provider_call_index")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(u64::MAX)
-            });
-            if group_starts
-                .iter()
-                .enumerate()
-                .any(|(expected, (_, event))| {
-                    event
-                        .event
-                        .metadata
-                        .get("provider_call_index")
-                        .and_then(serde_json::Value::as_u64)
-                        != u64::try_from(expected).ok()
-                        || event
-                            .event
-                            .metadata
-                            .get("provider_call_count")
-                            .and_then(serde_json::Value::as_u64)
-                            != u64::try_from(provider_call_count).ok()
-                })
-            {
-                continue;
-            }
-
-            let mut assistant_content: Option<String> = None;
-            let mut tool_calls = Vec::with_capacity(group_starts.len());
-            let mut tool_results = Vec::with_capacity(group_starts.len());
-            let mut seen_call_occurrences = HashSet::with_capacity(group_starts.len());
-            let mut consumed_result_indices = HashSet::with_capacity(group_starts.len());
-            let mut replayable = true;
-            for (start_index, group_start) in group_starts {
-                let metadata = &group_start.event.metadata;
-                let Some(provider_call_index) = metadata
-                    .get("provider_call_index")
-                    .and_then(serde_json::Value::as_u64)
-                else {
-                    replayable = false;
-                    break;
-                };
-                if metadata
-                    .get("call_id_truncated")
-                    .and_then(serde_json::Value::as_bool)
-                    != Some(false)
-                {
-                    replayable = false;
-                    break;
-                }
-                if metadata
-                    .get("tool_name_truncated")
-                    .and_then(serde_json::Value::as_bool)
-                    != Some(false)
-                {
-                    replayable = false;
-                    break;
-                }
-                let Some(call_id) = metadata.get("call_id").and_then(serde_json::Value::as_str)
-                else {
-                    replayable = false;
-                    break;
-                };
-                let Some(call_hash) = metadata
-                    .get("call_id_sha256")
-                    .and_then(serde_json::Value::as_str)
-                else {
-                    replayable = false;
-                    break;
-                };
-                let Some(occurrence) = metadata
-                    .get("occurrence")
-                    .and_then(serde_json::Value::as_u64)
-                else {
-                    replayable = false;
-                    break;
-                };
-                if !seen_call_occurrences.insert((call_hash.to_string(), occurrence)) {
-                    replayable = false;
-                    break;
-                }
-                let Some(tool_name) = metadata
-                    .get("tool_name")
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|value| !value.is_empty())
-                else {
-                    replayable = false;
-                    break;
-                };
-                if metadata
-                    .get("arguments_truncated")
-                    .and_then(serde_json::Value::as_bool)
-                    != Some(false)
-                {
-                    replayable = false;
-                    break;
-                }
-                let Some(_executed_arguments) =
-                    metadata.get("arguments").filter(|value| value.is_object())
-                else {
-                    replayable = false;
-                    break;
-                };
-                if metadata
-                    .get("provider_arguments_truncated")
-                    .and_then(serde_json::Value::as_bool)
-                    != Some(false)
-                {
-                    replayable = false;
-                    break;
-                }
-                let Some(provider_arguments) = metadata
-                    .get("provider_arguments")
-                    .filter(|value| value.is_object())
-                else {
-                    replayable = false;
-                    break;
-                };
-                if provider_call_index == 0 {
-                    if metadata
-                        .get("assistant_content_truncated")
-                        .and_then(serde_json::Value::as_bool)
-                        != Some(false)
-                    {
-                        replayable = false;
-                        break;
-                    }
-                    let Some(group_content) = metadata
-                        .get("assistant_content")
-                        .and_then(serde_json::Value::as_str)
-                    else {
-                        replayable = false;
-                        break;
-                    };
-                    assistant_content = Some(group_content.to_string());
-                } else if metadata.contains_key("assistant_content")
-                    || metadata.contains_key("assistant_content_truncated")
-                {
-                    replayable = false;
-                    break;
-                }
-
-                if metadata
-                    .get("provider_metadata_truncated")
-                    .and_then(serde_json::Value::as_bool)
-                    != Some(false)
-                {
-                    replayable = false;
-                    break;
-                }
-                let Some(provider_metadata) = metadata
-                    .get("provider_metadata")
-                    .and_then(|value| {
-                        serde_json::from_value::<axocoatl_core::ProviderMetadata>(value.clone())
-                            .ok()
-                    })
-                    .filter(|metadata| !metadata.is_empty())
-                else {
-                    replayable = false;
-                    break;
-                };
-                let Some((result_index, result)) = turn
-                    .execution_events
-                    .iter()
-                    .enumerate()
-                    .skip(start_index + 1)
-                    .find(|(result_index, event)| {
-                        !consumed_result_indices.contains(result_index)
-                            && event.event.kind == "tool_result"
-                            && event
-                                .event
-                                .metadata
-                                .get("agent_id")
-                                .and_then(serde_json::Value::as_str)
-                                == Some(agent_id)
-                            && event
-                                .event
-                                .metadata
-                                .get("call_id_sha256")
-                                .and_then(serde_json::Value::as_str)
-                                == Some(call_hash)
-                            && event
-                                .event
-                                .metadata
-                                .get("occurrence")
-                                .and_then(serde_json::Value::as_u64)
-                                == Some(occurrence)
-                    })
-                else {
-                    replayable = false;
-                    break;
-                };
-                consumed_result_indices.insert(result_index);
-                if result
-                    .event
-                    .metadata
-                    .get("call_id_truncated")
-                    .and_then(serde_json::Value::as_bool)
-                    != Some(false)
-                    || result
-                        .event
-                        .metadata
-                        .get("tool_name_truncated")
-                        .and_then(serde_json::Value::as_bool)
-                        != Some(false)
-                {
-                    replayable = false;
-                    break;
-                }
-                if result
-                    .event
-                    .metadata
-                    .get("tool_name")
-                    .and_then(serde_json::Value::as_str)
-                    != Some(tool_name)
-                {
-                    replayable = false;
-                    break;
-                }
-                if result
-                    .event
-                    .metadata
-                    .get("result_truncated")
-                    .and_then(serde_json::Value::as_bool)
-                    != Some(false)
-                {
-                    replayable = false;
-                    break;
-                }
-                let Some(result_value) = result.event.metadata.get("result") else {
-                    replayable = false;
-                    break;
-                };
-                let Ok(arguments_json) = serde_json::to_string(provider_arguments) else {
-                    replayable = false;
-                    break;
-                };
-                let Ok(result_content) = serde_json::to_string(result_value) else {
-                    replayable = false;
-                    break;
-                };
-                tool_calls.push(axocoatl_memory::StoredToolCall {
-                    id: call_id.to_string(),
-                    name: tool_name.to_string(),
-                    arguments_json,
-                    provider_metadata,
-                });
-                tool_results.push((
-                    call_id.to_string(),
-                    tool_name.to_string(),
-                    result_content,
-                    result.recorded_at,
-                ));
-            }
-            if !replayable || tool_calls.len() != tool_results.len() {
-                continue;
-            }
-            let Some(assistant_content) = assistant_content else {
-                continue;
-            };
-            projected.push(axocoatl_memory::StoredMessage {
-                role: axocoatl_core::MessageRole::Assistant,
-                token_count: checkpoint_token_count(counter, &assistant_content),
-                content: assistant_content,
-                timestamp: started.recorded_at / 1_000,
-                name: None,
-                tool_calls,
-                tool_call_id: None,
-            });
-            for (call_id, tool_name, result_content, recorded_at) in tool_results {
-                projected.push(axocoatl_memory::StoredMessage {
-                    role: axocoatl_core::MessageRole::Tool,
-                    token_count: checkpoint_token_count(counter, &result_content),
-                    content: result_content,
-                    timestamp: recorded_at / 1_000,
-                    name: Some(tool_name),
-                    tool_calls: Vec::new(),
-                    tool_call_id: Some(call_id),
-                });
-            }
-        }
-
-        if turn.agent_outputs.is_empty() {
-            if let Some(content) = turn
-                .final_output
-                .as_ref()
-                .or_else(|| (!turn.partial_output.is_empty()).then_some(&turn.partial_output))
-            {
-                projected.push(axocoatl_memory::StoredMessage {
-                    role: axocoatl_core::MessageRole::Assistant,
-                    token_count: checkpoint_token_count(counter, content),
-                    content: content.clone(),
-                    timestamp: turn.updated_at / 1_000,
-                    name: None,
-                    tool_calls: Vec::new(),
-                    tool_call_id: None,
-                });
-            }
-        } else {
-            for output in &turn.agent_outputs {
-                projected.push(axocoatl_memory::StoredMessage {
-                    role: axocoatl_core::MessageRole::Assistant,
-                    token_count: checkpoint_token_count(counter, &output.output),
-                    content: output.output.clone(),
-                    timestamp: output.recorded_at / 1_000,
-                    name: None,
-                    tool_calls: Vec::new(),
-                    tool_call_id: None,
-                });
-            }
-            let completed_len = turn
-                .agent_outputs
-                .iter()
-                .map(|output| output.output.len())
-                .sum::<usize>();
-            if let Some(tail) = turn
-                .partial_output
-                .get(completed_len..)
-                .filter(|tail| !tail.is_empty())
-                .map(str::to_string)
-            {
-                projected.push(axocoatl_memory::StoredMessage {
-                    role: axocoatl_core::MessageRole::Assistant,
-                    token_count: checkpoint_token_count(counter, &tail),
-                    content: tail,
-                    timestamp: turn.updated_at / 1_000,
-                    name: None,
-                    tool_calls: Vec::new(),
-                    tool_call_id: None,
-                });
-            }
-        }
-    }
-    projected
-}
-
-struct BoundedCheckpointProjection {
-    checkpoint: axocoatl_memory::AgentCheckpoint,
-    history_truncated: bool,
-    behavior_state_dropped: bool,
+    axocoatl_memory::legacy_conversation::project_history(
+        &|text| counter.count_text(text),
+        turns,
+        axocoatl_memory::legacy_conversation::ToolReplayPolicy::CompleteNativeGroups,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1343,110 +849,26 @@ fn bounded_checkpoint_projection(
     cumulative_token_usage_known: bool,
     behavior_state: Option<String>,
     replay_tool_transactions: bool,
-) -> Result<BoundedCheckpointProjection, axocoatl_memory::MemoryError> {
-    let mut checkpoint = axocoatl_memory::AgentCheckpoint {
+) -> Result<
+    axocoatl_memory::legacy_conversation::BoundedHistoryCheckpoint,
+    axocoatl_memory::MemoryError,
+> {
+    use axocoatl_memory::legacy_conversation::{bounded_history_checkpoint, ToolReplayPolicy};
+    bounded_history_checkpoint(
+        &|text| counter.count_text(text),
+        turns,
         version,
         agent_id,
         checkpoint_time,
-        session_messages: Vec::new(),
         cumulative_token_usage,
         cumulative_token_usage_known,
         behavior_state,
-    };
-    let mut behavior_state_dropped = false;
-    let mut base_size = axocoatl_memory::encoded_checkpoint_size(&checkpoint)?;
-    if base_size > axocoatl_memory::MAX_CHECKPOINT_BYTES && checkpoint.behavior_state.is_some() {
-        checkpoint.behavior_state = None;
-        behavior_state_dropped = true;
-        base_size = axocoatl_memory::encoded_checkpoint_size(&checkpoint)?;
-    }
-    if base_size > axocoatl_memory::MAX_CHECKPOINT_BYTES {
-        return Err(axocoatl_memory::MemoryError::Serialization(format!(
-            "checkpoint metadata is {base_size} bytes; limit is {}",
-            axocoatl_memory::MAX_CHECKPOINT_BYTES
-        )));
-    }
-
-    let message_budget = axocoatl_memory::MAX_CHECKPOINT_BYTES
-        .saturating_sub(base_size)
-        .min(SESSION_CHECKPOINT_MESSAGE_CAP);
-    let mut segments: VecDeque<Vec<axocoatl_memory::StoredMessage>> = VecDeque::new();
-    let mut segment_bytes = 0_usize;
-    let mut history_truncated = false;
-    for turn in turns.iter().rev() {
-        // Cancelled turns are canonical Route evidence, not provider-visible
-        // restart context. Skip them before estimating the message budget so
-        // an arbitrarily large stopped turn cannot evict older completed work
-        // that would otherwise fit in the bounded recovery tail.
-        if turn.status == SessionTurnLifecycle::Cancelled {
-            continue;
-        }
-        if checkpoint_turn_minimum_bytes(turn) > message_budget.saturating_sub(segment_bytes) {
-            history_truncated = true;
-            break;
-        }
-        let segment = checkpoint_projection_with_policy(
-            counter,
-            std::slice::from_ref(turn),
-            replay_tool_transactions,
-        );
-        if segment.is_empty() {
-            continue;
-        }
-        let encoded = axocoatl_memory::encoded_checkpoint_messages_size(&segment)?;
-        if encoded > message_budget.saturating_sub(segment_bytes) {
-            history_truncated = true;
-            break;
-        }
-        segment_bytes = segment_bytes.saturating_add(encoded);
-        segments.push_front(segment);
-    }
-
-    checkpoint.session_messages = segments.iter().flatten().cloned().collect();
-    let mut encoded_size = axocoatl_memory::encoded_checkpoint_size(&checkpoint)?;
-    // Separate segment vector prefixes make `segment_bytes` conservative, but
-    // retain an exact fail-safe if the persistence encoding ever changes.
-    while encoded_size > axocoatl_memory::MAX_CHECKPOINT_BYTES && segments.pop_front().is_some() {
-        history_truncated = true;
-        checkpoint.session_messages = segments.iter().flatten().cloned().collect();
-        encoded_size = axocoatl_memory::encoded_checkpoint_size(&checkpoint)?;
-    }
-    if encoded_size > axocoatl_memory::MAX_CHECKPOINT_BYTES {
-        return Err(axocoatl_memory::MemoryError::Serialization(format!(
-            "bounded checkpoint is {encoded_size} bytes; limit is {}",
-            axocoatl_memory::MAX_CHECKPOINT_BYTES
-        )));
-    }
-
-    Ok(BoundedCheckpointProjection {
-        checkpoint,
-        history_truncated,
-        behavior_state_dropped,
-    })
-}
-
-fn checkpoint_visible_matches(
-    existing: &[axocoatl_memory::StoredMessage],
-    projected: &[axocoatl_memory::StoredMessage],
-) -> bool {
-    existing.len() == projected.len()
-        && existing.iter().zip(projected).all(|(left, right)| {
-            left.role == right.role
-                && left.content == right.content
-                && left.name == right.name
-                && left.tool_call_id == right.tool_call_id
-                && left.tool_calls.len() == right.tool_calls.len()
-                && left
-                    .tool_calls
-                    .iter()
-                    .zip(&right.tool_calls)
-                    .all(|(left_call, right_call)| {
-                        left_call.id == right_call.id
-                            && left_call.name == right_call.name
-                            && left_call.arguments_json == right_call.arguments_json
-                            && left_call.provider_metadata == right_call.provider_metadata
-                    })
-        })
+        if replay_tool_transactions {
+            ToolReplayPolicy::CompleteNativeGroups
+        } else {
+            ToolReplayPolicy::OmitNativeGroups
+        },
+    )
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> String {
@@ -1514,12 +936,27 @@ fn logical_tool_source_agent<'a>(source_agent: Option<&'a str>, outer_agent: &'a
         .unwrap_or(outer_agent)
 }
 
-fn agent_chunk_stream_frame(
+/// Written into a legacy turn's partial output when a provider stream ended
+/// early and was retried; the text before it is the abandoned attempt's.
+const PROVIDER_RETRY_NOTE: &str = "\n\n[The model provider ended this response early and the \
+     Agent retried it. The text before this note is from the abandoned attempt.]\n\n";
+
+/// The text a stream chunk adds to a legacy turn's partial output.
+fn partial_output_text(chunk: &axocoatl_actor::AgentStreamChunk) -> Option<&str> {
+    match chunk {
+        axocoatl_actor::AgentStreamChunk::Text(delta) => Some(delta),
+        axocoatl_actor::AgentStreamChunk::ProviderRetry { .. } => Some(PROVIDER_RETRY_NOTE),
+        _ => None,
+    }
+}
+
+pub(crate) fn agent_chunk_stream_frame(
     chunk: &axocoatl_actor::AgentStreamChunk,
     workflow: &str,
     outer_agent: &str,
     turn_id: Option<&str>,
     tool_occurrence: Option<u64>,
+    coordination_generation: Option<u32>,
 ) -> crate::stream::StreamFrame {
     use crate::stream::StreamFrame;
     use axocoatl_actor::AgentStreamChunk;
@@ -1537,6 +974,14 @@ fn agent_chunk_stream_frame(
             turn_id: turn_id.map(String::from),
             delta: delta.clone(),
         },
+        // Live text shows the same note the partial output records, so the
+        // abandoned attempt's text is never presented as part of the answer.
+        AgentStreamChunk::ProviderRetry { .. } => StreamFrame::Token {
+            workflow: workflow.to_string(),
+            agent: outer_agent.to_string(),
+            turn_id: turn_id.map(String::from),
+            delta: PROVIDER_RETRY_NOTE.to_string(),
+        },
         AgentStreamChunk::ToolCallStarted {
             source_agent,
             id,
@@ -1549,6 +994,7 @@ fn agent_chunk_stream_frame(
             turn_id: turn_id.map(String::from),
             call_id: id.clone(),
             occurrence: tool_occurrence.expect("tool start has an occurrence"),
+            coordination_generation,
             name: name.clone(),
             phase: "start".to_string(),
             arguments: Some(arguments.clone()),
@@ -1567,6 +1013,7 @@ fn agent_chunk_stream_frame(
             turn_id: turn_id.map(String::from),
             call_id: id.clone(),
             occurrence: tool_occurrence.expect("tool result has an occurrence"),
+            coordination_generation,
             name: name.clone(),
             phase: "result".to_string(),
             arguments: None,
@@ -1931,6 +1378,7 @@ struct ActiveAttemptRun {
     /// One real filesystem boundary per lane. Stopping these also kills any
     /// background command or PTY an attempt created outside its actor task.
     sandboxes: Vec<Arc<dyn Sandbox>>,
+    native: Option<native_ways::NativeWaysRuntime>,
 }
 
 /// Owns resources created while an attempt set is still being launched.
@@ -2314,6 +1762,10 @@ struct StreamAgentRunOptions {
     turn_id: Option<String>,
     partial_ledger: Option<Arc<tokio::sync::Mutex<SessionTurnStore>>>,
     stream_commit_gate: Option<Arc<tokio::sync::Mutex<()>>>,
+    /// Distinguishes repeated activations of one logical Agent inside a
+    /// coordinated turn. Provider-local call ids and text sequence numbers may
+    /// restart at each activation and therefore cannot identify ledger writes.
+    coordination_generation: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -2376,12 +1828,29 @@ async fn replay_session_start(
 
 async fn commit_session_preflight_error(
     gate: &tokio::sync::Mutex<()>,
+    active: &tokio::sync::Mutex<HashMap<String, ActiveSessionTurn>>,
     bus: &crate::stream::StreamBus,
     session_id: &str,
     turn_id: &str,
     error: &DaemonError,
 ) {
     let _commit = gate.lock().await;
+    if active
+        .lock()
+        .await
+        .get(session_id)
+        .is_some_and(|running| running.turn_id == turn_id)
+    {
+        // The original executor still owns this exact lifecycle. A conflicting
+        // retry gets a nonterminal rejection, never a SessionError that would
+        // clear the live RunState and its exact Stop handle.
+        let _ = bus.send(crate::stream::StreamFrame::SessionRequestRejected {
+            session: session_id.to_string(),
+            turn_id: turn_id.to_string(),
+            error: error.to_string(),
+        });
+        return;
+    }
     let _ = bus.send(crate::stream::StreamFrame::SessionError {
         session: session_id.to_string(),
         turn_id: Some(turn_id.to_string()),
@@ -2412,10 +1881,28 @@ async fn commit_session_terminal(
     let _ = bus.send(frame);
 }
 
+async fn commit_session_terminal_after_operation_release(
+    operation: tokio::sync::MutexGuard<'_, ()>,
+    gate: &tokio::sync::Mutex<()>,
+    active: &tokio::sync::Mutex<HashMap<String, ActiveSessionTurn>>,
+    bus: &crate::stream::StreamBus,
+    session_id: &str,
+    turn_id: &str,
+    frame: crate::stream::StreamFrame,
+) {
+    // The active-turn row remains the retry/reconnect authority while the
+    // operation lease is released. Removing it first creates a false
+    // ownerless-but-locked window that an exact retry can misreport as a
+    // workspace-operation conflict.
+    drop(operation);
+    commit_session_terminal(gate, active, bus, session_id, turn_id, frame).await;
+}
+
 async fn live_run_snapshot_cut(
     gate: &tokio::sync::Mutex<()>,
     active: &tokio::sync::Mutex<HashMap<String, ActiveSessionTurn>>,
     bus: &crate::stream::StreamBus,
+    native: Option<&session_dispatch::SessionDispatchRegistry>,
 ) -> (
     u64,
     Vec<crate::stream::RunState>,
@@ -2423,7 +1910,7 @@ async fn live_run_snapshot_cut(
     Vec<crate::stream::WorkspaceAttemptOwnership>,
 ) {
     let _commit = gate.lock().await;
-    let active_sessions = active
+    let mut active_sessions = active
         .lock()
         .await
         .iter()
@@ -2431,6 +1918,14 @@ async fn live_run_snapshot_cut(
         .collect::<Vec<_>>();
     let (cursor, tracked, environment_transitions, attempt_ownerships) =
         bus.snapshot_with_runtime_ownership();
+    // Take the stream cursor before inspecting native ownership. Every native
+    // lifecycle edge after this cut will then be replayed by the subscriber.
+    if let Some(native) = native {
+        match native.live_native_turns() {
+            Ok(turns) => active_sessions.extend(turns),
+            Err(error) => tracing::warn!(%error, "could not restore native execution ownership"),
+        }
+    }
     let mut snapshot = tracked
         .iter()
         .filter(|run| run.kind != "session")
@@ -2559,10 +2054,49 @@ impl std::fmt::Display for MeasuredDaemonFailure {
 
 impl std::error::Error for MeasuredDaemonFailure {}
 
+async fn execute_configured_agent_input_measured(
+    config: &AxocoatlConfig,
+    agent_registry: &AgentRegistry,
+    agent_id: &str,
+    input: axocoatl_core::AgentInput,
+) -> Result<MeasuredDaemonOutput, MeasuredDaemonFailure> {
+    let actor = configured_agent_actor_from_registry(config, agent_registry, agent_id)
+        .await
+        .map_err(MeasuredDaemonFailure::known_zero)?;
+
+    let measured = axocoatl_actor::execute_agent_measured(&actor, input)
+        .await
+        .map_err(MeasuredDaemonFailure::from_agent)?;
+    let mut output = measured.outcome.into_output();
+    output.token_usage = measured.token_usage.usage;
+
+    Ok(MeasuredDaemonOutput {
+        output,
+        token_usage_known: measured.token_usage.complete,
+    })
+}
+
+async fn configured_agent_actor_from_registry(
+    config: &AxocoatlConfig,
+    agent_registry: &AgentRegistry,
+    agent_id: &str,
+) -> Result<ractor::ActorRef<axocoatl_actor::AgentMessage>, DaemonError> {
+    require_configured_executable_agent(config, agent_id)?;
+    agent_registry
+        .get(&AgentId::new(agent_id))
+        .await
+        .ok_or_else(|| DaemonError::AgentSpawn(format!("Agent '{agent_id}' not found")))
+}
+
 struct SessionRunFailure {
     error: DaemonError,
     token_usage: axocoatl_core::TokenUsageStats,
     token_usage_known: bool,
+    /// Text chunks that crossed the same persistence boundary as their live
+    /// frames before this activation failed. Coordinated callers use this to
+    /// give a failed Agent an exact durable output identity instead of leaving
+    /// its text as an unattributed aggregate turn tail.
+    coordinated_partial_output: Option<String>,
 }
 
 impl SessionRunFailure {
@@ -2571,6 +2105,7 @@ impl SessionRunFailure {
             error,
             token_usage: Default::default(),
             token_usage_known: true,
+            coordinated_partial_output: None,
         }
     }
 
@@ -2580,6 +2115,7 @@ impl SessionRunFailure {
             error: DaemonError::AgentSpawn(error.message),
             token_usage: token_usage.usage,
             token_usage_known: token_usage.complete,
+            coordinated_partial_output: None,
         }
     }
 
@@ -2604,6 +2140,7 @@ impl SessionRunFailure {
             error,
             token_usage: outcome.output().token_usage.clone(),
             token_usage_known,
+            coordinated_partial_output: None,
         }
     }
 }
@@ -2617,6 +2154,68 @@ impl From<DaemonError> for SessionRunFailure {
 impl std::fmt::Display for SessionRunFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.error, formatter)
+    }
+}
+
+fn session_terminal_stream_frame(
+    session_id: &str,
+    turn_id: &str,
+    terminal: &Result<(AgentRunOutcome, bool), SessionRunFailure>,
+    post_terminal_errors: &[String],
+) -> crate::stream::StreamFrame {
+    if let Ok((outcome, token_usage_known)) = terminal {
+        if !post_terminal_errors.is_empty() {
+            let output = outcome.output();
+            let durable_state = if outcome.is_cancelled() {
+                "cancelled"
+            } else {
+                "completed"
+            };
+            return crate::stream::StreamFrame::SessionError {
+                session: session_id.to_string(),
+                turn_id: Some(turn_id.to_string()),
+                error: format!(
+                    "Session turn is durably {durable_state}, but its runtime boundary failed: {}",
+                    post_terminal_errors.join("; ")
+                ),
+                input_tokens: output.token_usage.input_tokens as u64,
+                output_tokens: output.token_usage.output_tokens as u64,
+                reasoning_tokens: output.token_usage.reasoning_tokens.unwrap_or(0) as u64,
+                token_usage_known: *token_usage_known,
+            };
+        }
+    }
+
+    match terminal {
+        Ok((AgentRunOutcome::Completed(output), token_usage_known)) => {
+            crate::stream::StreamFrame::SessionDone {
+                session: session_id.to_string(),
+                turn_id: Some(turn_id.to_string()),
+                input_tokens: output.token_usage.input_tokens as u64,
+                output_tokens: output.token_usage.output_tokens as u64,
+                reasoning_tokens: output.token_usage.reasoning_tokens.unwrap_or(0) as u64,
+                token_usage_known: *token_usage_known,
+            }
+        }
+        Ok((AgentRunOutcome::Cancelled { partial_output, .. }, token_usage_known)) => {
+            crate::stream::StreamFrame::SessionCancelled {
+                session: session_id.to_string(),
+                turn_id: turn_id.to_string(),
+                input_tokens: partial_output.token_usage.input_tokens as u64,
+                output_tokens: partial_output.token_usage.output_tokens as u64,
+                reasoning_tokens: partial_output.token_usage.reasoning_tokens.unwrap_or(0) as u64,
+                token_usage_known: *token_usage_known,
+            }
+        }
+        Err(failure) => crate::stream::StreamFrame::SessionError {
+            session: session_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            error: failure.to_string(),
+            input_tokens: failure.token_usage.input_tokens as u64,
+            output_tokens: failure.token_usage.output_tokens as u64,
+            reasoning_tokens: failure.token_usage.reasoning_tokens.unwrap_or(0) as u64,
+            token_usage_known: failure.token_usage_known,
+        },
     }
 }
 
@@ -2671,14 +2270,335 @@ impl std::fmt::Display for WaysControlFailure {
 
 impl std::error::Error for WaysControlFailure {}
 
-fn require_multi_agent_handoff_output(
+fn require_session_agent_result(
     agent_id: &str,
     outcome: &AgentRunOutcome,
 ) -> Result<(), DaemonError> {
     if !outcome.is_cancelled() && outcome.output().content.trim().is_empty() {
         return Err(DaemonError::Session(format!(
-            "agent '{agent_id}' completed without a user-visible output; the multi-agent Session cannot claim a completed collaboration. Review the preserved Agent evidence and retry that turn"
+            "agent '{agent_id}' completed without a user-visible output; the Session turn cannot complete without a user-visible Agent result. Review the preserved Agent evidence and retry that turn"
         )));
+    }
+    Ok(())
+}
+
+fn bounded_coordination_summary(value: &str, max_chars: usize) -> String {
+    let mut summary = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        summary.push('…');
+    }
+    summary
+}
+
+fn coordination_usage_value(
+    usage: &axocoatl_core::TokenUsageStats,
+    known: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "reasoning_tokens": usage.reasoning_tokens,
+        "total_tokens": usage.total(),
+        "known": known,
+    })
+}
+
+fn coordinated_agent_graph(
+    agents: &[String],
+    config: &AxocoatlConfig,
+) -> Result<TurnAgentGraph, DaemonError> {
+    let members = agents.iter().map(String::as_str).collect::<HashSet<_>>();
+    let nodes = agents
+        .iter()
+        .map(|agent_id| {
+            let configured = config
+                .agents
+                .iter()
+                .find(|agent| agent.id == *agent_id)
+                .ok_or_else(|| {
+                    DaemonError::Session(format!(
+                        "coordination Agent '{agent_id}' is not configured"
+                    ))
+                })?;
+            if !matches!(configured.role, AgentRoleYaml::Autonomous) {
+                return Err(DaemonError::Session(format!(
+                    "agent '{agent_id}' is not autonomous; a Session coordination graph may contain autonomous Agents only"
+                )));
+            }
+            if let Some(missing) = configured
+                .depends_on
+                .iter()
+                .find(|dependency| !members.contains(dependency.as_str()))
+            {
+                return Err(DaemonError::Session(format!(
+                    "coordination Agent '{agent_id}' depends on '{missing}', which is not selected in this Session"
+                )));
+            }
+            Ok(TurnAgentNode::new(
+                agent_id,
+                configured.depends_on.iter().cloned(),
+            ))
+        })
+        .collect::<Result<Vec<_>, DaemonError>>()?;
+    TurnAgentGraph::new(nodes).map_err(|error| {
+        DaemonError::Session(format!("invalid Session coordination graph: {error}"))
+    })
+}
+
+fn coordinated_graph_sinks(graph: &TurnAgentGraph) -> Vec<String> {
+    graph
+        .nodes()
+        .iter()
+        .filter(|candidate| {
+            !graph
+                .nodes()
+                .iter()
+                .any(|node| node.depends_on.iter().any(|parent| parent == &candidate.id))
+        })
+        .map(|node| node.id.clone())
+        .collect()
+}
+
+fn coordinated_revision_targets(
+    graph: &TurnAgentGraph,
+    scheduler: &TurnCoordinationScheduler,
+    agent_id: &str,
+    generation: u32,
+) -> Vec<String> {
+    if generation >= scheduler.max_activations_per_agent() {
+        return Vec::new();
+    }
+    graph
+        .nodes()
+        .iter()
+        .filter(|candidate| graph.is_ancestor(&candidate.id, agent_id))
+        .filter(|candidate| {
+            graph
+                .nodes()
+                .iter()
+                .filter(|affected| {
+                    affected.id == candidate.id
+                        || affected.id == agent_id
+                        || (graph.is_ancestor(&candidate.id, &affected.id)
+                            && scheduler.state(&affected.id).is_ok_and(|state| {
+                                matches!(state, TurnAgentState::Completed | TurnAgentState::Running)
+                            }))
+                })
+                .all(|affected| {
+                    scheduler.activation_count(&affected.id).unwrap_or_default()
+                        < scheduler.max_activations_per_agent()
+                })
+        })
+        .map(|candidate| candidate.id.clone())
+        .collect()
+}
+
+fn coordinated_activation_input(
+    original: &str,
+    activation: &axocoatl_coordination::TurnActivation,
+    output_by_signal: &HashMap<String, axocoatl_core::AgentOutput>,
+    eligible_revision_targets: &[String],
+) -> Result<String, DaemonError> {
+    let handoffs = activation
+        .inputs
+        .iter()
+        .filter(|signal| signal.kind == TurnSignalKind::Completed)
+        .map(|signal| {
+            output_by_signal
+                .get(&signal.id)
+                .map(|output| {
+                    format!(
+                        "### {} (generation {})\n{}",
+                        signal.source, signal.generation, output.content
+                    )
+                })
+                .ok_or_else(|| {
+                    DaemonError::Session(format!(
+                        "coordination input '{}' from Agent '{}' has no retained generation output",
+                        signal.id, signal.source
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let feedback = activation
+        .inputs
+        .iter()
+        .filter(|signal| signal.kind == TurnSignalKind::ChangesRequested)
+        .map(|signal| {
+            if signal.target.as_deref() == Some(activation.agent_id.as_str()) {
+                format!(
+                    "### Revise for {} (signal {}, requested by {}, generation {})\n{}",
+                    activation.agent_id,
+                    signal.id,
+                    signal.source,
+                    signal.generation,
+                    signal.summary
+                )
+            } else if signal.source == activation.agent_id {
+                format!(
+                    "### Verify requested revision (signal {}, target {}, generation {})\n{}",
+                    signal.id,
+                    signal.target.as_deref().unwrap_or("unknown"),
+                    signal.generation,
+                    signal.summary
+                )
+            } else {
+                format!(
+                    "### Coordination feedback (signal {}, from {}, to {}, generation {})\n{}",
+                    signal.id,
+                    signal.source,
+                    signal.target.as_deref().unwrap_or("unknown"),
+                    signal.generation,
+                    signal.summary
+                )
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut content = original.to_string();
+    if !handoffs.is_empty() {
+        content.push_str("\n\n## Direct coordination handoffs\n");
+        content.push_str(&handoffs.join("\n\n"));
+    }
+    if !feedback.is_empty() {
+        content.push_str("\n\n## Coordination feedback\n");
+        content.push_str(&feedback.join("\n"));
+    }
+    if !eligible_revision_targets.is_empty() {
+        let target_ids = eligible_revision_targets
+            .iter()
+            .map(|target| format!("`{target}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        content.push_str("\n\n## Coordination control\n");
+        content.push_str(&format!(
+            "For this activation, `coordination_signal` can accept at most one `changes_requested` signal. Set `target_agent` to exactly one of: {target_ids}. Include a concise `summary`. These are eligible ancestor IDs only; transitive outputs are not added unless they appear under Direct coordination handoffs."
+        ));
+    } else {
+        content.push_str("\n\n## Coordination control\n");
+        content.push_str(
+            "No upstream revision is available for this activation. Do not call `coordination_signal`; complete only your configured role and return its result.",
+        );
+    }
+    Ok(content)
+}
+
+fn coordinated_final_output(
+    sinks: &[String],
+    latest_completed: &HashMap<String, (u32, String, axocoatl_core::AgentOutput)>,
+    scheduler: &TurnCoordinationScheduler,
+    usage: axocoatl_core::TokenUsageStats,
+) -> Result<axocoatl_core::AgentOutput, DaemonError> {
+    let sink_outputs = sinks
+        .iter()
+        .map(|sink| {
+            let expected_generation = scheduler.activation_count(sink).unwrap_or_default();
+            latest_completed
+                .get(sink)
+                .filter(|(generation, _, _)| *generation == expected_generation)
+                .map(|(_, _, output)| (sink.clone(), output.clone()))
+                .ok_or_else(|| {
+                    DaemonError::Session(format!(
+                        "coordination sink '{sink}' has no current generation-{expected_generation} output"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut output = if sink_outputs.len() == 1 {
+        sink_outputs[0].1.clone()
+    } else {
+        axocoatl_core::AgentOutput {
+            content: sink_outputs
+                .iter()
+                .map(|(agent, output)| format!("### {agent}\n{}", output.content))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+            tool_calls: sink_outputs
+                .iter()
+                .flat_map(|(_, output)| output.tool_calls.iter().cloned())
+                .collect(),
+            token_usage: Default::default(),
+        }
+    };
+    output.token_usage = usage;
+    Ok(output)
+}
+
+fn coordination_lifecycle_kind(kind: TurnCoordinationEventKind) -> Option<&'static str> {
+    match kind {
+        TurnCoordinationEventKind::AgentStarted => Some("coordination_agent_activated"),
+        TurnCoordinationEventKind::AgentCompleted => Some("coordination_agent_completed"),
+        TurnCoordinationEventKind::AgentFailed => Some("coordination_agent_failed"),
+        TurnCoordinationEventKind::AgentBlocked => Some("coordination_agent_blocked"),
+        TurnCoordinationEventKind::AgentReactivated => Some("coordination_agent_reactivated"),
+        TurnCoordinationEventKind::AgentCancelled => Some("coordination_agent_cancelled"),
+        TurnCoordinationEventKind::ChangesRequested => None,
+    }
+}
+
+fn invalidate_reactivated_outputs(
+    events: &[axocoatl_coordination::TurnCoordinationEvent],
+    latest_completed: &mut HashMap<String, (u32, String, axocoatl_core::AgentOutput)>,
+) -> Result<Vec<(String, u32, u32, String)>, DaemonError> {
+    let mut invalidated = Vec::new();
+    for event in events
+        .iter()
+        .filter(|event| event.kind == TurnCoordinationEventKind::AgentReactivated)
+    {
+        let previous_generation = event.generation.checked_sub(1).ok_or_else(|| {
+            DaemonError::Session(format!(
+                "reactivated Agent '{}' has invalid generation zero",
+                event.agent_id
+            ))
+        })?;
+        if let Some((generation, _, _)) = latest_completed.remove(&event.agent_id) {
+            if generation != previous_generation {
+                return Err(DaemonError::Session(format!(
+                    "reactivated Agent '{}' expected generation {previous_generation}, but its latest output is generation {generation}",
+                    event.agent_id
+                )));
+            }
+        }
+        let cause = event
+            .signal
+            .as_ref()
+            .map(|signal| signal.id.clone())
+            .or_else(|| event.cause_signal_ids.first().cloned())
+            .ok_or_else(|| {
+                DaemonError::Session(format!(
+                    "reactivated Agent '{}' has no causal coordination signal",
+                    event.agent_id
+                ))
+            })?;
+        invalidated.push((
+            event.agent_id.clone(),
+            previous_generation,
+            event.generation,
+            cause,
+        ));
+    }
+    Ok(invalidated)
+}
+
+fn validate_latest_completed_generations(
+    scheduler: &TurnCoordinationScheduler,
+    latest_completed: &HashMap<String, (u32, String, axocoatl_core::AgentOutput)>,
+) -> Result<(), DaemonError> {
+    for (agent_id, (generation, _, _)) in latest_completed {
+        let state = scheduler.state(agent_id).map_err(|error| {
+            DaemonError::Session(format!(
+                "could not validate coordinated output for Agent '{agent_id}': {error}"
+            ))
+        })?;
+        let current_generation = scheduler.activation_count(agent_id).map_err(|error| {
+            DaemonError::Session(format!(
+                "could not validate coordinated generation for Agent '{agent_id}': {error}"
+            ))
+        })?;
+        if state != TurnAgentState::Completed || current_generation != *generation {
+            return Err(DaemonError::Session(format!(
+                "stale coordinated output remained for Agent '{agent_id}' generation {generation}; scheduler is {state:?} at generation {current_generation}"
+            )));
+        }
     }
     Ok(())
 }
@@ -2824,8 +2744,12 @@ struct CreatedE2bSandbox {
 ///
 /// Isolation owns cancellation only while its start/setup future is alive. A
 /// request can disappear before that future returns a sandbox handle, so this
-/// daemon-level guard also makes the exact generation actionable and removes
-/// any partial local dependency volume.
+/// daemon-level guard also settles the exact generation and removes any partial
+/// local dependency volume. Interrupting a new plan's first preparation leaves
+/// it Failed and actionable. Interrupting the re-preparation of a plan that was
+/// already Ready (the first use after a restart) returns it to Ready without a
+/// live runtime, so the next use prepares it again; a paused turn bound to that
+/// generation is never stranded by a closed page.
 struct SessionPreparationStateGuard {
     session_id: String,
     local: bool,
@@ -2908,22 +2832,29 @@ impl Drop for SessionPreparationStateGuard {
                     runtime.cleanup_confirmed = true;
                 }
             }
-            let error = cleanup_error.map_or_else(
-                || "environment preparation was cancelled; rebuild the environment".to_string(),
-                |cleanup| {
+            let mut store = store.lock().await;
+            let _ = match cleanup_error {
+                // Nothing of the interrupted attempt remains. Re-preparing a
+                // Ready plan returns to Ready; a first preparation fails.
+                None => store.settle_interrupted_preparation(
+                    &session_id,
+                    generation,
+                    runtime_identity,
+                    setup_results,
+                    effective_image,
+                    "environment preparation was cancelled; rebuild the environment".to_string(),
+                ),
+                Some(cleanup) => store.fail_environment_if_preparing(
+                    &session_id,
+                    generation,
+                    effective_image,
+                    runtime_identity,
+                    setup_results,
                     format!(
                         "environment preparation was cancelled; dependency cleanup failed: {cleanup}; rebuild the environment"
-                    )
-                },
-            );
-            let _ = store.lock().await.fail_environment_if_preparing(
-                &session_id,
-                generation,
-                effective_image,
-                runtime_identity,
-                setup_results,
-                error,
-            );
+                    ),
+                ),
+            };
         });
     }
 }
@@ -2975,22 +2906,27 @@ impl Drop for PreparedSessionSandbox {
                     runtime.cleanup_confirmed = true;
                 }
             }
-            let error = cleanup_error.map_or_else(
-                || "environment preparation was cancelled before Ready was committed".to_string(),
-                |cleanup| {
+            let mut store = store.lock().await;
+            let _ = match cleanup_error {
+                None => store.settle_interrupted_preparation(
+                    &session_id,
+                    generation,
+                    runtime_identity,
+                    setup_results,
+                    effective_image,
+                    "environment preparation was cancelled before Ready was committed".to_string(),
+                ),
+                Some(cleanup) => store.fail_environment_if_preparing(
+                    &session_id,
+                    generation,
+                    effective_image,
+                    runtime_identity,
+                    setup_results,
                     format!(
                         "environment preparation was cancelled before Ready was committed; cleanup failed: {cleanup}"
-                    )
-                },
-            );
-            let _ = store.lock().await.fail_environment_if_preparing(
-                &session_id,
-                generation,
-                effective_image,
-                runtime_identity,
-                setup_results,
-                error,
-            );
+                    ),
+                ),
+            };
         });
     }
 }
@@ -3008,12 +2944,7 @@ struct SessionEnvironmentPreparationError {
 /// can reconcile, pause, or delete the active daemon's runtimes.
 #[derive(Debug)]
 struct DataDirLease {
-    _data_root: SecureDir,
-    external_root: SecureDir,
-    #[cfg(unix)]
-    _external_file: std::fs::File,
-    #[cfg(unix)]
-    _legacy_file: std::fs::File,
+    ownership: axocoatl_session::execution_ownership::DataRootFormatOwnership,
 }
 
 /// Stable, non-secret Podman ownership identity for one durable daemon root.
@@ -3028,6 +2959,7 @@ fn local_runtime_authority(data_root: &SecureDir) -> Result<String, DaemonError>
     ))
 }
 
+#[cfg(test)]
 fn external_lease_name(data_root: &SecureDir) -> String {
     use sha2::{Digest, Sha256};
 
@@ -3058,7 +2990,7 @@ fn root_authority_bytes(data_root: &SecureDir) -> Vec<u8> {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn external_lease_root_path_for_euid(effective_uid: u32) -> PathBuf {
     // Do not honor TMPDIR for process-lifecycle authority: it may point inside
     // a Workspace or another untrusted tree. The per-euid root itself is
@@ -3074,11 +3006,6 @@ fn effective_uid() -> u32 {
     // SAFETY: `geteuid` takes no arguments and has no failure sentinel; uid_t
     // is an unsigned 32-bit integer on every supported Unix target.
     unsafe { geteuid() }
-}
-
-#[cfg(unix)]
-fn external_lease_root_path() -> PathBuf {
-    external_lease_root_path_for_euid(effective_uid())
 }
 
 fn admit_and_restrict_data_root(data_root: &SecureDir) -> Result<(), DaemonError> {
@@ -3124,118 +3051,44 @@ fn open_ipc_control_root() -> Result<SecureDir, DaemonError> {
 
 impl DataDirLease {
     fn acquire(data_root: &SecureDir) -> Result<Self, DaemonError> {
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
+        use axocoatl_session::execution_ownership::{DataRootFormatOwnership, OwnershipError};
 
-            unsafe extern "C" {
-                fn flock(
-                    fd: std::os::raw::c_int,
-                    operation: std::os::raw::c_int,
-                ) -> std::os::raw::c_int;
-            }
-            const LOCK_EX: std::os::raw::c_int = 2;
-            const LOCK_NB: std::os::raw::c_int = 4;
-
-            // A v0.1 Workspace could expose the in-root lease to sandboxed
-            // repository code. Reject a hostile legacy link, but keep the
-            // authoritative lock outside every Workspace bind.
-            data_root
-                .is_file(".axocoatl-daemon.lock")
-                .map_err(|error| {
-                    DaemonError::Session(format!(
-                        "validating legacy data-directory lock '{}': {error}",
-                        data_root.path().join(".axocoatl-daemon.lock").display()
-                    ))
-                })?;
-            // Namespace the external authority by effective Unix user. A
-            // process must never depend on a shared 0700 directory first
-            // created by another account under a system-wide /tmp.
-            let lease_root_path = external_lease_root_path();
-            let lease_root = SecureDir::open_or_create_all(&lease_root_path).map_err(|error| {
-                DaemonError::Session(format!(
-                    "opening external data-directory lease root '{}': {error}",
-                    lease_root_path.display()
-                ))
-            })?;
-            lease_root
-                .require_owner_and_private_writes(effective_uid())
-                .map_err(|error| {
-                    DaemonError::Session(format!(
-                        "admitting external data-directory lease root '{}': {error}",
-                        lease_root_path.display()
-                    ))
-                })?;
-            lease_root.restrict_owner_only().map_err(|error| {
-                DaemonError::Session(format!(
-                    "restricting external data-directory lease root '{}': {error}",
-                    lease_root_path.display()
-                ))
-            })?;
-            let lease_name = external_lease_name(data_root);
-            let external_file = lease_root.open_lock_file(&lease_name).map_err(|error| {
-                DaemonError::Session(format!(
-                    "opening external data-directory ownership lock '{}': {error}",
-                    lease_root.path().join(&lease_name).display()
-                ))
-            })?;
-            // SAFETY: the file owns a valid descriptor and remains retained in
-            // `Self` for the entire successful lock lifetime.
-            let result = unsafe { flock(external_file.as_raw_fd(), LOCK_EX | LOCK_NB) };
-            if result != 0 {
-                let error = std::io::Error::last_os_error();
-                return Err(DaemonError::Session(format!(
-                    "Axocoatl data directory '{}' is already owned by another daemon/bootstrap ({error})",
-                    data_root.path().display()
-                )));
-            }
-            // Upgrade compatibility: v0.1 owns only this in-root lock. Acquire
-            // it second, in fixed order, so an old live daemon excludes 1.0;
-            // the external lease prevents an exposed Workspace from replacing
-            // this inode to admit another 1.0 daemon.
-            let legacy_file =
-                data_root
-                    .open_lock_file(".axocoatl-daemon.lock")
-                    .map_err(|error| {
-                        DaemonError::Session(format!(
-                            "opening legacy data-directory ownership lock '{}': {error}",
-                            data_root.path().join(".axocoatl-daemon.lock").display()
-                        ))
-                    })?;
-            // SAFETY: as above, the retained File keeps the locked inode alive.
-            let result = unsafe { flock(legacy_file.as_raw_fd(), LOCK_EX | LOCK_NB) };
-            if result != 0 {
-                let error = std::io::Error::last_os_error();
-                return Err(DaemonError::Session(format!(
-                    "Axocoatl data directory '{}' is owned by a legacy daemon/bootstrap ({error})",
-                    data_root.path().display()
-                )));
-            }
-            data_root.try_lock_exclusive().map_err(|error| {
-                DaemonError::Session(format!(
-                    "locking opened data-directory inode '{}': {error}",
-                    data_root.path().display()
-                ))
-            })?;
-            Ok(Self {
-                _data_root: data_root.clone(),
-                external_root: lease_root,
-                _external_file: external_file,
-                _legacy_file: legacy_file,
-            })
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = data_root;
-            Err(DaemonError::Session(
-                "Axocoatl cannot safely own a data directory on this unsupported non-Unix host"
-                    .to_string(),
+        let ownership = DataRootFormatOwnership::acquire_for_root(data_root).map_err(|error| {
+            let context = match &error {
+                OwnershipError::Busy("controller (external lease)") => {
+                    "is already owned by another daemon/bootstrap"
+                }
+                OwnershipError::Busy("legacy controller (in-root lease)") => {
+                    "is owned by a legacy daemon/bootstrap"
+                }
+                OwnershipError::Busy("controller (data-root inode)") => {
+                    "failed locking opened data-directory inode"
+                }
+                _ => "failed data-directory format ownership admission",
+            };
+            DaemonError::Session(format!(
+                "Axocoatl data directory '{}' {context}: {error}",
+                data_root.path().display()
             ))
+        })?;
+        Ok(Self { ownership })
+    }
+
+    #[cfg(test)]
+    fn require_legacy_startup_ready(&self) -> Result<(), DaemonError> {
+        if matches!(
+            self.ownership,
+            axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(_)
+        ) {
+            return Err(DaemonError::Session(
+                "This data directory uses the upgraded Session execution format. Live v2 startup is not enabled in this build; legacy reconciliation and execution are refused.".to_string(),
+            ));
         }
+        Ok(())
     }
 
     fn external_root(&self) -> &SecureDir {
-        &self.external_root
+        self.ownership.external_root()
     }
 }
 
@@ -3261,6 +3114,7 @@ impl ActiveAttemptRun {
             actors: Vec::new(),
             tasks: Vec::new(),
             sandboxes: Vec::new(),
+            native: None,
         }
     }
 }
@@ -3303,7 +3157,9 @@ fn validate_session_mode(config: &AxocoatlConfig, mode: &SessionMode) -> Result<
     match mode {
         SessionMode::SingleAgent { agent_id } => {
             let agent = configured_agent(agent_id).ok_or_else(|| {
-                DaemonError::Session(format!("agent '{agent_id}' is not in the config"))
+                DaemonError::Session(format!(
+                    "agent '{agent_id}' is not in the current config; restore that Agent in config or create a new Session with an available Agent. This Session and its History remain available"
+                ))
             })?;
             if matches!(agent.role, AgentRoleYaml::Worker) {
                 return Err(DaemonError::Session(format!(
@@ -3325,13 +3181,18 @@ fn validate_session_mode(config: &AxocoatlConfig, mode: &SessionMode) -> Result<
                     )));
                 }
                 let agent = configured_agent(agent_id).ok_or_else(|| {
-                    DaemonError::Session(format!("agent '{agent_id}' is not in the config"))
+                    DaemonError::Session(format!(
+                        "agent '{agent_id}' is not in the current config; restore that Agent in config or create a new Session with an available team. This Session and its History remain available"
+                    ))
                 })?;
                 if matches!(agent.role, AgentRoleYaml::Worker) {
                     return Err(DaemonError::Session(format!(
                         "agent '{agent_id}' is a coordinator-owned worker and cannot run directly in a Custom Session"
                     )));
                 }
+            }
+            if agents.len() > 1 {
+                coordinated_agent_graph(agents, config)?;
             }
         }
         SessionMode::Lattice {
@@ -3342,20 +3203,122 @@ fn validate_session_mode(config: &AxocoatlConfig, mode: &SessionMode) -> Result<
                 .iter()
                 .find(|workflow| workflow.id == *workflow_id)
                 .ok_or_else(|| {
-                    DaemonError::Session(format!("workflow '{workflow_id}' is not in the config"))
+                    DaemonError::Session(format!(
+                        "workflow '{workflow_id}' is not in the current config; restore that team in config or create a new Session with an available team. This Session and its History remain available"
+                    ))
                 })?;
-            AxocoatlDaemon::session_workflow_agents(config, workflow)?;
+            let roster = AxocoatlDaemon::session_workflow_agents(config, workflow)?;
+            if roster.len() > 1 {
+                coordinated_agent_graph(&roster, config)?;
+            }
         }
         SessionMode::Lattice { workflow_id: None } => {
             let workflow = config.workflows.first().ok_or_else(|| {
                 DaemonError::Session(
-                    "Lattice mode requires at least one configured workflow".to_string(),
+                    "this Session has no available configured team; restore its team in config or create a new Session with an available team. This Session and its History remain available"
+                        .to_string(),
                 )
             })?;
-            AxocoatlDaemon::session_workflow_agents(config, workflow)?;
+            let roster = AxocoatlDaemon::session_workflow_agents(config, workflow)?;
+            if roster.len() > 1 {
+                coordinated_agent_graph(&roster, config)?;
+            }
         }
     }
     Ok(())
+}
+
+fn is_safe_persisted_session_reference(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    !value.is_empty()
+        && value.len() <= 64
+        && bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+/// Validate only durable shape and storage safety. Config membership is a
+/// future-execution concern: removing or renaming an Agent/team must not erase
+/// the Session spine or hide its canonical History at startup.
+fn validate_persisted_session_structure(mode: &SessionMode) -> Result<(), DaemonError> {
+    let validate_reference = |kind: &str, id: &str| {
+        if is_safe_persisted_session_reference(id) {
+            Ok(())
+        } else {
+            Err(DaemonError::Session(format!(
+                "persisted {kind} id '{id}' is not a filesystem-safe identifier"
+            )))
+        }
+    };
+    match mode {
+        SessionMode::SingleAgent { agent_id } => validate_reference("Agent", agent_id),
+        SessionMode::Custom { agents } => {
+            if agents.is_empty() {
+                return Err(DaemonError::Session(
+                    "persisted Custom mode has no Agent ids".to_string(),
+                ));
+            }
+            let mut unique = HashSet::new();
+            for agent_id in agents {
+                validate_reference("Agent", agent_id)?;
+                if !unique.insert(agent_id) {
+                    return Err(DaemonError::Session(format!(
+                        "persisted Custom mode repeats Agent id '{agent_id}'"
+                    )));
+                }
+            }
+            Ok(())
+        }
+        SessionMode::Lattice {
+            workflow_id: Some(workflow_id),
+        } => {
+            // Workflow IDs were never restricted to Agent/path syntax; names
+            // such as `review.v1` and `Release Team` are valid config keys.
+            if workflow_id.is_empty() || workflow_id.len() > PERSISTED_WORKFLOW_REFERENCE_MAX_BYTES
+            {
+                Err(DaemonError::Session(
+                    "persisted workflow reference is empty or unreasonably large".to_string(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        SessionMode::Lattice { workflow_id: None } => Ok(()),
+    }
+}
+
+/// Reject only role ownership that is unsafe even before a new turn resolves
+/// its full current configuration. Unknown Agents remain recoverable config
+/// references; a known Worker selected directly would bypass its Coordinator.
+fn validate_persisted_session_runtime_ownership(
+    config: &AxocoatlConfig,
+    mode: &SessionMode,
+) -> Result<(), DaemonError> {
+    let reject_direct_worker = |agent_id: &str| {
+        if config
+            .agents
+            .iter()
+            .find(|agent| agent.id == agent_id)
+            .is_some_and(|agent| matches!(agent.role, AgentRoleYaml::Worker))
+        {
+            Err(DaemonError::Session(format!(
+                "persisted Session selects coordinator-owned Worker '{agent_id}' directly"
+            )))
+        } else {
+            Ok(())
+        }
+    };
+    match mode {
+        SessionMode::SingleAgent { agent_id } => reject_direct_worker(agent_id),
+        SessionMode::Custom { agents } => {
+            for agent_id in agents {
+                reject_direct_worker(agent_id)?;
+            }
+            Ok(())
+        }
+        SessionMode::Lattice { .. } => Ok(()),
+    }
 }
 
 fn validate_direct_actor_role(agent: &axocoatl_config::AgentConfigYaml) -> Result<(), DaemonError> {
@@ -3366,6 +3329,274 @@ fn validate_direct_actor_role(agent: &axocoatl_config::AgentConfigYaml) -> Resul
         )));
     }
     Ok(())
+}
+
+/// Resolve only a configured process-level Agent that public compatibility
+/// APIs may address directly. Session actors, ad-hoc Coordinator workers, and
+/// configured Worker templates are owned by their higher-level runtimes and
+/// must never be reached through the shared registry by spelling their ID.
+pub(crate) fn require_configured_executable_agent<'a>(
+    config: &'a AxocoatlConfig,
+    agent_id: &str,
+) -> Result<&'a axocoatl_config::AgentConfigYaml, DaemonError> {
+    let agent = config
+        .agents
+        .iter()
+        .find(|agent| agent.id == agent_id)
+        .ok_or_else(|| {
+            DaemonError::AgentSpawn(format!(
+                "Agent '{agent_id}' is not a configured top-level Agent"
+            ))
+        })?;
+    validate_direct_actor_role(agent)?;
+    Ok(agent)
+}
+
+pub(crate) fn configured_executable_agent_ids(config: &AxocoatlConfig) -> HashSet<String> {
+    config
+        .agents
+        .iter()
+        .filter(|agent| !matches!(agent.role, AgentRoleYaml::Worker))
+        .map(|agent| agent.id.clone())
+        .collect()
+}
+
+fn validate_automation_agent_authority(
+    config: &AxocoatlConfig,
+    automation: &axocoatl_config::Automation,
+) -> Result<(), DaemonError> {
+    for node in &automation.nodes {
+        if let axocoatl_config::AutomationNodeKind::Agent { agent_id, .. } = &node.kind {
+            require_configured_executable_agent(config, agent_id).map_err(|error| {
+                DaemonError::WorkflowExecution(format!(
+                    "automation '{}' node '{}' cannot use {agent_id:?}: {error}",
+                    automation.id, node.id
+                ))
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn coordination_signal_owner<'a>(
+    mode: &SessionMode,
+    agent: &'a axocoatl_config::AgentConfigYaml,
+    coordinated_execution: bool,
+) -> Option<&'a str> {
+    (coordinated_execution
+        && matches!(
+            mode,
+            SessionMode::Lattice { .. } | SessionMode::Custom { .. }
+        )
+        && matches!(agent.role, AgentRoleYaml::Autonomous))
+    .then_some(agent.id.as_str())
+}
+
+fn single_agent_coordinator_id<'a>(
+    config: &AxocoatlConfig,
+    mode: &'a SessionMode,
+) -> Option<&'a str> {
+    let SessionMode::SingleAgent { agent_id } = mode else {
+        return None;
+    };
+    config
+        .agents
+        .iter()
+        .find(|agent| agent.id == *agent_id)
+        .is_some_and(|agent| matches!(agent.role, AgentRoleYaml::Coordinator))
+        .then_some(agent_id.as_str())
+}
+
+fn session_uses_checkpoint_transaction(config: &AxocoatlConfig, mode: &SessionMode) -> bool {
+    match mode {
+        SessionMode::Lattice { .. } | SessionMode::Custom { .. } => true,
+        SessionMode::SingleAgent { .. } => single_agent_coordinator_id(config, mode).is_some(),
+    }
+}
+
+fn terminal_requires_fresh_session_actor(status: SessionTurnLifecycle) -> bool {
+    matches!(
+        status,
+        SessionTurnLifecycle::Failed
+            | SessionTurnLifecycle::Cancelled
+            | SessionTurnLifecycle::Interrupted
+    )
+}
+
+fn checkpoint_transaction_resolution(
+    session_id: &str,
+    turn_id: &str,
+    turn: Option<&SessionTurn>,
+) -> Result<CheckpointTransactionResolution, DaemonError> {
+    let Some(turn) = turn else {
+        // A transaction without a canonical Begin never had authority to
+        // publish actor state. Abort is the only safe recovery outcome.
+        return Ok(CheckpointTransactionResolution::Abort);
+    };
+    if turn.session_id != session_id {
+        return Err(DaemonError::Session(format!(
+            "checkpoint transaction for Session '{session_id}' turn '{turn_id}' collides with canonical Session '{}'",
+            turn.session_id
+        )));
+    }
+    Ok(if turn.status == SessionTurnLifecycle::Completed {
+        CheckpointTransactionResolution::Commit
+    } else {
+        CheckpointTransactionResolution::Abort
+    })
+}
+
+async fn resolve_checkpoint_transaction(
+    store: &CheckpointStore,
+    session_id: &str,
+    turn_id: &str,
+    turn: Option<&SessionTurn>,
+) -> Result<(), DaemonError> {
+    let resolution = checkpoint_transaction_resolution(session_id, turn_id, turn)?;
+    store
+        .reconcile_session_turn(session_id, turn_id, resolution)
+        .await
+        .map_err(|error| {
+            DaemonError::Session(format!(
+                "resolving checkpoint transaction for Session '{session_id}' turn '{turn_id}': {error}"
+            ))
+        })
+}
+
+async fn reconcile_checkpoint_transactions_from_ledger(
+    checkpoint_store: &CheckpointStore,
+    turn_store: &tokio::sync::Mutex<SessionTurnStore>,
+    only_session: Option<&str>,
+) -> Result<usize, DaemonError> {
+    let transactions = checkpoint_store
+        .list_session_turn_transactions()
+        .map_err(|error| {
+            DaemonError::Session(format!(
+                "listing unfinished Session checkpoint transactions: {error}"
+            ))
+        })?;
+    let mut reconciled = 0_usize;
+    for transaction in transactions.into_iter().filter(|transaction| {
+        only_session.is_none_or(|session_id| transaction.session_id == session_id)
+    }) {
+        let canonical = turn_store.lock().await.get(&transaction.turn_id);
+        resolve_checkpoint_transaction(
+            checkpoint_store,
+            &transaction.session_id,
+            &transaction.turn_id,
+            canonical.as_ref(),
+        )
+        .await?;
+        reconciled = reconciled.saturating_add(1);
+    }
+    Ok(reconciled)
+}
+
+fn session_checkpoint_adoption_marker(session_id: &str) -> Vec<u8> {
+    format!("axocoatl-session-turn-checkpoint-v1\n{session_id}\n").into_bytes()
+}
+
+struct CoordinatorCheckpointAdoption<'a> {
+    agent_id: &'a str,
+    turns: Vec<SessionTurn>,
+    counter: &'a dyn TokenCounter,
+}
+
+async fn adopt_session_checkpoint_transactions(
+    data_root: &SecureDir,
+    store: &CheckpointStore,
+    session_id: &str,
+    coordinator: Option<CoordinatorCheckpointAdoption<'_>>,
+) -> Result<usize, DaemonError> {
+    let markers = data_root
+        .child(SESSION_CHECKPOINT_ADOPTION_ROOT)
+        .map_err(|error| DaemonError::Session(error.to_string()))?;
+    let marker_name = format!("{}.adopted", axocoatl_memory::storage_key(session_id));
+    let expected = session_checkpoint_adoption_marker(session_id);
+    if expected.len() > SESSION_CHECKPOINT_ADOPTION_MARKER_MAX_BYTES {
+        return Err(DaemonError::Session(format!(
+            "Session '{session_id}' is too long for a checkpoint-adoption marker"
+        )));
+    }
+    if markers
+        .is_file(&marker_name)
+        .map_err(|error| DaemonError::Session(error.to_string()))?
+    {
+        let found = markers
+            .read_limited(&marker_name, SESSION_CHECKPOINT_ADOPTION_MARKER_MAX_BYTES)
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        if found != expected {
+            return Err(DaemonError::Session(format!(
+                "checkpoint-adoption marker for Session '{session_id}' has an invalid identity"
+            )));
+        }
+        return Ok(0);
+    }
+
+    // Pre-transaction releases could leave a coordinated checkpoint ahead of
+    // canonical History after a crash or failed turn. On first adoption only,
+    // retain cumulative accounting but clear every Session-owned transcript
+    // and behavior payload, including coordinator and ad-hoc worker identities.
+    let sanitized = store
+        .sanitize_committed_session_prefix(session_id)
+        .await
+        .map_err(|error| DaemonError::Session(error.to_string()))?;
+    if let Some(coordinator) = coordinator {
+        let scoped = AgentId::new(format!("{session_id}:{}", coordinator.agent_id));
+        let previous = store
+            .load_latest(&scoped)
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        // A failed, interrupted, or cancelled request remains visible in
+        // canonical History, but it must not become the model's committed
+        // conversation baseline for a Coordinator. Only a completed result is
+        // safe to replay after private orchestration state is discarded.
+        let completed = coordinator
+            .turns
+            .into_iter()
+            .filter(|turn| turn.status == SessionTurnLifecycle::Completed)
+            .collect::<Vec<_>>();
+        if !completed.is_empty() {
+            let version = match previous.as_ref() {
+                Some(checkpoint) => checkpoint.version.checked_add(1).ok_or_else(|| {
+                    DaemonError::Session(format!(
+                        "Coordinator checkpoint for Session '{session_id}' cannot advance past version {}",
+                        checkpoint.version
+                    ))
+                })?,
+                None => 1,
+            };
+            let bounded = bounded_checkpoint_projection(
+                coordinator.counter,
+                &completed,
+                version,
+                scoped.to_string(),
+                unix_now(),
+                previous
+                    .as_ref()
+                    .map(|checkpoint| checkpoint.cumulative_token_usage.clone())
+                    .unwrap_or_default(),
+                previous
+                    .as_ref()
+                    .map(|checkpoint| checkpoint.cumulative_token_usage_known)
+                    .unwrap_or(true),
+                None,
+                false,
+            )
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
+            store
+                .save(&bounded.checkpoint)
+                .await
+                .map_err(|error| DaemonError::Session(error.to_string()))?;
+        }
+    }
+    // SecureDir::atomic_write fsyncs the marker before returning. A crash before
+    // this point reruns the idempotent sanitization and Coordinator rebuild; a
+    // crash after it can never reset a later safely committed checkpoint.
+    markers
+        .atomic_write(&marker_name, &expected)
+        .map_err(|error| DaemonError::Session(error.to_string()))?;
+    Ok(sanitized)
 }
 
 fn validate_rewind_agent(config: &AxocoatlConfig, agent_id: &str) -> Result<(), DaemonError> {
@@ -3451,17 +3682,19 @@ fn quarantine_invalid_loaded_sessions(
         .list()
         .into_iter()
         .filter_map(|session| {
-            let validation = validate_session_mode(config, &session.mode).and_then(|()| {
-                if let Some(runtime) = session.environment.runtime.as_ref() {
-                    if runtime.backend == "podman" && runtime.id != session.id {
-                        return Err(DaemonError::Session(format!(
-                            "persisted Podman runtime '{}' does not belong to Session '{}'",
-                            runtime.id, session.id
-                        )));
+            let validation = validate_persisted_session_structure(&session.mode)
+                .and_then(|()| validate_persisted_session_runtime_ownership(config, &session.mode))
+                .and_then(|()| {
+                    if let Some(runtime) = session.environment.runtime.as_ref() {
+                        if runtime.backend == "podman" && runtime.id != session.id {
+                            return Err(DaemonError::Session(format!(
+                                "persisted Podman runtime '{}' does not belong to Session '{}'",
+                                runtime.id, session.id
+                            )));
+                        }
                     }
-                }
-                Ok(())
-            });
+                    Ok(())
+                });
             validation.err().map(|error| (session.id, error))
         })
         .collect();
@@ -3553,8 +3786,14 @@ pub struct AxocoatlDaemon {
     /// Durable authorized project directories. Workspaces outlive their open
     /// Sessions and provide the stable owner/name shown in navigation.
     pub workspace_store: Arc<tokio::sync::Mutex<WorkspaceStore>>,
+    pub(crate) knowledge_stores:
+        StdMutex<HashMap<String, Arc<StdMutex<axocoatl_memory::knowledge::KnowledgeStore>>>>,
     /// Canonical, append-only user-visible Session conversation ledger.
-    pub session_turn_store: Arc<tokio::sync::Mutex<SessionTurnStore>>,
+    session_turn_store: Arc<tokio::sync::Mutex<SessionTurnStore>>,
+    /// Turn-scoped authority behind the internal multi-agent feedback tool.
+    /// Session actors outlive a turn, so the tool itself must not imply that a
+    /// revision route is active outside an exact coordinated generation.
+    coordination_signal_router: crate::session_coordination::CoordinationSignalRouter,
     /// Session-owned references to immutable blobs in [`Self::file_store`].
     pub session_attachment_store: Arc<tokio::sync::Mutex<SessionAttachmentStore>>,
     /// Persistent store for the retained lightweight-chat API (no directory or
@@ -3583,6 +3822,12 @@ pub struct AxocoatlDaemon {
     /// Live session isolation instances (local Podman container or remote
     /// microVM), keyed by session id. Trait-typed so the backend is pluggable.
     session_sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
+    /// Retain canonical and process ownership beyond an external check waiter.
+    session_dispatch_lifecycles: Arc<session_dispatch::SessionDispatchRegistry>,
+    session_team_work: StdMutex<axocoatl_session::team_work::TeamWorkInbox>,
+    session_team_work_runner: tokio::sync::Mutex<()>,
+    /// Serializes signal-field observation, deposits and dispatch records.
+    session_signal_fields: tokio::sync::Mutex<()>,
     /// Recovery-only primary handles used while resolving an Attempt set after
     /// restart. They must never enter the ordinary Ready fast path because
     /// they intentionally skip project setup.
@@ -3637,6 +3882,43 @@ pub struct AxocoatlDaemon {
     pub tool_executor: Arc<ToolExecutor>,
     shared_registry: Arc<axocoatl_memory::SharedBlockRegistry>,
     agent_handles: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    shutdown_join: tokio::sync::Mutex<()>,
+}
+
+struct RetainedAgentJoin<'a> {
+    handle: Option<tokio::task::JoinHandle<()>>,
+    registry: &'a StdMutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for RetainedAgentJoin<'_> {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            // Cancellation returns the exact pending join to its owner. This
+            // registry contains handles only; recover poison to retain them.
+            self.registry
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(handle);
+        }
+    }
+}
+
+async fn join_retained_agent_handles(
+    registry: &StdMutex<Vec<tokio::task::JoinHandle<()>>>,
+) -> Result<(), DaemonError> {
+    loop {
+        let handle = registry
+            .lock()
+            .map_err(|_| DaemonError::Session("Agent shutdown ownership registry failed".into()))?
+            .pop();
+        let Some(handle) = handle else { return Ok(()) };
+        let mut pending = RetainedAgentJoin {
+            handle: Some(handle),
+            registry,
+        };
+        let _ = pending.handle.as_mut().expect("pending Agent join").await;
+        pending.handle.take();
+    }
 }
 
 impl std::fmt::Debug for AxocoatlDaemon {
@@ -3705,6 +3987,9 @@ impl AxocoatlDaemon {
     pub fn begin_shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
         self.shutdown_state.send_replace(true);
+        if let Err(error) = self.session_dispatch_lifecycles.close_all_admission() {
+            tracing::error!(%error, "failed to fence registered Session repository work during shutdown");
+        }
     }
 
     pub fn request_shutdown(&self) {
@@ -4486,7 +4771,21 @@ impl AxocoatlDaemon {
         config: &AxocoatlConfig,
         data_root: &SecureDir,
     ) -> Result<(DataDirLease, String, SecureDir, bool), DaemonError> {
+        Self::acquire_data_dir_lease_and_reconcile_created(config, data_root, None).await
+    }
+
+    async fn acquire_data_dir_lease_and_reconcile_created(
+        config: &AxocoatlConfig,
+        data_root: &SecureDir,
+        created: Option<session_recovery::CreatedDataRoot>,
+    ) -> Result<(DataDirLease, String, SecureDir, bool), DaemonError> {
         let lease = DataDirLease::acquire(data_root)?;
+        let lease = match created {
+            Some(created) => created.upgrade(lease)?,
+            None => lease,
+        };
+        // Physical orphan cleanup remains first. Version-selected canonical
+        // recovery below prevents upgraded roots from reaching legacy writers.
         let runtime_authority = local_runtime_authority(data_root)?;
         let ipc_root = open_ipc_control_root()?;
         Self::reconcile_interrupted_runtimes_before_bootstrap(
@@ -4569,14 +4868,21 @@ impl AxocoatlDaemon {
         // workspace, MCP, or automation failure must not leave an interrupted
         // remote create or local container untouched until another restart.
         let data_dir = std::env::var("AXOCOATL_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
-        let secure_data_dir = SecureDir::open_or_create_all(&data_dir).map_err(|error| {
-            DaemonError::Session(format!(
-                "opening control-plane data directory '{data_dir}': {error}"
-            ))
-        })?;
+        let (secure_data_dir, created_data_root) =
+            session_recovery::open_data_root(Path::new(&data_dir))?;
         admit_and_restrict_data_root(&secure_data_dir)?;
         let (data_dir_lease, local_runtime_authority, ipc_root, local_cleanup_pending) =
-            Self::acquire_data_dir_lease_and_reconcile(&config, &secure_data_dir).await?;
+            Self::acquire_data_dir_lease_and_reconcile_created(
+                &config,
+                &secure_data_dir,
+                created_data_root,
+            )
+            .await?;
+
+        let upgraded_startup = matches!(
+            data_dir_lease.ownership,
+            axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(_)
+        );
 
         let counter: Arc<dyn TokenCounter> = Arc::new(
             ApproximateCounter::new()
@@ -4732,31 +5038,6 @@ impl AxocoatlDaemon {
             );
         }
 
-        // 7. Spawn agents (deferred from earlier so the hook registry exists)
-        let mut agent_handles = Vec::new();
-        for agent_yaml in &config.agents {
-            // Workers are spawned on demand by their coordinator, not as
-            // standalone top-level agents — skip them in the main spawn loop.
-            if matches!(agent_yaml.role, AgentRoleYaml::Worker) {
-                continue;
-            }
-            let handle = Self::spawn_agent(
-                agent_yaml,
-                &config,
-                &provider_registry,
-                &counter,
-                &checkpoint_store,
-                &tool_executor,
-                &shared_registry,
-                &agent_registry,
-                &hook_registry,
-                &stream_bus,
-                &secure_data_dir,
-            )
-            .await?;
-            agent_handles.push(handle);
-        }
-
         // 8. Set up the event lattice used by Skills, Automation triggers,
         //    webhooks, the recent-events API, and compatibility event frames.
         let event_lattice = Arc::new(EventLattice::new(256));
@@ -4770,6 +5051,14 @@ impl AxocoatlDaemon {
             // Preserve each agent's coordination metadata in the lattice.
             // Runtime execution is owned by sessions and AutomationStore; there
             // is no second config-owned activation runner.
+            if agent_yaml.activation_threshold.is_some() || agent_yaml.activation_decay.is_some() {
+                tracing::warn!(
+                    agent = %agent_yaml.id,
+                    "activation_threshold and activation_decay are deprecated: they tune the \
+                     process-wide event lattice, which does not start Session work. Use a \
+                     signal field route threshold and half-life instead"
+                );
+            }
             let (threshold, decay_rate) = lattice_params(agent_yaml);
             event_lattice.register_agent(agent_id, threshold, decay_rate);
         }
@@ -4825,9 +5114,18 @@ impl AxocoatlDaemon {
             let mut sessions = SessionStore::new_in_secure(&secure_data_dir, "sessions")
                 .map_err(|e| DaemonError::Session(e.to_string()))?;
             if let Err(e) = sessions.load_all() {
+                if upgraded_startup {
+                    return Err(DaemonError::Session(format!(
+                        "could not load canonical Session owners: {e}"
+                    )));
+                }
                 tracing::warn!(error = %e, "failed to load some sessions");
             }
-            let quarantined = quarantine_invalid_loaded_sessions(&config, &mut sessions);
+            let quarantined = if upgraded_startup {
+                0
+            } else {
+                quarantine_invalid_loaded_sessions(&config, &mut sessions)
+            };
             if quarantined > 0 {
                 tracing::warn!(
                     quarantined,
@@ -4839,28 +5137,30 @@ impl AxocoatlDaemon {
             workspaces
                 .load_all()
                 .map_err(|e| DaemonError::Session(format!("workspace store: {e}")))?;
-            let migration = migrate_sessions_to_workspaces(&mut sessions, &mut workspaces)
-                .map_err(|e| DaemonError::Session(format!("workspace migration: {e}")))?;
-            if migration.created_workspaces > 0 || migration.linked_sessions > 0 {
-                tracing::info!(
-                    created_workspaces = migration.created_workspaces,
-                    linked_sessions = migration.linked_sessions,
-                    "migrated path-owned Sessions to durable Workspaces"
-                );
-            }
-            let (migrated_podman, untracked_e2b) =
-                reconcile_legacy_runtime_identities(&mut sessions)?;
-            if migrated_podman > 0 {
-                tracing::info!(
-                    sessions = migrated_podman,
-                    "backfilled deterministic Podman runtime identities"
-                );
-            }
-            if untracked_e2b > 0 {
-                tracing::warn!(
+            if !upgraded_startup {
+                let migration = migrate_sessions_to_workspaces(&mut sessions, &mut workspaces)
+                    .map_err(|e| DaemonError::Session(format!("workspace migration: {e}")))?;
+                if migration.created_workspaces > 0 || migration.linked_sessions > 0 {
+                    tracing::info!(
+                        created_workspaces = migration.created_workspaces,
+                        linked_sessions = migration.linked_sessions,
+                        "migrated path-owned Sessions to durable Workspaces"
+                    );
+                }
+                let (migrated_podman, untracked_e2b) =
+                    reconcile_legacy_runtime_identities(&mut sessions)?;
+                if migrated_podman > 0 {
+                    tracing::info!(
+                        sessions = migrated_podman,
+                        "backfilled deterministic Podman runtime identities"
+                    );
+                }
+                if untracked_e2b > 0 {
+                    tracing::warn!(
                     sessions = untracked_e2b,
                     "failed legacy E2B Sessions closed because their remote cleanup identity was not persisted"
                 );
+                }
             }
 
             (
@@ -4874,16 +5174,23 @@ impl AxocoatlDaemon {
         // Startup must never leave a turn looking live when its executor died
         // with the prior process.
         let session_turn_store = {
-            let mut store =
+            let mut store = if upgraded_startup {
+                SessionTurnStore::open_read_only_in_secure(&secure_data_dir, "session-history")
+            } else {
                 SessionTurnStore::open_in_secure(&secure_data_dir, "session-history")
-                    .map_err(|e| DaemonError::Session(format!("session turn store: {e}")))?;
-            let interrupted = store
-                .reconcile_orphaned_running(
-                    "Axocoatl restarted before this Session turn reached a terminal state.",
-                )
-                .map_err(|e| {
-                    DaemonError::Session(format!("could not reconcile Session turns: {e}"))
-                })?;
+            }
+            .map_err(|e| DaemonError::Session(format!("session turn store: {e}")))?;
+            let interrupted = if upgraded_startup {
+                Vec::new()
+            } else {
+                store
+                    .reconcile_orphaned_running(
+                        "Axocoatl restarted before this Session turn reached a terminal state.",
+                    )
+                    .map_err(|e| {
+                        DaemonError::Session(format!("could not reconcile Session turns: {e}"))
+                    })?
+            };
             if !interrupted.is_empty() {
                 tracing::warn!(
                     interrupted_turns = interrupted.len(),
@@ -4892,6 +5199,72 @@ impl AxocoatlDaemon {
             }
             Arc::new(tokio::sync::Mutex::new(store))
         };
+
+        // A prior process may have died after the canonical terminal fsync but
+        // during checkpoint promotion/abort. Resolve every durable manifest
+        // from the exact Session ledger before any actor or checkpoint repair
+        // can observe committed cache state.
+        let reconciled_checkpoint_transactions = if upgraded_startup {
+            0
+        } else {
+            reconcile_checkpoint_transactions_from_ledger(
+                checkpoint_store.as_ref(),
+                session_turn_store.as_ref(),
+                None,
+            )
+            .await?
+        };
+        if reconciled_checkpoint_transactions > 0 {
+            tracing::warn!(
+                checkpoint_transactions = reconciled_checkpoint_transactions,
+                "reconciled Session checkpoint transactions from the canonical turn ledger"
+            );
+        }
+        let mut sanitized_legacy_checkpoints = 0_usize;
+        for session in session_store.lock().await.list() {
+            if upgraded_startup {
+                continue;
+            }
+            if !session_uses_checkpoint_transaction(&config, &session.mode) {
+                continue;
+            }
+            let coordinator =
+                if let Some(agent_id) = single_agent_coordinator_id(&config, &session.mode) {
+                    // A legacy SingleAgent Coordinator owned valid conversation
+                    // before transaction manifests existed. Import it to canonical
+                    // History before prefix sanitization can discard the only copy.
+                    Self::migrate_session_turns_from_checkpoint(
+                        &session,
+                        counter.as_ref(),
+                        checkpoint_store.as_ref(),
+                        session_turn_store.as_ref(),
+                        false,
+                    )
+                    .await?;
+                    Some(CoordinatorCheckpointAdoption {
+                        agent_id,
+                        turns: session_turn_store.lock().await.list(&session.id),
+                        counter: counter.as_ref(),
+                    })
+                } else {
+                    None
+                };
+            sanitized_legacy_checkpoints = sanitized_legacy_checkpoints.saturating_add(
+                adopt_session_checkpoint_transactions(
+                    &secure_data_dir,
+                    checkpoint_store.as_ref(),
+                    &session.id,
+                    coordinator,
+                )
+                .await?,
+            );
+        }
+        if sanitized_legacy_checkpoints > 0 {
+            tracing::warn!(
+                sanitized_legacy_checkpoints,
+                "sanitized legacy coordinated checkpoint caches before transaction adoption"
+            );
+        }
         let session_attachment_store = Arc::new(tokio::sync::Mutex::new(
             SessionAttachmentStore::open_in_secure(&secure_data_dir, "session-history")
                 .map_err(|e| DaemonError::Session(format!("session attachment store: {e}")))?,
@@ -4911,7 +5284,9 @@ impl AxocoatlDaemon {
                 .flat_map(|session| turns.list_including_superseded(&session.id))
                 .collect()
         };
-        let repaired_attachment_pins = {
+        let repaired_attachment_pins = if upgraded_startup {
+            0
+        } else {
             let mut attachments = session_attachment_store.lock().await;
             reconcile_session_attachment_pins(&accepted_turns, &mut attachments)?
         };
@@ -4929,6 +5304,15 @@ impl AxocoatlDaemon {
         // so legacy checkpoints remain available for one-time migration.
         let mut repaired_checkpoints = 0_usize;
         for session in session_store.lock().await.list() {
+            if upgraded_startup {
+                continue;
+            }
+            if session_uses_checkpoint_transaction(&config, &session.mode) {
+                // A transaction-enabled Coordinator or multi-Agent Session
+                // owns per-identity causal state. Never replace it with the
+                // aggregate single-Agent projection below.
+                continue;
+            }
             let agent_id = match &session.mode {
                 SessionMode::SingleAgent { agent_id } => agent_id,
                 SessionMode::Lattice { .. } | SessionMode::Custom { .. } => continue,
@@ -5091,6 +5475,93 @@ impl AxocoatlDaemon {
 
         tracing::info!(agents = config.agents.len(), "Axocoatl daemon bootstrapped");
 
+        let session_dispatch_lifecycles = Arc::new(
+            session_dispatch::SessionDispatchRegistry::with_hooks(hook_registry.clone()),
+        );
+        if let axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(ownership) =
+            &data_dir_lease.ownership
+        {
+            let recovered = if let Some(prepared) =
+                session_migration::PreparedStartupMigration::load_existing(
+                    &secure_data_dir,
+                    checkpoint_store.as_ref(),
+                )? {
+                prepared
+                    .resume(
+                        ownership.clone(),
+                        &secure_data_dir,
+                        checkpoint_store.as_ref(),
+                        &agent_registry,
+                        active_session_turns.as_ref(),
+                        session_dispatch_lifecycles.as_ref(),
+                        &|text| counter.count_text(text),
+                    )
+                    .await?
+            } else {
+                session_recovery::recover_sessions(
+                    ownership.clone(),
+                    &session_store.lock().await.list(),
+                    session_dispatch_lifecycles.as_ref(),
+                )?
+            };
+            tracing::info!(
+                sessions = recovered,
+                "recovered canonical Session history without replaying execution"
+            );
+        }
+
+        let work_marker = "team-work.initialized.v1";
+        let work_dir = match secure_data_dir.read_limited(work_marker, 16) {
+            Ok(bytes) if bytes == b"1\n" => secure_data_dir.existing_child("team-work"),
+            Ok(_) => {
+                return Err(DaemonError::SessionConflict(
+                    "Invalid standing work initialization evidence".into(),
+                ))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                secure_data_dir.child("team-work")
+            }
+            Err(error) => return Err(DaemonError::SessionConflict(error.to_string())),
+        }
+        .map_err(|error| DaemonError::SessionConflict(error.to_string()))?;
+        work_dir
+            .restrict_owner_only()
+            .map_err(|error| DaemonError::SessionConflict(error.to_string()))?;
+        work_dir
+            .sync_all()
+            .and_then(|_| secure_data_dir.sync_all())
+            .map_err(|error| DaemonError::SessionConflict(error.to_string()))?;
+        let session_team_work = axocoatl_session::team_work::TeamWorkInbox::open(work_dir.path())
+            .map_err(|error| DaemonError::SessionConflict(error.to_string()))?;
+        secure_data_dir
+            .atomic_write(work_marker, b"1\n")
+            .map_err(|error| DaemonError::SessionConflict(error.to_string()))?;
+
+        // 7. Spawn agents (deferred from earlier so the hook registry exists)
+        let mut agent_handles = Vec::new();
+        for agent_yaml in &config.agents {
+            // Workers are spawned on demand by their coordinator, not as
+            // standalone top-level agents — skip them in the main spawn loop.
+            if matches!(agent_yaml.role, AgentRoleYaml::Worker) {
+                continue;
+            }
+            let handle = Self::spawn_agent(
+                agent_yaml,
+                &config,
+                &provider_registry,
+                &counter,
+                &checkpoint_store,
+                &tool_executor,
+                &shared_registry,
+                &agent_registry,
+                &hook_registry,
+                &stream_bus,
+                &secure_data_dir,
+            )
+            .await?;
+            agent_handles.push(handle);
+        }
+
         let daemon = Self {
             config,
             data_dir: data_dir.clone(),
@@ -5113,7 +5584,10 @@ impl AxocoatlDaemon {
             proactive_table: Arc::new(std::sync::Mutex::new(Vec::new())),
             session_store,
             workspace_store,
+            knowledge_stores: StdMutex::new(HashMap::new()),
             session_turn_store,
+            coordination_signal_router:
+                crate::session_coordination::CoordinationSignalRouter::default(),
             session_attachment_store,
             chat_store,
             file_store,
@@ -5126,6 +5600,10 @@ impl AxocoatlDaemon {
             pending_interrupts,
             run_store,
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            session_dispatch_lifecycles,
+            session_team_work: StdMutex::new(session_team_work),
+            session_team_work_runner: tokio::sync::Mutex::new(()),
+            session_signal_fields: tokio::sync::Mutex::new(()),
             attempt_recovery_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             sandbox_starts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             runtime_admission: Arc::new(tokio::sync::RwLock::new(())),
@@ -5139,9 +5617,12 @@ impl AxocoatlDaemon {
             tool_executor,
             shared_registry,
             agent_handles: std::sync::Mutex::new(agent_handles),
+            shutdown_join: tokio::sync::Mutex::new(()),
         };
         daemon
-            .reconcile_persisted_session_runtimes_on_startup(reattach_active_ready)
+            .reconcile_persisted_session_runtimes_on_startup(
+                reattach_active_ready && !upgraded_startup,
+            )
             .await;
         Ok(daemon)
     }
@@ -5660,14 +6141,10 @@ impl AxocoatlDaemon {
     pub async fn restart_agent(&self, agent_id: &str) -> Result<(), DaemonError> {
         let id = AgentId::new(agent_id);
 
-        let agent_yaml = self
-            .config
-            .agents
-            .iter()
-            .find(|a| a.id == agent_id)
-            .ok_or_else(|| {
-                DaemonError::AgentSpawn(format!("Agent '{agent_id}' is not in the config"))
-            })?;
+        // Resolve role ownership before touching a registry entry. In
+        // particular, a caller cannot stop a Session-scoped actor or a live
+        // Coordinator Worker by addressing its runtime ID here.
+        let agent_yaml = require_configured_executable_agent(&self.config, agent_id)?;
 
         // Stop the old actor and wait for full termination. ractor's name
         // registry holds the actor name until the actor genuinely stops; a new
@@ -5702,6 +6179,50 @@ impl AxocoatlDaemon {
 
         tracing::info!(agent = %agent_id, "Agent restarted");
         Ok(())
+    }
+
+    /// Apply one fully validated in-memory Agent edit and, when requested,
+    /// rebuild every idle runtime that inherited that Agent template.
+    ///
+    /// Callers must hold their exclusive daemon ownership for this entire
+    /// operation. The server does so with its `AppState` write guard, which
+    /// prevents a new Session/Agent execution from opening between retirement
+    /// and restart. An already-active exact Session actor is still rejected
+    /// explicitly before either config or actor ownership changes.
+    pub async fn apply_agent_config_update(
+        &mut self,
+        agent_id: &str,
+        next_config: AxocoatlConfig,
+        restart_now: bool,
+    ) -> Result<bool, DaemonError> {
+        axocoatl_config::validate_config(&next_config)?;
+        require_configured_executable_agent(&next_config, agent_id)?;
+
+        if !restart_now {
+            self.config = next_config;
+            return Ok(false);
+        }
+
+        let mut session_ids = self
+            .session_store
+            .lock()
+            .await
+            .list()
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<Vec<_>>();
+        session_ids.sort();
+        Self::retire_idle_session_agent_instances(
+            &self.agent_registry,
+            &self.active_session_turns,
+            &session_ids,
+            agent_id,
+        )
+        .await?;
+
+        self.config = next_config;
+        self.restart_agent(agent_id).await?;
+        Ok(true)
     }
 
     /// Configured agents whose actor is no longer running (crashed or stopped).
@@ -5862,23 +6383,35 @@ impl AxocoatlDaemon {
         agent_id: &str,
         input: axocoatl_core::AgentInput,
     ) -> Result<MeasuredDaemonOutput, MeasuredDaemonFailure> {
-        let id = AgentId::new(agent_id);
-        let actor = self.agent_registry.get(&id).await.ok_or_else(|| {
-            MeasuredDaemonFailure::known_zero(DaemonError::AgentSpawn(format!(
-                "Agent '{agent_id}' not found"
-            )))
-        })?;
-
-        let measured = axocoatl_actor::execute_agent_measured(&actor, input)
+        execute_configured_agent_input_measured(&self.config, &self.agent_registry, agent_id, input)
             .await
-            .map_err(MeasuredDaemonFailure::from_agent)?;
-        let mut output = measured.outcome.into_output();
-        output.token_usage = measured.token_usage.usage;
+    }
 
-        Ok(MeasuredDaemonOutput {
-            output,
-            token_usage_known: measured.token_usage.complete,
-        })
+    /// Config-owned IDs exposed by generic Agent status/restart surfaces.
+    /// Runtime-scoped Session and Coordinator Worker actors stay private to
+    /// their owning Session or Automation execution boundary.
+    pub fn configured_executable_agent_ids(&self) -> Vec<String> {
+        self.config
+            .agents
+            .iter()
+            .filter(|agent| !matches!(agent.role, AgentRoleYaml::Worker))
+            .map(|agent| agent.id.clone())
+            .collect()
+    }
+
+    pub async fn configured_agent_status(
+        &self,
+        agent_id: &str,
+    ) -> Result<axocoatl_core::AgentStatus, DaemonError> {
+        require_configured_executable_agent(&self.config, agent_id)?;
+        let actor = self
+            .agent_registry
+            .get(&AgentId::new(agent_id))
+            .await
+            .ok_or_else(|| DaemonError::AgentSpawn(format!("Agent '{agent_id}' not found")))?;
+        axocoatl_actor::get_agent_status(&actor)
+            .await
+            .map_err(|error| DaemonError::AgentSpawn(format!("Agent '{agent_id}': {error}")))
     }
 
     // ── Directory sessions ──────────────────────────────────────────────
@@ -6019,23 +6552,51 @@ impl AxocoatlDaemon {
                 "attempt set '{set_id}' in session '{owner}' owns this Workspace; keep or discard it before opening another Session"
             )));
         }
-        let session = self
-            .session_store
-            .lock()
-            .await
-            .create_with_environment(
-                name,
-                &workspace.id,
-                &workspace.canonical_path,
-                mode,
-                enabled_skills,
-                exposed_ports,
-                image,
-                setup_command,
-                setup_approved,
-                setup_reviewed,
-            )
-            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        let session = {
+            let mut sessions = self.session_store.lock().await;
+            match &self._data_dir_lease.ownership {
+                axocoatl_session::execution_ownership::DataRootFormatOwnership::Legacy(_) => {
+                    sessions
+                        .create_with_environment(
+                            name,
+                            &workspace.id,
+                            &workspace.canonical_path,
+                            mode,
+                            enabled_skills,
+                            exposed_ports,
+                            image,
+                            setup_command,
+                            setup_approved,
+                            setup_reviewed,
+                        )
+                        .map_err(|error| DaemonError::Session(error.to_string()))?
+                }
+                axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(
+                    ownership,
+                ) => {
+                    let (session, receipt) = sessions
+                        .create_native_with_environment(
+                            ownership,
+                            name,
+                            &workspace.id,
+                            &workspace.canonical_path,
+                            mode,
+                            enabled_skills,
+                            exposed_ports,
+                            image,
+                            setup_command,
+                            setup_approved,
+                            setup_reviewed,
+                        )
+                        .map_err(|error| DaemonError::Session(error.to_string()))?;
+                    // Retain native provenance and owned child stores before
+                    // an environment preparation await can lose this caller.
+                    self.session_dispatch_lifecycles
+                        .retain_native_session(ownership.clone(), receipt)?;
+                    session
+                }
+            }
+        };
         self.prepare_new_session_environment(session).await
     }
 
@@ -6074,23 +6635,51 @@ impl AxocoatlDaemon {
             .await
             .touch(workspace_id)
             .map_err(|error| DaemonError::Session(error.to_string()))?;
-        let session = self
-            .session_store
-            .lock()
-            .await
-            .create_with_environment(
-                name,
-                workspace_id,
-                &workspace.canonical_path,
-                mode,
-                enabled_skills,
-                exposed_ports,
-                image,
-                setup_command,
-                setup_approved,
-                setup_reviewed,
-            )
-            .map_err(|error| DaemonError::Session(error.to_string()))?;
+        let session = {
+            let mut sessions = self.session_store.lock().await;
+            match &self._data_dir_lease.ownership {
+                axocoatl_session::execution_ownership::DataRootFormatOwnership::Legacy(_) => {
+                    sessions
+                        .create_with_environment(
+                            name,
+                            workspace_id,
+                            &workspace.canonical_path,
+                            mode,
+                            enabled_skills,
+                            exposed_ports,
+                            image,
+                            setup_command,
+                            setup_approved,
+                            setup_reviewed,
+                        )
+                        .map_err(|error| DaemonError::Session(error.to_string()))?
+                }
+                axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(
+                    ownership,
+                ) => {
+                    let (session, receipt) = sessions
+                        .create_native_with_environment(
+                            ownership,
+                            name,
+                            workspace_id,
+                            &workspace.canonical_path,
+                            mode,
+                            enabled_skills,
+                            exposed_ports,
+                            image,
+                            setup_command,
+                            setup_approved,
+                            setup_reviewed,
+                        )
+                        .map_err(|error| DaemonError::Session(error.to_string()))?;
+                    // Retain native provenance and owned child stores before
+                    // an environment preparation await can lose this caller.
+                    self.session_dispatch_lifecycles
+                        .retain_native_session(ownership.clone(), receipt)?;
+                    session
+                }
+            }
+        };
         self.prepare_new_session_environment(session).await
     }
 
@@ -6213,10 +6802,10 @@ impl AxocoatlDaemon {
         let operation = self.attempt_operation(session_id).await;
         let _operation = operation.lock().await;
         let turns = self
-            .session_turn_store
-            .lock()
-            .await
-            .list_including_superseded(session_id);
+            .session_history_snapshot(session_id)
+            .await?
+            .legacy_rows(HistoryVisibility::IncludingSuperseded)
+            .map_err(|error| DaemonError::Session(error.to_string()))?;
         let used_by_turn = session_attachment_used_by_turn(&turns, reference_id);
         let mut attachments = self.session_attachment_store.lock().await;
         apply_session_attachment_detach(&mut attachments, session_id, reference_id, used_by_turn)
@@ -6254,10 +6843,20 @@ impl AxocoatlDaemon {
         // than silently waiting for the whole provider/tool run to finish and
         // then surprise-closing the Session.
         self.request_session_turn_stop(id, None).await?;
-        let current_set = self.peek_current_attempt_set(id).await?.map(|set| set.id);
-        let (_operation, _cancellation_requested) = self
-            .lock_attempt_operation_for_cleanup(id, current_set.as_deref())
+        let mut dispatch_cleanup = self
+            .session_dispatch_lifecycles
+            .prepare_session_cleanup(id, SESSION_DISPATCH_CLEANUP_TIMEOUT)
             .await?;
+        let current_set = self.peek_current_attempt_set(id).await?.map(|set| set.id);
+        let (_operation, _cancellation_requested) = match dispatch_cleanup.take_operation() {
+            Some(operation) => (operation, false),
+            None => {
+                let (operation, cancellation_requested) = self
+                    .lock_attempt_operation_for_cleanup(id, current_set.as_deref())
+                    .await?;
+                (operation.into(), cancellation_requested)
+            }
+        };
         let start = {
             let mut starts = self.sandbox_starts.lock().await;
             starts
@@ -6290,7 +6889,23 @@ impl AxocoatlDaemon {
         if let Some(set_id) = current_set {
             self.clear_attempt_cancellation(id, &set_id).await;
         }
-        result
+        result?;
+        let closed = if self.uses_native_session_history() {
+            Some(
+                self.get_session(id)
+                    .await
+                    .ok_or_else(|| DaemonError::Session(format!("session '{id}' not found")))?,
+            )
+        } else {
+            None
+        };
+        self.session_dispatch_lifecycles
+            .complete_session_cleanup(&dispatch_cleanup)?;
+        drop(dispatch_cleanup);
+        if let Some(closed) = closed {
+            self.restore_native_lifecycle_history(&closed, true)?;
+        }
+        Ok(())
     }
 
     /// Explicitly reopen a closed Session. Ordinary Files/Git/Terminal/turn
@@ -6299,6 +6914,8 @@ impl AxocoatlDaemon {
     /// Close and runtime creation.
     pub async fn reopen_session(&self, id: &str) -> Result<Session, DaemonError> {
         self.require_runtime_admission()?;
+        self.session_dispatch_lifecycles
+            .require_session_reopenable(id)?;
         let operation = self.attempt_operation(id).await;
         let _operation = operation.lock().await;
         self.require_no_unresolved_attempt(id).await?;
@@ -6313,6 +6930,14 @@ impl AxocoatlDaemon {
         self.require_runtime_admission()?;
         self.require_no_unresolved_attempt(id).await?;
         self.touch_session(id).await?;
+        self.session_dispatch_lifecycles.reopen_session(id)?;
+        if self.uses_native_session_history() {
+            let current = self
+                .get_session(id)
+                .await
+                .ok_or_else(|| DaemonError::Session(format!("session '{id}' not found")))?;
+            self.restore_native_lifecycle_history(&current, false)?;
+        }
         let reopened = self
             .get_session(id)
             .await
@@ -6333,6 +6958,19 @@ impl AxocoatlDaemon {
     /// left in place; a user that creates a new session pointing at the same
     /// directory gets a fresh memory slate (different session id).
     pub async fn delete_session(&self, id: &str) -> Result<(), DaemonError> {
+        let native = self.uses_native_session_history();
+        if native {
+            if self.get_session(id).await.is_some() {
+                if let Some(set) = self.peek_current_attempt_set(id).await? {
+                    self.discard_attempt(id, &set.id).await?;
+                }
+                if let Some(active) = self.active_session_turn(id).await? {
+                    self.stop_session_turn(id, &active.turn_id).await?;
+                }
+            }
+        } else {
+            self.require_legacy_history_mutation(id, HistoryMutation::DeleteSession)?;
+        }
         // Ask a live turn to stop before waiting for the Session operation
         // lease it owns. This preserves tool safe-boundary semantics without a
         // deletion deadlock.
@@ -6340,13 +6978,19 @@ impl AxocoatlDaemon {
         if let Some(active) = active {
             self.stop_session_turn(id, &active.turn_id).await?;
         }
+        let mut dispatch_cleanup = self
+            .session_dispatch_lifecycles
+            .prepare_session_cleanup(id, SESSION_DISPATCH_CLEANUP_TIMEOUT)
+            .await?;
         // Owner-first deletion can return after the owner was durably removed
         // but before history/relation cleanup completed. Retrying that exact
         // deletion must finish the idempotent cleanup instead of failing the
         // missing-owner lookup.
         if self.get_session(id).await.is_none() {
-            let operation = self.attempt_operation(id).await;
-            let _operation = operation.lock().await;
+            let _operation = match dispatch_cleanup.take_operation() {
+                Some(operation) => operation,
+                None => self.attempt_operation(id).await.lock_owned().await.into(),
+            };
             if self.config.sandbox.backend != "e2b" {
                 SessionSandbox::remove_named_with_dependencies(id)
                     .await
@@ -6354,23 +6998,32 @@ impl AxocoatlDaemon {
             }
             self.session_sandboxes.lock().await.remove(id);
             self.attempt_recovery_sandboxes.lock().await.remove(id);
-            self.session_turn_store
-                .lock()
-                .await
-                .delete_session(id)
-                .map_err(|error| DaemonError::Session(error.to_string()))?;
+            if !native {
+                self.legacy_session_history_writer(id, HistoryMutation::DeleteSession)
+                    .await?
+                    .delete_session(id)
+                    .map_err(|error| DaemonError::Session(error.to_string()))?;
+            }
             self.session_attachment_store
                 .lock()
                 .await
                 .delete_session(id)
                 .map_err(|error| DaemonError::Session(error.to_string()))?;
-            return Ok(());
+            self.session_dispatch_lifecycles
+                .complete_session_cleanup(&dispatch_cleanup)?;
+            return self.session_dispatch_lifecycles.forget_deleted_session(id);
         }
         let current_set = self.peek_current_attempt_set(id).await?.map(|set| set.id);
-        let (_operation, _cancellation_requested) = self
-            .lock_attempt_operation_for_cleanup(id, current_set.as_deref())
-            .await?;
-        let result = async {
+        let (_operation, _cancellation_requested) = match dispatch_cleanup.take_operation() {
+            Some(operation) => (operation, false),
+            None => {
+                let (operation, cancellation_requested) = self
+                    .lock_attempt_operation_for_cleanup(id, current_set.as_deref())
+                    .await?;
+                (operation.into(), cancellation_requested)
+            }
+        };
+        let result: Result<(), DaemonError> = async {
             self.remove_variant_worktrees_locked(id).await?;
             let start = {
                 let mut starts = self.sandbox_starts.lock().await;
@@ -6399,11 +7052,15 @@ impl AxocoatlDaemon {
                 .await
                 .remove(id)
                 .map_err(|e| DaemonError::Session(e.to_string()))?;
-            self.session_turn_store
-                .lock()
-                .await
-                .delete_session(id)
-                .map_err(|e| DaemonError::Session(e.to_string()))?;
+            // Native raw journals and artifacts remain immutable, matching
+            // retained memory policy. Removing the Session owner makes their
+            // former product references explicitly unavailable.
+            if !native {
+                self.legacy_session_history_writer(id, HistoryMutation::DeleteSession)
+                    .await?
+                    .delete_session(id)
+                    .map_err(|e| DaemonError::Session(e.to_string()))?;
+            }
             let _detached = self
                 .session_attachment_store
                 .lock()
@@ -6416,7 +7073,10 @@ impl AxocoatlDaemon {
         if let Some(set_id) = current_set {
             self.clear_attempt_cancellation(id, &set_id).await;
         }
-        result
+        result?;
+        self.session_dispatch_lifecycles
+            .complete_session_cleanup(&dispatch_cleanup)?;
+        self.session_dispatch_lifecycles.forget_deleted_session(id)
     }
 
     async fn cleanup_session_runtime_checked(
@@ -6630,6 +7290,18 @@ impl AxocoatlDaemon {
     /// unresolved attempt transaction. It must never survive resolution and
     /// later masquerade as the Session's prepared runtime.
     async fn stop_attempt_recovery_sandbox_checked(&self, id: &str) -> Result<(), DaemonError> {
+        // Workspace settlement can make the UI restore its normal runtime
+        // before this final cleanup runs. Share that restoration's exact start
+        // gate, then read the cache: a handle already replaced by restoration
+        // must not cause name-based removal of the newly prepared sandbox.
+        let start = {
+            let mut starts = self.sandbox_starts.lock().await;
+            starts
+                .entry(id.to_owned())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _start = start.lock().await;
         let recovery = self
             .attempt_recovery_sandboxes
             .lock()
@@ -6655,57 +7327,231 @@ impl AxocoatlDaemon {
     }
 
     async fn stop_session_actors_checked(&self, session_id: &str) -> Result<(), DaemonError> {
-        let prefix = format!("{session_id}:");
-        let actor_ids: Vec<AgentId> = self
-            .agent_registry
-            .list_ids()
-            .await
-            .into_iter()
-            .filter(|id| id.to_string().starts_with(&prefix))
-            .collect();
-        let mut shutdowns = tokio::task::JoinSet::new();
-        for actor_id in &actor_ids {
-            let Some(actor) = self.agent_registry.get(actor_id).await else {
-                continue;
-            };
-            let label = actor_id.to_string();
-            shutdowns.spawn(async move {
-                if matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
-                    return (label, Ok(()));
-                }
-                let graceful = actor
-                    .stop_and_wait(None, Some(Duration::from_secs(10)))
-                    .await;
-                if graceful.is_ok() || matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
-                    return (label, Ok(()));
-                }
-                let forced = actor.kill_and_wait(Some(Duration::from_secs(5))).await;
-                if forced.is_err() && matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
-                    (label, Ok(()))
-                } else {
-                    (label, forced.map_err(|error| error.to_string()))
-                }
-            });
-        }
-        let mut failures = Vec::new();
-        while let Some(result) = shutdowns.join_next().await {
+        let result = self.stop_session_actor_instances_checked(session_id).await;
+        self.stream_bus.remove_run(session_id);
+        result
+    }
+
+    async fn apply_session_actor_shutdown_results(
+        registry: &AgentRegistry,
+        shutdowns: Vec<(AgentId, ractor::ActorId, Result<(), String>)>,
+        mut failures: Vec<String>,
+    ) -> Result<(), DaemonError> {
+        for (actor, runtime_id, result) in shutdowns {
             match result {
-                Ok((_, Ok(()))) => {}
-                Ok((actor, Err(error))) => {
+                Ok(()) => {
+                    if registry
+                        .get(&actor)
+                        .await
+                        .is_some_and(|registered| registered.get_id() == runtime_id)
+                    {
+                        registry.remove(&actor).await;
+                    }
+                }
+                Err(error) => {
                     failures.push(format!("session actor '{actor}' did not stop: {error}"));
                 }
-                Err(error) => failures.push(format!("session actor shutdown failed: {error}")),
             }
         }
-        for actor_id in actor_ids {
-            self.agent_registry.remove(&actor_id).await;
-        }
-        self.stream_bus.remove_run(session_id);
         if failures.is_empty() {
             Ok(())
         } else {
             Err(DaemonError::Session(failures.join("; ")))
         }
+    }
+
+    async fn session_actor_instances(
+        registry: &AgentRegistry,
+        session_id: &str,
+    ) -> Vec<(AgentId, ractor::ActorCell)> {
+        let prefix = format!("{session_id}:");
+        let mut actors = HashMap::new();
+        for actor_id in registry
+            .list_ids()
+            .await
+            .into_iter()
+            .filter(|id| id.to_string().starts_with(&prefix))
+        {
+            if let Some(actor) = registry.get(&actor_id).await {
+                let cell = actor.get_cell();
+                actors.entry(cell.get_id()).or_insert((actor_id, cell));
+            }
+        }
+        // Coordinator Workers are named with their Session-scoped runtime id
+        // but historically were not members of AgentRegistry. The ractor
+        // registry is therefore part of the ownership boundary, not merely a
+        // diagnostic index. Insert it second so a daemon-registry identity is
+        // retained for exact removal when both registries reference one actor.
+        for name in ractor::registry::registered()
+            .into_iter()
+            .filter(|name| name.starts_with(&prefix))
+        {
+            if let Some(cell) = ractor::registry::where_is(name.clone()) {
+                actors
+                    .entry(cell.get_id())
+                    .or_insert_with(|| (AgentId::new(name), cell));
+            }
+        }
+        actors.into_values().collect()
+    }
+
+    /// Stop and forget every actor scoped to one Session without removing its
+    /// folded stream state. Turn finalization uses this after resolving the
+    /// checkpoint transaction but before releasing live ownership, so a
+    /// reconnect can still hydrate the durable coordination result.
+    async fn stop_session_actor_instances_checked(
+        &self,
+        session_id: &str,
+    ) -> Result<(), DaemonError> {
+        Self::stop_session_actor_instances_with(
+            &self.agent_registry,
+            session_id,
+            |_, actor| async move {
+                if matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+                    return Ok(());
+                }
+                let graceful = actor
+                    .stop_and_wait(None, Some(Duration::from_secs(10)))
+                    .await;
+                if graceful.is_ok() || matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+                    return Ok(());
+                }
+                let forced = actor.kill_and_wait(Some(Duration::from_secs(5))).await;
+                if forced.is_err() && matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+                    Ok(())
+                } else {
+                    forced.map_err(|error| error.to_string())
+                }
+            },
+        )
+        .await
+    }
+
+    async fn stop_session_actor_instances_with<F, Fut>(
+        registry: &AgentRegistry,
+        session_id: &str,
+        stop_actor: F,
+    ) -> Result<(), DaemonError>
+    where
+        F: Fn(AgentId, ractor::ActorCell) -> Fut,
+        Fut: Future<Output = Result<(), String>> + Send + 'static,
+    {
+        let prefix = format!("{session_id}:");
+        for _ in 0..SESSION_ACTOR_DRAIN_ROUNDS {
+            let actors = Self::session_actor_instances(registry, session_id).await;
+            if actors.is_empty() {
+                return Ok(());
+            }
+            let mut shutdowns = tokio::task::JoinSet::new();
+            for (actor_id, actor) in actors {
+                let runtime_id = actor.get_id();
+                let stop = stop_actor(actor_id.clone(), actor);
+                shutdowns.spawn(async move {
+                    let result = stop.await;
+                    (actor_id, runtime_id, result)
+                });
+            }
+            let mut settled = Vec::new();
+            let mut failures = Vec::new();
+            while let Some(result) = shutdowns.join_next().await {
+                match result {
+                    Ok(result) => settled.push(result),
+                    Err(error) => failures.push(format!("session actor shutdown failed: {error}")),
+                }
+            }
+            Self::apply_session_actor_shutdown_results(registry, settled, failures).await?;
+        }
+        if Self::session_actor_instances(registry, session_id)
+            .await
+            .is_empty()
+        {
+            return Ok(());
+        }
+        Err(DaemonError::Session(format!(
+            "Session actor prefix '{prefix}' did not quiesce after {SESSION_ACTOR_DRAIN_ROUNDS} bounded drain rounds"
+        )))
+    }
+
+    async fn stop_session_agent_actor_checked(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+    ) -> Result<(), DaemonError> {
+        let scoped = AgentId::new(format!("{session_id}:{agent_id}"));
+        let Some(actor) = self.agent_registry.get(&scoped).await else {
+            return Ok(());
+        };
+        if !matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+            let graceful = actor
+                .stop_and_wait(None, Some(Duration::from_secs(10)))
+                .await;
+            if graceful.is_err() && !matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+                actor
+                    .kill_and_wait(Some(Duration::from_secs(5)))
+                    .await
+                    .map_err(|error| {
+                        DaemonError::Session(format!(
+                            "Session actor '{scoped}' did not stop before its execution boundary was rebuilt: {error}"
+                        ))
+                    })?;
+            }
+        }
+        self.agent_registry.remove(&scoped).await;
+        Ok(())
+    }
+
+    /// Retire only the exact `{session}:{template}` actors affected by a live
+    /// Agent edit. Coordinator workers and Ways have longer scoped identities
+    /// and remain owned by their respective runtimes.
+    async fn retire_idle_session_agent_instances(
+        registry: &AgentRegistry,
+        active_session_turns: &tokio::sync::Mutex<HashMap<String, ActiveSessionTurn>>,
+        session_ids: &[String],
+        agent_id: &str,
+    ) -> Result<(), DaemonError> {
+        let mut targets = Vec::new();
+        for session_id in session_ids {
+            let scoped = AgentId::new(format!("{session_id}:{agent_id}"));
+            if registry.get(&scoped).await.is_some() {
+                targets.push((session_id.clone(), scoped));
+            }
+        }
+
+        {
+            let active = active_session_turns.lock().await;
+            if let Some((session_id, _)) = targets
+                .iter()
+                .find(|(session_id, _)| active.contains_key(session_id))
+            {
+                return Err(DaemonError::SessionConflict(format!(
+                    "session '{session_id}' is actively using Agent '{agent_id}'; wait for its current turn before applying this Agent update"
+                )));
+            }
+        }
+
+        for (_, scoped) in targets {
+            let Some(actor) = registry.get(&scoped).await else {
+                continue;
+            };
+            if !matches!(actor.get_status(), ractor::ActorStatus::Stopped) {
+                let graceful = actor
+                    .stop_and_wait(None, Some(Duration::from_secs(10)))
+                    .await;
+                if graceful.is_err() && !matches!(actor.get_status(), ractor::ActorStatus::Stopped)
+                {
+                    actor
+                        .kill_and_wait(Some(Duration::from_secs(5)))
+                        .await
+                        .map_err(|error| {
+                            DaemonError::Session(format!(
+                                "Session actor '{scoped}' did not stop before its Agent template was updated: {error}"
+                            ))
+                        })?;
+                }
+            }
+            registry.remove(&scoped).await;
+        }
+        Ok(())
     }
 
     /// Set the session's check command. `None` or empty clears it.
@@ -6732,6 +7578,18 @@ impl AxocoatlDaemon {
         setup_approved: bool,
         setup_reviewed: bool,
     ) -> Result<Session, DaemonError> {
+        if self.uses_native_session_history() {
+            return self
+                .configure_native_session_environment(
+                    id,
+                    image,
+                    setup_command,
+                    setup_approved,
+                    setup_reviewed,
+                )
+                .await;
+        }
+        self.require_legacy_history_mutation(id, HistoryMutation::ReplaceEnvironment)?;
         let current = self
             .get_session(id)
             .await
@@ -6982,18 +7840,25 @@ impl AxocoatlDaemon {
         agent_id: &str,
         name: &str,
     ) -> Result<axocoatl_memory::chat::Chat, DaemonError> {
-        // Reject unknown agents up-front rather than letting a "ghost" chat
-        // exist that the executor will refuse to run.
-        if self.config.agents.iter().all(|a| a.id != agent_id) {
-            return Err(DaemonError::AgentSpawn(format!(
-                "agent '{agent_id}' not found"
-            )));
-        }
+        // Use the same configured-executable authority as execution. A Worker
+        // belongs to its Coordinator and cannot own a standalone Chat.
+        require_configured_executable_agent(&self.config, agent_id)?;
         self.chat_store
             .lock()
             .await
             .create(agent_id, name)
             .map_err(|e| DaemonError::Session(e.to_string()))
+    }
+
+    /// Resolve the configured top-level actor authorized to execute a Chat.
+    /// Persisted Chat records are untrusted input at this boundary: an old or
+    /// corrupt `agent_id` must not reach a Session/attempt actor merely because
+    /// that runtime currently exists in the shared registry.
+    pub async fn configured_chat_actor(
+        &self,
+        agent_id: &str,
+    ) -> Result<ractor::ActorRef<axocoatl_actor::AgentMessage>, DaemonError> {
+        configured_agent_actor_from_registry(&self.config, &self.agent_registry, agent_id).await
     }
 
     pub async fn list_chats(&self) -> Vec<axocoatl_memory::chat::Chat> {
@@ -7123,6 +7988,7 @@ impl AxocoatlDaemon {
         &self,
         a: axocoatl_config::Automation,
     ) -> Result<axocoatl_config::Automation, DaemonError> {
+        validate_automation_agent_authority(&self.config, &a)?;
         self.automation_store
             .write()
             .await
@@ -7135,6 +8001,7 @@ impl AxocoatlDaemon {
         &self,
         a: axocoatl_config::Automation,
     ) -> Result<axocoatl_config::Automation, DaemonError> {
+        validate_automation_agent_authority(&self.config, &a)?;
         self.automation_store
             .write()
             .await
@@ -7705,6 +8572,19 @@ impl AxocoatlDaemon {
                     }
                 })?;
                 let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
+                    supervisor_program: None,
+                    supervisor_installation: Some(
+                        self.data_root
+                            .child("execution-supervisors")
+                            .map_err(|error| SessionEnvironmentPreparationError {
+                                error: DaemonError::Session(format!(
+                                    "preparing internal process supervisor storage: {error}"
+                                )),
+                                effective_image: None,
+                                runtime: None,
+                                setup_results: Vec::new(),
+                            })?,
+                    ),
                     // Global postCreate trust has already been resolved into
                     // this Session's exact durable command above. Keep start's
                     // generic hook empty so no second implicit path can run it.
@@ -7867,14 +8747,7 @@ impl AxocoatlDaemon {
             .session_store
             .lock()
             .await
-            .set_environment(
-                &session.id,
-                SessionEnvironmentState::Preparing,
-                None,
-                initial_runtime,
-                Vec::new(),
-                None,
-            )
+            .begin_environment_preparation(&session.id, initial_runtime)
             .map_err(|error| DaemonError::Session(error.to_string()))?;
         let mut state_guard = SessionPreparationStateGuard {
             session_id: preparing.id.clone(),
@@ -7885,9 +8758,11 @@ impl AxocoatlDaemon {
             e2b_config,
             armed: true,
         };
+        let mut shutdown_interrupted = false;
         let start_result = tokio::select! {
             result = self.start_prepared_session_sandbox(&preparing) => result,
             _ = wait_for_shutdown(self.shutdown_subscriber()) => {
+                shutdown_interrupted = true;
                 if self.config.sandbox.backend == "e2b" {
                     // The caller-facing start future was cancelled, but the
                     // provider create remains owned by a detached task. Wait
@@ -7997,23 +8872,64 @@ impl AxocoatlDaemon {
                 }
             }
             Err(failure) => {
-                let failed = self
-                    .session_store
-                    .lock()
-                    .await
-                    .fail_environment_if_preparing(
+                let message = failure.error.to_string();
+                // Shutdown is not a failure of a Ready plan, but the stopped
+                // setup may have left a partial dependency volume. Remove the
+                // local runtime and its dependencies before any return to
+                // Ready, as the cancellation guards do; the caller holds the
+                // start lock.
+                let cleanup = if shutdown_interrupted && self.config.sandbox.backend != "e2b" {
+                    Some(
+                        SessionSandbox::remove_named_with_dependencies(&session.id)
+                            .await
+                            .map_err(|error| error.to_string()),
+                    )
+                } else {
+                    None
+                };
+                let mut runtime = failure.runtime.map(|runtime| *runtime);
+                let mut store = self.session_store.lock().await;
+                let failed = match cleanup {
+                    Some(Ok(())) => {
+                        if let Some(runtime) = runtime.as_mut() {
+                            runtime.cleanup_confirmed = true;
+                        }
+                        store.settle_interrupted_preparation(
+                            &session.id,
+                            preparing.environment.generation,
+                            runtime,
+                            failure.setup_results,
+                            failure.effective_image,
+                            message.clone(),
+                        )
+                    }
+                    Some(Err(cleanup)) => store.fail_environment_if_preparing(
                         &session.id,
                         preparing.environment.generation,
                         failure.effective_image,
-                        failure.runtime.map(|runtime| *runtime),
+                        runtime,
                         failure.setup_results,
-                        failure.error.to_string(),
-                    )
-                    .map_err(|error| DaemonError::Session(error.to_string()));
+                        format!("{message}; dependency cleanup failed: {cleanup}"),
+                    ),
+                    None => store.fail_environment_if_preparing(
+                        &session.id,
+                        preparing.environment.generation,
+                        failure.effective_image,
+                        runtime,
+                        failure.setup_results,
+                        message.clone(),
+                    ),
+                }
+                .map_err(|error| DaemonError::Session(error.to_string()));
+                drop(store);
                 if failed.is_ok() {
                     state_guard.disarm();
                 }
-                failed
+                // The caller still learns why this attempt produced no runtime.
+                failed.and_then(|session| match session.environment.state {
+                    SessionEnvironmentState::Ready => Err(DaemonError::Session(message)),
+                    _ => Ok(session),
+                })
             }
         }
     }
@@ -8053,13 +8969,13 @@ impl AxocoatlDaemon {
         // The map is consulted only under the same per-Session start lock as
         // runtime changes and only after durable Ready is revalidated. This
         // prevents a stale caller from borrowing the old sandbox mid-rebuild.
-        if let Some(sandbox) = self
+        let cached_sandbox = self
             .session_sandboxes
             .lock()
             .await
             .get(&session.id)
-            .cloned()
-        {
+            .cloned();
+        if let Some(sandbox) = cached_sandbox {
             let runtime_matches = latest.environment.runtime.as_ref().is_some_and(|runtime| {
                 !runtime.cleanup_confirmed
                     && match (runtime.backend.as_str(), sandbox.runtime_id()) {
@@ -8123,13 +9039,13 @@ impl AxocoatlDaemon {
         // A recovery-only handle skipped setup by design. It cannot be
         // promoted into normal work; tear it down before preparing the Ready
         // environment from the persisted contract.
-        if let Some(recovery) = self
+        let cached_recovery = self
             .attempt_recovery_sandboxes
             .lock()
             .await
             .get(&session.id)
-            .cloned()
-        {
+            .cloned();
+        if let Some(recovery) = cached_recovery {
             if recovery.runtime_id().is_some() {
                 recovery.stop_checked().await.map_err(|error| {
                     DaemonError::Session(format!(
@@ -8923,6 +9839,8 @@ impl AxocoatlDaemon {
         Self::validate_passive_git_write_topology(&recovery_git)?;
         let config = &self.config.sandbox;
         let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
+            supervisor_program: None,
+            supervisor_installation: None,
             allow_post_create: false,
             // Recovery is daemon plumbing, not project execution. Always use
             // the curated tool base and bypass its normal image entrypoint.
@@ -10036,6 +10954,16 @@ impl AxocoatlDaemon {
         }
     }
 
+    /// The live startup dispatcher currently admits only legacy format. Keep
+    /// read consumers behind an explicit versioned snapshot so execution-state
+    /// projections cannot silently become legacy terminal/checkpoint authority.
+    async fn session_history_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionHistory, DaemonError> {
+        self.versioned_session_history_snapshot(session_id).await
+    }
+
     pub async fn list_session_turns(
         &self,
         session_id: &str,
@@ -10045,7 +10973,35 @@ impl AxocoatlDaemon {
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         self.ensure_session_turns_migrated(&session).await?;
-        Ok(self.session_turn_store.lock().await.list(session_id))
+        self.session_history_snapshot(session_id)
+            .await?
+            .legacy_rows(HistoryVisibility::Visible)
+            .map_err(|error| DaemonError::Session(error.to_string()))
+    }
+
+    /// Inspect one exact retained turn without granting runtime control. The
+    /// versioned envelope preserves absent legacy evidence rather than deriving
+    /// identities or capabilities from today's Agent configuration.
+    pub async fn session_turn_control_plane(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Result<Option<crate::session_control_plane::SessionTurnControlPlane>, DaemonError> {
+        if self.get_session(session_id).await.is_none() {
+            return Err(DaemonError::Session(format!(
+                "session '{session_id}' not found"
+            )));
+        }
+        self.session_dispatch_lifecycles
+            .lookup_control_plane(session_id, turn_id)?
+            .resolve_with_legacy(&self._data_dir_lease.ownership, || async {
+                Ok(self
+                    .get_session_turn(session_id, turn_id)
+                    .await?
+                    .as_ref()
+                    .map(crate::session_control_plane::SessionTurnControlPlane::from_legacy))
+            })
+            .await
     }
 
     /// Return the exact turn this daemon process can currently stop for the
@@ -10060,6 +11016,20 @@ impl AxocoatlDaemon {
             return Err(DaemonError::Session(format!(
                 "session '{session_id}' not found"
             )));
+        }
+        if self
+            .session_dispatch_lifecycles
+            .retains_session(session_id)?
+        {
+            return Ok(self
+                .session_dispatch_lifecycles
+                .live_native_turns()?
+                .into_iter()
+                .find(|(session, _)| session == session_id)
+                .map(|(session_id, turn_id)| ActiveSessionTurnState {
+                    session_id,
+                    turn_id,
+                }));
         }
         Ok(self
             .active_session_turns
@@ -10121,6 +11091,7 @@ impl AxocoatlDaemon {
                 &self.stream_commit_gate,
                 &self.active_session_turns,
                 &self.stream_bus,
+                Some(&self.session_dispatch_lifecycles),
             )
             .await;
 
@@ -10163,7 +11134,29 @@ impl AxocoatlDaemon {
         session_id: &str,
         turn_id: &str,
     ) -> Result<Option<SessionTurn>, DaemonError> {
-        let turn = self.session_turn_store.lock().await.get(turn_id);
+        if self
+            .session_dispatch_lifecycles
+            .retains_session(session_id)?
+            || matches!(
+                self._data_dir_lease.ownership,
+                axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(_)
+            )
+        {
+            // An old response shape cannot silently substitute mutable v1
+            // rows for the selected sealed/native Session history.
+            return self
+                .session_history_snapshot(session_id)
+                .await?
+                .legacy_get(turn_id)
+                .map_err(|error| DaemonError::Session(error.to_string()));
+        }
+        let turn = {
+            let store = self.session_turn_store.lock().await;
+            SessionHistoryCatalog::from_legacy(&store)
+                .map_err(|error| DaemonError::Session(error.to_string()))?
+                .legacy_get(turn_id)
+                .map_err(|error| DaemonError::Session(error.to_string()))?
+        };
         match turn {
             Some(turn) if turn.session_id == session_id => Ok(Some(turn)),
             Some(turn) => Err(DaemonError::Session(format!(
@@ -10190,12 +11183,35 @@ impl AxocoatlDaemon {
             for session in &sessions {
                 self.ensure_session_turns_migrated(session).await?;
             }
+            if matches!(
+                self._data_dir_lease.ownership,
+                axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(_)
+            ) || sessions.iter().try_fold(false, |retained, session| {
+                Ok::<_, DaemonError>(
+                    retained
+                        || self
+                            .session_dispatch_lifecycles
+                            .retains_session(&session.id)?,
+                )
+            })? {
+                return Err(DaemonError::SessionConflict(
+                    "global search includes versioned Session history; request history_version=2"
+                        .into(),
+                ));
+            }
         }
-        Ok(self
-            .session_turn_store
-            .lock()
-            .await
-            .search(session_id, query))
+        if let Some(session_id) = session_id {
+            self.session_history_snapshot(session_id)
+                .await?
+                .legacy_search(query)
+                .map_err(|error| DaemonError::Session(error.to_string()))
+        } else {
+            let store = self.session_turn_store.lock().await;
+            SessionHistoryCatalog::from_legacy(&store)
+                .map_err(|error| DaemonError::Session(error.to_string()))?
+                .legacy_search(query)
+                .map_err(|error| DaemonError::Session(error.to_string()))
+        }
     }
 
     pub async fn session_transcript(
@@ -10207,7 +11223,10 @@ impl AxocoatlDaemon {
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         self.ensure_session_turns_migrated(&session).await?;
-        Ok(self.session_turn_store.lock().await.transcript(session_id))
+        self.session_history_snapshot(session_id)
+            .await?
+            .legacy_transcript()
+            .map_err(|error| DaemonError::Session(error.to_string()))
     }
 
     pub async fn export_session_json(&self, session_id: &str) -> Result<String, DaemonError> {
@@ -10224,93 +11243,7 @@ impl AxocoatlDaemon {
         let turns = self.list_session_turns(session_id).await?;
         let mut markdown = format!("# {}\n\n", session.name);
         for turn in turns {
-            markdown.push_str(&format!("## User\n\n{}\n\n", turn.user_input));
-            if !turn.context.is_empty() {
-                markdown.push_str("Context:\n\n");
-                for reference in &turn.context {
-                    markdown.push_str(&format!(
-                        "- {} (`{}`)\n",
-                        reference.display_name, reference.kind
-                    ));
-                }
-                markdown.push('\n');
-            }
-            if !turn.execution_events.is_empty() {
-                markdown.push_str("Route:\n\n");
-                for execution in &turn.execution_events {
-                    if !matches!(
-                        execution.event.kind.as_str(),
-                        "tool_started" | "tool_result"
-                    ) {
-                        continue;
-                    }
-                    let metadata = &execution.event.metadata;
-                    let tool = metadata
-                        .get("tool_name")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("tool");
-                    let phase = if execution.event.kind == "tool_started" {
-                        "started"
-                    } else if metadata
-                        .get("is_error")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false)
-                    {
-                        "failed"
-                    } else {
-                        "result"
-                    };
-                    let value_key = if execution.event.kind == "tool_started" {
-                        "arguments"
-                    } else {
-                        "result"
-                    };
-                    let value = metadata
-                        .get(value_key)
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null);
-                    let explicitly_truncated = metadata
-                        .get(&format!("{value_key}_truncated"))
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false);
-                    let rendered =
-                        serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
-                    let preview = truncate_utf8(&rendered, 2 * 1024);
-                    markdown.push_str(&format!("- `{tool}` {phase}: `{preview}`"));
-                    if explicitly_truncated || rendered.len() > 2 * 1024 {
-                        markdown.push_str(" _(truncated)_");
-                    }
-                    markdown.push('\n');
-                }
-                markdown.push('\n');
-            }
-            if turn.agent_outputs.is_empty() {
-                if let Some(output) = turn.final_output.as_deref().or_else(|| {
-                    (!turn.partial_output.is_empty()).then_some(turn.partial_output.as_str())
-                }) {
-                    markdown.push_str(&format!("## Assistant\n\n{output}\n\n"));
-                }
-            } else {
-                let completed_len = turn
-                    .agent_outputs
-                    .iter()
-                    .map(|output| output.output.len())
-                    .sum::<usize>();
-                for output in &turn.agent_outputs {
-                    markdown.push_str(&format!(
-                        "## Assistant ({})\n\n{}\n\n",
-                        output.agent_id, output.output
-                    ));
-                }
-                if let Some(tail) = turn.partial_output.get(completed_len..) {
-                    if !tail.is_empty() {
-                        markdown.push_str(&format!("## Assistant (incomplete)\n\n{tail}\n\n"));
-                    }
-                }
-            }
-            if turn.status != SessionTurnLifecycle::Completed {
-                markdown.push_str(&format!("_Turn status: {:?}_\n\n", turn.status));
-            }
+            markdown.push_str(&session_history::read::legacy_turn_markdown(&turn));
         }
         Ok(markdown)
     }
@@ -10329,12 +11262,13 @@ impl AxocoatlDaemon {
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         self.ensure_session_turns_migrated(&session).await?;
         Ok(self
-            .session_turn_store
-            .lock()
-            .await
-            .transcript(session_id)
+            .session_history_snapshot(session_id)
+            .await?
+            .legacy_transcript()
+            .map_err(|error| DaemonError::Session(error.to_string()))?
             .into_iter()
             .map(|message| axocoatl_memory::session::StoredMessage {
+                content_parts: None,
                 role: match message.role {
                     SessionTranscriptRole::User => axocoatl_core::MessageRole::User,
                     SessionTranscriptRole::Assistant => axocoatl_core::MessageRole::Assistant,
@@ -10350,6 +11284,12 @@ impl AxocoatlDaemon {
     }
 
     async fn ensure_session_turns_migrated(&self, session: &Session) -> Result<(), DaemonError> {
+        if !self
+            .legacy_checkpoint_history_import_required(&session.id)
+            .await?
+        {
+            return Ok(());
+        }
         Self::migrate_session_turns_from_checkpoint(
             session,
             self.counter.as_ref(),
@@ -10596,6 +11536,25 @@ impl AxocoatlDaemon {
     /// messages, dropping everything after. The raw count must land on an exact
     /// canonical turn boundary in the transcript returned by `session_messages`.
     pub async fn rewind_session(&self, session_id: &str, keep: usize) -> Result<(), DaemonError> {
+        if self.uses_native_session_history() {
+            if keep == 0 {
+                return self
+                    .rewind_versioned_session_to_turn(session_id, None)
+                    .await
+                    .map(|_| ());
+            }
+            let history = self.versioned_session_history_snapshot(session_id).await?;
+            let transcript = history.legacy_transcript().map_err(|_| {
+                DaemonError::SessionConflict(
+                    "Use an exact turn ID when rewinding native Session history".into(),
+                )
+            })?;
+            let boundary = legacy_rewind_turn_boundary(&transcript, keep)?;
+            return self
+                .rewind_versioned_session_to_turn(session_id, boundary.as_deref())
+                .await
+                .map(|_| ());
+        }
         self.rewind_session_boundary(
             session_id,
             SessionRewindBoundary::LegacyTranscriptMessages(keep),
@@ -10621,6 +11580,7 @@ impl AxocoatlDaemon {
         session_id: &str,
         boundary: SessionRewindBoundary,
     ) -> Result<Vec<SessionTurn>, DaemonError> {
+        self.require_legacy_history_mutation(session_id, HistoryMutation::Rewind)?;
         if let Some(active) = self.active_session_turns.lock().await.get(session_id) {
             return Err(DaemonError::SessionConflict(format!(
                 "cannot rewind while turn '{}' is running",
@@ -10662,14 +11622,17 @@ impl AxocoatlDaemon {
         let keep_through_turn_id = match boundary {
             SessionRewindBoundary::CanonicalTurn(turn_id) => turn_id,
             SessionRewindBoundary::LegacyTranscriptMessages(keep) => {
-                let transcript = self.session_turn_store.lock().await.transcript(session_id);
+                let transcript = self
+                    .session_history_snapshot(session_id)
+                    .await?
+                    .legacy_transcript()
+                    .map_err(|error| DaemonError::Session(error.to_string()))?;
                 legacy_rewind_turn_boundary(&transcript, keep)?
             }
         };
         let turns = self
-            .session_turn_store
-            .lock()
-            .await
+            .legacy_session_history_writer(session_id, HistoryMutation::Rewind)
+            .await?
             .turns_through(session_id, keep_through_turn_id.as_deref())
             .map_err(|e| DaemonError::Session(e.to_string()))?;
         let scoped = AgentId::new(format!("{session_id}:{agent_id}"));
@@ -10731,11 +11694,16 @@ impl AxocoatlDaemon {
                 })?;
             self.agent_registry.remove(&scoped).await;
         }
+        // Resolve the actual History writer before publishing the prepared
+        // checkpoint so format refusal cannot skip its rollback path.
+        let mut history_writer = self
+            .legacy_session_history_writer(session_id, HistoryMutation::Rewind)
+            .await?;
         self.checkpoint_store
             .save(&checkpoint)
             .await
             .map_err(|error| DaemonError::Session(error.to_string()))?;
-        let result = match self.session_turn_store.lock().await.rewind(
+        let result = match history_writer.rewind(
             session_id,
             keep_through_turn_id.as_deref(),
             format!(
@@ -10758,6 +11726,7 @@ impl AxocoatlDaemon {
                 };
             }
         };
+        drop(history_writer);
         let _ = self.touch_session(session_id).await;
         Ok(result)
     }
@@ -10945,6 +11914,7 @@ head -c 524288 "$1"
         rel: &str,
         content: &str,
     ) -> Result<usize, DaemonError> {
+        let writer = self.session_writer(session_id).await?;
         let (sandbox, target, _) = self.session_sandbox_target(session_id, Some(rel)).await?;
         const WRITE: &str = r#"
 [ -f "$1" ] || exit 5
@@ -10955,10 +11925,17 @@ cat > "$tmp" || exit 6
 mv "$tmp" "$1" || exit 7
 trap - EXIT HUP INT TERM
 "#;
-        let written = sandbox
-            .exec_stdin(
-                &["sh", "-c", WRITE, "axocoatl-write", &target],
-                content,
+        let written = writer
+            .exec(
+                sandbox,
+                vec![
+                    "sh".into(),
+                    "-c".into(),
+                    WRITE.into(),
+                    "axocoatl-write".into(),
+                    target,
+                ],
+                Some(content.to_string()),
                 SESSION_FILE_IO_TIMEOUT,
             )
             .await
@@ -11116,23 +12093,9 @@ trap - EXIT HUP INT TERM
         if probe.ok() && probe.stdout.trim() == "true" {
             return Ok(());
         }
-        // Not a repo — initialize with a local identity + a baseline commit so
-        // HEAD always exists (diffs need a reference point).
-        self.session_git(session_id, &["init", "-q"]).await?;
-        self.session_git(
-            session_id,
-            &["config", "user.email", "agent@axocoatl.local"],
-        )
-        .await?;
-        self.session_git(session_id, &["config", "user.name", "Axocoatl"])
-            .await?;
-        self.session_git(session_id, &["add", "-A"]).await?;
-        self.session_git(
-            session_id,
-            &["commit", "-q", "-m", "axocoatl: baseline", "--allow-empty"],
-        )
-        .await?;
-        Ok(())
+        let writer = self.session_writer(session_id).await?;
+        self.ensure_session_git_with_writer(session_id, &writer)
+            .await
     }
 
     /// Working-tree status (current branch + changed files).
@@ -11578,12 +12541,12 @@ trap - EXIT HUP INT TERM
         message: &str,
         stage_all: bool,
     ) -> Result<crate::git::GitStatus, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
-        self.require_no_unresolved_attempt(session_id).await?;
-        self.ensure_session_git(session_id).await?;
+        let writer = self.session_writer(session_id).await?;
+        self.ensure_session_git_with_writer(session_id, &writer)
+            .await?;
         if stage_all {
-            self.session_git(session_id, &["add", "-A"]).await?;
+            self.session_git_with_writer(&writer, session_id, &["add", "-A"])
+                .await?;
         }
         let msg = if message.trim().is_empty() {
             "axocoatl: snapshot"
@@ -11591,7 +12554,7 @@ trap - EXIT HUP INT TERM
             message
         };
         let _ = self
-            .session_git(session_id, &["commit", "-q", "-m", msg])
+            .session_git_with_writer(&writer, session_id, &["commit", "-q", "-m", msg])
             .await;
         self.git_status(session_id).await
     }
@@ -11613,9 +12576,9 @@ trap - EXIT HUP INT TERM
         path: &str,
         index: usize,
     ) -> Result<crate::git::GitStatus, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
-        self.require_no_unresolved_attempt(session_id).await?;
+        let writer = self.session_writer(session_id).await?;
+        self.ensure_session_git_with_writer(session_id, &writer)
+            .await?;
         // Always the unstaged diff: a staged change is not in the working tree
         // to revert, so unstage it first and then decide.
         let hunks = self.git_hunks(session_id, path, false).await?;
@@ -11624,7 +12587,7 @@ trap - EXIT HUP INT TERM
             .ok_or_else(|| DaemonError::Session(format!("no hunk {index} in '{path}'")))?;
 
         let raw = self
-            .session_git(session_id, &["diff", "--no-color", "--", path])
+            .session_git_with_writer(&writer, session_id, &["diff", "--no-color", "--", path])
             .await?;
         let (preamble, _) = crate::git::parse_hunks(&raw.stdout);
         let patch = crate::git::one_hunk_patch(&preamble, hunk);
@@ -11645,8 +12608,9 @@ trap - EXIT HUP INT TERM
             "--reverse",
             "-",
         ];
-        let r = sandbox
-            .exec_stdin(&argv, &patch, Duration::from_secs(30))
+        let argv = argv.iter().map(|arg| (*arg).to_string()).collect();
+        let r = writer
+            .exec(sandbox, argv, Some(patch), Duration::from_secs(30))
             .await
             .map_err(|e| DaemonError::Session(e.to_string()))?;
         if !r.ok() {
@@ -11701,9 +12665,9 @@ trap - EXIT HUP INT TERM
         index: usize,
         stage: bool,
     ) -> Result<crate::git::GitStatus, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
-        self.require_no_unresolved_attempt(session_id).await?;
+        let writer = self.session_writer(session_id).await?;
+        self.ensure_session_git_with_writer(session_id, &writer)
+            .await?;
         let hunks = self.git_hunks(session_id, path, !stage).await?;
         let hunk = hunks
             .get(index)
@@ -11716,7 +12680,9 @@ trap - EXIT HUP INT TERM
             args.push("--cached");
         }
         args.extend_from_slice(&["--no-color", "--", path]);
-        let raw = self.session_git(session_id, &args).await?;
+        let raw = self
+            .session_git_with_writer(&writer, session_id, &args)
+            .await?;
         let (preamble, _) = crate::git::parse_hunks(&raw.stdout);
         let patch = crate::git::one_hunk_patch(&preamble, hunk);
 
@@ -11739,8 +12705,9 @@ trap - EXIT HUP INT TERM
             argv.push("--reverse");
         }
         argv.push("-");
-        let r = sandbox
-            .exec_stdin(&argv, &patch, Duration::from_secs(30))
+        let argv = argv.iter().map(|arg| (*arg).to_string()).collect();
+        let r = writer
+            .exec(sandbox, argv, Some(patch), Duration::from_secs(30))
             .await
             .map_err(|e| DaemonError::Session(e.to_string()))?;
         if !r.ok() {
@@ -11772,18 +12739,19 @@ trap - EXIT HUP INT TERM
         session_id: &str,
         paths: &[String],
     ) -> Result<crate::git::GitStatus, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
-        self.require_no_unresolved_attempt(session_id).await?;
-        self.ensure_session_git(session_id).await?;
+        let writer = self.session_writer(session_id).await?;
+        self.ensure_session_git_with_writer(session_id, &writer)
+            .await?;
         if paths.is_empty() {
-            self.session_git(session_id, &["add", "-A"]).await?;
+            self.session_git_with_writer(&writer, session_id, &["add", "-A"])
+                .await?;
         } else {
             for p in paths {
                 if p.contains("..") {
                     return Err(DaemonError::Session(format!("invalid path '{p}'")));
                 }
-                self.session_git(session_id, &["add", "--", p]).await?;
+                self.session_git_with_writer(&writer, session_id, &["add", "--", p])
+                    .await?;
             }
         }
         self.git_status(session_id).await
@@ -11800,12 +12768,13 @@ trap - EXIT HUP INT TERM
         session_id: &str,
         paths: &[String],
     ) -> Result<crate::git::GitStatus, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
-        self.require_no_unresolved_attempt(session_id).await?;
-        self.ensure_session_git(session_id).await?;
+        let writer = self.session_writer(session_id).await?;
+        self.ensure_session_git_with_writer(session_id, &writer)
+            .await?;
         if paths.is_empty() {
-            let _ = self.session_git(session_id, &["reset", "-q"]).await;
+            let _ = self
+                .session_git_with_writer(&writer, session_id, &["reset", "-q"])
+                .await;
         } else {
             for p in paths {
                 if p.contains("..") {
@@ -11815,7 +12784,7 @@ trap - EXIT HUP INT TERM
                 // no commits yet, where there is nothing to reset *to* but the
                 // file is still correctly removed from the index.
                 let _ = self
-                    .session_git(session_id, &["reset", "-q", "--", p])
+                    .session_git_with_writer(&writer, session_id, &["reset", "-q", "--", p])
                     .await;
             }
         }
@@ -11827,23 +12796,28 @@ trap - EXIT HUP INT TERM
         session_id: &str,
         path: Option<&str>,
     ) -> Result<crate::git::GitStatus, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
-        self.require_no_unresolved_attempt(session_id).await?;
-        self.ensure_session_git(session_id).await?;
+        let writer = self.session_writer(session_id).await?;
+        self.ensure_session_git_with_writer(session_id, &writer)
+            .await?;
         match path {
             Some(p) => {
                 if p.contains("..") {
                     return Err(DaemonError::Session("invalid path".to_string()));
                 }
-                let _ = self.session_git(session_id, &["checkout", "--", p]).await;
                 let _ = self
-                    .session_git(session_id, &["clean", "-fd", "--", p])
+                    .session_git_with_writer(&writer, session_id, &["checkout", "--", p])
+                    .await;
+                let _ = self
+                    .session_git_with_writer(&writer, session_id, &["clean", "-fd", "--", p])
                     .await;
             }
             None => {
-                let _ = self.session_git(session_id, &["checkout", "--", "."]).await;
-                let _ = self.session_git(session_id, &["clean", "-fd"]).await;
+                let _ = self
+                    .session_git_with_writer(&writer, session_id, &["checkout", "--", "."])
+                    .await;
+                let _ = self
+                    .session_git_with_writer(&writer, session_id, &["clean", "-fd"])
+                    .await;
             }
         }
         self.git_status(session_id).await
@@ -11855,12 +12829,11 @@ trap - EXIT HUP INT TERM
         session_id: &str,
         reference: &str,
     ) -> Result<crate::git::GitStatus, DaemonError> {
-        let operation = self.attempt_operation(session_id).await;
-        let _operation = operation.lock().await;
-        self.require_no_unresolved_attempt(session_id).await?;
-        self.ensure_session_git(session_id).await?;
+        let writer = self.session_writer(session_id).await?;
+        self.ensure_session_git_with_writer(session_id, &writer)
+            .await?;
         let r = self
-            .session_git(session_id, &["checkout", reference])
+            .session_git_with_writer(&writer, session_id, &["checkout", reference])
             .await?;
         if !r.ok() {
             return Err(DaemonError::Session(format!(
@@ -12725,6 +13698,14 @@ trap - 0 1 2 15
         })?;
         let config = &self.config.sandbox;
         let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
+            supervisor_program: None,
+            supervisor_installation: Some(self.data_root.child("execution-supervisors").map_err(
+                |error| {
+                    DaemonError::Session(format!(
+                        "preparing internal process supervisor storage: {error}"
+                    ))
+                },
+            )?),
             allow_post_create: false,
             allow_untrusted_image: config.allow_untrusted_images,
             network: match config.network.as_str() {
@@ -14185,6 +15166,8 @@ trap - 0 1 2 15
             )));
         }
 
+        self.retire_native_ways_after_cleanup(&session, set).await?;
+
         // Attempt resolution must remain possible even when the Session's new
         // environment is AwaitingApproval or Failed. Start this setup-free
         // primary only after exact-removing every untrusted lane process, so
@@ -14247,7 +15230,9 @@ trap - 0 1 2 15
         failures.clear();
         let set_relative = Self::attempt_root_relative(&session.working_dir, session_id, &set.id)?;
         if let Err(error) = workspace.remove_dir_all(&set_relative) {
-            failures.push(format!("remove attempt metadata: {error}"));
+            if error.kind() != std::io::ErrorKind::NotFound {
+                failures.push(format!("remove attempt metadata: {error}"));
+            }
         }
         if !failures.is_empty() {
             return Err(DaemonError::Session(format!(
@@ -14260,11 +15245,17 @@ trap - 0 1 2 15
         let session_relative = session_attempts_root
             .strip_prefix(&session.working_dir)
             .map_err(|_| DaemonError::Session("attempt cleanup escaped Workspace".to_string()))?;
-        let session_root = workspace
-            .existing_child(session_relative)
-            .map_err(|error| {
-                DaemonError::Session(format!("opening retained attempt cleanup root: {error}"))
-            })?;
+        let session_root = match workspace.existing_child(session_relative) {
+            Ok(root) => root,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return self.stop_attempt_recovery_sandbox_checked(session_id).await
+            }
+            Err(error) => {
+                return Err(DaemonError::Session(format!(
+                    "opening retained attempt cleanup root: {error}"
+                )))
+            }
+        };
         match Self::read_host_json_file::<crate::git::AttemptSet>(
             &session_root,
             std::path::Path::new("current.json"),
@@ -14456,8 +15447,8 @@ trap - 0 1 2 15
                 ))
             })?;
         let executor = self
-            .build_session_executor(session, sandbox.clone(), false)
-            .await;
+            .build_session_executor(session, sandbox.clone(), false, None)
+            .await?;
         // Context path = the in-sandbox worktree (where the tools operate);
         // project instructions still come from the primary session's host repo.
         let actor = match self
@@ -14466,6 +15457,7 @@ trap - 0 1 2 15
                 &agent_yaml,
                 &scoped,
                 Arc::new(executor),
+                self.checkpoint_store.clone(),
                 worktree.path(),
                 false,
                 false,
@@ -14502,6 +15494,45 @@ trap - 0 1 2 15
         instruction: &str,
         lanes: &[crate::git::LaneConfig],
     ) -> Result<crate::git::AttemptSet, DaemonError> {
+        self.execute_session_variants_with_evidence(session_id, task, instruction, lanes, &[])
+            .await
+    }
+
+    pub async fn execute_session_variants_with_evidence(
+        &self,
+        session_id: &str,
+        task: &str,
+        instruction: &str,
+        lanes: &[crate::git::LaneConfig],
+        preparation_refs: &[String],
+    ) -> Result<crate::git::AttemptSet, DaemonError> {
+        if !(1..=100).contains(&lanes.len()) {
+            return Err(DaemonError::AttemptConflict(
+                "Choose between 1 and 100 Ways".into(),
+            ));
+        }
+        let native = self.uses_native_session_history();
+        if native {
+            self.with_ways_archive(session_id, |_| Ok(()))?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|error| DaemonError::Session(error.to_string()))?
+                .as_millis() as u64;
+            if lanes.iter().any(|lane| {
+                lane.approval.as_ref().is_none_or(|approval| {
+                    approval.limits.activations == 0
+                        || approval.limits.invocations == 0
+                        || approval.limits.tokens == 0
+                        || approval.max_output_tokens == 0
+                        || approval.expires_at_ms <= now
+                })
+            }) {
+                return Err(DaemonError::AttemptConflict("Approve explicit limits, output maximum and expiry for each Way before starting".into()));
+            }
+            self.quiesce_native_histories_for_ways(session_id).await?;
+        } else {
+            self.require_legacy_history_mutation(session_id, HistoryMutation::ExploreAttempts)?;
+        }
         let operation = self.attempt_operation(session_id).await;
         let _operation = operation.try_lock().map_err(|_| {
             DaemonError::AttemptConflict(
@@ -14536,28 +15567,31 @@ trap - 0 1 2 15
                     .to_string(),
             ));
         }
-        let canonical_history: Vec<axocoatl_core::ChatMessage> = self
-            .session_messages(session_id)
-            .await?
-            .into_iter()
-            .map(|message| axocoatl_core::ChatMessage {
-                role: message.role,
-                content: axocoatl_core::MessageContent::Text(message.content),
-                name: message.name,
-                tool_calls: message
-                    .tool_calls
-                    .into_iter()
-                    .map(|call| axocoatl_core::ToolCall {
-                        id: call.id,
-                        name: call.name,
-                        arguments: serde_json::from_str(&call.arguments_json)
-                            .unwrap_or(serde_json::Value::Null),
-                        provider_metadata: call.provider_metadata,
-                    })
-                    .collect(),
-                tool_call_id: message.tool_call_id,
-            })
-            .collect();
+        let canonical_history: Vec<axocoatl_core::ChatMessage> = if native {
+            self.native_ways_conversation(session_id)?
+        } else {
+            self.session_messages(session_id)
+                .await?
+                .into_iter()
+                .map(|message| axocoatl_core::ChatMessage {
+                    role: message.role,
+                    content: axocoatl_core::MessageContent::Text(message.content),
+                    name: message.name,
+                    tool_calls: message
+                        .tool_calls
+                        .into_iter()
+                        .map(|call| axocoatl_core::ToolCall {
+                            id: call.id,
+                            name: call.name,
+                            arguments: serde_json::from_str(&call.arguments_json)
+                                .unwrap_or(serde_json::Value::Null),
+                            provider_metadata: call.provider_metadata,
+                        })
+                        .collect(),
+                    tool_call_id: message.tool_call_id,
+                })
+                .collect()
+        };
         let attempt_history = project_way_provider_history(&canonical_history)?;
         let default_agent = self.primary_session_agent(&session)?;
         let set_id = uuid::Uuid::new_v4().to_string();
@@ -14607,6 +15641,37 @@ trap - 0 1 2 15
                 .to_string(),
             ));
         }
+        let shared_preparation_usage = self.resolve_ways_preparations(
+            session_id,
+            task,
+            instruction,
+            &variants,
+            preparation_refs,
+        )?;
+        let native_preparation = if native {
+            let preview = crate::git::AttemptSet {
+                id: set_id.clone(),
+                session_id: session_id.into(),
+                task: if task.trim().is_empty() {
+                    instruction.into()
+                } else {
+                    task.into()
+                },
+                instruction: instruction.into(),
+                base_sha: String::new(),
+                base_tree: String::new(),
+                state: crate::git::AttemptSetState::Preparing,
+                kept_index: None,
+                created_at: unix_now(),
+                lanes: variants.clone(),
+            };
+            Some(
+                self.prepare_native_ways_admission(&session, &preview, lanes, &attempt_history)
+                    .await?,
+            )
+        } else {
+            None
+        };
         let (start_guards, attempt_ownership) = self
             .quiesce_workspace_runtimes_for_attempt(&session, &set_id)
             .await?;
@@ -14640,6 +15705,19 @@ trap - 0 1 2 15
             lanes: variants,
         };
         if let Err(error) = Self::persist_attempt_set_host(&session.working_dir, &set) {
+            return Err(self
+                .rollback_attempt_setup_host(&session.working_dir, session_id, &mut set, error)
+                .await);
+        }
+        if let Err(error) = self
+            .write_variant_meta(
+                session_id,
+                &set_id,
+                "preparation-usage.json",
+                &shared_preparation_usage,
+            )
+            .await
+        {
             return Err(self
                 .rollback_attempt_setup_host(&session.working_dir, session_id, &mut set, error)
                 .await);
@@ -14698,49 +15776,110 @@ trap - 0 1 2 15
         let mut runtime = ActiveAttemptRun::new(&set_id);
         let mut launch_guard = AttemptLaunchGuard::new(self.agent_registry.clone());
         let mut prepared = Vec::with_capacity(set.lanes.len());
-        for (variant, worktree) in set.lanes.iter().zip(&lane_roots) {
-            let lane_agent = variant.agent.as_deref().unwrap_or(&default_agent);
-            launch_guard.track_container(crate::attempts::container_id(
-                session_id,
-                &set_id,
-                variant.index,
-            ));
-            match self
-                .variant_actor(
+        if let Some(preparation) = native_preparation {
+            let native_setup = async {
+                let fence = session_repository::NativeWaysRuntimeFence::new();
+                for (variant, worktree) in set.lanes.iter().zip(&lane_roots) {
+                    let container =
+                        crate::attempts::container_id(session_id, &set_id, variant.index);
+                    launch_guard.track_container(container.clone());
+                    Self::sanitize_attempt_git_config_at(
+                        &session.working_dir,
+                        worktree.path(),
+                        &set.base_sha,
+                    )?;
+                    runtime.sandboxes.push(
+                        self.start_prepared_attempt_sandbox(
+                            &session,
+                            &container,
+                            worktree,
+                            &set.base_sha,
+                            &variant.branch,
+                            AttemptSandboxUse::AgentLaunch,
+                        )
+                        .await?,
+                    );
+                }
+                self.prepare_native_ways_execution(
                     &session,
-                    &set_id,
-                    &set.base_sha,
-                    lane_agent,
-                    variant,
-                    worktree,
+                    &set,
+                    preparation,
+                    &runtime.sandboxes,
+                    &lane_roots,
+                    fence,
                 )
                 .await
-            {
-                Ok((actor_id, actor, lane_sandbox)) => {
-                    launch_guard.track_actor(actor_id.clone(), actor.clone());
-                    runtime.actors.push((actor_id, actor.clone()));
-                    runtime.sandboxes.push(lane_sandbox);
-                    prepared.push((variant.clone(), actor));
+            }
+            .await;
+            match native_setup {
+                Ok((native_runtime, native_prepared)) => {
+                    runtime.native = Some(native_runtime);
+                    prepared = native_prepared;
                 }
-                Err(e) => {
-                    for (actor_id, actor) in &runtime.actors {
-                        let _ = actor.kill_and_wait(Some(Duration::from_secs(10))).await;
-                        self.agent_registry.remove(actor_id).await;
-                        self.remove_attempt_memory(actor_id).await;
+                Err(error) => {
+                    // No candidate task started; all prepared tickets have been
+                    // dropped before exact cleanup retires canonical ownership.
+                    drop(runtime);
+                    return Err(self
+                        .rollback_attempt_setup_host(
+                            &session.working_dir,
+                            session_id,
+                            &mut set,
+                            error,
+                        )
+                        .await);
+                }
+            }
+        } else {
+            for (variant, worktree) in set.lanes.iter().zip(&lane_roots) {
+                let lane_agent = variant.agent.as_deref().unwrap_or(&default_agent);
+                launch_guard.track_container(crate::attempts::container_id(
+                    session_id,
+                    &set_id,
+                    variant.index,
+                ));
+                match self
+                    .variant_actor(
+                        &session,
+                        &set_id,
+                        &set.base_sha,
+                        lane_agent,
+                        variant,
+                        worktree,
+                    )
+                    .await
+                {
+                    Ok((actor_id, actor, lane_sandbox)) => {
+                        launch_guard.track_actor(actor_id.clone(), actor.clone());
+                        runtime.actors.push((actor_id, actor.clone()));
+                        runtime.sandboxes.push(lane_sandbox);
+                        prepared.push((variant.clone(), native_ways::PreparedWay::Legacy(actor)));
                     }
-                    for lane_sandbox in &runtime.sandboxes {
-                        lane_sandbox.stop().await;
+                    Err(e) => {
+                        for (actor_id, actor) in &runtime.actors {
+                            let _ = actor.kill_and_wait(Some(Duration::from_secs(10))).await;
+                            self.agent_registry.remove(actor_id).await;
+                            self.remove_attempt_memory(actor_id).await;
+                        }
+                        for lane_sandbox in &runtime.sandboxes {
+                            lane_sandbox.stop().await;
+                        }
+                        let error = self
+                            .rollback_attempt_setup_host(
+                                &session.working_dir,
+                                session_id,
+                                &mut set,
+                                e,
+                            )
+                            .await;
+                        return Err(error);
                     }
-                    let error = self
-                        .rollback_attempt_setup_host(&session.working_dir, session_id, &mut set, e)
-                        .await;
-                    return Err(error);
                 }
             }
         }
-
         set.state = crate::git::AttemptSetState::Running;
         if let Err(error) = Self::persist_attempt_set_host(&session.working_dir, &set) {
+            drop(prepared);
             for (actor_id, actor) in &runtime.actors {
                 let _ = actor.kill_and_wait(Some(Duration::from_secs(10))).await;
                 self.agent_registry.remove(actor_id).await;
@@ -14749,6 +15888,7 @@ trap - 0 1 2 15
             for lane_sandbox in &runtime.sandboxes {
                 lane_sandbox.stop().await;
             }
+            drop(runtime);
             let error = self
                 .rollback_attempt_setup_host(&session.working_dir, session_id, &mut set, error)
                 .await;
@@ -14844,25 +15984,31 @@ trap - 0 1 2 15
                     session: rid.clone(),
                     turn_id: None,
                 });
-                let outcome = Self::stream_agent_run(
-                    bus.clone(),
-                    actor,
-                    rid.clone(),
-                    aid,
-                    inp,
-                    StreamAgentRunOptions {
-                        model_override: mo,
-                        run_context: Some(serde_json::json!({"workflow_id": rid.clone()})),
-                        trace: Some(trace.clone()),
-                        supplied_history: Some(lane_history),
-                        attachments: Vec::new(),
-                        control: None,
-                        turn_id: None,
-                        partial_ledger: None,
-                        stream_commit_gate: None,
-                    },
-                )
-                .await;
+                let outcome = match actor {
+                    native_ways::PreparedWay::Native(native) => native.run(trace.clone()).await,
+                    native_ways::PreparedWay::Legacy(actor) => {
+                        Self::stream_agent_run(
+                            bus.clone(),
+                            actor,
+                            rid.clone(),
+                            aid,
+                            inp,
+                            StreamAgentRunOptions {
+                                model_override: mo,
+                                run_context: Some(serde_json::json!({"workflow_id": rid.clone()})),
+                                trace: Some(trace.clone()),
+                                supplied_history: Some(lane_history),
+                                attachments: Vec::new(),
+                                control: None,
+                                turn_id: None,
+                                partial_ledger: None,
+                                stream_commit_gate: None,
+                                coordination_generation: None,
+                            },
+                        )
+                        .await
+                    }
+                };
                 let duration_ms = started.elapsed().as_millis() as u64;
                 // Written on both paths: a lane that errored still took a route,
                 // and *where* it went wrong is the most useful trajectory there
@@ -15132,6 +16278,17 @@ trap - 0 1 2 15
             .get(&set.session_id)
             .is_some_and(|run| run.set_id == set.id);
         let is_live = operation_owned || runtime_owned;
+        Ok((
+            Self::read_attempt_lane_states_host(attempt_root, set, is_live)?,
+            is_live,
+        ))
+    }
+
+    fn read_attempt_lane_states_host(
+        attempt_root: &SecureDir,
+        set: &crate::git::AttemptSet,
+        is_live: bool,
+    ) -> Result<Vec<crate::git::AttemptLaneStatus>, DaemonError> {
         let mut states = Vec::with_capacity(set.lanes.len());
         for lane in &set.lanes {
             let stored = Self::read_host_json_file::<crate::git::AttemptLaneStatus>(
@@ -15143,7 +16300,7 @@ trap - 0 1 2 15
             ));
         }
         states.sort_by_key(|state| state.index);
-        Ok((states, is_live))
+        Ok(states)
     }
 
     fn observed_attempt_lane_state(
@@ -15564,6 +16721,7 @@ trap - 0 1 2 15
                     )
                     .await?;
                 let check_args = ["sh", "-c", check];
+                let check_started = std::time::Instant::now();
                 let check_result = tokio::select! {
                     result = lane_sandbox.exec(&check_args, CHECK_TIMEOUT) => Some(result),
                     _ = async {
@@ -15607,6 +16765,25 @@ trap - 0 1 2 15
                 } else {
                     format!("{}{}", r.stdout, r.stderr)
                 };
+                if self
+                    .session_dispatch_lifecycles
+                    .retains_session(session_id)?
+                {
+                    let limits =
+                        self.with_ways_archive(session_id, |archive| Ok(archive.limits()))?;
+                    self.write_variant_meta(
+                        session_id,
+                        set_id,
+                        &format!("check-evidence-{index}.json"),
+                        &ways_history::StoredWaysCheck {
+                            command: check.to_string(),
+                            duration_ms: check_started.elapsed().as_millis().min(u64::MAX as u128)
+                                as u64,
+                            output: ways_history::retained_text(&combined, limits.field_bytes),
+                        },
+                    )
+                    .await?;
+                }
                 // A green check is only evidence if the tests judging this lane were
                 // not written by it. Report any it changed, so "passed" can be read
                 // with that in view rather than taken at face value.
@@ -16517,9 +17694,79 @@ trap - 0 1 2 15
         // Judge owns the workspace decision lease so Keep and Discard cannot
         // race its reviewed patch set. The shared control-Agent path bounds the
         // call and honors the selected configured Agent in full.
+        let retained_judge = if self
+            .session_dispatch_lifecycles
+            .retains_session(session_id)?
+        {
+            let configured = self
+                .config
+                .agents
+                .iter()
+                .find(|agent| agent.id == agent_id)
+                .ok_or_else(|| DaemonError::Session("Judge Agent is unavailable".into()))?;
+            let token = self
+                .session_dispatch_lifecycles
+                .session_team_token(session_id)?;
+            let model = self.session_dispatch_lifecycles.with_session_team_stores(&token, |_, content, _| {
+                let configuration = content.retain_activation_evidence(axocoatl_session::execution_content::ActivationEvidenceContent::Attachment {
+                    reference_id: format!("judge-config-{}", crate::attempts::set_key(set_id)), media_type: "application/json".into(),
+                    text: serde_json::to_string(configured).map_err(|error| DaemonError::Session(error.to_string()))?,
+                }).map_err(|error| DaemonError::Session(error.to_string()))?;
+                Ok(axocoatl_session::execution_content::ExecutionModelRef {provider_id: configured.provider.clone(), model_id: configured.model.clone(), configuration_ref: configuration.reference().clone()})
+            })?;
+            Some((model, prompt.clone()))
+        } else {
+            None
+        };
         let response = self
             .execute_ways_control_agent(agent_id, "judging attempts", prompt)
             .await?;
+        if let Some((model, criteria)) = retained_judge {
+            let local = model.provider_id == "ollama" && self.ollama_model_api_cost_known_zero();
+            let price = self.config.pricing.get(&model.model_id);
+            let cost = price
+                .map(|price| {
+                    crate::git::ModelPrice {
+                        input_per_mtok: price.input_per_mtok,
+                        output_per_mtok: price.output_per_mtok,
+                    }
+                    .cost(
+                        response.token_usage.usage.input_tokens as u64,
+                        response.token_usage.usage.output_tokens.saturating_add(
+                            response.token_usage.usage.reasoning_tokens.unwrap_or(0),
+                        ) as u64,
+                    )
+                })
+                .unwrap_or(0.0);
+            self.write_variant_meta(
+                session_id,
+                set_id,
+                "judge-evidence.json",
+                &ways_history::StoredWaysJudge {
+                    criteria,
+                    model,
+                    usage: axocoatl_session::ways_decision::WaysUsage {
+                        measurement_id: axocoatl_session::turn_contract::EvidenceRef::new(format!(
+                            "judge-usage-{}",
+                            crate::attempts::set_key(set_id)
+                        ))
+                        .map_err(|error| DaemonError::Session(error.to_string()))?,
+                        tokens: if response.token_usage.complete {
+                            axocoatl_session::execution_content::ExecutionUsage::Measured {
+                                usage: response.token_usage.usage.clone(),
+                            }
+                        } else {
+                            axocoatl_session::execution_content::ExecutionUsage::Unknown {
+                                known_subtotal: response.token_usage.usage.clone(),
+                            }
+                        },
+                        cost_usd_known_subtotal: if local { 0.0 } else { cost },
+                        cost_complete: (local || price.is_some()) && response.token_usage.complete,
+                    },
+                },
+            )
+            .await?;
+        }
 
         let control_usage = crate::git::ControlUsage::measured(
             Some(agent_id.to_string()),
@@ -16800,11 +18047,29 @@ trap - 0 1 2 15
                     // Abort wrapper tasks and signal every actor while the runtime is
                     // still process-owned. Cancellation at a later await leaves this
                     // entry available to a retry instead of orphaning live actors.
-                    for task in &runtime.tasks {
-                        task.abort();
-                    }
-                    for (_, actor) in &runtime.actors {
-                        actor.kill();
+                    if let Some(native) = &runtime.native {
+                        let snapshot = native
+                            .controller
+                            .snapshot()
+                            .map_err(|error| DaemonError::Session(error.to_string()))?;
+                        if snapshot
+                            .contract()
+                            .state()
+                            .is_some_and(|state| !state.is_closed())
+                        {
+                            native
+                                .controller
+                                .request_human_turn_stop(session_id, snapshot.turn_id().as_str())
+                                .map_err(|error| DaemonError::Session(error.to_string()))?;
+                        }
+                        native.fence.close();
+                    } else {
+                        for task in &runtime.tasks {
+                            task.abort();
+                        }
+                        for (_, actor) in &runtime.actors {
+                            actor.kill();
+                        }
                     }
                     runtime.actors.clone()
                 }
@@ -16992,6 +18257,11 @@ trap - 0 1 2 15
         assistant: String,
         touched_paths: &[String],
     ) -> Result<(), DaemonError> {
+        if self.uses_native_session_history() {
+            self.native_kept_session_turn(session, set, index, &assistant, touched_paths)?;
+            return Ok(());
+        }
+        self.require_legacy_history_mutation(&session.id, HistoryMutation::KeepAttempt)?;
         self.ensure_session_turns_migrated(session).await?;
         let agent_id = match &session.mode {
             SessionMode::SingleAgent { agent_id } => agent_id,
@@ -17093,6 +18363,7 @@ trap - 0 1 2 15
         checkpoint
             .session_messages
             .push(axocoatl_memory::StoredMessage {
+                content_parts: None,
                 role: axocoatl_core::MessageRole::User,
                 content: set.task.clone(),
                 timestamp: unix_now(),
@@ -17104,6 +18375,7 @@ trap - 0 1 2 15
         checkpoint
             .session_messages
             .push(axocoatl_memory::StoredMessage {
+                content_parts: None,
                 role: axocoatl_core::MessageRole::Assistant,
                 content: assistant.clone(),
                 timestamp: unix_now(),
@@ -17138,7 +18410,9 @@ trap - 0 1 2 15
             "touched_paths".to_string(),
             serde_json::json!(touched_paths),
         );
-        let mut store = self.session_turn_store.lock().await;
+        let mut store = self
+            .legacy_session_history_writer(&session.id, HistoryMutation::KeepAttempt)
+            .await?;
         let turn = store
             .begin(BeginSessionTurn {
                 turn_id: Some(turn_id.clone()),
@@ -18351,6 +19625,12 @@ trap - 0 1 2 15
         set_id: &str,
         index: usize,
     ) -> Result<crate::git::GitStatus, DaemonError> {
+        let native_decision = self
+            .session_dispatch_lifecycles
+            .retains_session(session_id)?;
+        if !native_decision {
+            self.require_legacy_history_mutation(session_id, HistoryMutation::KeepAttempt)?;
+        }
         let operation = self.attempt_operation(session_id).await;
         let _operation = operation.lock().await;
         let session = self
@@ -18376,8 +19656,20 @@ trap - 0 1 2 15
             }
             self.remember_session_last_turn_files(session_id, receipt.paths.clone());
             match current.as_ref() {
-                None => return Ok(receipt.status),
-                Some(current) if current.id != set_id => return Ok(receipt.status),
+                None => {
+                    if native_decision {
+                        self.resume_disposed_ways_cleanup(session_id, set_id)
+                            .await?;
+                    }
+                    return Ok(receipt.status);
+                }
+                Some(current) if current.id != set_id => {
+                    if native_decision {
+                        self.resume_disposed_ways_cleanup(session_id, set_id)
+                            .await?;
+                    }
+                    return Ok(receipt.status);
+                }
                 Some(current) if Self::completed_keep_receipt_allows_cleanup(current, index)? => {
                     // Cleanup removes the set directory before current.json. A
                     // crash in that narrow window leaves the receipt and current
@@ -18394,6 +19686,9 @@ trap - 0 1 2 15
                                 index + 1
                             ))
                         })?;
+                    if native_decision {
+                        self.record_ways_cleanup(session_id, set_id)?;
+                    }
                     return Ok(receipt.status);
                 }
                 Some(_) => {}
@@ -18532,11 +19827,29 @@ trap - 0 1 2 15
             // Checks already froze and imported the candidate. Stop any stale
             // process ownership before computing the primary pre/post trees.
             self.stop_attempt_runtime(session_id, &set).await?;
-            let persisted = self
-                .prepare_keep_apply(&sandbox, session_id, &set, checked)
-                .await?;
+            if native_decision {
+                self.freeze_ways_decision(&session, &set, &sandbox, Some(index))
+                    .await?;
+            }
+            let persisted = if let Some(persisted) = Self::read_host_json_file::<StoredKeepApply>(
+                &attempt_root,
+                std::path::Path::new("keep-apply.json"),
+            )? {
+                if persisted.index != index || persisted.patch_sha256 != checked.patch_sha256 {
+                    return Err(DaemonError::AttemptConflict(
+                        "Prepared Keep differs from selected checked patch".into(),
+                    ));
+                }
+                persisted
+            } else {
+                self.prepare_keep_apply(&sandbox, session_id, &set, checked)
+                    .await?
+            };
             self.write_variant_meta(session_id, set_id, "keep-apply.json", &persisted)
                 .await?;
+            if native_decision {
+                self.record_ways_keep_pending(session_id, set_id, &persisted)?;
+            }
             set.state = crate::git::AttemptSetState::Applying;
             set.kept_index = Some(index);
             Self::persist_attempt_set_host(&session.working_dir, &set)?;
@@ -18563,6 +19876,9 @@ trap - 0 1 2 15
                         .to_string(),
                 ));
             }
+            if native_decision {
+                self.record_ways_keep_pending(session_id, set_id, &persisted)?;
+            }
             stored_apply = Some(persisted);
         }
 
@@ -18583,8 +19899,20 @@ trap - 0 1 2 15
                 let apply = stored_apply.as_ref().ok_or_else(|| {
                     DaemonError::Session("Keep journal was not loaded".to_string())
                 })?;
-                self.reconcile_keep_apply(&sandbox, session_id, &set, apply)
-                    .await?;
+                if let Err(error) = self
+                    .reconcile_keep_apply(&sandbox, session_id, &set, apply)
+                    .await
+                {
+                    if native_decision {
+                        self.record_ways_reconciliation_failure(session_id, set_id, &error)
+                            .map_err(|record_error| {
+                                DaemonError::Session(format!(
+                                    "{error}; retaining Keep failure also failed: {record_error}"
+                                ))
+                            })?;
+                    }
+                    return Err(error);
+                }
                 set.state = crate::git::AttemptSetState::Applied;
                 Self::persist_attempt_set_host(&session.working_dir, &set)?;
             }
@@ -18595,8 +19923,20 @@ trap - 0 1 2 15
                 let apply = stored_apply.as_ref().ok_or_else(|| {
                     DaemonError::Session("Keep journal was not loaded".to_string())
                 })?;
-                self.reconcile_keep_apply(&sandbox, session_id, &set, apply)
-                    .await?;
+                if let Err(error) = self
+                    .reconcile_keep_apply(&sandbox, session_id, &set, apply)
+                    .await
+                {
+                    if native_decision {
+                        self.record_ways_reconciliation_failure(session_id, set_id, &error)
+                            .map_err(|record_error| {
+                                DaemonError::Session(format!(
+                                    "{error}; retaining Keep failure also failed: {record_error}"
+                                ))
+                            })?;
+                    }
+                    return Err(error);
+                }
             }
             _ => {}
         }
@@ -18620,6 +19960,19 @@ trap - 0 1 2 15
                         index + 1
                     ))
                 })?;
+            if native_decision {
+                let assistant = self.read_lane_output(&set, index).await?.ok_or_else(|| {
+                    DaemonError::Session("Native kept output is unavailable".into())
+                })?;
+                let link = self.native_kept_session_turn(
+                    &session,
+                    &set,
+                    index,
+                    &assistant,
+                    &touched_paths,
+                )?;
+                self.record_ways_application(session_id, set_id, Some(link))?;
+            }
             set.state = crate::git::AttemptSetState::TranscriptRecorded;
             Self::persist_attempt_set_host(&session.working_dir, &set)?;
         }
@@ -18659,11 +20012,34 @@ trap - 0 1 2 15
                 index + 1
             )));
         }
+        if native_decision {
+            self.record_ways_cleanup(session_id, set_id)?;
+        }
         Ok(status)
     }
 
     /// Cancel/join a running set if necessary, then remove only that set.
     pub async fn discard_attempt(&self, session_id: &str, set_id: &str) -> Result<(), DaemonError> {
+        if !self
+            .session_dispatch_lifecycles
+            .retains_session(session_id)?
+        {
+            self.require_legacy_history_mutation(session_id, HistoryMutation::DiscardAttempts)?;
+        } else if let Some(record) = self.retained_ways_decision(session_id, set_id)? {
+            if matches!(
+                record.human_decision.choice,
+                axocoatl_session::ways_decision::WaysHumanChoice::NoKeep
+            ) {
+                if record.cleanup.completed_at_unix_ms.is_some() {
+                    return Ok(());
+                }
+                if self.peek_current_attempt_set(session_id).await?.is_none() {
+                    let operation = self.attempt_operation(session_id).await;
+                    let _operation = operation.lock().await;
+                    return self.resume_disposed_ways_cleanup(session_id, set_id).await;
+                }
+            }
+        }
         self.require_attempt_set(session_id, set_id).await?;
         let (_operation, _cancellation_requested) = self
             .lock_attempt_operation_for_cleanup(session_id, Some(set_id))
@@ -18698,12 +20074,25 @@ trap - 0 1 2 15
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         Self::require_attempt_resolution_backend(&self.config.sandbox.backend)?;
+        let native_decision = self
+            .session_dispatch_lifecycles
+            .retains_session(session_id)?;
+        self.stop_attempt_runtime(session_id, &set).await?;
+        if native_decision {
+            let sandbox = self.ensure_attempt_recovery_sandbox(&session).await?;
+            self.freeze_ways_decision(&session, &set, &sandbox, None)
+                .await?;
+            self.record_ways_application(session_id, &set.id, None)?;
+        }
         if set.state != crate::git::AttemptSetState::Discarding {
             set.state = crate::git::AttemptSetState::Discarding;
             Self::persist_attempt_set_host(&session.working_dir, &set)?;
         }
         self.stop_attempt_runtime(session_id, &set).await?;
         self.remove_attempt_worktrees(session_id, &set).await?;
+        if native_decision {
+            self.record_ways_cleanup(session_id, &set.id)?;
+        }
         let _ = self.touch_session(session_id).await;
         Ok(())
     }
@@ -18753,6 +20142,28 @@ trap - 0 1 2 15
         target_agent: Option<String>,
         sink: axocoatl_actor::StreamSink,
     ) -> Result<AgentRunOutcome, DaemonError> {
+        if self
+            .session_dispatch_lifecycles
+            .retains_session(session_id)?
+            || matches!(
+                self._data_dir_lease.ownership,
+                axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(_)
+            )
+        {
+            return self
+                .execute_native_session_send(native_send::NativeSessionSend {
+                    session_id: session_id.into(),
+                    turn_id: turn_id.into(),
+                    idempotency_key,
+                    display_input: display_input.map(str::to_owned),
+                    input: input.into(),
+                    reference_ids,
+                    context_references,
+                    model_override,
+                    target_agent,
+                })
+                .await;
+        }
         let mut lifecycle_publication_owned = false;
         let result = self
             .execute_session_turn_streaming_inner(
@@ -18780,11 +20191,13 @@ trap - 0 1 2 15
         };
         if let Some(error) = preflight_error {
             // Errors before ownership is announced still need one WS terminal
-            // response. They must not remove another turn that already owns
-            // this Session, so this publishes without touching
-            // `active_session_turns`.
+            // response. Publication checks live ownership under the same
+            // stream gate: another turn's rejection stays turn-scoped, while
+            // a conflicting retry for the exact live turn cannot terminalize
+            // its original executor.
             commit_session_preflight_error(
                 &self.stream_commit_gate,
+                &self.active_session_turns,
                 &self.stream_bus,
                 session_id,
                 turn_id,
@@ -18847,10 +20260,6 @@ trap - 0 1 2 15
                 .await
                 .begin(retry)
                 .map_err(|error| DaemonError::Session(error.to_string()))?;
-            if accepted.status.is_terminal() {
-                *lifecycle_publication_owned = true;
-                return Self::outcome_from_terminal_turn(accepted);
-            }
             if replay_session_start(
                 &self.stream_commit_gate,
                 &self.active_session_turns,
@@ -18866,25 +20275,77 @@ trap - 0 1 2 15
                     turn: turn_id.to_string(),
                 });
             }
-            if let Some(terminal) = self
-                .session_turn_store
+            // A terminal transition can race either the idempotent Begin or
+            // the live-owner lookup. Never return that result from this fast
+            // path: fall through to the terminal recovery path below, which
+            // must reconcile the manifest and drain actor ownership first.
+            let reached_terminal = accepted.status.is_terminal()
+                || self
+                    .session_turn_store
+                    .lock()
+                    .await
+                    .get(turn_id)
+                    .is_some_and(|turn| turn.status.is_terminal());
+            if !reached_terminal {
+                return Err(DaemonError::Session(format!(
+                    "turn '{turn_id}' is marked running without a live executor"
+                )));
+            }
+        }
+        let active_turn = {
+            self.active_session_turns
                 .lock()
                 .await
-                .get(turn_id)
-                .filter(|turn| turn.status.is_terminal())
-            {
-                *lifecycle_publication_owned = true;
-                return Self::outcome_from_terminal_turn(terminal);
+                .get(session_id)
+                .cloned()
+        };
+        if let Some(active) = active_turn {
+            if active.turn_id == turn_id {
+                // The ledger may already be terminal while its original owner
+                // is still committing/aborting checkpoints and draining actor
+                // state. Validate the idempotent request, then reattach to that
+                // owner instead of racing or masking its mandatory boundary.
+                let session = self.get_session(session_id).await.ok_or_else(|| {
+                    DaemonError::Session(format!("session '{session_id}' not found"))
+                })?;
+                let (_, _, mut retry) = self
+                    .prepare_session_turn_context(
+                        &session,
+                        turn_id,
+                        display_input.unwrap_or(input),
+                        &reference_ids,
+                        &context_references,
+                        model_override.clone(),
+                        target_agent.clone(),
+                    )
+                    .await?;
+                retry.idempotency_key = idempotency_key.clone();
+                self.session_turn_store
+                    .lock()
+                    .await
+                    .begin(retry)
+                    .map_err(|error| DaemonError::Session(error.to_string()))?;
+                if replay_session_start(
+                    &self.stream_commit_gate,
+                    &self.active_session_turns,
+                    &self.stream_bus,
+                    session_id,
+                    turn_id,
+                )
+                .await
+                {
+                    *lifecycle_publication_owned = true;
+                    return Err(DaemonError::SessionTurnReattached {
+                        session: session_id.to_string(),
+                        turn: turn_id.to_string(),
+                    });
+                }
+            } else {
+                return Err(DaemonError::SessionConflict(format!(
+                    "session '{session_id}' is already running turn '{}'",
+                    active.turn_id
+                )));
             }
-            return Err(DaemonError::Session(format!(
-                "turn '{turn_id}' is marked running without a live executor"
-            )));
-        }
-        if let Some(active) = self.active_session_turns.lock().await.get(session_id) {
-            return Err(DaemonError::SessionConflict(format!(
-                "session '{session_id}' is already running turn '{}'",
-                active.turn_id
-            )));
         }
         let operation = self.attempt_operation(session_id).await;
         let _operation = operation.try_lock().map_err(|_| {
@@ -18897,9 +20358,39 @@ trap - 0 1 2 15
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        let turn_already_exists = self.session_turn_store.lock().await.get(turn_id).is_some();
+        let checkpoint_transaction =
+            session_uses_checkpoint_transaction(&self.config, &session.mode);
+        if !turn_already_exists {
+            // Persisted Sessions outlive configuration edits, but a genuinely
+            // new turn must resolve its current Agent/team before migration,
+            // adoption, sandbox admission, attachment consumption, or Begin
+            // can mutate any durable state.
+            validate_session_mode(&self.config, &session.mode)?;
+        }
         self.ensure_session_turns_migrated(&session).await?;
+        if checkpoint_transaction {
+            let coordinator =
+                if let Some(agent_id) = single_agent_coordinator_id(&self.config, &session.mode) {
+                    Some(CoordinatorCheckpointAdoption {
+                        agent_id,
+                        turns: self.session_turn_store.lock().await.list(&session.id),
+                        counter: self.counter.as_ref(),
+                    })
+                } else {
+                    None
+                };
+            adopt_session_checkpoint_transactions(
+                &self.data_root,
+                self.checkpoint_store.as_ref(),
+                session_id,
+                coordinator,
+            )
+            .await?;
+        }
 
-        if let Some(existing) = self.session_turn_store.lock().await.get(turn_id) {
+        let existing_turn = { self.session_turn_store.lock().await.get(turn_id) };
+        if let Some(mut existing) = existing_turn {
             if existing.session_id != session_id {
                 return Err(DaemonError::Session(format!(
                     "turn '{turn_id}' belongs to session '{}', not '{session_id}'",
@@ -18939,28 +20430,117 @@ trap - 0 1 2 15
                         turn: turn_id.to_string(),
                     });
                 }
-                if let Some(terminal) = self
+                existing = self
                     .session_turn_store
                     .lock()
                     .await
                     .get(turn_id)
                     .filter(|turn| turn.status.is_terminal())
-                {
-                    *lifecycle_publication_owned = true;
-                    return Self::outcome_from_terminal_turn(terminal);
-                }
-                return Err(DaemonError::Session(format!(
-                    "turn '{turn_id}' is marked running without a live executor"
-                )));
+                    .ok_or_else(|| {
+                        DaemonError::Session(format!(
+                            "turn '{turn_id}' is marked running without a live executor"
+                        ))
+                    })?;
+                // The terminal transition raced the replay check. Continue to
+                // the operation-locked existing-turn branch so checkpoint and
+                // actor cleanup complete before the cached outcome is exposed.
             }
+            if checkpoint_transaction {
+                // A terminal idempotent retry is also a recovery opportunity.
+                // Do not report the cached outcome until the exact manifest is
+                // reconciled.
+                resolve_checkpoint_transaction(
+                    self.checkpoint_store.as_ref(),
+                    session_id,
+                    turn_id,
+                    Some(&existing),
+                )
+                .await?;
+            }
+            if checkpoint_transaction || terminal_requires_fresh_session_actor(existing.status) {
+                // A failed terminal cleanup keeps its registry ownership. Both
+                // exact retries and genuinely new turns must prove that actor
+                // stopped before reporting or proceeding, including ordinary
+                // autonomous SingleAgent Sessions with no checkpoint manifest.
+                self.stop_session_actor_instances_checked(session_id)
+                    .await
+                    .map_err(|error| {
+                        DaemonError::Session(format!(
+                            "could not settle the terminal Session actor boundary: {error}"
+                        ))
+                    })?;
+            }
+            let (token_usage, token_usage_known) = Self::terminal_turn_measurement(&existing);
+            let terminal = Self::outcome_from_terminal_turn(existing)
+                .map(|outcome| (outcome, token_usage_known))
+                .map_err(|error| SessionRunFailure {
+                    error,
+                    token_usage,
+                    token_usage_known,
+                    coordinated_partial_output: None,
+                });
+            let frame = session_terminal_stream_frame(session_id, turn_id, &terminal, &[]);
             *lifecycle_publication_owned = true;
-            return Self::outcome_from_terminal_turn(existing);
+            commit_session_terminal_after_operation_release(
+                _operation,
+                &self.stream_commit_gate,
+                &self.active_session_turns,
+                &self.stream_bus,
+                session_id,
+                turn_id,
+                frame,
+            )
+            .await;
+            return terminal
+                .map(|(outcome, _)| outcome)
+                .map_err(|failure| failure.error);
         }
         if let Some(active) = self.active_session_turns.lock().await.get(session_id) {
             return Err(DaemonError::SessionConflict(format!(
                 "session '{session_id}' is already running turn '{}'",
                 active.turn_id
             )));
+        }
+
+        let prior_turn_status = self
+            .session_turn_store
+            .lock()
+            .await
+            .list(session_id)
+            .last()
+            .map(|turn| turn.status);
+        if prior_turn_status == Some(SessionTurnLifecycle::Running) {
+            return Err(DaemonError::Session(format!(
+                "session '{session_id}' has a prior turn still marked running without a live executor; restart Axocoatl to reconcile it before starting another turn"
+            )));
+        }
+        let prior_turn_requires_actor_reset =
+            prior_turn_status.is_some_and(terminal_requires_fresh_session_actor);
+        if checkpoint_transaction {
+            reconcile_checkpoint_transactions_from_ledger(
+                self.checkpoint_store.as_ref(),
+                self.session_turn_store.as_ref(),
+                Some(session_id),
+            )
+            .await?;
+        }
+        if checkpoint_transaction || prior_turn_requires_actor_reset {
+            // Every transaction-enabled turn gets fresh actor instances with
+            // a fresh turn-scoped checkpoint store. This prefix includes a
+            // Coordinator's declared and ad-hoc workers, not only graph nodes.
+            // Ordinary autonomous Sessions also rebuild after a failed,
+            // cancelled, or interrupted prior turn so a failed terminal stop
+            // cannot leak the old actor into a new canonical Begin. Completed
+            // ordinary turns retain their live actor for conversation
+            // continuity. Reject before Begin if any required prior executor
+            // cannot be proven stopped; its registry entry remains the guard.
+            self.stop_session_actor_instances_checked(session_id)
+                .await
+                .map_err(|error| {
+                    DaemonError::Session(format!(
+                        "could not establish a clean Session actor boundary before the new turn: {error}"
+                    ))
+                })?;
         }
 
         // Only a genuinely new turn crosses the environment boundary. Exact
@@ -18988,6 +20568,32 @@ trap - 0 1 2 15
             .await
             .begin(begin)
             .map_err(|e| DaemonError::Session(e.to_string()))?;
+        if checkpoint_transaction {
+            if let Err(error) = self
+                .checkpoint_store
+                .begin_session_turn(session_id, &accepted.id)
+                .await
+            {
+                let transition = self.session_turn_store.lock().await.transition(
+                    &accepted.id,
+                    format!("checkpoint-transaction-begin-failed:{}", accepted.id),
+                    TransitionSessionTurn {
+                        status: SessionTurnLifecycle::Failed,
+                        final_output: None,
+                        error: Some(error.to_string()),
+                        metadata: serde_json::Map::new(),
+                    },
+                );
+                return Err(DaemonError::Session(match transition {
+                    Ok(_) => format!(
+                        "could not begin Session checkpoint transaction: {error}"
+                    ),
+                    Err(transition_error) => format!(
+                        "could not begin Session checkpoint transaction: {error}; could not persist failed turn: {transition_error}"
+                    ),
+                }));
+            }
+        }
         // A new accepted turn supersedes the prior provenance filter even if
         // actor startup later fails before any tool can run.
         self.remember_session_last_turn_files(session_id, Vec::new());
@@ -18996,7 +20602,7 @@ trap - 0 1 2 15
             &selected_refs,
             &accepted.id,
         ) {
-            let _ = self.session_turn_store.lock().await.transition(
+            let transition = self.session_turn_store.lock().await.transition(
                 &accepted.id,
                 format!("attachment-consume-failed:{}", accepted.id),
                 TransitionSessionTurn {
@@ -19006,9 +20612,37 @@ trap - 0 1 2 15
                     metadata: serde_json::Map::new(),
                 },
             );
-            return Err(DaemonError::Session(error.to_string()));
+            let abort = if transition.is_ok() && checkpoint_transaction {
+                self.checkpoint_store
+                    .abort_session_turn(session_id, &accepted.id)
+                    .await
+                    .err()
+                    .map(|abort_error| abort_error.to_string())
+            } else {
+                None
+            };
+            let mut details = error.to_string();
+            if let Err(transition_error) = transition {
+                details.push_str(&format!(
+                    "; could not persist failed turn: {transition_error}"
+                ));
+            }
+            if let Some(abort_error) = abort {
+                details.push_str(&format!(
+                    "; could not abort Session checkpoint transaction: {abort_error}"
+                ));
+            }
+            return Err(DaemonError::Session(details));
         }
 
+        // Agent input and restart context share the accepted immutable snapshot.
+        // Browser-supplied selection bodies remain unchanged for older clients.
+        let resolved_input = accepted
+            .context
+            .iter()
+            .any(|reference| reference.kind == "coordination_reference")
+            .then(|| axocoatl_memory::legacy_conversation::checkpoint_user_content(&accepted));
+        let input = resolved_input.as_deref().unwrap_or(input);
         let control = AgentRunControl::new(AgentRunId::new(turn_id));
         commit_session_start(
             &self.stream_commit_gate,
@@ -19033,7 +20667,7 @@ trap - 0 1 2 15
 
         let run = match &session.mode {
             SessionMode::SingleAgent { agent_id } => {
-                let actor = self.session_actor(&session, agent_id).await;
+                let actor = self.session_actor(&session, agent_id, turn_id, false).await;
                 match actor {
                     Ok(actor) => {
                         let agent_input = axocoatl_core::AgentInput::text(input)
@@ -19122,22 +20756,6 @@ trap - 0 1 2 15
             }
         };
 
-        // Any execution error may have occurred after the actor mutated its
-        // in-memory transcript but before its checkpoint became durable. Drop
-        // every scoped actor for this Session so a later turn cannot silently
-        // continue from state the canonical ledger did not accept.
-        let run = match run {
-            Ok(run) => Ok(run),
-            Err(mut failure) => match self.stop_session_actors_checked(session_id).await {
-                Ok(()) => Err(failure),
-                Err(stop_error) => {
-                    failure.error = DaemonError::Session(format!(
-                        "{failure}; could not discard failed Session actor state: {stop_error}"
-                    ));
-                    Err(failure)
-                }
-            },
-        };
         let touched_paths = self.session_last_turn_files(session_id);
 
         let terminal = match run {
@@ -19207,17 +20825,13 @@ trap - 0 1 2 15
             Err(error) => Err(error),
         };
 
-        let terminal = match terminal {
+        let mut terminal = match terminal {
             Ok(outcome) => Ok(outcome),
             Err(mut failure) => {
                 // This includes failures after the actor checkpoint succeeded
                 // but before the canonical ledger accepted its output/terminal
-                // event. Never reuse that ahead-of-ledger in-memory actor.
-                let actor_discard_error = self
-                    .stop_session_actors_checked(session_id)
-                    .await
-                    .err()
-                    .map(|error| error.to_string());
+                // event. Persist the canonical failure before resolving any
+                // staged checkpoint or stopping its actor.
                 let transition = self.session_turn_store.lock().await.transition(
                     turn_id,
                     format!("terminal:{turn_id}"),
@@ -19230,79 +20844,69 @@ trap - 0 1 2 15
                         &touched_paths,
                     ),
                 );
-                failure.error = match (transition, actor_discard_error) {
-                    (Ok(_), None) => failure.error,
-                    (Ok(_), Some(discard_error)) => DaemonError::Session(format!(
-                        "{}; could not discard divergent Session actor state: {discard_error}",
-                        failure.error
-                    )),
-                    (Err(transition_error), None) => DaemonError::Session(format!(
+                failure.error = match transition {
+                    Ok(_) => failure.error,
+                    Err(transition_error) => DaemonError::Session(format!(
                         "{}; could not persist failed turn: {transition_error}",
-                        failure.error
-                    )),
-                    (Err(transition_error), Some(discard_error)) => DaemonError::Session(format!(
-                        "{}; could not persist failed turn: {transition_error}; could not discard divergent Session actor state: {discard_error}",
                         failure.error
                     )),
                 };
                 Err(failure)
             }
         };
-        // Cancellation is a canonical terminal boundary, not a resumable
-        // pause in the actor's private tool loop. The actor may have already
-        // checkpointed reasoning or a next tool call that the turn ledger did
-        // not accept. Discard it only after Cancelled is durable and before
-        // releasing live ownership; the next turn will respawn from the
-        // canonical terminal-turn projection in `session_actor`.
-        let terminal = match terminal {
-            Ok((outcome, token_usage_known)) if outcome.is_cancelled() => match self
-                .stop_session_actors_checked(session_id)
-                .await
-            {
-                Ok(()) => Ok((outcome, token_usage_known)),
-                Err(error) => Err(SessionRunFailure::from_outcome(
-                    DaemonError::Session(format!(
-                        "turn '{turn_id}' was cancelled, but its Session actor state could not be discarded: {error}"
-                    )),
-                    &outcome,
-                    token_usage_known,
-                )),
-            },
-            terminal => terminal,
-        };
-        let terminal_frame = match &terminal {
-            Ok((AgentRunOutcome::Completed(output), token_usage_known)) => {
-                crate::stream::StreamFrame::SessionDone {
-                    session: session_id.to_string(),
-                    turn_id: Some(turn_id.to_string()),
-                    input_tokens: output.token_usage.input_tokens as u64,
-                    output_tokens: output.token_usage.output_tokens as u64,
-                    reasoning_tokens: output.token_usage.reasoning_tokens.unwrap_or(0) as u64,
-                    token_usage_known: *token_usage_known,
+
+        // The Session ledger is the commit authority. Resolve the private
+        // actor cache only after its exact terminal transition is durable,
+        // then stop every transaction-scoped actor before releasing the live
+        // turn owner. Abort retains incurred accounting but rejects pending
+        // transcript and orchestration state.
+        let mut post_terminal_errors = Vec::new();
+        if session_uses_checkpoint_transaction(&self.config, &session.mode) {
+            let durable = self.session_turn_store.lock().await.get(turn_id);
+            match checkpoint_transaction_resolution(session_id, turn_id, durable.as_ref()) {
+                Ok(resolution) if durable.as_ref().is_some_and(|turn| turn.status.is_terminal()) => {
+                    if let Err(error) = self
+                        .checkpoint_store
+                        .reconcile_session_turn(session_id, turn_id, resolution)
+                        .await
+                    {
+                        post_terminal_errors.push(format!(
+                            "could not resolve Session checkpoint transaction: {error}"
+                        ));
+                    }
                 }
+                Ok(_) => post_terminal_errors.push(
+                    "could not resolve Session checkpoint transaction before its canonical terminal state was durable"
+                        .to_string(),
+                ),
+                Err(error) => post_terminal_errors.push(error.to_string()),
             }
-            Ok((AgentRunOutcome::Cancelled { partial_output, .. }, token_usage_known)) => {
-                crate::stream::StreamFrame::SessionCancelled {
-                    session: session_id.to_string(),
-                    turn_id: turn_id.to_string(),
-                    input_tokens: partial_output.token_usage.input_tokens as u64,
-                    output_tokens: partial_output.token_usage.output_tokens as u64,
-                    reasoning_tokens: partial_output.token_usage.reasoning_tokens.unwrap_or(0)
-                        as u64,
-                    token_usage_known: *token_usage_known,
-                }
+        }
+        let reset_actors = session_uses_checkpoint_transaction(&self.config, &session.mode)
+            || terminal.is_err()
+            || terminal
+                .as_ref()
+                .is_ok_and(|(outcome, _)| outcome.is_cancelled());
+        if reset_actors {
+            if let Err(error) = self.stop_session_actor_instances_checked(session_id).await {
+                post_terminal_errors.push(format!(
+                    "could not stop Session actor state at its terminal boundary: {error}"
+                ));
             }
-            Err(failure) => crate::stream::StreamFrame::SessionError {
-                session: session_id.to_string(),
-                turn_id: Some(turn_id.to_string()),
-                error: failure.to_string(),
-                input_tokens: failure.token_usage.input_tokens as u64,
-                output_tokens: failure.token_usage.output_tokens as u64,
-                reasoning_tokens: failure.token_usage.reasoning_tokens.unwrap_or(0) as u64,
-                token_usage_known: failure.token_usage_known,
-            },
-        };
-        commit_session_terminal(
+        }
+        if let Err(failure) = &mut terminal {
+            if !post_terminal_errors.is_empty() {
+                failure.error = DaemonError::Session(format!(
+                    "{}; {}",
+                    failure.error,
+                    post_terminal_errors.join("; ")
+                ));
+            }
+        }
+        let terminal_frame =
+            session_terminal_stream_frame(session_id, turn_id, &terminal, &post_terminal_errors);
+        commit_session_terminal_after_operation_release(
+            _operation,
             &self.stream_commit_gate,
             &self.active_session_turns,
             &self.stream_bus,
@@ -19312,13 +20916,19 @@ trap - 0 1 2 15
         )
         .await;
         let _ = self.touch_session(session_id).await;
-        terminal.map(|(outcome, _)| outcome).map_err(|failure| {
-            DaemonError::session_execution_measured(
+        match terminal {
+            Ok((outcome, _)) if post_terminal_errors.is_empty() => Ok(outcome),
+            Ok((outcome, token_usage_known)) => Err(DaemonError::session_execution_measured(
+                DaemonError::Session(post_terminal_errors.join("; ")),
+                outcome.output().token_usage.clone(),
+                token_usage_known,
+            )),
+            Err(failure) => Err(DaemonError::session_execution_measured(
                 failure.error,
                 failure.token_usage,
                 failure.token_usage_known,
-            )
-        })
+            )),
+        }
     }
 
     pub async fn stop_session_turn(
@@ -19326,6 +20936,30 @@ trap - 0 1 2 15
         session_id: &str,
         turn_id: &str,
     ) -> Result<bool, DaemonError> {
+        if let Some(first_request) = self
+            .session_dispatch_lifecycles
+            .request_human_turn_stop(session_id, turn_id)?
+        {
+            // The durable Stop fences effects before an approval hook wakes.
+            self.mcp_approval_gate
+                .deny_pending_for_agent_prefix(&format!("{session_id}:"))
+                .await;
+            session_control_execution::settle_closed_native_control(
+                &self.session_dispatch_lifecycles,
+                &self.stream_bus,
+                session_id,
+                &axocoatl_session::turn_contract::LogicalTurnId::new(turn_id)
+                    .map_err(|error| DaemonError::SessionConflict(error.to_string()))?,
+            )?;
+            return Ok(first_request);
+        }
+        if matches!(
+            self._data_dir_lease.ownership,
+            axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(_)
+        ) {
+            return Err(DaemonError::SessionConflict(
+                "This native Session has no retained Stop controller; legacy execution cannot substitute for it.".into()));
+        }
         self.request_session_turn_stop(session_id, Some(turn_id))
             .await?
             .ok_or_else(|| {
@@ -19431,7 +21065,10 @@ trap - 0 1 2 15
             .await
             .snapshot_into_begin(&mut begin, &selected)
             .map_err(|e| DaemonError::Session(e.to_string()))?;
-        let inline = Self::validate_inline_context(turn_id, context_references)?;
+        let resolved = self
+            .resolve_coordination_context(&session.id, turn_id, context_references)
+            .await?;
+        let inline = Self::validate_inline_context(turn_id, &resolved)?;
         begin.context.extend(inline);
 
         let file_store = self.file_store.lock().await;
@@ -19478,7 +21115,7 @@ trap - 0 1 2 15
         for (index, reference) in references.iter().enumerate() {
             if !matches!(
                 reference.kind.as_str(),
-                "code_selection" | "browser_selection"
+                "code_selection" | "browser_selection" | "coordination_reference" | "ways_decision"
             ) {
                 return Err(DaemonError::Session(format!(
                     "unsupported inline context kind '{}'",
@@ -19501,7 +21138,12 @@ trap - 0 1 2 15
                     "inline context name or origin is invalid".to_string(),
                 ));
             }
-            if reference.content_sha256.is_some() {
+            if reference.content_sha256.is_some()
+                && !matches!(
+                    reference.kind.as_str(),
+                    "coordination_reference" | "ways_decision"
+                )
+            {
                 return Err(DaemonError::Session(
                     "inline selection hashes are not accepted until their source bytes can be verified"
                         .to_string(),
@@ -19610,7 +21252,9 @@ trap - 0 1 2 15
                     AgentStreamChunk::ToolCallResult { id, .. } => {
                         Some(tool_occurrences.finish(id))
                     }
-                    AgentStreamChunk::Text(_) | AgentStreamChunk::Reasoning(_) => None,
+                    AgentStreamChunk::Text(_)
+                    | AgentStreamChunk::Reasoning(_)
+                    | AgentStreamChunk::ProviderRetry { .. } => None,
                 };
                 match &chunk {
                     AgentStreamChunk::ToolCallStarted {
@@ -19700,7 +21344,9 @@ trap - 0 1 2 15
                         result,
                         Some(*is_error),
                     )),
-                    AgentStreamChunk::Text(_) | AgentStreamChunk::Reasoning(_) => None,
+                    AgentStreamChunk::Text(_)
+                    | AgentStreamChunk::Reasoning(_)
+                    | AgentStreamChunk::ProviderRetry { .. } => None,
                 };
                 let persisted = if let Some((operation, event)) = tool_event {
                     ledger
@@ -19708,13 +21354,13 @@ trap - 0 1 2 15
                         .await
                         .record_execution(&turn_id, operation, event)
                         .map(|_| ())
-                } else if let AgentStreamChunk::Text(delta) = &chunk {
+                } else if let Some(delta) = partial_output_text(&chunk) {
                     let operation = format!("partial:{turn_id}:single:{text_sequence}");
                     text_sequence = text_sequence.saturating_add(1);
                     ledger
                         .lock()
                         .await
-                        .append_output(&turn_id, operation, delta.clone())
+                        .append_output(&turn_id, operation, delta.to_owned())
                         .map(|_| ())
                 } else {
                     Ok(())
@@ -19733,6 +21379,7 @@ trap - 0 1 2 15
                     &agent_id,
                     Some(&turn_id),
                     tool_occurrence,
+                    None,
                 );
                 let _ = bus.send(frame);
                 drop(stream_commit);
@@ -19760,6 +21407,7 @@ trap - 0 1 2 15
                 )),
                 token_usage,
                 token_usage_known,
+                coordinated_partial_output: None,
             });
         }
         outcome
@@ -19785,6 +21433,168 @@ trap - 0 1 2 15
         }
     }
 
+    async fn record_session_coordination_event(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        operation_id: String,
+        mut event: RecordTurnExecution,
+        usage: &axocoatl_core::TokenUsageStats,
+        token_usage_known: bool,
+    ) -> Result<(), SessionRunFailure> {
+        event
+            .metadata
+            .entry("session_id".to_string())
+            .or_insert_with(|| serde_json::Value::String(session_id.to_string()));
+        event
+            .metadata
+            .entry("turn_id".to_string())
+            .or_insert_with(|| serde_json::Value::String(turn_id.to_string()));
+        let stream_commit = self.stream_commit_gate.lock().await;
+        let persisted = self
+            .session_turn_store
+            .lock()
+            .await
+            .record_execution(turn_id, operation_id.clone(), event)
+            .map_err(|error| SessionRunFailure {
+                error: DaemonError::Session(format!(
+                    "could not persist Session coordination event: {error}"
+                )),
+                token_usage: usage.clone(),
+                token_usage_known,
+                coordinated_partial_output: None,
+            })?
+            .execution_events
+            .into_iter()
+            .find(|candidate| candidate.operation_id == operation_id)
+            .ok_or_else(|| SessionRunFailure {
+                error: DaemonError::Session(
+                    "persisted Session coordination event could not be rehydrated".to_string(),
+                ),
+                token_usage: usage.clone(),
+                token_usage_known,
+                coordinated_partial_output: None,
+            })?;
+        let _ = self
+            .stream_bus
+            .send(crate::stream::StreamFrame::Coordination {
+                session: session_id.to_string(),
+                turn_id: turn_id.to_string(),
+                operation_id: persisted.operation_id,
+                recorded_at: persisted.recorded_at,
+                event: persisted.event,
+            });
+        drop(stream_commit);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn record_coordinated_agent_output(
+        &self,
+        turn_id: &str,
+        agent_id: &str,
+        model: Option<String>,
+        generation: u32,
+        disposition: SessionTurnAgentOutputDisposition,
+        causal_signal_id: Option<String>,
+        output: &axocoatl_core::AgentOutput,
+        usage: &axocoatl_core::TokenUsageStats,
+        token_usage_known: bool,
+    ) -> Result<(), SessionRunFailure> {
+        self.session_turn_store
+            .lock()
+            .await
+            .record_agent_output_with_coordination(
+                turn_id,
+                format!("agent-output:{turn_id}:{agent_id}:generation-{generation}"),
+                agent_id,
+                model,
+                output.content.clone(),
+                SessionTurnAgentOutputIdentity {
+                    activation_generation: generation,
+                    disposition,
+                    causal_signal_id,
+                },
+            )
+            .map_err(|error| SessionRunFailure {
+                error: DaemonError::Session(error.to_string()),
+                token_usage: usage.clone(),
+                token_usage_known,
+                coordinated_partial_output: None,
+            })?;
+        Ok(())
+    }
+
+    async fn record_coordination_feedback_batch(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        batch_operation_id: String,
+        mut operations: Vec<SessionTurnAtomicOperation>,
+        usage: &axocoatl_core::TokenUsageStats,
+        token_usage_known: bool,
+    ) -> Result<(), SessionRunFailure> {
+        let execution_operation_ids = operations
+            .iter_mut()
+            .filter_map(|operation| match &mut operation.mutation {
+                SessionTurnAtomicMutation::Execution { execution } => {
+                    execution
+                        .metadata
+                        .entry("session_id".to_string())
+                        .or_insert_with(|| serde_json::Value::String(session_id.to_string()));
+                    execution
+                        .metadata
+                        .entry("turn_id".to_string())
+                        .or_insert_with(|| serde_json::Value::String(turn_id.to_string()));
+                    Some(operation.operation_id.clone())
+                }
+                SessionTurnAtomicMutation::AgentOutput { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        let stream_commit = self.stream_commit_gate.lock().await;
+        let persisted = self
+            .session_turn_store
+            .lock()
+            .await
+            .record_operations_atomically(turn_id, batch_operation_id, operations)
+            .map_err(|error| SessionRunFailure {
+                error: DaemonError::Session(format!(
+                    "could not persist atomic Session coordination feedback: {error}"
+                )),
+                token_usage: usage.clone(),
+                token_usage_known,
+                coordinated_partial_output: None,
+            })?;
+        let mut frames = Vec::with_capacity(execution_operation_ids.len());
+        for operation_id in execution_operation_ids {
+            let event = persisted
+                .execution_events
+                .iter()
+                .find(|candidate| candidate.operation_id == operation_id)
+                .cloned()
+                .ok_or_else(|| SessionRunFailure {
+                    error: DaemonError::Session(format!(
+                        "atomic Session coordination event '{operation_id}' could not be rehydrated"
+                    )),
+                    token_usage: usage.clone(),
+                    token_usage_known,
+                    coordinated_partial_output: None,
+                })?;
+            frames.push(crate::stream::StreamFrame::Coordination {
+                session: session_id.to_string(),
+                turn_id: turn_id.to_string(),
+                operation_id: event.operation_id,
+                recorded_at: event.recorded_at,
+                event: event.event,
+            });
+        }
+        for frame in frames {
+            let _ = self.stream_bus.send(frame);
+        }
+        drop(stream_commit);
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn execute_session_agents_controlled(
         &self,
@@ -19796,32 +21606,976 @@ trap - 0 1 2 15
         attachments: Vec<axocoatl_core::AgentAttachment>,
         control: AgentRunControl,
     ) -> Result<SessionAgentsRun, SessionRunFailure> {
-        for agent_id in &agents {
-            if self
-                .config
-                .agents
-                .iter()
-                .find(|agent| agent.id == *agent_id)
-                .is_some_and(|agent| matches!(agent.role, AgentRoleYaml::Worker))
-            {
-                return Err(DaemonError::Session(format!(
-                    "agent '{agent_id}' is a coordinator-owned worker and cannot be targeted directly"
-                ))
-                .into());
-            }
+        if agents.is_empty() {
+            return Err(DaemonError::Session("no agents ran".to_string()).into());
         }
-        let mut order = Self::topo_order(&agents, &self.config);
-        if let Some(target) = target_agent.as_deref() {
-            if !order.iter().any(|agent| agent == target) {
+        if let Some(target) = target_agent {
+            if !agents.iter().any(|agent| agent == &target) {
                 return Err(DaemonError::Session(format!(
                     "target agent '{target}' is not in this session"
                 ))
                 .into());
             }
-            order.retain(|agent| agent == target);
+            self.stop_session_agent_actor_checked(&session.id, &target)
+                .await?;
+            return self
+                .execute_direct_session_agent_controlled(
+                    session,
+                    target,
+                    input,
+                    model_override,
+                    attachments,
+                    control,
+                )
+                .await;
         }
-        if order.is_empty() {
-            return Err(DaemonError::Session("no agents ran".to_string()).into());
+        if agents.len() == 1 {
+            self.stop_session_agent_actor_checked(&session.id, &agents[0])
+                .await?;
+            return self
+                .execute_direct_session_agent_controlled(
+                    session,
+                    agents[0].clone(),
+                    input,
+                    model_override,
+                    attachments,
+                    control,
+                )
+                .await;
+        }
+
+        self.execute_coordinated_session_agents(
+            session,
+            agents,
+            input,
+            model_override,
+            attachments,
+            control,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_coordinated_session_agents(
+        &self,
+        session: &Session,
+        agents: Vec<String>,
+        input: &str,
+        model_override: Option<String>,
+        attachments: Vec<axocoatl_core::AgentAttachment>,
+        control: AgentRunControl,
+    ) -> Result<SessionAgentsRun, SessionRunFailure> {
+        let graph = coordinated_agent_graph(&agents, &self.config)?;
+        for agent_id in &agents {
+            self.stop_session_agent_actor_checked(&session.id, agent_id)
+                .await?;
+        }
+        let mut scheduler = TurnCoordinationScheduler::new(graph.clone());
+        let sinks = coordinated_graph_sinks(&graph);
+        let turn_id = control.id().to_string();
+        let mut event_sequence = 0_u64;
+        let mut next_operation = |kind: &str| {
+            let operation = format!("coordination:{turn_id}:{event_sequence}:{kind}");
+            event_sequence = event_sequence.saturating_add(1);
+            operation
+        };
+        let mut usage = axocoatl_core::TokenUsageStats::default();
+        let mut token_usage_known = true;
+        let mut outputs = Vec::new();
+        let mut output_by_signal = HashMap::<String, axocoatl_core::AgentOutput>::new();
+        let mut latest_completed =
+            HashMap::<String, (u32, String, axocoatl_core::AgentOutput)>::new();
+        let mut first_failure = None::<String>;
+        let mut touched_paths = HashSet::<String>::new();
+        let mut cancelled = false;
+
+        let agent_metadata = graph
+            .nodes()
+            .iter()
+            .map(|node| {
+                let name = self
+                    .config
+                    .agents
+                    .iter()
+                    .find(|agent| agent.id == node.id)
+                    .map(|agent| agent.name.clone())
+                    .unwrap_or_else(|| node.id.clone());
+                serde_json::json!({
+                    "id": node.id,
+                    "name": name,
+                    "depends_on": node.depends_on,
+                })
+            })
+            .collect::<Vec<_>>();
+        let roots = graph
+            .nodes()
+            .iter()
+            .filter(|node| node.depends_on.is_empty())
+            .map(|node| node.id.clone())
+            .collect::<Vec<_>>();
+        self.record_session_coordination_event(
+            &session.id,
+            &turn_id,
+            next_operation("planned"),
+            RecordTurnExecution {
+                kind: "coordination_planned".to_string(),
+                execution_id: Some(turn_id.clone()),
+                attempt_id: None,
+                metadata: serde_json::json!({
+                    "agents": agent_metadata,
+                    "roots": roots,
+                    "sinks": sinks,
+                    "max_generations": scheduler.max_activations_per_agent(),
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            },
+            &usage,
+            token_usage_known,
+        )
+        .await?;
+
+        loop {
+            if control.is_cancelled() {
+                let event_start = scheduler.events().len();
+                scheduler.cancel();
+                for event in scheduler.events()[event_start..].iter().cloned() {
+                    if event.kind != TurnCoordinationEventKind::AgentCancelled {
+                        continue;
+                    }
+                    self.record_session_coordination_event(
+                        &session.id,
+                        &turn_id,
+                        next_operation("agent-cancelled"),
+                        RecordTurnExecution {
+                            kind: "coordination_agent_cancelled".to_string(),
+                            execution_id: Some(turn_id.clone()),
+                            attempt_id: None,
+                            metadata: serde_json::json!({
+                                "agent_id": event.agent_id,
+                                "generation": event.generation,
+                                "cause_signal_ids": event.cause_signal_ids,
+                                "reason": "turn_stop",
+                                "usage": coordination_usage_value(&Default::default(), true),
+                            })
+                            .as_object()
+                            .cloned()
+                            .unwrap_or_default(),
+                        },
+                        &usage,
+                        token_usage_known,
+                    )
+                    .await?;
+                    let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
+                        event_type: "AgentCancelled".to_string(),
+                        agent: Some(event.agent_id),
+                        task: None,
+                        name: None,
+                        output: None,
+                        tokens: None,
+                        workflow: Some(session.id.clone()),
+                    });
+                }
+                cancelled = true;
+                break;
+            }
+
+            let Some(ready) = scheduler.ready_activations().into_iter().next() else {
+                break;
+            };
+            let activation = scheduler.start(&ready.agent_id).map_err(|error| {
+                SessionRunFailure::known_zero(DaemonError::Session(format!(
+                    "could not activate coordinated Agent '{}': {error}",
+                    ready.agent_id
+                )))
+                .with_prior_usage(&usage, token_usage_known)
+            })?;
+            let agent_id = activation.agent_id.clone();
+            let generation = activation.generation;
+            let cause_signal_ids = activation
+                .inputs
+                .iter()
+                .map(|signal| signal.id.clone())
+                .collect::<Vec<_>>();
+            self.record_session_coordination_event(
+                &session.id,
+                &turn_id,
+                next_operation("agent-activated"),
+                RecordTurnExecution {
+                    kind: "coordination_agent_activated".to_string(),
+                    execution_id: Some(turn_id.clone()),
+                    attempt_id: None,
+                    metadata: serde_json::json!({
+                        "agent_id": agent_id,
+                        "generation": generation,
+                        "cause_signal_ids": cause_signal_ids,
+                        "parents": graph.node(&agent_id).map(|node| node.depends_on.clone()).unwrap_or_default(),
+                    })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+                },
+                &usage,
+                token_usage_known,
+            )
+            .await?;
+            let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
+                event_type: "AgentActivated".to_string(),
+                agent: Some(agent_id.clone()),
+                task: None,
+                name: None,
+                output: None,
+                tokens: None,
+                workflow: Some(session.id.clone()),
+            });
+
+            let allowed_targets =
+                coordinated_revision_targets(&graph, &scheduler, &agent_id, generation);
+            let signal_lease = self
+                .coordination_signal_router
+                .activate(
+                    &session.id,
+                    &turn_id,
+                    &agent_id,
+                    generation,
+                    allowed_targets.iter().cloned(),
+                )
+                .map_err(|error| SessionRunFailure {
+                    error: DaemonError::Session(error),
+                    token_usage: usage.clone(),
+                    token_usage_known,
+                    coordinated_partial_output: None,
+                })?;
+            let actor = match self.session_actor(session, &agent_id, &turn_id, true).await {
+                Ok(actor) => actor,
+                Err(error) => {
+                    drop(signal_lease);
+                    let summary = error.to_string();
+                    let signal_id =
+                        format!("coordination-signal:{turn_id}:{agent_id}:g{generation}:failed");
+                    let event_start = scheduler.events().len();
+                    scheduler
+                        .fail(&agent_id, &signal_id, bounded_coordination_summary(&summary, 512))
+                        .map_err(|scheduler_error| SessionRunFailure {
+                            error: DaemonError::Session(format!(
+                                "{summary}; coordination failure transition also failed: {scheduler_error}"
+                            )),
+                            token_usage: usage.clone(),
+                            token_usage_known,
+                            coordinated_partial_output: None,
+                        })?;
+                    first_failure.get_or_insert_with(|| summary.clone());
+                    for event in scheduler.events()[event_start..].iter().cloned() {
+                        if !matches!(
+                            event.kind,
+                            TurnCoordinationEventKind::AgentFailed
+                                | TurnCoordinationEventKind::AgentBlocked
+                        ) {
+                            continue;
+                        }
+                        let kind = coordination_lifecycle_kind(event.kind)
+                            .expect("failed and blocked events have ledger kinds");
+                        self.record_session_coordination_event(
+                            &session.id,
+                            &turn_id,
+                            next_operation(kind),
+                            RecordTurnExecution {
+                                kind: kind.to_string(),
+                                execution_id: Some(turn_id.clone()),
+                                attempt_id: None,
+                                metadata: serde_json::json!({
+                                    "agent_id": event.agent_id,
+                                    "generation": event.generation,
+                                    "cause_signal_ids": event.cause_signal_ids,
+                                    "summary": event.signal.as_ref().map(|signal| signal.summary.clone()),
+                                    "signal_id": event.signal.as_ref().map(|signal| signal.id.clone()),
+                                    "usage": coordination_usage_value(&Default::default(), true),
+                                })
+                                .as_object()
+                                .cloned()
+                                .unwrap_or_default(),
+                            },
+                            &usage,
+                            token_usage_known,
+                        )
+                        .await?;
+                    }
+                    let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
+                        event_type: "AgentFailed".to_string(),
+                        agent: Some(agent_id),
+                        task: None,
+                        name: None,
+                        output: Some(bounded_coordination_summary(&summary, 200)),
+                        tokens: Some(0),
+                        workflow: Some(session.id.clone()),
+                    });
+                    continue;
+                }
+            };
+            let content = coordinated_activation_input(
+                input,
+                &activation,
+                &output_by_signal,
+                &allowed_targets,
+            )
+            .map_err(|error| SessionRunFailure {
+                error,
+                token_usage: usage.clone(),
+                token_usage_known,
+                coordinated_partial_output: None,
+            })?;
+            let trace: Arc<StdMutex<Vec<crate::trajectory::Action>>> =
+                Arc::new(StdMutex::new(Vec::new()));
+            let run = Self::stream_agent_run(
+                self.stream_bus.clone(),
+                actor,
+                session.id.clone(),
+                agent_id.clone(),
+                content,
+                StreamAgentRunOptions {
+                    model_override: model_override.clone(),
+                    run_context: Some(serde_json::json!({
+                        "workflow_id": session.id,
+                        "coordination_turn_id": turn_id,
+                        "coordination_generation": generation,
+                    })),
+                    trace: Some(trace.clone()),
+                    supplied_history: None,
+                    attachments: attachments.clone(),
+                    control: Some(control.clone()),
+                    turn_id: Some(turn_id.clone()),
+                    partial_ledger: Some(self.session_turn_store.clone()),
+                    stream_commit_gate: Some(self.stream_commit_gate.clone()),
+                    coordination_generation: Some(generation),
+                },
+            )
+            .await;
+            let requested_changes = signal_lease.take_signals();
+            drop(signal_lease);
+            if let Ok(steps) = trace.lock() {
+                touched_paths.extend(session_write_paths(session, &steps));
+            }
+
+            let measured = match run {
+                Ok(measured) => measured,
+                Err(failure) => {
+                    usage.merge(&failure.token_usage);
+                    token_usage_known &= failure.token_usage_known;
+                    let summary = if failure.coordinated_partial_output.is_some() {
+                        failure.error.to_string()
+                    } else {
+                        format!(
+                            "{}; coordinated failure did not retain its streamed-output boundary",
+                            failure.error
+                        )
+                    };
+                    let signal_id =
+                        format!("coordination-signal:{turn_id}:{agent_id}:g{generation}:failed");
+                    let event_start = scheduler.events().len();
+                    scheduler
+                        .fail(&agent_id, &signal_id, bounded_coordination_summary(&summary, 512))
+                        .map_err(|scheduler_error| SessionRunFailure {
+                            error: DaemonError::Session(format!(
+                                "{summary}; coordination failure transition also failed: {scheduler_error}"
+                            )),
+                            token_usage: usage.clone(),
+                            token_usage_known,
+                            coordinated_partial_output: None,
+                        })?;
+                    first_failure.get_or_insert_with(|| summary.clone());
+                    for signal in requested_changes {
+                        self.record_session_coordination_event(
+                            &session.id,
+                            &turn_id,
+                            next_operation("signal"),
+                            RecordTurnExecution {
+                                kind: "coordination_signal".to_string(),
+                                execution_id: Some(turn_id.clone()),
+                                attempt_id: None,
+                                metadata: serde_json::json!({
+                                    "from_agent": signal.requester,
+                                    "to_agent": signal.target_agent,
+                                    "summary": signal.summary,
+                                    "generation": signal.generation,
+                                    "signal_id": format!("coordination-feedback:{turn_id}:{agent_id}:g{generation}"),
+                                    "applied": false,
+                                    "reason": "requesting Agent failed",
+                                }).as_object().cloned().unwrap_or_default(),
+                            },
+                            &usage,
+                            token_usage_known,
+                        ).await?;
+                    }
+                    for event in scheduler.events()[event_start..].iter().cloned() {
+                        if !matches!(
+                            event.kind,
+                            TurnCoordinationEventKind::AgentFailed
+                                | TurnCoordinationEventKind::AgentBlocked
+                        ) {
+                            continue;
+                        }
+                        let kind = coordination_lifecycle_kind(event.kind)
+                            .expect("failed and blocked events have ledger kinds");
+                        self.record_session_coordination_event(
+                            &session.id,
+                            &turn_id,
+                            next_operation(kind),
+                            RecordTurnExecution {
+                                kind: kind.to_string(),
+                                execution_id: Some(turn_id.clone()),
+                                attempt_id: None,
+                                metadata: serde_json::json!({
+                                    "agent_id": event.agent_id,
+                                    "generation": event.generation,
+                                    "cause_signal_ids": event.cause_signal_ids,
+                                    "summary": event.signal.as_ref().map(|signal| signal.summary.clone()),
+                                    "signal_id": event.signal.as_ref().map(|signal| signal.id.clone()),
+                                    "usage": if event.kind == TurnCoordinationEventKind::AgentBlocked {
+                                        coordination_usage_value(&Default::default(), true)
+                                    } else {
+                                        coordination_usage_value(&failure.token_usage, failure.token_usage_known)
+                                    },
+                                }).as_object().cloned().unwrap_or_default(),
+                            },
+                            &usage,
+                            token_usage_known,
+                        ).await?;
+                    }
+                    let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
+                        event_type: "AgentFailed".to_string(),
+                        agent: Some(agent_id),
+                        task: None,
+                        name: None,
+                        output: Some(bounded_coordination_summary(
+                            &failure.error.to_string(),
+                            200,
+                        )),
+                        tokens: Some(failure.token_usage.total() as u64),
+                        workflow: Some(session.id.clone()),
+                    });
+                    continue;
+                }
+            };
+            let mut outcome = measured.outcome;
+            set_outcome_token_usage(&mut outcome, measured.token_usage.usage.clone());
+            let output = outcome.output().clone();
+            usage.merge(&measured.token_usage.usage);
+            token_usage_known &= measured.token_usage.complete;
+
+            if outcome.is_cancelled() || control.is_cancelled() {
+                self.record_coordinated_agent_output(
+                    &turn_id,
+                    &agent_id,
+                    model_override.clone(),
+                    generation,
+                    SessionTurnAgentOutputDisposition::Cancelled,
+                    None,
+                    &output,
+                    &usage,
+                    token_usage_known,
+                )
+                .await?;
+                outputs.push((agent_id.clone(), output.clone()));
+                for signal in requested_changes {
+                    self.record_session_coordination_event(
+                        &session.id,
+                        &turn_id,
+                        next_operation("signal"),
+                        RecordTurnExecution {
+                            kind: "coordination_signal".to_string(),
+                            execution_id: Some(turn_id.clone()),
+                            attempt_id: None,
+                            metadata: serde_json::json!({
+                                "from_agent": signal.requester,
+                                "to_agent": signal.target_agent,
+                                "summary": signal.summary,
+                                "generation": signal.generation,
+                                "signal_id": format!("coordination-feedback:{turn_id}:{agent_id}:g{generation}"),
+                                "applied": false,
+                                "reason": "turn stopped",
+                            }).as_object().cloned().unwrap_or_default(),
+                        },
+                        &usage,
+                        token_usage_known,
+                    ).await?;
+                }
+                let event_start = scheduler.events().len();
+                scheduler.cancel();
+                let cancelled_agent = agent_id.clone();
+                for event in scheduler.events()[event_start..].iter().cloned() {
+                    if event.kind != TurnCoordinationEventKind::AgentCancelled {
+                        continue;
+                    }
+                    self.record_session_coordination_event(
+                        &session.id,
+                        &turn_id,
+                        next_operation("agent-cancelled"),
+                        RecordTurnExecution {
+                            kind: "coordination_agent_cancelled".to_string(),
+                            execution_id: Some(turn_id.clone()),
+                            attempt_id: None,
+                            metadata: serde_json::json!({
+                                "agent_id": event.agent_id,
+                                "generation": event.generation,
+                                "cause_signal_ids": event.cause_signal_ids,
+                                "reason": "turn_stop",
+                                "usage": if event.agent_id == cancelled_agent {
+                                    coordination_usage_value(&output.token_usage, measured.token_usage.complete)
+                                } else {
+                                    coordination_usage_value(&Default::default(), true)
+                                },
+                            }).as_object().cloned().unwrap_or_default(),
+                        },
+                        &usage,
+                        token_usage_known,
+                    ).await?;
+                    let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
+                        event_type: "AgentCancelled".to_string(),
+                        agent: Some(event.agent_id),
+                        task: None,
+                        name: None,
+                        output: None,
+                        tokens: None,
+                        workflow: Some(session.id.clone()),
+                    });
+                }
+                cancelled = true;
+                break;
+            }
+
+            if let Err(error) = require_session_agent_result(&agent_id, &outcome) {
+                let summary = error.to_string();
+                let failure_signal_id =
+                    format!("coordination-signal:{turn_id}:{agent_id}:g{generation}:failed");
+                self.record_coordinated_agent_output(
+                    &turn_id,
+                    &agent_id,
+                    model_override.clone(),
+                    generation,
+                    SessionTurnAgentOutputDisposition::Failed,
+                    Some(failure_signal_id.clone()),
+                    &output,
+                    &usage,
+                    token_usage_known,
+                )
+                .await?;
+                outputs.push((agent_id.clone(), output.clone()));
+                for signal in requested_changes {
+                    self.record_session_coordination_event(
+                        &session.id,
+                        &turn_id,
+                        next_operation("signal"),
+                        RecordTurnExecution {
+                            kind: "coordination_signal".to_string(),
+                            execution_id: Some(turn_id.clone()),
+                            attempt_id: None,
+                            metadata: serde_json::json!({
+                                "from_agent": signal.requester,
+                                "to_agent": signal.target_agent,
+                                "summary": signal.summary,
+                                "generation": signal.generation,
+                                "signal_id": format!("coordination-feedback:{turn_id}:{agent_id}:g{generation}"),
+                                "applied": false,
+                                "reason": "requesting Agent returned no usable handoff",
+                            })
+                            .as_object()
+                            .cloned()
+                            .unwrap_or_default(),
+                        },
+                        &usage,
+                        token_usage_known,
+                    )
+                    .await?;
+                }
+                let event_start = scheduler.events().len();
+                scheduler
+                    .fail(
+                        &agent_id,
+                        &failure_signal_id,
+                        bounded_coordination_summary(&summary, 512),
+                    )
+                    .map_err(|scheduler_error| SessionRunFailure {
+                        error: DaemonError::Session(format!(
+                            "{summary}; coordination failure transition also failed: {scheduler_error}"
+                        )),
+                        token_usage: usage.clone(),
+                        token_usage_known,
+                        coordinated_partial_output: None,
+                    })?;
+                first_failure.get_or_insert_with(|| summary.clone());
+                for event in scheduler.events()[event_start..].iter().cloned() {
+                    if !matches!(
+                        event.kind,
+                        TurnCoordinationEventKind::AgentFailed
+                            | TurnCoordinationEventKind::AgentBlocked
+                    ) {
+                        continue;
+                    }
+                    let kind = coordination_lifecycle_kind(event.kind)
+                        .expect("failed and blocked events have ledger kinds");
+                    self.record_session_coordination_event(
+                        &session.id,
+                        &turn_id,
+                        next_operation(kind),
+                        RecordTurnExecution {
+                            kind: kind.to_string(),
+                            execution_id: Some(turn_id.clone()),
+                            attempt_id: None,
+                            metadata: serde_json::json!({
+                                "agent_id": event.agent_id,
+                                "generation": event.generation,
+                                "cause_signal_ids": event.cause_signal_ids,
+                                "summary": event.signal.as_ref().map(|signal| signal.summary.clone()),
+                                "signal_id": event.signal.as_ref().map(|signal| signal.id.clone()),
+                                "usage": if event.kind == TurnCoordinationEventKind::AgentBlocked {
+                                    coordination_usage_value(&Default::default(), true)
+                                } else {
+                                    coordination_usage_value(&output.token_usage, measured.token_usage.complete)
+                                },
+                            }).as_object().cloned().unwrap_or_default(),
+                        },
+                        &usage,
+                        token_usage_known,
+                    ).await?;
+                }
+                let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
+                    event_type: "AgentFailed".to_string(),
+                    agent: Some(agent_id),
+                    task: None,
+                    name: None,
+                    output: Some(bounded_coordination_summary(&summary, 200)),
+                    tokens: Some(output.token_usage.total() as u64),
+                    workflow: Some(session.id.clone()),
+                });
+                continue;
+            }
+
+            if let Some(signal) = requested_changes.into_iter().next() {
+                let signal_id = format!("coordination-feedback:{turn_id}:{agent_id}:g{generation}");
+                let event_start = scheduler.events().len();
+                scheduler
+                    .request_changes(&agent_id, &signal.target_agent, &signal_id, &signal.summary)
+                    .map_err(|error| SessionRunFailure {
+                        error: DaemonError::Session(format!(
+                            "accepted coordination signal could not be scheduled: {error}"
+                        )),
+                        token_usage: usage.clone(),
+                        token_usage_known,
+                        coordinated_partial_output: None,
+                    })?;
+                let mut feedback_operations = vec![
+                    SessionTurnAtomicOperation {
+                        operation_id: format!(
+                            "agent-output:{turn_id}:{agent_id}:generation-{generation}"
+                        ),
+                        mutation: SessionTurnAtomicMutation::AgentOutput {
+                            agent_id: agent_id.clone(),
+                            model: model_override.clone(),
+                            output: output.content.clone(),
+                            attempt_id: None,
+                            identity: Some(SessionTurnAgentOutputIdentity {
+                                activation_generation: generation,
+                                disposition: SessionTurnAgentOutputDisposition::ChangesRequested,
+                                causal_signal_id: Some(signal_id.clone()),
+                            }),
+                        },
+                    },
+                    SessionTurnAtomicOperation {
+                        operation_id: next_operation("signal"),
+                        mutation: SessionTurnAtomicMutation::Execution {
+                            execution: RecordTurnExecution {
+                                kind: "coordination_signal".to_string(),
+                                execution_id: Some(turn_id.clone()),
+                                attempt_id: None,
+                                metadata: serde_json::json!({
+                                    "from_agent": signal.requester.clone(),
+                                    "to_agent": signal.target_agent.clone(),
+                                    "summary": signal.summary.clone(),
+                                    "generation": signal.generation,
+                                    "signal_id": signal_id.clone(),
+                                    "applied": true,
+                                    "usage": coordination_usage_value(
+                                        &output.token_usage,
+                                        measured.token_usage.complete,
+                                    ),
+                                })
+                                .as_object()
+                                .cloned()
+                                .unwrap_or_default(),
+                            },
+                        },
+                    },
+                ];
+                let feedback_events = scheduler.events()[event_start..].to_vec();
+                let invalidated =
+                    invalidate_reactivated_outputs(&feedback_events, &mut latest_completed)
+                        .map_err(|error| SessionRunFailure {
+                            error,
+                            token_usage: usage.clone(),
+                            token_usage_known,
+                            coordinated_partial_output: None,
+                        })?;
+                validate_latest_completed_generations(&scheduler, &latest_completed).map_err(
+                    |error| SessionRunFailure {
+                        error,
+                        token_usage: usage.clone(),
+                        token_usage_known,
+                        coordinated_partial_output: None,
+                    },
+                )?;
+                for (stale_agent, stale_generation, replacement_generation, cause_signal_id) in
+                    invalidated
+                {
+                    feedback_operations.push(SessionTurnAtomicOperation {
+                        operation_id: next_operation("agent-output-superseded"),
+                        mutation: SessionTurnAtomicMutation::Execution {
+                            execution: RecordTurnExecution {
+                                kind: "agent_output_superseded".to_string(),
+                                execution_id: None,
+                                attempt_id: None,
+                                metadata: serde_json::json!({
+                                    "agent_id": stale_agent,
+                                    "activation_generation": stale_generation,
+                                    "superseded_by_generation": replacement_generation,
+                                    "cause_signal_id": cause_signal_id,
+                                })
+                                .as_object()
+                                .cloned()
+                                .unwrap_or_default(),
+                            },
+                        },
+                    });
+                }
+                for event in feedback_events {
+                    if event.kind != TurnCoordinationEventKind::AgentReactivated {
+                        continue;
+                    }
+                    feedback_operations.push(SessionTurnAtomicOperation {
+                        operation_id: next_operation("agent-reactivated"),
+                        mutation: SessionTurnAtomicMutation::Execution {
+                            execution: RecordTurnExecution {
+                            kind: "coordination_agent_reactivated".to_string(),
+                            execution_id: Some(turn_id.clone()),
+                            attempt_id: None,
+                            metadata: serde_json::json!({
+                                "agent_id": event.agent_id,
+                                "generation": event.generation,
+                                "cause_signal_ids": event.cause_signal_ids,
+                                "summary": event.signal.as_ref().map(|signal| signal.summary.clone()),
+                                "signal_id": event.signal.as_ref().map(|signal| signal.id.clone()),
+                            })
+                            .as_object()
+                            .cloned()
+                            .unwrap_or_default(),
+                            },
+                        },
+                    });
+                }
+                let batch_operation_id = next_operation("feedback-batch");
+                self.record_coordination_feedback_batch(
+                    &session.id,
+                    &turn_id,
+                    batch_operation_id,
+                    feedback_operations,
+                    &usage,
+                    token_usage_known,
+                )
+                .await?;
+                outputs.push((agent_id.clone(), output.clone()));
+                continue;
+            }
+
+            let completion_signal =
+                format!("coordination-signal:{turn_id}:{agent_id}:g{generation}:completed");
+            scheduler
+                .complete(
+                    &agent_id,
+                    &completion_signal,
+                    bounded_coordination_summary(&output.content, 512),
+                )
+                .map_err(|error| SessionRunFailure {
+                    error: DaemonError::Session(format!(
+                        "could not complete coordinated Agent '{agent_id}': {error}"
+                    )),
+                    token_usage: usage.clone(),
+                    token_usage_known,
+                    coordinated_partial_output: None,
+                })?;
+            self.record_coordinated_agent_output(
+                &turn_id,
+                &agent_id,
+                model_override.clone(),
+                generation,
+                SessionTurnAgentOutputDisposition::Completed,
+                Some(completion_signal.clone()),
+                &output,
+                &usage,
+                token_usage_known,
+            )
+            .await?;
+            outputs.push((agent_id.clone(), output.clone()));
+            output_by_signal.insert(completion_signal.clone(), output.clone());
+            latest_completed.insert(
+                agent_id.clone(),
+                (generation, completion_signal.clone(), output.clone()),
+            );
+            self.record_session_coordination_event(
+                &session.id,
+                &turn_id,
+                next_operation("agent-completed"),
+                RecordTurnExecution {
+                    kind: "coordination_agent_completed".to_string(),
+                    execution_id: Some(turn_id.clone()),
+                    attempt_id: None,
+                    metadata: serde_json::json!({
+                        "agent_id": agent_id,
+                        "generation": generation,
+                        "signal_id": completion_signal,
+                        "cause_signal_ids": cause_signal_ids,
+                        "summary": bounded_coordination_summary(&output.content, 512),
+                        "usage": coordination_usage_value(&output.token_usage, measured.token_usage.complete),
+                    })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+                },
+                &usage,
+                token_usage_known,
+            )
+            .await?;
+            let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
+                event_type: "TaskCompleted".to_string(),
+                agent: Some(agent_id),
+                task: None,
+                name: None,
+                output: Some(bounded_coordination_summary(&output.content, 200)),
+                tokens: Some(output.token_usage.total() as u64),
+                workflow: Some(session.id.clone()),
+            });
+        }
+
+        let mut touched_paths = touched_paths.into_iter().collect::<Vec<_>>();
+        touched_paths.sort();
+        self.remember_session_last_turn_files(&session.id, touched_paths);
+        let snapshot = scheduler.snapshot();
+        let completed_metadata = snapshot
+            .agents
+            .iter()
+            .map(|agent| {
+                serde_json::json!({
+                    "agent_id": agent.id,
+                    "state": agent.state,
+                    "generation": agent.generation,
+                })
+            })
+            .collect::<Vec<_>>();
+        let status = if cancelled {
+            "cancelled"
+        } else if first_failure.is_some()
+            || snapshot.agents.iter().any(|agent| {
+                matches!(
+                    agent.state,
+                    TurnAgentState::Failed | TurnAgentState::Blocked
+                )
+            })
+        {
+            "failed"
+        } else if snapshot
+            .agents
+            .iter()
+            .all(|agent| agent.state == TurnAgentState::Completed)
+        {
+            "completed"
+        } else {
+            first_failure.get_or_insert_with(|| {
+                "coordination reached a fixed point with agents still waiting".to_string()
+            });
+            "failed"
+        };
+        self.record_session_coordination_event(
+            &session.id,
+            &turn_id,
+            next_operation("completed"),
+            RecordTurnExecution {
+                kind: "coordination_completed".to_string(),
+                execution_id: Some(turn_id.clone()),
+                attempt_id: None,
+                metadata: serde_json::json!({
+                    "status": status,
+                    "agents": completed_metadata,
+                    "sinks": sinks,
+                    "usage": coordination_usage_value(&usage, token_usage_known),
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            },
+            &usage,
+            token_usage_known,
+        )
+        .await?;
+
+        if cancelled {
+            let mut partial = outputs
+                .last()
+                .map(|(_, output)| output.clone())
+                .unwrap_or_else(|| axocoatl_core::AgentOutput::text(""));
+            partial.token_usage = usage;
+            return Ok(SessionAgentsRun {
+                outcome: AgentRunOutcome::Cancelled {
+                    run_id: control.id().clone(),
+                    partial_output: partial,
+                },
+                outputs,
+                token_usage_known,
+            });
+        }
+        if let Some(error) = first_failure {
+            return Err(SessionRunFailure {
+                error: DaemonError::Session(error),
+                token_usage: usage,
+                token_usage_known,
+                coordinated_partial_output: None,
+            });
+        }
+
+        let final_output =
+            coordinated_final_output(&sinks, &latest_completed, &scheduler, usage.clone())
+                .map_err(|error| SessionRunFailure {
+                    error,
+                    token_usage: usage,
+                    token_usage_known,
+                    coordinated_partial_output: None,
+                })?;
+        Ok(SessionAgentsRun {
+            outcome: AgentRunOutcome::Completed(final_output),
+            outputs,
+            token_usage_known,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_direct_session_agent_controlled(
+        &self,
+        session: &Session,
+        agent_id: String,
+        input: &str,
+        model_override: Option<String>,
+        attachments: Vec<axocoatl_core::AgentAttachment>,
+        control: AgentRunControl,
+    ) -> Result<SessionAgentsRun, SessionRunFailure> {
+        if self
+            .config
+            .agents
+            .iter()
+            .find(|agent| agent.id == agent_id)
+            .is_some_and(|agent| matches!(agent.role, AgentRoleYaml::Worker))
+        {
+            return Err(DaemonError::Session(format!(
+                "agent '{agent_id}' is a coordinator-owned worker and cannot be targeted directly"
+            ))
+            .into());
         }
 
         let mut prior: Vec<(String, String)> = Vec::new();
@@ -19830,7 +22584,7 @@ trap - 0 1 2 15
         let mut token_usage_known = true;
         let trace: Arc<StdMutex<Vec<crate::trajectory::Action>>> =
             Arc::new(StdMutex::new(Vec::new()));
-        for agent_id in order {
+        for agent_id in [agent_id] {
             if control.is_cancelled() {
                 return Ok(SessionAgentsRun {
                     outcome: AgentRunOutcome::Cancelled {
@@ -19849,7 +22603,7 @@ trap - 0 1 2 15
                 });
             }
             let actor = self
-                .session_actor(session, &agent_id)
+                .session_actor(session, &agent_id, control.id().as_str(), false)
                 .await
                 .map_err(SessionRunFailure::from)
                 .map_err(|failure| failure.with_prior_usage(&usage, token_usage_known))?;
@@ -19888,6 +22642,7 @@ trap - 0 1 2 15
                     turn_id: Some(control.id().to_string()),
                     partial_ledger: Some(self.session_turn_store.clone()),
                     stream_commit_gate: Some(self.stream_commit_gate.clone()),
+                    coordination_generation: None,
                 },
             )
             .await
@@ -19913,8 +22668,9 @@ trap - 0 1 2 15
                     error: DaemonError::Session(error.to_string()),
                     token_usage: usage.clone(),
                     token_usage_known,
+                    coordinated_partial_output: None,
                 })?;
-            let handoff_result = require_multi_agent_handoff_output(&agent_id, &outcome);
+            let handoff_result = require_session_agent_result(&agent_id, &outcome);
             let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
                 event_type: if outcome.is_cancelled() || handoff_result.is_err() {
                     "AgentFailed".to_string()
@@ -19945,6 +22701,7 @@ trap - 0 1 2 15
                     error,
                     token_usage: usage,
                     token_usage_known,
+                    coordinated_partial_output: None,
                 });
             }
         }
@@ -20023,6 +22780,7 @@ trap - 0 1 2 15
             turn_id,
             partial_ledger,
             stream_commit_gate,
+            coordination_generation,
         } = options;
         let (sink_tx, mut sink_rx) =
             tokio::sync::mpsc::unbounded_channel::<axocoatl_actor::AgentStreamChunk>();
@@ -20035,6 +22793,13 @@ trap - 0 1 2 15
             let stream_commit_gate = stream_commit_gate.clone();
             let partial_error: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
             let partial_error_task = partial_error.clone();
+            // Only coordinated executions need a second, attributed copy of
+            // the streamed text. Append after ledger persistence succeeds so
+            // this always describes the canonical text the UI was allowed to
+            // observe, including when the provider later fails.
+            let coordinated_partial_output =
+                coordination_generation.map(|_| Arc::new(StdMutex::new(String::new())));
+            let coordinated_partial_output_task = coordinated_partial_output.clone();
             let partial_control = control.clone();
             let partial_agent = agent_label.clone();
             let trace = trace.clone();
@@ -20051,7 +22816,7 @@ trap - 0 1 2 15
                     let tool_occurrence = match &chunk {
                         C::ToolCallStarted { id, .. } => Some(tool_occurrences.start(id)),
                         C::ToolCallResult { id, .. } => Some(tool_occurrences.finish(id)),
-                        C::Text(_) | C::Reasoning(_) => None,
+                        C::Text(_) | C::Reasoning(_) | C::ProviderRetry { .. } => None,
                     };
                     if let Some(t) = &trace {
                         match &chunk {
@@ -20102,14 +22867,25 @@ trap - 0 1 2 15
                         (&partial_ledger, turn_id.as_deref())
                     {
                         match &chunk {
-                            C::Text(delta) => {
-                                let operation =
-                                    format!("partial:{turn_id}:{partial_agent}:{text_sequence}");
+                            C::Text(_) | C::ProviderRetry { .. } => {
+                                let delta = partial_output_text(&chunk).unwrap_or_default();
+                                let operation = coordination_generation.map_or_else(
+                                    || {
+                                        format!(
+                                            "partial:{turn_id}:{partial_agent}:{text_sequence}"
+                                        )
+                                    },
+                                    |generation| {
+                                        format!(
+                                            "partial:{turn_id}:{partial_agent}:generation-{generation}:{text_sequence}"
+                                        )
+                                    },
+                                );
                                 text_sequence = text_sequence.saturating_add(1);
                                 ledger
                                     .lock()
                                     .await
-                                    .append_output(turn_id, operation, delta.clone())
+                                    .append_output(turn_id, operation, delta.to_owned())
                                     .map(|_| ())
                             }
                             C::ToolCallStarted {
@@ -20124,7 +22900,7 @@ trap - 0 1 2 15
                                 assistant_content,
                                 provider_metadata,
                             } => {
-                                let (operation, event) =
+                                let (mut operation, mut event) =
                                     session_tool_execution_event_with_provider_metadata(
                                         turn_id,
                                         logical_tool_source_agent(
@@ -20145,6 +22921,13 @@ trap - 0 1 2 15
                                         provider_metadata,
                                         None,
                                     );
+                                if let Some(generation) = coordination_generation {
+                                    operation.push_str(&format!(":generation-{generation}"));
+                                    event.metadata.insert(
+                                        "generation".to_string(),
+                                        serde_json::Value::Number(generation.into()),
+                                    );
+                                }
                                 ledger
                                     .lock()
                                     .await
@@ -20158,7 +22941,7 @@ trap - 0 1 2 15
                                 result,
                                 is_error,
                             } => {
-                                let (operation, event) = session_tool_execution_event(
+                                let (mut operation, mut event) = session_tool_execution_event(
                                     turn_id,
                                     logical_tool_source_agent(
                                         source_agent.as_deref(),
@@ -20172,6 +22955,13 @@ trap - 0 1 2 15
                                     result,
                                     Some(*is_error),
                                 );
+                                if let Some(generation) = coordination_generation {
+                                    operation.push_str(&format!(":generation-{generation}"));
+                                    event.metadata.insert(
+                                        "generation".to_string(),
+                                        serde_json::Value::Number(generation.into()),
+                                    );
+                                }
                                 ledger
                                     .lock()
                                     .await
@@ -20193,19 +22983,33 @@ trap - 0 1 2 15
                         }
                         continue;
                     }
+                    if let (C::Text(delta), Some(output)) =
+                        (&chunk, &coordinated_partial_output_task)
+                    {
+                        output
+                            .lock()
+                            // This buffer has one writer and contains evidence
+                            // already accepted by the ledger. Recovering the
+                            // inner String after an unrelated unwind is safer
+                            // than panicking the daemon task and losing it.
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push_str(delta);
+                    }
                     let frame = agent_chunk_stream_frame(
                         &chunk,
                         &rid,
                         &aid,
                         turn_id.as_deref(),
                         tool_occurrence,
+                        coordination_generation,
                     );
                     let _ = bus.send(frame);
                     drop(stream_commit);
                 }
             });
-            (handle, partial_error)
+            (handle, partial_error, coordinated_partial_output)
         };
+        let coordinated_model = model_override.clone();
         let mut agent_input =
             axocoatl_core::AgentInput::text(input).with_model_override(model_override);
         if let Some(context) = run_context {
@@ -20219,7 +23023,7 @@ trap - 0 1 2 15
             // without writing candidate turns back into the canonical actor.
             agent_input = agent_input.with_supplied_history(history);
         }
-        let out = if let Some(control) = control {
+        let mut out = if let Some(control) = control {
             axocoatl_actor::execute_agent_streaming_controlled_measured(
                 &actor,
                 agent_input,
@@ -20233,8 +23037,14 @@ trap - 0 1 2 15
                 .await
                 .map_err(SessionRunFailure::from_agent)
         };
-        let (fwd, partial_error) = fwd;
+        let (fwd, partial_error, coordinated_partial_output) = fwd;
         let _ = fwd.await;
+        let coordinated_partial_output = coordinated_partial_output.map(|output| {
+            output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        });
         if let Some(error) = partial_error.lock().ok().and_then(|slot| slot.clone()) {
             let (token_usage, token_usage_known) = match &out {
                 Ok(measured) => (
@@ -20243,44 +23053,88 @@ trap - 0 1 2 15
                 ),
                 Err(failure) => (failure.token_usage.clone(), failure.token_usage_known),
             };
-            return Err(SessionRunFailure {
+            out = Err(SessionRunFailure {
                 error: DaemonError::Session(format!(
                     "could not persist partial Session output: {error}"
                 )),
                 token_usage,
                 token_usage_known,
+                coordinated_partial_output: coordinated_partial_output.clone(),
             });
+        }
+        if let Err(failure) = &mut out {
+            failure.coordinated_partial_output = coordinated_partial_output.clone();
+            if let (Some(generation), Some(turn_id), Some(ledger)) = (
+                coordination_generation,
+                turn_id.as_deref(),
+                partial_ledger.as_ref(),
+            ) {
+                let stream_commit = match &stream_commit_gate {
+                    Some(gate) => Some(gate.lock().await),
+                    None => None,
+                };
+                let signal_id =
+                    format!("coordination-signal:{turn_id}:{agent_label}:g{generation}:failed");
+                if let Err(error) = ledger.lock().await.record_agent_output_with_coordination(
+                    turn_id,
+                    format!("agent-output:{turn_id}:{agent_label}:generation-{generation}"),
+                    &agent_label,
+                    coordinated_model,
+                    coordinated_partial_output.unwrap_or_default(),
+                    SessionTurnAgentOutputIdentity {
+                        activation_generation: generation,
+                        disposition: SessionTurnAgentOutputDisposition::Failed,
+                        causal_signal_id: Some(signal_id),
+                    },
+                ) {
+                    failure.error = DaemonError::Session(format!(
+                        "{}; could not persist failed coordinated Agent output: {error}",
+                        failure.error
+                    ));
+                }
+                drop(stream_commit);
+            }
         }
         out
     }
 
-    /// Order a workflow's agents so every agent comes after its dependencies
-    /// (Kahn's algorithm). Falls back to config order if there is a cycle.
+    /// Resolve the workflow roster. Autonomous workflows keep declaration
+    /// order for the turn scheduler; coordinator-led workflows enter only the
+    /// coordinator because it owns its worker execution internally.
     fn session_workflow_agents(
         config: &AxocoatlConfig,
         workflow: &axocoatl_config::WorkflowConfigYaml,
     ) -> Result<Vec<String>, DaemonError> {
-        if let Some(entry_id) = workflow.entry_point.as_deref() {
-            let entry = config
-                .agents
-                .iter()
-                .find(|agent| agent.id == entry_id)
-                .ok_or_else(|| {
-                    DaemonError::Session(format!(
-                        "workflow '{}' entry Agent '{}' is not configured",
-                        workflow.id, entry_id
-                    ))
-                })?;
-            if matches!(entry.role, AgentRoleYaml::Coordinator) {
-                // CoordinatorBehavior owns its declared workers. Executing the
-                // workflow roster afterward would run those workers a second
-                // time as independent Session actors and break attribution,
-                // cancellation, and token-budget ownership.
-                return Ok(vec![entry_id.to_string()]);
+        let mut workflow_ids = HashSet::new();
+        for configured in &config.workflows {
+            if configured.id.trim().is_empty() {
+                return Err(DaemonError::Session(
+                    "configured workflow id cannot be empty".to_string(),
+                ));
+            }
+            if !workflow_ids.insert(configured.id.as_str()) {
+                return Err(DaemonError::Session(format!(
+                    "configured workflow id '{}' is ambiguous because it appears more than once",
+                    configured.id
+                )));
             }
         }
+        if workflow.agents.is_empty() {
+            return Err(DaemonError::Session(format!(
+                "workflow '{}' has no configured Agents",
+                workflow.id
+            )));
+        }
 
+        let mut member_ids = HashSet::new();
+        let mut members = Vec::with_capacity(workflow.agents.len());
         for agent_id in &workflow.agents {
+            if !member_ids.insert(agent_id.as_str()) {
+                return Err(DaemonError::Session(format!(
+                    "workflow '{}' repeats Agent '{}' in its roster",
+                    workflow.id, agent_id
+                )));
+            }
             let agent = config
                 .agents
                 .iter()
@@ -20291,60 +23145,99 @@ trap - 0 1 2 15
                         workflow.id, agent_id
                     ))
                 })?;
-            if !matches!(agent.role, AgentRoleYaml::Autonomous) {
+            members.push(agent);
+        }
+
+        let entry = workflow
+            .entry_point
+            .as_deref()
+            .map(|entry_id| {
+                config
+                    .agents
+                    .iter()
+                    .find(|agent| agent.id == entry_id)
+                    .ok_or_else(|| {
+                        DaemonError::Session(format!(
+                            "workflow '{}' entry Agent '{}' is not configured",
+                            workflow.id, entry_id
+                        ))
+                    })
+            })
+            .transpose()?;
+
+        if let Some(entry) = entry {
+            if !member_ids.contains(entry.id.as_str()) {
+                let role = if matches!(entry.role, AgentRoleYaml::Coordinator) {
+                    "Coordinator entry Agent"
+                } else {
+                    "entry Agent"
+                };
                 return Err(DaemonError::Session(format!(
-                    "workflow '{}' must enter its coordinator instead of running coordination Agent '{}' directly",
-                    workflow.id, agent_id
+                    "workflow '{}' must include its {role} '{}' in the roster",
+                    workflow.id, entry.id
                 )));
             }
         }
-        Ok(workflow.agents.clone())
-    }
 
-    fn topo_order(agents: &[String], config: &AxocoatlConfig) -> Vec<String> {
-        use std::collections::VecDeque;
-        let member: HashSet<&str> = agents.iter().map(|s| s.as_str()).collect();
-        let mut deps: HashMap<String, Vec<String>> = HashMap::new();
-        let mut indeg: HashMap<String, usize> = HashMap::new();
-        for a in agents {
-            let d: Vec<String> = config
-                .agents
-                .iter()
-                .find(|c| &c.id == a)
-                .map(|c| {
-                    c.depends_on
-                        .iter()
-                        .filter(|x| member.contains(x.as_str()))
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default();
-            indeg.insert(a.clone(), d.len());
-            deps.insert(a.clone(), d);
-        }
-        let mut queue: VecDeque<String> = agents
-            .iter()
-            .filter(|a| indeg.get(*a).copied().unwrap_or(0) == 0)
-            .cloned()
-            .collect();
-        let mut order = Vec::new();
-        while let Some(n) = queue.pop_front() {
-            order.push(n.clone());
-            for a in agents {
-                if deps.get(a).map(|d| d.contains(&n)).unwrap_or(false) {
-                    let e = indeg.get_mut(a).unwrap();
-                    *e -= 1;
-                    if *e == 0 {
-                        queue.push_back(a.clone());
-                    }
+        if let Some(entry) = entry.filter(|entry| matches!(entry.role, AgentRoleYaml::Coordinator))
+        {
+            for member in &members {
+                if member.id == entry.id {
+                    continue;
+                }
+                if !matches!(member.role, AgentRoleYaml::Worker) {
+                    return Err(DaemonError::Session(format!(
+                        "coordinator-led workflow '{}' may contain only Coordinator '{}' and Worker Agents; '{}' is not a Worker",
+                        workflow.id, entry.id, member.id
+                    )));
+                }
+                let owner_count = config
+                    .workflows
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.agents.iter().any(|id| id == &member.id)
+                            && candidate.entry_point.as_deref().is_some_and(|entry_id| {
+                                config.agents.iter().any(|agent| {
+                                    agent.id == entry_id
+                                        && matches!(agent.role, AgentRoleYaml::Coordinator)
+                                })
+                            })
+                    })
+                    .count();
+                if owner_count != 1 {
+                    return Err(DaemonError::Session(format!(
+                        "Worker '{}' must belong to exactly one coordinator-led workflow; found {owner_count}",
+                        member.id
+                    )));
                 }
             }
+            // CoordinatorBehavior owns its declared workers. Executing the
+            // workflow roster afterward would run those workers a second
+            // time as independent Session actors and break attribution,
+            // cancellation, and token-budget ownership.
+            return Ok(vec![entry.id.clone()]);
         }
-        if order.len() == agents.len() {
-            order
-        } else {
-            agents.to_vec()
+
+        if entry.is_some_and(|entry| matches!(entry.role, AgentRoleYaml::Worker)) {
+            return Err(DaemonError::Session(format!(
+                "workflow '{}' cannot use Worker '{}' as its entry Agent",
+                workflow.id,
+                entry.expect("worker entry was present").id
+            )));
         }
+        for agent in members {
+            if !matches!(agent.role, AgentRoleYaml::Autonomous) {
+                return Err(DaemonError::Session(format!(
+                    "workflow '{}' is not coordinator-led and may contain autonomous Agents only; '{}' is not autonomous",
+                    workflow.id, agent.id
+                )));
+            }
+        }
+        // Defense in depth for programmatically constructed configs: even a
+        // one-Agent roster must satisfy the same closed-DAG contract as the
+        // config loader before a Session can write canonical Begin.
+        coordinated_agent_graph(&workflow.agents, config)?;
+        Ok(workflow.agents.clone())
     }
 
     /// Get — spawning on first use — the session-scoped actor for `agent_id`.
@@ -20353,12 +23246,11 @@ trap - 0 1 2 15
         session: &Session,
         agent_id: &str,
     ) -> Result<(), DaemonError> {
-        if !matches!(
-            &session.mode,
-            SessionMode::SingleAgent {
-                agent_id: configured
-            } if configured == agent_id
-        ) {
+        if session_uses_checkpoint_transaction(&self.config, &session.mode) {
+            // Transaction-scoped actors persist their own transcript and
+            // behavior state through the Session-turn manifest. Replaying the
+            // aggregate canonical transcript here would leak sibling evidence
+            // into a graph Agent and could resurrect stale Coordinator state.
             return Ok(());
         }
         // The caller may already have durably begun the new turn. Project only
@@ -20440,6 +23332,8 @@ trap - 0 1 2 15
         &self,
         session: &Session,
         agent_id: &str,
+        turn_id: &str,
+        coordinated_execution: bool,
     ) -> Result<ractor::ActorRef<axocoatl_actor::AgentMessage>, DaemonError> {
         let agent_yaml = self
             .config
@@ -20467,12 +23361,26 @@ trap - 0 1 2 15
             .await?;
         let sandbox = self.ensure_sandbox(session).await?;
         let context_dir = sandbox.root().to_path_buf();
-        let executor = self.build_session_executor(session, sandbox, true).await;
+        let coordination_agent =
+            coordination_signal_owner(&session.mode, &agent_yaml, coordinated_execution);
+        let executor = self
+            .build_session_executor(session, sandbox, true, coordination_agent)
+            .await?;
+        let actor_checkpoint_store =
+            if session_uses_checkpoint_transaction(&self.config, &session.mode) {
+                Arc::new(
+                    self.checkpoint_store
+                        .scoped_to_session_turn(&session.id, turn_id),
+                )
+            } else {
+                self.checkpoint_store.clone()
+            };
         self.spawn_session_agent(
             session,
             &agent_yaml,
             &scoped,
             Arc::new(executor),
+            actor_checkpoint_store,
             &context_dir,
             true,
             true,
@@ -20489,7 +23397,8 @@ trap - 0 1 2 15
         session: &Session,
         sandbox: Arc<dyn Sandbox>,
         include_integrations: bool,
-    ) -> ToolExecutor {
+        coordination_agent: Option<&str>,
+    ) -> Result<ToolExecutor, DaemonError> {
         let mut executor = ToolExecutor::new();
         axocoatl_tools::register_session_tools(&mut executor, sandbox);
         if !include_integrations {
@@ -20497,7 +23406,7 @@ trap - 0 1 2 15
             // set-scoped, reversible permission semantics, attempts are limited
             // to their isolated repository container rather than duplicating
             // writes to MCP servers, Skills, or search providers.
-            return executor;
+            return Ok(executor);
         }
         // Skills on the session's allowlist become callable tools — calling
         // one fires it into the lattice.
@@ -20522,7 +23431,23 @@ trap - 0 1 2 15
             let reg = self.mcp_registry.read().await;
             register_discovered_mcp_tools(&mut executor, &reg);
         }
-        executor.with_mcp_registry(self.mcp_registry.clone())
+        if let Some(agent_id) = coordination_agent {
+            let reserved = crate::session_coordination::COORDINATION_SIGNAL_TOOL;
+            if executor.tool_names().iter().any(|name| name == reserved) {
+                return Err(DaemonError::Session(format!(
+                    "reserved internal tool name '{reserved}' collides with a configured Session tool"
+                )));
+            }
+            executor.register_builtin(
+                reserved,
+                Arc::new(crate::session_coordination::CoordinationSignalTool::new(
+                    self.coordination_signal_router.clone(),
+                    &session.id,
+                    agent_id,
+                )),
+            );
+        }
+        Ok(executor.with_mcp_registry(self.mcp_registry.clone()))
     }
 
     /// Spawn a session-scoped agent actor named `{session}:{agent}`, bound to
@@ -20537,6 +23462,7 @@ trap - 0 1 2 15
         agent_yaml: &axocoatl_config::AgentConfigYaml,
         scoped_id: &str,
         tool_executor: Arc<ToolExecutor>,
+        checkpoint_store: Arc<CheckpointStore>,
         // The in-sandbox working dir shown to the model (`sandbox.root()`): the
         // host repo for Podman, the in-VM clone/worktree for E2B. Project
         // instructions are read separately from the host path (`session.working_dir`).
@@ -20552,6 +23478,30 @@ trap - 0 1 2 15
         allow_provider_fallback: bool,
     ) -> Result<ractor::ActorRef<axocoatl_actor::AgentMessage>, DaemonError> {
         let mut agent_config = agent_yaml.to_core();
+
+        // A non-empty Agent tool list is an exact allowlist, so coordinated
+        // autonomous Session actors receive the internal signal tool by
+        // automatic injection. An empty list is expanded to the executor's
+        // full, deterministic inventory so adding the internal tool does not
+        // accidentally hide the ordinary repository tools.
+        if tool_executor
+            .tool_names()
+            .iter()
+            .any(|name| name == crate::session_coordination::COORDINATION_SIGNAL_TOOL)
+        {
+            if agent_config.tools.is_empty() {
+                agent_config.tools = tool_executor.tool_names();
+                agent_config.tools.sort();
+            } else if !agent_config
+                .tools
+                .iter()
+                .any(|name| name == crate::session_coordination::COORDINATION_SIGNAL_TOOL)
+            {
+                agent_config
+                    .tools
+                    .push(crate::session_coordination::COORDINATION_SIGNAL_TOOL.to_string());
+            }
+        }
 
         // Normal Sessions use the same fallback-aware provider path as global
         // actors. Ways deliberately retain the selected primary route only so
@@ -20594,7 +23544,7 @@ trap - 0 1 2 15
                 &self.provider_registry,
                 provider,
                 &self.counter,
-                &self.checkpoint_store,
+                &checkpoint_store,
                 &tool_executor,
                 &self.shared_registry,
                 &self.hook_registry,
@@ -20620,7 +23570,7 @@ trap - 0 1 2 15
             let mut behavior = session_agent_base_behavior(
                 provider,
                 self.counter.clone(),
-                self.checkpoint_store.clone(),
+                checkpoint_store,
                 tool_executor,
                 self.hook_registry.clone(),
                 agent_config.sampling.clone(),
@@ -20704,6 +23654,20 @@ trap - 0 1 2 15
         }
         let mut failures = Vec::new();
         for session in sessions {
+            let mut dispatch_cleanup = match self
+                .session_dispatch_lifecycles
+                .prepare_session_cleanup(&session.id, SESSION_DISPATCH_CLEANUP_TIMEOUT)
+                .await
+            {
+                Ok(cleanup) => cleanup,
+                Err(error) => {
+                    failures.push(format!(
+                        "{}: joining repository execution: {error}",
+                        session.name
+                    ));
+                    continue;
+                }
+            };
             let current_set = match self.peek_current_attempt_set(&session.id).await {
                 Ok(set) => set.map(|set| set.id),
                 Err(error) => {
@@ -20711,40 +23675,47 @@ trap - 0 1 2 15
                     continue;
                 }
             };
-            let first_wait = tokio::time::timeout(
-                ATTEMPT_OPERATION_RELEASE_TIMEOUT,
-                self.lock_attempt_operation_for_cleanup(&session.id, current_set.as_deref()),
-            )
-            .await;
-            let locked = match first_wait {
-                Ok(locked) => locked,
-                Err(_) => {
-                    // A normal Session turn has no attempt-set id, so the
-                    // cleanup waiter cannot request set cancellation for it.
-                    // Escalate the already-requested cooperative Stop to the
-                    // exact Session actors, then give the workspace owner one
-                    // final bounded chance to release. Shutdown must never
-                    // wait forever behind a provider or side-effecting tool.
-                    let force_stop = self.stop_session_actors_checked(&session.id).await;
-                    match tokio::time::timeout(
-                        ATTEMPT_OPERATION_RELEASE_TIMEOUT,
-                        self.lock_attempt_operation_for_cleanup(
-                            &session.id,
-                            current_set.as_deref(),
-                        ),
-                    )
-                    .await
-                    {
-                        Ok(locked) => locked,
-                        Err(_) => Err(DaemonError::Session(format!(
+            let locked = if let Some(operation) = dispatch_cleanup.take_operation() {
+                Ok((operation, false))
+            } else {
+                let first_wait = tokio::time::timeout(
+                    ATTEMPT_OPERATION_RELEASE_TIMEOUT,
+                    self.lock_attempt_operation_for_cleanup(&session.id, current_set.as_deref()),
+                )
+                .await;
+                match first_wait {
+                    Ok(locked) => locked,
+                    Err(_) => {
+                        // A normal Session turn has no attempt-set id, so the
+                        // cleanup waiter cannot request set cancellation for it.
+                        // Escalate the already-requested cooperative Stop to the
+                        // exact Session actors, then give the workspace owner one
+                        // final bounded chance to release. Shutdown must never
+                        // wait forever behind a provider or side-effecting tool.
+                        let force_stop = self.stop_session_actors_checked(&session.id).await;
+                        match tokio::time::timeout(
+                            ATTEMPT_OPERATION_RELEASE_TIMEOUT,
+                            self.lock_attempt_operation_for_cleanup(
+                                &session.id,
+                                current_set.as_deref(),
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(locked) => locked,
+                            Err(_) => Err(DaemonError::Session(format!(
                             "timed out waiting for Session workspace ownership during shutdown{}",
                             force_stop
                                 .err()
                                 .map(|error| format!(" after actor stop also failed: {error}"))
                                 .unwrap_or_default()
                         ))),
+                        }
                     }
                 }
+                .map(|(operation, cancellation_requested)| {
+                    (operation.into(), cancellation_requested)
+                })
             };
             let (_operation, _cancellation_requested) = match locked {
                 Ok(locked) => locked,
@@ -20776,6 +23747,14 @@ trap - 0 1 2 15
             }
             if let Err(error) = cleanup {
                 failures.push(format!("{}: {error}", session.name));
+            } else if let Err(error) = self
+                .session_dispatch_lifecycles
+                .complete_session_cleanup(&dispatch_cleanup)
+            {
+                failures.push(format!(
+                    "{}: retiring repository ownership: {error}",
+                    session.name
+                ));
             }
         }
         if failures.is_empty() {
@@ -20788,11 +23767,12 @@ trap - 0 1 2 15
         }
     }
 
-    /// Gracefully shut down all agents and process-local attempt tasks.
-    pub async fn shutdown(self) {
-        if let Err(error) = self.shutdown_session_runtimes_checked().await {
-            tracing::error!(error = %error, "Session runtime shutdown was incomplete");
-        }
+    /// Gracefully shut down all agents and process-local attempt tasks. Borrow
+    /// ownership so a failed or cancelled wait leaves the daemon available for
+    /// inspection and a checked cleanup retry. Callers drop it after success.
+    pub async fn shutdown(&self) -> Result<(), DaemonError> {
+        let _join = self.shutdown_join.lock().await;
+        self.shutdown_session_runtimes_checked().await?;
         // Attempt tasks are not ordinary supervised agents: their JoinHandles
         // own metadata writes that must finish before the runtime disappears.
         // Preserve their worktrees/current manifests for recovery, but stop and
@@ -20804,25 +23784,27 @@ trap - 0 1 2 15
             .iter()
             .map(|(session, run)| (session.clone(), run.set_id.clone()))
             .collect();
+        let mut failures = Vec::new();
         for (session_id, set_id) in active_sets {
             match self.require_attempt_set(&session_id, &set_id).await {
                 Ok(set) => {
                     if let Err(error) = self.stop_attempt_runtime(&session_id, &set).await {
-                        tracing::warn!(
-                            session = %session_id,
-                            attempt_set = %set_id,
-                            error = %error,
-                            "failed to join an attempt set during shutdown"
-                        );
+                        failures.push(format!(
+                            "Session {session_id}, attempt set {set_id}: {error}"
+                        ));
                     }
                 }
-                Err(error) => tracing::warn!(
-                    session = %session_id,
-                    attempt_set = %set_id,
-                    error = %error,
-                    "could not load an active attempt set during shutdown"
-                ),
+                Err(error) => failures.push(format!(
+                    "Session {session_id}, attempt set {set_id}: {error}"
+                )),
             }
+        }
+
+        if !failures.is_empty() {
+            return Err(DaemonError::Session(format!(
+                "shutdown could not join active attempts: {}",
+                failures.join("; ")
+            )));
         }
 
         let ids = self.agent_registry.list_ids().await;
@@ -20831,11 +23813,9 @@ trap - 0 1 2 15
                 actor.stop(None);
             }
         }
-        let handles = self.agent_handles.into_inner().unwrap_or_default();
-        for handle in handles {
-            let _ = handle.await;
-        }
+        join_retained_agent_handles(&self.agent_handles).await?;
         tracing::info!("Axocoatl daemon shut down");
+        Ok(())
     }
 
     /// Number of running agents.
@@ -20847,6 +23827,104 @@ trap - 0 1 2 15
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    include!("bootstrap_runtime_cache_tests.rs");
+
+    #[tokio::test]
+    async fn cancelled_shutdown_join_returns_the_pending_task_for_exact_retry() {
+        let release = Arc::new(tokio::sync::Notify::new());
+        let worker_release = release.clone();
+        let handles = StdMutex::new(vec![tokio::spawn(async move {
+            worker_release.notified().await;
+        })]);
+        assert!(tokio::time::timeout(
+            Duration::from_millis(20),
+            join_retained_agent_handles(&handles)
+        )
+        .await
+        .is_err());
+        assert_eq!(handles.lock().unwrap().len(), 1);
+        assert!(!handles.lock().unwrap()[0].is_finished());
+        release.notify_one();
+        join_retained_agent_handles(&handles).await.unwrap();
+        assert!(handles.lock().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_and_cancelled_shutdown_retain_the_actual_data_directory_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        const CHILD: &str = "AXOCOATL_TEST_SHUTDOWN_OWNER_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let mut config = test_config();
+            config.agents.clear();
+            config.consolidation.enabled = false;
+            let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
+            let root = daemon.data_root.clone();
+
+            // Cancel while shutdown waits on a real runtime admission owner.
+            let admission = daemon.runtime_admission.read().await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), daemon.shutdown())
+                    .await
+                    .is_err()
+            );
+            assert!(DataDirLease::acquire(&root).is_err());
+            drop(admission);
+
+            // A retained attempt whose durable set cannot be read makes cleanup
+            // fail. Its ownership must survive the returned error for retry.
+            daemon.active_attempts.lock().await.insert(
+                "missing-session".into(),
+                ActiveAttemptRun::new("missing-set"),
+            );
+            assert!(daemon.shutdown().await.is_err());
+            assert!(DataDirLease::acquire(&root).is_err());
+            assert!(daemon
+                .active_attempts
+                .lock()
+                .await
+                .contains_key("missing-session"));
+            daemon.active_attempts.lock().await.clear();
+            daemon.shutdown().await.unwrap();
+            assert!(DataDirLease::acquire(&root).is_err());
+            drop(daemon);
+            assert!(DataDirLease::acquire(&root).is_ok());
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let podman = bin.join("podman");
+        std::fs::write(
+            &podman,
+            r#"#!/bin/sh
+case "$*" in
+  --version) printf 'podman version 5.0.0\n' ;;
+  'machine list --format json') printf '[{"Running":true}]\n' ;;
+  'info --format json') printf '{}\n' ;;
+  'ps '*) ;;
+  *) printf 'unexpected Podman command: %s\n' "$*" >&2; exit 1 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(60), tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "bootstrap::tests::failed_and_cancelled_shutdown_retain_the_actual_data_directory_owner", "--nocapture"])
+            .env(CHILD, "1")
+            .env("AXOCOATL_DATA_DIR", root.path().join("data"))
+            .env("AXOCOATL_SOCKET_PATH", root.path().join("ipc/daemon.sock"))
+            .env("PATH", bin)
+            .current_dir(root.path())
+            .kill_on_drop(true).output()).await.unwrap().unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
 
     #[test]
     fn local_image_preflight_rejects_untrusted_and_skips_remote_contracts() {
@@ -21135,6 +24213,557 @@ mod tests {
 
     struct SessionHookProbeLlm {
         calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[derive(Default)]
+    struct CoordinatedPartialFailureBehavior {
+        sink: Option<axocoatl_actor::StreamSink>,
+    }
+
+    struct GenericExecutionProbeBehavior {
+        dispatches: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl axocoatl_actor::AgentBehavior for GenericExecutionProbeBehavior {
+        async fn on_start(
+            &mut self,
+            _config: &axocoatl_core::AgentConfig,
+        ) -> Result<(), axocoatl_actor::AgentError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &mut self,
+            _input: axocoatl_core::AgentInput,
+        ) -> Result<axocoatl_core::AgentOutput, axocoatl_actor::AgentError> {
+            self.dispatches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(axocoatl_core::AgentOutput::text("top-level executed"))
+        }
+
+        async fn on_stop(&mut self) -> Result<(), axocoatl_actor::AgentError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl axocoatl_actor::AgentBehavior for CoordinatedPartialFailureBehavior {
+        async fn on_start(
+            &mut self,
+            _config: &axocoatl_core::AgentConfig,
+        ) -> Result<(), axocoatl_actor::AgentError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &mut self,
+            _input: axocoatl_core::AgentInput,
+        ) -> Result<axocoatl_core::AgentOutput, axocoatl_actor::AgentError> {
+            if let Some(sink) = &self.sink {
+                let _ = sink.send(axocoatl_actor::AgentStreamChunk::Text(
+                    "partial 🦎 evidence".to_string(),
+                ));
+            }
+            Err(axocoatl_actor::AgentError::Internal(
+                "provider failed after text".to_string(),
+            ))
+        }
+
+        fn set_stream_sink(&mut self, sink: Option<axocoatl_actor::StreamSink>) {
+            self.sink = sink;
+        }
+
+        fn last_execution_token_usage_measurement(
+            &self,
+        ) -> Option<axocoatl_core::MeasuredTokenUsage> {
+            Some(axocoatl_core::MeasuredTokenUsage::known(
+                axocoatl_core::TokenUsageStats::new(7, 3),
+            ))
+        }
+
+        async fn on_stop(&mut self) -> Result<(), axocoatl_actor::AgentError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn generic_agent_execute_uses_config_authority_before_registry_membership() {
+        let config = test_config();
+        let registry = AgentRegistry::new();
+        let top_level_id = AgentId::new("test-agent");
+        let scoped_id = AgentId::new("session-a:test-agent");
+        let top_level_dispatches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let scoped_dispatches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let (top_level, top_level_handle) = AgentActor::spawn(
+            Some(format!("generic-top-level-{}", uuid::Uuid::new_v4())),
+            AgentActor,
+            (
+                axocoatl_core::AgentConfig {
+                    id: top_level_id.clone(),
+                    ..Default::default()
+                },
+                Box::new(GenericExecutionProbeBehavior {
+                    dispatches: top_level_dispatches.clone(),
+                }) as Box<dyn axocoatl_actor::AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        let (scoped, scoped_handle) = AgentActor::spawn(
+            Some(format!("generic-scoped-{}", uuid::Uuid::new_v4())),
+            AgentActor,
+            (
+                axocoatl_core::AgentConfig {
+                    id: scoped_id.clone(),
+                    ..Default::default()
+                },
+                Box::new(GenericExecutionProbeBehavior {
+                    dispatches: scoped_dispatches.clone(),
+                }) as Box<dyn axocoatl_actor::AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        registry
+            .register(top_level_id.clone(), top_level.clone())
+            .await;
+        registry.register(scoped_id.clone(), scoped.clone()).await;
+
+        let rejected = execute_configured_agent_input_measured(
+            &config,
+            &registry,
+            "session-a:test-agent",
+            axocoatl_core::AgentInput::text("must not dispatch"),
+        )
+        .await
+        .unwrap_err();
+        assert!(rejected
+            .to_string()
+            .contains("not a configured top-level Agent"));
+        assert_eq!(rejected.token_usage.total(), 0);
+        assert!(rejected.token_usage_known);
+        assert_eq!(scoped_dispatches.load(Ordering::SeqCst), 0);
+
+        let allowed = execute_configured_agent_input_measured(
+            &config,
+            &registry,
+            "test-agent",
+            axocoatl_core::AgentInput::text("run"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(allowed.output.content, "top-level executed");
+        assert_eq!(top_level_dispatches.load(Ordering::SeqCst), 1);
+
+        let worker = require_configured_executable_agent(&role_test_config(), "worker")
+            .unwrap_err()
+            .to_string();
+        assert!(worker.contains("coordinator-owned worker"));
+
+        top_level.stop(None);
+        scoped.stop(None);
+        top_level_handle.await.unwrap();
+        scoped_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn settings_live_update_preserves_active_turn_then_retires_only_exact_idle_actor() {
+        let registry = AgentRegistry::new();
+        let session_id = format!("settings-session-{}", uuid::Uuid::new_v4());
+        let agent_id = "test-agent";
+        let exact_id = AgentId::new(format!("{session_id}:{agent_id}"));
+        let worker_id = AgentId::new(format!("{session_id}:{agent_id}:worker:reviewer"));
+
+        let (exact, exact_handle) = AgentActor::spawn(
+            Some(exact_id.to_string()),
+            AgentActor,
+            (
+                axocoatl_core::AgentConfig {
+                    id: exact_id.clone(),
+                    ..Default::default()
+                },
+                Box::new(GenericExecutionProbeBehavior {
+                    dispatches: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                }) as Box<dyn axocoatl_actor::AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        let (worker, worker_handle) = AgentActor::spawn(
+            Some(worker_id.to_string()),
+            AgentActor,
+            (
+                axocoatl_core::AgentConfig {
+                    id: worker_id.clone(),
+                    ..Default::default()
+                },
+                Box::new(GenericExecutionProbeBehavior {
+                    dispatches: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                }) as Box<dyn axocoatl_actor::AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        registry.register(exact_id.clone(), exact).await;
+        registry.register(worker_id.clone(), worker.clone()).await;
+
+        let active = tokio::sync::Mutex::new(HashMap::from([(
+            session_id.clone(),
+            ActiveSessionTurn {
+                turn_id: "turn-active".to_string(),
+                control: AgentRunControl::new(AgentRunId::new("turn-active")),
+            },
+        )]));
+        let sessions = vec![session_id.clone()];
+        let rejected = AxocoatlDaemon::retire_idle_session_agent_instances(
+            &registry, &active, &sessions, agent_id,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(rejected, DaemonError::SessionConflict(_)));
+        assert!(registry.get(&exact_id).await.is_some());
+        assert!(registry.get(&worker_id).await.is_some());
+
+        active.lock().await.clear();
+        AxocoatlDaemon::retire_idle_session_agent_instances(
+            &registry, &active, &sessions, agent_id,
+        )
+        .await
+        .unwrap();
+        assert!(registry.get(&exact_id).await.is_none());
+        assert!(
+            registry.get(&worker_id).await.is_some(),
+            "a template update must not seize a Coordinator Worker's lifecycle"
+        );
+        exact_handle.await.unwrap();
+
+        // The next Session turn can now create the same canonical scoped name
+        // and therefore cannot reuse the actor built from stale config.
+        let (replacement, replacement_handle) = AgentActor::spawn(
+            Some(exact_id.to_string()),
+            AgentActor,
+            (
+                axocoatl_core::AgentConfig {
+                    id: exact_id.clone(),
+                    ..Default::default()
+                },
+                Box::new(GenericExecutionProbeBehavior {
+                    dispatches: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                }) as Box<dyn axocoatl_actor::AgentBehavior>,
+            ),
+        )
+        .await
+        .expect("retired exact Session identity should be available for the next turn");
+        registry
+            .register(exact_id.clone(), replacement.clone())
+            .await;
+        assert!(registry.get(&exact_id).await.is_some());
+
+        replacement.stop(None);
+        worker.stop(None);
+        replacement_handle.await.unwrap();
+        worker_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_chat_actor_resolution_reauthorizes_persisted_agent_id() {
+        let config = test_config();
+        let registry = AgentRegistry::new();
+        let scoped_id = AgentId::new("session-owned:test-agent");
+        let dispatches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (scoped, handle) = AgentActor::spawn(
+            Some(format!("chat-authority-{}", uuid::Uuid::new_v4())),
+            AgentActor,
+            (
+                axocoatl_core::AgentConfig {
+                    id: scoped_id.clone(),
+                    ..Default::default()
+                },
+                Box::new(GenericExecutionProbeBehavior {
+                    dispatches: dispatches.clone(),
+                }) as Box<dyn axocoatl_actor::AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        registry.register(scoped_id.clone(), scoped.clone()).await;
+
+        let error =
+            configured_agent_actor_from_registry(&config, &registry, "session-owned:test-agent")
+                .await
+                .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not a configured top-level Agent"));
+        assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+        assert!(
+            registry.get(&scoped_id).await.is_some(),
+            "rejected Chat authority must not mutate the Session actor"
+        );
+
+        scoped.stop(None);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_actor_stop_retains_ownership_until_a_successful_retry() {
+        assert!(terminal_requires_fresh_session_actor(
+            SessionTurnLifecycle::Failed
+        ));
+        assert!(terminal_requires_fresh_session_actor(
+            SessionTurnLifecycle::Cancelled
+        ));
+        assert!(terminal_requires_fresh_session_actor(
+            SessionTurnLifecycle::Interrupted
+        ));
+        assert!(!terminal_requires_fresh_session_actor(
+            SessionTurnLifecycle::Completed
+        ));
+        let registry = AgentRegistry::new();
+        let blocked_id = AgentId::new("session-stop:lead");
+        let stopped_id = AgentId::new("session-stop:lead:worker:tester");
+        let late_id = AgentId::new("session-stop:lead:worker:late");
+        let (blocked_actor, blocked_handle) = AgentActor::spawn(
+            Some("session-stop-blocked".to_string()),
+            AgentActor,
+            (
+                axocoatl_core::AgentConfig {
+                    id: blocked_id.clone(),
+                    ..Default::default()
+                },
+                Box::new(CoordinatedPartialFailureBehavior::default())
+                    as Box<dyn axocoatl_actor::AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        let (stopped_actor, stopped_handle) = AgentActor::spawn(
+            Some("session-stop-confirmed".to_string()),
+            AgentActor,
+            (
+                axocoatl_core::AgentConfig {
+                    id: stopped_id.clone(),
+                    ..Default::default()
+                },
+                Box::new(CoordinatedPartialFailureBehavior::default())
+                    as Box<dyn axocoatl_actor::AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        let (late_actor, late_handle) = AgentActor::spawn(
+            Some("session-stop-late-worker".to_string()),
+            AgentActor,
+            (
+                axocoatl_core::AgentConfig {
+                    id: late_id.clone(),
+                    ..Default::default()
+                },
+                Box::new(CoordinatedPartialFailureBehavior::default())
+                    as Box<dyn axocoatl_actor::AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        let orphan_name = "session-stop:lead:worker:orphan#1";
+        let (orphan_actor, orphan_handle) = AgentActor::spawn(
+            Some(orphan_name.to_string()),
+            AgentActor,
+            (
+                axocoatl_core::AgentConfig {
+                    id: AgentId::new(orphan_name),
+                    ..Default::default()
+                },
+                Box::new(CoordinatedPartialFailureBehavior::default())
+                    as Box<dyn axocoatl_actor::AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        registry
+            .register(blocked_id.clone(), blocked_actor.clone())
+            .await;
+        registry
+            .register(stopped_id.clone(), stopped_actor.clone())
+            .await;
+
+        let fail_blocked = Arc::new(AtomicBool::new(true));
+        let provider_or_tool_dispatches = std::sync::atomic::AtomicUsize::new(0);
+        let injected = fail_blocked.clone();
+        let boundary = AxocoatlDaemon::stop_session_actor_instances_with(
+            &registry,
+            "session-stop",
+            move |actor_id, actor| {
+                let injected = injected.clone();
+                async move {
+                    if actor_id == AgentId::new("session-stop:lead")
+                        && injected.load(Ordering::SeqCst)
+                    {
+                        Err("injected stop timeout".to_string())
+                    } else {
+                        actor
+                            .stop_and_wait(None, Some(Duration::from_secs(1)))
+                            .await
+                            .map_err(|error| error.to_string())
+                    }
+                }
+            },
+        )
+        .await;
+        if boundary.is_ok() {
+            provider_or_tool_dispatches.fetch_add(1, Ordering::SeqCst);
+        }
+        let error = boundary.unwrap_err().to_string();
+        assert!(error.contains("injected stop timeout"));
+        assert_eq!(provider_or_tool_dispatches.load(Ordering::SeqCst), 0);
+        assert!(
+            registry.get(&blocked_id).await.is_some(),
+            "an unconfirmed executor remains the next-turn ownership guard"
+        );
+        assert!(registry.get(&stopped_id).await.is_none());
+        assert!(ractor::registry::where_is(orphan_name.to_string()).is_none());
+
+        fail_blocked.store(false, Ordering::SeqCst);
+        let injected = fail_blocked.clone();
+        let late_registered = Arc::new(AtomicBool::new(false));
+        let registered = late_registered.clone();
+        let registry_for_late_worker = registry.clone();
+        let late_id_for_registration = late_id.clone();
+        let late_actor_for_registration = late_actor.clone();
+        let boundary = AxocoatlDaemon::stop_session_actor_instances_with(
+            &registry,
+            "session-stop",
+            move |actor_id, actor| {
+                let injected = injected.clone();
+                let registered = registered.clone();
+                let registry = registry_for_late_worker.clone();
+                let late_id = late_id_for_registration.clone();
+                let late_actor = late_actor_for_registration.clone();
+                async move {
+                    if actor_id == AgentId::new("session-stop:lead")
+                        && injected.load(Ordering::SeqCst)
+                    {
+                        Err("injected stop timeout".to_string())
+                    } else {
+                        if actor_id == AgentId::new("session-stop:lead")
+                            && !registered.swap(true, Ordering::SeqCst)
+                        {
+                            // Simulate a Coordinator registering a Worker while
+                            // the first shutdown snapshot is already draining.
+                            registry.register(late_id, late_actor).await;
+                        }
+                        actor
+                            .stop_and_wait(None, Some(Duration::from_secs(1)))
+                            .await
+                            .map_err(|error| error.to_string())
+                    }
+                }
+            },
+        )
+        .await;
+        if boundary.is_ok() {
+            provider_or_tool_dispatches.fetch_add(1, Ordering::SeqCst);
+        }
+        boundary.unwrap();
+        assert!(registry.get(&blocked_id).await.is_none());
+        assert!(late_registered.load(Ordering::SeqCst));
+        assert!(registry.get(&late_id).await.is_none());
+        assert_eq!(provider_or_tool_dispatches.load(Ordering::SeqCst), 1);
+
+        blocked_actor.stop(None);
+        stopped_actor.stop(None);
+        late_actor.stop(None);
+        orphan_actor.stop(None);
+        blocked_handle.await.unwrap();
+        stopped_handle.await.unwrap();
+        late_handle.await.unwrap();
+        orphan_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_and_cancelled_exact_retries_settle_retained_actor_before_cached_outcome() {
+        use ractor::Actor;
+
+        for (label, status) in [
+            ("cancelled", SessionTurnLifecycle::Cancelled),
+            ("failed", SessionTurnLifecycle::Failed),
+        ] {
+            let session_id = format!("terminal-retry-{label}");
+            let actor_id = AgentId::new(format!("{session_id}:coder"));
+            let registry = AgentRegistry::new();
+            let (actor, handle) = AgentActor::spawn(
+                Some(format!("{session_id}:coder")),
+                AgentActor,
+                (
+                    axocoatl_core::AgentConfig {
+                        id: actor_id.clone(),
+                        ..Default::default()
+                    },
+                    Box::new(CoordinatedPartialFailureBehavior::default())
+                        as Box<dyn axocoatl_actor::AgentBehavior>,
+                ),
+            )
+            .await
+            .unwrap();
+            registry.register(actor_id.clone(), actor).await;
+
+            let mut turn = projection_turn();
+            turn.id = format!("turn-{label}");
+            turn.session_id = session_id.clone();
+            turn.status = status;
+            turn.final_output = None;
+            turn.error =
+                (status == SessionTurnLifecycle::Failed).then(|| "provider failed".to_string());
+
+            let dispatches = std::sync::atomic::AtomicUsize::new(0);
+            let first_boundary = if terminal_requires_fresh_session_actor(turn.status) {
+                AxocoatlDaemon::stop_session_actor_instances_with(
+                    &registry,
+                    &session_id,
+                    |_, _| async { Err("injected first stop failure".to_string()) },
+                )
+                .await
+            } else {
+                Ok(())
+            };
+            let first = first_boundary.and_then(|()| {
+                dispatches.fetch_add(1, Ordering::SeqCst);
+                AxocoatlDaemon::outcome_from_terminal_turn(turn.clone())
+            });
+            let error = first.unwrap_err().to_string();
+            assert!(error.contains("injected first stop failure"), "{error}");
+            assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+            assert!(registry.get(&actor_id).await.is_some());
+
+            AxocoatlDaemon::stop_session_actor_instances_with(
+                &registry,
+                &session_id,
+                |_, actor| async move {
+                    actor
+                        .stop_and_wait(None, Some(Duration::from_secs(1)))
+                        .await
+                        .map_err(|error| error.to_string())
+                },
+            )
+            .await
+            .unwrap();
+            let retry = AxocoatlDaemon::outcome_from_terminal_turn(turn);
+            dispatches.fetch_add(1, Ordering::SeqCst);
+            assert!(registry.get(&actor_id).await.is_none());
+            assert_eq!(dispatches.load(Ordering::SeqCst), 1);
+            match status {
+                SessionTurnLifecycle::Cancelled => {
+                    assert!(retry.unwrap().is_cancelled());
+                }
+                SessionTurnLifecycle::Failed => {
+                    assert!(retry.unwrap_err().to_string().contains("provider failed"));
+                }
+                _ => unreachable!(),
+            }
+            handle.await.unwrap();
+        }
     }
 
     #[async_trait::async_trait]
@@ -22961,6 +26590,105 @@ agents:
             .is_some_and(|error| error.contains("cancelled")));
     }
 
+    async fn abort_guarded_preparation(
+        store: Arc<tokio::sync::Mutex<SessionStore>>,
+        session_id: &str,
+        generation: u64,
+        local: bool,
+    ) -> axocoatl_session::SessionEnvironment {
+        let guard_store = store.clone();
+        let guard_session = session_id.to_string();
+        let preparation = tokio::spawn(async move {
+            let _guard = SessionPreparationStateGuard {
+                session_id: guard_session,
+                local,
+                session_store: guard_store,
+                start_lock: Arc::new(tokio::sync::Mutex::new(())),
+                generation,
+                e2b_config: None,
+                armed: true,
+            };
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        preparation.abort();
+        let _ = preparation.await;
+        for _ in 0..500 {
+            if store.lock().await.get(session_id).is_some_and(|session| {
+                session.environment.state != SessionEnvironmentState::Preparing
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        store.lock().await.get(session_id).unwrap().environment
+    }
+
+    #[tokio::test]
+    async fn cancelled_remote_repreparation_never_returns_to_ready() {
+        // E2B begins without a runtime id; nothing proves the remote runtime
+        // or its workspace, so a cancelled re-preparation fails as before.
+        let (_data, _work, mut store, session) = environment_test_session(None, false);
+        store
+            .set_environment(
+                &session.id,
+                SessionEnvironmentState::Ready,
+                Some("e2b:base".into()),
+                None,
+                Vec::new(),
+                None,
+            )
+            .unwrap();
+        let preparing = store
+            .begin_environment_preparation(&session.id, None)
+            .unwrap();
+        assert!(preparing.environment.resume_ready.is_none());
+        let store = Arc::new(tokio::sync::Mutex::new(store));
+        let environment =
+            abort_guarded_preparation(store, &session.id, preparing.environment.generation, false)
+                .await;
+        assert_eq!(environment.state, SessionEnvironmentState::Failed);
+        assert!(environment
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("cancelled")));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Podman; run this test explicitly"]
+    async fn cancelled_local_repreparation_returns_to_ready_after_cleanup() {
+        let (_data, _work, mut store, session) = environment_test_session(None, false);
+        let evidence = vec![SessionSetupResult {
+            command: "npm ci".into(),
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            completed_at: 1,
+        }];
+        let ready = store
+            .set_environment(
+                &session.id,
+                SessionEnvironmentState::Ready,
+                Some("localhost/demo:latest".into()),
+                Some(AxocoatlDaemon::podman_runtime_identity(&session.id)),
+                evidence.clone(),
+                None,
+            )
+            .unwrap();
+        let preparing = store
+            .begin_environment_preparation(&session.id, ready.environment.runtime.clone())
+            .unwrap();
+        let store = Arc::new(tokio::sync::Mutex::new(store));
+        let environment =
+            abort_guarded_preparation(store, &session.id, preparing.environment.generation, true)
+                .await;
+        assert_eq!(environment.state, SessionEnvironmentState::Ready);
+        assert_eq!(environment.generation, ready.environment.generation);
+        assert_eq!(environment.setup_results, evidence);
+        assert!(environment.resume_ready.is_none());
+        assert!(environment.runtime.unwrap().cleanup_confirmed);
+    }
+
     #[tokio::test]
     async fn shutdown_cancellation_retains_persisted_e2b_id_when_delete_fails() {
         let (api_url, mut requests, server) = start_fake_e2b_control_plane(vec![
@@ -23266,6 +26994,48 @@ agents:
                 .map(|message| message.content.as_str()),
             Some("latest-after-boundary")
         );
+    }
+
+    #[test]
+    fn coordinated_tool_frames_preserve_activation_generation() {
+        let chunk = axocoatl_actor::AgentStreamChunk::ToolCallStarted {
+            source_agent: None,
+            id: "call_0".to_string(),
+            name: "read_file".to_string(),
+            arguments: serde_json::json!({"path": "src/lib.rs"}),
+            provider_arguments: serde_json::json!({"path": "src/lib.rs"}),
+            provider_metadata: Default::default(),
+            assistant_content: Some("Inspecting.".to_string()),
+            provider_response_group: 1,
+            provider_call_index: 0,
+            provider_call_count: 1,
+        };
+        let coordinated = agent_chunk_stream_frame(
+            &chunk,
+            "session-a",
+            "builder",
+            Some("turn-a"),
+            Some(0),
+            Some(2),
+        );
+        let coordinated = serde_json::to_value(coordinated).unwrap();
+        assert_eq!(coordinated["kind"], "tool-call");
+        assert_eq!(coordinated["call_id"], "call_0");
+        assert_eq!(coordinated["occurrence"], 0);
+        assert_eq!(coordinated["coordination_generation"], 2);
+
+        let direct = agent_chunk_stream_frame(
+            &chunk,
+            "session-a",
+            "builder",
+            Some("turn-b"),
+            Some(0),
+            None,
+        );
+        assert!(serde_json::to_value(direct)
+            .unwrap()
+            .get("coordination_generation")
+            .is_none());
     }
 
     #[test]
@@ -24443,6 +28213,43 @@ agents:
     }
 
     #[test]
+    fn mandatory_post_terminal_failure_is_never_published_as_clean_completion() {
+        let terminal = Ok((
+            AgentRunOutcome::Completed(axocoatl_core::AgentOutput {
+                content: "durable answer".to_string(),
+                tool_calls: Vec::new(),
+                token_usage: axocoatl_core::TokenUsageStats::new(11, 5).with_reasoning(2),
+            }),
+            false,
+        ));
+        let frame = session_terminal_stream_frame(
+            "session-boundary",
+            "turn-boundary",
+            &terminal,
+            &["checkpoint transaction could not commit".to_string()],
+        );
+        match frame {
+            crate::stream::StreamFrame::SessionError {
+                session,
+                turn_id,
+                error,
+                input_tokens,
+                output_tokens,
+                reasoning_tokens,
+                token_usage_known,
+            } => {
+                assert_eq!(session, "session-boundary");
+                assert_eq!(turn_id.as_deref(), Some("turn-boundary"));
+                assert!(error.contains("durably completed"));
+                assert!(error.contains("checkpoint transaction could not commit"));
+                assert_eq!((input_tokens, output_tokens, reasoning_tokens), (11, 5, 2));
+                assert!(!token_usage_known);
+            }
+            other => panic!("mandatory terminal-boundary failure was hidden by {other:?}"),
+        }
+    }
+
+    #[test]
     fn failed_tool_blank_completion_reopens_as_failed_with_tool_evidence() {
         let root = tempfile::tempdir().unwrap();
         let turn_id = "turn-failed-tool";
@@ -24768,12 +28575,12 @@ agents:
             "Invalidate catalog cache entries immediately after each mutation.",
         ));
         let reviewer = AgentRunOutcome::Completed(axocoatl_core::AgentOutput::text("   \n"));
-        assert!(require_multi_agent_handoff_output("architect", &architect).is_ok());
-        let error = require_multi_agent_handoff_output("reviewer", &reviewer).unwrap_err();
+        assert!(require_session_agent_result("architect", &architect).is_ok());
+        let error = require_session_agent_result("reviewer", &reviewer).unwrap_err();
         assert!(error.to_string().contains("reviewer"));
         assert!(error
             .to_string()
-            .contains("cannot claim a completed collaboration"));
+            .contains("cannot complete without a user-visible Agent result"));
 
         {
             let mut store = SessionTurnStore::open(root.path()).unwrap();
@@ -24844,7 +28651,7 @@ agents:
             run_id: AgentRunId::new("turn-cancelled-reviewer"),
             partial_output: axocoatl_core::AgentOutput::text(""),
         };
-        assert!(require_multi_agent_handoff_output("reviewer", &cancelled).is_ok());
+        assert!(require_session_agent_result("reviewer", &cancelled).is_ok());
     }
 
     #[test]
@@ -25065,6 +28872,1806 @@ providers:
             &std::path::PathBuf::from("primary-only-route.yaml"),
         )
         .unwrap()
+    }
+
+    fn coordination_adapter_test_config() -> AxocoatlConfig {
+        axocoatl_config::parse_config(
+            r#"
+agents:
+  - id: source
+    name: "Source"
+    provider: mock
+    model: source-model
+  - id: sibling
+    name: "Sibling sink"
+    provider: mock
+    model: sibling-model
+    depends_on: [source]
+  - id: reviewer
+    name: "Reviewer sink"
+    provider: mock
+    model: reviewer-model
+    depends_on: [source]
+workflows:
+  - id: coordination-team
+    name: "Coordination team"
+    agents: [source, sibling, reviewer]
+    entry_point: source
+"#,
+            &std::path::PathBuf::from("coordination-adapter.yaml"),
+        )
+        .unwrap()
+    }
+
+    fn authority_test_automation(agent_id: &str) -> axocoatl_config::Automation {
+        axocoatl_config::Automation {
+            id: "authority-test".to_string(),
+            name: "Authority test".to_string(),
+            description: None,
+            nodes: vec![axocoatl_config::AutomationNode {
+                id: "agent".to_string(),
+                kind: axocoatl_config::AutomationNodeKind::Agent {
+                    agent_id: agent_id.to_string(),
+                    input: axocoatl_config::NodeInput::FromTrigger,
+                },
+                position: None,
+            }],
+            edges: Vec::new(),
+            trigger: axocoatl_config::AutomationTrigger::Manual,
+            enabled: true,
+            folder: None,
+        }
+    }
+
+    #[test]
+    fn automation_writes_accept_only_configured_top_level_non_worker_agents() {
+        assert!(validate_automation_agent_authority(
+            &test_config(),
+            &authority_test_automation("test-agent")
+        )
+        .is_ok());
+
+        let scoped = validate_automation_agent_authority(
+            &test_config(),
+            &authority_test_automation("session-a:test-agent"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(scoped.contains("not a configured top-level Agent"));
+
+        let worker = validate_automation_agent_authority(
+            &role_test_config(),
+            &authority_test_automation("worker"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(worker.contains("coordinator-owned worker"));
+    }
+
+    fn coordination_test_output(content: &str) -> axocoatl_core::AgentOutput {
+        axocoatl_core::AgentOutput {
+            content: content.to_string(),
+            tool_calls: Vec::new(),
+            token_usage: axocoatl_core::TokenUsageStats::new(1, 1),
+        }
+    }
+
+    fn coordination_checkpoint(
+        agent_id: &str,
+        version: u64,
+        content: &str,
+        usage: axocoatl_core::TokenUsageStats,
+        behavior_state: Option<&str>,
+    ) -> axocoatl_memory::AgentCheckpoint {
+        axocoatl_memory::AgentCheckpoint {
+            version,
+            agent_id: agent_id.to_string(),
+            checkpoint_time: 1_700_000_000 + version,
+            session_messages: vec![axocoatl_memory::StoredMessage {
+                content_parts: None,
+                role: axocoatl_core::MessageRole::User,
+                content: content.to_string(),
+                timestamp: 1_700_000_000 + version,
+                token_count: 1,
+                name: None,
+                tool_calls: Vec::new(),
+                tool_call_id: None,
+            }],
+            cumulative_token_usage: usage,
+            cumulative_token_usage_known: true,
+            behavior_state: behavior_state.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn coordinated_provider_failure_persists_exact_attributed_partial_after_reload() {
+        use ractor::Actor;
+
+        let history = tempfile::tempdir().unwrap();
+        let ledger = Arc::new(tokio::sync::Mutex::new(
+            SessionTurnStore::open(history.path()).unwrap(),
+        ));
+        let turn_id = "coordinated-partial-failure-turn";
+        ledger
+            .lock()
+            .await
+            .begin(BeginSessionTurn {
+                turn_id: Some(turn_id.to_string()),
+                session_id: "coordinated-partial-failure-session".to_string(),
+                user_input: "inspect the failure".to_string(),
+                agent_id: None,
+                model: None,
+                context: Vec::new(),
+                idempotency_key: Some(turn_id.to_string()),
+                metadata: serde_json::Map::new(),
+            })
+            .unwrap();
+
+        let behavior = CoordinatedPartialFailureBehavior::default();
+        let config = axocoatl_core::AgentConfig {
+            id: AgentId::new("reviewer"),
+            name: "Reviewer".to_string(),
+            ..Default::default()
+        };
+        let (actor, handle) = axocoatl_actor::AgentActor::spawn(
+            Some("coordinated-partial-failure-actor".to_string()),
+            axocoatl_actor::AgentActor,
+            (config, Box::new(behavior)),
+        )
+        .await
+        .unwrap();
+        let bus = crate::stream::StreamBus::new(16);
+        let _receiver = bus.subscribe();
+        let failure = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            AxocoatlDaemon::stream_agent_run(
+                bus,
+                actor.clone(),
+                "coordinated-partial-failure-session".to_string(),
+                "reviewer".to_string(),
+                "inspect the failure".to_string(),
+                StreamAgentRunOptions {
+                    model_override: Some("coordinated-partial-failure".to_string()),
+                    run_context: None,
+                    trace: None,
+                    supplied_history: None,
+                    attachments: Vec::new(),
+                    control: Some(AgentRunControl::new(AgentRunId::new(turn_id))),
+                    turn_id: Some(turn_id.to_string()),
+                    partial_ledger: Some(ledger.clone()),
+                    stream_commit_gate: Some(Arc::new(tokio::sync::Mutex::new(()))),
+                    coordination_generation: Some(1),
+                },
+            ),
+        )
+        .await
+        .expect("coordinated failed stream did not settle")
+        .unwrap_err();
+        assert!(failure
+            .error
+            .to_string()
+            .contains("provider failed after text"));
+        assert_eq!(
+            failure.coordinated_partial_output.as_deref(),
+            Some("partial 🦎 evidence")
+        );
+        assert_eq!(
+            failure.token_usage,
+            axocoatl_core::TokenUsageStats::new(7, 3)
+        );
+
+        ledger
+            .lock()
+            .await
+            .transition(
+                turn_id,
+                format!("terminal:{turn_id}"),
+                TransitionSessionTurn {
+                    status: SessionTurnLifecycle::Failed,
+                    final_output: None,
+                    error: Some(failure.error.to_string()),
+                    metadata: serde_json::Map::new(),
+                },
+            )
+            .unwrap();
+        actor.stop(None);
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("failed Agent actor did not stop")
+            .unwrap();
+        drop(ledger);
+
+        let reopened = SessionTurnStore::open(history.path()).unwrap();
+        let turn = reopened.get(turn_id).unwrap();
+        assert_eq!(turn.partial_output, "partial 🦎 evidence");
+        assert_eq!(turn.agent_outputs.len(), 1);
+        assert_eq!(turn.agent_outputs[0].agent_id, "reviewer");
+        assert_eq!(turn.agent_outputs[0].output, "partial 🦎 evidence");
+        assert_eq!(
+            turn.agent_outputs[0].disposition,
+            Some(SessionTurnAgentOutputDisposition::Failed)
+        );
+        assert_eq!(turn.agent_outputs[0].activation_generation, Some(1));
+
+        let transcript = reopened.transcript("coordinated-partial-failure-session");
+        assert_eq!(transcript.len(), 2);
+        assert_eq!(transcript[1].agent_id.as_deref(), Some("reviewer"));
+        assert_eq!(transcript[1].content, "partial 🦎 evidence");
+        let projected = checkpoint_projection(&ApproximateCounter::new().unwrap(), &[turn]);
+        assert_eq!(
+            projected
+                .iter()
+                .filter(|message| message.role == axocoatl_core::MessageRole::Assistant)
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["partial 🦎 evidence"]
+        );
+    }
+
+    #[test]
+    fn structured_tool_round_output_reloads_without_an_aggregate_stream_tail() {
+        let history = tempfile::tempdir().unwrap();
+        let turn_id = "tool-round-structured-turn";
+        let provider_metadata = axocoatl_core::ProviderMetadata::from([(
+            "axocoatl.provider".to_string(),
+            "openai".to_string(),
+        )]);
+        let (started_operation, started) = session_tool_execution_event_with_provider_metadata(
+            turn_id,
+            "coder",
+            "call-read",
+            0,
+            "read_file",
+            "tool_started",
+            "arguments",
+            &serde_json::json!({"path":"src/lib.rs"}),
+            &serde_json::json!({"path":"src/lib.rs"}),
+            0,
+            0,
+            1,
+            Some("I’ll inspect 🦎."),
+            &provider_metadata,
+            None,
+        );
+        let (result_operation, result) = session_tool_execution_event(
+            turn_id,
+            "coder",
+            "call-read",
+            0,
+            "read_file",
+            "tool_result",
+            "result",
+            &serde_json::json!({"content":"fn ready() {}"}),
+            Some(false),
+        );
+        {
+            let mut ledger = SessionTurnStore::open(history.path()).unwrap();
+            ledger
+                .begin(BeginSessionTurn {
+                    turn_id: Some(turn_id.to_string()),
+                    session_id: "tool-round-structured-session".to_string(),
+                    user_input: "Inspect the implementation".to_string(),
+                    agent_id: Some("coder".to_string()),
+                    model: Some("model-a".to_string()),
+                    context: Vec::new(),
+                    idempotency_key: Some(turn_id.to_string()),
+                    metadata: serde_json::Map::new(),
+                })
+                .unwrap();
+            ledger
+                .append_output(turn_id, "partial:preamble", "I’ll inspect 🦎.")
+                .unwrap();
+            ledger
+                .record_execution(turn_id, started_operation, started)
+                .unwrap();
+            ledger
+                .record_execution(turn_id, result_operation, result)
+                .unwrap();
+            ledger
+                .append_output(turn_id, "partial:final", "The fix is ready.")
+                .unwrap();
+            ledger
+                .record_agent_output(
+                    turn_id,
+                    "agent-output:coder",
+                    "coder",
+                    Some("model-a".to_string()),
+                    "The fix is ready.",
+                    None,
+                )
+                .unwrap();
+            ledger
+                .transition(
+                    turn_id,
+                    format!("terminal:{turn_id}"),
+                    TransitionSessionTurn {
+                        status: SessionTurnLifecycle::Completed,
+                        final_output: Some("The fix is ready.".to_string()),
+                        error: None,
+                        metadata: serde_json::Map::new(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let reopened = SessionTurnStore::open(history.path()).unwrap();
+        let turn = reopened.get(turn_id).unwrap();
+        assert_eq!(turn.partial_output, "I’ll inspect 🦎.The fix is ready.");
+        let transcript = reopened.transcript("tool-round-structured-session");
+        assert_eq!(transcript.len(), 2);
+        assert_eq!(transcript[1].content, "The fix is ready.");
+        assert_eq!(transcript[1].agent_id.as_deref(), Some("coder"));
+
+        let projected = checkpoint_projection(&ApproximateCounter::new().unwrap(), &[turn]);
+        assert_eq!(projected.len(), 4);
+        assert_eq!(projected[0].content, "Inspect the implementation");
+        assert_eq!(projected[1].content, "I’ll inspect 🦎.");
+        assert_eq!(projected[1].tool_calls.len(), 1);
+        assert_eq!(projected[2].role, axocoatl_core::MessageRole::Tool);
+        assert_eq!(projected[3].content, "The fix is ready.");
+        assert!(projected.iter().all(|message| {
+            message.content != "🦎.The fix is ready."
+                && message.content != "I’ll inspect 🦎.The fix is ready."
+        }));
+    }
+
+    #[test]
+    fn daemon_coordination_adapter_revises_target_and_every_stale_sink() {
+        let config = coordination_adapter_test_config();
+        let history = tempfile::tempdir().unwrap();
+        let mut ledger = SessionTurnStore::open(history.path()).unwrap();
+        let turn_id = "coordination-revision-turn";
+        ledger
+            .begin(BeginSessionTurn {
+                turn_id: Some(turn_id.to_string()),
+                session_id: "coordination-revision-session".to_string(),
+                user_input: "build it".to_string(),
+                agent_id: None,
+                model: None,
+                context: Vec::new(),
+                idempotency_key: Some("coordination-revision-request".to_string()),
+                metadata: serde_json::Map::new(),
+            })
+            .unwrap();
+        let members = vec![
+            "source".to_string(),
+            "sibling".to_string(),
+            "reviewer".to_string(),
+        ];
+        let graph = coordinated_agent_graph(&members, &config).unwrap();
+        let sinks = coordinated_graph_sinks(&graph);
+        assert_eq!(sinks, ["sibling", "reviewer"]);
+        let mut scheduler = TurnCoordinationScheduler::new(graph);
+        let mut by_signal = HashMap::new();
+        let mut latest = HashMap::new();
+
+        let source_1 = scheduler.start("source").unwrap();
+        let source_1_prompt =
+            coordinated_activation_input("build it", &source_1, &by_signal, &[]).unwrap();
+        assert!(source_1_prompt.starts_with("build it"));
+        assert!(source_1_prompt.contains("No upstream revision is available"));
+        assert!(source_1_prompt.contains("Do not call `coordination_signal`"));
+        let source_1_output = coordination_test_output("source generation one");
+        ledger
+            .record_agent_output_with_coordination(
+                turn_id,
+                "output-source-1",
+                "source",
+                Some("source-model".to_string()),
+                source_1_output.content.clone(),
+                SessionTurnAgentOutputIdentity {
+                    activation_generation: 1,
+                    disposition: SessionTurnAgentOutputDisposition::Completed,
+                    causal_signal_id: Some("source-1".to_string()),
+                },
+            )
+            .unwrap();
+        by_signal.insert("source-1".to_string(), source_1_output.clone());
+        latest.insert(
+            "source".to_string(),
+            (1, "source-1".to_string(), source_1_output),
+        );
+        scheduler
+            .complete("source", "source-1", "source one")
+            .unwrap();
+
+        let sibling_1 = scheduler.start("sibling").unwrap();
+        let sibling_1_prompt =
+            coordinated_activation_input("build it", &sibling_1, &by_signal, &[]).unwrap();
+        assert!(sibling_1_prompt.contains("source generation one"));
+        let sibling_1_output = coordination_test_output("stale sibling result");
+        ledger
+            .record_agent_output_with_coordination(
+                turn_id,
+                "output-sibling-1",
+                "sibling",
+                Some("sibling-model".to_string()),
+                sibling_1_output.content.clone(),
+                SessionTurnAgentOutputIdentity {
+                    activation_generation: 1,
+                    disposition: SessionTurnAgentOutputDisposition::Completed,
+                    causal_signal_id: Some("sibling-1".to_string()),
+                },
+            )
+            .unwrap();
+        by_signal.insert("sibling-1".to_string(), sibling_1_output.clone());
+        latest.insert(
+            "sibling".to_string(),
+            (1, "sibling-1".to_string(), sibling_1_output),
+        );
+        scheduler
+            .complete("sibling", "sibling-1", "sibling one")
+            .unwrap();
+
+        let reviewer_1 = scheduler.start("reviewer").unwrap();
+        assert!(
+            coordinated_activation_input("build it", &reviewer_1, &by_signal, &[])
+                .unwrap()
+                .contains("source generation one")
+        );
+        let before_feedback = scheduler.events().len();
+        scheduler
+            .request_changes(
+                "reviewer",
+                "source",
+                "feedback-1",
+                "replace the unsafe implementation",
+            )
+            .unwrap();
+        let feedback_events = scheduler.events()[before_feedback..].to_vec();
+        let invalidated = invalidate_reactivated_outputs(&feedback_events, &mut latest).unwrap();
+        validate_latest_completed_generations(&scheduler, &latest).unwrap();
+        assert_eq!(
+            invalidated,
+            vec![
+                ("source".to_string(), 1, 2, "feedback-1".to_string()),
+                ("sibling".to_string(), 1, 2, "feedback-1".to_string()),
+                ("reviewer".to_string(), 1, 2, "feedback-1".to_string()),
+            ]
+        );
+        let mut feedback_operations = vec![
+            SessionTurnAtomicOperation {
+                operation_id: "output-reviewer-1".to_string(),
+                mutation: SessionTurnAtomicMutation::AgentOutput {
+                    agent_id: "reviewer".to_string(),
+                    model: Some("reviewer-model".to_string()),
+                    output: "revision requested".to_string(),
+                    attempt_id: None,
+                    identity: Some(SessionTurnAgentOutputIdentity {
+                        activation_generation: 1,
+                        disposition: SessionTurnAgentOutputDisposition::ChangesRequested,
+                        causal_signal_id: Some("feedback-1".to_string()),
+                    }),
+                },
+            },
+            SessionTurnAtomicOperation {
+                operation_id: "feedback-signal-1".to_string(),
+                mutation: SessionTurnAtomicMutation::Execution {
+                    execution: RecordTurnExecution {
+                        kind: "coordination_signal".to_string(),
+                        execution_id: Some(turn_id.to_string()),
+                        attempt_id: None,
+                        metadata: serde_json::json!({
+                            "from_agent": "reviewer",
+                            "to_agent": "source",
+                            "summary": "replace the unsafe implementation",
+                            "generation": 1,
+                            "signal_id": "feedback-1",
+                            "applied": true,
+                            "usage": coordination_usage_value(
+                                &axocoatl_core::TokenUsageStats::new(3, 2),
+                                true,
+                            ),
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                    },
+                },
+            },
+        ];
+        for (agent_id, old_generation, new_generation, cause_signal_id) in &invalidated {
+            feedback_operations.push(SessionTurnAtomicOperation {
+                operation_id: format!("supersede-{agent_id}-{old_generation}"),
+                mutation: SessionTurnAtomicMutation::Execution {
+                    execution: RecordTurnExecution {
+                        kind: "agent_output_superseded".to_string(),
+                        execution_id: None,
+                        attempt_id: None,
+                        metadata: serde_json::json!({
+                            "agent_id": agent_id,
+                            "activation_generation": old_generation,
+                            "superseded_by_generation": new_generation,
+                            "cause_signal_id": cause_signal_id,
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                    },
+                },
+            });
+        }
+        for event in feedback_events
+            .iter()
+            .filter(|event| event.kind == TurnCoordinationEventKind::AgentReactivated)
+        {
+            feedback_operations.push(SessionTurnAtomicOperation {
+                operation_id: format!("reactivated-{}", event.agent_id),
+                mutation: SessionTurnAtomicMutation::Execution {
+                    execution: RecordTurnExecution {
+                        kind: "coordination_agent_reactivated".to_string(),
+                        execution_id: Some(turn_id.to_string()),
+                        attempt_id: None,
+                        metadata: serde_json::json!({
+                            "agent_id": event.agent_id,
+                            "generation": event.generation,
+                            "cause_signal_ids": event.cause_signal_ids,
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                    },
+                },
+            });
+        }
+        ledger
+            .record_operations_atomically(turn_id, "feedback-batch-1", feedback_operations)
+            .unwrap();
+        assert!(
+            latest.is_empty(),
+            "every stale descendant output is invalidated"
+        );
+        assert_eq!(
+            feedback_events
+                .iter()
+                .filter(|event| event.kind == TurnCoordinationEventKind::AgentReactivated)
+                .map(|event| event.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["source", "sibling", "reviewer"]
+        );
+
+        let source_2 = scheduler.start("source").unwrap();
+        assert_eq!(source_2.generation, 2);
+        let source_2_prompt =
+            coordinated_activation_input("build it", &source_2, &by_signal, &[]).unwrap();
+        assert!(source_2_prompt.contains("Revise for source"));
+        assert!(source_2_prompt.contains("feedback-1"));
+        assert!(source_2_prompt.contains("replace the unsafe implementation"));
+        let source_2_output = coordination_test_output("source generation two");
+        ledger
+            .record_agent_output_with_coordination(
+                turn_id,
+                "output-source-2",
+                "source",
+                Some("source-model".to_string()),
+                source_2_output.content.clone(),
+                SessionTurnAgentOutputIdentity {
+                    activation_generation: 2,
+                    disposition: SessionTurnAgentOutputDisposition::Completed,
+                    causal_signal_id: Some("source-2".to_string()),
+                },
+            )
+            .unwrap();
+        by_signal.insert("source-2".to_string(), source_2_output.clone());
+        latest.insert(
+            "source".to_string(),
+            (2, "source-2".to_string(), source_2_output),
+        );
+        scheduler
+            .complete("source", "source-2", "source two")
+            .unwrap();
+
+        let sibling_2 = scheduler.start("sibling").unwrap();
+        let sibling_2_prompt =
+            coordinated_activation_input("build it", &sibling_2, &by_signal, &[]).unwrap();
+        assert!(sibling_2_prompt.contains("source generation two"));
+        assert!(!sibling_2_prompt.contains("source generation one"));
+        let sibling_2_output = coordination_test_output("current sibling result");
+        ledger
+            .record_agent_output_with_coordination(
+                turn_id,
+                "output-sibling-2",
+                "sibling",
+                Some("sibling-model".to_string()),
+                sibling_2_output.content.clone(),
+                SessionTurnAgentOutputIdentity {
+                    activation_generation: 2,
+                    disposition: SessionTurnAgentOutputDisposition::Completed,
+                    causal_signal_id: Some("sibling-2".to_string()),
+                },
+            )
+            .unwrap();
+        by_signal.insert("sibling-2".to_string(), sibling_2_output.clone());
+        latest.insert(
+            "sibling".to_string(),
+            (2, "sibling-2".to_string(), sibling_2_output),
+        );
+        scheduler
+            .complete("sibling", "sibling-2", "sibling two")
+            .unwrap();
+
+        let reviewer_2 = scheduler.start("reviewer").unwrap();
+        let reviewer_2_prompt =
+            coordinated_activation_input("build it", &reviewer_2, &by_signal, &[]).unwrap();
+        assert!(reviewer_2_prompt.contains("source generation two"));
+        assert!(reviewer_2_prompt.contains("Verify requested revision"));
+        assert!(reviewer_2_prompt.contains("feedback-1"));
+        let reviewer_2_output = coordination_test_output("verified current result");
+        ledger
+            .record_agent_output_with_coordination(
+                turn_id,
+                "output-reviewer-2",
+                "reviewer",
+                Some("reviewer-model".to_string()),
+                reviewer_2_output.content.clone(),
+                SessionTurnAgentOutputIdentity {
+                    activation_generation: 2,
+                    disposition: SessionTurnAgentOutputDisposition::Completed,
+                    causal_signal_id: Some("reviewer-2".to_string()),
+                },
+            )
+            .unwrap();
+        by_signal.insert("reviewer-2".to_string(), reviewer_2_output.clone());
+        latest.insert(
+            "reviewer".to_string(),
+            (2, "reviewer-2".to_string(), reviewer_2_output),
+        );
+        scheduler
+            .complete("reviewer", "reviewer-2", "reviewer two")
+            .unwrap();
+
+        let final_output = coordinated_final_output(
+            &sinks,
+            &latest,
+            &scheduler,
+            axocoatl_core::TokenUsageStats::new(9, 7),
+        )
+        .unwrap();
+        assert_eq!(
+            final_output.content,
+            "### sibling\ncurrent sibling result\n\n### reviewer\nverified current result"
+        );
+        assert_eq!(final_output.token_usage.total(), 16);
+
+        drop(ledger);
+        let reopened = SessionTurnStore::open(history.path()).unwrap();
+        let durable = reopened.get(turn_id).unwrap();
+        let durable_feedback = durable
+            .execution_events
+            .iter()
+            .find(|event| event.event.kind == "coordination_signal")
+            .expect("accepted feedback remains durable");
+        assert_eq!(durable_feedback.event.metadata["usage"]["input_tokens"], 3);
+        assert_eq!(durable_feedback.event.metadata["usage"]["output_tokens"], 2);
+        assert_eq!(durable_feedback.event.metadata["usage"]["total_tokens"], 5);
+        assert_eq!(durable_feedback.event.metadata["usage"]["known"], true);
+        assert_eq!(durable.agent_outputs.len(), 6);
+        assert_eq!(
+            durable
+                .agent_outputs
+                .iter()
+                .filter(|output| !output.superseded)
+                .map(|output| (output.agent_id.as_str(), output.activation_generation))
+                .collect::<Vec<_>>(),
+            vec![
+                ("source", Some(2)),
+                ("sibling", Some(2)),
+                ("reviewer", Some(2)),
+            ]
+        );
+        assert_eq!(
+            durable
+                .execution_events
+                .iter()
+                .filter(|event| event.event.kind == "coordination_agent_reactivated")
+                .map(|event| event.event.metadata["agent_id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["source", "sibling", "reviewer"]
+        );
+        let projected = checkpoint_projection(&ApproximateCounter::new().unwrap(), &[durable]);
+        let projected_text = projected
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>();
+        assert!(projected_text.contains(&"source generation two"));
+        assert!(projected_text.contains(&"current sibling result"));
+        assert!(projected_text.contains(&"verified current result"));
+        assert!(!projected_text.contains(&"source generation one"));
+        assert!(!projected_text.contains(&"stale sibling result"));
+    }
+
+    #[test]
+    fn coordination_prompt_names_eligible_ancestors_without_leaking_transitive_output() {
+        let graph = TurnAgentGraph::new(vec![
+            TurnAgentNode::new("source", Vec::<String>::new()),
+            TurnAgentNode::new("implementer", ["source"]),
+            TurnAgentNode::new("reviewer", ["implementer"]),
+        ])
+        .unwrap();
+        let mut scheduler = TurnCoordinationScheduler::new(graph.clone());
+        let mut by_signal = HashMap::new();
+
+        scheduler.start("source").unwrap();
+        by_signal.insert(
+            "source-1".to_string(),
+            coordination_test_output("private transitive source result"),
+        );
+        scheduler
+            .complete("source", "source-1", "source complete")
+            .unwrap();
+
+        scheduler.start("implementer").unwrap();
+        by_signal.insert(
+            "implementer-1".to_string(),
+            coordination_test_output("direct implementer result"),
+        );
+        scheduler
+            .complete("implementer", "implementer-1", "implementation complete")
+            .unwrap();
+
+        let reviewer = scheduler.start("reviewer").unwrap();
+        let targets = coordinated_revision_targets(
+            &graph,
+            &scheduler,
+            &reviewer.agent_id,
+            reviewer.generation,
+        );
+        assert_eq!(targets, ["source", "implementer"]);
+        let prompt =
+            coordinated_activation_input("review the change", &reviewer, &by_signal, &targets)
+                .unwrap();
+        assert!(prompt.contains("## Coordination control"));
+        assert!(prompt.contains("at most one `changes_requested` signal"));
+        assert!(prompt.contains("`source`, `implementer`"));
+        assert!(prompt.contains("direct implementer result"));
+        assert!(!prompt.contains("private transitive source result"));
+
+        scheduler
+            .request_changes("reviewer", "source", "feedback-1", "revise the source")
+            .unwrap();
+        let source_retry = scheduler.start("source").unwrap();
+        assert_eq!(source_retry.generation, 2);
+        let retry_targets = coordinated_revision_targets(
+            &graph,
+            &scheduler,
+            &source_retry.agent_id,
+            source_retry.generation,
+        );
+        assert!(retry_targets.is_empty());
+        let retry_prompt = coordinated_activation_input(
+            "review the change",
+            &source_retry,
+            &by_signal,
+            &retry_targets,
+        )
+        .unwrap();
+        assert!(retry_prompt.contains("Revise for source"));
+        assert!(retry_prompt.contains("## Coordination control"));
+        assert!(retry_prompt.contains("No upstream revision is available"));
+        assert!(retry_prompt.contains("Do not call `coordination_signal`"));
+    }
+
+    #[test]
+    fn one_app_release_review_demo_enforces_bounded_consistent_verdicts() {
+        let source = Path::new("demo/one-app/axocoatl.demo.yaml");
+        let config = axocoatl_config::parse_config(
+            include_str!("../../../demo/one-app/axocoatl.demo.yaml"),
+            source,
+        )
+        .expect("one-app demo config parses and validates");
+        let team = config
+            .workflows
+            .iter()
+            .find(|workflow| workflow.id == "release-review")
+            .expect("release-review team exists");
+        assert_eq!(team.agents, ["architect", "reviewer"]);
+        assert_eq!(team.entry_point.as_deref(), Some("architect"));
+
+        let architect = config
+            .agents
+            .iter()
+            .find(|agent| agent.id == "architect")
+            .expect("architect exists");
+        assert!(architect.depends_on.is_empty());
+        assert_eq!(architect.tools, ["coordination_signal"]);
+        assert_eq!(architect.sampling.max_tokens, Some(700));
+        let architect_budget = architect.token_budget.as_ref().expect("architect budget");
+        assert_eq!(architect_budget.per_call, 5_000);
+        assert_eq!(architect_budget.per_execution, 5_000);
+        assert!(matches!(
+            architect_budget.overflow_policy,
+            axocoatl_config::OverflowPolicyYaml::Abort
+        ));
+        let architect_prompt = architect.system_prompt.as_deref().unwrap_or_default();
+        assert!(architect_prompt.contains("Do not call tools"));
+        assert!(architect_prompt.contains("do not use them anywhere"));
+        assert!(architect_prompt.contains("End with acceptance criteria"));
+
+        let reviewer = config
+            .agents
+            .iter()
+            .find(|agent| agent.id == "reviewer")
+            .expect("reviewer exists");
+        assert_eq!(reviewer.depends_on, ["architect"]);
+        assert_eq!(reviewer.tools, ["coordination_signal"]);
+        assert_eq!(reviewer.sampling.max_tokens, Some(2_000));
+        let reviewer_budget = reviewer.token_budget.as_ref().expect("reviewer budget");
+        assert_eq!(reviewer_budget.per_call, 5_000);
+        assert_eq!(reviewer_budget.per_execution, 8_000);
+        assert!(matches!(
+            reviewer_budget.overflow_policy,
+            axocoatl_config::OverflowPolicyYaml::Abort
+        ));
+        let reviewer_prompt = reviewer.system_prompt.as_deref().unwrap_or_default();
+        assert!(reviewer_prompt.contains("Do not call any other tool"));
+        assert!(reviewer_prompt.contains("BLOCK if"));
+        assert!(reviewer_prompt.contains("otherwise SHIP"));
+        assert!(reviewer_prompt.contains("Never combine unresolved BLOCKING with SHIP"));
+    }
+
+    #[test]
+    fn daemon_coordination_adapter_maps_failure_blocking_and_stop() {
+        let history = tempfile::tempdir().unwrap();
+        let mut ledger = SessionTurnStore::open(history.path()).unwrap();
+        let turn_id = "coordination-failure-stop-turn";
+        ledger
+            .begin(BeginSessionTurn {
+                turn_id: Some(turn_id.to_string()),
+                session_id: "coordination-failure-stop-session".to_string(),
+                user_input: "run every independent branch".to_string(),
+                agent_id: None,
+                model: None,
+                context: Vec::new(),
+                idempotency_key: Some("coordination-failure-stop-request".to_string()),
+                metadata: serde_json::Map::new(),
+            })
+            .unwrap();
+        let graph = TurnAgentGraph::new(vec![
+            TurnAgentNode::new("source", Vec::<String>::new()),
+            TurnAgentNode::new("child", ["source"]),
+            TurnAgentNode::new("independent", Vec::<String>::new()),
+        ])
+        .unwrap();
+        let mut scheduler = TurnCoordinationScheduler::new(graph);
+        scheduler.start("source").unwrap();
+        let before_failure = scheduler.events().len();
+        scheduler
+            .fail("source", "failed-1", "provider failed")
+            .unwrap();
+        let failure_kinds = scheduler.events()[before_failure..]
+            .iter()
+            .filter_map(|event| coordination_lifecycle_kind(event.kind))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            failure_kinds,
+            ["coordination_agent_failed", "coordination_agent_blocked"]
+        );
+        for event in &scheduler.events()[before_failure..] {
+            let kind = coordination_lifecycle_kind(event.kind).unwrap();
+            let event_usage = if event.kind == TurnCoordinationEventKind::AgentBlocked {
+                axocoatl_core::TokenUsageStats::default()
+            } else {
+                axocoatl_core::TokenUsageStats::new(3, 2)
+            };
+            ledger
+                .record_execution(
+                    turn_id,
+                    format!("failure-event-{}", event.agent_id),
+                    RecordTurnExecution {
+                        kind: kind.to_string(),
+                        execution_id: Some(turn_id.to_string()),
+                        attempt_id: None,
+                        metadata: serde_json::json!({
+                            "agent_id": event.agent_id,
+                            "generation": event.generation,
+                            "cause_signal_ids": event.cause_signal_ids,
+                            "summary": event.signal.as_ref().map(|signal| signal.summary.clone()),
+                            "usage": coordination_usage_value(&event_usage, true),
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                    },
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            scheduler
+                .ready_activations()
+                .into_iter()
+                .map(|activation| activation.agent_id)
+                .collect::<Vec<_>>(),
+            ["independent"]
+        );
+
+        let before_stop = scheduler.events().len();
+        scheduler.cancel();
+        assert_eq!(
+            scheduler.events()[before_stop..]
+                .iter()
+                .filter_map(|event| coordination_lifecycle_kind(event.kind))
+                .collect::<Vec<_>>(),
+            ["coordination_agent_cancelled"]
+        );
+        for event in &scheduler.events()[before_stop..] {
+            ledger
+                .record_execution(
+                    turn_id,
+                    format!("cancel-event-{}", event.agent_id),
+                    RecordTurnExecution {
+                        kind: coordination_lifecycle_kind(event.kind).unwrap().to_string(),
+                        execution_id: Some(turn_id.to_string()),
+                        attempt_id: None,
+                        metadata: serde_json::json!({
+                            "agent_id": event.agent_id,
+                            "generation": event.generation,
+                            "cause_signal_ids": event.cause_signal_ids,
+                            "reason": "turn_stop",
+                            "usage": coordination_usage_value(&Default::default(), true),
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                    },
+                )
+                .unwrap();
+        }
+        assert_eq!(scheduler.state("source").unwrap(), TurnAgentState::Failed);
+        assert_eq!(scheduler.state("child").unwrap(), TurnAgentState::Blocked);
+        assert_eq!(
+            scheduler.state("independent").unwrap(),
+            TurnAgentState::Cancelled
+        );
+        drop(ledger);
+        let reopened = SessionTurnStore::open(history.path()).unwrap();
+        let durable = reopened.get(turn_id).unwrap();
+        assert_eq!(
+            durable
+                .execution_events
+                .iter()
+                .map(|event| event.event.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "coordination_agent_failed",
+                "coordination_agent_blocked",
+                "coordination_agent_cancelled",
+            ]
+        );
+        let blocked = durable
+            .execution_events
+            .iter()
+            .find(|event| event.event.kind == "coordination_agent_blocked")
+            .unwrap();
+        assert_eq!(blocked.event.metadata["usage"]["total_tokens"], 0);
+        let cancelled = durable
+            .execution_events
+            .iter()
+            .find(|event| event.event.kind == "coordination_agent_cancelled")
+            .unwrap();
+        assert_eq!(cancelled.event.metadata["reason"], "turn_stop");
+    }
+
+    #[test]
+    fn daemon_coordination_graph_rejects_an_omitted_configured_parent() {
+        let mut config = coordination_adapter_test_config();
+        config.workflows[0].id = "missing-parent".to_string();
+        config.workflows[0].agents = vec!["sibling".to_string(), "reviewer".to_string()];
+        config.workflows[0].entry_point = Some("reviewer".to_string());
+        let error = coordinated_agent_graph(&["reviewer".to_string()], &config)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("depends on 'source'"), "{error}");
+        assert!(error.contains("not selected"), "{error}");
+        assert!(validate_session_mode(
+            &config,
+            &SessionMode::Custom {
+                agents: vec!["reviewer".to_string()]
+            }
+        )
+        .is_ok());
+        assert!(validate_session_mode(
+            &config,
+            &SessionMode::Custom {
+                agents: vec!["sibling".to_string(), "reviewer".to_string()]
+            }
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("not selected"));
+        assert!(validate_session_mode(
+            &config,
+            &SessionMode::Lattice {
+                workflow_id: Some("missing-parent".to_string())
+            }
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("not selected"));
+    }
+
+    #[test]
+    fn session_coordination_graph_accepts_autonomous_agents_only() {
+        let config = role_test_config();
+        let mixed = vec!["auto-code".to_string(), "lead".to_string()];
+        let error = coordinated_agent_graph(&mixed, &config)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("autonomous Agents only"), "{error}");
+        assert!(validate_session_mode(
+            &config,
+            &SessionMode::Custom {
+                agents: mixed.clone()
+            }
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("autonomous Agents only"));
+        assert!(validate_session_mode(
+            &config,
+            &SessionMode::Custom {
+                agents: vec!["lead".to_string()]
+            }
+        )
+        .is_ok());
+        assert!(session_uses_checkpoint_transaction(
+            &config,
+            &SessionMode::SingleAgent {
+                agent_id: "lead".to_string()
+            }
+        ));
+        assert!(!session_uses_checkpoint_transaction(
+            &config,
+            &SessionMode::SingleAgent {
+                agent_id: "auto-code".to_string()
+            }
+        ));
+        assert!(session_uses_checkpoint_transaction(
+            &config,
+            &SessionMode::Custom {
+                agents: vec!["lead".to_string()]
+            }
+        ));
+
+        let coordinator = config
+            .agents
+            .iter()
+            .find(|agent| agent.id == "lead")
+            .unwrap();
+        let autonomous = config
+            .agents
+            .iter()
+            .find(|agent| agent.id == "auto-code")
+            .unwrap();
+        let multi = SessionMode::Custom { agents: mixed };
+        assert_eq!(
+            coordination_signal_owner(&multi, autonomous, true),
+            Some("auto-code")
+        );
+        assert_eq!(coordination_signal_owner(&multi, autonomous, false), None);
+        assert_eq!(coordination_signal_owner(&multi, coordinator, true), None);
+        assert_eq!(
+            coordination_signal_owner(
+                &SessionMode::SingleAgent {
+                    agent_id: "auto-code".to_string()
+                },
+                autonomous,
+                true
+            ),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_checkpoint_transactions_follow_canonical_terminal_status() {
+        let root = tempfile::tempdir().unwrap();
+        let checkpoint_store = CheckpointStore::new(
+            root.path().join("checkpoints"),
+            CheckpointPolicy::EveryLlmCall,
+        );
+        let mut turn_store = SessionTurnStore::open(root.path().join("session-history")).unwrap();
+        let session_id = "coordination-checkpoint-session";
+        let agent_id = format!("{session_id}:source");
+        let worker_id = format!("{session_id}:lead:worker:tester");
+
+        checkpoint_store
+            .save(&coordination_checkpoint(
+                &agent_id,
+                1,
+                "committed baseline",
+                axocoatl_core::TokenUsageStats::new(2, 1),
+                None,
+            ))
+            .await
+            .unwrap();
+
+        let failed_turn = "checkpoint-failed-turn";
+        turn_store
+            .begin(BeginSessionTurn {
+                turn_id: Some(failed_turn.to_string()),
+                session_id: session_id.to_string(),
+                user_input: "unsafe failed turn".to_string(),
+                agent_id: None,
+                model: None,
+                context: Vec::new(),
+                idempotency_key: Some(failed_turn.to_string()),
+                metadata: serde_json::Map::new(),
+            })
+            .unwrap();
+        checkpoint_store
+            .begin_session_turn(session_id, failed_turn)
+            .await
+            .unwrap();
+        let failed_scope = checkpoint_store.scoped_to_session_turn(session_id, failed_turn);
+        failed_scope
+            .save(&coordination_checkpoint(
+                &agent_id,
+                2,
+                "must not survive abort",
+                axocoatl_core::TokenUsageStats::new(11, 5),
+                Some("unsafe-orchestration"),
+            ))
+            .await
+            .unwrap();
+        turn_store
+            .transition(
+                failed_turn,
+                "fail",
+                TransitionSessionTurn {
+                    status: SessionTurnLifecycle::Failed,
+                    final_output: None,
+                    error: Some("provider failed".to_string()),
+                    metadata: serde_json::Map::new(),
+                },
+            )
+            .unwrap();
+        let failed = turn_store.get(failed_turn);
+        resolve_checkpoint_transaction(&checkpoint_store, session_id, failed_turn, failed.as_ref())
+            .await
+            .unwrap();
+        let after_abort = checkpoint_store
+            .load_latest(&AgentId::new(&agent_id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after_abort.session_messages[0].content,
+            "committed baseline"
+        );
+        assert_eq!(
+            after_abort.cumulative_token_usage,
+            axocoatl_core::TokenUsageStats::new(11, 5)
+        );
+        assert!(after_abort.behavior_state.is_none());
+
+        let completed_turn = "checkpoint-completed-turn";
+        turn_store
+            .begin(BeginSessionTurn {
+                turn_id: Some(completed_turn.to_string()),
+                session_id: session_id.to_string(),
+                user_input: "accepted turn".to_string(),
+                agent_id: None,
+                model: None,
+                context: Vec::new(),
+                idempotency_key: Some(completed_turn.to_string()),
+                metadata: serde_json::Map::new(),
+            })
+            .unwrap();
+        checkpoint_store
+            .begin_session_turn(session_id, completed_turn)
+            .await
+            .unwrap();
+        let completed_scope = checkpoint_store.scoped_to_session_turn(session_id, completed_turn);
+        completed_scope
+            .save(&coordination_checkpoint(
+                &agent_id,
+                after_abort.version + 1,
+                "accepted causal transcript",
+                axocoatl_core::TokenUsageStats::new(17, 8),
+                None,
+            ))
+            .await
+            .unwrap();
+        completed_scope
+            .save(&coordination_checkpoint(
+                &worker_id,
+                1,
+                "worker causal transcript",
+                axocoatl_core::TokenUsageStats::new(3, 2),
+                None,
+            ))
+            .await
+            .unwrap();
+        turn_store
+            .transition(
+                completed_turn,
+                "complete",
+                TransitionSessionTurn {
+                    status: SessionTurnLifecycle::Completed,
+                    final_output: Some("done".to_string()),
+                    error: None,
+                    metadata: serde_json::Map::new(),
+                },
+            )
+            .unwrap();
+        let completed = turn_store.get(completed_turn);
+        resolve_checkpoint_transaction(
+            &checkpoint_store,
+            session_id,
+            completed_turn,
+            completed.as_ref(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            checkpoint_store
+                .load_latest(&AgentId::new(&agent_id))
+                .await
+                .unwrap()
+                .unwrap()
+                .session_messages[0]
+                .content,
+            "accepted causal transcript"
+        );
+        assert_eq!(
+            checkpoint_store
+                .load_latest(&AgentId::new(&worker_id))
+                .await
+                .unwrap()
+                .unwrap()
+                .session_messages[0]
+                .content,
+            "worker causal transcript"
+        );
+
+        let interrupted_turn = "checkpoint-interrupted-turn";
+        turn_store
+            .begin(BeginSessionTurn {
+                turn_id: Some(interrupted_turn.to_string()),
+                session_id: session_id.to_string(),
+                user_input: "process died mid-turn".to_string(),
+                agent_id: None,
+                model: None,
+                context: Vec::new(),
+                idempotency_key: Some(interrupted_turn.to_string()),
+                metadata: serde_json::Map::new(),
+            })
+            .unwrap();
+        turn_store
+            .record_execution(
+                interrupted_turn,
+                "restart-plan",
+                RecordTurnExecution {
+                    kind: "coordination_planned".to_string(),
+                    execution_id: Some(interrupted_turn.to_string()),
+                    attempt_id: None,
+                    metadata: serde_json::json!({
+                        "agents": [
+                            {"id": "source", "depends_on": []},
+                            {"id": "tester", "depends_on": ["source"]},
+                        ]
+                    })
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+                },
+            )
+            .unwrap();
+        turn_store
+            .record_execution(
+                interrupted_turn,
+                "restart-source-active",
+                RecordTurnExecution {
+                    kind: "coordination_agent_activated".to_string(),
+                    execution_id: Some(interrupted_turn.to_string()),
+                    attempt_id: None,
+                    metadata: serde_json::json!({
+                        "agent_id": "source",
+                        "generation": 1,
+                    })
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+                },
+            )
+            .unwrap();
+        turn_store
+            .append_output(
+                interrupted_turn,
+                "restart-source-stream",
+                "unattributed restart evidence",
+            )
+            .unwrap();
+        checkpoint_store
+            .begin_session_turn(session_id, interrupted_turn)
+            .await
+            .unwrap();
+        let interrupted_scope =
+            checkpoint_store.scoped_to_session_turn(session_id, interrupted_turn);
+        let current = checkpoint_store
+            .load_latest(&AgentId::new(&agent_id))
+            .await
+            .unwrap()
+            .unwrap();
+        interrupted_scope
+            .save(&coordination_checkpoint(
+                &agent_id,
+                current.version + 1,
+                "must not survive process restart",
+                axocoatl_core::TokenUsageStats::new(23, 9),
+                Some("incomplete-orchestration"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            turn_store
+                .reconcile_orphaned_running("daemon restarted")
+                .unwrap()
+                .into_iter()
+                .map(|turn| turn.id)
+                .collect::<Vec<_>>(),
+            vec![interrupted_turn.to_string()]
+        );
+        let interrupted = turn_store.get(interrupted_turn).unwrap();
+        assert_eq!(interrupted.status, SessionTurnLifecycle::Interrupted);
+        assert_eq!(interrupted.partial_output, "unattributed restart evidence");
+        assert!(interrupted.execution_events.iter().any(|event| {
+            event.event.kind == "coordination_recovery_partial"
+                && event.event.metadata["attribution"] == "unattributed"
+                && event.event.metadata["source"] == "turn.partial_output"
+        }));
+        assert_eq!(
+            interrupted
+                .execution_events
+                .iter()
+                .filter(|event| event.event.kind == "coordination_agent_cancelled")
+                .map(|event| (
+                    event.event.metadata["agent_id"].as_str().unwrap(),
+                    event.event.metadata["generation"].as_u64().unwrap(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![("source", 1), ("tester", 0)]
+        );
+        let turn_store = tokio::sync::Mutex::new(turn_store);
+        assert_eq!(
+            reconcile_checkpoint_transactions_from_ledger(&checkpoint_store, &turn_store, None)
+                .await
+                .unwrap(),
+            1
+        );
+        let after_restart = checkpoint_store
+            .load_latest(&AgentId::new(&agent_id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after_restart.session_messages[0].content,
+            "accepted causal transcript"
+        );
+        assert_eq!(
+            after_restart.cumulative_token_usage,
+            axocoatl_core::TokenUsageStats::new(23, 9)
+        );
+        assert!(after_restart.behavior_state.is_none());
+        assert!(checkpoint_store
+            .list_session_turn_transactions()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn terminal_retry_reconciles_an_unfinished_commit_before_returning_outcome() {
+        let root = tempfile::tempdir().unwrap();
+        let checkpoint_store = CheckpointStore::new(
+            root.path().join("checkpoints"),
+            CheckpointPolicy::EveryLlmCall,
+        );
+        let session_id = "terminal-retry-session";
+        let turn_id = "terminal-retry-turn";
+        let agent_id = format!("{session_id}:lead");
+        checkpoint_store
+            .save(&coordination_checkpoint(
+                &agent_id,
+                1,
+                "committed baseline",
+                axocoatl_core::TokenUsageStats::new(2, 1),
+                None,
+            ))
+            .await
+            .unwrap();
+        checkpoint_store
+            .begin_session_turn(session_id, turn_id)
+            .await
+            .unwrap();
+        checkpoint_store
+            .scoped_to_session_turn(session_id, turn_id)
+            .save(&coordination_checkpoint(
+                &agent_id,
+                2,
+                "terminal result cache",
+                axocoatl_core::TokenUsageStats::new(9, 4),
+                None,
+            ))
+            .await
+            .unwrap();
+
+        let mut ledger = SessionTurnStore::open(root.path().join("session-history")).unwrap();
+        ledger
+            .begin(BeginSessionTurn {
+                turn_id: Some(turn_id.to_string()),
+                session_id: session_id.to_string(),
+                user_input: "finish the task".to_string(),
+                agent_id: Some("lead".to_string()),
+                model: None,
+                context: Vec::new(),
+                idempotency_key: Some(turn_id.to_string()),
+                metadata: serde_json::Map::new(),
+            })
+            .unwrap();
+        let terminal = ledger
+            .transition(
+                turn_id,
+                "complete-terminal-retry",
+                TransitionSessionTurn {
+                    status: SessionTurnLifecycle::Completed,
+                    final_output: Some("done".to_string()),
+                    error: None,
+                    metadata: serde_json::Map::new(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            checkpoint_store
+                .load_latest(&AgentId::new(&agent_id))
+                .await
+                .unwrap()
+                .unwrap()
+                .session_messages[0]
+                .content,
+            "committed baseline"
+        );
+
+        // This is the exact recovery call made by the terminal idempotent
+        // route before it returns the already-durable result.
+        resolve_checkpoint_transaction(&checkpoint_store, session_id, turn_id, Some(&terminal))
+            .await
+            .unwrap();
+        let outcome = AxocoatlDaemon::outcome_from_terminal_turn(terminal).unwrap();
+        assert_eq!(outcome.output().content, "done");
+        assert_eq!(
+            checkpoint_store
+                .load_latest(&AgentId::new(&agent_id))
+                .await
+                .unwrap()
+                .unwrap()
+                .session_messages[0]
+                .content,
+            "terminal result cache"
+        );
+        assert!(checkpoint_store
+            .list_session_turn_transactions()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn legacy_multi_agent_checkpoint_adoption_is_exact_and_one_time() {
+        let root = tempfile::tempdir().unwrap();
+        let data_root = SecureDir::open_or_create_all(root.path()).unwrap();
+        let checkpoint_store = CheckpointStore::new_in_secure(
+            &data_root,
+            "checkpoints",
+            CheckpointPolicy::EveryLlmCall,
+        )
+        .unwrap();
+        let session_id = "legacy-multi";
+        let main_id = format!("{session_id}:source");
+        let worker_id = format!("{session_id}:lead:worker:tester");
+        let unrelated_id = "legacy-multi-peer:source";
+        for (agent_id, content) in [
+            (main_id.as_str(), "unsafe main transcript"),
+            (worker_id.as_str(), "unsafe worker transcript"),
+            (unrelated_id, "unrelated transcript"),
+        ] {
+            checkpoint_store
+                .save(&coordination_checkpoint(
+                    agent_id,
+                    1,
+                    content,
+                    axocoatl_core::TokenUsageStats::new(7, 4),
+                    Some("legacy-private-state"),
+                ))
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            adopt_session_checkpoint_transactions(&data_root, &checkpoint_store, session_id, None)
+                .await
+                .unwrap(),
+            2
+        );
+        for agent_id in [&main_id, &worker_id] {
+            let sanitized = checkpoint_store
+                .load_latest(&AgentId::new(agent_id))
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(sanitized.session_messages.is_empty());
+            assert!(sanitized.behavior_state.is_none());
+            assert_eq!(
+                sanitized.cumulative_token_usage,
+                axocoatl_core::TokenUsageStats::new(7, 4)
+            );
+        }
+        assert_eq!(
+            checkpoint_store
+                .load_latest(&AgentId::new(unrelated_id))
+                .await
+                .unwrap()
+                .unwrap()
+                .session_messages[0]
+                .content,
+            "unrelated transcript"
+        );
+
+        let sanitized = checkpoint_store
+            .load_latest(&AgentId::new(&main_id))
+            .await
+            .unwrap()
+            .unwrap();
+        checkpoint_store
+            .save(&coordination_checkpoint(
+                &main_id,
+                sanitized.version + 1,
+                "safely committed after adoption",
+                axocoatl_core::TokenUsageStats::new(9, 6),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            adopt_session_checkpoint_transactions(&data_root, &checkpoint_store, session_id, None)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            checkpoint_store
+                .load_latest(&AgentId::new(&main_id))
+                .await
+                .unwrap()
+                .unwrap()
+                .session_messages[0]
+                .content,
+            "safely committed after adoption"
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_only_legacy_coordinator_is_imported_before_transaction_adoption() {
+        let data = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let data_root = SecureDir::open_or_create_all(data.path()).unwrap();
+        // The checked-in v0.1.4 fixture is bound to this exact logical
+        // checkpoint identity.
+        let session = legacy_migration_session("legacy-session", work.path());
+        let checkpoint_root = data.path().join("checkpoints");
+        let checkpoint_dir = checkpoint_root.join("legacy-session:coder");
+        tokio::fs::create_dir_all(&checkpoint_dir).await.unwrap();
+        let legacy =
+            hex::decode(include_str!("../tests/fixtures/checkpoint-v0.1.4.hex").trim()).unwrap();
+        tokio::fs::write(checkpoint_dir.join("0000000000000012.ckpt"), legacy)
+            .await
+            .unwrap();
+
+        let checkpoint_store =
+            CheckpointStore::new_in_secure(&data_root, "checkpoints", CheckpointPolicy::Manual)
+                .unwrap();
+        let history_dir = data.path().join("session-history");
+        let turn_store = tokio::sync::Mutex::new(SessionTurnStore::open(&history_dir).unwrap());
+        let counter = ApproximateCounter::new().unwrap();
+
+        // This ordering is the startup migration boundary: the checkpoint is
+        // the only copy of the conversation, so canonicalize it before the
+        // first transaction adoption clears pre-transaction private state.
+        AxocoatlDaemon::migrate_session_turns_from_checkpoint(
+            &session,
+            &counter,
+            &checkpoint_store,
+            &turn_store,
+            false,
+        )
+        .await
+        .unwrap();
+        let imported = turn_store.lock().await.list(&session.id);
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].user_input, "Please inspect src/lib.rs");
+        assert_eq!(
+            imported[0].final_output.as_deref(),
+            Some("The answer is 42.")
+        );
+
+        assert_eq!(
+            adopt_session_checkpoint_transactions(
+                &data_root,
+                &checkpoint_store,
+                &session.id,
+                Some(CoordinatorCheckpointAdoption {
+                    agent_id: "coder",
+                    turns: imported.clone(),
+                    counter: &counter,
+                }),
+            )
+            .await
+            .unwrap(),
+            1
+        );
+
+        let restarted_turn_store = SessionTurnStore::open(&history_dir).unwrap();
+        assert_eq!(restarted_turn_store.list(&session.id), imported);
+        let rebuilt = checkpoint_store
+            .load_latest(&AgentId::new("legacy-session:coder"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rebuilt.session_messages.len(), 2);
+        assert_eq!(
+            rebuilt.session_messages[0].content,
+            "Please inspect src/lib.rs"
+        );
+        assert_eq!(rebuilt.session_messages[1].content, "The answer is 42.");
+        assert!(rebuilt.behavior_state.is_none());
+        assert_eq!(
+            adopt_session_checkpoint_transactions(
+                &data_root,
+                &checkpoint_store,
+                &session.id,
+                Some(CoordinatorCheckpointAdoption {
+                    agent_id: "coder",
+                    turns: imported,
+                    counter: &counter,
+                }),
+            )
+            .await
+            .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn ledger_backed_coordinator_adoption_rebuilds_only_canonical_conversation() {
+        let data = tempfile::tempdir().unwrap();
+        let data_root = SecureDir::open_or_create_all(data.path()).unwrap();
+        let checkpoint_store = CheckpointStore::new_in_secure(
+            &data_root,
+            "checkpoints",
+            CheckpointPolicy::EveryLlmCall,
+        )
+        .unwrap();
+        let session_id = "ledger-coordinator";
+        let coordinator_id = format!("{session_id}:lead");
+        let worker_id = format!("{session_id}:lead:worker:tester");
+        for (agent_id, content) in [
+            (coordinator_id.as_str(), "stale coordinator transcript"),
+            (worker_id.as_str(), "stale worker transcript"),
+        ] {
+            checkpoint_store
+                .save(&coordination_checkpoint(
+                    agent_id,
+                    1,
+                    content,
+                    axocoatl_core::TokenUsageStats::new(17, 9),
+                    Some("incomplete-orchestration"),
+                ))
+                .await
+                .unwrap();
+        }
+
+        let mut ledger = SessionTurnStore::open(data.path().join("session-history")).unwrap();
+        ledger
+            .begin(BeginSessionTurn {
+                turn_id: Some("coordinator-failed-turn".to_string()),
+                session_id: session_id.to_string(),
+                user_input: "Do not replay this failed request".to_string(),
+                agent_id: Some("lead".to_string()),
+                model: Some("coordinator-model".to_string()),
+                context: Vec::new(),
+                idempotency_key: Some("coordinator-failed-turn".to_string()),
+                metadata: serde_json::Map::new(),
+            })
+            .unwrap();
+        ledger
+            .append_output(
+                "coordinator-failed-turn",
+                "failed-coordinator-partial",
+                "unsafe partial plan",
+            )
+            .unwrap();
+        ledger
+            .transition(
+                "coordinator-failed-turn",
+                "fail-coordinator-turn",
+                TransitionSessionTurn {
+                    status: SessionTurnLifecycle::Failed,
+                    final_output: None,
+                    error: Some("provider failed".to_string()),
+                    metadata: serde_json::Map::new(),
+                },
+            )
+            .unwrap();
+        ledger
+            .begin(BeginSessionTurn {
+                turn_id: Some("coordinator-completed-turn".to_string()),
+                session_id: session_id.to_string(),
+                user_input: "Implement the canonical fix".to_string(),
+                agent_id: Some("lead".to_string()),
+                model: Some("coordinator-model".to_string()),
+                context: Vec::new(),
+                idempotency_key: Some("coordinator-completed-turn".to_string()),
+                metadata: serde_json::Map::new(),
+            })
+            .unwrap();
+        ledger
+            .transition(
+                "coordinator-completed-turn",
+                "complete-coordinator-turn",
+                TransitionSessionTurn {
+                    status: SessionTurnLifecycle::Completed,
+                    final_output: Some("Canonical result".to_string()),
+                    error: None,
+                    metadata: serde_json::Map::new(),
+                },
+            )
+            .unwrap();
+        let canonical = ledger.list(session_id);
+        let counter = ApproximateCounter::new().unwrap();
+
+        assert_eq!(
+            adopt_session_checkpoint_transactions(
+                &data_root,
+                &checkpoint_store,
+                session_id,
+                Some(CoordinatorCheckpointAdoption {
+                    agent_id: "lead",
+                    turns: canonical,
+                    counter: &counter,
+                }),
+            )
+            .await
+            .unwrap(),
+            2
+        );
+
+        let coordinator = checkpoint_store
+            .load_latest(&AgentId::new(&coordinator_id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            coordinator
+                .session_messages
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Implement the canonical fix", "Canonical result"]
+        );
+        assert_eq!(
+            coordinator.cumulative_token_usage,
+            axocoatl_core::TokenUsageStats::new(17, 9)
+        );
+        assert!(coordinator.behavior_state.is_none());
+
+        let worker = checkpoint_store
+            .load_latest(&AgentId::new(&worker_id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(worker.session_messages.is_empty());
+        assert_eq!(
+            worker.cumulative_token_usage,
+            axocoatl_core::TokenUsageStats::new(17, 9)
+        );
+        assert!(worker.behavior_state.is_none());
     }
 
     #[tokio::test]
@@ -25680,13 +31287,18 @@ providers:
             },
         )
         .is_ok());
-        assert!(validate_session_mode(
+        let mixed_custom_error = validate_session_mode(
             &config,
             &SessionMode::Custom {
                 agents: vec!["auto-code".into(), "lead".into()],
             },
         )
-        .is_ok());
+        .unwrap_err()
+        .to_string();
+        assert!(
+            mixed_custom_error.contains("autonomous Agents only"),
+            "{mixed_custom_error}"
+        );
 
         for mode in [
             SessionMode::SingleAgent {
@@ -25722,11 +31334,92 @@ providers:
             vec!["auto-review", "auto-code"],
             "an autonomous lattice keeps its configured roster",
         );
+        let graph = coordinated_agent_graph(&autonomous.agents, &config).unwrap();
+        let scheduler = TurnCoordinationScheduler::new(graph);
         assert_eq!(
-            AxocoatlDaemon::topo_order(&autonomous.agents, &config),
-            vec!["auto-code", "auto-review"],
-            "the existing autonomous lattice dependency order remains unchanged",
+            scheduler
+                .ready_activations()
+                .into_iter()
+                .map(|activation| activation.agent_id)
+                .collect::<Vec<_>>(),
+            vec!["auto-code"],
+            "the shared turn scheduler must activate the dependency root first",
         );
+    }
+
+    #[test]
+    fn malformed_coordinator_rosters_fail_session_validation_before_execution() {
+        let coordinated_mode = SessionMode::Lattice {
+            workflow_id: Some("coordinated".to_string()),
+        };
+
+        let mut missing_entry_member = role_test_config();
+        missing_entry_member.workflows[0].agents = vec!["worker".to_string()];
+        let error = validate_session_mode(&missing_entry_member, &coordinated_mode)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("must include its Coordinator entry Agent 'lead'"));
+
+        let mut unknown_member = role_test_config();
+        unknown_member.workflows[0]
+            .agents
+            .push("missing".to_string());
+        let error = validate_session_mode(&unknown_member, &coordinated_mode)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Agent 'missing' is not configured"));
+
+        let mut autonomous_member = role_test_config();
+        autonomous_member.workflows[0]
+            .agents
+            .push("auto-code".to_string());
+        let error = validate_session_mode(&autonomous_member, &coordinated_mode)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("'auto-code' is not a Worker"));
+
+        let mut shared_worker = role_test_config();
+        shared_worker.workflows[1].entry_point = Some("lead".to_string());
+        shared_worker.workflows[1].agents = vec!["lead".to_string(), "worker".to_string()];
+        let error = validate_session_mode(&shared_worker, &coordinated_mode)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Worker 'worker' must belong to exactly one"));
+
+        let mut duplicate_workflow = role_test_config();
+        duplicate_workflow
+            .workflows
+            .push(duplicate_workflow.workflows[0].clone());
+        let error = validate_session_mode(&duplicate_workflow, &coordinated_mode)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("workflow id 'coordinated' is ambiguous"));
+
+        let mut empty_workflow = role_test_config();
+        empty_workflow.workflows[0].agents.clear();
+        let error = validate_session_mode(&empty_workflow, &coordinated_mode)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("workflow 'coordinated' has no configured Agents"));
+
+        let mut missing_entry = role_test_config();
+        missing_entry.workflows[0].entry_point = Some("missing".to_string());
+        let error = validate_session_mode(&missing_entry, &coordinated_mode)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("entry Agent 'missing' is not configured"));
+
+        let mut autonomous_entry_outside_roster = role_test_config();
+        autonomous_entry_outside_roster.workflows[1].agents = vec!["auto-review".to_string()];
+        let error = validate_session_mode(
+            &autonomous_entry_outside_roster,
+            &SessionMode::Lattice {
+                workflow_id: Some("autonomous".to_string()),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("must include its entry Agent 'auto-code'"));
     }
 
     #[test]
@@ -25869,6 +31562,91 @@ providers:
         assert!(session_path.is_file(), "quarantine preserves operator data");
     }
 
+    #[test]
+    fn removed_non_agent_style_team_retains_session_and_history_but_blocks_a_new_turn() {
+        let data = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let sessions_dir = data.path().join("sessions");
+        let history_dir = data.path().join("session-history");
+        let mode = SessionMode::Lattice {
+            workflow_id: Some("Release Team".to_string()),
+        };
+        let mut sessions = SessionStore::new(&sessions_dir).unwrap();
+        let session = sessions
+            .create(
+                "Retained team history",
+                "wsp-retained-team",
+                work.path(),
+                mode.clone(),
+                Vec::new(),
+                Vec::new(),
+                None,
+            )
+            .unwrap();
+        let mut history = SessionTurnStore::open(&history_dir).unwrap();
+        history
+            .begin(BeginSessionTurn {
+                turn_id: Some("retained-team-turn".to_string()),
+                session_id: session.id.clone(),
+                user_input: "Explain the release".to_string(),
+                agent_id: None,
+                model: None,
+                context: Vec::new(),
+                idempotency_key: Some("retained-team-turn".to_string()),
+                metadata: serde_json::Map::new(),
+            })
+            .unwrap();
+        history
+            .transition(
+                "retained-team-turn",
+                "complete-retained-team-turn",
+                TransitionSessionTurn {
+                    status: SessionTurnLifecycle::Completed,
+                    final_output: Some("The release is ready.".to_string()),
+                    error: None,
+                    metadata: serde_json::Map::new(),
+                },
+            )
+            .unwrap();
+        drop(history);
+        drop(sessions);
+
+        let mut restarted = SessionStore::new(&sessions_dir).unwrap();
+        restarted.load_all().unwrap();
+        assert_eq!(
+            quarantine_invalid_loaded_sessions(&test_config(), &mut restarted),
+            0
+        );
+        assert_eq!(restarted.get(&session.id).unwrap().mode, mode);
+        assert_eq!(
+            SessionTurnStore::open(&history_dir)
+                .unwrap()
+                .list(&session.id)[0]
+                .final_output
+                .as_deref(),
+            Some("The release is ready.")
+        );
+
+        let error = validate_session_mode(&test_config(), &mode)
+            .expect_err("a new turn must resolve the current team before Begin")
+            .to_string();
+        assert!(error.contains("restore that team in config"), "{error}");
+        assert!(error.contains("History remain available"), "{error}");
+        assert_eq!(
+            SessionTurnStore::open(&history_dir)
+                .unwrap()
+                .list(&session.id)
+                .len(),
+            1,
+            "failed current-config validation cannot append a new Begin"
+        );
+
+        assert!(validate_persisted_session_structure(&SessionMode::Lattice {
+            workflow_id: Some("review.v1".to_string()),
+        })
+        .is_ok());
+    }
+
     fn legacy_migration_session(id: &str, working_dir: &std::path::Path) -> Session {
         Session {
             id: id.to_string(),
@@ -25950,7 +31728,7 @@ providers:
         let promoted_path = axocoatl_memory::storage_path(&checkpoint_root, "legacy-session:coder")
             .join("0000000000000014.ckpt");
         let promoted = tokio::fs::read(&promoted_path).await.unwrap();
-        assert!(promoted.starts_with(b"AXOCKPT\0\x02"));
+        assert!(promoted.starts_with(b"AXOCKPT\0\x03"));
         assert_eq!(tokio::fs::read(&legacy_path).await.unwrap(), legacy);
         assert_eq!(tokio::fs::read(&corrupt_path).await.unwrap(), corrupt);
 
@@ -25985,6 +31763,9 @@ providers:
             .unwrap()
             .unwrap();
         assert_eq!(loaded.checkpoint.version, 14);
+        assert_eq!(tokio::fs::read(&legacy_path).await.unwrap(), legacy);
+        assert_eq!(tokio::fs::read(&corrupt_path).await.unwrap(), corrupt);
+        assert_eq!(tokio::fs::read(&promoted_path).await.unwrap(), promoted);
         assert_eq!(
             loaded.encoding,
             axocoatl_memory::CheckpointEncoding::PostcardV1
@@ -26022,6 +31803,7 @@ providers:
             checkpoint_time: 1_720_000_102,
             session_messages: vec![
                 axocoatl_memory::StoredMessage {
+                    content_parts: None,
                     role: axocoatl_core::MessageRole::User,
                     content: "Inspect the file".to_string(),
                     timestamp: 1_720_000_100,
@@ -26031,6 +31813,7 @@ providers:
                     tool_call_id: None,
                 },
                 axocoatl_memory::StoredMessage {
+                    content_parts: None,
                     role: axocoatl_core::MessageRole::Assistant,
                     content: "I started checking the file.".to_string(),
                     timestamp: 1_720_000_101,
@@ -26053,10 +31836,26 @@ providers:
         checkpoint_store.save(&checkpoint).await.unwrap();
         let checkpoint_path = checkpoint_dir.join("0000000000000003.ckpt");
         let enveloped = tokio::fs::read(&checkpoint_path).await.unwrap();
-        assert!(enveloped.starts_with(b"AXOCKPT\0\x02"));
-        tokio::fs::write(&checkpoint_path, &enveloped[9..])
+        assert!(enveloped.starts_with(b"AXOCKPT\0\x03"));
+        let unframed = enveloped[9..].to_vec();
+        tokio::fs::write(&checkpoint_path, &unframed).await.unwrap();
+        let original = checkpoint_store
+            .load_latest_with_encoding(&AgentId::new("interrupted-session:coder"))
             .await
+            .unwrap()
             .unwrap();
+        assert_eq!(
+            original.encoding,
+            axocoatl_memory::CheckpointEncoding::UnframedPostcard
+        );
+        assert_eq!(
+            serde_json::to_value(&original.checkpoint).unwrap(),
+            serde_json::to_value(&checkpoint).unwrap()
+        );
+        assert_eq!(
+            original.checkpoint.session_messages[1].tool_calls[0].id,
+            "call-read"
+        );
 
         let turn_store = tokio::sync::Mutex::new(
             SessionTurnStore::open(data.path().join("session-history")).unwrap(),
@@ -26072,6 +31871,7 @@ providers:
         .unwrap();
 
         let turns = turn_store.lock().await.list("interrupted-session");
+        assert_eq!(tokio::fs::read(&checkpoint_path).await.unwrap(), unframed);
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].status, SessionTurnLifecycle::Interrupted);
         assert_eq!(turns[0].partial_output, "I started checking the file.");
@@ -26088,7 +31888,7 @@ providers:
             tokio::fs::read(checkpoint_dir.join("0000000000000004.ckpt"))
                 .await
                 .unwrap()
-                .starts_with(b"AXOCKPT\0\x02")
+                .starts_with(b"AXOCKPT\0\x03")
         );
         let promoted = checkpoint_store
             .load_latest_with_encoding(&AgentId::new("interrupted-session:coder"))
@@ -26173,16 +31973,85 @@ providers:
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn bootstrap_fails_with_missing_provider() {
-        let config = test_config();
-        let result = AxocoatlDaemon::bootstrap(config).await;
-        // Should fail because "mock" provider isn't registered
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        use std::os::unix::fs::PermissionsExt;
+
+        const CHILD: &str = "AXOCOATL_TEST_MISSING_PROVIDER_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let result = AxocoatlDaemon::bootstrap(test_config()).await;
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("mock"),
+                "Error should mention mock provider: {err}"
+            );
+            return;
+        }
+
+        // Bootstrap reads its data root and invokes Podman through the process
+        // environment. Isolate those inputs in a child, without changing the
+        // parallel test process or skipping real early runtime reconciliation.
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let podman = bin.join("podman");
+        std::fs::write(
+            &podman,
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "$AXOCOATL_TEST_PODMAN_CALLS"
+case "$*" in
+  --version) printf 'podman version 5.0.0\n' ;;
+  'machine list --format json') printf '[{"Running":true}]\n' ;;
+  'info --format json') printf '{}\n' ;;
+  'ps -a --no-trunc --filter name=axo-ses- --format '* | \
+  'ps -a --no-trunc --filter name=axo-ses- --filter label=io.axocoatl.runtime-authority='*) ;;
+  *) printf 'unexpected Podman command: %s\n' "$*" >&2; exit 1 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let calls_path = root.path().join("podman-calls");
+        let output = tokio::time::timeout(
+            Duration::from_secs(60),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "bootstrap::tests::bootstrap_fails_with_missing_provider",
+                    "--nocapture",
+                ])
+                .current_dir(root.path())
+                .env(CHILD, "1")
+                .env("AXOCOATL_DATA_DIR", root.path().join("data"))
+                .env("AXOCOATL_SOCKET_PATH", root.path().join("ipc/daemon.sock"))
+                .env("AXOCOATL_TEST_PODMAN_CALLS", &calls_path)
+                .env("PATH", &bin)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("isolated bootstrap test timed out")
+        .expect("starting isolated bootstrap test");
         assert!(
-            err.contains("mock"),
-            "Error should mention mock provider: {err}"
+            output.status.success(),
+            "isolated bootstrap test failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let calls = std::fs::read_to_string(calls_path).unwrap();
+        assert_eq!(
+            calls.lines().filter(|line| line.starts_with("ps ")).count(),
+            4,
+            "early bootstrap must inspect all three protected roots and owned containers: {calls}"
+        );
+        assert_eq!(
+            calls
+                .lines()
+                .filter(|line| line.contains("label=io.axocoatl.runtime-authority="))
+                .count(),
+            1,
+            "early bootstrap must inspect exact authority-owned containers: {calls}"
         );
     }
 
@@ -26521,6 +32390,120 @@ providers:
             "lock rejection must happen before PAUSE/DELETE/LIST"
         );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn installed_format_admits_checked_cleanup_without_mutating_legacy_history() {
+        let (api_url, mut requests, server) = start_fake_e2b_control_plane(vec![
+            test_e2b_owned_list("live-owned-id", TEST_E2B_REQUEST_TOKEN),
+            test_e2b_owned_sandbox("live-owned-id", TEST_E2B_REQUEST_TOKEN),
+            test_http_response("204 No Content", ""),
+        ])
+        .await;
+        let config = e2b_test_config(&api_url);
+        let data = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut sessions = SessionStore::new(data.path().join("sessions")).unwrap();
+        let session = sessions
+            .create_with_environment(
+                "Live owner",
+                "wsp-live-owner",
+                work.path(),
+                SessionMode::SingleAgent {
+                    agent_id: "test-agent".into(),
+                },
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                false,
+                true,
+            )
+            .unwrap();
+        sessions
+            .set_environment(
+                &session.id,
+                SessionEnvironmentState::Ready,
+                Some("e2b:base".into()),
+                Some(SessionRuntimeIdentity {
+                    backend: "e2b".into(),
+                    id: "live-owned-id".into(),
+                    remote_root: Some("/home/user/repository".into()),
+                    control_plane: Some(api_url),
+                    data_plane_domain: Some("sandbox.test".into()),
+                    authority_fingerprint: Some(AxocoatlDaemon::e2b_authority_fingerprint(
+                        "test-key",
+                    )),
+                    ownership_token: Some(test_e2b_ownership_token(&session)),
+                    cleanup_confirmed: false,
+                }),
+                Vec::new(),
+                None,
+            )
+            .unwrap();
+        drop(sessions);
+
+        let data_root = SecureDir::open(data.path()).unwrap();
+        let history_root = data_root.child("session-history").unwrap();
+        history_root
+            .atomic_write(
+                "turns.v1.jsonl",
+                b"retained legacy bytes; runtime cleanup must not interpret or rewrite these\n",
+            )
+            .unwrap();
+        let checkpoint_root = data_root.child("checkpoints").unwrap();
+        checkpoint_root
+            .atomic_write("retained-source", b"exact original checkpoint bytes")
+            .unwrap();
+        let history_before = history_root.read("turns.v1.jsonl").unwrap();
+        let checkpoint_before = checkpoint_root.read("retained-source").unwrap();
+        let owner = DataDirLease::acquire(&data_root).expect("controlled migration owner");
+        let upgraded = owner.ownership.into_upgraded().unwrap();
+        drop(upgraded);
+        let (lease, _, _, _) =
+            AxocoatlDaemon::acquire_data_dir_lease_and_reconcile(&config, &data_root)
+                .await
+                .unwrap();
+        assert!(matches!(
+            lease.ownership,
+            axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(_)
+        ));
+        assert_eq!(history_root.read("turns.v1.jsonl").unwrap(), history_before);
+        assert_eq!(
+            checkpoint_root.read("retained-source").unwrap(),
+            checkpoint_before
+        );
+        assert!(
+            !data.path().join("execution-v2").exists(),
+            "physical cleanup must not manufacture canonical history"
+        );
+        for expected in [
+            "GET /v2/sandboxes?",
+            "GET /sandboxes/live-owned-id ",
+            "POST /sandboxes/live-owned-id/pause ",
+        ] {
+            let request = requests
+                .recv()
+                .await
+                .expect("exact checked runtime cleanup request");
+            assert!(
+                request.starts_with(expected),
+                "unexpected request: {request}"
+            );
+            assert!(!request.starts_with("DELETE "));
+        }
+        server.await.unwrap();
+        let mut sessions = SessionStore::new(data.path().join("sessions")).unwrap();
+        sessions.load_all().unwrap();
+        let retained = sessions.get(&session.id).unwrap();
+        assert_eq!(retained.environment.state, SessionEnvironmentState::Ready);
+        let runtime = retained.environment.runtime.unwrap();
+        assert_eq!(runtime.id, "live-owned-id");
+        assert_eq!(
+            runtime.remote_root.as_deref(),
+            Some("/home/user/repository")
+        );
+        assert!(!runtime.cleanup_confirmed);
     }
 
     #[test]
@@ -26873,7 +32856,7 @@ providers:
     }
 
     #[tokio::test]
-    async fn invalid_mode_ready_e2b_is_paused_before_the_record_is_quarantined() {
+    async fn unresolved_mode_ready_e2b_is_paused_and_the_record_is_retained() {
         let (api_url, mut requests, server) = start_fake_e2b_control_plane(vec![
             test_e2b_owned_list("invalid-ready-e2b-id", TEST_E2B_REQUEST_TOKEN),
             test_e2b_owned_sandbox("invalid-ready-e2b-id", TEST_E2B_REQUEST_TOKEN),
@@ -26944,13 +32927,17 @@ providers:
         assert!(reopened.get(&session_id).is_some());
         assert_eq!(
             quarantine_invalid_loaded_sessions(&config, &mut reopened),
-            1
+            0
         );
-        assert!(reopened.get(&session_id).is_none());
+        let retained = reopened.get(&session_id).expect("Session spine retained");
+        let error = validate_session_mode(&config, &retained.mode)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("restore that Agent in config"), "{error}");
     }
 
     #[tokio::test]
-    async fn invalid_mode_interrupted_e2b_is_deleted_before_the_record_is_quarantined() {
+    async fn unresolved_mode_interrupted_e2b_is_deleted_and_the_record_is_retained() {
         let (api_url, mut requests, server) = start_fake_e2b_control_plane(vec![
             test_e2b_owned_list("invalid-interrupted-e2b-id", TEST_E2B_REQUEST_TOKEN),
             test_e2b_owned_sandbox("invalid-interrupted-e2b-id", TEST_E2B_REQUEST_TOKEN),
@@ -27021,9 +33008,9 @@ providers:
         assert!(reopened.get(&session_id).is_some());
         assert_eq!(
             quarantine_invalid_loaded_sessions(&config, &mut reopened),
-            1
+            0
         );
-        assert!(reopened.get(&session_id).is_none());
+        assert!(reopened.get(&session_id).is_some());
     }
 
     #[tokio::test]
@@ -27266,7 +33253,7 @@ providers:
     }
 
     #[tokio::test]
-    async fn invalid_mode_ready_dual_e2b_markers_are_reconciled_independently() {
+    async fn unresolved_mode_ready_dual_e2b_markers_are_reconciled_and_retained() {
         let (api_url, mut requests, server) = start_fake_e2b_control_plane(vec![
             test_e2b_owned_list("dual-ready-runtime", TEST_E2B_REQUEST_TOKEN),
             test_e2b_owned_sandbox("dual-ready-runtime", TEST_E2B_REQUEST_TOKEN),
@@ -27386,12 +33373,13 @@ providers:
         assert!(retained.environment.runtime_creation.is_none());
         assert_eq!(
             quarantine_invalid_loaded_sessions(&config, &mut reopened),
-            1
+            0
         );
+        assert!(reopened.get(&session.id).is_some());
     }
 
     #[tokio::test]
-    async fn invalid_mode_interrupted_dual_e2b_markers_are_both_deleted() {
+    async fn unresolved_mode_interrupted_dual_e2b_markers_are_deleted_and_retained() {
         let (api_url, mut requests, server) = start_fake_e2b_control_plane(vec![
             test_e2b_owned_list("dual-interrupted-runtime", TEST_E2B_REQUEST_TOKEN),
             test_e2b_owned_sandbox("dual-interrupted-runtime", TEST_E2B_REQUEST_TOKEN),
@@ -27507,8 +33495,9 @@ providers:
         assert!(retained.environment.runtime_creation.is_none());
         assert_eq!(
             quarantine_invalid_loaded_sessions(&config, &mut reopened),
-            1
+            0
         );
+        assert!(reopened.get(&session.id).is_some());
     }
 
     #[tokio::test]
@@ -28028,10 +34017,9 @@ providers:
         let cut_gate = gate.clone();
         let cut_active = active.clone();
         let cut_bus = bus.clone();
-        let cut =
-            tokio::spawn(
-                async move { live_run_snapshot_cut(&cut_gate, &cut_active, &cut_bus).await },
-            );
+        let cut = tokio::spawn(async move {
+            live_run_snapshot_cut(&cut_gate, &cut_active, &cut_bus, None).await
+        });
 
         drop(active_guard);
         start.await.unwrap();
@@ -28048,6 +34036,80 @@ providers:
             assert_eq!(envelope.sequence, expected_sequence);
             assert!(envelope.sequence <= cursor);
         }
+    }
+
+    #[tokio::test]
+    async fn terminal_ledger_observation_reattaches_while_cleanup_owner_is_live() {
+        let history = tempfile::tempdir().unwrap();
+        let mut ledger = SessionTurnStore::open(history.path()).unwrap();
+        ledger
+            .begin(BeginSessionTurn {
+                turn_id: Some("turn-cleanup".to_string()),
+                session_id: "session-cleanup".to_string(),
+                user_input: "finish".to_string(),
+                agent_id: Some("lead".to_string()),
+                model: None,
+                context: Vec::new(),
+                idempotency_key: Some("turn-cleanup".to_string()),
+                metadata: serde_json::Map::new(),
+            })
+            .unwrap();
+        ledger
+            .transition(
+                "turn-cleanup",
+                "terminal-before-cache-cleanup",
+                TransitionSessionTurn {
+                    status: SessionTurnLifecycle::Completed,
+                    final_output: Some("done".to_string()),
+                    error: None,
+                    metadata: serde_json::Map::new(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            ledger.get("turn-cleanup").unwrap().status,
+            SessionTurnLifecycle::Completed
+        );
+
+        let gate = tokio::sync::Mutex::new(());
+        let active = tokio::sync::Mutex::new(HashMap::new());
+        let bus = crate::stream::StreamBus::new(16);
+        commit_session_start(
+            &gate,
+            &active,
+            &bus,
+            "session-cleanup",
+            "turn-cleanup",
+            AgentRunControl::new(AgentRunId::new("turn-cleanup")),
+        )
+        .await;
+
+        let retry = if replay_session_start(&gate, &active, &bus, "session-cleanup", "turn-cleanup")
+            .await
+        {
+            Err(DaemonError::SessionTurnReattached {
+                session: "session-cleanup".to_string(),
+                turn: "turn-cleanup".to_string(),
+            })
+        } else {
+            AxocoatlDaemon::outcome_from_terminal_turn(ledger.get("turn-cleanup").unwrap())
+        };
+        assert!(
+            matches!(
+                retry,
+                Err(DaemonError::SessionTurnReattached { session, turn })
+                    if session == "session-cleanup" && turn == "turn-cleanup"
+            ),
+            "the retry must reattach instead of returning the terminal outcome while cleanup owns the turn"
+        );
+        assert_eq!(
+            active
+                .lock()
+                .await
+                .get("session-cleanup")
+                .map(|turn| turn.turn_id.as_str()),
+            Some("turn-cleanup")
+        );
     }
 
     #[tokio::test]
@@ -28096,10 +34158,9 @@ providers:
         let cut_gate = gate.clone();
         let cut_active = active.clone();
         let cut_bus = bus.clone();
-        let cut =
-            tokio::spawn(
-                async move { live_run_snapshot_cut(&cut_gate, &cut_active, &cut_bus).await },
-            );
+        let cut = tokio::spawn(async move {
+            live_run_snapshot_cut(&cut_gate, &cut_active, &cut_bus, None).await
+        });
 
         drop(active_guard);
         terminal.await.unwrap();
@@ -28180,10 +34241,86 @@ providers:
                 expected_sequence
             );
         }
+    }
+
+    #[tokio::test]
+    async fn terminal_route_releases_operation_before_removing_live_owner() {
+        let gate = tokio::sync::Mutex::new(());
+        let active = tokio::sync::Mutex::new(HashMap::new());
+        let operation = tokio::sync::Mutex::new(());
+        let bus = crate::stream::StreamBus::new(16);
+        let mut subscriber = bus.subscribe();
+        commit_session_start(
+            &gate,
+            &active,
+            &bus,
+            "session-terminal-barrier",
+            "turn-terminal-barrier",
+            AgentRunControl::new(AgentRunId::new("turn-terminal-barrier")),
+        )
+        .await;
+
+        let operation_guard = operation.lock().await;
+        let publication_barrier = gate.lock().await;
+        let terminal = commit_session_terminal_after_operation_release(
+            operation_guard,
+            &gate,
+            &active,
+            &bus,
+            "session-terminal-barrier",
+            "turn-terminal-barrier",
+            crate::stream::StreamFrame::SessionDone {
+                session: "session-terminal-barrier".to_string(),
+                turn_id: Some("turn-terminal-barrier".to_string()),
+                input_tokens: 3,
+                output_tokens: 5,
+                reasoning_tokens: 0,
+                token_usage_known: true,
+            },
+        );
+        tokio::pin!(terminal);
+        tokio::select! {
+            _ = &mut terminal => panic!("terminal publication crossed a deliberately held barrier"),
+            _ = async {
+                for _ in 0..100 {
+                    if operation.try_lock().is_ok() {
+                        return;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                panic!("terminal route did not release its operation lease before publication");
+            } => {}
+        }
+
+        assert_eq!(
+            active
+                .lock()
+                .await
+                .get("session-terminal-barrier")
+                .map(|turn| turn.turn_id.as_str()),
+            Some("turn-terminal-barrier"),
+            "an exact retry must still see the live owner while terminal publication is blocked"
+        );
+        assert_eq!(subscriber.recv_sequenced().await.unwrap().sequence, 1);
+        assert_eq!(subscriber.recv_sequenced().await.unwrap().sequence, 2);
         assert!(matches!(
             subscriber.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
+
+        drop(publication_barrier);
+        terminal.await;
+        let terminal = subscriber.recv_sequenced().await.unwrap();
+        assert_eq!(terminal.sequence, 3);
+        assert!(matches!(
+            terminal.frame,
+            crate::stream::StreamFrame::SessionDone {
+                ref session,
+                turn_id: Some(ref turn_id),
+                ..
+            } if session == "session-terminal-barrier" && turn_id == "turn-terminal-barrier"
+        ));
+        assert!(!active.lock().await.contains_key("session-terminal-barrier"));
     }
 
     #[tokio::test]
@@ -28204,6 +34341,7 @@ providers:
 
         commit_session_preflight_error(
             &gate,
+            &active,
             &bus,
             "session-a",
             "turn-b",
@@ -28228,6 +34366,86 @@ providers:
                 ..
             } if session == "session-a" && turn_id == "turn-b"
         ));
+    }
+
+    #[tokio::test]
+    async fn conflicting_same_turn_preflight_cannot_terminalize_the_live_executor() {
+        let gate = tokio::sync::Mutex::new(());
+        let active = tokio::sync::Mutex::new(HashMap::new());
+        let bus = crate::stream::StreamBus::new(16);
+        let mut subscriber = bus.subscribe();
+        let control = AgentRunControl::new(AgentRunId::new("turn-live"));
+        commit_session_start(
+            &gate,
+            &active,
+            &bus,
+            "session-live",
+            "turn-live",
+            control.clone(),
+        )
+        .await;
+
+        commit_session_preflight_error(
+            &gate,
+            &active,
+            &bus,
+            "session-live",
+            "turn-live",
+            &DaemonError::Session(
+                "turn 'turn-live' already exists with different request data".to_string(),
+            ),
+        )
+        .await;
+
+        assert_eq!(subscriber.recv_sequenced().await.unwrap().sequence, 1);
+        assert_eq!(subscriber.recv_sequenced().await.unwrap().sequence, 2);
+        let rejected = subscriber.recv_sequenced().await.unwrap();
+        assert_eq!(rejected.sequence, 3);
+        assert!(matches!(
+            rejected.frame,
+            crate::stream::StreamFrame::SessionRequestRejected {
+                ref session,
+                ref turn_id,
+                ref error,
+            } if session == "session-live"
+                && turn_id == "turn-live"
+                && error.contains("different request data")
+        ));
+        assert_eq!(
+            active
+                .lock()
+                .await
+                .get("session-live")
+                .map(|turn| turn.turn_id.as_str()),
+            Some("turn-live")
+        );
+        assert_eq!(
+            bus.run("session-live").and_then(|run| run.turn_id),
+            Some("turn-live".to_string()),
+            "the live RunState and its exact Stop identity must remain visible"
+        );
+
+        bus.send(crate::stream::StreamFrame::Token {
+            workflow: "session-live".to_string(),
+            agent: "coder".to_string(),
+            turn_id: Some("turn-live".to_string()),
+            delta: "still running".to_string(),
+        })
+        .unwrap();
+        assert_eq!(
+            bus.run("session-live").unwrap().agents[0].output,
+            "still running",
+            "later output from the real executor must continue folding"
+        );
+        assert_eq!(
+            request_active_session_turn_cancellation(&active, "session-live", Some("turn-live"))
+                .await
+                .unwrap(),
+            Some(true),
+            "the exact Stop handle must remain reachable"
+        );
+        assert!(control.is_cancelled());
+        assert_eq!(subscriber.recv_sequenced().await.unwrap().sequence, 4);
     }
 
     #[tokio::test]
@@ -29733,3 +35951,6 @@ providers:
         assert!(AxocoatlDaemon::require_attempt_resolution_backend("e2b").is_err());
     }
 }
+
+#[path = "bootstrap_session_grants.rs"]
+mod session_grants;

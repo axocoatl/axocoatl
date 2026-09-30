@@ -5,13 +5,14 @@ description: Choose among explicit Automations, multi-Agent Sessions, typed even
 
 import { Aside } from '@astrojs/starlight/components';
 
-Axocoatl has four related coordination mechanisms. Each answers a different
+Axocoatl has five related coordination mechanisms. Each answers a different
 question and owns a different recovery boundary.
 
 | Mechanism | Use when | Ordering/choice |
 | --- | --- | --- |
 | Automation | The graph can be declared ahead of time | Explicit DAG nodes and edges |
 | Multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
+| Signal field | Agents own parts of a repository and should react to each other's evidence | Deposits on paths; each Agent senses only the paths it watches |
 | Event lattice | Producers and consumers should be decoupled | Typed publish/subscribe notification |
 | Coordinator Agent | Task shape and worker choice emerge at runtime | Decomposition plus capability/budget auction |
 
@@ -25,12 +26,107 @@ workflow.
 Legacy workflows are compatibility seed/input. They do not constitute a
 second live scheduler after the canonical store exists.
 
-## Multi-Agent Sessions
+## Native Session teams
 
-A lattice-mode Session uses configured legacy workflow membership to determine
-which Agents participate. Session-scoped actors run in dependency order inside
-one sandbox and stream lifecycle frames under the Session ID. This is bounded
-foreground work with a shared Session transcript, not an Automation trigger.
+Use **Team & budget** to review the exact team, dependencies, Agent templates,
+explicit limits, and expiry for future native turns. Apply retains an immutable
+team revision. Each activation has its own input, conversation, grant, and history.
+The current-turn inspector separately reviews changes to work that has not started;
+it does not replace the future-team configuration.
+
+A Coordinator receives only explicitly approved Worker templates and delegated
+operations. Each admitted Worker instance has a separate conversation and consumes
+an allocation from the parent's shared allowance. Its command source, parent
+activation, and result stay in the same canonical Session history. Increasing
+budget or authority requires human review; another model call cannot grant it.
+
+Standing work sources feed that same Session controller. Manual events, signed
+webhooks, verified Session completion, and a signal field preserve source and
+candidate identity. See [Receive standing work](/workbench/history/#receive-standing-work).
+
+## Signal field
+
+A signal field is stigmergic coordination for one Session's repository: Agents
+coordinate through evidence left on the code rather than through a manager. Arm it
+from **Work sources** by giving each team Agent the path patterns it owns and a
+threshold.
+
+- A `finding` or `pitfall` an Agent records with `workspace_knowledge` deposits 1.0 on
+  the files it cites as needing a change, once its turn completes. Files cited only as
+  supporting evidence don't route it. When the Agent records the finding, Axocoatl
+  tells it which Agent the finding will reach. A person's flag or finding note also
+  deposits 1.0. A finding counts once it is published with its turn. One from a turn that
+  failed or stopped, or from work that was not accepted, leaves no signal until you accept
+  it in **Work sources**.
+- When a watched file changes after a turn, that change deposits 0.5, attributed to
+  the Agent whose signal work made it. A required check that fails after signal work
+  deposits 1.5 on the files that work changed.
+- Deposits evaporate with the half-life you choose. An Agent never senses its own
+  deposits, stops sensing a deposit once it has acted on it, and ignores a finding
+  whose cited file has since changed.
+- When the signal on an Agent's paths reaches its threshold, Axocoatl queues one
+  work item for that Agent through the same inbox, grants and allowance as any
+  standing work. The Agent receives the deposits as evidence to verify. During that
+  work its file tools can change only the paths it owns; a problem elsewhere is
+  recorded as a finding, which signals whoever watches that file. A change outside its
+  owned paths made any other way, such as a shell command, fails that work and is kept
+  for you to review; ignored files are not checked.
+- An Agent owns the paths it watches unless you name other owned paths, or mark it
+  read-only. A read-only reviewer can watch the whole repository and only report: the
+  sandbox's kernel write restriction stops every command it runs, its shell included,
+  from changing the repository. Where that restriction is unavailable, its commands do
+  not run.
+
+Nothing is dispatched when no Agent watches a path; that deposit stays visible.
+The field never blocks other work, and you can flag paths, withdraw a deposit, or
+send an Agent its current signals below threshold. Work runs in episodes: after the
+field goes quiet, the next deposit starts a new one with a fresh dispatch limit and
+token budget. The same evidence at the same code is held rather than sent again.
+Quiet means the signals stopped, not that the work is correct. **Work sources** shows each
+Agent's signal against its threshold, why each deposit does or does not count, and a
+cause chain: each dispatch, the signals that caused it, how its work ended and the
+signals its turn left. A cause graph shows the same links. Signal strength decides who looks next; it does not
+certify that a finding is true or that work is correct.
+
+## Legacy multi-Agent Sessions
+
+A lattice-mode Session stores the selected config-owned team ID; Custom mode stores
+the selected Agent IDs. Each all-team request resolves that selection against current
+Agent configuration. When the result contains more than one autonomous Agent, Axocoatl
+snapshots its exact membership and dependencies. Later configuration changes affect
+future turns, never retained maps. Removing or renaming a referenced Agent or team does
+not remove the Session or its History; a new turn stops before durable acceptance and
+tells you to restore the reference or create a new Session with an available selection.
+Each autonomous multi-Agent request owns a validated Coordination map in canonical
+Session History:
+
+1. Agents without dependencies activate from the accepted request.
+2. A downstream Agent activates only after every named direct dependency has
+   completed.
+3. Its input contains the request and those direct-parent contributions, not
+   every earlier Agent's output.
+4. A failed branch blocks only descendants that can no longer satisfy their
+   dependency predicate; independent ready work may continue.
+5. A reviewer can request one bounded revision from an ancestor. The target and
+   every completed downstream result derived from it run again before the reviewer
+   verifies the newest direct-parent result.
+
+The internal `coordination_signal` tool is advertised only while that exact activation is
+active, has not spent its one revision request, and has eligible upstream targets. Its
+request-local schema enumerates those exact Agent IDs. Execution still rechecks the active
+activation, unspent allowance, and eligible target, so a stale or fabricated call cannot rely
+on an earlier advertisement. The activation prompt names the same eligible IDs without
+including a transitive ancestor's output.
+
+When a request is accepted and applied, the requester's `changes_requested` output, the
+signal with that activation's usage and completeness, affected-output supersessions, and
+reactivations are recorded as one durable batch before matching live frames publish. A
+Coordinator-led team instead runs through the Coordinator's separate live hierarchy and does
+not fabricate this peer map.
+
+Agents in a Session share one checkout, so ready work is executed serially in a
+stable order until parallel repository writers have explicit isolation and merge
+authority. This is bounded foreground work, not an Automation trigger.
 When a workflow enters a Coordinator, the Session executes that entry once and the
 Coordinator owns its declared Workers; the roster is not looped again. A Worker cannot be
 selected or targeted directly.
@@ -51,10 +147,13 @@ and timestamp. Current consumers include:
 
 A YAML Skill's `reacts_to` and holder fields are metadata in the current daemon;
 they do not cause Agents to execute. The reusable coordination crate contains
-pheromone/signal threshold primitives, but the product daemon does not run the
-returned activation IDs as another workflow engine.
+the turn-scoped exact-dependency scheduler used by multi-Agent Sessions, the
+path-scoped signal field used by Session work sources, and the older process-wide
+pheromone threshold primitive. The product daemon does not run that process-wide
+primitive's returned activation IDs as another workflow engine; the
+[signal field](#signal-field) is the path-scoped replacement for Session work.
 
-## Coordinator Agents
+## Legacy Coordinator execution
 
 An Agent with `role: coordinator` handles one execution hierarchically:
 
@@ -75,8 +174,19 @@ can be created when the pool lacks a fitting target; they are run-scoped and eph
 The Coordinator itself owns Tier-1 Session conversation plus private checkpointed plan/outcome
 state, not Tier 2–4 recall tools. That private state is separate from Session History and
 Automation run records. Once the Session turn is Completed, Cancelled, Failed, or Interrupted,
-canonical projection clears it and the next turn decomposes fresh rather than auto-resuming
-finished subtasks.
+Axocoatl records that canonical terminal state first and then reconciles the scoped checkpoint
+transaction. It will not start the next turn until reconciliation durably commits the completed
+checkpoint or clears resumable orchestration state for Cancelled, Failed, or Interrupted work.
+A completed checkpoint is marked nonresumable, so finished subtasks are not silently resumed
+as a new request.
+When an older single-Agent Coordinator is adopted into this transaction model, Axocoatl imports
+checkpoint-only conversation into canonical History before clearing unsafe private and Worker
+state. It then rebuilds only Completed Coordinator turns as model context and preserves cumulative
+usage; the one-time adoption marker is written after that rebuild succeeds.
+Transaction-scoped Agents and Coordinator Workers may read existing Tier 2–4 memory, but cannot
+run semantic auto-store, daily-log archive writes, personal/shared core edits, or core
+consolidation during the turn. That restriction also applies to Completed work until these durable
+tiers support causal transactional promotion.
 
 Decomposition, unresolved HTN frontiers, and synthesis are checked against the exact
 configured model window before dispatch. If older context must be reduced, Axocoatl omits only
@@ -91,9 +201,27 @@ coordinator execution; Automation ordering happens in the DAG executor.
 
 ## Observe coordination
 
-Conversation shows Session messages and ordered tool events. Open the focused
-**Agent graph** from **More** to inspect configured relationships for the
-Session. Integrations can read `GET /api/events/recent` and `event` WebSocket
-frames; there is no separate global event-feed browser destination.
+Conversation places a durable **Coordination** card beneath each coordinated
+request. It shows request → Agents → answer, node state, dependencies, handoff
+summaries, and the causal event timeline. **Open Agent graph** reveals the same
+turn state in the focused graph surface. Reloading rebuilds both from the turn
+ledger; live `coordination` frames are published only after their matching
+record is durable.
+
+The Agent graph opens in View mode. Select an Agent to open its
+inspector, then choose a recorded activation to review input, output, partial
+output, usage, and causal evidence. Older or incomplete records explicitly show
+which details are unknown, missing, or not recorded. The graph also supports
+ordinary and directly targeted turns using their recorded membership. Historical
+inspection alone grants no command authority. Native current work exposes exact
+Guide, Stop, Retry, and other controls only when the host reports that capability.
+Legacy graphs remain read-only, with whole-turn Stop in Conversation. See
+[native controls](/workbench/history/#control-native-work).
+
+Integrations can read the Session turn endpoint for the canonical record.
+`GET /api/events/recent` and `event` WebSocket frames remain the separate
+process-wide notification feed; there is no global event-feed browser destination.
+The [WebSocket reference](/reference/websocket/#coordination-event-metadata)
+defines the exact turn-coordination event fields.
 
 Next: [Protocols →](/understand/protocols/)

@@ -13,8 +13,8 @@ readme.workspace = true
 description = "LLM provider abstraction layer for Axocoatl — core traits, types, and registry"
 
 [dependencies]
-axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
-axocoatl-token = { version = "1.0.0", path = "../axocoatl-token" }
+axocoatl-core = { version = "1.1.0", path = "../axocoatl-core" }
+axocoatl-token = { version = "1.1.0", path = "../axocoatl-token" }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

@@ -12,8 +12,9 @@ class AxProductFilm extends HTMLElement {
     const caption = this.getAttribute('caption');
 
     const validFilm = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(film || '');
-    const expectedSrc = validFilm ? `/assets/films/${film}.mp4` : null;
-    const expectedPoster = validFilm ? `/assets/films/${film}.jpg` : null;
+    const mediaDirectory = src?.match(/^\/assets\/films\/(?:v\d+\.\d+\.\d+\/)?/)?.[0];
+    const expectedSrc = validFilm && mediaDirectory ? `${mediaDirectory}${film}.mp4` : null;
+    const expectedPoster = validFilm && mediaDirectory ? `${mediaDirectory}${film}.jpg` : null;
     if (!validFilm || src !== expectedSrc || poster !== expectedPoster || !label || !caption) {
       this.dataset.state = 'error';
       console.error('ax-product-film requires a film slug, its matching MP4/JPEG pair, a label, and a caption.');

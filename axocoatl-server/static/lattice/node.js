@@ -14,7 +14,7 @@
  * @attr {number}  data-h          Optional height hint (default 60)
  * @attr {boolean} selected        Selection state
  * @attr {boolean} draggable       (default true) — set to "false" to lock
- * @attr {string}  status          Execution state: idle|pending|running|success|error
+ * @attr {string}  status          Execution state: idle|pending|running|success|error|blocked|cancelled
  *
  * @csspart frame                  The outer rectangle
  *
@@ -31,6 +31,8 @@
  * @cssprop --ax-node-running-glow Pulse glow color when status=running
  * @cssprop --ax-node-success      Border color when status=success
  * @cssprop --ax-node-error        Border color when status=error
+ * @cssprop --ax-node-blocked      Border color when status=blocked
+ * @cssprop --ax-node-cancelled    Border color when status=cancelled
  *
  * @event node-pointerdown   detail: {ev, additive} — cancellable; preventDefault to skip selection/drag
  * @event node-select        detail: {additive: boolean, alreadySelected: boolean}
@@ -73,6 +75,7 @@ const TEMPLATE = `
     border-color: var(--ax-node-border-sel, var(--ax-accent, #7c5cff));
     box-shadow: var(--ax-node-shadow-sel, 0 0 0 1px var(--ax-accent, #7c5cff), 0 8px 24px rgba(124,92,255,.25));
   }
+  :host([data-lattice-view]) { cursor: pointer; }
   :host(.dragging) {
     cursor: grabbing;
     z-index: 1;
@@ -100,6 +103,15 @@ const TEMPLATE = `
   :host([status="error"]) {
     border-color: var(--ax-node-error, #ff6b6b);
   }
+  :host([status="blocked"]) {
+    border-style: dashed;
+    border-color: var(--ax-node-blocked, #e8b25a);
+  }
+  :host([status="cancelled"]) {
+    border-style: dashed;
+    border-color: var(--ax-node-cancelled, #8e96a8);
+    opacity: .8;
+  }
   @keyframes ax-node-pulse {
     0%, 100% { box-shadow: 0 0 0 0 rgba(124,92,255,0), var(--ax-node-shadow, 0 4px 12px rgba(0,0,0,.35)); }
     50%      { box-shadow: 0 0 0 7px var(--ax-node-running-glow, rgba(124,92,255,.20)), var(--ax-node-shadow, 0 4px 12px rgba(0,0,0,.35)); }
@@ -121,7 +133,9 @@ const ATTR = {
 };
 
 /** Recognised execution states. */
-const STATUSES = new Set(['idle', 'pending', 'running', 'success', 'error']);
+const STATUSES = new Set([
+  'idle', 'pending', 'running', 'success', 'error', 'blocked', 'cancelled',
+]);
 
 export class AxNodeElement extends HTMLElement {
   static get observedAttributes() {
@@ -192,6 +206,20 @@ export class AxNodeElement extends HTMLElement {
     }
   }
 
+  /** Internal mode sync also cancels pending movement and delayed events. */
+  _setLatticeView(viewing) {
+    this.toggleAttribute('data-lattice-view', viewing);
+    if (!viewing) return;
+    if (this.#drag && this.hasPointerCapture(this.#drag.pointerId)) {
+      this.releasePointerCapture(this.#drag.pointerId);
+    }
+    this.#drag = null;
+    this.#press = null;
+    this.classList.remove('dragging');
+    if (this.#rafEmit) cancelAnimationFrame(this.#rafEmit);
+    this.#rafEmit = 0;
+  }
+
   // ── Public API ─────────────────────────────────────────────────────────
 
   get x() { return this.#num(ATTR.X, 0); }
@@ -226,7 +254,8 @@ export class AxNodeElement extends HTMLElement {
 
   /**
    * Execution state — the node's "live" dimension.
-   * One of: `idle` | `pending` | `running` | `success` | `error`.
+   * One of: `idle` | `pending` | `running` | `success` | `error` |
+   * `blocked` | `cancelled`.
    * Setting `idle` (or an unknown value) clears the attribute.
    */
   get status() { return this.getAttribute(ATTR.STATUS) || 'idle'; }
@@ -281,6 +310,7 @@ export class AxNodeElement extends HTMLElement {
   }
 
   #isDraggableNow() {
+    if (this.#lattice?.mode === 'view') return false;
     return this.getAttribute(ATTR.DRAGGABLE) !== 'false';
   }
 
@@ -339,6 +369,7 @@ export class AxNodeElement extends HTMLElement {
   };
 
   #onPointerMove = (ev) => {
+    if (this.#lattice?.mode === 'view') return;
     // Track press displacement to distinguish a click from a drag.
     if (this.#press && ev.pointerId === this.#press.pointerId) {
       if (

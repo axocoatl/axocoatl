@@ -40,6 +40,8 @@ const TEMPLATE = `
   .mm-node.running { fill: var(--ax-node-running, var(--ax-accent, #7c5cff)); }
   .mm-node.success { fill: var(--ax-node-success, #00d9b1); }
   .mm-node.error   { fill: var(--ax-node-error, #ff6b6b); }
+  .mm-node.blocked { fill: var(--ax-node-blocked, #e8b25a); }
+  .mm-node.cancelled { fill: var(--ax-node-cancelled, #8e96a8); }
   .mm-node.pending { fill: var(--ax-node-pending, #5a6478); }
   .mm-view {
     fill: var(--ax-minimap-view-fill, rgba(124,92,255,.14));

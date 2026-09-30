@@ -1,0 +1,78 @@
+[
+  {
+    "begin": {
+      "turn_id": "legacy-turn-1",
+      "session_id": "session-a",
+      "user_input": "Explain the existing function.",
+      "agent_id": "coder",
+      "model": "ordinary-model",
+      "context": [],
+      "idempotency_key": "legacy-turn-1",
+      "metadata": {
+        "mode": "single_agent",
+        "target_agent": "coder"
+      }
+    },
+    "execution": {
+      "kind": "run_started",
+      "execution_id": "legacy-turn-1",
+      "attempt_id": null,
+      "metadata": {}
+    },
+    "agent_output": {
+      "agent_id": "coder",
+      "model": "ordinary-model",
+      "output": "The function returns the supplied value."
+    },
+    "complete": {
+      "status": "completed",
+      "final_output": "The function returns the supplied value.",
+      "error": null,
+      "metadata": {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "reasoning_tokens": 2,
+        "total_tokens": 17,
+        "token_usage_known": true
+      }
+    }
+  },
+  {
+    "begin": {
+      "turn_id": "legacy-turn-2",
+      "session_id": "session-a",
+      "user_input": "Explain the next step.",
+      "agent_id": "coder",
+      "model": "ordinary-model",
+      "context": [],
+      "idempotency_key": "legacy-turn-2",
+      "metadata": {
+        "mode": "single_agent",
+        "target_agent": "coder"
+      }
+    },
+    "execution": {
+      "kind": "run_started",
+      "execution_id": "legacy-turn-2",
+      "attempt_id": null,
+      "metadata": {}
+    },
+    "agent_output": {
+      "agent_id": "coder",
+      "model": "ordinary-model",
+      "output": "Add the requested validation."
+    },
+    "complete": {
+      "status": "completed",
+      "final_output": "Add the requested validation.",
+      "error": null,
+      "metadata": {
+        "input_tokens": 20,
+        "output_tokens": 10,
+        "reasoning_tokens": 4,
+        "total_tokens": 34,
+        "token_usage_known": true
+      }
+    }
+  }
+]

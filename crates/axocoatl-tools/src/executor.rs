@@ -143,14 +143,18 @@ impl ToolExecutor {
     pub fn as_llm_tools(&self) -> Vec<axocoatl_llm::ToolDefinition> {
         self.tools
             .iter()
-            .map(|(name, backend)| match backend {
-                ToolBackend::Builtin(tool) => axocoatl_llm::ToolDefinition {
-                    name: name.clone(),
-                    description: tool.description().to_string(),
-                    parameters: tool.parameters_schema(),
-                    concurrency: tool.concurrency_policy(),
-                },
-                ToolBackend::Mcp { definition, .. } => definition.clone(),
+            .filter_map(|(name, backend)| match backend {
+                ToolBackend::Builtin(tool) => {
+                    tool.advertised_parameters_schema().map(|parameters| {
+                        axocoatl_llm::ToolDefinition {
+                            name: name.clone(),
+                            description: tool.description().to_string(),
+                            parameters,
+                            concurrency: tool.concurrency_policy(),
+                        }
+                    })
+                }
+                ToolBackend::Mcp { definition, .. } => Some(definition.clone()),
             })
             .collect()
     }
@@ -212,6 +216,31 @@ mod tests {
 
         fn parameters_schema(&self) -> serde_json::Value {
             serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(
+            &self,
+            _arguments: serde_json::Value,
+        ) -> Result<serde_json::Value, ToolError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(serde_json::json!({"ok": true}))
+        }
+    }
+
+    struct UnadvertisedCountingTool(Arc<AtomicUsize>);
+
+    #[async_trait::async_trait]
+    impl BuiltinTool for UnadvertisedCountingTool {
+        fn description(&self) -> &str {
+            "test-only dynamically hidden counter"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        fn advertised_parameters_schema(&self) -> Option<serde_json::Value> {
+            None
         }
 
         async fn execute(
@@ -290,6 +319,21 @@ mod tests {
         let tools = executor.as_llm_tools();
         assert_eq!(tools.len(), 2);
         assert!(tools.iter().any(|t| t.name == "mcp__srv__do"));
+    }
+
+    #[tokio::test]
+    async fn unadvertised_builtin_remains_guarded_by_dispatch_authority() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("hidden", Arc::new(UnadvertisedCountingTool(calls.clone())));
+
+        assert!(executor.as_llm_tools().is_empty());
+        let result = executor
+            .execute("hidden", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(result, serde_json::json!({"ok": true}));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

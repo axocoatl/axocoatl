@@ -28,7 +28,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -132,6 +132,14 @@ panic = "abort"
 opt-level = 0
 debug = true
 
+# gemm-f16's AArch64 FP16 helpers require inlining into their target-feature
+# kernels; its unoptimized build fails on portable AArch64 (upstream issue #31).
+# Match upstream's development optimization for this dependency alone, without
+# enabling FP16 globally or changing application debug/overflow checks.
+# https://github.com/sarah-quinones/gemm/issues/31
+[profile.dev.package.gemm-f16]
+opt-level = 3
+
 # ---------------------------------------------------------------------------
 # Workspace-level benchmarks (Criterion)
 # ---------------------------------------------------------------------------
@@ -141,11 +149,11 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-axocoatl-core = { version = "1.0.0", path = "crates/axocoatl-core" }
-axocoatl-token = { version = "1.0.0", path = "crates/axocoatl-token" }
-axocoatl-coordination = { version = "1.0.0", path = "crates/axocoatl-coordination" }
-axocoatl-isolation = { version = "1.0.0", path = "crates/axocoatl-isolation" }
-axocoatl-actor = { version = "1.0.0", path = "crates/axocoatl-actor" }
+axocoatl-core = { version = "1.1.0", path = "crates/axocoatl-core" }
+axocoatl-token = { version = "1.1.0", path = "crates/axocoatl-token" }
+axocoatl-coordination = { version = "1.1.0", path = "crates/axocoatl-coordination" }
+axocoatl-isolation = { version = "1.1.0", path = "crates/axocoatl-isolation" }
+axocoatl-actor = { version = "1.1.0", path = "crates/axocoatl-actor" }
 tokio = { workspace = true }
 ractor = { workspace = true }
 async-trait = { workspace = true }

@@ -82,6 +82,7 @@ export default defineConfig({
           label: 'Use the workbench',
           items: [
             { label: 'Work in a Session', slug: 'workbench/session' },
+            { label: 'Workspace knowledge', slug: 'workbench/knowledge' },
             { label: 'Files, Preview, and Terminal', slug: 'workbench/tools' },
             { label: 'Explore several Ways', slug: 'workbench/ways' },
             { label: 'Review Git and Last turn', slug: 'workbench/git' },

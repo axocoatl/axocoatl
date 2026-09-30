@@ -35,6 +35,7 @@ The canvas. Holds nodes and edges, owns pan/zoom, selection, history.
 
 | Attribute | Type | Default | Description |
 |---|---|---|---|
+| `mode` | `edit`\|`view` | `edit` | View disables graph editing while retaining inspection and camera controls |
 | `zoom` | number | `1` | Current zoom level |
 | `min-zoom` | number | `0.2` | Minimum zoom |
 | `max-zoom` | number | `3` | Maximum zoom |
@@ -58,12 +59,13 @@ The canvas. Holds nodes and edges, owns pan/zoom, selection, history.
 | `nodes` *(getter)* | `Set` | Registered `<ax-node>`s |
 | `edges` *(getter)* | `Set` | Registered `<ax-edge>`s |
 | `selection` *(getter)* | `Set` | Selected nodes |
+| `setSelection(ids)` | — | Restore selection by node identity after a host update |
 | `selectedIds()` | `string[]` | Selected node ids |
 | `selectedEdgeIds()` | `string[]` | Selected edge ids |
 | `selectAll()` / `deselectAll()` | — | Selection ops |
 | `deleteSelected()` | — | Delete selected nodes (undoable) |
 | `deleteSelectedEdges()` | — | Delete selected edges (undoable) |
-| `addEdge({from,to,label?})` | `<ax-edge>` | Create an edge (undoable) |
+| `addEdge({from,to,label?})` | `<ax-edge>` or `null` | Create an edge (undoable) |
 | `undo()` / `redo()` | — | History navigation |
 | `canUndo()` / `canRedo()` | boolean | History state |
 | `clearHistory()` | — | Drop all undo/redo state |
@@ -78,7 +80,8 @@ The canvas. Holds nodes and edges, owns pan/zoom, selection, history.
 
 ### `<ax-node>` execution state
 
-`node.status` — one of `idle` / `pending` / `running` / `success` / `error`.
+`node.status` — one of `idle` / `pending` / `running` / `success` / `error` /
+`blocked` / `cancelled`.
 Set via the `status` attribute or the property. `running` pulses and sets
 `aria-busy`; the minimap tints nodes by status.
 
@@ -159,7 +162,7 @@ Set these on `<ax-lattice>` (or any ancestor):
 | `--ax-edge-color-active` | `--ax-accent-2` | Flowing-edge stroke |
 | `--ax-edge-width` | `2` | Edge stroke width |
 | `--ax-node-bg` / `-fg` / `-border` / `-border-sel` | — | Node theming |
-| `--ax-node-pending` / `-running` / `-running-glow` / `-success` / `-error` | — | Per-status node theming |
+| `--ax-node-pending` / `-running` / `-running-glow` / `-success` / `-error` / `-blocked` / `-cancelled` | — | Per-status node theming |
 | `--ax-handle-size` / `-bg` / `-border` | — | Handle theming |
 | `--ax-minimap-*` / `--ax-controls-*` | — | Overlay theming |
 
@@ -210,3 +213,25 @@ The lattice must be focused (click it once).
 - A visually-hidden `aria-live` region announces selection changes, deletions,
   connections, undo/redo, and auto-layout. Call `lattice.announce(msg)` to add
   your own announcements.
+
+### View mode
+
+Set `lattice.mode = 'view'` (or `<ax-lattice mode="view">`) for execution graphs.
+Selection, pan, zoom, fit, minimap, and execution status updates remain available.
+Dragging, connection gestures, delete, internal copy/paste, undo/redo, and auto-layout
+are disabled, including calls to their public methods. `addEdge()` returns `null`,
+`copy()` returns `0`, and `paste()` returns `[]`. Connection handles and toolbar
+history buttons are hidden. Entering View cancels an unfinished connection or drag.
+
+The host still renders authoritative graph updates through DOM attributes and
+children; View is an interaction contract, not a security boundary against host
+JavaScript. For automatic layout, call the pure `layeredLayout()` function and
+apply returned positions as part of the host projection. `setSelection(ids)`
+restores retained selection without changing graph content.
+
+In View, arrows inspect the previous/next node, Home/End select the first/last,
+and Enter/Space emits `node-inspect` with `{id}` for opening details. Tab leaves
+the canvas normally. `mode-change` emits `{mode}` when interaction mode changes.
+The default accessible role description is “execution graph” in View. Default
+Edit behavior remains compatible. This is an additive minor-version API change;
+it has not been published.

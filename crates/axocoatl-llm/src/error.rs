@@ -37,6 +37,11 @@ pub enum ProviderError {
     #[error("Streaming error: {0}")]
     Stream(String),
 
+    /// The stream closed before the provider's own completion record, so no
+    /// tool call from it was released and its usage is unknown.
+    #[error("{provider} stream ended without a complete response: {message}")]
+    IncompleteStream { provider: String, message: String },
+
     #[error("Provider not found: {0}")]
     ProviderNotFound(String),
 }

@@ -12,7 +12,7 @@ import {
 import { resolve } from 'node:path';
 import {
   fail,
-  filmsDir,
+  filmSourceDirectory,
   findFilm,
   loadPortfolio,
   probePoster,
@@ -31,7 +31,7 @@ Required capture-dir contents:
   timeline.json     ordered beat holds expressed as 8 fps hold_frames
 
 Options:
-  --output <dir>       canonical source directory (default: films/source/<slug>)
+  --output <dir>       canonical source directory (default: films/source/[recording_version/]<slug>)
   --captured-at <iso>  capture instant (default: SOURCE_DATE_EPOCH or newest input mtime)
   --url <url>          captured product URL (default: http://127.0.0.1:18080/)
   --browser <name>     capture client identity (default: Codex in-app browser)
@@ -90,7 +90,7 @@ for (let index = 2; index < args.length; index += 1) {
 
 const portfolio = loadPortfolio();
 const film = findFilm(portfolio, slug);
-outputDirectory ||= resolve(filmsDir, 'source', slug);
+outputDirectory ||= filmSourceDirectory(portfolio, slug);
 repoRelative(outputDirectory);
 
 if (!existsSync(inputDirectory) || !lstatSync(inputDirectory).isDirectory()) {

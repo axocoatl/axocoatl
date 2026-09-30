@@ -59,7 +59,12 @@ complete pre-PR gate.
 
 The native portion deliberately runs Cargo with one job. This removes
 host- and core-count-dependent rustdoc jobserver stalls so a local green result
-has the same deterministic meaning as CI.
+has the same deterministic meaning as CI. Its workspace test command also uses
+`-- --test-threads=1`: on Linux, unrelated test subprocesses can inherit another
+test's live `flock` descriptors between fork and exec, briefly retaining a lock
+after its owning test closes the last handle. Serial libtest scheduling isolates
+those process lifetimes. It does not skip tests or disable concurrency explicitly
+created inside a test; production locking remains nonblocking and unchanged.
 
 If you touch the browser app (`axocoatl-server/static/index.html` or
 `axocoatl-server/static/ui/*`):

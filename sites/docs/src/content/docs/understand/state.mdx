@@ -1,6 +1,6 @@
 ---
 title: State and memory
-description: Distinguish the Session ledger, Agent memory tiers, checkpoint cache, attachments, and consolidation behavior.
+description: Distinguish workspace knowledge, native activation state, compatibility memory tiers, checkpoints, and attachments.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -9,7 +9,33 @@ Axocoatl preserves several kinds of context for different purposes. The
 durable workbench transcript, model-facing Agent memory, and crash-recovery
 checkpoint are related but not interchangeable.
 
-## Session turn ledger
+## Native execution state
+
+New data roots use native Session execution. Each accepted turn retains its team,
+exact activation generations, inputs, outputs, usage, commands, and lifecycle.
+Model-facing checkpoints belong to those exact activations. Only accepted current
+generations can become future conversation state; failed or superseded candidates
+remain diagnostic evidence. Recovery retains interrupted work and requires explicit
+continuation instead of replaying a provider or tool call.
+
+Native workspace knowledge adds versioned, source-linked Markdown shared within a
+Workspace. Agents read selected records and stage proposals through a scoped tool;
+accepted publication is separate from speculative execution. The
+[Knowledge inspector](/workbench/knowledge/) exposes notes, revisions, sources,
+links, and proposals. Its source index records syntax and file identity; it does
+not make inferred claims authoritative.
+
+This does not attach the compatibility daily-log, core-memory, or semantic-recall
+stores to native actors. Those tools and shared-block injection remain separate
+from native workspace knowledge, durable conversation, and accepted activation state.
+Use [native controls](/workbench/history/#control-native-work) for Guide, Retry,
+Revise, Continue, and Finish. Rewind belongs to legacy History.
+
+Existing legacy roots remain on compatibility execution until the explicit
+[Session storage upgrade](/operate/upgrade/). The ledger, memory, and checkpoint
+paths below describe that compatibility runtime.
+
+## Legacy Session turn ledger
 
 The canonical Session ledger records a durable begin before normal execution,
 then one completed, failed, stopped, or interrupted terminal state. It stores:
@@ -24,7 +50,7 @@ History, search, export, exact Stop, Last turn attribution, and rewind project
 this ledger. On startup, an orphaned running turn becomes interrupted rather
 than remaining falsely active.
 
-## Agent memory tiers
+## Compatibility Agent memory tiers
 
 | Tier | Purpose | Persistence |
 | --- | --- | --- |
@@ -115,6 +141,21 @@ transcript to the ledger first and only then writes a newer Postcard cache. The
 import is idempotent across restart; a turn without a completed assistant
 response remains visibly interrupted instead of being called complete.
 
+The first transaction-aware startup makes older Lattice and Custom checkpoints
+accounting-only. For a single-Agent Coordinator, it first performs the legacy
+History import above, clears private behavior and Worker state, and rebuilds the
+Coordinator's conversation from canonical Completed turns only. Cumulative
+provider usage is preserved. The durable adoption marker is written last, so a
+crash repeats this ordering instead of losing History or reviving a stale plan.
+
+The transaction currently promotes Tier-1 conversation state. Existing daily,
+core, and semantic memory remains available for read and recall, but Axocoatl
+suppresses all Tier 2–4 mutation during a transaction-scoped turn—even when it
+Completes—so a failed or superseded generation cannot leak into later recall.
+Automatic semantic storage, daily-log archive writes, personal or shared core
+edits, and core consolidation stay disabled until those stores have their own
+transactional deltas.
+
 ## Attachments
 
 Session attachment relations own the name, selection scope, consumption state,
@@ -126,7 +167,7 @@ Once-scoped references are consumed after the accepted turn begins durably;
 Session-scoped references remain selected. Rewind and Retry do not silently
 recreate that old selection.
 
-## Rewind consistency
+## Legacy rewind consistency
 
 For an autonomous single-Agent Session, Rewind appends a logical supersession boundary to the canonical ledger and
 prepares a checkpoint from the retained transcript. The two stores are not one

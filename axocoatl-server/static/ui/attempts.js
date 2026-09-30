@@ -264,6 +264,7 @@ export class AxAttempts extends HTMLElement {
   #draft = { task: '', lanes: [] };
   #plan = null;
   #planUsage = null;
+  #planEvidenceRef = null;
   #instruction = '';
   #probes = new Map();
   #planning = false;
@@ -330,6 +331,7 @@ export class AxAttempts extends HTMLElement {
       if (action === 'probe') void this.#checkModels();
       if (action === 'explore') this.#requestExplore();
       if (action === 'review') this.#reviewOutcomes();
+      if (action === 'graph' && this.#attemptSetId()) this.dispatchEvent(new CustomEvent('open-ways-graph', {bubbles:true, composed:true, detail:{sessionId:this.session, setId:this.#attemptSetId()}}));
       if (action === 'retry') this.#retry(button.dataset.retry);
       if (action === 'cost') void this.#loadCost();
     });
@@ -342,6 +344,7 @@ export class AxAttempts extends HTMLElement {
           this.#planning = false;
           this.#plan = null;
           this.#planUsage = null;
+      this.#planEvidenceRef = null;
           this.#instruction = '';
         }
         this.#clearError('plan');
@@ -411,6 +414,7 @@ export class AxAttempts extends HTMLElement {
     if (!keepInitialDraft) this.#draft = { task: '', lanes: [] };
     this.#plan = null;
     this.#planUsage = null;
+      this.#planEvidenceRef = null;
     this.#instruction = '';
     this.#probes.clear();
     this.#planning = false;
@@ -445,6 +449,7 @@ export class AxAttempts extends HTMLElement {
       this.#planning = false;
       this.#plan = null;
       this.#planUsage = null;
+      this.#planEvidenceRef = null;
       this.#instruction = '';
       this.#clearError('plan');
     }
@@ -667,6 +672,7 @@ export class AxAttempts extends HTMLElement {
       this.#planning = false;
       this.#plan = null;
       this.#planUsage = null;
+      this.#planEvidenceRef = null;
       this.#instruction = '';
       this.#clearError('plan');
     }
@@ -715,6 +721,7 @@ export class AxAttempts extends HTMLElement {
       };
       this.#planUsage = response.control_usage && typeof response.control_usage === 'object'
         ? response.control_usage : null;
+      this.#planEvidenceRef = typeof response.evidence_ref === 'string' ? response.evidence_ref : null;
       this.#instruction = response.instruction;
       this.#clearError('plan');
     } catch (error) {
@@ -749,6 +756,7 @@ export class AxAttempts extends HTMLElement {
       detail: {
         task: this.#draft.task,
         instruction: this.#instruction.trim(),
+        evidence_ref: this.#planEvidenceRef,
         plan,
       },
       bubbles: true,
@@ -787,7 +795,7 @@ export class AxAttempts extends HTMLElement {
     this.#renderDraft();
 
     const requests = [...groups].map(async ([provider, models]) => {
-      const params = new URLSearchParams({ provider, models: [...models.keys()].join(',') });
+      const params = new URLSearchParams({ provider, models: [...models.keys()].join(','), session_id: sessionId });
       try {
         const response = await jsonRequest(`/api/variants/probe?${params}`);
         if (!Array.isArray(response)) {
@@ -837,12 +845,17 @@ export class AxAttempts extends HTMLElement {
             provider: group.provider,
             model,
             control_usage: probe?.control_usage || null,
+            evidence_ref: typeof probe?.evidence_ref === 'string' ? probe.evidence_ref : null,
           });
         }
       }
     }
     this.#probing = false;
     this.#renderDraft();
+  }
+
+  preparationReferences() {
+    return [...new Set([...this.#probes.values()].map(probe => probe.evidence_ref).filter(Boolean))];
   }
 
   /** Refresh the current durable attempt set. */
@@ -1241,7 +1254,7 @@ export class AxAttempts extends HTMLElement {
       <span class="eyebrow">Task</span><p class="task">${html(set.task || 'Task unavailable')}</p>
       <span class="set-state" data-state="${html(state)}">${html(words(state))}</span>
       <div class="ways" aria-label="Current attempt roster">${roster}</div>
-      <div class="review"><button type="button" class="action primary" data-action="review"
+      <div class="review"><button type="button" class="action" data-action="graph">Open Ways graph</button><button type="button" class="action primary" data-action="review"
         ${this.#isTerminal() ? '' : 'disabled'}>Review outcomes</button>
         <span class="hint">${html(reviewReason)}</span></div>`;
     restoreFocus();

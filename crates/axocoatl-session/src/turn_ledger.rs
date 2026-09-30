@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 
 const EVENT_SCHEMA_VERSION: u32 = 1;
 const LEDGER_FILE_NAME: &str = "turns.v1.jsonl";
+const AGENT_OUTPUT_SUPERSEDED_EXECUTION_KIND: &str = "agent_output_superseded";
+const COORDINATION_PLANNED_EXECUTION_KIND: &str = "coordination_planned";
+const COORDINATION_RECOVERY_PARTIAL_EXECUTION_KIND: &str = "coordination_recovery_partial";
+const COORDINATION_AGENT_CANCELLED_EXECUTION_KIND: &str = "coordination_agent_cancelled";
 
 fn now_millis() -> u64 {
     SystemTime::now()
@@ -58,6 +62,30 @@ pub enum SessionTurnError {
     },
     #[error("operation id {operation_id} was already used for a different event")]
     OperationConflict { operation_id: String },
+    #[error("invalid coordinated Agent output identity: {0}")]
+    InvalidAgentOutputIdentity(String),
+    #[error("invalid atomic turn mutation batch: {0}")]
+    InvalidMutationBatch(String),
+    #[error("turn {turn_id} has no current output for Agent '{agent_id}' generation {generation}")]
+    AgentOutputNotFound {
+        turn_id: String,
+        agent_id: String,
+        generation: u32,
+    },
+    #[error("turn {turn_id} already has an output for Agent '{agent_id}' generation {generation}")]
+    AgentOutputGenerationConflict {
+        turn_id: String,
+        agent_id: String,
+        generation: u32,
+    },
+    #[error(
+        "turn {turn_id} output for Agent '{agent_id}' generation {generation} has conflicting supersession identity"
+    )]
+    AgentOutputSupersessionConflict {
+        turn_id: String,
+        agent_id: String,
+        generation: u32,
+    },
     #[error("invalid terminal-turn import: {0}")]
     InvalidImport(String),
     #[error("corrupt session-turn ledger at line {line}: {message}")]
@@ -176,13 +204,94 @@ pub struct SessionTurnExecutionEvent {
 /// One agent's durable output in a single- or multi-agent turn.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionTurnAgentOutput {
+    /// The append-only ledger operation that recorded this exact output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
     pub agent_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     pub output: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt_id: Option<String>,
+    /// One-based activation generation for coordinated execution. Ordinary and
+    /// historical non-coordinated outputs leave this absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_generation: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disposition: Option<SessionTurnAgentOutputDisposition>,
+    /// The completion, failure, cancellation, or feedback signal associated
+    /// with this generation's output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causal_signal_id: Option<String>,
+    /// Superseded outputs remain durable evidence but are omitted from the
+    /// normal transcript projection.
+    #[serde(default)]
+    pub superseded: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by_generation: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by_signal_id: Option<String>,
     pub recorded_at: u64,
+}
+
+/// How one coordinated activation ended. Supersession remains a separate flag:
+/// a generation can have completed truthfully and later become stale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionTurnAgentOutputDisposition {
+    Completed,
+    ChangesRequested,
+    Failed,
+    Cancelled,
+}
+
+/// Identity supplied when recording one coordinated activation output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionTurnAgentOutputIdentity {
+    pub activation_generation: u32,
+    pub disposition: SessionTurnAgentOutputDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub causal_signal_id: Option<String>,
+}
+
+/// Append-only invalidation of an earlier completed Agent generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionTurnAgentOutputSupersession {
+    pub agent_id: String,
+    pub activation_generation: u32,
+    pub superseded_by_generation: u32,
+    pub cause_signal_id: String,
+}
+
+/// One durable mutation inside an atomic turn-ledger batch.
+///
+/// This deliberately supports only the two append-only record types needed to
+/// make a coordinated feedback transition indivisible. Lifecycle transitions
+/// remain separate canonical boundaries.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SessionTurnAtomicMutation {
+    AgentOutput {
+        agent_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        output: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity: Option<SessionTurnAgentOutputIdentity>,
+    },
+    Execution {
+        execution: RecordTurnExecution,
+    },
+}
+
+/// One uniquely identified mutation in an atomic turn-ledger batch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionTurnAtomicOperation {
+    pub operation_id: String,
+    #[serde(flatten)]
+    pub mutation: SessionTurnAtomicMutation,
 }
 
 /// Neutral transcript projection that server and daemon adapters can convert
@@ -283,6 +392,15 @@ enum LedgerPayload {
         model: Option<String>,
         output: String,
         attempt_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        identity: Option<SessionTurnAgentOutputIdentity>,
+    },
+    /// One fsynced record containing an ordered set of individually identified
+    /// turn mutations. Replay applies the whole record or ignores it as a
+    /// trailing partial line.
+    MutationBatch {
+        turn_id: String,
+        operations: Vec<SessionTurnAtomicOperation>,
     },
     /// One atomic import of a legacy transcript. Keeping every already-terminal
     /// turn in one newline-delimited event makes crash recovery all-or-nothing:
@@ -329,6 +447,7 @@ pub struct SessionTurnStore {
     operations: HashMap<String, LedgerPayload>,
     events: Vec<LedgerEvent>,
     valid_len: u64,
+    read_only: bool,
 }
 
 impl SessionTurnStore {
@@ -355,6 +474,55 @@ impl SessionTurnStore {
     ) -> Result<Self, SessionTurnError> {
         let secure_dir = data_root.child(relative)?;
         Self::open_at(secure_dir, OsString::from(LEDGER_FILE_NAME))
+    }
+
+    /// Read the frozen legacy source after schema-2 ownership is installed.
+    /// No missing ledger is created, partial tail repaired, or legacy write allowed.
+    pub fn open_read_only_in_secure(
+        data_root: &SecureDir,
+        relative: impl AsRef<Path>,
+    ) -> Result<Self, SessionTurnError> {
+        let relative = relative.as_ref();
+        let secure_dir = match data_root.existing_child(relative) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // A natively-created upgraded root need not have a legacy
+                // source. Keep a disabled empty view without creating one.
+                let file_name = relative.join(LEDGER_FILE_NAME).into_os_string();
+                return Ok(Self {
+                    path: data_root.path().join(&file_name),
+                    secure_dir: data_root.clone(),
+                    file_name,
+                    turns: HashMap::new(),
+                    order: Vec::new(),
+                    begin_keys: HashMap::new(),
+                    operations: HashMap::new(),
+                    events: Vec::new(),
+                    valid_len: 0,
+                    read_only: true,
+                });
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let bytes = match secure_dir.read(LEDGER_FILE_NAME) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        let mut store = Self::decode_existing_snapshot(secure_dir, bytes)?;
+        store.read_only = true;
+        Ok(store)
+    }
+
+    fn require_writable(&self) -> Result<(), SessionTurnError> {
+        if self.read_only {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "legacy Session history is frozen by upgraded execution ownership",
+            )
+            .into());
+        }
+        Ok(())
     }
 
     /// Open an explicitly named ledger file. Primarily useful to embedders and
@@ -395,9 +563,49 @@ impl SessionTurnStore {
             operations: HashMap::new(),
             events: Vec::new(),
             valid_len: 0,
+            read_only: false,
         };
         store.replay()?;
         Ok(store)
+    }
+
+    /// Decode an existing, fully captured source without creating or repairing it.
+    pub(crate) fn decode_existing_snapshot(
+        secure_dir: SecureDir,
+        bytes: Vec<u8>,
+    ) -> Result<Self, SessionTurnError> {
+        let file_name = OsString::from(LEDGER_FILE_NAME);
+        let mut store = Self {
+            path: secure_dir.path().join(&file_name),
+            secure_dir,
+            file_name,
+            turns: HashMap::new(),
+            order: Vec::new(),
+            begin_keys: HashMap::new(),
+            operations: HashMap::new(),
+            events: Vec::new(),
+            valid_len: 0,
+            read_only: false,
+        };
+        store.replay_bytes(bytes, true)?;
+        Ok(store)
+    }
+
+    pub(crate) fn borrowed_session_turns<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> impl Iterator<Item = &'a SessionTurn> + 'a {
+        self.order
+            .iter()
+            .filter_map(|id| self.turns.get(id))
+            .filter(move |turn| turn.session_id == session_id)
+    }
+
+    pub(crate) fn session_turn_count(&self, session_id: &str) -> usize {
+        self.turns
+            .values()
+            .filter(|turn| turn.session_id == session_id)
+            .count()
     }
 
     pub fn path(&self) -> &Path {
@@ -437,7 +645,7 @@ impl SessionTurnStore {
         if let Some(key) = begin.idempotency_key.as_deref() {
             if let Some(existing_id) = self.begin_keys.get(key) {
                 let existing = self.turns.get(existing_id).expect("indexed turn exists");
-                if equivalent_begin(existing, &turn) {
+                if self.equivalent_original_begin(existing_id, &turn) {
                     return Ok(existing.clone());
                 }
                 return Err(SessionTurnError::IdempotencyConflict {
@@ -448,7 +656,7 @@ impl SessionTurnStore {
         }
 
         if let Some(existing) = self.turns.get(&id) {
-            if equivalent_begin(existing, &turn) {
+            if self.equivalent_original_begin(&id, &turn) {
                 return Ok(existing.clone());
             }
             return Err(SessionTurnError::TurnIdConflict {
@@ -470,6 +678,23 @@ impl SessionTurnStore {
         };
         self.append_and_apply(event)?;
         Ok(self.turns.get(&id).expect("just inserted").clone())
+    }
+
+    /// Retry identity belongs to the immutable request, not the materialized
+    /// row whose metadata accumulates runtime observations. Imported terminal
+    /// turns have no Begin record: their exact retained import is the original
+    /// comparison baseline, preserving the existing imported-turn semantics.
+    fn equivalent_original_begin(&self, turn_id: &str, candidate: &SessionTurn) -> bool {
+        self.events
+            .iter()
+            .find_map(|event| match &event.payload {
+                LedgerPayload::Begin { turn } if turn.id == turn_id => Some(turn.as_ref()),
+                LedgerPayload::ImportTerminalTurns { turns, .. } => {
+                    turns.iter().find(|turn| turn.id == turn_id)
+                }
+                _ => None,
+            })
+            .is_some_and(|original| equivalent_begin(original, candidate))
     }
 
     /// Append one output chunk exactly once for `operation_id`.
@@ -544,6 +769,82 @@ impl SessionTurnStore {
             model,
             output: output.into(),
             attempt_id,
+            identity: None,
+        };
+        self.append_operation(operation_id.into(), payload)?;
+        self.get(turn_id)
+            .ok_or_else(|| SessionTurnError::NotFound(turn_id.to_string()))
+    }
+
+    /// Record one coordinated activation output without overloading attempt
+    /// identity. Existing non-coordinated callers should keep using
+    /// [`Self::record_agent_output`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_agent_output_with_coordination(
+        &mut self,
+        turn_id: &str,
+        operation_id: impl Into<String>,
+        agent_id: impl Into<String>,
+        model: Option<String>,
+        output: impl Into<String>,
+        identity: SessionTurnAgentOutputIdentity,
+    ) -> Result<SessionTurn, SessionTurnError> {
+        let payload = LedgerPayload::AgentOutput {
+            turn_id: turn_id.to_string(),
+            agent_id: agent_id.into(),
+            model,
+            output: output.into(),
+            attempt_id: None,
+            identity: Some(identity),
+        };
+        self.append_operation(operation_id.into(), payload)?;
+        self.get(turn_id)
+            .ok_or_else(|| SessionTurnError::NotFound(turn_id.to_string()))
+    }
+
+    /// Mark one prior coordinated generation stale through an ordinary durable
+    /// execution event. Keeping this as a recognized execution kind means older
+    /// readers can safely retain the event even though they do not project the
+    /// new supersession fields.
+    pub fn supersede_agent_output(
+        &mut self,
+        turn_id: &str,
+        operation_id: impl Into<String>,
+        supersession: SessionTurnAgentOutputSupersession,
+    ) -> Result<SessionTurn, SessionTurnError> {
+        let execution = RecordTurnExecution {
+            kind: AGENT_OUTPUT_SUPERSEDED_EXECUTION_KIND.to_string(),
+            execution_id: None,
+            attempt_id: None,
+            metadata: serde_json::json!({
+                "agent_id": supersession.agent_id,
+                "activation_generation": supersession.activation_generation,
+                "superseded_by_generation": supersession.superseded_by_generation,
+                "cause_signal_id": supersession.cause_signal_id,
+            })
+            .as_object()
+            .cloned()
+            .expect("supersession metadata is an object"),
+        };
+        self.record_execution(turn_id, operation_id, execution)
+    }
+
+    /// Persist an ordered set of output/execution mutations in one fsynced
+    /// ledger record.
+    ///
+    /// The outer `operation_id` makes the whole batch idempotent. Every inner
+    /// operation id remains globally unique and becomes the durable identity
+    /// of its materialized output or execution event. No mutation is applied
+    /// unless the complete batch validates.
+    pub fn record_operations_atomically(
+        &mut self,
+        turn_id: &str,
+        operation_id: impl Into<String>,
+        operations: Vec<SessionTurnAtomicOperation>,
+    ) -> Result<SessionTurn, SessionTurnError> {
+        let payload = LedgerPayload::MutationBatch {
+            turn_id: turn_id.to_string(),
+            operations,
         };
         self.append_operation(operation_id.into(), payload)?;
         self.get(turn_id)
@@ -606,7 +907,9 @@ impl SessionTurnStore {
     }
 
     /// On daemon startup, terminalize turns whose executor did not survive the
-    /// process. One durable transition is emitted per turn.
+    /// process. Coordinated turns first close every still-live graph node and
+    /// mark retained stream text as unattributed recovery evidence. One durable
+    /// transition is then emitted per turn.
     pub fn reconcile_orphaned_running(
         &mut self,
         reason: &str,
@@ -620,6 +923,64 @@ impl SessionTurnStore {
             .collect();
         let mut reconciled = Vec::with_capacity(ids.len());
         for id in ids {
+            let turn = self
+                .get(&id)
+                .ok_or_else(|| SessionTurnError::NotFound(id.clone()))?;
+            if turn
+                .execution_events
+                .iter()
+                .any(|event| event.event.kind == COORDINATION_PLANNED_EXECUTION_KIND)
+            {
+                if !turn.partial_output.is_empty() {
+                    self.record_execution(
+                        &id,
+                        format!("startup-interrupt-recovery-partial:{id}"),
+                        RecordTurnExecution {
+                            kind: COORDINATION_RECOVERY_PARTIAL_EXECUTION_KIND.to_string(),
+                            execution_id: Some(id.clone()),
+                            attempt_id: None,
+                            metadata: serde_json::json!({
+                                "attribution": "unattributed",
+                                "source": "turn.partial_output",
+                                "byte_len": turn.partial_output.len(),
+                            })
+                            .as_object()
+                            .cloned()
+                            .expect("recovery metadata is an object"),
+                        },
+                    )?;
+                }
+                for agent in coordinated_agents_requiring_restart_closure(&turn) {
+                    self.record_execution(
+                        &id,
+                        format!(
+                            "startup-interrupt-agent:{id}:{}:g{}",
+                            agent.agent_id, agent.generation
+                        ),
+                        RecordTurnExecution {
+                            kind: COORDINATION_AGENT_CANCELLED_EXECUTION_KIND.to_string(),
+                            execution_id: Some(id.clone()),
+                            attempt_id: None,
+                            metadata: serde_json::json!({
+                                "agent_id": agent.agent_id,
+                                "generation": agent.generation,
+                                "cause_signal_ids": agent.cause_signal_ids,
+                                "reason": "daemon_restart_interrupted",
+                                "usage": {
+                                    "input_tokens": 0,
+                                    "output_tokens": 0,
+                                    "reasoning_tokens": 0,
+                                    "total_tokens": 0,
+                                    "known": false,
+                                },
+                            })
+                            .as_object()
+                            .cloned()
+                            .expect("restart closure metadata is an object"),
+                        },
+                    )?;
+                }
+            }
             reconciled.push(self.transition(
                 &id,
                 format!("startup-interrupt:{id}"),
@@ -638,11 +999,14 @@ impl SessionTurnStore {
         self.turns.get(turn_id).cloned()
     }
 
+    /// Exact global ledger order, including rows hidden by per-Session rewind.
+    pub(crate) fn ordered_turns(&self) -> impl Iterator<Item = &SessionTurn> {
+        self.order.iter().filter_map(|id| self.turns.get(id))
+    }
+
     /// List a session's turns in creation order.
     pub fn list(&self, session_id: &str) -> Vec<SessionTurn> {
-        self.order
-            .iter()
-            .filter_map(|id| self.turns.get(id))
+        self.ordered_turns()
             .filter(|turn| turn.session_id == session_id && !turn.superseded)
             .cloned()
             .collect()
@@ -652,9 +1016,7 @@ impl SessionTurnStore {
     /// later rewind. This is for integrity repair and audit/pinning, not normal
     /// transcript presentation.
     pub fn list_including_superseded(&self, session_id: &str) -> Vec<SessionTurn> {
-        self.order
-            .iter()
-            .filter_map(|id| self.turns.get(id))
+        self.ordered_turns()
             .filter(|turn| turn.session_id == session_id)
             .cloned()
             .collect()
@@ -691,51 +1053,58 @@ impl SessionTurnStore {
         if query.is_empty() {
             return Vec::new();
         }
-        self.order
-            .iter()
-            .filter_map(|id| self.turns.get(id))
+        self.ordered_turns()
             .filter(|turn| !turn.superseded)
             .filter(|turn| session_id.is_none_or(|session_id| turn.session_id == session_id))
             .filter_map(|turn| {
-                let mut matched_fields = Vec::new();
-                if contains_case_insensitive(&turn.user_input, &query) {
-                    matched_fields.push(TurnSearchField::UserInput);
-                }
-                if turn
-                    .final_output
-                    .as_deref()
-                    .is_some_and(|output| contains_case_insensitive(output, &query))
-                    || contains_case_insensitive(&turn.partial_output, &query)
-                    || turn
-                        .agent_outputs
-                        .iter()
-                        .any(|agent| contains_case_insensitive(&agent.output, &query))
-                {
-                    matched_fields.push(TurnSearchField::Output);
-                }
-                if turn
-                    .error
-                    .as_deref()
-                    .is_some_and(|error| contains_case_insensitive(error, &query))
-                {
-                    matched_fields.push(TurnSearchField::Error);
-                }
-                if turn.context.iter().any(|context| {
-                    contains_case_insensitive(&context.display_name, &query)
-                        || contains_case_insensitive(&context.kind, &query)
-                        || context
-                            .origin
-                            .as_deref()
-                            .is_some_and(|origin| contains_case_insensitive(origin, &query))
-                }) {
-                    matched_fields.push(TurnSearchField::Context);
-                }
+                let matched_fields = Self::matching_fields(turn, &query);
                 (!matched_fields.is_empty()).then(|| SessionTurnSearchHit {
                     turn: turn.clone(),
                     matched_fields,
                 })
             })
             .collect()
+    }
+
+    /// Shared read semantics for exact legacy rows, including sealed frontiers.
+    /// The query has already been trimmed and lowercased by the caller.
+    pub(crate) fn matching_fields(turn: &SessionTurn, query: &str) -> Vec<TurnSearchField> {
+        let mut matched_fields = Vec::new();
+        if contains_case_insensitive(&turn.user_input, query) {
+            matched_fields.push(TurnSearchField::UserInput);
+        }
+        let output_matches = if turn.agent_outputs.is_empty() {
+            turn.final_output
+                .as_deref()
+                .is_some_and(|output| contains_case_insensitive(output, query))
+                || contains_case_insensitive(&turn.partial_output, query)
+        } else {
+            turn.agent_outputs
+                .iter()
+                .filter(|agent| !agent.superseded)
+                .any(|agent| contains_case_insensitive(&agent.output, query))
+        };
+        if output_matches {
+            matched_fields.push(TurnSearchField::Output);
+        }
+        if turn
+            .error
+            .as_deref()
+            .is_some_and(|error| contains_case_insensitive(error, query))
+        {
+            matched_fields.push(TurnSearchField::Error);
+        }
+        if turn.context.iter().any(|context| {
+            contains_case_insensitive(&context.display_name, query)
+                || contains_case_insensitive(&context.kind, query)
+                || context
+                    .origin
+                    .as_deref()
+                    .is_some_and(|origin| contains_case_insensitive(origin, query))
+        }) {
+            matched_fields.push(TurnSearchField::Context);
+        }
+        matched_fields
     }
 
     /// Project visible turns to protocol-neutral user/assistant messages.
@@ -766,6 +1135,7 @@ impl SessionTurnStore {
     /// ledger. This is intentionally separate from rewind and is the deletion
     /// boundary the daemon should pair with session removal.
     pub fn delete_session(&mut self, session_id: &str) -> Result<usize, SessionTurnError> {
+        self.require_writable()?;
         let removed = self
             .turns
             .values()
@@ -801,6 +1171,7 @@ impl SessionTurnStore {
                 Err(SessionTurnError::OperationConflict { operation_id })
             };
         }
+        self.validate_atomic_operation_ids(&operation_id, &payload)?;
         self.validate_payload(&payload)?;
         self.append_and_apply(LedgerEvent {
             schema_version: EVENT_SCHEMA_VERSION,
@@ -808,6 +1179,43 @@ impl SessionTurnStore {
             recorded_at: now_millis(),
             payload,
         })
+    }
+
+    fn validate_atomic_operation_ids(
+        &self,
+        outer_operation_id: &str,
+        payload: &LedgerPayload,
+    ) -> Result<(), SessionTurnError> {
+        let LedgerPayload::MutationBatch { operations, .. } = payload else {
+            return Ok(());
+        };
+        if outer_operation_id.trim().is_empty() {
+            return Err(SessionTurnError::InvalidMutationBatch(
+                "outer operation_id must not be empty".to_string(),
+            ));
+        }
+        if operations.is_empty() {
+            return Err(SessionTurnError::InvalidMutationBatch(
+                "at least one mutation is required".to_string(),
+            ));
+        }
+        let mut ids = HashSet::with_capacity(operations.len() + 1);
+        ids.insert(outer_operation_id);
+        for operation in operations {
+            if operation.operation_id.trim().is_empty() {
+                return Err(SessionTurnError::InvalidMutationBatch(
+                    "inner operation_id must not be empty".to_string(),
+                ));
+            }
+            if !ids.insert(operation.operation_id.as_str())
+                || self.operations.contains_key(&operation.operation_id)
+            {
+                return Err(SessionTurnError::OperationConflict {
+                    operation_id: operation.operation_id.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     fn validate_payload(&self, payload: &LedgerPayload) -> Result<(), SessionTurnError> {
@@ -829,8 +1237,7 @@ impl SessionTurnStore {
                 }
                 Ok(())
             }
-            LedgerPayload::AppendOutput { turn_id, .. }
-            | LedgerPayload::AgentOutput { turn_id, .. } => {
+            LedgerPayload::AppendOutput { turn_id, .. } => {
                 let turn = self
                     .turns
                     .get(turn_id)
@@ -844,11 +1251,74 @@ impl SessionTurnStore {
                 }
                 Ok(())
             }
-            LedgerPayload::Execution { turn_id, .. } => self
-                .turns
-                .contains_key(turn_id)
-                .then_some(())
-                .ok_or_else(|| SessionTurnError::NotFound(turn_id.clone())),
+            LedgerPayload::AgentOutput {
+                turn_id,
+                agent_id,
+                identity,
+                ..
+            } => {
+                let turn = self
+                    .turns
+                    .get(turn_id)
+                    .ok_or_else(|| SessionTurnError::NotFound(turn_id.clone()))?;
+                validate_agent_output_for_turn(turn, turn_id, agent_id, identity.as_ref())
+            }
+            LedgerPayload::MutationBatch {
+                turn_id,
+                operations,
+            } => {
+                let mut projected = self
+                    .turns
+                    .get(turn_id)
+                    .cloned()
+                    .ok_or_else(|| SessionTurnError::NotFound(turn_id.clone()))?;
+                for operation in operations {
+                    let projected_at = projected.updated_at;
+                    match &operation.mutation {
+                        SessionTurnAtomicMutation::AgentOutput {
+                            agent_id,
+                            model,
+                            output,
+                            attempt_id,
+                            identity,
+                        } => {
+                            validate_agent_output_for_turn(
+                                &projected,
+                                turn_id,
+                                agent_id,
+                                identity.as_ref(),
+                            )?;
+                            apply_agent_output_to_turn(
+                                &mut projected,
+                                &operation.operation_id,
+                                projected_at,
+                                agent_id,
+                                model,
+                                output,
+                                attempt_id,
+                                identity.as_ref(),
+                            );
+                        }
+                        SessionTurnAtomicMutation::Execution { execution } => {
+                            validate_execution_for_turn(&projected, turn_id, execution)?;
+                            apply_execution_to_turn(
+                                &mut projected,
+                                &operation.operation_id,
+                                projected_at,
+                                execution,
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            }
+            LedgerPayload::Execution { turn_id, execution } => {
+                let turn = self
+                    .turns
+                    .get(turn_id)
+                    .ok_or_else(|| SessionTurnError::NotFound(turn_id.clone()))?;
+                validate_execution_for_turn(turn, turn_id, execution)
+            }
             LedgerPayload::Transition {
                 turn_id,
                 transition,
@@ -950,6 +1420,7 @@ impl SessionTurnStore {
     }
 
     fn append_and_apply(&mut self, event: LedgerEvent) -> Result<(), SessionTurnError> {
+        self.require_writable()?;
         self.repair_partial_tail()?;
         let mut bytes = serde_json::to_vec(&event)?;
         bytes.push(b'\n');
@@ -962,6 +1433,10 @@ impl SessionTurnStore {
 
     fn replay(&mut self) -> Result<(), SessionTurnError> {
         let bytes = self.secure_dir.read(&self.file_name)?;
+        self.replay_bytes(bytes, false)
+    }
+
+    fn replay_bytes(&mut self, bytes: Vec<u8>, exact_schema: bool) -> Result<(), SessionTurnError> {
         let file_len = bytes.len() as u64;
         let mut reader = BufReader::new(Cursor::new(bytes));
         let mut line = Vec::new();
@@ -992,7 +1467,9 @@ impl SessionTurnStore {
                     line: line_number,
                     message: error.to_string(),
                 })?;
-            if event.schema_version > EVENT_SCHEMA_VERSION {
+            if event.schema_version > EVENT_SCHEMA_VERSION
+                || (exact_schema && event.schema_version != EVENT_SCHEMA_VERSION)
+            {
                 return Err(SessionTurnError::UnsupportedVersion(event.schema_version));
             }
             if let Some(existing) = self.operations.get(&event.operation_id) {
@@ -1007,6 +1484,11 @@ impl SessionTurnStore {
                 }
                 continue;
             }
+            self.validate_atomic_operation_ids(&event.operation_id, &event.payload)
+                .map_err(|error| SessionTurnError::Corrupt {
+                    line: line_number,
+                    message: error.to_string(),
+                })?;
             self.validate_replayed_payload(&event.payload, line_number)?;
             self.events.push(event.clone());
             self.apply(event);
@@ -1049,7 +1531,8 @@ impl SessionTurnStore {
                 let turn = self.turns.get_mut(turn_id).expect("validated turn exists");
                 turn.status = transition.status;
                 turn.final_output = transition.final_output.clone().or_else(|| {
-                    (!turn.partial_output.is_empty()).then(|| turn.partial_output.clone())
+                    (turn.agent_outputs.is_empty() && !turn.partial_output.is_empty())
+                        .then(|| turn.partial_output.clone())
                 });
                 turn.error = transition.error.clone();
                 turn.metadata.extend(transition.metadata.clone());
@@ -1058,12 +1541,7 @@ impl SessionTurnStore {
             }
             LedgerPayload::Execution { turn_id, execution } => {
                 let turn = self.turns.get_mut(turn_id).expect("validated turn exists");
-                turn.execution_events.push(SessionTurnExecutionEvent {
-                    operation_id: operation_id.clone(),
-                    recorded_at,
-                    event: execution.clone(),
-                });
-                turn.updated_at = turn.updated_at.max(recorded_at);
+                apply_execution_to_turn(turn, &operation_id, recorded_at, execution);
             }
             LedgerPayload::AgentOutput {
                 turn_id,
@@ -1071,16 +1549,53 @@ impl SessionTurnStore {
                 model,
                 output,
                 attempt_id,
+                identity,
             } => {
                 let turn = self.turns.get_mut(turn_id).expect("validated turn exists");
-                turn.agent_outputs.push(SessionTurnAgentOutput {
-                    agent_id: agent_id.clone(),
-                    model: model.clone(),
-                    output: output.clone(),
-                    attempt_id: attempt_id.clone(),
+                apply_agent_output_to_turn(
+                    turn,
+                    &operation_id,
                     recorded_at,
-                });
-                turn.updated_at = turn.updated_at.max(recorded_at);
+                    agent_id,
+                    model,
+                    output,
+                    attempt_id,
+                    identity.as_ref(),
+                );
+            }
+            LedgerPayload::MutationBatch {
+                turn_id,
+                operations,
+            } => {
+                let turn = self.turns.get_mut(turn_id).expect("validated turn exists");
+                for operation in operations {
+                    match &operation.mutation {
+                        SessionTurnAtomicMutation::AgentOutput {
+                            agent_id,
+                            model,
+                            output,
+                            attempt_id,
+                            identity,
+                        } => apply_agent_output_to_turn(
+                            turn,
+                            &operation.operation_id,
+                            recorded_at,
+                            agent_id,
+                            model,
+                            output,
+                            attempt_id,
+                            identity.as_ref(),
+                        ),
+                        SessionTurnAtomicMutation::Execution { execution } => {
+                            apply_execution_to_turn(
+                                turn,
+                                &operation.operation_id,
+                                recorded_at,
+                                execution,
+                            );
+                        }
+                    }
+                }
             }
             LedgerPayload::ImportTerminalTurns { turns, .. } => {
                 for turn in turns {
@@ -1110,6 +1625,18 @@ impl SessionTurnStore {
                 }
             }
         }
+        if let LedgerPayload::MutationBatch {
+            turn_id,
+            operations,
+        } = &event.payload
+        {
+            for operation in operations {
+                self.operations.insert(
+                    operation.operation_id.clone(),
+                    atomic_mutation_payload(turn_id, &operation.mutation),
+                );
+            }
+        }
         self.operations.insert(operation_id, event.payload);
     }
 
@@ -1133,7 +1660,8 @@ impl SessionTurnStore {
                     LedgerPayload::AppendOutput { turn_id, .. }
                     | LedgerPayload::Transition { turn_id, .. }
                     | LedgerPayload::Execution { turn_id, .. }
-                    | LedgerPayload::AgentOutput { turn_id, .. } => self
+                    | LedgerPayload::AgentOutput { turn_id, .. }
+                    | LedgerPayload::MutationBatch { turn_id, .. } => self
                         .turns
                         .get(turn_id)
                         .is_some_and(|turn| turn.session_id == session_id),
@@ -1152,6 +1680,123 @@ impl SessionTurnStore {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CoordinationRecoveryState {
+    Waiting,
+    Running,
+    Settled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CoordinationRecoveryAgent {
+    agent_id: String,
+    generation: u32,
+    cause_signal_ids: Vec<String>,
+    state: CoordinationRecoveryState,
+}
+
+fn coordinated_agents_requiring_restart_closure(
+    turn: &SessionTurn,
+) -> Vec<CoordinationRecoveryAgent> {
+    let Some((planned_index, planned)) = turn
+        .execution_events
+        .iter()
+        .enumerate()
+        .find(|(_, event)| event.event.kind == COORDINATION_PLANNED_EXECUTION_KIND)
+    else {
+        return Vec::new();
+    };
+    let Some(declared) = planned
+        .event
+        .metadata
+        .get("agents")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut agents = Vec::<CoordinationRecoveryAgent>::new();
+    let mut indices = HashMap::<String, usize>::new();
+    for value in declared {
+        let id = value.as_str().or_else(|| {
+            value.as_object().and_then(|object| {
+                object
+                    .get("id")
+                    .or_else(|| object.get("agent_id"))
+                    .and_then(serde_json::Value::as_str)
+            })
+        });
+        let Some(agent_id) = id.map(str::trim).filter(|id| !id.is_empty()) else {
+            continue;
+        };
+        if indices.contains_key(agent_id) {
+            continue;
+        }
+        indices.insert(agent_id.to_string(), agents.len());
+        agents.push(CoordinationRecoveryAgent {
+            agent_id: agent_id.to_string(),
+            generation: 0,
+            cause_signal_ids: Vec::new(),
+            state: CoordinationRecoveryState::Waiting,
+        });
+    }
+
+    for recorded in turn.execution_events.iter().skip(planned_index + 1) {
+        let Some(agent_id) = recorded
+            .event
+            .metadata
+            .get("agent_id")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let Some(index) = indices.get(agent_id).copied() else {
+            continue;
+        };
+        let agent = &mut agents[index];
+        let event_generation = recorded
+            .event
+            .metadata
+            .get("generation")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|generation| u32::try_from(generation).ok());
+        if let Some(cause_signal_ids) = recorded
+            .event
+            .metadata
+            .get("cause_signal_ids")
+            .and_then(serde_json::Value::as_array)
+        {
+            agent.cause_signal_ids = cause_signal_ids
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect();
+        }
+        agent.state = match recorded.event.kind.as_str() {
+            "coordination_agent_activated" => {
+                if let Some(generation) = event_generation {
+                    agent.generation = generation;
+                }
+                CoordinationRecoveryState::Running
+            }
+            // Reactivation announces the next required generation. It does not
+            // mean that generation started, so restart cancellation retains the
+            // last activation generation until an activated event proves more.
+            "coordination_agent_reactivated" => CoordinationRecoveryState::Waiting,
+            "coordination_agent_completed"
+            | "coordination_agent_failed"
+            | "coordination_agent_blocked"
+            | COORDINATION_AGENT_CANCELLED_EXECUTION_KIND => CoordinationRecoveryState::Settled,
+            _ => continue,
+        };
+    }
+
+    agents
+        .into_iter()
+        .filter(|agent| agent.state != CoordinationRecoveryState::Settled)
+        .collect()
+}
+
 fn serialize_events(events: &[LedgerEvent]) -> Result<Vec<u8>, SessionTurnError> {
     let mut bytes = Vec::new();
     for event in events {
@@ -1159,6 +1804,257 @@ fn serialize_events(events: &[LedgerEvent]) -> Result<Vec<u8>, SessionTurnError>
         bytes.push(b'\n');
     }
     Ok(bytes)
+}
+
+fn validate_agent_output_identity(
+    identity: &SessionTurnAgentOutputIdentity,
+) -> Result<(), SessionTurnError> {
+    if identity.activation_generation == 0 {
+        return Err(SessionTurnError::InvalidAgentOutputIdentity(
+            "activation_generation must be at least one".to_string(),
+        ));
+    }
+    if identity
+        .causal_signal_id
+        .as_deref()
+        .is_some_and(|signal| signal.trim().is_empty())
+    {
+        return Err(SessionTurnError::InvalidAgentOutputIdentity(
+            "causal_signal_id must not be empty when present".to_string(),
+        ));
+    }
+    if identity.disposition == SessionTurnAgentOutputDisposition::ChangesRequested {
+        if identity.activation_generation == u32::MAX {
+            return Err(SessionTurnError::InvalidAgentOutputIdentity(
+                "a changes_requested output must have room for its next generation".to_string(),
+            ));
+        }
+        if identity.causal_signal_id.is_none() {
+            return Err(SessionTurnError::InvalidAgentOutputIdentity(
+                "a changes_requested output requires causal_signal_id".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn output_supersession(
+    execution: &RecordTurnExecution,
+) -> Result<Option<SessionTurnAgentOutputSupersession>, SessionTurnError> {
+    if execution.kind != AGENT_OUTPUT_SUPERSEDED_EXECUTION_KIND {
+        return Ok(None);
+    }
+    let text = |key: &str| {
+        execution
+            .metadata
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                SessionTurnError::InvalidAgentOutputIdentity(format!(
+                    "{AGENT_OUTPUT_SUPERSEDED_EXECUTION_KIND}.{key} must be a non-empty string"
+                ))
+            })
+    };
+    let generation = |key: &str| {
+        execution
+            .metadata
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                SessionTurnError::InvalidAgentOutputIdentity(format!(
+                    "{AGENT_OUTPUT_SUPERSEDED_EXECUTION_KIND}.{key} must be a positive u32"
+                ))
+            })
+    };
+    let activation_generation = generation("activation_generation")?;
+    let superseded_by_generation = generation("superseded_by_generation")?;
+    if superseded_by_generation <= activation_generation {
+        return Err(SessionTurnError::InvalidAgentOutputIdentity(
+            "superseded_by_generation must be greater than activation_generation".to_string(),
+        ));
+    }
+    Ok(Some(SessionTurnAgentOutputSupersession {
+        agent_id: text("agent_id")?,
+        activation_generation,
+        superseded_by_generation,
+        cause_signal_id: text("cause_signal_id")?,
+    }))
+}
+
+fn atomic_mutation_payload(turn_id: &str, mutation: &SessionTurnAtomicMutation) -> LedgerPayload {
+    match mutation {
+        SessionTurnAtomicMutation::AgentOutput {
+            agent_id,
+            model,
+            output,
+            attempt_id,
+            identity,
+        } => LedgerPayload::AgentOutput {
+            turn_id: turn_id.to_string(),
+            agent_id: agent_id.clone(),
+            model: model.clone(),
+            output: output.clone(),
+            attempt_id: attempt_id.clone(),
+            identity: identity.clone(),
+        },
+        SessionTurnAtomicMutation::Execution { execution } => LedgerPayload::Execution {
+            turn_id: turn_id.to_string(),
+            execution: execution.clone(),
+        },
+    }
+}
+
+fn validate_agent_output_for_turn(
+    turn: &SessionTurn,
+    turn_id: &str,
+    agent_id: &str,
+    identity: Option<&SessionTurnAgentOutputIdentity>,
+) -> Result<(), SessionTurnError> {
+    if turn.status.is_terminal() {
+        return Err(SessionTurnError::InvalidTransition {
+            turn_id: turn_id.to_string(),
+            from: turn.status,
+            to: turn.status,
+        });
+    }
+    if let Some(identity) = identity {
+        validate_agent_output_identity(identity)?;
+        if turn.agent_outputs.iter().any(|output| {
+            output.agent_id == agent_id
+                && output.activation_generation == Some(identity.activation_generation)
+        }) {
+            return Err(SessionTurnError::AgentOutputGenerationConflict {
+                turn_id: turn_id.to_string(),
+                agent_id: agent_id.to_string(),
+                generation: identity.activation_generation,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_execution_for_turn(
+    turn: &SessionTurn,
+    turn_id: &str,
+    execution: &RecordTurnExecution,
+) -> Result<(), SessionTurnError> {
+    let Some(supersession) = output_supersession(execution)? else {
+        return Ok(());
+    };
+    if turn.status.is_terminal() {
+        return Err(SessionTurnError::InvalidTransition {
+            turn_id: turn_id.to_string(),
+            from: turn.status,
+            to: turn.status,
+        });
+    }
+    let Some(output) = turn.agent_outputs.iter().find(|output| {
+        output.agent_id == supersession.agent_id
+            && output.activation_generation == Some(supersession.activation_generation)
+    }) else {
+        return Err(SessionTurnError::AgentOutputNotFound {
+            turn_id: turn_id.to_string(),
+            agent_id: supersession.agent_id,
+            generation: supersession.activation_generation,
+        });
+    };
+    if output.superseded
+        && (output.superseded_by_generation != Some(supersession.superseded_by_generation)
+            || output
+                .superseded_by_signal_id
+                .as_deref()
+                .is_some_and(|signal_id| signal_id != supersession.cause_signal_id))
+    {
+        return Err(SessionTurnError::AgentOutputSupersessionConflict {
+            turn_id: turn_id.to_string(),
+            agent_id: supersession.agent_id,
+            generation: supersession.activation_generation,
+        });
+    }
+    Ok(())
+}
+
+fn apply_execution_to_turn(
+    turn: &mut SessionTurn,
+    operation_id: &str,
+    recorded_at: u64,
+    execution: &RecordTurnExecution,
+) {
+    turn.execution_events.push(SessionTurnExecutionEvent {
+        operation_id: operation_id.to_string(),
+        recorded_at,
+        event: execution.clone(),
+    });
+    if let Some(supersession) =
+        output_supersession(execution).expect("validated output supersession")
+    {
+        for output in turn.agent_outputs.iter_mut().filter(|output| {
+            output.agent_id == supersession.agent_id
+                && output.activation_generation == Some(supersession.activation_generation)
+        }) {
+            output.superseded = true;
+            output.superseded_by_generation = Some(supersession.superseded_by_generation);
+            output.superseded_by_signal_id = Some(supersession.cause_signal_id.clone());
+        }
+    }
+    turn.updated_at = turn.updated_at.max(recorded_at);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_agent_output_to_turn(
+    turn: &mut SessionTurn,
+    operation_id: &str,
+    recorded_at: u64,
+    agent_id: &str,
+    model: &Option<String>,
+    output: &str,
+    attempt_id: &Option<String>,
+    identity: Option<&SessionTurnAgentOutputIdentity>,
+) {
+    if let Some(identity) = identity {
+        for prior in turn.agent_outputs.iter_mut().filter(|prior| {
+            prior.agent_id == agent_id
+                && prior
+                    .activation_generation
+                    .is_some_and(|generation| generation < identity.activation_generation)
+                && !prior.superseded
+        }) {
+            prior.superseded = true;
+            prior.superseded_by_generation = Some(identity.activation_generation);
+        }
+    }
+    let requested_changes = identity.is_some_and(|identity| {
+        identity.disposition == SessionTurnAgentOutputDisposition::ChangesRequested
+    });
+    turn.agent_outputs.push(SessionTurnAgentOutput {
+        operation_id: Some(operation_id.to_string()),
+        agent_id: agent_id.to_string(),
+        model: model.clone(),
+        output: output.to_string(),
+        attempt_id: attempt_id.clone(),
+        activation_generation: identity.map(|identity| identity.activation_generation),
+        disposition: identity.map(|identity| identity.disposition),
+        causal_signal_id: identity.and_then(|identity| identity.causal_signal_id.clone()),
+        superseded: requested_changes,
+        superseded_by_generation: requested_changes.then(|| {
+            identity
+                .expect("requested changes has identity")
+                .activation_generation
+                + 1
+        }),
+        superseded_by_signal_id: requested_changes.then(|| {
+            identity
+                .and_then(|identity| identity.causal_signal_id.clone())
+                .expect("validated requested changes has a signal id")
+        }),
+        recorded_at,
+    });
+    turn.updated_at = turn.updated_at.max(recorded_at);
 }
 
 fn equivalent_begin(existing: &SessionTurn, candidate: &SessionTurn) -> bool {
@@ -1176,7 +2072,7 @@ fn contains_case_insensitive(value: &str, lower_query: &str) -> bool {
     value.to_lowercase().contains(lower_query)
 }
 
-fn transcript_messages_for_turn(turn: &SessionTurn) -> Vec<SessionTranscriptMessage> {
+pub(crate) fn transcript_messages_for_turn(turn: &SessionTurn) -> Vec<SessionTranscriptMessage> {
     let mut messages = vec![SessionTranscriptMessage {
         turn_id: turn.id.clone(),
         role: SessionTranscriptRole::User,
@@ -1204,6 +2100,7 @@ fn transcript_messages_for_turn(turn: &SessionTurn) -> Vec<SessionTranscriptMess
         messages.extend(
             turn.agent_outputs
                 .iter()
+                .filter(|agent| !agent.superseded)
                 .map(|agent| SessionTranscriptMessage {
                     turn_id: turn.id.clone(),
                     role: SessionTranscriptRole::Assistant,
@@ -1213,25 +2110,6 @@ fn transcript_messages_for_turn(turn: &SessionTurn) -> Vec<SessionTranscriptMess
                     incomplete: turn.status != SessionTurnLifecycle::Completed,
                 }),
         );
-        let completed_len: usize = turn
-            .agent_outputs
-            .iter()
-            .map(|agent| agent.output.len())
-            .sum();
-        if let Some(tail) = turn
-            .partial_output
-            .get(completed_len..)
-            .filter(|tail| !tail.is_empty())
-        {
-            messages.push(SessionTranscriptMessage {
-                turn_id: turn.id.clone(),
-                role: SessionTranscriptRole::Assistant,
-                content: tail.to_string(),
-                created_at: turn.updated_at,
-                agent_id: None,
-                incomplete: true,
-            });
-        }
     }
     messages
 }
@@ -1242,6 +2120,31 @@ mod tests {
     use std::fs::OpenOptions;
     use std::io::{Seek, Write};
     use tempfile::tempdir;
+
+    #[test]
+    fn upgraded_legacy_view_is_read_only_and_does_not_create_missing_sources() {
+        let root = tempdir().unwrap();
+        let data = SecureDir::open(root.path()).unwrap();
+        let mut empty =
+            SessionTurnStore::open_read_only_in_secure(&data, "session-history").unwrap();
+        assert!(empty.begin(begin("session", "new", "new-key")).is_err());
+        assert!(!root.path().join("session-history").exists());
+        let mut writer = SessionTurnStore::open_in_secure(&data, "session-history").unwrap();
+        writer
+            .begin(begin("session", "original", "original-key"))
+            .unwrap();
+        let original = std::fs::read(writer.path()).unwrap();
+        drop(writer);
+        let mut frozen =
+            SessionTurnStore::open_read_only_in_secure(&data, "session-history").unwrap();
+        assert_eq!(frozen.list("session").len(), 1);
+        assert!(frozen
+            .begin(begin("session", "other", "other-key"))
+            .is_err());
+        assert!(frozen.reconcile_orphaned_running("restart").is_err());
+        assert!(frozen.delete_session("session").is_err());
+        assert_eq!(std::fs::read(frozen.path()).unwrap(), original);
+    }
 
     fn begin(session_id: &str, turn_id: &str, key: &str) -> BeginSessionTurn {
         BeginSessionTurn {
@@ -1272,6 +2175,164 @@ mod tests {
             error: None,
             metadata: serde_json::Map::new(),
         }
+    }
+
+    fn coordinated_identity(
+        activation_generation: u32,
+        disposition: SessionTurnAgentOutputDisposition,
+        causal_signal_id: Option<&str>,
+    ) -> SessionTurnAgentOutputIdentity {
+        SessionTurnAgentOutputIdentity {
+            activation_generation,
+            disposition,
+            causal_signal_id: causal_signal_id.map(str::to_string),
+        }
+    }
+
+    fn coordination_event(kind: &str, metadata: serde_json::Value) -> RecordTurnExecution {
+        RecordTurnExecution {
+            kind: kind.to_string(),
+            execution_id: Some("turn-a".to_string()),
+            attempt_id: None,
+            metadata: metadata.as_object().cloned().unwrap(),
+        }
+    }
+
+    fn record_feedback_test_baseline(store: &mut SessionTurnStore) {
+        store.begin(begin("ses-a", "turn-a", "request-a")).unwrap();
+        store
+            .record_execution(
+                "turn-a",
+                "plan",
+                coordination_event(
+                    COORDINATION_PLANNED_EXECUTION_KIND,
+                    serde_json::json!({
+                        "agents": [
+                            {"id": "source", "depends_on": []},
+                            {"id": "sibling", "depends_on": ["source"]},
+                            {"id": "reviewer", "depends_on": ["source"]},
+                        ]
+                    }),
+                ),
+            )
+            .unwrap();
+        for agent in ["source", "sibling", "reviewer"] {
+            store
+                .record_execution(
+                    "turn-a",
+                    format!("{agent}-active-1"),
+                    coordination_event(
+                        "coordination_agent_activated",
+                        serde_json::json!({
+                            "agent_id": agent,
+                            "generation": 1,
+                        }),
+                    ),
+                )
+                .unwrap();
+            if agent != "reviewer" {
+                store
+                    .record_agent_output_with_coordination(
+                        "turn-a",
+                        format!("{agent}-output-1"),
+                        agent,
+                        None,
+                        format!("{agent} generation one"),
+                        coordinated_identity(
+                            1,
+                            SessionTurnAgentOutputDisposition::Completed,
+                            Some(&format!("{agent}-complete-1")),
+                        ),
+                    )
+                    .unwrap();
+                store
+                    .record_execution(
+                        "turn-a",
+                        format!("{agent}-complete-1"),
+                        coordination_event(
+                            "coordination_agent_completed",
+                            serde_json::json!({
+                                "agent_id": agent,
+                                "generation": 1,
+                            }),
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    fn feedback_batch_operations() -> Vec<SessionTurnAtomicOperation> {
+        let mut operations = vec![
+            SessionTurnAtomicOperation {
+                operation_id: "reviewer-output-1".to_string(),
+                mutation: SessionTurnAtomicMutation::AgentOutput {
+                    agent_id: "reviewer".to_string(),
+                    model: None,
+                    output: "revision requested".to_string(),
+                    attempt_id: None,
+                    identity: Some(coordinated_identity(
+                        1,
+                        SessionTurnAgentOutputDisposition::ChangesRequested,
+                        Some("feedback-1"),
+                    )),
+                },
+            },
+            SessionTurnAtomicOperation {
+                operation_id: "feedback-signal-1".to_string(),
+                mutation: SessionTurnAtomicMutation::Execution {
+                    execution: coordination_event(
+                        "coordination_signal",
+                        serde_json::json!({
+                            "from_agent": "reviewer",
+                            "to_agent": "source",
+                            "generation": 1,
+                            "signal_id": "feedback-1",
+                            "summary": "revise the source",
+                            "applied": true,
+                        }),
+                    ),
+                },
+            },
+        ];
+        for agent in ["source", "sibling", "reviewer"] {
+            operations.push(SessionTurnAtomicOperation {
+                operation_id: format!("{agent}-superseded-1"),
+                mutation: SessionTurnAtomicMutation::Execution {
+                    execution: RecordTurnExecution {
+                        kind: AGENT_OUTPUT_SUPERSEDED_EXECUTION_KIND.to_string(),
+                        execution_id: None,
+                        attempt_id: None,
+                        metadata: serde_json::json!({
+                            "agent_id": agent,
+                            "activation_generation": 1,
+                            "superseded_by_generation": 2,
+                            "cause_signal_id": "feedback-1",
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                    },
+                },
+            });
+        }
+        for agent in ["source", "sibling", "reviewer"] {
+            operations.push(SessionTurnAtomicOperation {
+                operation_id: format!("{agent}-reactivated-2"),
+                mutation: SessionTurnAtomicMutation::Execution {
+                    execution: coordination_event(
+                        "coordination_agent_reactivated",
+                        serde_json::json!({
+                            "agent_id": agent,
+                            "generation": 2,
+                            "cause_signal_ids": ["feedback-1"],
+                            "signal_id": "feedback-1",
+                        }),
+                    ),
+                },
+            });
+        }
+        operations
     }
 
     fn imported_turn(id: &str, input: &str, output: Option<&str>) -> SessionTurn {
@@ -1334,6 +2395,121 @@ mod tests {
         assert_eq!(turn.context[0].display_name, "Q2-report.pdf");
         assert_eq!(turn.execution_events.len(), 1);
         assert_eq!(store.list("ses-a"), vec![turn]);
+    }
+
+    #[test]
+    fn completed_begin_retry_uses_original_metadata_before_and_after_restart() {
+        for keyed in [false, true] {
+            let dir = tempdir().unwrap();
+            let mut request = begin("ses-a", "turn-a", "request-a");
+            if !keyed {
+                request.idempotency_key = None;
+            }
+            request.metadata = serde_json::json!({
+                "mode": "single_agent",
+                "input_tokens": 7,
+                "custom": {"retained": "original user metadata"},
+            })
+            .as_object()
+            .unwrap()
+            .clone();
+            let mut store = SessionTurnStore::open(dir.path()).unwrap();
+            store.begin(request.clone()).unwrap();
+            store
+                .append_output("turn-a", "partial", "retained partial")
+                .unwrap();
+            let mut terminal = complete();
+            terminal.metadata = serde_json::json!({
+                "input_tokens": 99,
+                "output_tokens": 23,
+                "token_usage_known": true,
+                "runtime_detail": {"elapsed_ms": 50},
+            })
+            .as_object()
+            .unwrap()
+            .clone();
+            let completed = store.transition("turn-a", "finish", terminal).unwrap();
+            assert_ne!(completed.metadata, request.metadata);
+            let bytes = std::fs::read(store.path()).unwrap();
+            assert_eq!(store.begin(request.clone()).unwrap(), completed);
+            assert_eq!(std::fs::read(store.path()).unwrap(), bytes);
+            drop(store);
+            let mut reopened = SessionTurnStore::open(dir.path()).unwrap();
+            assert_eq!(reopened.begin(request.clone()).unwrap(), completed);
+            assert_eq!(std::fs::read(reopened.path()).unwrap(), bytes);
+
+            // A caller cannot change an original field to its later runtime
+            // value, nor adopt the materialized metadata as a new request.
+            let mut changed = request.clone();
+            changed
+                .metadata
+                .insert("input_tokens".into(), serde_json::json!(99));
+            assert!(reopened.begin(changed).is_err());
+            let mut changed = request;
+            changed.metadata = completed.metadata;
+            assert!(reopened.begin(changed).is_err());
+            assert_eq!(std::fs::read(reopened.path()).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn completed_retry_does_not_rebind_a_reused_key_to_another_turn() {
+        let dir = tempdir().unwrap();
+        let request = begin("ses-a", "turn-a", "request-a");
+        let mut store = SessionTurnStore::open(dir.path()).unwrap();
+        store.begin(request.clone()).unwrap();
+        let mut terminal = complete();
+        terminal
+            .metadata
+            .insert("output_tokens".into(), serde_json::json!(23));
+        store.transition("turn-a", "finish", terminal).unwrap();
+        drop(store);
+        let mut store = SessionTurnStore::open(dir.path()).unwrap();
+        let before = std::fs::read(store.path()).unwrap();
+        let mut changed = request;
+        changed.turn_id = Some("turn-b".into());
+        assert!(
+            matches!(store.begin(changed), Err(SessionTurnError::IdempotencyConflict {
+            key, existing_turn_id,
+        }) if key == "request-a" && existing_turn_id == "turn-a")
+        );
+        assert!(store.get("turn-b").is_none());
+        assert_eq!(std::fs::read(store.path()).unwrap(), before);
+    }
+
+    #[test]
+    fn imported_terminal_retry_uses_the_exact_original_import() {
+        let dir = tempdir().unwrap();
+        let mut imported = imported_turn("legacy-a", "old request", Some("old answer"));
+        imported.metadata = serde_json::json!({"source":"legacy", "input_tokens":3})
+            .as_object()
+            .unwrap()
+            .clone();
+        let request = BeginSessionTurn {
+            turn_id: Some(imported.id.clone()),
+            session_id: imported.session_id.clone(),
+            user_input: imported.user_input.clone(),
+            agent_id: imported.agent_id.clone(),
+            model: imported.model.clone(),
+            context: imported.context.clone(),
+            idempotency_key: imported.idempotency_key.clone(),
+            metadata: imported.metadata.clone(),
+        };
+        let mut store = SessionTurnStore::open(dir.path()).unwrap();
+        store
+            .import_terminal_turns("ses-legacy", "import", vec![imported])
+            .unwrap();
+        store.rewind("ses-legacy", None, "rewind-import").unwrap();
+        let expected = store.get("legacy-a").unwrap();
+        assert!(expected.superseded);
+        drop(store);
+        let mut store = SessionTurnStore::open(dir.path()).unwrap();
+        let before = std::fs::read(store.path()).unwrap();
+        assert_eq!(store.begin(request.clone()).unwrap(), expected);
+        let mut changed = request;
+        changed.metadata.remove("input_tokens");
+        assert!(store.begin(changed).is_err());
+        assert_eq!(std::fs::read(store.path()).unwrap(), before);
     }
 
     #[test]
@@ -1633,6 +2809,351 @@ mod tests {
     }
 
     #[test]
+    fn restart_reconciliation_closes_coordinated_nodes_and_keeps_partial_unattributed() {
+        let dir = tempdir().unwrap();
+        {
+            let mut store = SessionTurnStore::open(dir.path()).unwrap();
+            store.begin(begin("ses-a", "turn-a", "request-a")).unwrap();
+            store
+                .record_execution(
+                    "turn-a",
+                    "plan",
+                    RecordTurnExecution {
+                        kind: COORDINATION_PLANNED_EXECUTION_KIND.to_string(),
+                        execution_id: Some("turn-a".to_string()),
+                        attempt_id: None,
+                        metadata: serde_json::json!({
+                            "agents": [
+                                {"id": "planner", "depends_on": []},
+                                {"id": "builder", "depends_on": ["planner"]},
+                                {"agent_id": "reviewer", "depends_on": ["builder"]},
+                            ]
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                    },
+                )
+                .unwrap();
+            store
+                .record_execution(
+                    "turn-a",
+                    "planner-active",
+                    RecordTurnExecution {
+                        kind: "coordination_agent_activated".to_string(),
+                        execution_id: Some("turn-a".to_string()),
+                        attempt_id: None,
+                        metadata: serde_json::json!({
+                            "agent_id": "planner",
+                            "generation": 1,
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                    },
+                )
+                .unwrap();
+            store
+                .record_execution(
+                    "turn-a",
+                    "planner-complete",
+                    RecordTurnExecution {
+                        kind: "coordination_agent_completed".to_string(),
+                        execution_id: Some("turn-a".to_string()),
+                        attempt_id: None,
+                        metadata: serde_json::json!({
+                            "agent_id": "planner",
+                            "generation": 1,
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                    },
+                )
+                .unwrap();
+            store
+                .record_execution(
+                    "turn-a",
+                    "builder-active",
+                    RecordTurnExecution {
+                        kind: "coordination_agent_activated".to_string(),
+                        execution_id: Some("turn-a".to_string()),
+                        attempt_id: None,
+                        metadata: serde_json::json!({
+                            "agent_id": "builder",
+                            "generation": 1,
+                            "cause_signal_ids": ["planner-g1-complete"],
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                    },
+                )
+                .unwrap();
+            store
+                .record_execution(
+                    "turn-a",
+                    "planner-reactivated",
+                    RecordTurnExecution {
+                        kind: "coordination_agent_reactivated".to_string(),
+                        execution_id: Some("turn-a".to_string()),
+                        attempt_id: None,
+                        metadata: serde_json::json!({
+                            "agent_id": "planner",
+                            "generation": 2,
+                            "cause_signal_ids": ["reviewer-changes"],
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap(),
+                    },
+                )
+                .unwrap();
+            store
+                .append_output(
+                    "turn-a",
+                    "builder-stream",
+                    "Retained text whose Agent boundary cannot be reconstructed.",
+                )
+                .unwrap();
+        }
+
+        let mut store = SessionTurnStore::open(dir.path()).unwrap();
+        let turns = store
+            .reconcile_orphaned_running("daemon restarted before execution completed")
+            .unwrap();
+        assert_eq!(turns.len(), 1);
+        let turn = &turns[0];
+        assert_eq!(turn.status, SessionTurnLifecycle::Interrupted);
+        assert_eq!(
+            turn.partial_output,
+            "Retained text whose Agent boundary cannot be reconstructed."
+        );
+        let recovery = turn
+            .execution_events
+            .iter()
+            .find(|event| event.event.kind == COORDINATION_RECOVERY_PARTIAL_EXECUTION_KIND)
+            .unwrap();
+        assert_eq!(recovery.event.metadata["attribution"], "unattributed");
+        assert_eq!(recovery.event.metadata["source"], "turn.partial_output");
+        assert_eq!(
+            recovery.event.metadata["byte_len"],
+            turn.partial_output.len()
+        );
+        let cancelled = turn
+            .execution_events
+            .iter()
+            .filter(|event| event.event.kind == COORDINATION_AGENT_CANCELLED_EXECUTION_KIND)
+            .map(|event| {
+                (
+                    event.event.metadata["agent_id"].as_str().unwrap(),
+                    event.event.metadata["generation"].as_u64().unwrap(),
+                    event.event.metadata["reason"].as_str().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            cancelled,
+            vec![
+                ("planner", 1, "daemon_restart_interrupted"),
+                ("builder", 1, "daemon_restart_interrupted"),
+                ("reviewer", 0, "daemon_restart_interrupted"),
+            ]
+        );
+        assert!(turn.execution_events.iter().any(|event| {
+            event.event.kind == COORDINATION_AGENT_CANCELLED_EXECUTION_KIND
+                && event.event.metadata["agent_id"] == "planner"
+                && event.event.metadata["generation"] == 1
+                && event.event.metadata["cause_signal_ids"]
+                    == serde_json::json!(["reviewer-changes"])
+        }));
+        assert!(turn.execution_events.iter().any(|event| {
+            event.event.kind == COORDINATION_AGENT_CANCELLED_EXECUTION_KIND
+                && event.event.metadata["agent_id"] == "builder"
+                && event.event.metadata["cause_signal_ids"]
+                    == serde_json::json!(["planner-g1-complete"])
+        }));
+        assert!(store
+            .reconcile_orphaned_running("daemon restarted before execution completed")
+            .unwrap()
+            .is_empty());
+        drop(store);
+
+        let reopened = SessionTurnStore::open(dir.path())
+            .unwrap()
+            .get("turn-a")
+            .unwrap();
+        assert_eq!(reopened, *turn);
+    }
+
+    #[test]
+    fn atomic_feedback_batch_reopens_and_restart_closes_every_reactivated_agent() {
+        let dir = tempdir().unwrap();
+        {
+            let mut store = SessionTurnStore::open(dir.path()).unwrap();
+            record_feedback_test_baseline(&mut store);
+            store
+                .record_operations_atomically(
+                    "turn-a",
+                    "feedback-batch-1",
+                    feedback_batch_operations(),
+                )
+                .unwrap();
+            store
+                .record_execution(
+                    "turn-a",
+                    "source-active-2",
+                    coordination_event(
+                        "coordination_agent_activated",
+                        serde_json::json!({
+                            "agent_id": "source",
+                            "generation": 2,
+                            "cause_signal_ids": ["feedback-1"],
+                        }),
+                    ),
+                )
+                .unwrap();
+        }
+
+        let mut reopened = SessionTurnStore::open(dir.path()).unwrap();
+        let before_recovery = reopened.get("turn-a").unwrap();
+        assert_eq!(before_recovery.agent_outputs.len(), 3);
+        assert!(before_recovery
+            .agent_outputs
+            .iter()
+            .all(|output| output.superseded));
+        let feedback_kinds = before_recovery
+            .execution_events
+            .iter()
+            .filter(|event| {
+                event.operation_id == "feedback-signal-1"
+                    || event.operation_id.ends_with("-superseded-1")
+                    || event.operation_id.ends_with("-reactivated-2")
+            })
+            .map(|event| event.event.kind.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            feedback_kinds,
+            vec![
+                "coordination_signal",
+                "agent_output_superseded",
+                "agent_output_superseded",
+                "agent_output_superseded",
+                "coordination_agent_reactivated",
+                "coordination_agent_reactivated",
+                "coordination_agent_reactivated",
+            ]
+        );
+
+        let reconciled = reopened
+            .reconcile_orphaned_running("daemon restarted before execution completed")
+            .unwrap();
+        assert_eq!(reconciled.len(), 1);
+        let interrupted = &reconciled[0];
+        assert_eq!(interrupted.status, SessionTurnLifecycle::Interrupted);
+        let cancelled = interrupted
+            .execution_events
+            .iter()
+            .filter(|event| event.event.kind == COORDINATION_AGENT_CANCELLED_EXECUTION_KIND)
+            .map(|event| {
+                (
+                    event.event.metadata["agent_id"].as_str().unwrap(),
+                    event.event.metadata["generation"].as_u64().unwrap(),
+                    event.event.metadata["cause_signal_ids"].clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            cancelled,
+            vec![
+                ("source", 2, serde_json::json!(["feedback-1"])),
+                ("sibling", 1, serde_json::json!(["feedback-1"])),
+                ("reviewer", 1, serde_json::json!(["feedback-1"])),
+            ]
+        );
+    }
+
+    #[test]
+    fn trailing_partial_feedback_batch_is_ignored_wholesale_on_restart() {
+        let dir = tempdir().unwrap();
+        let path;
+        {
+            let mut store = SessionTurnStore::open(dir.path()).unwrap();
+            record_feedback_test_baseline(&mut store);
+            path = store.path().to_path_buf();
+        }
+        let event = LedgerEvent {
+            schema_version: EVENT_SCHEMA_VERSION,
+            operation_id: "feedback-batch-1".to_string(),
+            recorded_at: now_millis(),
+            payload: LedgerPayload::MutationBatch {
+                turn_id: "turn-a".to_string(),
+                operations: feedback_batch_operations(),
+            },
+        };
+        let bytes = serde_json::to_vec(&event).unwrap();
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&bytes[..bytes.len() - 1])
+            .unwrap();
+
+        let mut reopened = SessionTurnStore::open_file(&path).unwrap();
+        let turn = reopened.get("turn-a").unwrap();
+        assert_eq!(turn.agent_outputs.len(), 2);
+        assert!(turn.agent_outputs.iter().all(|output| !output.superseded));
+        assert!(!turn.execution_events.iter().any(|event| {
+            matches!(
+                event.event.kind.as_str(),
+                "coordination_signal"
+                    | "agent_output_superseded"
+                    | "coordination_agent_reactivated"
+            )
+        }));
+
+        let interrupted = reopened
+            .reconcile_orphaned_running("daemon restarted before execution completed")
+            .unwrap()
+            .pop()
+            .unwrap();
+        let cancelled = interrupted
+            .execution_events
+            .iter()
+            .filter(|event| event.event.kind == COORDINATION_AGENT_CANCELLED_EXECUTION_KIND)
+            .map(|event| {
+                (
+                    event.event.metadata["agent_id"].as_str().unwrap(),
+                    event.event.metadata["generation"].as_u64().unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cancelled, vec![("reviewer", 1)]);
+    }
+
+    #[test]
+    fn atomic_feedback_batch_rejects_duplicate_or_previously_used_inner_ids() {
+        let dir = tempdir().unwrap();
+        let mut store = SessionTurnStore::open(dir.path()).unwrap();
+        record_feedback_test_baseline(&mut store);
+        let mut duplicate = feedback_batch_operations();
+        duplicate[1].operation_id = duplicate[0].operation_id.clone();
+        assert!(matches!(
+            store.record_operations_atomically("turn-a", "duplicate-batch", duplicate),
+            Err(SessionTurnError::OperationConflict { .. })
+        ));
+        assert_eq!(store.get("turn-a").unwrap().agent_outputs.len(), 2);
+
+        let mut collision = feedback_batch_operations();
+        collision[0].operation_id = "source-output-1".to_string();
+        assert!(matches!(
+            store.record_operations_atomically("turn-a", "collision-batch", collision),
+            Err(SessionTurnError::OperationConflict { .. })
+        ));
+        assert_eq!(store.get("turn-a").unwrap().agent_outputs.len(), 2);
+    }
+
+    #[test]
     fn rewind_is_append_only_and_delete_session_physically_removes_history() {
         let dir = tempdir().unwrap();
         let path;
@@ -1717,6 +3238,335 @@ mod tests {
     }
 
     #[test]
+    fn coordinated_outputs_preserve_identity_and_supersession_after_restart() {
+        let dir = tempdir().unwrap();
+        let path;
+        {
+            let mut store = SessionTurnStore::open(dir.path()).unwrap();
+            path = store.path().to_path_buf();
+            store.begin(begin("ses-a", "turn-a", "request-a")).unwrap();
+            store
+                .record_agent_output_with_coordination(
+                    "turn-a",
+                    "agent:reviewer:1",
+                    "reviewer",
+                    Some("model-a".to_string()),
+                    "Obsolete first review",
+                    coordinated_identity(
+                        1,
+                        SessionTurnAgentOutputDisposition::Completed,
+                        Some("signal:reviewer:1"),
+                    ),
+                )
+                .unwrap();
+            store
+                .supersede_agent_output(
+                    "turn-a",
+                    "supersede:reviewer:1",
+                    SessionTurnAgentOutputSupersession {
+                        agent_id: "reviewer".to_string(),
+                        activation_generation: 1,
+                        superseded_by_generation: 2,
+                        cause_signal_id: "feedback:tester:1".to_string(),
+                    },
+                )
+                .unwrap();
+            store
+                .record_agent_output_with_coordination(
+                    "turn-a",
+                    "agent:reviewer:2",
+                    "reviewer",
+                    Some("model-a".to_string()),
+                    "Current revised review",
+                    coordinated_identity(
+                        2,
+                        SessionTurnAgentOutputDisposition::Completed,
+                        Some("signal:reviewer:2"),
+                    ),
+                )
+                .unwrap();
+            store.transition("turn-a", "finish-a", complete()).unwrap();
+
+            let turn = store.get("turn-a").unwrap();
+            assert_eq!(turn.agent_outputs.len(), 2);
+            let first = &turn.agent_outputs[0];
+            assert_eq!(first.operation_id.as_deref(), Some("agent:reviewer:1"));
+            assert_eq!(first.activation_generation, Some(1));
+            assert_eq!(
+                first.disposition,
+                Some(SessionTurnAgentOutputDisposition::Completed)
+            );
+            assert_eq!(first.causal_signal_id.as_deref(), Some("signal:reviewer:1"));
+            assert!(first.superseded);
+            assert_eq!(first.superseded_by_generation, Some(2));
+            assert_eq!(
+                first.superseded_by_signal_id.as_deref(),
+                Some("feedback:tester:1")
+            );
+            let current = &turn.agent_outputs[1];
+            assert_eq!(current.operation_id.as_deref(), Some("agent:reviewer:2"));
+            assert_eq!(current.activation_generation, Some(2));
+            assert!(!current.superseded);
+
+            let transcript = store.transcript("ses-a");
+            assert_eq!(transcript.len(), 2);
+            assert_eq!(transcript[1].content, "Current revised review");
+            assert!(store
+                .search(Some("ses-a"), "obsolete first review")
+                .is_empty());
+            assert_eq!(
+                store.search(Some("ses-a"), "current revised review").len(),
+                1
+            );
+        }
+
+        let reopened = SessionTurnStore::open_file(path).unwrap();
+        let turn = reopened.get("turn-a").unwrap();
+        assert_eq!(turn.agent_outputs.len(), 2);
+        assert!(turn.agent_outputs[0].superseded);
+        assert_eq!(turn.agent_outputs[0].superseded_by_generation, Some(2));
+        assert_eq!(turn.agent_outputs[1].activation_generation, Some(2));
+        assert!(!turn.agent_outputs[1].superseded);
+        assert_eq!(
+            reopened.transcript("ses-a")[1].content,
+            "Current revised review"
+        );
+    }
+
+    #[test]
+    fn failed_coordinated_turn_does_not_canonize_aggregate_partial_output() {
+        let dir = tempdir().unwrap();
+        let path;
+        {
+            let mut store = SessionTurnStore::open(dir.path()).unwrap();
+            path = store.path().to_path_buf();
+            store.begin(begin("ses-a", "turn-a", "request-a")).unwrap();
+            store
+                .append_output("turn-a", "stream:reviewer:1", "obsolete generation")
+                .unwrap();
+            store
+                .record_agent_output_with_coordination(
+                    "turn-a",
+                    "agent:reviewer:1",
+                    "reviewer",
+                    Some("model-a".to_string()),
+                    "obsolete generation",
+                    coordinated_identity(
+                        1,
+                        SessionTurnAgentOutputDisposition::Completed,
+                        Some("signal:reviewer:1"),
+                    ),
+                )
+                .unwrap();
+            store
+                .supersede_agent_output(
+                    "turn-a",
+                    "supersede:reviewer:1",
+                    SessionTurnAgentOutputSupersession {
+                        agent_id: "reviewer".to_string(),
+                        activation_generation: 1,
+                        superseded_by_generation: 2,
+                        cause_signal_id: "feedback:tester:1".to_string(),
+                    },
+                )
+                .unwrap();
+            store
+                .append_output("turn-a", "stream:reviewer:2", "failed retry text")
+                .unwrap();
+            store
+                .record_agent_output_with_coordination(
+                    "turn-a",
+                    "agent:reviewer:2",
+                    "reviewer",
+                    Some("model-a".to_string()),
+                    "failed retry text",
+                    coordinated_identity(
+                        2,
+                        SessionTurnAgentOutputDisposition::Failed,
+                        Some("signal:reviewer:2"),
+                    ),
+                )
+                .unwrap();
+            store
+                .transition(
+                    "turn-a",
+                    "fail-a",
+                    TransitionSessionTurn {
+                        status: SessionTurnLifecycle::Failed,
+                        final_output: None,
+                        error: Some("reviewer failed".to_string()),
+                        metadata: serde_json::Map::new(),
+                    },
+                )
+                .unwrap();
+
+            let turn = store.get("turn-a").unwrap();
+            assert_eq!(turn.partial_output, "obsolete generationfailed retry text");
+            assert_eq!(turn.final_output, None);
+            assert!(turn.agent_outputs[0].superseded);
+            assert_eq!(
+                turn.agent_outputs[1].disposition,
+                Some(SessionTurnAgentOutputDisposition::Failed)
+            );
+            assert!(!turn.agent_outputs[1].superseded);
+        }
+
+        let reopened = SessionTurnStore::open_file(path).unwrap();
+        let turn = reopened.get("turn-a").unwrap();
+        assert_eq!(turn.status, SessionTurnLifecycle::Failed);
+        assert_eq!(turn.final_output, None);
+        assert_eq!(turn.agent_outputs.len(), 2);
+        assert!(turn.agent_outputs[0].superseded);
+        assert_eq!(reopened.transcript("ses-a").len(), 2);
+        assert_eq!(reopened.transcript("ses-a")[1].content, "failed retry text");
+    }
+
+    #[test]
+    fn changes_requested_output_accepts_its_matching_reactivation_event() {
+        let dir = tempdir().unwrap();
+        let mut store = SessionTurnStore::open(dir.path()).unwrap();
+        store.begin(begin("ses-a", "turn-a", "request-a")).unwrap();
+        store
+            .record_agent_output_with_coordination(
+                "turn-a",
+                "agent:tester:1",
+                "tester",
+                None,
+                "Please revise the error handling",
+                coordinated_identity(
+                    1,
+                    SessionTurnAgentOutputDisposition::ChangesRequested,
+                    Some("feedback:tester:1"),
+                ),
+            )
+            .unwrap();
+
+        let output = &store.get("turn-a").unwrap().agent_outputs[0];
+        assert!(output.superseded);
+        assert_eq!(output.superseded_by_generation, Some(2));
+        assert_eq!(
+            output.superseded_by_signal_id.as_deref(),
+            Some("feedback:tester:1")
+        );
+
+        // The scheduler emits an AgentReactivated event for every affected
+        // node, including the requester. Applying that event after recording
+        // the request is deliberately idempotent at the materialized-state seam.
+        store
+            .supersede_agent_output(
+                "turn-a",
+                "supersede:tester:1",
+                SessionTurnAgentOutputSupersession {
+                    agent_id: "tester".to_string(),
+                    activation_generation: 1,
+                    superseded_by_generation: 2,
+                    cause_signal_id: "feedback:tester:1".to_string(),
+                },
+            )
+            .unwrap();
+        assert!(store.get("turn-a").unwrap().agent_outputs[0].superseded);
+    }
+
+    #[test]
+    fn coordinated_output_identity_rejects_invalid_or_duplicate_generations() {
+        let dir = tempdir().unwrap();
+        let mut store = SessionTurnStore::open(dir.path()).unwrap();
+        store.begin(begin("ses-a", "turn-a", "request-a")).unwrap();
+
+        assert!(matches!(
+            store.record_agent_output_with_coordination(
+                "turn-a",
+                "agent:reviewer:zero",
+                "reviewer",
+                None,
+                "invalid",
+                coordinated_identity(0, SessionTurnAgentOutputDisposition::Completed, None),
+            ),
+            Err(SessionTurnError::InvalidAgentOutputIdentity(_))
+        ));
+        store
+            .record_agent_output_with_coordination(
+                "turn-a",
+                "agent:reviewer:1",
+                "reviewer",
+                None,
+                "first",
+                coordinated_identity(
+                    1,
+                    SessionTurnAgentOutputDisposition::Completed,
+                    Some("signal:reviewer:1"),
+                ),
+            )
+            .unwrap();
+        assert!(matches!(
+            store.record_agent_output_with_coordination(
+                "turn-a",
+                "agent:reviewer:1:duplicate",
+                "reviewer",
+                None,
+                "duplicate",
+                coordinated_identity(
+                    1,
+                    SessionTurnAgentOutputDisposition::Completed,
+                    Some("signal:reviewer:1:duplicate"),
+                ),
+            ),
+            Err(SessionTurnError::AgentOutputGenerationConflict { .. })
+        ));
+        assert!(matches!(
+            store.supersede_agent_output(
+                "turn-a",
+                "supersede:missing:1",
+                SessionTurnAgentOutputSupersession {
+                    agent_id: "missing".to_string(),
+                    activation_generation: 1,
+                    superseded_by_generation: 2,
+                    cause_signal_id: "feedback:1".to_string(),
+                },
+            ),
+            Err(SessionTurnError::AgentOutputNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn historical_agent_output_event_defaults_coordination_fields() {
+        let dir = tempdir().unwrap();
+        let path;
+        {
+            let mut store = SessionTurnStore::open(dir.path()).unwrap();
+            path = store.path().to_path_buf();
+            store.begin(begin("ses-a", "turn-a", "request-a")).unwrap();
+        }
+        let historical_event = serde_json::json!({
+            "schema_version": 1,
+            "operation_id": "historical-agent-output",
+            "recorded_at": 1_700_000_002_000_u64,
+            "kind": "agent_output",
+            "turn_id": "turn-a",
+            "agent_id": "reviewer",
+            "model": null,
+            "output": "Historical result",
+            "attempt_id": null
+        });
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{historical_event}").unwrap();
+        file.sync_data().unwrap();
+
+        let reopened = SessionTurnStore::open_file(path).unwrap();
+        let output = &reopened.get("turn-a").unwrap().agent_outputs[0];
+        assert_eq!(
+            output.operation_id.as_deref(),
+            Some("historical-agent-output")
+        );
+        assert_eq!(output.activation_generation, None);
+        assert_eq!(output.disposition, None);
+        assert_eq!(output.causal_signal_id, None);
+        assert!(!output.superseded);
+        assert_eq!(output.superseded_by_generation, None);
+        assert_eq!(output.superseded_by_signal_id, None);
+    }
+
+    #[test]
     fn transcript_tolerates_stream_and_agent_output_byte_mismatch() {
         let dir = tempdir().unwrap();
         let mut store = SessionTurnStore::open(dir.path()).unwrap();
@@ -1736,6 +3586,78 @@ mod tests {
         let transcript = store.transcript("ses-a");
         assert_eq!(transcript.len(), 2);
         assert_eq!(transcript[1].content, "x");
+        let path = store.path().to_path_buf();
+        drop(store);
+        let reopened = SessionTurnStore::open_file(path).unwrap();
+        let transcript = reopened.transcript("ses-a");
+        assert_eq!(transcript.len(), 2);
+        assert_eq!(transcript[1].content, "x");
+    }
+
+    #[test]
+    fn transcript_does_not_invent_an_anonymous_tail_before_structured_output() {
+        let dir = tempdir().unwrap();
+        let path;
+        {
+            let mut store = SessionTurnStore::open(dir.path()).unwrap();
+            path = store.path().to_path_buf();
+            store.begin(begin("ses-a", "turn-a", "request-a")).unwrap();
+            store
+                .append_output(
+                    "turn-a",
+                    "pre-tool-stream",
+                    "I will inspect the repository before answering. ",
+                )
+                .unwrap();
+            store
+                .record_execution(
+                    "turn-a",
+                    "tool-round",
+                    RecordTurnExecution {
+                        kind: "tool_completed".to_string(),
+                        execution_id: Some("tool-1".to_string()),
+                        attempt_id: None,
+                        metadata: serde_json::Map::new(),
+                    },
+                )
+                .unwrap();
+            store
+                .append_output("turn-a", "final-stream", "Final answer from reviewer.")
+                .unwrap();
+            store
+                .record_agent_output_with_coordination(
+                    "turn-a",
+                    "agent:reviewer:1",
+                    "reviewer",
+                    Some("model-a".to_string()),
+                    "Final answer from reviewer.",
+                    coordinated_identity(
+                        1,
+                        SessionTurnAgentOutputDisposition::Completed,
+                        Some("signal:reviewer:1"),
+                    ),
+                )
+                .unwrap();
+            store
+                .transition(
+                    "turn-a",
+                    "finish-a",
+                    TransitionSessionTurn {
+                        status: SessionTurnLifecycle::Completed,
+                        final_output: None,
+                        error: None,
+                        metadata: serde_json::Map::new(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let reopened = SessionTurnStore::open_file(path).unwrap();
+        let transcript = reopened.transcript("ses-a");
+        assert_eq!(transcript.len(), 2);
+        assert_eq!(transcript[1].agent_id.as_deref(), Some("reviewer"));
+        assert_eq!(transcript[1].content, "Final answer from reviewer.");
+        assert!(!transcript[1].incomplete);
     }
 
     #[cfg(unix)]

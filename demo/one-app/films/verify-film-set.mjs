@@ -22,7 +22,7 @@ function usage() {
   console.error(`Usage: verify-film-set.mjs [--manifest-only | --portable | --source-bound | --allow-needs-recording]
        verify-film-set.mjs --release-compatibility <attestation> --release-root <frozen-checkout>
 
-With no flag, verification is release-strict: all 12 films must be ready, match
+With no flag, verification is release-strict: all 12 required films must match
 the technical contract and duration, have complete recorded provenance, and match
 the local binary to the first-committed declared hash/version and source content.
 
@@ -40,7 +40,8 @@ platform-specific capture binary. It remains the strict contract for a new captu
 or a checkout that exactly materializes the first-committed source declaration.
 
 --allow-needs-recording performs the same structural verification, warns for
-films explicitly marked needs_recording, and strictly verifies any ready film.
+legacy films explicitly marked needs_recording, and strictly verifies every
+required or ready film. Required is a stable recording obligation, not acceptance.
 
 --release-compatibility performs portable verification in the explicit frozen
 release checkout, audits its historical source/binary-only provenance rewrite
@@ -310,7 +311,10 @@ let portfolio;
 let currentSourceContentSha256 = null;
 try {
   portfolio = loadPortfolio(activeRepoRoot);
-  if (releaseStrict || sourceBound) currentSourceContentSha256 = sourceContentDigest(activeRepoRoot);
+  if (releaseStrict || sourceBound || (allowNeedsRecording
+      && portfolio.films.some(film => film.status === 'required'))) {
+    currentSourceContentSha256 = sourceContentDigest(activeRepoRoot);
+  }
 } catch (error) {
   console.error(`FAIL portfolio: ${error.message}`);
   process.exit(1);
@@ -338,8 +342,8 @@ if (!manifestOnly) {
       console.warn(`WARN ${film.slug}: needs_recording; media and provenance intentionally not accepted.`);
       continue;
     }
-    if (film.status !== 'ready') {
-      failures.push(`${film.slug}: status is ${film.status}; release-strict verification requires ready.`);
+    if (!['required', 'ready'].includes(film.status)) {
+      failures.push(`${film.slug}: status is ${film.status}; release-strict verification requires recorded evidence for required or ready films.`);
       continue;
     }
     try {
@@ -376,7 +380,7 @@ if (releaseCompatibility) {
 }
 
 if (manifestOnly) console.log('Film portfolio manifest: PASS (12 scenarios, placements, and shot contracts)');
-else if (allowNeedsRecording) console.log('Film portfolio structure: PASS (ready films strict; needs_recording films warned)');
+else if (allowNeedsRecording) console.log('Film portfolio structure: PASS (required and ready films strict; legacy needs_recording films warned)');
 else if (releaseCompatibility) {
   console.log(
     `Film portfolio release compatibility: PASS (${compatibilityResult.tag} at ${compatibilityResult.commit}; ` +
@@ -387,6 +391,6 @@ else if (releaseCompatibility) {
     `not captured with the patch binary)`,
   );
 }
-else if (portable) console.log('Film portfolio portable contract: PASS (12 ready films with restored first-committed provenance declarations)');
-else if (sourceBound) console.log('Film portfolio source-bound contract: PASS (12 ready films with recorded provenance matching this checkout)');
-else console.log('Film portfolio release contract: PASS (12 ready films, exact source content, and local binary matching the first-committed declaration)');
+else if (portable) console.log('Film portfolio portable contract: PASS (12 verified films with preserved provenance declarations)');
+else if (sourceBound) console.log('Film portfolio source-bound contract: PASS (12 verified films with recorded provenance matching this checkout)');
+else console.log('Film portfolio release contract: PASS (12 verified films, exact source content, and local binary matching the declared recording)');

@@ -1,0 +1,6 @@
+{
+  "accepted": { "version": 2, "message": "Exact accepted answer" },
+  "unselected_newer": { "version": 900, "message": "Newer candidate was not accepted" },
+  "failed": { "version": 999, "message": "Failed branch must not become conversation state" },
+  "replacement": { "version": 1, "message": "Explicitly revised accepted answer" }
+}

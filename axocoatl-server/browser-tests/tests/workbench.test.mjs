@@ -6,6 +6,51 @@ import { chromium } from 'playwright';
 
 import { launchTestDaemon, resolveChromiumExecutable } from '../support/daemon.mjs';
 
+test('a reconnect snapshot preserves its already-owned cold runtime preparation request', async () => {
+  const session = readySessionFixture(runtime.fixtures.alpha.sessions[0]);
+  let releasePost, observePost, taskPosts = 0, terminalReady = false;
+  const postHeld = new Promise(resolve => { observePost = resolve; });
+  const postRelease = new Promise(resolve => { releasePost = resolve; });
+  const opened = await openSession(session, {width:1280,height:800}, runtime, async ({page}) => {
+    for (const url of ['**/api/sessions', `**/api/workspaces/${session.workspace_id}/sessions`]) {
+      await page.route(url, route => route.fulfill({json:[session]}));
+    }
+    await page.route(`**/api/sessions/${session.id}/tasks`, async route => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({json:terminalReady ? [{id:'restored-shell',kind:'terminal',command:'sh',status:'running'}] : []});
+      }
+      taskPosts += 1;
+      observePost();
+      await postRelease;
+      terminalReady = true;
+      return route.fulfill({json:{id:'restored-shell'}});
+    });
+  });
+  const {context,page,requestFailures,assertNoBrowserErrors} = opened;
+  try {
+    await postHeld;
+    await page.evaluate(sessionId => {
+      handleWsFrame({kind:'session-environment-changing',session:sessionId,generation:1});
+      replaceSessionEnvironmentTransitions([{session:sessionId,generation:1}]);
+    },session.id);
+    assert.equal(await page.evaluate(() => Boolean(S.session.autoTerminalController)
+      && !S.session.autoTerminalController.signal.aborted),true,
+    'a repeated authoritative snapshot must not cancel the POST which owns cold reconstruction');
+    assert.equal(await page.locator('#session-send').isDisabled(),true);
+    assert.equal(await page.locator('#file-tree').evaluate(element => element.session),'');
+    const responded = page.waitForResponse(response => response.request().method()==='POST'
+      && new URL(response.url()).pathname===`/api/sessions/${session.id}/tasks`);
+    releasePost();
+    await responded;
+    await page.evaluate(sessionId => handleWsFrame({kind:'session-environment-settled',session:sessionId}),session.id);
+    await page.waitForFunction(() => sessionRuntimeSurfaceReady(S.session));
+    assert.equal(taskPosts,1,'settlement must reuse the terminal from the preserved preparation');
+    assert.equal(requestFailures.filter(request => request.method==='POST'
+      && requestPathname(request)===`/api/sessions/${session.id}/tasks`).length,0);
+    assertNoBrowserErrors();
+  } finally {releasePost();await context.close();}
+});
+
 let runtime;
 let browser;
 
@@ -44,6 +89,34 @@ function isSuccessfulGet(response, pathname) {
     && response.status >= 200
     && response.status < 300
     && requestPathname(response) === pathname;
+}
+
+// Fixtures declaring a live HTTP turn must declare the same initial socket
+// ownership. The real fixture daemon has no model run and otherwise sends an
+// empty snapshot, whose arrival order can erase that synthetic live turn.
+async function routeSessionRunSnapshot(page, run) {
+  await page.routeWebSocket('**/ws', socket => {
+    const server = socket.connectToServer();
+    server.onMessage(message => {
+      const frame = JSON.parse(String(message));
+      if (frame.kind === 'snapshot') frame.runs = [
+        ...(frame.runs || []).filter(item => item.workflow !== run.workflow), run,
+      ];
+      socket.send(JSON.stringify(frame));
+    });
+  });
+}
+
+async function waitForSessionProjection(page, predicate, argument) {
+  try { await page.waitForFunction(predicate, argument); }
+  catch (error) {
+    const state = await page.evaluate(() => ({session:S.session.id,history:S.session.historyState,
+      historyError:S.session.historyError,historyGeneration:S.session.historyGeneration,
+      activeTurn:S.session.activeTurnId,attemptRestorePending:S.session.attemptRestorePending,
+      attemptRestoreError:S.session.attemptRestoreError,attemptSet:S.threadVariants?.attemptSetId,
+      connection:S.liveConnection}));
+    throw new Error(`${error.message}\nSession projection: ${JSON.stringify(state)}`, {cause:error});
+  }
 }
 
 async function openSession(
@@ -660,7 +733,7 @@ test('restored unresolved Ways keep primary runtime surfaces unbound', async () 
         contentType: 'application/json',
         body: JSON.stringify([session]),
       }));
-      await page.route(`**/api/sessions/${session.id}/turns`, (route) => route.fulfill({
+      await page.route(`**/api/sessions/${session.id}/turns*`, (route) => route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: '[]',
@@ -711,7 +784,7 @@ test('restored unresolved Ways keep primary runtime surfaces unbound', async () 
     assertNoBrowserErrors,
   } = opened;
   try {
-    await page.waitForFunction(({ sessionId, setId }) =>
+    await waitForSessionProjection(page, ({ sessionId, setId }) =>
       S.session.id === sessionId
       && S.session.historyState === 'ready'
       && S.session.attemptRestorePending === false
@@ -807,7 +880,7 @@ test('a stale task snapshot cannot repopulate runtime state after Ways takes own
       await page.route('**/api/sessions', (route) => route.fulfill({
         status: 200, contentType: 'application/json', body: sessions,
       }));
-      await page.route(`**/api/sessions/${session.id}/turns`, (route) => route.fulfill({
+      await page.route(`**/api/sessions/${session.id}/turns*`, (route) => route.fulfill({
         status: 200, contentType: 'application/json', body: '[]',
       }));
       await page.route(`**/api/sessions/${session.id}/active-turn`, (route) => route.fulfill({
@@ -1882,7 +1955,7 @@ test('a cross-tab Keep settlement clears a judged comparison and restores the ke
       await page.route('**/api/sessions', (route) => route.fulfill({
         status: 200, contentType: 'application/json', body: sessions,
       }));
-      await page.route(`**/api/sessions/${session.id}/turns`, (route) => {
+      await page.route(`**/api/sessions/${session.id}/turns*`, (route) => {
         turnReads += 1;
         return route.fulfill({
           status: 200,
@@ -2792,9 +2865,10 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     );
     assert.ok(controlResponses.every((status) => status === 403));
 
-    await page.evaluate(() => setBrowserPicking(true));
+    await page.locator('[data-session-view="browser"]').click();
+    await page.locator('#bx-pick').click();
     await previewFrame.waitForSelector('.axo-tap-banner', { state: 'attached' });
-    await previewFrame.evaluate(() => document.querySelector('#pick-target').click());
+    await previewFrame.locator('#pick-target').click();
     assert.equal(
       await previewFrame.locator('#pick-target').evaluate((element) =>
         element.classList.contains('axo-tap-locked')),
@@ -2804,7 +2878,30 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     await page.waitForFunction(() =>
       !document.querySelector('#dom-hier')?.classList.contains('hide'));
     assert.match(await page.locator('#dom-hier-list').textContent(), /button#pick-target/);
-    await page.evaluate(() => closeDomHier(false));
+    await page.locator('[data-session-view="browser"]').click();
+    const previewLayout = await page.evaluate(() => {
+      const rect = selector => {
+        const r = document.querySelector(selector).getBoundingClientRect();
+        return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,height:r.height};
+      };
+      return {body:rect('#browser-body'),browser:rect('#browser'),picker:rect('#dom-hier')};
+    });
+    assert.ok(previewLayout.body.height > 100);
+    assert.ok(Math.abs(previewLayout.browser.height - previewLayout.body.height) < 2,
+      'Preview must fill its body instead of sharing height with an empty sibling');
+    assert.ok(previewLayout.picker.top >= previewLayout.browser.top
+      && previewLayout.picker.bottom <= previewLayout.browser.bottom
+      && previewLayout.picker.left >= previewLayout.browser.left
+      && previewLayout.picker.right <= previewLayout.browser.right,
+    'the active element picker overlays the same full-height Preview');
+    await page.locator('#dom-hier-confirm').click();
+    await page.waitForFunction(() => S.session.refs.some(ref => ref.kind === 'dom' && ref.selector.includes('#pick-target')));
+    assert.match(await page.locator('#chat-refs').textContent(), /pick-target/);
+    const selectedRef = await page.evaluate(() => S.session.refs.find(ref => ref.kind === 'dom' && ref.selector.includes('#pick-target')));
+    assert.doesNotMatch(selectedRef.html, /axo-tap-(?:hover|locked)/);
+    await previewFrame.waitForFunction(() => !document.querySelector('.axo-tap-locked,.axo-tap-hover'));
+    assert.equal(await previewFrame.evaluate(selector => document.querySelector(selector) === document.querySelector('#pick-target'), selectedRef.selector),true,
+      'the retained reference still resolves after picker cleanup');
 
     // Modern Chromium blocks ordinary third-party cookies in the embedded
     // Preview. The explicit full-preview action opens this exact virtual URL
@@ -3109,7 +3206,7 @@ test('Closed unresolved Attempts mount read-only and route setup-free recovery w
           contentType: 'application/json',
           body: JSON.stringify([closed]),
         }));
-        await page.route(`**/api/sessions/${closed.id}/turns`, (route) => route.fulfill({
+        await page.route(`**/api/sessions/${closed.id}/turns*`, (route) => route.fulfill({
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify([{
@@ -3458,8 +3555,19 @@ test('malformed devcontainer repair can explicitly retain the configured E2B tem
   }
 });
 
-test('Session creation hides coordinator-owned Workers from Single and Custom controls', async () => {
+test('Session creation hides coordinator-owned Workers and chooses a named Lattice team', async () => {
   const session = runtime.fixtures.alpha.sessions[0];
+  const automations = [
+    { id: 'manual-release-automation', name: 'Manual release automation', steps: [] },
+  ];
+  const teams = [
+    { id: 'feature-team', name: 'Feature Team', agents: ['browser-test-autonomous'] },
+    {
+      id: 'coordination-team', name: 'Coordination Team',
+      agents: ['browser-test-coordinator', 'browser-test-worker'],
+      entry_point: 'browser-test-coordinator',
+    },
+  ];
   const agents = [
     {
       id: 'browser-test-autonomous', name: 'Autonomous Agent', role: 'autonomous', depends_on: [],
@@ -3471,6 +3579,9 @@ test('Session creation hides coordinator-owned Workers from Single and Custom co
       id: 'browser-test-coordinator', name: 'Session Coordinator', role: 'coordinator', depends_on: [],
     },
   ];
+  let resolveCreation;
+  const creationRequest = new Promise((resolve) => { resolveCreation = resolve; });
+  let createdSession = null;
   const { context, page, assertNoBrowserErrors } = await openSession(
     session,
     { width: 1280, height: 800 },
@@ -3481,13 +3592,68 @@ test('Session creation hides coordinator-owned Workers from Single and Custom co
         contentType: 'application/json',
         body: JSON.stringify(agents),
       }));
+      await target.route('**/api/workflows', (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(automations),
+      }));
+      await target.route('**/api/session-teams', (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([]),
+      }));
+      await target.route('**/api/sessions', (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(createdSession ? [session, createdSession] : [session]),
+      }));
+      await target.route('**/api/sessions/session-created-coordination-team/turns*', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify([]),
+      }));
+      await target.route('**/api/sessions/session-created-coordination-team/active-turn', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({ run: null }),
+      }));
+      await target.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => {
+          if (route.request().method() !== 'POST') {
+            return route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify(createdSession ? [session, createdSession] : [session]),
+            });
+          }
+          const body = route.request().postDataJSON();
+          resolveCreation(body);
+          createdSession = {
+            ...session,
+            id: 'session-created-coordination-team',
+            name: body.name,
+            mode: body.mode,
+          };
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(createdSession),
+          });
+        },
+      );
     },
   );
   try {
-    await page.waitForFunction(() => sessionHome().agents.length === 3);
+    await page.waitForFunction(() => sessionHome().agents.length === 3
+      && S.workflows.some((workflow) => workflow.id === 'manual-release-automation'));
+    assert.deepEqual(await page.evaluate(() => ({
+      automationIds: S.workflows.map((workflow) => workflow.id),
+      teamIds: sessionHome().teams.map((team) => team.id),
+    })), {
+      automationIds: ['manual-release-automation'],
+      teamIds: [],
+    });
     await page.evaluate((workspaceId) => sessionHome().newSession(workspaceId), session.workspace_id);
 
     const singleAgent = page.locator('ax-session-home [data-field="agent"]');
+    const create = page.locator('ax-session-home [data-action="picker-use"]');
     await singleAgent.waitFor({ state: 'visible' });
     assert.deepEqual(
       await singleAgent.locator('option').evaluateAll((options) =>
@@ -3509,6 +3675,222 @@ test('Session creation hides coordinator-owned Workers from Single and Custom co
       await page.locator('ax-session-home [data-field="custom-agent"][value="browser-test-worker"]').count(),
       0,
     );
+
+    const mode = page.locator('ax-session-home [data-field="mode"]');
+    await mode.selectOption('single_agent');
+    await page.waitForFunction(() => {
+      const button = sessionHome()?.shadowRoot?.querySelector('[data-action="picker-use"]');
+      return Boolean(button && !button.disabled);
+    });
+    await mode.selectOption('lattice');
+    const workflow = page.locator('ax-session-home [data-field="workflow"]');
+    assert.equal(await workflow.isDisabled(), true);
+    assert.deepEqual(
+      await workflow.locator('option').evaluateAll((options) =>
+        options.map((option) => ({ value: option.value, label: option.textContent }))),
+      [{ value: '', label: 'No Lattice teams configured' }],
+    );
+    assert.equal(await create.isDisabled(), true, 'a missing team blocks creation before submit');
+    const setupGuide = page.locator('ax-session-home .team-setup-link');
+    assert.equal(await setupGuide.textContent(), 'Open team setup guide ↗');
+    assert.equal(
+      await setupGuide.getAttribute('href'),
+      'https://docs.axocoatl.ai/configure/agents/#define-a-session-team',
+    );
+    assert.match(
+      await page.locator('ax-session-home .config-help', {
+        hasText: 'Add a team to your user configuration',
+      }).textContent(),
+      /run axocoatl validate, then restart Axocoatl/,
+    );
+
+    await page.evaluate((configuredTeams) => {
+      S.sessionTeams = configuredTeams;
+      sessionHome().teams = configuredTeams;
+    }, teams);
+    await page.waitForFunction(() => sessionHome().teams.length === 2);
+    assert.deepEqual(
+      await workflow.locator('option').evaluateAll((options) =>
+        options.map((option) => ({ value: option.value, label: option.textContent }))),
+      [
+        { value: 'feature-team', label: 'Feature Team' },
+        { value: 'coordination-team', label: 'Coordination Team' },
+      ],
+    );
+    assert.equal(
+      await workflow.locator('option[value="manual-release-automation"]').count(),
+      0,
+      'manual Automations are not selectable as Session coordination teams',
+    );
+    await workflow.selectOption('coordination-team');
+    assert.equal(await workflow.inputValue(), 'coordination-team');
+    assert.equal(
+      await page.locator('ax-session-home .config-help', {
+        hasText: 'snapshot membership and dependencies into each coordinated turn',
+      }).count(),
+      1,
+    );
+    assert.equal(await workflow.getAttribute('id'), 'session-lattice-team');
+    assert.equal(
+      await page.locator('ax-session-home label[for="session-lattice-team"]').textContent(),
+      'Team',
+    );
+    await create.waitFor({ state: 'visible' });
+    await page.waitForFunction(() => {
+      const button = sessionHome()?.shadowRoot?.querySelector('[data-action="picker-use"]');
+      return Boolean(button && !button.disabled);
+    });
+    await create.click();
+    assert.deepEqual((await creationRequest).mode, {
+      kind: 'lattice',
+      workflow_id: 'coordination-team',
+    });
+    await page.waitForFunction(() => S.session?.mode?.workflow_id === 'coordination-team');
+    assert.deepEqual(
+      await page.evaluate(() => sessionActiveAgentIds(S.session)),
+      ['browser-test-coordinator'],
+      'a coordinator-led team enters only its Coordinator in the Session',
+    );
+    assert.equal(await page.locator('#session-target').evaluate((target) => target.classList.contains('hide')), true);
+    assert.equal(await page.locator('#session-target option').count(), 0);
+
+    await page.locator('#panes-menu-btn').click();
+    await page.getByRole('menuitem', { name: 'Agent graph' }).click();
+    const graph = page.locator('#session-lattice-host ax-lattice');
+    await graph.waitFor({ state: 'visible' });
+    assert.equal(await graph.locator('ax-node').count(), 1);
+    assert.equal(await graph.locator('#sl-browser-test-coordinator').count(), 1);
+    assert.equal(await graph.locator('#sl-browser-test-worker').count(), 0);
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
+test('Custom team picker blocks invalid coordination graphs before Session creation', async () => {
+  const session = runtime.fixtures.alpha.sessions[0];
+  const agents = [
+    {
+      id: 'custom-builder', name: 'Builder', role: 'autonomous', depends_on: [],
+    },
+    {
+      id: 'custom-reviewer', name: 'Reviewer', role: 'autonomous',
+      depends_on: ['custom-builder'],
+    },
+    {
+      id: 'custom-observer', name: 'Observer', role: 'autonomous', depends_on: [],
+    },
+    {
+      id: 'custom-cycle-a', name: 'Cycle A', role: 'autonomous',
+      depends_on: ['custom-cycle-b'],
+    },
+    {
+      id: 'custom-cycle-b', name: 'Cycle B', role: 'autonomous',
+      depends_on: ['custom-cycle-a'],
+    },
+    {
+      id: 'custom-lead', name: 'Team Lead', role: 'coordinator', depends_on: [],
+    },
+  ];
+  let createRequests = 0;
+  let resolveCreation;
+  const creationRequest = new Promise((resolve) => { resolveCreation = resolve; });
+  const { context, page, assertNoBrowserErrors } = await openSession(
+    session,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: routedPage }) => {
+      await routedPage.route('**/api/agents', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify(agents),
+      }));
+      await routedPage.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => {
+          if (route.request().method() !== 'POST') return route.fallback();
+          createRequests += 1;
+          const body = route.request().postDataJSON();
+          resolveCreation(body);
+          return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ ...session, name: body.name, mode: body.mode }),
+          });
+        },
+      );
+    },
+  );
+  try {
+    await page.waitForFunction(() => sessionHome().agents.length === 6);
+    await page.evaluate((workspaceId) => sessionHome().newSession(workspaceId), session.workspace_id);
+    await page.locator('ax-session-home [data-field="mode"]').selectOption('custom');
+
+    const create = page.locator('ax-session-home [data-action="picker-use"]');
+    const validation = page.locator('ax-session-home #session-custom-team-validation');
+    const agent = (id) => page.locator(
+      `ax-session-home [data-field="custom-agent"][value="${id}"]`,
+    );
+    await validation.waitFor({ state: 'visible' });
+    assert.equal(await validation.textContent(), 'Pick at least one Agent.');
+    assert.equal(await validation.getAttribute('role'), 'alert');
+    assert.equal(await create.isDisabled(), true);
+
+    await agent('custom-lead').check();
+    assert.equal(
+      await validation.textContent(),
+      'Team Lead will run directly and coordinate its own Workers.',
+    );
+    await page.waitForFunction(() => {
+      const button = sessionHome()?.shadowRoot?.querySelector('[data-action="picker-use"]');
+      return Boolean(button && !button.disabled);
+    });
+
+    await agent('custom-builder').check();
+    assert.equal(
+      await validation.textContent(),
+      'Team Lead is a Coordinator. Select it alone, or choose only autonomous Agents for a coordinated Custom team.',
+    );
+    assert.equal(await create.isDisabled(), true);
+    assert.equal(createRequests, 0);
+
+    await agent('custom-lead').uncheck();
+    await agent('custom-reviewer').check();
+    await agent('custom-observer').check();
+    assert.equal(
+      await validation.textContent(),
+      '3 autonomous Agents will coordinate by their declared dependencies.',
+    );
+    await agent('custom-builder').uncheck();
+    assert.equal(
+      await validation.textContent(),
+      'Reviewer depends on Builder, which is not selected. Select Builder or remove Reviewer.',
+    );
+    assert.equal(await create.isDisabled(), true);
+    assert.equal(createRequests, 0);
+
+    await agent('custom-reviewer').uncheck();
+    await agent('custom-observer').uncheck();
+    await agent('custom-cycle-a').check();
+    await agent('custom-cycle-b').check();
+    assert.match(
+      await validation.textContent(),
+      /^These dependencies form a cycle: (?:Cycle A → Cycle B → Cycle A|Cycle B → Cycle A → Cycle B)\./,
+    );
+    assert.equal(await create.isDisabled(), true);
+    assert.equal(createRequests, 0);
+
+    await agent('custom-cycle-a').uncheck();
+    await agent('custom-cycle-b').uncheck();
+    await agent('custom-lead').check();
+    await page.waitForFunction(() => {
+      const button = sessionHome()?.shadowRoot?.querySelector('[data-action="picker-use"]');
+      return Boolean(button && !button.disabled);
+    });
+    await create.click();
+    assert.deepEqual((await creationRequest).mode, {
+      kind: 'custom',
+      agents: ['custom-lead'],
+    });
+    assert.equal(createRequests, 1);
     assertNoBrowserErrors();
   } finally {
     await context.close();
@@ -3979,7 +4361,7 @@ test('Session History hydration preserves live frames that arrive while turns ar
         contentType: 'application/json',
         body: JSON.stringify({ run: activeRun }),
       }));
-      await routedPage.route(`**/api/sessions/${session.id}/turns`, async (route) => {
+      await routedPage.route(`**/api/sessions/${session.id}/turns*`, async (route) => {
         noteTurnsRequested();
         await turnsMayReturn;
         await route.fulfill({
@@ -4085,6 +4467,1961 @@ test('Session History hydration preserves live frames that arrive while turns ar
   }
 });
 
+test('live coordination survives delayed History and a delayed Agent graph module build', async () => {
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  session.status = 'active';
+  session.mode = {
+    kind: 'custom',
+    agents: ['browser-test-coder', 'browser-test-reviewer'],
+  };
+  const turnId = 'turn-live-coordination-race';
+  const turn = {
+    id: turnId,
+    session_id: session.id,
+    status: 'running',
+    user_input: 'Implement the cache fix and review it',
+    agent_id: null,
+    partial_output: '',
+    final_output: null,
+    agent_outputs: [],
+    execution_events: [],
+    context: [],
+  };
+  const activeRun = {
+    kind: 'session',
+    workflow: session.id,
+    turn_id: turnId,
+    agents: [
+      {
+        agent: 'browser-test-coder', status: 'running', output: '', thinking: '', tokens: 0,
+      },
+      {
+        agent: 'browser-test-reviewer', status: 'idle', output: '', thinking: '', tokens: 0,
+      },
+    ],
+  };
+  let noteTurnsRequested;
+  const turnsRequested = new Promise((resolve) => { noteTurnsRequested = resolve; });
+  let releaseTurns;
+  const turnsMayReturn = new Promise((resolve) => { releaseTurns = resolve; });
+  let noteLatticeRequested;
+  const latticeRequested = new Promise((resolve) => { noteLatticeRequested = resolve; });
+  let releaseLattice;
+  const latticeMayReturn = new Promise((resolve) => { releaseLattice = resolve; });
+  const { context, page, assertNoBrowserErrors } = await openSession(
+    session,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: routedPage }) => {
+      await routedPage.route('**/api/agents', (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'browser-test-coder', name: 'Browser Test Coder', role: 'autonomous',
+            provider: 'ollama', model: 'browser-test-model', depends_on: [],
+          },
+          {
+            id: 'browser-test-reviewer', name: 'Browser Test Reviewer', role: 'autonomous',
+            provider: 'ollama', model: 'browser-test-model', depends_on: ['browser-test-coder'],
+          },
+        ]),
+      }));
+      await routedPage.route('**/api/sessions', (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([session]),
+      }));
+      await routedPage.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([session]),
+        }),
+      );
+      await routedPage.route(`**/api/sessions/${session.id}/active-turn`, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ run: activeRun }),
+      }));
+      await routedPage.route(`**/api/sessions/${session.id}/turns*`, async (route) => {
+        noteTurnsRequested();
+        await turnsMayReturn;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([turn]),
+        }).catch(() => {});
+      });
+      await routedPage.route('**/lattice/index.js', async (route) => {
+        noteLatticeRequested();
+        await latticeMayReturn;
+        await route.continue().catch(() => {});
+      });
+    },
+  );
+  try {
+    await turnsRequested;
+    await latticeRequested;
+    await page.evaluate(({ sessionId, activeTurn, historicalTurn }) => {
+      renderSessionTurns([historicalTurn]);
+      handleWsFrame({ kind: 'session-accepted', session: sessionId, turn_id: activeTurn });
+      handleWsFrame({ kind: 'session-start', session: sessionId, turn_id: activeTurn });
+      handleWsFrame({
+        kind: 'coordination',
+        session: sessionId,
+        turn_id: activeTurn,
+        operation_id: `coordination:${activeTurn}:0:planned`,
+        recorded_at: 1_700_000_000_000,
+        event: {
+          kind: 'coordination_planned',
+          execution_id: activeTurn,
+          metadata: {
+            agents: [
+              { id: 'browser-test-coder', name: 'Browser Test Coder', depends_on: [] },
+              {
+                id: 'browser-test-reviewer', name: 'Browser Test Reviewer',
+                depends_on: ['browser-test-coder'],
+              },
+            ],
+            roots: ['browser-test-coder'],
+            sinks: ['browser-test-reviewer'],
+            max_generations: 2,
+          },
+        },
+      });
+      handleWsFrame({
+        kind: 'coordination',
+        session: sessionId,
+        turn_id: activeTurn,
+        operation_id: `coordination:${activeTurn}:1:agent-activated`,
+        recorded_at: 1_700_000_000_001,
+        event: {
+          kind: 'coordination_agent_activated',
+          execution_id: activeTurn,
+          metadata: {
+            agent_id: 'browser-test-coder', generation: 1,
+            cause_signal_ids: [], parents: [],
+          },
+        },
+      });
+    }, { sessionId: session.id, activeTurn: turnId, historicalTurn: turn });
+
+    const card = page.locator(`ax-coordination-turn[data-turn-id="${turnId}"]`);
+    await card.waitFor({ state: 'visible' });
+    assert.equal(
+      await card.locator('.agent[data-agent-id="browser-test-coder"]').getAttribute('data-state'),
+      'working',
+    );
+
+    releaseTurns();
+    await page.waitForFunction((activeTurn) => {
+      const events = S.session.coordinationEvents.get(activeTurn) || [];
+      const cardElement = document.querySelector(
+        `ax-coordination-turn[data-turn-id="${activeTurn}"]`,
+      );
+      return S.session.historyState === 'ready'
+        && events.length === 2
+        && cardElement?.shadowRoot
+          ?.querySelector('.agent[data-agent-id="browser-test-coder"]')
+          ?.getAttribute('data-state') === 'working';
+    }, turnId);
+
+    releaseLattice();
+    try {
+      await page.waitForFunction(() => {
+        const host = document.querySelector('#session-lattice-host');
+        return host?.querySelectorAll('ax-node').length === 2
+          && host.querySelector('#sl-browser-test-coder')?.getAttribute('status') === 'running'
+          && !['running', 'success', 'error', 'blocked', 'cancelled'].includes(
+            host.querySelector('#sl-browser-test-reviewer')?.getAttribute('status'),
+          );
+      }, null, { timeout: 10_000 });
+    } catch (error) {
+      const state = await page.evaluate((activeTurn) => ({
+        activeTurn: S.session.activeTurnId,
+        graphTurn: S.session.coordinationGraphTurnId,
+        graphAgents: S.session.graphAgents,
+        eventKinds: (S.session.coordinationEvents.get(activeTurn) || []).map((event) => event.kind),
+        nodes: Array.from(document.querySelectorAll('#session-lattice-host ax-node'), (node) => ({
+          id: node.id, status: node.getAttribute('status'),
+        })),
+        hostText: document.querySelector('#session-lattice-host')?.textContent || '',
+        latticeDefined: Boolean(customElements.get('ax-lattice')),
+      }), turnId);
+      throw new Error(`${error.message}\ncoordination graph state=${JSON.stringify(state)}`);
+    }
+    assert.deepEqual(await page.evaluate((activeTurn) => ({
+      graphTurn: S.session.coordinationGraphTurnId,
+      eventKinds: (S.session.coordinationEvents.get(activeTurn) || []).map((event) => event.kind),
+      nodeStates: Object.fromEntries(Array.from(
+        document.querySelectorAll('#session-lattice-host ax-node'),
+        (node) => [node.id, node.getAttribute('status') || 'idle'],
+      )),
+    }), turnId), {
+      graphTurn: turnId,
+      eventKinds: ['coordination_planned', 'coordination_agent_activated'],
+      nodeStates: {
+        'sl-browser-test-coder': 'running',
+        'sl-browser-test-reviewer': 'pending',
+      },
+    });
+    assertNoBrowserErrors();
+  } finally {
+    releaseTurns?.();
+    releaseLattice?.();
+    await context.close();
+  }
+});
+
+test('direct target graph restores only recorded membership from durable metadata on open and reconnect', async () => {
+  let releaseLayout;
+  const layoutReady = new Promise(resolve => { releaseLayout = resolve; });
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  session.status = 'active';
+  session.mode = {
+    kind: 'custom',
+    agents: ['direct-builder', 'direct-reviewer', 'independent-checker'],
+  };
+  const turnId = 'turn-durable-direct-reviewer';
+  const turn = {
+    id: turnId,
+    session_id: session.id,
+    status: 'running',
+    user_input: 'Ask only the reviewer to inspect this change',
+    agent_id: 'direct-reviewer',
+    partial_output: '',
+    final_output: null,
+    agent_outputs: [],
+    execution_events: [],
+    context: [],
+    metadata: { mode: 'custom', target_agent: 'direct-reviewer' },
+  };
+  const activeRun = {
+    kind: 'session', workflow: session.id, turn_id: turnId,
+    agents: [{
+      agent: 'direct-reviewer', status: 'running', output: '', thinking: '', tokens: 0,
+    }],
+  };
+  const agents = [
+    {
+      id: 'direct-builder', name: 'Direct Builder', role: 'autonomous',
+      provider: 'ollama', model: 'browser-test-model', depends_on: [],
+    },
+    {
+      id: 'direct-reviewer', name: 'Direct Reviewer', role: 'autonomous',
+      provider: 'ollama', model: 'browser-test-model', depends_on: ['direct-builder'],
+    },
+    {
+      id: 'independent-checker', name: 'Independent Checker', role: 'autonomous',
+      provider: 'ollama', model: 'browser-test-model', depends_on: [],
+    },
+  ];
+  const { context, page, assertNoBrowserErrors } = await openSession(
+    session,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: routedPage }) => {
+      await routeSessionRunSnapshot(routedPage, activeRun);
+      // History restoration must be correct even when graph module loading
+      // finishes after the durable active target has already been restored.
+      await routedPage.route('**/lattice/layout.js', async route => { await layoutReady; await route.continue(); });
+      const sessions = JSON.stringify([session]);
+      await routedPage.route('**/api/agents', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify(agents),
+      }));
+      await routedPage.route('**/api/sessions', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: sessions,
+      }));
+      await routedPage.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => route.fulfill({ status: 200, contentType: 'application/json', body: sessions }),
+      );
+      await routedPage.route(`**/api/sessions/${session.id}/turns*`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify([turn]),
+      }));
+      await routedPage.route(`**/api/sessions/${session.id}/active-turn`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({ run: activeRun }),
+      }));
+    },
+  );
+  const graphState = () => page.evaluate(() => ({
+    target: S.session.activeTurnTargetAgent,
+    nodes: Object.fromEntries(Array.from(
+      document.querySelectorAll('#session-lattice-host ax-node'),
+      (node) => [node.id, node.getAttribute('status') || 'idle'],
+    )),
+  }));
+  try {
+    await page.waitForFunction(() => S.session.historyState === 'ready'
+      && S.session.activeTurnTargetAgent === 'direct-reviewer');
+    releaseLayout();
+    await page.waitForFunction(() => S.session.historyState === 'ready'
+      && S.session.activeTurnTargetAgent === 'direct-reviewer'
+      && document.querySelectorAll('#session-lattice-host ax-node').length === 1
+      && document.querySelector('#sl-direct-reviewer')?.getAttribute('status') === 'running');
+    assert.deepEqual(await graphState(), {
+      target: 'direct-reviewer',
+      nodes: {
+        'sl-direct-reviewer': 'running',
+      },
+    });
+
+    const historyGeneration = await page.evaluate(() => {
+      S.session.activeTurnTargetAgent = null;
+      for (const agent of S.session.graphAgents) sessionLatticeStatus(agent, 'idle');
+      return S.session.historyGeneration;
+    });
+    await page.evaluate((run) => handleWsFrame({
+      kind: 'snapshot', approvals: [], runs: [run],
+      environment_transitions: [], attempt_ownerships: [],
+    }), activeRun);
+    await page.waitForFunction((generation) => S.session.historyGeneration > generation
+      && S.session.historyState === 'ready'
+      && S.session.activeTurnTargetAgent === 'direct-reviewer'
+      && document.querySelector('#sl-direct-reviewer')?.getAttribute('status') === 'running',
+    historyGeneration);
+    assert.deepEqual(await graphState(), {
+      target: 'direct-reviewer',
+      nodes: {
+        'sl-direct-reviewer': 'running',
+      },
+    });
+    assertNoBrowserErrors();
+  } finally {
+    releaseLayout();
+    await context.close();
+  }
+});
+
+test('direct targets stay isolated and coordinated cancellation preserves each terminal Agent state', async () => {
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  session.status = 'active';
+  session.mode = {
+    kind: 'custom',
+    agents: ['direct-builder', 'direct-reviewer', 'independent-checker'],
+  };
+  const agents = [
+    {
+      id: 'direct-builder', name: 'Direct Builder', role: 'autonomous',
+      provider: 'ollama', model: 'browser-test-model', depends_on: [],
+    },
+    {
+      id: 'direct-reviewer', name: 'Direct Reviewer', role: 'autonomous',
+      provider: 'ollama', model: 'browser-test-model', depends_on: ['direct-builder'],
+    },
+    {
+      id: 'independent-checker', name: 'Independent Checker', role: 'autonomous',
+      provider: 'ollama', model: 'browser-test-model', depends_on: [],
+    },
+  ];
+  const cancelledTurnId = 'turn-coordinated-cancelled';
+  const failedSignal = `coordination-signal:${cancelledTurnId}:direct-builder:g1:failed`;
+  const cancelledTurn = {
+    id: cancelledTurnId,
+    session_id: session.id,
+    user_input: 'Try the independent routes and stop at a safe boundary',
+    agent_id: null,
+    model: null,
+    context: [],
+    status: 'cancelled',
+    partial_output: '',
+    final_output: null,
+    error: null,
+    created_at: 1_700_000_001_000,
+    updated_at: 1_700_000_001_100,
+    completed_at: 1_700_000_001_100,
+    metadata: { mode: 'custom' },
+    execution_events: [
+      {
+        operation_id: `coordination:${cancelledTurnId}:0:planned`,
+        recorded_at: 1_700_000_001_000,
+        kind: 'coordination_planned',
+        execution_id: cancelledTurnId,
+        metadata: {
+          agents: [
+            { id: 'direct-builder', name: 'Direct Builder', depends_on: [] },
+            { id: 'direct-reviewer', name: 'Direct Reviewer', depends_on: ['direct-builder'] },
+            { id: 'independent-checker', name: 'Independent Checker', depends_on: [] },
+          ],
+          roots: ['direct-builder', 'independent-checker'],
+          sinks: ['direct-reviewer', 'independent-checker'],
+          max_generations: 2,
+        },
+      },
+      {
+        operation_id: `coordination:${cancelledTurnId}:1:agent-activated`,
+        recorded_at: 1_700_000_001_010,
+        kind: 'coordination_agent_activated',
+        execution_id: cancelledTurnId,
+        metadata: {
+          agent_id: 'direct-builder', generation: 1, cause_signal_ids: [], parents: [],
+        },
+      },
+      {
+        operation_id: `coordination:${cancelledTurnId}:2:coordination_agent_failed`,
+        recorded_at: 1_700_000_001_020,
+        kind: 'coordination_agent_failed',
+        execution_id: cancelledTurnId,
+        metadata: {
+          agent_id: 'direct-builder', generation: 1, cause_signal_ids: [],
+          signal_id: failedSignal, summary: 'The build route failed its check.',
+          usage: { input_tokens: 4, output_tokens: 2, reasoning_tokens: 0, total_tokens: 6, known: true },
+        },
+      },
+      {
+        operation_id: `coordination:${cancelledTurnId}:3:coordination_agent_blocked`,
+        recorded_at: 1_700_000_001_030,
+        kind: 'coordination_agent_blocked',
+        execution_id: cancelledTurnId,
+        metadata: {
+          agent_id: 'direct-reviewer', generation: 0, cause_signal_ids: [failedSignal],
+          summary: 'Blocked because the required builder route failed.',
+          usage: { input_tokens: 0, output_tokens: 0, reasoning_tokens: 0, total_tokens: 0, known: true },
+        },
+      },
+      {
+        operation_id: `coordination:${cancelledTurnId}:4:agent-activated`,
+        recorded_at: 1_700_000_001_040,
+        kind: 'coordination_agent_activated',
+        execution_id: cancelledTurnId,
+        metadata: {
+          agent_id: 'independent-checker', generation: 1, cause_signal_ids: [], parents: [],
+        },
+      },
+      {
+        operation_id: `coordination:${cancelledTurnId}:5:agent-cancelled`,
+        recorded_at: 1_700_000_001_050,
+        kind: 'coordination_agent_cancelled',
+        execution_id: cancelledTurnId,
+        metadata: {
+          agent_id: 'independent-checker', generation: 1, cause_signal_ids: [],
+          reason: 'turn_stop',
+          usage: { input_tokens: 3, output_tokens: 1, reasoning_tokens: 0, total_tokens: 4, known: true },
+        },
+      },
+      {
+        operation_id: `coordination:${cancelledTurnId}:6:completed`,
+        recorded_at: 1_700_000_001_060,
+        kind: 'coordination_completed',
+        execution_id: cancelledTurnId,
+        metadata: {
+          status: 'cancelled',
+          agents: [
+            { agent_id: 'direct-builder', state: 'failed', generation: 1 },
+            { agent_id: 'direct-reviewer', state: 'blocked', generation: 0 },
+            { agent_id: 'independent-checker', state: 'cancelled', generation: 1 },
+          ],
+          sinks: ['direct-reviewer', 'independent-checker'],
+          usage: { input_tokens: 7, output_tokens: 3, reasoning_tokens: 0, total_tokens: 10, known: true },
+        },
+      },
+    ],
+    agent_outputs: [],
+    superseded: false,
+  };
+  const { context, page, assertNoBrowserErrors } = await openSession(
+    session,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: routedPage }) => {
+      await routedPage.route('**/api/agents', (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(agents),
+      }));
+      await routedPage.route('**/api/sessions', (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([session]),
+      }));
+      await routedPage.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([session]),
+        }),
+      );
+    },
+  );
+  let releaseTurns;
+  try {
+    await page.waitForFunction(() => S.session.historyState === 'ready'
+      && document.querySelectorAll('#session-lattice-host ax-node').length === 3);
+    const turnsMayReturn = new Promise((resolve) => { releaseTurns = resolve; });
+    await page.route(`**/api/sessions/${session.id}/turns*`, async (route) => {
+      await turnsMayReturn;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([cancelledTurn]),
+      }).catch(() => {});
+    });
+
+    const directStates = await page.evaluate((sessionId) => {
+      const directTurn = 'turn-direct-reviewer-only';
+      handleWsFrame({ kind: 'session-accepted', session: sessionId, turn_id: directTurn });
+      S.session.activeTurnTargetAgent = 'direct-reviewer';
+      handleWsFrame({
+        kind: 'event', type: 'AgentActivated', workflow: sessionId, agent: 'direct-reviewer',
+      });
+      const before = Object.fromEntries(Array.from(
+        document.querySelectorAll('#session-lattice-host ax-node'),
+        (node) => [node.id, node.getAttribute('status')],
+      ));
+      handleWsFrame({
+        kind: 'session-done', session: sessionId, turn_id: directTurn,
+        input_tokens: 2, output_tokens: 1, reasoning_tokens: 0, token_usage_known: true,
+      });
+      const after = Object.fromEntries(Array.from(
+        document.querySelectorAll('#session-lattice-host ax-node'),
+        (node) => [node.id, node.getAttribute('status')],
+      ));
+      return { before, after };
+    }, session.id);
+    assert.deepEqual(directStates, {
+      before: {
+        'sl-direct-builder': 'idle',
+        'sl-direct-reviewer': 'running',
+        'sl-independent-checker': 'idle',
+      },
+      after: {
+        'sl-direct-builder': 'idle',
+        'sl-direct-reviewer': 'success',
+        'sl-independent-checker': 'idle',
+      },
+    });
+
+    await page.evaluate(async ({ sessionId, turn }) => {
+      renderSessionTurns([turn]);
+      await showCoordinationGraph(turn.id);
+      handleWsFrame({ kind: 'session-accepted', session: sessionId, turn_id: turn.id });
+      handleWsFrame({
+        kind: 'session-cancelled', session: sessionId, turn_id: turn.id,
+        input_tokens: 7, output_tokens: 3, reasoning_tokens: 0, token_usage_known: true,
+      });
+    }, { sessionId: session.id, turn: cancelledTurn });
+    const cancellationCard = page.locator(
+      `ax-coordination-turn[data-turn-id="${cancelledTurnId}"]`,
+    );
+    await cancellationCard.waitFor({ state: 'visible' });
+    assert.deepEqual(await page.evaluate(() => ({
+      graph: Object.fromEntries(Array.from(
+        document.querySelectorAll('#session-lattice-host ax-node'),
+        (node) => [node.id, node.getAttribute('status')],
+      )),
+      activeTurn: S.session.activeTurnId,
+    })), {
+      graph: {
+        'sl-direct-builder': 'error',
+        'sl-direct-reviewer': 'blocked',
+        'sl-independent-checker': 'cancelled',
+      },
+      activeTurn: null,
+    });
+    assert.equal(
+      await cancellationCard.locator('.agent[data-agent-id="direct-builder"]').getAttribute('data-state'),
+      'failed',
+    );
+    assert.equal(
+      await cancellationCard.locator('.agent[data-agent-id="direct-reviewer"]').getAttribute('data-state'),
+      'blocked',
+    );
+    assert.equal(
+      await cancellationCard.locator('.agent[data-agent-id="independent-checker"]').getAttribute('data-state'),
+      'stopped',
+    );
+    assert.equal(await cancellationCard.locator('.summary').textContent(), 'Coordination · 3 agents · stopped');
+    assertNoBrowserErrors();
+  } finally {
+    releaseTurns?.();
+    await context.close();
+  }
+});
+
+test('terminal coordinated History reload uses structured output after pre-tool text', async () => {
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  session.status = 'active';
+  session.mode = { kind: 'custom', agents: ['builder', 'reviewer'] };
+  const turnId = 'turn-history-preamble-tool-final';
+  const turn = {
+    id: turnId,
+    session_id: session.id,
+    user_input: 'Inspect the cache with a tool and report the result',
+    agent_id: null,
+    model: null,
+    context: [],
+    status: 'completed',
+    partial_output: 'PRE_TOOL_ONLY_TEXTBUILDER_STRUCTURED_RESULTCANONICAL_FINAL_REVIEW',
+    final_output: null,
+    error: null,
+    created_at: 1_700_000_001_000,
+    updated_at: 1_700_000_001_100,
+    completed_at: 1_700_000_001_100,
+    metadata: { mode: 'custom' },
+    execution_events: [
+      {
+        operation_id: `coordination:${turnId}:planned`, kind: 'coordination_planned',
+        execution_id: turnId,
+        metadata: {
+          agents: [
+            { id: 'builder', depends_on: [] },
+            { id: 'reviewer', depends_on: ['builder'] },
+          ],
+        },
+      },
+      {
+        operation_id: `tool:${turnId}:start`, kind: 'tool_started', execution_id: 'inspect-cache',
+        metadata: {
+          agent_id: 'builder', occurrence: 0, tool_name: 'inspect_cache',
+          arguments: { key: 'generation' },
+        },
+      },
+      {
+        operation_id: `tool:${turnId}:result`, kind: 'tool_result', execution_id: 'inspect-cache',
+        metadata: {
+          agent_id: 'builder', occurrence: 0, tool_name: 'inspect_cache',
+          result: { generation: 2 }, is_error: false,
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:builder-done`, kind: 'coordination_agent_completed',
+        execution_id: turnId,
+        metadata: { agent_id: 'builder', generation: 1, summary: 'Inspection complete.' },
+      },
+      {
+        operation_id: `coordination:${turnId}:reviewer-active`, kind: 'coordination_agent_activated',
+        execution_id: turnId,
+        metadata: { agent_id: 'reviewer', generation: 1, parents: ['builder'] },
+      },
+      {
+        operation_id: `coordination:${turnId}:reviewer-done`, kind: 'coordination_agent_completed',
+        execution_id: turnId,
+        metadata: { agent_id: 'reviewer', generation: 1, summary: 'Review complete.' },
+      },
+      {
+        operation_id: `coordination:${turnId}:complete`, kind: 'coordination_completed',
+        execution_id: turnId, metadata: { status: 'completed' },
+      },
+    ],
+    agent_outputs: [
+      {
+        operation_id: `coordination-output:${turnId}:builder:g1`,
+        agent_id: 'builder', model: 'browser-test-model',
+        output: 'BUILDER_STRUCTURED_RESULT', activation_generation: 1,
+        disposition: 'completed', superseded: false, recorded_at: 1_700_000_001_080,
+      },
+      {
+        operation_id: `coordination-output:${turnId}:reviewer:g1`,
+        agent_id: 'reviewer', model: 'browser-test-model',
+        output: 'CANONICAL_FINAL_REVIEW', activation_generation: 1,
+        disposition: 'completed', superseded: false, recorded_at: 1_700_000_001_090,
+      },
+    ],
+    superseded: false,
+  };
+  const { context, page, assertNoBrowserErrors } = await openSession(
+    session,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: routedPage }) => {
+      const sessions = JSON.stringify([session]);
+      await routedPage.route('**/api/agents', (route) => route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'builder', name: 'Builder', role: 'autonomous',
+            provider: 'ollama', model: 'browser-test-model', depends_on: [],
+          },
+          {
+            id: 'reviewer', name: 'Reviewer', role: 'autonomous',
+            provider: 'ollama', model: 'browser-test-model', depends_on: ['builder'],
+          },
+        ]),
+      }));
+      await routedPage.route('**/api/sessions', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: sessions,
+      }));
+      await routedPage.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => route.fulfill({ status: 200, contentType: 'application/json', body: sessions }),
+      );
+      await routedPage.route(`**/api/sessions/${session.id}/turns*`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify([turn]),
+      }));
+      await routedPage.route(`**/api/sessions/${session.id}/active-turn`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({ run: null }),
+      }));
+    },
+  );
+  try {
+    await page.waitForFunction(() => S.session.historyState === 'ready');
+    const transcript = page.locator('#session-msgs');
+    assert.match(await transcript.textContent(), /BUILDER_STRUCTURED_RESULT/);
+    assert.match(await transcript.textContent(), /CANONICAL_FINAL_REVIEW/);
+    assert.doesNotMatch(await transcript.textContent(), /PRE_TOOL_ONLY_TEXT/);
+    assert.equal(await transcript.locator('.toolcard').count(), 1);
+    assert.equal(await transcript.locator('.smsg[data-agent-id="builder"]').count(), 1);
+    assert.equal(await transcript.locator('.smsg[data-agent-id="reviewer"]').count(), 1);
+
+    await page.evaluate((sessionId) => hydrateSessionConversation(sessionId), session.id);
+    assert.match(await transcript.textContent(), /BUILDER_STRUCTURED_RESULT/);
+    assert.match(await transcript.textContent(), /CANONICAL_FINAL_REVIEW/);
+    assert.doesNotMatch(await transcript.textContent(), /PRE_TOOL_ONLY_TEXT/);
+    assert.equal(await transcript.locator('.toolcard').count(), 1);
+    assert.equal(await transcript.locator('.smsg[data-agent-id="builder"]').count(), 1);
+    assert.equal(await transcript.locator('.smsg[data-agent-id="reviewer"]').count(), 1);
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
+test('reactivated Agent keeps repeated tool call ids distinct live and after History hydration', async () => {
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  session.status = 'active';
+  const builderId = 'browser-test-coder';
+  const reviewerId = 'browser-test-reviewer';
+  session.mode = { kind: 'custom', agents: [builderId, reviewerId] };
+  const turnId = 'turn-repeated-call-id-across-generations';
+  const builderCompleted = `coordination-signal:${turnId}:${builderId}:g1:completed`;
+  const feedbackSignal = `coordination-feedback:${turnId}:${reviewerId}:g1`;
+  const planned = {
+    operation_id: `coordination:${turnId}:0:planned`,
+    recorded_at: 1_700_000_001_110,
+    kind: 'coordination_planned',
+    execution_id: turnId,
+    metadata: {
+      agents: [
+        { id: builderId, name: 'Browser Test Coder', depends_on: [] },
+        { id: reviewerId, name: 'Browser Test Reviewer', depends_on: [builderId] },
+      ],
+      roots: [builderId], sinks: [reviewerId], max_generations: 2,
+    },
+  };
+  const initialTurn = {
+    id: turnId,
+    session_id: session.id,
+    user_input: 'Inspect the file, apply feedback, and inspect it again',
+    agent_id: null,
+    model: 'browser-test-model',
+    context: [],
+    status: 'running',
+    partial_output: '',
+    final_output: null,
+    error: null,
+    created_at: 1_700_000_001_110,
+    updated_at: 1_700_000_001_110,
+    completed_at: null,
+    metadata: { mode: 'custom' },
+    execution_events: [],
+    agent_outputs: [],
+    superseded: false,
+  };
+  const executionEvents = [
+    planned,
+    {
+      operation_id: `coordination:${turnId}:1:builder-activated`,
+      recorded_at: 1_700_000_001_111,
+      kind: 'coordination_agent_activated', execution_id: turnId,
+      metadata: { agent_id: builderId, generation: 1, cause_signal_ids: [], parents: [] },
+    },
+    {
+      operation_id: `tool:${turnId}:g1:start`, kind: 'tool_started', execution_id: 'call_0',
+      metadata: {
+        agent_id: builderId, occurrence: 0, generation: 1,
+        tool_name: 'read_file', arguments: { path: 'src/cache.rs' },
+      },
+    },
+    {
+      operation_id: `tool:${turnId}:g1:result`, kind: 'tool_result', execution_id: 'call_0',
+      metadata: {
+        agent_id: builderId, occurrence: 0, generation: 1,
+        tool_name: 'read_file', result: { content: 'GENERATION_ONE_TOOL_RESULT' }, is_error: false,
+      },
+    },
+    {
+      operation_id: `coordination:${turnId}:2:builder-completed`,
+      recorded_at: 1_700_000_001_112,
+      kind: 'coordination_agent_completed', execution_id: turnId,
+      metadata: {
+        agent_id: builderId, generation: 1, signal_id: builderCompleted,
+        cause_signal_ids: [], summary: 'Initial implementation is ready for review.',
+      },
+    },
+    {
+      operation_id: `coordination:${turnId}:3:reviewer-activated`,
+      recorded_at: 1_700_000_001_113,
+      kind: 'coordination_agent_activated', execution_id: turnId,
+      metadata: {
+        agent_id: reviewerId, generation: 1,
+        cause_signal_ids: [builderCompleted], parents: [builderId],
+      },
+    },
+    {
+      operation_id: `coordination:${turnId}:4:feedback`,
+      recorded_at: 1_700_000_001_114,
+      kind: 'coordination_signal', execution_id: turnId,
+      metadata: {
+        from_agent: reviewerId, to_agent: builderId, generation: 1,
+        signal_id: feedbackSignal, applied: true,
+        summary: 'Re-read the file after the requested revision.',
+      },
+    },
+    {
+      operation_id: `coordination:${turnId}:5:builder-reactivated`,
+      recorded_at: 1_700_000_001_115,
+      kind: 'coordination_agent_reactivated', execution_id: turnId,
+      metadata: {
+        agent_id: builderId, generation: 2, cause_signal_ids: [feedbackSignal],
+      },
+    },
+    {
+      operation_id: `coordination:${turnId}:6:reviewer-reactivated`,
+      recorded_at: 1_700_000_001_116,
+      kind: 'coordination_agent_reactivated', execution_id: turnId,
+      metadata: {
+        agent_id: reviewerId, generation: 2, cause_signal_ids: [feedbackSignal],
+      },
+    },
+    {
+      operation_id: `coordination:${turnId}:7:builder-activated`,
+      recorded_at: 1_700_000_001_117,
+      kind: 'coordination_agent_activated', execution_id: turnId,
+      metadata: {
+        agent_id: builderId, generation: 2,
+        cause_signal_ids: [feedbackSignal], parents: [],
+      },
+    },
+    {
+      operation_id: `tool:${turnId}:g2:start`, kind: 'tool_started', execution_id: 'call_0',
+      metadata: {
+        agent_id: builderId, occurrence: 0, generation: 2,
+        tool_name: 'read_file', arguments: { path: 'src/cache.rs' },
+      },
+    },
+    {
+      operation_id: `tool:${turnId}:g2:result`, kind: 'tool_result', execution_id: 'call_0',
+      metadata: {
+        agent_id: builderId, occurrence: 0, generation: 2,
+        tool_name: 'read_file', result: { content: 'GENERATION_TWO_TOOL_RESULT' }, is_error: false,
+      },
+    },
+  ];
+  const agents = [
+    {
+      id: builderId, name: 'Browser Test Coder', role: 'autonomous',
+      provider: 'ollama', model: 'browser-test-model', depends_on: [],
+    },
+    {
+      id: reviewerId, name: 'Browser Test Reviewer', role: 'autonomous',
+      provider: 'ollama', model: 'browser-test-model', depends_on: [builderId],
+    },
+  ];
+  const { context, page, assertNoBrowserErrors } = await openSession(
+    session,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: routedPage }) => {
+      const sessions = JSON.stringify([session]);
+      await routedPage.route('**/api/agents', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify(agents),
+      }));
+      await routedPage.route('**/api/sessions', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: sessions,
+      }));
+      await routedPage.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => route.fulfill({ status: 200, contentType: 'application/json', body: sessions }),
+      );
+    },
+  );
+  try {
+    await page.waitForFunction(() => S.session.historyState === 'ready');
+    const liveProjection = await page.evaluate(({ sessionId, turn, events }) => {
+      renderSessionTurns([turn]);
+      handleWsFrame({ kind: 'session-accepted', session: sessionId, turn_id: turn.id });
+      for (const event of events) {
+        if (event.kind === 'tool_started' || event.kind === 'tool_result') {
+          const metadata = event.metadata;
+          handleWsFrame({
+            kind: 'tool-call', workflow: sessionId, turn_id: turn.id,
+            agent: metadata.agent_id, call_id: event.execution_id,
+            occurrence: metadata.occurrence,
+            coordination_generation: metadata.generation,
+            name: metadata.tool_name,
+            phase: event.kind === 'tool_started' ? 'start' : 'result',
+            ...(event.kind === 'tool_started'
+              ? { arguments: metadata.arguments }
+              : { result: metadata.result, is_error: metadata.is_error }),
+          });
+        } else {
+          handleWsFrame({
+            kind: 'coordination', session: sessionId, turn_id: turn.id,
+            operation_id: event.operation_id,
+            recorded_at: event.recorded_at || 1_700_000_001_120,
+            event,
+          });
+        }
+      }
+      return {
+        cards: Array.from(document.querySelectorAll('#session-msgs .toolcard'), (card) => ({
+          generation: card.dataset.coordinationGeneration,
+          resultApplied: card.dataset.resultApplied,
+          text: card.textContent,
+        })),
+        cardKeys: Object.keys(S.session.toolCards),
+        cachedFrameKeys: (_liveSessionRuns.get(sessionId)?.toolFrames || []).map(liveToolFrameKey),
+      };
+    }, { sessionId: session.id, turn: initialTurn, events: executionEvents });
+    assert.deepEqual(liveProjection.cards.map((card) => card.generation), ['1', '2']);
+    assert.deepEqual(liveProjection.cards.map((card) => card.resultApplied), ['true', 'true']);
+    assert.match(liveProjection.cards[0].text, /GENERATION_ONE_TOOL_RESULT/);
+    assert.match(liveProjection.cards[1].text, /GENERATION_TWO_TOOL_RESULT/);
+    assert.equal(liveProjection.cardKeys.length, 2);
+    assert.equal(liveProjection.cachedFrameKeys.length, 4);
+
+    const hydratedProjection = await page.evaluate(({ turn, events }) => {
+      renderSessionTurns([{ ...turn, execution_events: events }]);
+      return {
+        cards: Array.from(document.querySelectorAll('#session-msgs .toolcard'), (card) => ({
+          generation: card.dataset.coordinationGeneration,
+          resultApplied: card.dataset.resultApplied,
+          text: card.textContent,
+        })),
+        cardKeys: Object.keys(S.session.toolCards),
+      };
+    }, { turn: initialTurn, events: executionEvents });
+    assert.deepEqual(hydratedProjection.cards.map((card) => card.generation), ['1', '2']);
+    assert.deepEqual(hydratedProjection.cards.map((card) => card.resultApplied), ['true', 'true']);
+    assert.match(hydratedProjection.cards[0].text, /GENERATION_ONE_TOOL_RESULT/);
+    assert.match(hydratedProjection.cards[1].text, /GENERATION_TWO_TOOL_RESULT/);
+    assert.equal(hydratedProjection.cardKeys.length, 2);
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
+test('interrupted coordinated History labels unattributed recovery evidence and stops unfinished Agents', async () => {
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  session.status = 'active';
+  session.mode = { kind: 'custom', agents: ['planner', 'builder', 'reviewer'] };
+  const turnId = 'turn-history-interrupted-coordination';
+  const turn = {
+    id: turnId,
+    session_id: session.id,
+    user_input: 'Implement and verify the cache boundary',
+    agent_id: null,
+    model: null,
+    context: [],
+    status: 'interrupted',
+    partial_output: 'UNATTRIBUTED_RESTART_RECOVERY_TEXT',
+    final_output: null,
+    error: 'daemon restarted during the turn',
+    created_at: 1_700_000_001_200,
+    updated_at: 1_700_000_001_300,
+    completed_at: 1_700_000_001_300,
+    metadata: { mode: 'custom' },
+    execution_events: [
+      {
+        operation_id: `coordination:${turnId}:planned`, kind: 'coordination_planned',
+        execution_id: turnId,
+        metadata: {
+          agents: [
+            { id: 'planner', depends_on: [] },
+            { id: 'builder', depends_on: ['planner'] },
+            { id: 'reviewer', depends_on: ['builder'] },
+          ],
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:planner-done`,
+        kind: 'coordination_agent_completed', execution_id: turnId,
+        metadata: { agent_id: 'planner', generation: 1, summary: 'Plan complete.' },
+      },
+      {
+        operation_id: `coordination:${turnId}:builder-active`,
+        kind: 'coordination_agent_activated', execution_id: turnId,
+        metadata: { agent_id: 'builder', generation: 1, parents: ['planner'] },
+      },
+      {
+        operation_id: `coordination:${turnId}:builder-cancelled`,
+        kind: 'coordination_agent_cancelled', execution_id: turnId,
+        metadata: {
+          agent_id: 'builder', generation: 1, reason: 'daemon_restart_interrupted',
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:reviewer-cancelled`,
+        kind: 'coordination_agent_cancelled', execution_id: turnId,
+        metadata: {
+          agent_id: 'reviewer', generation: 0, reason: 'daemon_restart_interrupted',
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:recovery-partial`,
+        kind: 'coordination_recovery_partial', execution_id: turnId,
+        metadata: {
+          attribution: 'unattributed', source: 'turn.partial_output',
+          byte_len: 'UNATTRIBUTED_RESTART_RECOVERY_TEXT'.length,
+        },
+      },
+    ],
+    agent_outputs: [],
+    superseded: false,
+  };
+  const agents = [
+    {
+      id: 'planner', name: 'Planner', role: 'autonomous',
+      provider: 'ollama', model: 'browser-test-model', depends_on: [],
+    },
+    {
+      id: 'builder', name: 'Builder', role: 'autonomous',
+      provider: 'ollama', model: 'browser-test-model', depends_on: ['planner'],
+    },
+    {
+      id: 'reviewer', name: 'Reviewer', role: 'autonomous',
+      provider: 'ollama', model: 'browser-test-model', depends_on: ['builder'],
+    },
+  ];
+  const { context, page, assertNoBrowserErrors } = await openSession(
+    session,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: routedPage }) => {
+      const sessions = JSON.stringify([session]);
+      await routedPage.route('**/api/agents', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify(agents),
+      }));
+      await routedPage.route('**/api/sessions', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: sessions,
+      }));
+      await routedPage.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => route.fulfill({ status: 200, contentType: 'application/json', body: sessions }),
+      );
+      await routedPage.route(`**/api/sessions/${session.id}/turns*`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify([turn]),
+      }));
+      await routedPage.route(`**/api/sessions/${session.id}/active-turn`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({ run: null }),
+      }));
+    },
+  );
+  try {
+    const card = page.locator(`ax-coordination-turn[data-turn-id="${turnId}"]`);
+    await page.waitForFunction(() => S.session.historyState === 'ready');
+    await card.waitFor({ state: 'visible' });
+    const assertRecoveryProjection = async () => {
+      assert.equal(await card.locator('.status').textContent(), 'interrupted');
+      assert.equal(
+        await card.locator('.agent[data-agent-id="planner"]').getAttribute('data-state'),
+        'completed',
+      );
+      assert.equal(
+        await card.locator('.agent[data-agent-id="builder"]').getAttribute('data-state'),
+        'stopped',
+      );
+      assert.equal(
+        await card.locator('.agent[data-agent-id="reviewer"]').getAttribute('data-state'),
+        'stopped',
+      );
+      assert.equal(
+        await card.locator('.recovery-label').textContent(),
+        'Unattributed recovery evidence',
+      );
+      assert.equal(
+        await card.locator('.recovery-copy').textContent(),
+        'UNATTRIBUTED_RESTART_RECOVERY_TEXT',
+      );
+      assert.equal(await card.locator('.answer-output, .answer-agent').count(), 0);
+      assert.match(
+        await card.locator('details').textContent(),
+        /34 bytes retained from the interrupted turn as unattributed recovery evidence/,
+      );
+      assert.equal(await page.locator('#session-msgs .smsg[data-agent-id]').count(), 0);
+      assert.match(await page.locator('#session-msgs').textContent(), /Interrupted by restart/);
+    };
+    await assertRecoveryProjection();
+    await page.evaluate((sessionId) => hydrateSessionConversation(sessionId), session.id);
+    await assertRecoveryProjection();
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
+test('coordinated reconnect keeps completed Agent A and identity-bearing Agent B stream only', async () => {
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  session.status = 'active';
+  session.mode = { kind: 'custom', agents: ['agent-a', 'agent-b'] };
+  const turnId = 'turn-history-agent-a-complete-agent-b-streaming';
+  const turn = {
+    id: turnId,
+    session_id: session.id,
+    user_input: 'Research and verify the cache boundary',
+    agent_id: null,
+    model: null,
+    context: [],
+    status: 'running',
+    partial_output: 'AGENT_A_COMPLETEDUNSAFE_AGGREGATE_AGENT_B_TAIL',
+    final_output: null,
+    error: null,
+    created_at: 1_700_000_001_500,
+    updated_at: 1_700_000_001_600,
+    completed_at: null,
+    metadata: { mode: 'custom' },
+    execution_events: [
+      {
+        operation_id: `coordination:${turnId}:planned`, kind: 'coordination_planned',
+        execution_id: turnId,
+        metadata: {
+          agents: [
+            { id: 'agent-a', depends_on: [] },
+            { id: 'agent-b', depends_on: ['agent-a'] },
+          ],
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:a-done`, kind: 'coordination_agent_completed',
+        execution_id: turnId,
+        metadata: { agent_id: 'agent-a', generation: 1, summary: 'Research complete.' },
+      },
+      {
+        operation_id: `coordination:${turnId}:b-active`, kind: 'coordination_agent_activated',
+        execution_id: turnId,
+        metadata: { agent_id: 'agent-b', generation: 1, parents: ['agent-a'] },
+      },
+    ],
+    agent_outputs: [{
+      operation_id: `coordination-output:${turnId}:agent-a:g1`,
+      agent_id: 'agent-a', model: 'browser-test-model', output: 'AGENT_A_COMPLETED',
+      activation_generation: 1, disposition: 'completed', superseded: false,
+      recorded_at: 1_700_000_001_550,
+    }],
+    superseded: false,
+  };
+  const liveRun = {
+    kind: 'session', workflow: session.id, turn_id: turnId,
+    agents: [
+      { agent: 'agent-a', status: 'done', output: 'AGENT_A_COMPLETED', thinking: '', tokens: 4 },
+      { agent: 'agent-b', status: 'running', output: 'AGENT_B_IDENTITY_STREAM', thinking: '', tokens: 2 },
+    ],
+  };
+  const { context, page, assertNoBrowserErrors } = await openSession(
+    session,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: routedPage }) => {
+      await routeSessionRunSnapshot(routedPage, liveRun);
+      const sessions = JSON.stringify([session]);
+      await routedPage.route('**/api/agents', (route) => route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify([
+          { id: 'agent-a', name: 'Agent A', role: 'autonomous', provider: 'ollama', model: 'browser-test-model', depends_on: [] },
+          { id: 'agent-b', name: 'Agent B', role: 'autonomous', provider: 'ollama', model: 'browser-test-model', depends_on: ['agent-a'] },
+        ]),
+      }));
+      await routedPage.route('**/api/sessions', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: sessions,
+      }));
+      await routedPage.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => route.fulfill({ status: 200, contentType: 'application/json', body: sessions }),
+      );
+      await routedPage.route(`**/api/sessions/${session.id}/turns*`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify([turn]),
+      }));
+      await routedPage.route(`**/api/sessions/${session.id}/active-turn`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({ run: liveRun }),
+      }));
+    },
+  );
+  try {
+    await page.waitForFunction(() => S.session.historyState === 'ready'
+      && S.session.activeTurnId === 'turn-history-agent-a-complete-agent-b-streaming');
+    const transcript = page.locator('#session-msgs');
+    const assertCanonicalProjection = async () => {
+      const text = await transcript.textContent();
+      assert.match(text, /AGENT_A_COMPLETED/);
+      assert.match(text, /AGENT_B_IDENTITY_STREAM/);
+      assert.doesNotMatch(text, /UNSAFE_AGGREGATE_AGENT_B_TAIL/);
+      assert.equal(await transcript.locator('.smsg[data-agent-id="agent-a"]').count(), 1);
+      assert.equal(await transcript.locator('.smsg[data-agent-id="agent-b"]').count(), 1);
+    };
+    await assertCanonicalProjection();
+    await page.evaluate((sessionId) => hydrateSessionConversation(sessionId), session.id);
+    await assertCanonicalProjection();
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
+test('non-completed coordinated outputs are labeled as partial or incomplete evidence', async () => {
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  const turnId = 'turn-non-completed-output-labels';
+  const { context, page, assertNoBrowserErrors } = await openSession(session);
+  try {
+    // Let the normal open-session History and Attempt restoration settle before
+    // replacing the transcript with this synthetic durable turn. Otherwise its
+    // final rerender can legitimately remove the fixture between assertions.
+    await page.waitForFunction(() => _liveSessionSnapshotEpoch > 0
+      && S.session.historyState === 'ready'
+      && S.session.attemptRestorePending === false);
+    await page.evaluate((historicalTurnId) => renderSessionTurns([{
+      id: historicalTurnId,
+      session_id: S.session.id,
+      user_input: 'Retain every useful partial result without overstating it',
+      agent_id: null,
+      model: null,
+      context: [],
+      status: 'failed',
+      partial_output: '',
+      final_output: null,
+      error: 'The coordinated turn did not complete.',
+      metadata: { mode: 'custom' },
+      execution_events: [{
+        operation_id: `coordination:${historicalTurnId}:planned`,
+        kind: 'coordination_planned', execution_id: historicalTurnId,
+        metadata: { agents: ['failed-worker', 'stopped-worker', 'revision-worker'] },
+      }],
+      agent_outputs: [
+        {
+          agent_id: 'failed-worker', output: 'FAILED_PARTIAL_EVIDENCE',
+          activation_generation: 1, disposition: 'failed', superseded: false,
+        },
+        {
+          agent_id: 'stopped-worker', output: 'STOPPED_PARTIAL_EVIDENCE',
+          activation_generation: 1, disposition: 'cancelled', superseded: false,
+        },
+        {
+          agent_id: 'revision-worker', output: 'CHANGES_REQUESTED_EVIDENCE',
+          activation_generation: 1, disposition: 'changes_requested', superseded: false,
+        },
+      ],
+      superseded: false,
+    }]), turnId);
+
+    const rows = await page.locator('#session-msgs .smsg.incomplete-output').evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        agent: node.dataset.agentId,
+        disposition: node.dataset.disposition,
+        label: node.querySelector('.smsg-role')?.textContent || '',
+        output: node.querySelector('.smsg-body')?.textContent?.trim() || '',
+      })));
+    assert.deepEqual(rows, [
+      {
+        agent: 'failed-worker', disposition: 'failed',
+        label: 'failed-worker · failed · partial output', output: 'FAILED_PARTIAL_EVIDENCE',
+      },
+      {
+        agent: 'stopped-worker', disposition: 'cancelled',
+        label: 'stopped-worker · stopped · partial output', output: 'STOPPED_PARTIAL_EVIDENCE',
+      },
+      {
+        agent: 'revision-worker', disposition: 'changes_requested',
+        label: 'revision-worker · changes requested · incomplete output',
+        output: 'CHANGES_REQUESTED_EVIDENCE',
+      },
+    ]);
+    assert.equal(await page.locator('#session-msgs .smsg[data-disposition]').count(), 3);
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
+test('Session History omits superseded Agent generations while retaining their coordination evidence', async () => {
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  const turnId = 'turn-superseded-agent-output';
+  const feedbackSignal = `coordination-feedback:${turnId}:reviewer:g1`;
+  const turn = {
+    id: turnId,
+    session_id: session.id,
+    user_input: 'Implement and review the cache boundary',
+    agent_id: null,
+    model: null,
+    context: [],
+    status: 'completed',
+    partial_output: '',
+    final_output: 'CURRENT_REVIEWED_OUTPUT',
+    error: null,
+    created_at: 1_700_000_002_000,
+    updated_at: 1_700_000_002_200,
+    completed_at: 1_700_000_002_200,
+    metadata: { mode: 'custom' },
+    execution_events: [
+      {
+        operation_id: `coordination:${turnId}:0:planned`,
+        recorded_at: 1_700_000_002_000,
+        kind: 'coordination_planned',
+        execution_id: turnId,
+        metadata: {
+          agents: [
+            { id: 'builder', name: 'Builder', depends_on: [] },
+            { id: 'reviewer', name: 'Reviewer', depends_on: ['builder'] },
+          ],
+          roots: ['builder'], sinks: ['reviewer'], max_generations: 2,
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:1:agent-activated`,
+        recorded_at: 1_700_000_002_010,
+        kind: 'coordination_agent_activated',
+        execution_id: turnId,
+        metadata: { agent_id: 'builder', generation: 1, cause_signal_ids: [], parents: [] },
+      },
+      {
+        operation_id: `coordination:${turnId}:2:agent-completed`,
+        recorded_at: 1_700_000_002_020,
+        kind: 'coordination_agent_completed',
+        execution_id: turnId,
+        metadata: {
+          agent_id: 'builder', generation: 1,
+          signal_id: `coordination-signal:${turnId}:builder:g1:completed`,
+          cause_signal_ids: [], summary: 'Initial implementation handed to Reviewer.',
+          usage: { input_tokens: 4, output_tokens: 2, reasoning_tokens: 0, total_tokens: 6, known: true },
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:3:signal`,
+        recorded_at: 1_700_000_002_030,
+        kind: 'coordination_signal',
+        execution_id: turnId,
+        metadata: {
+          from_agent: 'reviewer', to_agent: 'builder', generation: 1,
+          signal_id: feedbackSignal, applied: true,
+          summary: 'Keep invalidation atomic with the write.',
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:4:agent-output-superseded`,
+        recorded_at: 1_700_000_002_040,
+        kind: 'agent_output_superseded',
+        metadata: {
+          agent_id: 'builder', activation_generation: 1,
+          superseded_by_generation: 2, cause_signal_id: feedbackSignal,
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:5:agent-reactivated`,
+        recorded_at: 1_700_000_002_050,
+        kind: 'coordination_agent_reactivated',
+        execution_id: turnId,
+        metadata: {
+          agent_id: 'builder', generation: 2, cause_signal_ids: [feedbackSignal],
+          summary: 'Keep invalidation atomic with the write.',
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:6:agent-reactivated`,
+        recorded_at: 1_700_000_002_060,
+        kind: 'coordination_agent_reactivated',
+        execution_id: turnId,
+        metadata: {
+          agent_id: 'reviewer', generation: 2, cause_signal_ids: [feedbackSignal],
+          summary: 'Re-verify the revised implementation.',
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:7:agent-activated`,
+        recorded_at: 1_700_000_002_070,
+        kind: 'coordination_agent_activated',
+        execution_id: turnId,
+        metadata: {
+          agent_id: 'builder', generation: 2, cause_signal_ids: [feedbackSignal], parents: [],
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:8:agent-completed`,
+        recorded_at: 1_700_000_002_080,
+        kind: 'coordination_agent_completed',
+        execution_id: turnId,
+        metadata: {
+          agent_id: 'builder', generation: 2,
+          signal_id: `coordination-signal:${turnId}:builder:g2:completed`,
+          cause_signal_ids: [feedbackSignal], summary: 'Atomic invalidation is implemented.',
+          usage: { input_tokens: 5, output_tokens: 3, reasoning_tokens: 0, total_tokens: 8, known: true },
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:9:agent-activated`,
+        recorded_at: 1_700_000_002_090,
+        kind: 'coordination_agent_activated',
+        execution_id: turnId,
+        metadata: {
+          agent_id: 'reviewer', generation: 2,
+          cause_signal_ids: [`coordination-signal:${turnId}:builder:g2:completed`, feedbackSignal],
+          parents: ['builder'],
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:10:agent-completed`,
+        recorded_at: 1_700_000_002_100,
+        kind: 'coordination_agent_completed',
+        execution_id: turnId,
+        metadata: {
+          agent_id: 'reviewer', generation: 2,
+          signal_id: `coordination-signal:${turnId}:reviewer:g2:completed`,
+          cause_signal_ids: [`coordination-signal:${turnId}:builder:g2:completed`, feedbackSignal],
+          summary: 'The revised implementation passes review.',
+          usage: { input_tokens: 5, output_tokens: 2, reasoning_tokens: 0, total_tokens: 7, known: true },
+        },
+      },
+      {
+        operation_id: `coordination:${turnId}:11:completed`,
+        recorded_at: 1_700_000_002_110,
+        kind: 'coordination_completed',
+        execution_id: turnId,
+        metadata: {
+          status: 'completed',
+          agents: [
+            { agent_id: 'builder', state: 'completed', generation: 2 },
+            { agent_id: 'reviewer', state: 'completed', generation: 2 },
+          ],
+          sinks: ['reviewer'],
+          usage: { input_tokens: 14, output_tokens: 7, reasoning_tokens: 0, total_tokens: 21, known: true },
+        },
+      },
+    ],
+    agent_outputs: [
+      {
+        operation_id: `coordination-output:${turnId}:builder:g1`,
+        agent_id: 'builder', model: 'browser-test-model',
+        output: 'STALE_OUTPUT_MUST_NOT_RENDER', activation_generation: 1,
+        disposition: 'completed',
+        causal_signal_id: `coordination-signal:${turnId}:builder:g1:completed`,
+        superseded: true, superseded_by_generation: 2,
+        superseded_by_signal_id: feedbackSignal, recorded_at: 1_700_000_002_020,
+      },
+      {
+        operation_id: `coordination-output:${turnId}:builder:g2`,
+        agent_id: 'builder', model: 'browser-test-model',
+        output: 'CURRENT_BUILDER_OUTPUT', activation_generation: 2,
+        disposition: 'completed',
+        causal_signal_id: `coordination-signal:${turnId}:builder:g2:completed`,
+        superseded: false, recorded_at: 1_700_000_002_080,
+      },
+      {
+        operation_id: `coordination-output:${turnId}:reviewer:g2`,
+        agent_id: 'reviewer', model: 'browser-test-model',
+        output: 'CURRENT_REVIEWED_OUTPUT', activation_generation: 2,
+        disposition: 'completed',
+        causal_signal_id: `coordination-signal:${turnId}:reviewer:g2:completed`,
+        superseded: false, recorded_at: 1_700_000_002_100,
+      },
+    ],
+    superseded: false,
+  };
+  const { context, page, assertNoBrowserErrors } = await openSession(session);
+  try {
+    await page.waitForFunction(() => _liveSessionSnapshotEpoch > 0
+      && S.session.historyState === 'ready'
+      && S.session.attemptRestorePending === false);
+    await page.evaluate((historicalTurn) => renderSessionTurns([historicalTurn]), turn);
+    const transcript = page.locator('#session-msgs');
+    const card = transcript.locator(`ax-coordination-turn[data-turn-id="${turnId}"]`);
+    await card.waitFor({ state: 'visible' });
+    const transcriptText = await transcript.textContent();
+    assert.doesNotMatch(transcriptText, /STALE_OUTPUT_MUST_NOT_RENDER/);
+    assert.match(transcriptText, /CURRENT_BUILDER_OUTPUT/);
+    assert.match(transcriptText, /CURRENT_REVIEWED_OUTPUT/);
+    assert.equal(
+      await transcript.locator('.smsg[data-agent-id="builder"][data-generation="1"]').count(),
+      0,
+    );
+    assert.equal(
+      await transcript.locator('.smsg[data-agent-id="builder"][data-generation="2"]').count(),
+      1,
+    );
+    assert.match(await card.locator('details').textContent(), /Generation 1 replaced by generation 2/);
+    assert.equal(
+      await card.locator('.agent[data-agent-id="builder"]').getAttribute('data-state'),
+      'completed',
+      'the replacement completion must be the visible terminal state',
+    );
+
+    await page.evaluate(({ historicalTurn, activeTurnId }) => {
+      setSessionTurnRunning(activeTurnId, true);
+      renderSessionTurns([{
+        ...historicalTurn,
+        status: 'running',
+        final_output: null,
+        execution_events: historicalTurn.execution_events.slice(0, 10),
+      }], {
+        preserveLive: true,
+        liveRun: {
+          kind: 'session',
+          workflow: historicalTurn.session_id,
+          turn_id: activeTurnId,
+          agents: [{
+            agent: 'builder', status: 'running',
+            output: 'CURRENT_BUILDER_OUTPUT_WITH_LIVE_SUFFIX', thinking: '', tokens: 8,
+          }],
+        },
+      });
+    }, { historicalTurn: turn, activeTurnId: turnId });
+    const liveTranscriptText = await transcript.textContent();
+    assert.doesNotMatch(
+      liveTranscriptText,
+      /STALE_OUTPUT_MUST_NOT_RENDER/,
+      'a delayed History merge must never rebind the live stream to a superseded generation',
+    );
+    assert.match(liveTranscriptText, /CURRENT_BUILDER_OUTPUT_WITH_LIVE_SUFFIX/);
+    assert.equal(
+      await transcript.locator('.smsg[data-agent-id="builder"][data-generation="1"]').count(),
+      0,
+    );
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
+test('reconnect during an upstream retry cannot resurrect a superseded descendant RunState', async () => {
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  session.status = 'active';
+  session.mode = { kind: 'custom', agents: ['retry-builder', 'retry-reviewer'] };
+  const turnId = 'turn-reconnect-upstream-retry';
+  const completedBuilder = `coordination-signal:${turnId}:retry-builder:g1:completed`;
+  const feedbackSignal = `coordination-feedback:${turnId}:retry-reviewer:g1`;
+  const event = (sequence, suffix, kind, metadata, { executionId = true } = {}) => ({
+    operation_id: `coordination:${turnId}:${sequence}:${suffix}`,
+    recorded_at: 1_700_000_003_000 + sequence,
+    kind,
+    ...(executionId ? { execution_id: turnId } : {}),
+    metadata,
+  });
+  const pendingRetryTurn = {
+    id: turnId,
+    session_id: session.id,
+    user_input: 'Implement the cache fix, review it, and revise the upstream work',
+    agent_id: null,
+    model: null,
+    context: [],
+    status: 'running',
+    partial_output: 'STALE_BUILDER_PARTIALSTALE_DESCENDANT_PARTIAL',
+    final_output: null,
+    error: null,
+    created_at: 1_700_000_003_000,
+    updated_at: 1_700_000_003_100,
+    completed_at: null,
+    metadata: { mode: 'custom' },
+    execution_events: [
+      event(0, 'planned', 'coordination_planned', {
+        agents: [
+          { id: 'retry-builder', name: 'Retry Builder', depends_on: [] },
+          { id: 'retry-reviewer', name: 'Retry Reviewer', depends_on: ['retry-builder'] },
+        ],
+        roots: ['retry-builder'], sinks: ['retry-reviewer'], max_generations: 2,
+      }),
+      event(1, 'agent-activated', 'coordination_agent_activated', {
+        agent_id: 'retry-builder', generation: 1, cause_signal_ids: [], parents: [],
+      }),
+      event(2, 'agent-completed', 'coordination_agent_completed', {
+        agent_id: 'retry-builder', generation: 1, signal_id: completedBuilder,
+        cause_signal_ids: [], summary: 'Initial builder result.',
+        usage: { input_tokens: 4, output_tokens: 2, reasoning_tokens: 0, total_tokens: 6, known: true },
+      }),
+      event(3, 'agent-activated', 'coordination_agent_activated', {
+        agent_id: 'retry-reviewer', generation: 1,
+        cause_signal_ids: [completedBuilder], parents: ['retry-builder'],
+      }),
+      event(4, 'signal', 'coordination_signal', {
+        from_agent: 'retry-reviewer', to_agent: 'retry-builder', generation: 1,
+        signal_id: feedbackSignal, applied: true,
+        summary: 'Make invalidation atomic with the write.',
+      }),
+      event(5, 'agent-output-superseded', 'agent_output_superseded', {
+        agent_id: 'retry-builder', activation_generation: 1,
+        superseded_by_generation: 2, cause_signal_id: feedbackSignal,
+      }, { executionId: false }),
+      event(6, 'agent-output-superseded', 'agent_output_superseded', {
+        agent_id: 'retry-reviewer', activation_generation: 1,
+        superseded_by_generation: 2, cause_signal_id: feedbackSignal,
+      }, { executionId: false }),
+      event(7, 'agent-reactivated', 'coordination_agent_reactivated', {
+        agent_id: 'retry-builder', generation: 2, cause_signal_ids: [feedbackSignal],
+        summary: 'Make invalidation atomic with the write.',
+      }),
+      event(8, 'agent-reactivated', 'coordination_agent_reactivated', {
+        agent_id: 'retry-reviewer', generation: 2, cause_signal_ids: [feedbackSignal],
+        summary: 'Re-verify the revised builder result.',
+      }),
+    ],
+    agent_outputs: [
+      {
+        operation_id: `coordination-output:${turnId}:retry-builder:g1`,
+        agent_id: 'retry-builder', model: 'browser-test-model',
+        output: 'STALE_BUILDER_LEDGER_OUTPUT', activation_generation: 1,
+        disposition: 'completed', causal_signal_id: completedBuilder,
+        superseded: true, superseded_by_generation: 2,
+        superseded_by_signal_id: feedbackSignal, recorded_at: 1_700_000_003_002,
+      },
+      {
+        operation_id: `coordination-output:${turnId}:retry-reviewer:g1`,
+        agent_id: 'retry-reviewer', model: 'browser-test-model',
+        output: 'STALE_DESCENDANT_LEDGER_OUTPUT', activation_generation: 1,
+        disposition: 'changes_requested', causal_signal_id: feedbackSignal,
+        superseded: true, superseded_by_generation: 2,
+        superseded_by_signal_id: feedbackSignal, recorded_at: 1_700_000_003_004,
+      },
+    ],
+    superseded: false,
+  };
+  const staleHttpRun = {
+    kind: 'session', workflow: session.id, turn_id: turnId,
+    agents: [
+      {
+        agent: 'retry-builder', status: 'done', output: 'STALE_BUILDER_HTTP_OUTPUT',
+        thinking: 'STALE_BUILDER_HTTP_REASONING', tokens: 6,
+      },
+      {
+        agent: 'retry-reviewer', status: 'done', output: 'STALE_DESCENDANT_HTTP_OUTPUT',
+        thinking: 'STALE_DESCENDANT_HTTP_REASONING', tokens: 7,
+      },
+    ],
+  };
+  const { context, page, assertNoBrowserErrors } = await openSession(
+    session,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: routedPage }) => {
+      await routedPage.route('**/api/agents', (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'retry-builder', name: 'Retry Builder', role: 'autonomous',
+            provider: 'ollama', model: 'browser-test-model', depends_on: [],
+          },
+          {
+            id: 'retry-reviewer', name: 'Retry Reviewer', role: 'autonomous',
+            provider: 'ollama', model: 'browser-test-model', depends_on: ['retry-builder'],
+          },
+        ]),
+      }));
+      await routedPage.route('**/api/sessions', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify([session]),
+      }));
+      await routedPage.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => route.fulfill({
+          status: 200, contentType: 'application/json', body: JSON.stringify([session]),
+        }),
+      );
+      await routedPage.route(`**/api/sessions/${session.id}/turns*`, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([pendingRetryTurn]),
+      }));
+      await routedPage.route(`**/api/sessions/${session.id}/active-turn`, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ run: staleHttpRun }),
+      }));
+    },
+  );
+  try {
+    await page.waitForFunction(() => _liveSessionSnapshotEpoch > 0
+      && S.session.historyState === 'ready'
+      && S.session.attemptRestorePending === false);
+    const historyGeneration = await page.evaluate(() => S.session.historyGeneration);
+    await page.evaluate(({ sessionId, activeTurn }) => handleWsFrame({
+      kind: 'snapshot',
+      approvals: [],
+      runs: [{
+        kind: 'session', workflow: sessionId, turn_id: activeTurn,
+        agents: [
+          {
+            agent: 'retry-builder', status: 'done', output: 'STALE_BUILDER_RUNSTATE_OUTPUT',
+            thinking: 'STALE_BUILDER_RUNSTATE_REASONING', tokens: 6,
+          },
+          {
+            agent: 'retry-reviewer', status: 'done', output: 'STALE_DESCENDANT_RUNSTATE_OUTPUT',
+            thinking: 'STALE_DESCENDANT_RUNSTATE_REASONING', tokens: 7,
+          },
+        ],
+      }],
+    }), { sessionId: session.id, activeTurn: turnId });
+    await page.waitForFunction((generation) => S.session.historyGeneration > generation
+      && S.session.historyState === 'ready', historyGeneration);
+    await page.evaluate((sessionId) => hydrateSessionConversation(sessionId), session.id);
+
+    const pendingState = await page.evaluate(({ sessionId, activeTurn }) => {
+      const run = _liveSessionRuns.get(sessionId);
+      return {
+        activeTurn: S.session.activeTurnId,
+        agents: Object.fromEntries((run?.agents || []).map((agent) => [agent.agent, {
+          status: agent.status, output: agent.output, thinking: agent.thinking,
+          tokens: agent.tokens, resetOutput: agent.resetOutput === true,
+        }])),
+        transcript: document.querySelector('#session-msgs')?.textContent || '',
+        eventKinds: (S.session.coordinationEvents.get(activeTurn) || []).map((item) => item.kind),
+      };
+    }, { sessionId: session.id, activeTurn: turnId });
+    assert.equal(pendingState.activeTurn, turnId);
+    assert.deepEqual(pendingState.agents, {
+      'retry-builder': {
+        status: 'pending', output: '', thinking: '', tokens: 0, resetOutput: true,
+      },
+      'retry-reviewer': {
+        status: 'pending', output: '', thinking: '', tokens: 0, resetOutput: true,
+      },
+    });
+    assert.match(pendingState.eventKinds.join(','), /coordination_agent_reactivated/);
+    assert.doesNotMatch(pendingState.transcript, /STALE_(?:BUILDER|DESCENDANT)/);
+    assert.equal(await page.locator('#session-msgs .smsg[data-agent-id="retry-reviewer"]').count(), 0);
+    assert.equal(await page.locator('#session-msgs details[data-agent-id="retry-reviewer"]').count(), 0);
+
+    await page.evaluate(({ sessionId, activeTurn }) => {
+      handleWsFrame({
+        kind: 'coordination', session: sessionId, turn_id: activeTurn,
+        operation_id: `coordination:${activeTurn}:9:agent-activated`,
+        recorded_at: 1_700_000_003_009,
+        event: {
+          kind: 'coordination_agent_activated', execution_id: activeTurn,
+          metadata: {
+            agent_id: 'retry-reviewer', generation: 2,
+            cause_signal_ids: [`coordination-signal:${activeTurn}:retry-builder:g2:completed`],
+            parents: ['retry-builder'],
+          },
+        },
+      });
+      handleWsFrame({
+        kind: 'event', type: 'AgentActivated', workflow: sessionId, agent: 'retry-reviewer',
+      });
+      handleWsFrame({
+        kind: 'token', workflow: sessionId, turn_id: activeTurn,
+        agent: 'retry-reviewer', delta: 'CURRENT_DESCENDANT_GENERATION_2',
+      });
+    }, { sessionId: session.id, activeTurn: turnId });
+    await page.evaluate((sessionId) => hydrateSessionConversation(sessionId), session.id);
+    const activatedState = await page.evaluate((sessionId) => {
+      const agent = _liveSessionRuns.get(sessionId)?.agents
+        ?.find((candidate) => candidate.agent === 'retry-reviewer');
+      return {
+        status: agent?.status,
+        output: agent?.output,
+        transcript: document.querySelector('#session-msgs')?.textContent || '',
+      };
+    }, session.id);
+    assert.equal(activatedState.status, 'running');
+    assert.equal(activatedState.output, 'CURRENT_DESCENDANT_GENERATION_2');
+    assert.match(activatedState.transcript, /CURRENT_DESCENDANT_GENERATION_2/);
+    assert.doesNotMatch(activatedState.transcript, /STALE_(?:BUILDER|DESCENDANT)/);
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
+test('failed coordinated History renders only current-generation Agent output and keeps failure evidence', async () => {
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  session.status = 'active';
+  session.mode = { kind: 'custom', agents: ['failed-builder', 'blocked-reviewer'] };
+  const turnId = 'turn-failed-coordination-revision';
+  const builderGenerationOne = `coordination-signal:${turnId}:failed-builder:g1:completed`;
+  const feedbackSignal = `coordination-feedback:${turnId}:blocked-reviewer:g1`;
+  const failedSignal = `coordination-signal:${turnId}:failed-builder:g2:failed`;
+  const event = (sequence, suffix, kind, metadata, { executionId = true } = {}) => ({
+    operation_id: `coordination:${turnId}:${sequence}:${suffix}`,
+    recorded_at: 1_700_000_004_000 + sequence,
+    kind,
+    ...(executionId ? { execution_id: turnId } : {}),
+    metadata,
+  });
+  const turn = {
+    id: turnId,
+    session_id: session.id,
+    user_input: 'Implement the cache boundary and stop if the revision cannot pass review',
+    agent_id: null,
+    model: null,
+    context: [],
+    status: 'failed',
+    // These aggregate projections deliberately model the old bug: streamed
+    // generations were concatenated and therefore are not safe History copy.
+    partial_output: 'STALE_BUILDER_GENERATION_1STALE_REVIEW_REQUEST'
+      + 'CURRENT_FAILED_BUILDER_GENERATION_2CONCATENATED_PARTIAL_MUST_NOT_RENDER',
+    final_output: null,
+    error: 'The revised builder result did not provide a usable handoff.',
+    created_at: 1_700_000_004_000,
+    updated_at: 1_700_000_004_100,
+    completed_at: 1_700_000_004_100,
+    metadata: {
+      mode: 'custom', input_tokens: 12, output_tokens: 7,
+      reasoning_tokens: 0, total_tokens: 19, token_usage_known: true,
+    },
+    execution_events: [
+      event(0, 'planned', 'coordination_planned', {
+        agents: [
+          { id: 'failed-builder', name: 'Failed Builder', depends_on: [] },
+          { id: 'blocked-reviewer', name: 'Blocked Reviewer', depends_on: ['failed-builder'] },
+        ],
+        roots: ['failed-builder'], sinks: ['blocked-reviewer'], max_generations: 2,
+      }),
+      event(1, 'agent-activated', 'coordination_agent_activated', {
+        agent_id: 'failed-builder', generation: 1, cause_signal_ids: [], parents: [],
+      }),
+      event(2, 'agent-completed', 'coordination_agent_completed', {
+        agent_id: 'failed-builder', generation: 1, signal_id: builderGenerationOne,
+        cause_signal_ids: [], summary: 'Initial cache implementation.',
+        usage: { input_tokens: 4, output_tokens: 2, reasoning_tokens: 0, total_tokens: 6, known: true },
+      }),
+      event(3, 'agent-activated', 'coordination_agent_activated', {
+        agent_id: 'blocked-reviewer', generation: 1,
+        cause_signal_ids: [builderGenerationOne], parents: ['failed-builder'],
+      }),
+      event(4, 'signal', 'coordination_signal', {
+        from_agent: 'blocked-reviewer', to_agent: 'failed-builder', generation: 1,
+        signal_id: feedbackSignal, applied: true,
+        summary: 'Keep invalidation atomic with the write.',
+      }),
+      event(5, 'builder-output-superseded', 'agent_output_superseded', {
+        agent_id: 'failed-builder', activation_generation: 1,
+        superseded_by_generation: 2, cause_signal_id: feedbackSignal,
+      }, { executionId: false }),
+      event(6, 'reviewer-output-superseded', 'agent_output_superseded', {
+        agent_id: 'blocked-reviewer', activation_generation: 1,
+        superseded_by_generation: 2, cause_signal_id: feedbackSignal,
+      }, { executionId: false }),
+      event(7, 'builder-reactivated', 'coordination_agent_reactivated', {
+        agent_id: 'failed-builder', generation: 2, cause_signal_ids: [feedbackSignal],
+        summary: 'Keep invalidation atomic with the write.',
+      }),
+      event(8, 'reviewer-reactivated', 'coordination_agent_reactivated', {
+        agent_id: 'blocked-reviewer', generation: 2, cause_signal_ids: [feedbackSignal],
+        summary: 'Re-verify the revised builder result.',
+      }),
+      event(9, 'agent-activated', 'coordination_agent_activated', {
+        agent_id: 'failed-builder', generation: 2,
+        cause_signal_ids: [feedbackSignal], parents: [],
+      }),
+      event(10, 'agent-failed', 'coordination_agent_failed', {
+        agent_id: 'failed-builder', generation: 2, signal_id: failedSignal,
+        cause_signal_ids: [feedbackSignal], summary: 'Revision returned no usable handoff.',
+        usage: { input_tokens: 5, output_tokens: 3, reasoning_tokens: 0, total_tokens: 8, known: true },
+      }),
+      event(11, 'agent-blocked', 'coordination_agent_blocked', {
+        agent_id: 'blocked-reviewer', generation: 2, signal_id: failedSignal,
+        cause_signal_ids: [failedSignal], summary: 'Required builder revision failed.',
+        usage: { input_tokens: 0, output_tokens: 0, reasoning_tokens: 0, total_tokens: 0, known: true },
+      }),
+      event(12, 'completed', 'coordination_completed', {
+        status: 'failed',
+        agents: [
+          { agent_id: 'failed-builder', state: 'failed', generation: 2 },
+          { agent_id: 'blocked-reviewer', state: 'blocked', generation: 2 },
+        ],
+        sinks: ['blocked-reviewer'],
+        usage: { input_tokens: 12, output_tokens: 7, reasoning_tokens: 0, total_tokens: 19, known: true },
+      }),
+    ],
+    agent_outputs: [
+      {
+        operation_id: `coordination-output:${turnId}:failed-builder:g1`,
+        agent_id: 'failed-builder', model: 'browser-test-model',
+        output: 'STALE_BUILDER_GENERATION_1', activation_generation: 1,
+        disposition: 'completed', causal_signal_id: builderGenerationOne,
+        superseded: true, superseded_by_generation: 2,
+        superseded_by_signal_id: feedbackSignal, recorded_at: 1_700_000_004_002,
+      },
+      {
+        operation_id: `coordination-output:${turnId}:blocked-reviewer:g1`,
+        agent_id: 'blocked-reviewer', model: 'browser-test-model',
+        output: 'STALE_REVIEW_REQUEST', activation_generation: 1,
+        disposition: 'changes_requested', causal_signal_id: feedbackSignal,
+        superseded: true, superseded_by_generation: 2,
+        superseded_by_signal_id: feedbackSignal, recorded_at: 1_700_000_004_004,
+      },
+      {
+        operation_id: `coordination-output:${turnId}:failed-builder:g2`,
+        agent_id: 'failed-builder', model: 'browser-test-model',
+        output: 'CURRENT_FAILED_BUILDER_GENERATION_2', activation_generation: 2,
+        disposition: 'failed', causal_signal_id: failedSignal,
+        superseded: false, recorded_at: 1_700_000_004_010,
+      },
+    ],
+    superseded: false,
+  };
+  const { context, page, assertNoBrowserErrors } = await openSession(
+    session,
+    { width: 1280, height: 800 },
+    runtime,
+    async ({ page: routedPage }) => {
+      await routedPage.route('**/api/agents', (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'failed-builder', name: 'Failed Builder', role: 'autonomous',
+            provider: 'ollama', model: 'browser-test-model', depends_on: [],
+          },
+          {
+            id: 'blocked-reviewer', name: 'Blocked Reviewer', role: 'autonomous',
+            provider: 'ollama', model: 'browser-test-model', depends_on: ['failed-builder'],
+          },
+        ]),
+      }));
+      await routedPage.route('**/api/sessions', (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify([session]),
+      }));
+      await routedPage.route(
+        `**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`,
+        (route) => route.fulfill({
+          status: 200, contentType: 'application/json', body: JSON.stringify([session]),
+        }),
+      );
+      await routedPage.route(`**/api/sessions/${session.id}/turns*`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify([turn]),
+      }));
+      await routedPage.route(`**/api/sessions/${session.id}/active-turn`, (route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({ run: null }),
+      }));
+    },
+  );
+  try {
+    await page.waitForFunction(() => S.session.historyState === 'ready'
+      && document.querySelector('ax-coordination-turn')?.shadowRoot);
+    const transcript = page.locator('#session-msgs');
+    const card = transcript.locator(`ax-coordination-turn[data-turn-id="${turnId}"]`);
+    const transcriptText = await transcript.textContent();
+    assert.match(transcriptText, /CURRENT_FAILED_BUILDER_GENERATION_2/);
+    assert.doesNotMatch(transcriptText, /STALE_BUILDER_GENERATION_1/);
+    assert.doesNotMatch(transcriptText, /STALE_REVIEW_REQUEST/);
+    assert.doesNotMatch(transcriptText, /CONCATENATED_PARTIAL_MUST_NOT_RENDER/);
+    assert.equal(
+      await transcript.locator('.smsg[data-agent-id="failed-builder"][data-generation="2"]').count(),
+      1,
+    );
+    assert.equal(
+      await transcript.locator('.smsg[data-agent-id="failed-builder"][data-generation="1"]').count(),
+      0,
+    );
+    assert.equal(await card.locator('.summary').textContent(), 'Coordination · 2 agents · failed');
+    assert.equal(
+      await card.locator('.agent[data-agent-id="failed-builder"]').getAttribute('data-state'),
+      'failed',
+    );
+    assert.equal(
+      await card.locator('.agent[data-agent-id="blocked-reviewer"]').getAttribute('data-state'),
+      'blocked',
+    );
+    const details = await card.locator('details').textContent();
+    assert.match(details, /Generation 1 replaced by generation 2/);
+    assert.match(details, /Revision returned no usable handoff/);
+    assert.match(details, /Required builder revision failed/);
+    assert.match(transcriptText, /Failed: The revised builder result did not provide a usable handoff/);
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
 test('stale History response cannot resurrect a prior turn over a newer accepted turn', async () => {
   const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
   session.status = 'active';
@@ -4098,7 +6435,7 @@ test('stale History response cannot resurrect a prior turn over a newer accepted
     const turnsRequested = new Promise((resolve) => { noteTurnsRequested = resolve; });
     let releaseTurns;
     const turnsMayReturn = new Promise((resolve) => { releaseTurns = resolve; });
-    await page.route(`**/api/sessions/${session.id}/turns`, async (route) => {
+    await page.route(`**/api/sessions/${session.id}/turns*`, async (route) => {
       noteTurnsRequested();
       await turnsMayReturn;
       await route.fulfill({
@@ -4455,6 +6792,130 @@ test('a rejected pending send cannot clear a different active Session turn', asy
   }
 });
 
+test('a nonterminal request rejection preserves its same-turn live Session owner and evidence', async () => {
+  const session = structuredClone(runtime.fixtures.alpha.sessions[0]);
+  session.status = 'active';
+  const agent = session.mode.agent_id;
+  const turnId = 'turn-live-owner-with-conflicting-retry';
+  const { context, page, assertNoBrowserErrors } = await openSession(session);
+  try {
+    await page.waitForFunction(() => _liveSessionSnapshotEpoch > 0
+      && S.session.historyState === 'ready'
+      && S.session.attemptRestorePending === false);
+    const beforeRejection = await page.evaluate(async ({ sessionId, activeTurn, agentId }) => {
+      await sessionLatticeBuild(S.session);
+      handleWsFrame({ kind: 'session-accepted', session: sessionId, turn_id: activeTurn });
+      handleWsFrame({
+        kind: 'event', type: 'AgentActivated', workflow: sessionId, agent: agentId,
+      });
+      handleWsFrame({
+        kind: 'token', workflow: sessionId, turn_id: activeTurn,
+        agent: agentId, delta: 'LIVE_OUTPUT_BEFORE_REJECTION',
+      });
+      const optimistic = el('div', 'smsg user', 'duplicate retry');
+      optimistic.dataset.turnId = activeTurn;
+      document.querySelector('#session-msgs').appendChild(optimistic);
+      S.session.pendingTurn = {
+        id: activeTurn,
+        userEl: optimistic,
+        composerText: 'retry this prompt',
+        inlineRefs: [],
+        referenceIds: [],
+      };
+      _pendingSessionTurns.set(sessionId, S.session.pendingTurn);
+      setSessionTurnPending(true);
+
+      handleWsFrame({
+        kind: 'session-request-rejected', session: 'another-session', turn_id: activeTurn,
+        error: 'unrelated session rejection',
+      });
+      handleWsFrame({
+        kind: 'session-request-rejected', session: sessionId, turn_id: 'another-turn',
+        error: 'unrelated turn rejection',
+      });
+      return {
+        pending: S.session.pendingTurn?.id || null,
+        notices: document.querySelectorAll('.session-request-rejection').length,
+      };
+    }, { sessionId: session.id, activeTurn: turnId, agentId: agent });
+    assert.deepEqual(beforeRejection, { pending: turnId, notices: 0 });
+
+    const rejectedState = await page.evaluate(({ sessionId, activeTurn, agentId }) => {
+      const optimistic = S.session.pendingTurn.userEl;
+      handleWsFrame({
+        kind: 'session-request-rejected', session: sessionId, turn_id: activeTurn,
+        error: 'This Session is already running that turn',
+      });
+      const cached = _liveSessionRuns.get(sessionId);
+      const cachedAgent = cached?.agents?.find((candidate) => candidate.agent === agentId);
+      const graphNode = S.session.lattice?.querySelector(`#sl-${agentId}`);
+      return {
+        activeTurn: S.session.activeTurnId,
+        pending: S.session.pendingTurn,
+        pendingCache: _pendingSessionTurns.has(sessionId),
+        cachedTurn: cached?.turn_id || null,
+        cachedStatus: cachedAgent?.status || null,
+        cachedOutput: cachedAgent?.output || '',
+        liveOutput: document.querySelector(
+          `#session-msgs .smsg[data-agent-id="${agentId}"] .smsg-body`,
+        )?.textContent?.trim() || '',
+        graphStatus: graphNode?.getAttribute('status') || null,
+        composer: document.querySelector('#session-text').value,
+        optimisticVisible: document.body.contains(optimistic),
+        stopVisible: !document.querySelector('#session-run-action').classList.contains('hide'),
+        stopText: document.querySelector('#session-run-action').textContent.trim(),
+        rejectionRole: document.querySelector('.session-request-rejection .smsg-role')?.textContent,
+        rejectionText: document.querySelector('.session-request-rejection .smsg-body')?.textContent,
+      };
+    }, { sessionId: session.id, activeTurn: turnId, agentId: agent });
+    assert.deepEqual(rejectedState, {
+      activeTurn: turnId,
+      pending: null,
+      pendingCache: false,
+      cachedTurn: turnId,
+      cachedStatus: 'running',
+      cachedOutput: 'LIVE_OUTPUT_BEFORE_REJECTION',
+      liveOutput: 'LIVE_OUTPUT_BEFORE_REJECTION',
+      graphStatus: 'running',
+      composer: 'retry this prompt',
+      optimisticVisible: false,
+      stopVisible: true,
+      stopText: 'Stop',
+      rejectionRole: 'not sent',
+      rejectionText: 'This Session is already running that turn',
+    });
+
+    const continued = await page.evaluate(({ sessionId, activeTurn, agentId }) => {
+      handleWsFrame({
+        kind: 'token', workflow: sessionId, turn_id: activeTurn,
+        agent: agentId, delta: '_AND_CONTINUED',
+      });
+      const cachedAgent = _liveSessionRuns.get(sessionId)?.agents
+        ?.find((candidate) => candidate.agent === agentId);
+      return {
+        activeTurn: S.session.activeTurnId,
+        cachedOutput: cachedAgent?.output || '',
+        liveOutput: document.querySelector(
+          `#session-msgs .smsg[data-agent-id="${agentId}"] .smsg-body`,
+        )?.textContent?.trim() || '',
+        graphStatus: S.session.lattice?.querySelector(`#sl-${agentId}`)
+          ?.getAttribute('status') || null,
+        stopVisible: !document.querySelector('#session-run-action').classList.contains('hide'),
+      };
+    }, { sessionId: session.id, activeTurn: turnId, agentId: agent });
+    assert.deepEqual(continued, {
+      activeTurn: turnId,
+      cachedOutput: 'LIVE_OUTPUT_BEFORE_REJECTION_AND_CONTINUED',
+      liveOutput: 'LIVE_OUTPUT_BEFORE_REJECTION_AND_CONTINUED',
+      graphStatus: 'running',
+      stopVisible: true,
+    });
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
+  }
+});
+
 test('manual E2B cleanup confirmation requires the exact retained runtime affirmation', async () => {
   const session = runtime.fixtures.beta.sessions[0];
   const runtimeId = 'e2b-runtime-exact-123';
@@ -4555,19 +7016,23 @@ test('manual E2B cleanup confirmation requires the exact retained runtime affirm
       new URL(candidate.url).pathname
         === `/api/sessions/${session.id}/environment/confirm-runtime-cleanup`).length;
 
-    const creationReview = await page.evaluate(async (sessionId) => {
-      const refreshed = await sessionHome().refresh();
+    await page.evaluate(() => sessionHome().refresh());
+    // Cleanup also refreshes the shell. A later refresh may supersede this
+    // request, so wait for the authoritative Session model rather than treating
+    // one request's generation result as the completed navigation state.
+    await page.waitForFunction(({ sessionId, token }) =>
+      sessionHome().session(sessionId)?.environment?.runtime_creation?.token === token,
+    { sessionId: session.id, token: creationToken });
+    const creationReview = await page.evaluate((sessionId) => {
       const current = sessionHome().session(sessionId);
       applySessionEnvironmentUpdate(current, { activateRuntime: false });
       const configured = sessionHome().configureEnvironment(sessionId);
       return {
-        refreshed,
         configured,
         creationToken: current?.environment?.runtime_creation?.token || '',
       };
     }, session.id);
     assert.deepEqual(creationReview, {
-      refreshed: true,
       configured: true,
       creationToken,
     });
@@ -4674,7 +7139,11 @@ test('E2B Close explains exact-runtime pause while local Close keeps its existin
 });
 
 test('operator devcontainer policy is visible and reversible while package-lock setup stays unapproved', async () => {
-  const policyRuntime = await launchTestDaemon({ allowPostCreateCommand: true });
+  // This is a second live daemon with a different configuration. Even when
+  // the primary suite is pinned to port 8080, policy requests must reach this
+  // fixture's listener rather than the first daemon's healthy endpoint.
+  const policyRuntime = await launchTestDaemon({ allowPostCreateCommand: true, port: 0 });
+  assert.notEqual(policyRuntime.baseUrl, runtime.baseUrl, 'different daemon configurations need independent listeners');
   const markerName = '.axocoatl-policy-marker';
   const postCreateCommand = `touch ${markerName}`;
   const policyProject = await policyRuntime.createProjectWorkspace(
@@ -4747,4 +7216,34 @@ test('operator devcontainer policy is visible and reversible while package-lock 
     await context.close();
     await policyRuntime.stop();
   }
+});
+
+test('refused No-Keep remains in review with its error and current Team and terminal Ways facts', async () => {
+ const session=readySessionFixture(runtime.fixtures.alpha.sessions[0]);
+ const results=closedRecoveryResults(session,'failed');results.lane_states=[{index:0,state:'interrupted'},{index:1,state:'failed'}];
+ let reads=0,decisions=0;
+ const {context,page,assertNoBrowserErrors}=await openSession(session,{width:1280,height:800},runtime,async({page})=>{
+  await page.route(`**/api/sessions/${session.id}/team`,route=>route.fulfill({json:{session_id:session.id,history_version:'execution_v2',approved:true,revision:2,slots:[{slot_id:'engineer-slot',name:'Approved Engineer',model:'local-engineer',role:'autonomous'},{slot_id:'reviewer-slot',name:'Approved Reviewer',model:'local-reviewer',role:'autonomous'}]}}));
+  await page.route(`**/api/sessions/${session.id}/variants/**`,route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path.endsWith('/results')){reads++;return route.fulfill({json:results});}
+   if(path.endsWith('/discard')){decisions++;return route.fulfill({status:409,json:{error:'Stop and settle every attempt before freezing its decision'}});}
+   if(path.endsWith('/trajectories'))return route.fulfill({json:{lanes:[],rows:[]}});
+   return route.fulfill({json:[]});
+  });
+ });
+ try{
+  await page.waitForFunction(()=>document.querySelector('#session-active')?.textContent.includes('Approved Reviewer'));
+  assert.match(await page.locator('#status-pearls').textContent(),/2 agents/);
+  assert.match(await page.locator('#session-active').textContent(),/Approved Engineer.*Approved Reviewer/);
+  await page.locator('#panes-menu-btn').click();await page.getByRole('menuitem',{name:'Review attempts'}).click();
+  const finish=page.locator('ax-compare [data-discard]');await finish.waitFor({state:'visible'});await finish.click();
+  const error=page.locator('ax-compare .action-error');await error.waitFor({state:'visible'});
+  assert.match(await error.textContent(),/Stop and settle every attempt/);
+  const before=reads;await page.waitForTimeout(3300);assert.ok(reads>before,'the exact current set is reread after refusal');
+  assert.equal(await page.evaluate(()=>centerSurface()),'compare');assert.equal(await error.isVisible(),true);assert.equal(decisions,1);
+  const projection=await page.evaluate(()=>{threadVariantStatus(0,'completed');threadVariantToken(0,'STALE_LIVE_TEXT');return S.threadVariants.variants.map(variant=>({state:variant.laneState,stale:variant.buf.includes('STALE_LIVE_TEXT')}));});
+  assert.deepEqual(projection,[{state:'interrupted',stale:false},{state:'failed',stale:false}]);
+  assertNoBrowserErrors();
+ }finally{await context.close();}
 });

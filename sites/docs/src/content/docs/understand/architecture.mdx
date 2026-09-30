@@ -29,7 +29,25 @@ The HTTP router embeds the static workbench at `/`. WebSocket frames carry live
 Session, tool, event, approval, and Automation updates. IPC lets the CLI reach
 the running daemon without creating a second runtime.
 
-## One normal Session turn
+## One native Session turn
+
+New data roots use the native execution controller. The Session retains an explicitly
+reviewed team, provider profiles, limits, and authority before work starts. The daemon
+records the request and exact activation identities, then reserves provider and tool
+invocations against that authority. Each activation uses its own model-facing state;
+Coordinator children consume bounded allocations from their parent.
+
+Provider observations, tool evidence, outputs, and control receipts remain attached
+to those exact generations. Only accepted current results become future conversation
+state. Failed, superseded, and interrupted work remains inspectable, and continuation
+requires an explicit command. The current native actor factory does not attach
+daily-log, core-memory, or semantic-recall stores. See [State and memory](/understand/state/) and
+[Coordination](/understand/coordination/).
+
+Existing legacy roots keep compatibility execution until an explicit offline
+[upgrade](/operate/upgrade/). Its actor/checkpoint path is described below.
+
+## One legacy Session turn
 
 1. The server validates the Session and appends a durable turn begin, including
    stable request identity and structured context references.
@@ -58,7 +76,9 @@ E2B Cloud remote backend when a Session sandbox starts. The Session
 creation request chooses the directory, mode, optional enabled Skills, exposed
 ports, and—on Podman—an allowed image; it does not independently switch the
 configured backend. E2B uses the daemon-global template and rejects an explicit
-or devcontainer OCI image instead of silently replacing it.
+or devcontainer OCI image instead of silently replacing it. Native repository
+tools and required checks currently require Podman's supervised command boundary;
+E2B supports the compatibility execution path.
 
 A Ready E2B Session persists its exact provider identity, data-plane domain, and
 remote root. Close and graceful daemon shutdown pause that runtime; Reopen and
@@ -108,7 +128,9 @@ Do not collapse all multi-Agent behavior into one scheduler:
 - **The event lattice** publishes typed notifications to triggers, webhooks,
   and observers; signal-threshold library results do not execute Agents in the
   product daemon.
-- **Coordinator Agents** dynamically decompose a goal and auction subtasks to
+- **Native Coordinators** create distinct Worker activations from explicitly
+  approved templates and delegated limits in the Session controller.
+- **Legacy Coordinators** dynamically decompose a goal and auction subtasks to
   worker Agents during that Agent execution.
 
 ## Failure and recovery seams
@@ -141,6 +163,7 @@ daemon and copy the whole data root plus Workspace repositories and config.
 - `axocoatl-session` — folder Session and durable turn model;
 - `axocoatl-memory` — memory stores, embeddings, and checkpoints;
 - `axocoatl-isolation` — local Podman and the optional E2B Cloud backend;
+- `axocoatl-exec` — the embedded Linux supervisor for bounded repository commands;
 - `axocoatl-coordination` — lattice, HTN, and auction primitives;
 - `axocoatl-mcp` and `axocoatl-a2a` — interoperability;
 - `packages/lattice` — browser graph web components.

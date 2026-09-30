@@ -116,9 +116,12 @@ absolute provider billing cap.
 Expected: `abort` policy terminates the agent. Restart it
 (`axocoatl agents restart <id>`) or use `warn`.
 
-**Workflow agents run in parallel instead of cascading**
-Ensure downstream agents declare `depends_on: [<upstream>]` and the workflow
-sets a correct `entry_point`. Entry agents must have `depends_on: []`.
+**A Lattice team does not activate the expected Agent**
+Open the turn's **Coordination** card and inspect the Agent's named dependencies.
+Every direct parent must complete; a failed parent leaves the dependent visibly
+blocked. Ensure the Agent declares `depends_on: [<upstream>]`, both Agents belong
+to the selected team, and the base dependency graph has no cycle. Entry Agents
+must have `depends_on: []`.
 
 **Workflow times out (300s)**
 A slow/unreachable provider, or an agent never completing. Check the daemon

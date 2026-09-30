@@ -68,9 +68,69 @@ If the connection dropped, the workbench hydrates the active-turn endpoint
 before it re-enables Stop. A rejection means the target turn changed or was no
 longer active; refresh History before acting again.
 
-## Retry a turn
+## Control native work
 
-Retry re-sends the request that produced a prior response. It is disabled when
+For native Sessions, use **Guide current work** in the composer or open the Agent
+graph and select an exact activation. The host exposes only actions allowed for
+that recorded generation. Guide and Revise retain the instruction, selected context,
+and attachments. Retry creates a new generation; it does not erase the failed one.
+Continue explicitly resumes an interrupted logical turn, and normal Finish waits
+for required work and conditions. Stop prevents new dispatch while started work
+settles; none of these actions rolls back completed effects.
+
+Attach recorded evidence from the inspector to a follow-up request. Its saved
+Conversation reference reopens the original activation and generation after reload.
+Unavailable source evidence stays unavailable; it is not replaced by a newer result.
+
+**Finish partial result** requires a separate human confirmation. Choose the accepted
+results to carry forward, then review running work to stop, work that never started,
+and missing checks. Selecting no result explicitly finishes without an answer. It
+waits for safe settlement and retains partial evidence and charged usage; it does
+not report missing checks as passed. A later request starts a linked successor.
+
+**Plan a change** can propose a bounded action for review. Its provider call has no
+tools or repository access. Review the exact target and Apply deliberately; a stale
+proposal is refused rather than redirected to newer work.
+
+**Team & budget** edits future turns. The current-turn inspector separately reviews
+adding an Agent or replacing work that has not started. **Review current authority**
+shows the current grant and any requested expansion; approval preserves usage
+already charged. Revocation closes new dispatch.
+
+Ways decisions appear in History after Keep or no-Keep when native retention was
+configured. See [Ways](/workbench/ways/) for storage, export, and deletion behavior.
+
+## Receive standing work
+
+Open **Work sources** beside **Team & budget** in the Session. Review a standing
+instruction, select a manual source, configured signed webhook, or completion of a
+Session in the same Workspace, and explicitly arm it. Enter required checks as one
+JSON argument array per line, for example `["npm", "test"]`. Without required
+checks, the source cannot establish readiness.
+
+Manual events declare a candidate identity and immutable version. A commit must be
+the full current commit ID from a clean checkout. Build, artifact, and release
+candidate versions must match the captured repository tree SHA-256. A producer's
+label alone is not verification. **Received work** retains event identity, original
+team/source revisions, queue state, and the exact checked-tree readiness evidence.
+
+Events and required checks consume the existing shared lifetime allowance. Review
+or renew authority deliberately when it is exhausted. Queued work can be retried or
+dismissed with a recorded reason; disarming a source prevents new admission without
+rewriting earlier receipts.
+
+A **Signal field** source routes work by evidence on the code instead of by event.
+Give each team Agent the repository paths it owns and a threshold, then arm it.
+Findings, source changes, failed checks and your flags leave deposits on paths; the
+Agent whose paths reach their threshold receives one targeted work item. See
+[Signal field](/understand/coordination/#signal-field) for the exact rules. The
+field view in **Work sources** lists what each Agent senses and why, lets you flag
+paths, withdraw a deposit, or send an Agent its signals now, and opens each
+dispatched turn.
+
+## Legacy request retry
+
+For legacy history, Retry re-sends the request that produced a prior response. It is disabled when
 that turn used immutable attached context because silently substituting the
 current attachment selection would change the request. Attach the files again
 and send a new turn instead.
@@ -80,7 +140,7 @@ state before using it on a mutating request.
 
 ## Rewind conversation state
 
-Rewind is available from History for an autonomous single-Agent Session when no turn is
+Rewind is available from legacy History for an autonomous single-Agent Session when no turn is
 active and no attempt set is unresolved. It moves the durable conversation
 head to the selected point and prefills the earlier request for revision.
 

@@ -55,17 +55,22 @@ async function loadPlaywright() {
     '/tmp/pwtest/node_modules/playwright/index.mjs',
   ];
   for (const c of candidates) {
-    try { return await import(c); } catch { /* keep trying */ }
+    try {
+      const loaded = await import(c);
+      return loaded.chromium ? loaded : (loaded.default || loaded);
+    } catch { /* keep trying */ }
   }
   // Last resort: require.resolve from NODE_PATH
   try {
     const req = createRequire(import.meta.url);
-    return await import(req.resolve('playwright'));
+    const loaded = await import(req.resolve('playwright'));
+    return loaded.chromium ? loaded : (loaded.default || loaded);
   } catch { return null; }
 }
 
 /** Find any cached Chromium executable (ms-playwright cache). */
 function findChromium() {
+  if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE) return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
   const cache = process.env.PLAYWRIGHT_BROWSERS_PATH
     || join(homedir(), '.cache/ms-playwright');
   if (!existsSync(cache)) return undefined;
@@ -350,12 +355,16 @@ try {
     lat.setNodeStatus('architect', 'running');
     lat.setNodeStatus('coder', 'success');
     lat.setNodeStatus('reviewer', 'error');
+    lat.setNodeStatus('planner', 'blocked');
+    lat.setNodeStatus('researcher', 'cancelled');
     const arch = document.querySelector('#architect');
     const out = {
       runningAttr: arch.getAttribute('status'),
       runningAriaBusy: arch.getAttribute('aria-busy'),
       coderStatus: document.querySelector('#coder').status,
       reviewerStatus: document.querySelector('#reviewer').status,
+      plannerStatus: document.querySelector('#planner').status,
+      researcherStatus: document.querySelector('#researcher').status,
     };
     // Active edge
     lat.setEdgeActive({ from: 'architect', to: 'coder' }, true);
@@ -366,6 +375,8 @@ try {
   check('node.status drives the status attribute', exec.runningAttr === 'running', exec);
   check('running node sets aria-busy', exec.runningAriaBusy === 'true', exec);
   check('setNodeStatus applies success/error', exec.coderStatus === 'success' && exec.reviewerStatus === 'error', exec);
+  check('setNodeStatus preserves blocked/cancelled',
+    exec.plannerStatus === 'blocked' && exec.researcherStatus === 'cancelled', exec);
   check('setEdgeActive marks an edge active', exec.activeEdges >= 1, exec);
 
   // Active edge renders with the .active class on its path.
@@ -386,6 +397,61 @@ try {
   });
   check('resetStatuses clears node + edge state',
     !afterReset.anyStatus && !afterReset.anyActive, afterReset);
+
+  // View blocks every editing entry point while the host can render evidence.
+  const viewBefore = await page.evaluate(() => {
+    const lat = document.querySelector('ax-lattice');
+    lat.setSelection(['architect', 'planner']);
+    lat.copy(); // Existing clipboard/history must not remain executable in View.
+    lat.mode = 'view';
+    window.viewMutationEvents = [];
+    for (const kind of ['nodes-delete-request', 'edges-delete-request', 'edge-connect', 'node-moving']) {
+      lat.addEventListener(kind, () => window.viewMutationEvents.push(kind));
+    }
+    window.viewSnapshot = () => JSON.stringify({
+      nodes: [...lat.nodes].map(n => [n.id, n.x, n.y]),
+      edges: [...lat.edges].map(e => [e.id, e.getAttribute('from'), e.getAttribute('to')]),
+    });
+    const snapshot = window.viewSnapshot();
+    const result = { copy: lat.copy(), pasted: lat.paste().length, edge: lat.addEdge({ from: 'architect', to: 'planner' }) };
+    lat.deleteSelected(); lat.deleteSelectedEdges(); lat.undo(); lat.redo(); lat.autoLayout();
+    return { snapshot, after: window.viewSnapshot(), result, canUndo: lat.canUndo(), canRedo: lat.canRedo(),
+      role: lat.getAttribute('aria-roledescription'),
+      handlesHidden: [...lat.querySelectorAll('ax-handle')].every(h => getComputedStyle(h).display === 'none'),
+      historyHidden: [...document.querySelector('ax-controls').shadowRoot.querySelectorAll('.undo,.redo')].every(b => b.hidden),
+    };
+  });
+  check('View public mutation methods leave graph unchanged', viewBefore.snapshot === viewBefore.after, viewBefore.result);
+  check('View reports no executable history', !viewBefore.canUndo && !viewBefore.canRedo);
+  check('View hides handles and history buttons', viewBefore.handlesHidden && viewBefore.historyHidden, viewBefore);
+  check('View describes an execution graph', viewBefore.role === 'execution graph', viewBefore.role);
+  const viewNode = await page.locator('#architect').boundingBox();
+  await page.mouse.move(viewNode.x + 35, viewNode.y + 20);
+  await page.mouse.down(); await page.mouse.move(viewNode.x + 90, viewNode.y + 60, { steps: 4 }); await page.mouse.up();
+  await page.evaluate(() => document.querySelector('ax-lattice').focus());
+  for (const key of ['Delete', 'Backspace', 'Control+z', 'Control+Shift+z', 'Control+y', 'Control+c', 'Control+v', 'ArrowRight', 'Shift+ArrowDown']) {
+    await page.keyboard.press(key);
+  }
+  const afterViewKeys = await page.evaluate(() => ({ snapshot: window.viewSnapshot(), events: window.viewMutationEvents,
+    ids: document.querySelector('ax-lattice').selectedIds() }));
+  check('View drag and keyboard never mutate graph', afterViewKeys.snapshot === viewBefore.snapshot, afterViewKeys);
+  check('View never emits editing requests', afterViewKeys.events.length === 0, afterViewKeys.events);
+  check('View arrows keep keyboard inspection available', afterViewKeys.ids.length === 1, afterViewKeys.ids);
+  const viewCamera = await page.evaluate(() => {
+    const lat = document.querySelector('ax-lattice'); const before = lat.getViewport(); lat.zoomIn();
+    const zoomed = lat.getViewport(); lat.fitView(); lat.setSelection(['architect']);
+    return { zoomed: zoomed.k !== before.k, selection: lat.selectedIds() };
+  });
+  check('View camera and selection APIs remain available', viewCamera.zoomed && viewCamera.selection[0] === 'architect');
+  await page.evaluate(() => document.querySelector('ax-lattice').mode = 'edit');
+  const switchBox = await page.locator('#architect').boundingBox();
+  const beforeSwitch = await page.evaluate(() => window.viewSnapshot());
+  await page.mouse.move(switchBox.x + 35, switchBox.y + 20); await page.mouse.down();
+  await page.mouse.move(switchBox.x + 60, switchBox.y + 35, { steps: 3 });
+  await page.evaluate(() => document.querySelector('ax-lattice').mode = 'view');
+  await page.mouse.move(switchBox.x + 120, switchBox.y + 65, { steps: 3 }); await page.mouse.up();
+  check('Switching to View cancels and restores an unfinished drag', await page.evaluate(() => window.viewSnapshot()) === beforeSwitch);
+  await page.evaluate(() => document.querySelector('ax-lattice').mode = 'edit');
 
   // ── Node delete (do last; removes nodes) ──────────────────────────────
   await page.evaluate(() => {

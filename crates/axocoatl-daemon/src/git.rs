@@ -105,6 +105,18 @@ pub struct LaneConfig {
     /// own checks decide is evidence.
     #[serde(default)]
     pub agent: Option<String>,
+    /// Explicit per-candidate hard limits, selected output maximum and expiry.
+    /// Native Ways capture the actual selected profile before any lane starts.
+    #[serde(default)]
+    pub approval: Option<WaysLaneApproval>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WaysLaneApproval {
+    pub limits: axocoatl_session::control_authority::GrantLimits,
+    pub max_output_tokens: usize,
+    pub expires_at_ms: u64,
 }
 
 /// One parallel exploration: a `git worktree` on its own branch where a

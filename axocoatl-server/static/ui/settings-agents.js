@@ -40,6 +40,7 @@ function normalizeStatus(value) {
 }
 
 function statusClass(status) {
+  if (status === 'Worker template') return '';
   if (status.startsWith('Idle')) return 'idle';
   if (status.startsWith('Running')) return 'running';
   return 'failed';
@@ -48,8 +49,15 @@ function statusClass(status) {
 function dotClass(status) {
   if (status.startsWith('Running')) return 'run';
   if (status.startsWith('Idle')) return 'on';
-  if (status === '—' || !status) return '';
+  if (status === 'Worker template' || status === '—' || !status) return '';
   return 'err';
+}
+
+function readGlobalStatus(agent) {
+  // Workers are reusable Coordinator templates, never standalone actors.
+  // Their actual child activations are inspected in the owning Session.
+  return agent.role === 'worker' ? Promise.resolve({status: 'Worker template'})
+    : jsonRequest(`/api/agents/${encodeURIComponent(agent.id)}/status`);
 }
 
 export class AxSettingsAgents extends HTMLElement {
@@ -126,7 +134,7 @@ export class AxSettingsAgents extends HTMLElement {
 
       const [tokensResult, ...statusResults] = await Promise.allSettled([
         jsonRequest('/api/tokens/report'),
-        ...agents.map((agent) => jsonRequest(`/api/agents/${encodeURIComponent(agent.id)}/status`)),
+        ...agents.map(readGlobalStatus),
       ]);
       if (generation !== this.#generation) return;
 
@@ -256,7 +264,7 @@ export class AxSettingsAgents extends HTMLElement {
     const generation = ++this.#generation;
     const [tokensResult, ...statusResults] = await Promise.allSettled([
       jsonRequest('/api/tokens/report'),
-      ...this.#agents.map((agent) => jsonRequest(`/api/agents/${encodeURIComponent(agent.id)}/status`)),
+      ...this.#agents.map(readGlobalStatus),
     ]);
     if (generation !== this.#generation) return;
     this.#tokens = tokensResult.status === 'fulfilled' ? tokensResult.value : this.#tokens;

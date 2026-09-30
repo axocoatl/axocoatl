@@ -1,0 +1,26 @@
+{
+  "binding": {
+    "binding_id": "qa-client-storefront",
+    "binding_revision": 3,
+    "workspace_id": "workspace-storefront",
+    "session_id": "session-release-qa",
+    "team_revision": 7,
+    "grant_id": "grant-preview-qa",
+    "grant_revision": 2,
+    "source_id": "ci-storefront",
+    "event_kind": "build_ready"
+  },
+  "event": {
+    "source_id": "ci-storefront",
+    "event_id": "build-184-completed",
+    "event_kind": "build_ready",
+    "content_sha256": "c63f5d7b2e064bc5631580907b7c26f92fca4906efcaf9143c45d89757208bbc",
+    "correlation_id": "release-storefront-12",
+    "subject": {
+      "kind": "build",
+      "reference_id": "storefront/build/184",
+      "version": "git:8f9d4fd2854606e5a340bf05beb46a2dc744a321"
+    },
+    "evidence_refs": ["artifact:storefront-build-184", "artifact:storefront-test-scope-184"]
+  }
+}

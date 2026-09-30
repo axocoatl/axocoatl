@@ -13,7 +13,10 @@ use axocoatl_mcp::approval::{
 };
 use axocoatl_mcp::permissions::{McpPermissionStore, PermissionDecision, PermissionRecord};
 use axocoatl_mcp::registry::McpToolRegistry;
-use axocoatl_tools::hooks::{HookAction, HookContext, HookPhase, ToolHook};
+use axocoatl_tools::hooks::{
+    HookAction, HookApprovalResolution, HookContext, HookPhase, SharedHookApprovalBoundary,
+    ToolHook,
+};
 use tokio::sync::RwLock;
 
 use crate::stream::{StreamBus, StreamFrame};
@@ -68,6 +71,30 @@ impl ToolHook for McpApprovalHook {
     }
 
     async fn execute(&self, ctx: &HookContext) -> HookAction {
+        self.execute_bound(ctx, None).await
+    }
+
+    async fn execute_with_approval(
+        &self,
+        ctx: &HookContext,
+        approval: SharedHookApprovalBoundary,
+    ) -> HookAction {
+        let scope = match approval.actor_scope() {
+            Ok(scope) => scope,
+            Err(error) => return HookAction::Deny { reason: error },
+        };
+        let mut scoped = ctx.clone();
+        scoped.agent_id = scope;
+        self.execute_bound(&scoped, Some(approval)).await
+    }
+}
+
+impl McpApprovalHook {
+    async fn execute_bound(
+        &self,
+        ctx: &HookContext,
+        approval: Option<SharedHookApprovalBoundary>,
+    ) -> HookAction {
         // Resolve "is this an MCP tool, and which server owns it?" The
         // registry holds qualified names like `mcp__server__tool`; native
         // builtins won't appear there.
@@ -124,22 +151,42 @@ impl ToolHook for McpApprovalHook {
         // connected) — `send` returns Err in that case, which we ignore. The
         // approval will timeout and Deny, which is the safe default.
         let bus = self.stream_bus.clone();
-        let resolution = self
-            .gate
-            .request(approval_ctx.clone(), |c| {
-                let _ = bus.send(StreamFrame::McpApprovalRequired {
-                    approval_id: c.approval_id.clone(),
-                    // Which run is blocked — derived once, here.
-                    run: crate::stream::run_of_scoped_agent(&c.agent_id),
-                    agent_id: c.agent_id.clone(),
-                    server: c.server.clone(),
-                    tool: c.tool.clone(),
-                    tool_display: c.tool_display.clone(),
-                    arguments_preview: c.arguments_preview.clone(),
-                    requested_at: c.requested_at,
-                });
-            })
-            .await;
+        let resolution = if let Some(boundary) = approval {
+            let display = match serde_json::to_value(&approval_ctx) {
+                Ok(display) => display,
+                Err(error) => {
+                    return HookAction::Deny {
+                        reason: error.to_string(),
+                    }
+                }
+            };
+            return match boundary
+                .request_human_approval(ctx, display, axocoatl_mcp::approval::MCP_APPROVAL_TIMEOUT)
+                .await
+            {
+                Ok(HookApprovalResolution::Approved) => HookAction::Allow,
+                Ok(HookApprovalResolution::Denied { reason }) => HookAction::Deny { reason },
+                Err(error) => HookAction::Deny {
+                    reason: format!("Exact approval wait refused: {error}"),
+                },
+            };
+        } else {
+            self.gate
+                .request(approval_ctx.clone(), |c| {
+                    let _ = bus.send(StreamFrame::McpApprovalRequired {
+                        approval_id: c.approval_id.clone(),
+                        // Which run is blocked — derived once, here.
+                        run: crate::stream::run_of_scoped_agent(&c.agent_id),
+                        agent_id: c.agent_id.clone(),
+                        server: c.server.clone(),
+                        tool: c.tool.clone(),
+                        tool_display: c.tool_display.clone(),
+                        arguments_preview: c.arguments_preview.clone(),
+                        requested_at: c.requested_at,
+                    });
+                })
+                .await
+        };
 
         // Persist the decision according to the scope the user chose.
         self.persist_resolution(&approval_ctx, &resolution).await;

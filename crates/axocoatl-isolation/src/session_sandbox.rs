@@ -25,8 +25,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
@@ -34,6 +36,8 @@ use axocoatl_core::SecureDir;
 
 use crate::error::IsolationError;
 use crate::podman;
+use crate::supervisor_image::SupervisorImage;
+use crate::supervisor_program::{SupervisorProgram, SUPERVISOR_CONTAINER_PATH};
 
 /// The container runtime executable — always podman.
 const PODMAN: &str = "podman";
@@ -92,9 +96,31 @@ pub(crate) struct BoundedCommandOutput {
     pub(crate) timed_out: bool,
 }
 
-struct BoundedCapture {
+struct CaptureProgress {
     bytes: Vec<u8>,
-    truncated: bool,
+    observed_bytes: u64,
+    digest: Sha256,
+    complete: bool,
+    error: Option<String>,
+}
+
+struct OutputReader {
+    task: tokio::task::JoinHandle<()>,
+    progress: Arc<Mutex<CaptureProgress>>,
+}
+
+impl Drop for OutputReader {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+struct CapturedCommandOutput {
+    status: Option<ExitStatus>,
+    timed_out: bool,
+    supervision_error: Option<String>,
+    stdout: ObservedExecOutput,
+    stderr: ObservedExecOutput,
 }
 
 #[derive(Clone, Copy)]
@@ -275,6 +301,13 @@ pub struct SandboxPolicy {
     /// setup can execute. `control_plane_dirs` remains the public compatibility
     /// input for examples and callers that do not own daemon state.
     pub control_plane_roots: Vec<SecureDir>,
+    /// Exact trusted first-party Linux executable. It is mounted read-only at
+    /// a fixed root-level path and never inferred from an attached container.
+    pub supervisor_program: Option<SupervisorProgram>,
+    /// Automatically install the bundled Linux supervisor in this private
+    /// host directory after resolving the selected image's architecture. This
+    /// is mutually exclusive with an explicitly supplied supervisor program.
+    pub supervisor_installation: Option<SecureDir>,
 }
 
 impl Default for SandboxPolicy {
@@ -288,6 +321,8 @@ impl Default for SandboxPolicy {
             runtime_authority: None,
             control_plane_dirs: Vec::new(),
             control_plane_roots: Vec::new(),
+            supervisor_program: None,
+            supervisor_installation: None,
         }
     }
 }
@@ -298,6 +333,81 @@ pub struct ExecResult {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: i32,
+}
+
+/// Raw bytes observed at the execution transport, before text decoding. The
+/// digest includes drained bytes beyond the retained prefix. It says nothing
+/// about bytes the transport never delivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedExecOutput {
+    pub retained: Vec<u8>,
+    pub observed_bytes: u64,
+    pub observed_sha256: String,
+    /// EOF was observed on this transport pipe. This does not establish that
+    /// the backend or its descendants completed, or that the prefix is uncut.
+    pub complete: bool,
+    pub error: Option<String>,
+}
+
+/// An execution observation, not proof that background descendants have exited.
+/// A killed/timed-out transport cannot establish the command's exit status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedExecResult {
+    /// Command exit inferred only from an intact Podman transport with a
+    /// non-reserved status. None never implies that dispatch did not occur.
+    pub exit_code: Option<i32>,
+    pub transport_exit_code: Option<i32>,
+    pub client_timed_out: bool,
+    pub supervision_error: Option<String>,
+    pub stdout: ObservedExecOutput,
+    pub stderr: ObservedExecOutput,
+}
+
+impl CapturedCommandOutput {
+    fn into_observation(self) -> ObservedExecResult {
+        let transport_exit_code = self.status.and_then(|status| status.code());
+        // Podman reserves these statuses for client/invocation failures. A
+        // command could also deliberately exit with one, so remain conservative.
+        // https://docs.podman.io/en/latest/markdown/podman-exec.1.html#exit-status
+        let exit_code = transport_exit_code.filter(|code| {
+            !matches!(*code, 125..=127)
+                && !self.timed_out
+                && self.supervision_error.is_none()
+                && self.stdout.complete
+                && self.stderr.complete
+        });
+        ObservedExecResult {
+            exit_code,
+            transport_exit_code,
+            client_timed_out: self.timed_out,
+            supervision_error: self.supervision_error,
+            stdout: self.stdout,
+            stderr: self.stderr,
+        }
+    }
+
+    fn into_legacy(self) -> Result<BoundedCommandOutput, IsolationError> {
+        if let Some(error) = self.supervision_error {
+            return Err(IsolationError::OciContainerFailed(error));
+        }
+        if !self.stdout.complete || !self.stderr.complete {
+            return Err(IsolationError::OciContainerFailed(format!(
+                "incomplete Podman output: stdout={:?}; stderr={:?}",
+                self.stdout.error, self.stderr.error,
+            )));
+        }
+        let status = self.status.ok_or_else(|| {
+            IsolationError::OciContainerFailed("Podman process status was not observed".to_string())
+        })?;
+        Ok(BoundedCommandOutput {
+            status,
+            stdout_truncated: self.stdout.observed_bytes > self.stdout.retained.len() as u64,
+            stderr_truncated: self.stderr.observed_bytes > self.stderr.retained.len() as u64,
+            stdout: self.stdout.retained,
+            stderr: self.stderr.retained,
+            timed_out: self.timed_out,
+        })
+    }
 }
 
 /// One explicitly-requested project setup command and its bounded outcome.
@@ -342,7 +452,9 @@ fn output_has_truncation_marker(value: &str, stream: &str) -> bool {
     ))
 }
 
-pub(crate) fn captured_output_text(bytes: &[u8], truncated: bool, stream: &str) -> String {
+/// Format the existing bounded foreground capture, including its truncation
+/// marker. This text conversion makes no process-settlement claim.
+pub fn captured_output_text(bytes: &[u8], truncated: bool, stream: &str) -> String {
     let bytes = if truncated {
         // If a valid UTF-8 stream was clipped in the middle of its final code
         // point, omit only that incomplete suffix. Invalid bytes elsewhere
@@ -431,6 +543,8 @@ pub struct SessionSandbox {
     passive_start: bool,
     passive_execution_usable: std::sync::Arc<std::sync::atomic::AtomicBool>,
     passive_exec_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    /// Present only on the actual owner that installed this verified mount.
+    supervisor_program: Option<SupervisorProgram>,
     /// Background tasks started in this container.
     tasks: std::sync::Mutex<Vec<BgTaskHandle>>,
     /// Interactive PTY-backed terminals.
@@ -730,7 +844,16 @@ impl SessionSandbox {
             ));
         }
         Self::verify_start_authorities(working_dir, &policy.control_plane_roots)?;
+        Self::verify_supervisor_policy(policy)?;
         let mut control_plane_dirs = policy.control_plane_dirs.clone();
+        if let Some(program) = &policy.supervisor_program {
+            // A read-only file mount alone is insufficient when the same host
+            // file is reachable through the writable Workspace bind alias.
+            control_plane_dirs.push(program.private_dir().path().to_path_buf());
+        }
+        if let Some(installation) = &policy.supervisor_installation {
+            control_plane_dirs.push(installation.path().to_path_buf());
+        }
         control_plane_dirs.extend(
             policy
                 .control_plane_roots
@@ -754,6 +877,40 @@ impl SessionSandbox {
         if policy.passive_start {
             image = Self::ensure_passive_recovery_image().await?;
         }
+
+        // Choose the executable using the actual selected Linux image, never
+        // the host CPU. Pin run to that immutable image identity so a moving
+        // tag cannot change architecture between inspection and creation.
+        let supervisor_image =
+            if policy.supervisor_program.is_some() || policy.supervisor_installation.is_some() {
+                let selected = SupervisorImage::resolve(&image).await?;
+                if let Some(installation) = &policy.supervisor_installation {
+                    effective_policy.supervisor_program = Some(
+                        SupervisorProgram::install_embedded_async(
+                            selected.architecture(),
+                            installation,
+                        )
+                        .await?,
+                    );
+                    effective_policy.supervisor_installation = None;
+                }
+                if effective_policy
+                    .supervisor_program
+                    .as_ref()
+                    .is_none_or(|program| program.architecture() != selected.architecture())
+                {
+                    return Err(IsolationError::OciSetupFailed(
+                        "installed supervisor architecture differs from the selected Linux image"
+                            .into(),
+                    ));
+                }
+                Some(selected)
+            } else {
+                None
+            };
+        let run_image = supervisor_image
+            .as_ref()
+            .map_or(image.as_str(), SupervisorImage::id);
 
         // A macOS/Windows Podman machine may have been stopped during daemon
         // bootstrap. Once it is running, repeat the legacy exposure sweep
@@ -812,10 +969,11 @@ impl SessionSandbox {
         let mut dynamic_port_retries = 0_usize;
         let container_id = loop {
             Self::verify_start_authorities(working_dir, &policy.control_plane_roots)?;
+            Self::verify_supervisor_policy(&effective_policy)?;
             match Self::run_container(
                 &container,
                 &dir,
-                &image,
+                run_image,
                 node_dependency_volume.as_deref(),
                 with_limits,
                 &publish,
@@ -876,6 +1034,7 @@ impl SessionSandbox {
         let lifecycle = Self::supervise_container_lifecycle(container_id.clone());
 
         if let Err(error) = Self::verify_start_authorities(working_dir, &policy.control_plane_roots)
+            .and_then(|()| Self::verify_supervisor_policy(&effective_policy))
         {
             let cleanup = lifecycle.finish(SandboxLifecycleDisposition::Remove).await;
             return Err(match cleanup {
@@ -904,6 +1063,42 @@ impl SessionSandbox {
                     });
                 }
             };
+
+        let sandbox = Self {
+            container,
+            container_id: Some(container_id.clone()),
+            working_dir: working_dir_path,
+            published_ports,
+            effective_image: Some(image.clone()),
+            node_dependency_volume,
+            passive_start: policy.passive_start,
+            passive_execution_usable: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            passive_exec_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            supervisor_program: effective_policy.supervisor_program.clone(),
+            tasks: std::sync::Mutex::new(Vec::new()),
+            terminals: std::sync::Mutex::new(Vec::new()),
+        };
+        if let Some(selected) = &supervisor_image {
+            let handshake = async {
+                let program = sandbox.supervisor_program.as_ref().ok_or_else(|| {
+                    IsolationError::OciSetupFailed(
+                        "selected image has no installed process supervisor".into(),
+                    )
+                })?;
+                selected.verify_container(&container_id, program).await?;
+                sandbox.verify_supervisor_readiness().await
+            }
+            .await;
+            if let Err(error) = handshake {
+                let cleanup = lifecycle.finish(SandboxLifecycleDisposition::Remove).await;
+                return Err(match cleanup {
+                    Ok(()) => error,
+                    Err(cleanup_error) => IsolationError::OciContainerFailed(format!(
+                        "{error}; removing the sandbox with an unverified supervisor also failed: {cleanup_error}"
+                    )),
+                });
+            }
+        }
 
         // Normal Sessions can provision their chosen runtime after mounting
         // the Workspace. Passive recovery may only *probe*: its derived tool
@@ -947,25 +1142,13 @@ impl SessionSandbox {
         if !post_create_commands.is_empty() && !policy.allow_post_create {
             tracing::warn!(
                 "skipping {} project setup script(s) (postCreateCommand) for \
-                 session container ({container}): these come from the opened \
+                 session container ({}): these come from the opened \
                  repository and are not run automatically. Set \
                  sandbox.allow_post_create_command = true to enable.",
-                post_create_commands.len()
+                post_create_commands.len(),
+                sandbox.container
             );
         }
-        let sandbox = Self {
-            container,
-            container_id: Some(container_id),
-            working_dir: working_dir_path,
-            published_ports,
-            effective_image: Some(image),
-            node_dependency_volume,
-            passive_start: policy.passive_start,
-            passive_execution_usable: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            passive_exec_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
-            tasks: std::sync::Mutex::new(Vec::new()),
-            terminals: std::sync::Mutex::new(Vec::new()),
-        };
         if policy.allow_post_create && !post_create_commands.is_empty() {
             let setup = sandbox.run_setup_commands(post_create_commands).await?;
             if let Some(failed) = setup.iter().find(|result| !result.ok()) {
@@ -996,6 +1179,99 @@ impl SessionSandbox {
     /// The session's working directory — the confinement root for file tools.
     pub fn root(&self) -> &Path {
         &self.working_dir
+    }
+
+    fn verify_supervisor_policy(policy: &SandboxPolicy) -> Result<(), IsolationError> {
+        if policy.supervisor_program.is_some() && policy.supervisor_installation.is_some() {
+            return Err(IsolationError::OciSetupFailed(
+                "choose either an explicit supervisor program or its automatic private installation".into(),
+            ));
+        }
+        if policy.passive_start
+            && (policy.supervisor_program.is_some() || policy.supervisor_installation.is_some())
+        {
+            return Err(IsolationError::OciSetupFailed(
+                "passive recovery cannot install a project execution supervisor".into(),
+            ));
+        }
+        if let Some(root) = &policy.supervisor_installation {
+            root.verify_ambient_identity()?;
+            #[cfg(unix)]
+            root.require_owner_and_private_writes(rustix::process::geteuid().as_raw())?;
+            #[cfg(not(unix))]
+            return Err(IsolationError::OciSetupFailed(
+                "supervisor installation requires a Unix ownership boundary".into(),
+            ));
+        }
+        if let Some(program) = &policy.supervisor_program {
+            program.verify()?;
+        }
+        Ok(())
+    }
+
+    /// Prove that the installed executable really speaks the expected protocol
+    /// in this exact container before repository provisioning/setup. No command
+    /// is dispatched: the prepared invocation is cancelled and its no-launch
+    /// acknowledgment is collected through the normal owned transport.
+    async fn verify_supervisor_readiness(&self) -> Result<(), IsolationError> {
+        use axocoatl_exec::protocol::{
+            ExecRequest, ProcessOutcome, ServerMessage, PROTOCOL_VERSION,
+        };
+        let request = ExecRequest {
+            protocol: PROTOCOL_VERSION,
+            stdin: None,
+            invocation_id: format!("sandbox-readiness-{}", uuid::Uuid::new_v4()),
+            argv: vec!["/bin/true".into()],
+            timeout_ms: 1_000,
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+            write_restriction: None,
+        };
+        let prepared = self.prepare_supervised_command(request).await?;
+        prepared.cancellation().cancel();
+        let execution = prepared.dispatch()?.finish().await?;
+        let acknowledged = matches!(execution.result(), ServerMessage::Finished {
+            outcome: ProcessOutcome::Cancelled | ProcessOutcome::TimedOut,
+            primary_exit: None,
+            launched: false,
+            quiescent: true,
+            stdout,
+            stderr,
+            ..
+        } if stdout.observed_bytes == 0 && stderr.observed_bytes == 0 && stdout.complete && stderr.complete);
+        if !acknowledged || execution.settlement().is_none() {
+            return Err(IsolationError::OciSetupFailed(
+                "the installed supervisor did not confirm a complete no-launch handshake".into(),
+            ));
+        }
+        // Recheck the retained executable after the live handshake, before a
+        // newly prepared runtime is made available to repository execution.
+        self.supervised_parts()?;
+        Ok(())
+    }
+
+    /// Exact owner-only transport inputs. This does not acknowledge command
+    /// intent, grant permission, or prove process quiescence.
+    pub(crate) fn supervised_parts(
+        &self,
+    ) -> Result<(String, std::path::PathBuf, SupervisorProgram), IsolationError> {
+        if self.passive_start {
+            return Err(IsolationError::OciSetupFailed(
+                "passive recovery has no supervised project authority".into(),
+            ));
+        }
+        let container = self.container_id.as_ref().ok_or_else(|| {
+            IsolationError::OciSetupFailed(
+                "supervised execution requires an owned container incarnation".into(),
+            )
+        })?;
+        let program = self.supervisor_program.as_ref().ok_or_else(|| {
+            IsolationError::OciSetupFailed(
+                "this runtime has no installed first-party supervisor".into(),
+            )
+        })?;
+        program.verify()?;
+        Ok((container.clone(), self.working_dir.clone(), program.clone()))
     }
 
     /// The container this sandbox runs in (`axo-ses-{session_id}`).
@@ -1140,6 +1416,7 @@ impl SessionSandbox {
             passive_start: false,
             passive_execution_usable: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             passive_exec_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            supervisor_program: None,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
         }
@@ -1754,24 +2031,45 @@ impl SessionSandbox {
                 String::from_utf8_lossy(&listed.stderr).trim()
             )));
         }
-        let listed_ids = Self::parse_data_root_exposure_candidates(&listed.stdout)?;
+        let mut listed_ids = Self::parse_data_root_exposure_candidates(&listed.stdout)?;
         if listed_ids.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut inspect = Command::new(PODMAN);
-        inspect.args(["inspect", "--type", "container", "--format", "json"]);
-        inspect.args(&listed_ids);
-        let inspected = Self::run_bounded_command(inspect, NAMED_REMOVE_COMMAND_TIMEOUT).await?;
-        if inspected.timed_out {
-            return Err(IsolationError::Timeout(NAMED_REMOVE_COMMAND_TIMEOUT));
-        }
-        if !inspected.status.success() {
-            return Err(IsolationError::OciContainerFailed(format!(
-                "inspecting legacy Axocoatl containers: {}",
-                String::from_utf8_lossy(&inspected.stderr).trim()
-            )));
-        }
+        let inspected = loop {
+            let mut inspect = Command::new(PODMAN);
+            inspect.args(["inspect", "--type", "container", "--format", "json"]);
+            inspect.args(&listed_ids);
+            let inspected =
+                Self::run_bounded_command(inspect, NAMED_REMOVE_COMMAND_TIMEOUT).await?;
+            if inspected.timed_out {
+                return Err(IsolationError::Timeout(NAMED_REMOVE_COMMAND_TIMEOUT));
+            }
+            if inspected.status.success() {
+                break inspected;
+            }
+            // Another Session may remove its container after the inventory
+            // query. A failed batch inspect is not evidence of absence: prove
+            // each immutable ID through Podman's exact existence status, then
+            // retry only if the candidate set strictly shrinks. Other errors
+            // and incomplete successful inspection still fail closed.
+            let mut present = Vec::new();
+            for id in &listed_ids {
+                if Self::container_identity_present(id, NAMED_REMOVE_PROBE_TIMEOUT).await? {
+                    present.push(id.clone());
+                }
+            }
+            if present.is_empty() {
+                return Ok(Vec::new());
+            }
+            if present.len() == listed_ids.len() {
+                return Err(IsolationError::OciContainerFailed(format!(
+                    "inspecting legacy Axocoatl containers: {}",
+                    String::from_utf8_lossy(&inspected.stderr).trim()
+                )));
+            }
+            listed_ids = present;
+        };
         let exposing = Self::data_root_exposing_ids(
             &listed_ids,
             data_root,
@@ -1956,6 +2254,16 @@ impl SessionSandbox {
             "-w".into(),
             dir.into(),
         ];
+        if let Some(program) = &policy.supervisor_program {
+            // The supervised start path resolved this image before selecting
+            // the executable. Never fall back to pulling after that pin.
+            args.push("--pull=never".into());
+            args.push("--mount".into());
+            args.push(format!(
+                "type=bind,source={},destination={SUPERVISOR_CONTAINER_PATH},ro=true",
+                program.path().display(),
+            ));
+        }
         for mask in &policy.control_plane_dirs {
             args.push("--tmpfs".into());
             // Podman enables `tmpcopyup` by default. Without the explicit
@@ -2268,6 +2576,56 @@ impl SessionSandbox {
         })?
     }
 
+    /// Observe raw bounded output from the exact owned container incarnation.
+    /// This path is for protected check evidence; it does not bypass passive
+    /// recovery's stricter lifecycle or prove the absence of surviving children.
+    pub async fn exec_observed(
+        &self,
+        argv: &[&str],
+        timeout: Duration,
+        stdout_limit: usize,
+        stderr_limit: usize,
+    ) -> Result<ObservedExecResult, IsolationError> {
+        if self.passive_start {
+            return Err(IsolationError::Io(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "passive recovery requires its own checked execution lifecycle",
+            )));
+        }
+        let container = self.container_id.clone().ok_or_else(|| {
+            IsolationError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "observed execution requires an owned container incarnation",
+            ))
+        })?;
+        let working_dir = self.working_dir.clone();
+        let argv = argv.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        tokio::spawn(async move {
+            let mut command = Command::new(PODMAN);
+            command
+                .arg("exec")
+                .arg("-w")
+                .arg(working_dir)
+                .arg(container)
+                .args(argv);
+            Self::run_bounded_command_with_capture_owned(
+                command,
+                None,
+                timeout,
+                stdout_limit,
+                stderr_limit,
+            )
+            .await
+            .map(CapturedCommandOutput::into_observation)
+        })
+        .await
+        .map_err(|failure| {
+            IsolationError::OciContainerFailed(format!(
+                "observed exec supervisor failed: {failure}"
+            ))
+        })?
+    }
+
     /// Start a long-running command in the background inside the container
     /// (a dev server, a build watch, …). Returns a task id immediately; the
     /// command keeps running and its output is captured. Killed for free when
@@ -2484,46 +2842,115 @@ impl SessionSandbox {
         }
     }
 
-    fn spawn_output_reader<R>(
-        mut reader: R,
-    ) -> tokio::task::JoinHandle<std::io::Result<BoundedCapture>>
+    #[cfg(test)]
+    fn spawn_output_reader<R>(reader: R) -> OutputReader
     where
         R: AsyncRead + Unpin + Send + 'static,
     {
-        tokio::spawn(async move {
-            let mut bytes = Vec::with_capacity(16 * 1024);
-            let mut truncated = false;
-            let mut chunk = [0_u8; 16 * 1024];
-            loop {
-                let read = reader.read(&mut chunk).await?;
-                if read == 0 {
-                    break;
-                }
-                let remaining = COMMAND_OUTPUT_MAX_BYTES.saturating_sub(bytes.len());
-                let retained = remaining.min(read);
-                bytes.extend_from_slice(&chunk[..retained]);
-                truncated |= retained < read;
-            }
-            Ok(BoundedCapture { bytes, truncated })
-        })
+        Self::spawn_output_reader_with_limit(reader, COMMAND_OUTPUT_MAX_BYTES)
     }
 
+    fn spawn_output_reader_with_limit<R>(mut reader: R, limit: usize) -> OutputReader
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+    {
+        let progress = Arc::new(Mutex::new(CaptureProgress {
+            bytes: Vec::with_capacity(limit.min(16 * 1024)),
+            observed_bytes: 0,
+            digest: Sha256::new(),
+            complete: false,
+            error: None,
+        }));
+        let task_progress = progress.clone();
+        let task = tokio::spawn(async move {
+            let mut chunk = [0_u8; 16 * 1024];
+            loop {
+                let read = match reader.read(&mut chunk).await {
+                    Ok(read) => read,
+                    Err(error) => {
+                        task_progress
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .error = Some(Self::bounded_capture_error(format!(
+                            "reading output: {error}"
+                        )));
+                        break;
+                    }
+                };
+                let mut capture = task_progress
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                if read == 0 {
+                    capture.complete = true;
+                    break;
+                }
+                let Some(observed_bytes) = capture.observed_bytes.checked_add(read as u64) else {
+                    capture.error = Some("observed output length overflow".to_string());
+                    break;
+                };
+                capture.observed_bytes = observed_bytes;
+                capture.digest.update(&chunk[..read]);
+                let remaining = limit.saturating_sub(capture.bytes.len());
+                let retained = remaining.min(read);
+                capture.bytes.extend_from_slice(&chunk[..retained]);
+            }
+        });
+        OutputReader { task, progress }
+    }
+
+    fn bounded_capture_error(mut error: String) -> String {
+        if error.len() > 1024 {
+            let mut boundary = 1024;
+            while !error.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            error.truncate(boundary);
+        }
+        error
+    }
+
+    #[cfg(test)]
     async fn collect_output_reader(
-        mut reader: tokio::task::JoinHandle<std::io::Result<BoundedCapture>>,
-    ) -> Result<BoundedCapture, IsolationError> {
-        match tokio::time::timeout(COMMAND_REAP_TIMEOUT, &mut reader).await {
-            Ok(Ok(Ok(capture))) => Ok(capture),
-            Ok(Ok(Err(error))) => Err(IsolationError::Io(error)),
-            Ok(Err(error)) => Err(IsolationError::OciContainerFailed(format!(
-                "collecting Podman output: {error}"
+        reader: OutputReader,
+    ) -> Result<ObservedExecOutput, IsolationError> {
+        let capture = Self::collect_observed_output(reader).await;
+        if capture.complete {
+            Ok(capture)
+        } else {
+            Err(IsolationError::OciContainerFailed(
+                capture
+                    .error
+                    .unwrap_or_else(|| "incomplete output".to_string()),
+            ))
+        }
+    }
+
+    async fn collect_observed_output(mut reader: OutputReader) -> ObservedExecOutput {
+        let failure = match tokio::time::timeout(COMMAND_REAP_TIMEOUT, &mut reader.task).await {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(Self::bounded_capture_error(format!(
+                "collecting output: {error}"
             ))),
             Err(_) => {
-                reader.abort();
-                let _ = reader.await;
-                Err(IsolationError::OciContainerFailed(
-                    "collecting Podman output timed out after its process exited".to_string(),
-                ))
+                reader.task.abort();
+                let _ = (&mut reader.task).await;
+                Some("collecting output timed out before transport EOF".to_string())
             }
+        };
+        let mut capture = reader
+            .progress
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(failure) = failure {
+            capture.complete = false;
+            capture.error = Some(failure);
+        }
+        ObservedExecOutput {
+            retained: std::mem::take(&mut capture.bytes),
+            observed_bytes: capture.observed_bytes,
+            observed_sha256: format!("{:x}", capture.digest.clone().finalize()),
+            complete: capture.complete,
+            error: capture.error.take(),
         }
     }
 
@@ -2539,10 +2966,37 @@ impl SessionSandbox {
     }
 
     async fn run_bounded_command_with_input_owned(
-        mut command: Command,
+        command: Command,
         input: Option<Vec<u8>>,
         timeout: Duration,
     ) -> Result<BoundedCommandOutput, IsolationError> {
+        Self::run_bounded_command_with_capture_owned(
+            command,
+            input,
+            timeout,
+            COMMAND_OUTPUT_MAX_BYTES,
+            COMMAND_OUTPUT_MAX_BYTES,
+        )
+        .await?
+        .into_legacy()
+    }
+
+    async fn run_bounded_command_with_capture_owned(
+        mut command: Command,
+        input: Option<Vec<u8>>,
+        timeout: Duration,
+        stdout_limit: usize,
+        stderr_limit: usize,
+    ) -> Result<CapturedCommandOutput, IsolationError> {
+        if stdout_limit > COMMAND_OUTPUT_MAX_BYTES
+            || stderr_limit > COMMAND_OUTPUT_MAX_BYTES
+            || timeout.is_zero()
+        {
+            return Err(IsolationError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "execution observation limits are invalid",
+            )));
+        }
         command
             .kill_on_drop(true)
             .stdin(if input.is_some() {
@@ -2555,12 +3009,18 @@ impl SessionSandbox {
         let mut child = command
             .spawn()
             .map_err(|error| IsolationError::OciContainerFailed(error.to_string()))?;
-        let stdout_reader = Self::spawn_output_reader(child.stdout.take().ok_or_else(|| {
-            IsolationError::OciContainerFailed("Podman stdout was not captured".to_string())
-        })?);
-        let stderr_reader = Self::spawn_output_reader(child.stderr.take().ok_or_else(|| {
-            IsolationError::OciContainerFailed("Podman stderr was not captured".to_string())
-        })?);
+        let stdout_reader = Self::spawn_output_reader_with_limit(
+            child.stdout.take().ok_or_else(|| {
+                IsolationError::OciContainerFailed("Podman stdout was not captured".to_string())
+            })?,
+            stdout_limit,
+        );
+        let stderr_reader = Self::spawn_output_reader_with_limit(
+            child.stderr.take().ok_or_else(|| {
+                IsolationError::OciContainerFailed("Podman stderr was not captured".to_string())
+            })?,
+            stderr_limit,
+        );
 
         let mut child_stdin = child.stdin.take();
         let waited = tokio::time::timeout(timeout, async {
@@ -2578,72 +3038,59 @@ impl SessionSandbox {
             child.wait().await
         })
         .await;
-        let (status, timed_out) = match waited {
-            Ok(Ok(status)) => (status, false),
+        let (status, timed_out, supervision_error) = match waited {
+            Ok(Ok(status)) => (Some(status), false, None),
             Ok(Err(error)) => {
-                let kill_error = child.start_kill().err();
-                let reap_error =
-                    match tokio::time::timeout(COMMAND_REAP_TIMEOUT, child.wait()).await {
-                        Ok(Ok(_)) => None,
-                        Ok(Err(reap)) => Some(reap.to_string()),
-                        Err(_) => Some(format!(
-                            "process was not reaped within {} seconds",
-                            COMMAND_REAP_TIMEOUT.as_secs()
-                        )),
-                    };
-                stdout_reader.abort();
-                stderr_reader.abort();
-                return Err(IsolationError::OciContainerFailed(format!(
-                    "writing to or waiting for Podman: {error}{}{}",
-                    kill_error.map_or_else(String::new, |kill| format!(
-                        "; initiating kill also failed: {kill}"
-                    )),
-                    reap_error
-                        .map_or_else(String::new, |reap| format!("; reaping also failed: {reap}"))
-                )));
+                let (status, failure) = Self::reap_failed_capture(
+                    &mut child,
+                    Some(format!("writing to or waiting for Podman: {error}")),
+                )
+                .await;
+                (status, false, failure)
             }
             Err(_) => {
-                let kill_error = child.start_kill().err();
-                match tokio::time::timeout(COMMAND_REAP_TIMEOUT, child.wait()).await {
-                    Ok(Ok(status)) => (status, true),
-                    Ok(Err(error)) => {
-                        stdout_reader.abort();
-                        stderr_reader.abort();
-                        return Err(IsolationError::OciContainerFailed(format!(
-                            "reaping timed-out Podman process: {error}{}",
-                            kill_error.map_or_else(String::new, |kill| format!(
-                                "; initiating kill also failed: {kill}"
-                            ))
-                        )));
-                    }
-                    Err(_) => {
-                        stdout_reader.abort();
-                        stderr_reader.abort();
-                        return Err(IsolationError::OciContainerFailed(format!(
-                            "timed-out Podman process could not be reaped within {} seconds{}",
-                            COMMAND_REAP_TIMEOUT.as_secs(),
-                            kill_error.map_or_else(String::new, |kill| format!(
-                                "; initiating kill failed: {kill}"
-                            ))
-                        )));
-                    }
-                }
+                let (status, failure) = Self::reap_failed_capture(&mut child, None).await;
+                (status, true, failure)
             }
         };
         let (stdout, stderr) = tokio::join!(
-            Self::collect_output_reader(stdout_reader),
-            Self::collect_output_reader(stderr_reader)
+            Self::collect_observed_output(stdout_reader),
+            Self::collect_observed_output(stderr_reader)
         );
-        let stdout = stdout?;
-        let stderr = stderr?;
-        Ok(BoundedCommandOutput {
+        Ok(CapturedCommandOutput {
             status,
-            stdout: stdout.bytes,
-            stderr: stderr.bytes,
-            stdout_truncated: stdout.truncated,
-            stderr_truncated: stderr.truncated,
             timed_out,
+            supervision_error,
+            stdout,
+            stderr,
         })
+    }
+
+    async fn reap_failed_capture(
+        child: &mut tokio::process::Child,
+        initial_error: Option<String>,
+    ) -> (Option<ExitStatus>, Option<String>) {
+        let mut failures = initial_error.into_iter().collect::<Vec<_>>();
+        if let Err(error) = child.start_kill() {
+            failures.push(format!("initiating kill failed: {error}"));
+        }
+        let status = match tokio::time::timeout(COMMAND_REAP_TIMEOUT, child.wait()).await {
+            Ok(Ok(status)) => Some(status),
+            Ok(Err(error)) => {
+                failures.push(format!("reaping process failed: {error}"));
+                None
+            }
+            Err(_) => {
+                failures.push(format!(
+                    "process was not reaped within {} seconds",
+                    COMMAND_REAP_TIMEOUT.as_secs()
+                ));
+                None
+            }
+        };
+        let failure =
+            (!failures.is_empty()).then(|| Self::bounded_capture_error(failures.join("; ")));
+        (status, failure)
     }
 
     /// Keep subprocess ownership in a supervisor task. Dropping an HTTP
@@ -3143,6 +3590,12 @@ pub trait Sandbox: Send + Sync {
         None
     }
 
+    /// Exact backend incarnation used for dispatch/resource binding. A reusable
+    /// display name cannot supply this identity.
+    fn execution_identity(&self) -> Option<&str> {
+        self.runtime_id()
+    }
+
     /// Transfer final-Drop ownership to durable Session state. Local runtimes
     /// do not need a disposition change; remote implementations use this only
     /// after the exact runtime identity has been fsynced as Ready.
@@ -3163,6 +3616,46 @@ pub trait Sandbox: Send + Sync {
 
     /// Run a command in the sandbox and capture its output.
     async fn exec(&self, argv: &[&str], timeout: Duration) -> Result<ExecResult, IsolationError>;
+
+    /// Structured raw evidence must be implemented by the backend. A formatted
+    /// or already-truncated text result cannot be relabelled as an observed stream.
+    async fn exec_observed(
+        &self,
+        _argv: &[&str],
+        _timeout: Duration,
+        _stdout_limit: usize,
+        _stderr_limit: usize,
+    ) -> Result<ObservedExecResult, IsolationError> {
+        Err(IsolationError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "backend does not expose observed execution output",
+        )))
+    }
+
+    /// Prepare the owned supervisor without starting the repository command.
+    /// Unsupported backends must not substitute an ordinary exec result.
+    async fn prepare_supervised_command(
+        &self,
+        _request: axocoatl_exec::protocol::ExecRequest,
+    ) -> Result<crate::supervisor_transport::PreparedSupervisedCommand, IsolationError> {
+        Err(IsolationError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "backend does not expose owned process supervision",
+        )))
+    }
+
+    /// Prepare exact bounded stdin through the same owned process supervisor.
+    /// Unsupported backends must not substitute ordinary exec_stdin settlement.
+    async fn prepare_supervised_command_with_stdin(
+        &self,
+        _request: axocoatl_exec::protocol::ExecRequest,
+        _stdin: Vec<u8>,
+    ) -> Result<crate::supervisor_transport::PreparedSupervisedCommand, IsolationError> {
+        Err(IsolationError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "backend does not expose owned process supervision with stdin",
+        )))
+    }
 
     /// Run a command with `stdin` piped in (used to write file contents).
     async fn exec_stdin(
@@ -3226,6 +3719,24 @@ pub trait Sandbox: Send + Sync {
 // recursion and Podman behavior is byte-for-byte unchanged.
 #[async_trait::async_trait]
 impl Sandbox for SessionSandbox {
+    async fn prepare_supervised_command(
+        &self,
+        request: axocoatl_exec::protocol::ExecRequest,
+    ) -> Result<crate::supervisor_transport::PreparedSupervisedCommand, IsolationError> {
+        SessionSandbox::prepare_supervised_command(self, request).await
+    }
+
+    async fn prepare_supervised_command_with_stdin(
+        &self,
+        request: axocoatl_exec::protocol::ExecRequest,
+        stdin: Vec<u8>,
+    ) -> Result<crate::supervisor_transport::PreparedSupervisedCommand, IsolationError> {
+        SessionSandbox::prepare_supervised_command_with_stdin(self, request, stdin).await
+    }
+
+    fn execution_identity(&self) -> Option<&str> {
+        self.container_id.as_deref()
+    }
     fn root(&self) -> &Path {
         self.root()
     }
@@ -3237,6 +3748,16 @@ impl Sandbox for SessionSandbox {
     }
     async fn exec(&self, argv: &[&str], timeout: Duration) -> Result<ExecResult, IsolationError> {
         self.exec(argv, timeout).await
+    }
+    async fn exec_observed(
+        &self,
+        argv: &[&str],
+        timeout: Duration,
+        stdout_limit: usize,
+        stderr_limit: usize,
+    ) -> Result<ObservedExecResult, IsolationError> {
+        self.exec_observed(argv, timeout, stdout_limit, stderr_limit)
+            .await
     }
     async fn exec_stdin(
         &self,
@@ -3280,6 +3801,7 @@ impl Sandbox for SessionSandbox {
             passive_start: self.passive_start,
             passive_execution_usable: self.passive_execution_usable.clone(),
             passive_exec_lock: self.passive_exec_lock.clone(),
+            supervisor_program: None,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
         })
@@ -3296,6 +3818,192 @@ impl Sandbox for SessionSandbox {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn installed_test_supervisor(root: &Path) -> SupervisorProgram {
+        let root = root.canonicalize().unwrap();
+        let bytes = crate::supervisor_program::test_elf(62);
+        let source = root.join("supervisor-source");
+        std::fs::write(&source, &bytes).unwrap();
+        let private = SecureDir::open(&root)
+            .unwrap()
+            .child("supervisor-private")
+            .unwrap();
+        SupervisorProgram::install(&source, &format!("{:x}", Sha256::digest(&bytes)), &private)
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervisor_mount_is_root_level_read_only_and_masks_writable_source_alias() {
+        let root = tempfile::tempdir().unwrap();
+        let program = installed_test_supervisor(root.path());
+        let (workspace, masks) = SessionSandbox::control_plane_paths(
+            root.path(),
+            &[program.private_dir().path().to_path_buf()],
+        )
+        .unwrap();
+        let policy = SandboxPolicy {
+            supervisor_program: Some(program.clone()),
+            control_plane_dirs: masks,
+            ..SandboxPolicy::default()
+        };
+        SessionSandbox::verify_supervisor_policy(&policy).unwrap();
+        let args = SessionSandbox::build_run_args(
+            "owned",
+            workspace.to_str().unwrap(),
+            DEFAULT_IMAGE,
+            None,
+            false,
+            &[],
+            &policy,
+        );
+        let expected = format!(
+            "type=bind,source={},destination=/axocoatl-exec-supervisor,ro=true",
+            program.path().display()
+        );
+        assert_eq!(
+            args.iter().filter(|arg| arg.as_str() == expected).count(),
+            1
+        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--mount" && pair[1] == expected));
+        let mask = format!(
+            "{}:rw,noexec,nosuid,nodev,notmpcopyup",
+            program.private_dir().path().display()
+        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "--tmpfs" && pair[1] == mask));
+        assert!(!args.iter().any(|arg| arg == "--entrypoint"));
+        assert_eq!(
+            &args[args.len() - 3..],
+            &[DEFAULT_IMAGE, "sleep", "infinity"]
+        );
+        let plain = SessionSandbox::build_run_args(
+            "owned",
+            workspace.to_str().unwrap(),
+            DEFAULT_IMAGE,
+            None,
+            false,
+            &[],
+            &SandboxPolicy::default(),
+        );
+        assert!(!plain
+            .iter()
+            .any(|arg| arg.contains(SUPERVISOR_CONTAINER_PATH)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervised_run_pins_the_inspected_image_without_changing_entrypoint() {
+        let root = tempfile::tempdir().unwrap();
+        let program = installed_test_supervisor(root.path());
+        let image_id = "a".repeat(64);
+        let selected = SupervisorImage::parse(
+            &serde_json::to_vec(&serde_json::json!({
+                "id": image_id, "os": "linux", "architecture": "amd64",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let policy = SandboxPolicy {
+            supervisor_program: Some(program),
+            ..SandboxPolicy::default()
+        };
+        let args = SessionSandbox::build_run_args(
+            "owned",
+            "/workspace",
+            selected.id(),
+            None,
+            false,
+            &[],
+            &policy,
+        );
+        assert_eq!(
+            &args[args.len() - 3..],
+            &[selected.id(), "sleep", "infinity"]
+        );
+        assert_eq!(
+            args.iter()
+                .filter(|arg| arg.as_str() == "--pull=never")
+                .count(),
+            1
+        );
+        assert!(!args.iter().any(|arg| arg == "--entrypoint"));
+        assert!(!args.iter().any(|arg| arg == DEFAULT_IMAGE));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn automatic_supervisor_installation_is_private_masked_and_not_passive() {
+        assert!(SandboxPolicy::default().supervisor_installation.is_none());
+        let root = tempfile::tempdir().unwrap();
+        let root = SecureDir::open(root.path().canonicalize().unwrap()).unwrap();
+        let installation = root.child("private-supervisor").unwrap();
+        let mut policy = SandboxPolicy {
+            supervisor_installation: Some(installation.clone()),
+            ..SandboxPolicy::default()
+        };
+        SessionSandbox::verify_supervisor_policy(&policy).unwrap();
+        let (workspace, masks) =
+            SessionSandbox::control_plane_paths(root.path(), &[installation.path().to_path_buf()])
+                .unwrap();
+        assert_eq!(workspace, root.path());
+        assert_eq!(masks, vec![installation.path().to_path_buf()]);
+        assert!(SessionSandbox::control_plane_paths(
+            installation.path(),
+            &[installation.path().to_path_buf()]
+        )
+        .is_err());
+        policy.passive_start = true;
+        assert!(SessionSandbox::verify_supervisor_policy(&policy).is_err());
+        policy.passive_start = false;
+        policy.supervisor_program = Some(installed_test_supervisor(root.path()));
+        assert!(SessionSandbox::verify_supervisor_policy(&policy).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervisor_capability_requires_installed_program_and_refuses_passive_or_attached_handles() {
+        let root = tempfile::tempdir().unwrap();
+        let program = installed_test_supervisor(root.path());
+        let mut sandbox = SessionSandbox::attach("reusable-name", root.path());
+        assert!(sandbox.supervised_parts().is_err());
+        sandbox.container_id = Some("immutable-container-id".into());
+        assert!(sandbox.supervised_parts().is_err());
+        sandbox.supervisor_program = Some(program.clone());
+        let (container, directory, installed) = sandbox.supervised_parts().unwrap();
+        assert_eq!(container, "immutable-container-id");
+        assert_eq!(directory, root.path());
+        assert_eq!(installed.sha256(), program.sha256());
+        sandbox.passive_start = true;
+        assert!(sandbox.supervised_parts().is_err());
+        assert!(SessionSandbox::verify_supervisor_policy(&SandboxPolicy {
+            supervisor_program: Some(program),
+            passive_start: true,
+            ..SandboxPolicy::default()
+        })
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replaced_supervisor_is_refused_at_start_and_at_transport_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let program = installed_test_supervisor(root.path());
+        let policy = SandboxPolicy {
+            supervisor_program: Some(program.clone()),
+            ..SandboxPolicy::default()
+        };
+        let mut sandbox = SessionSandbox::attach("name", root.path());
+        sandbox.container_id = Some("exact-incarnation".into());
+        sandbox.supervisor_program = Some(program.clone());
+        std::fs::rename(program.path(), root.path().join("old-program")).unwrap();
+        assert!(SessionSandbox::verify_supervisor_policy(&policy).is_err());
+        assert!(sandbox.supervised_parts().is_err());
+    }
+
     #[tokio::test]
     async fn output_reader_caps_retention_but_drains_to_eof() {
         let (reader, mut writer) = tokio::io::duplex(16 * 1024);
@@ -3310,8 +4018,263 @@ mod tests {
 
         writer.await.unwrap();
         let capture = SessionSandbox::collect_output_reader(reader).await.unwrap();
-        assert_eq!(capture.bytes.len(), COMMAND_OUTPUT_MAX_BYTES);
-        assert!(capture.truncated);
+        assert_eq!(capture.retained.len(), COMMAND_OUTPUT_MAX_BYTES);
+        assert!(capture.observed_bytes > capture.retained.len() as u64);
+        assert!(capture.complete);
+        use sha2::{Digest, Sha256};
+        let complete = vec![b'x'; COMMAND_OUTPUT_MAX_BYTES + 4 * 16 * 1024];
+        assert_eq!(capture.observed_bytes, complete.len() as u64);
+        assert_eq!(
+            capture.observed_sha256,
+            format!("{:x}", Sha256::digest(&complete))
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn observed_exec_retains_raw_prefixes_but_hashes_both_complete_streams() {
+        use sha2::{Digest, Sha256};
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "printf '\\000\\377abcdef'; printf 'separate-error' >&2; exit 7",
+        ]);
+        let result = SessionSandbox::run_bounded_command_with_capture_owned(
+            command,
+            None,
+            Duration::from_secs(2),
+            3,
+            4,
+        )
+        .await
+        .unwrap()
+        .into_observation();
+        let full_stdout = [0, 255, b'a', b'b', b'c', b'd', b'e', b'f'];
+        assert_eq!(result.exit_code, Some(7));
+        assert_eq!(result.transport_exit_code, Some(7));
+        assert!(!result.client_timed_out);
+        assert!(result.supervision_error.is_none());
+        assert!(result.stdout.complete && result.stderr.complete);
+        assert_eq!(result.stdout.retained, full_stdout[..3]);
+        assert_eq!(result.stdout.observed_bytes, full_stdout.len() as u64);
+        assert_eq!(
+            result.stdout.observed_sha256,
+            format!("{:x}", Sha256::digest(full_stdout))
+        );
+        assert_eq!(result.stderr.retained, b"sepa");
+        assert_eq!(result.stderr.observed_bytes, 14);
+        assert_eq!(
+            result.stderr.observed_sha256,
+            format!("{:x}", Sha256::digest(b"separate-error"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn observed_exec_invalid_limits_refuse_before_starting_the_command() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("must-not-exist");
+        for (timeout, limit) in [
+            (Duration::ZERO, 1),
+            (Duration::from_secs(1), COMMAND_OUTPUT_MAX_BYTES + 1),
+        ] {
+            let mut command = Command::new("sh");
+            command
+                .args(["-c", "printf started > \"$1\"", "test"])
+                .arg(&marker);
+            assert!(SessionSandbox::run_bounded_command_with_capture_owned(
+                command, None, timeout, limit, 0
+            )
+            .await
+            .is_err());
+            assert!(!marker.exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn observed_exec_timeout_keeps_observed_output_without_inventing_an_exit_code() {
+        use sha2::{Digest, Sha256};
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf before-timeout; exec sleep 60"]);
+        let result = SessionSandbox::run_bounded_command_with_capture_owned(
+            command,
+            None,
+            Duration::from_secs(1),
+            4,
+            0,
+        )
+        .await
+        .unwrap()
+        .into_observation();
+        assert!(result.client_timed_out);
+        assert_eq!(result.exit_code, None);
+        assert_eq!(result.stdout.retained, b"befo");
+        assert_eq!(result.stdout.observed_bytes, 14);
+        assert_eq!(
+            result.stdout.observed_sha256,
+            format!("{:x}", Sha256::digest(b"before-timeout"))
+        );
+        assert!(result.stderr.retained.is_empty());
+        assert_eq!(result.stderr.observed_bytes, 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn observed_exec_keeps_transport_status_without_certifying_reserved_podman_errors() {
+        for status in [0, 7, 125, 126, 127] {
+            let mut command = Command::new("sh");
+            command
+                .args(["-c", "printf diagnostic >&2; exit \"$1\"", "test"])
+                .arg(status.to_string());
+            let result = SessionSandbox::run_bounded_command_with_capture_owned(
+                command,
+                None,
+                Duration::from_secs(2),
+                0,
+                32,
+            )
+            .await
+            .unwrap()
+            .into_observation();
+            assert_eq!(result.transport_exit_code, Some(status));
+            assert_eq!(
+                result.exit_code,
+                if status < 125 { Some(status) } else { None }
+            );
+            assert_eq!(result.stderr.retained, b"diagnostic");
+            assert!(result.stderr.complete);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn observed_exec_retains_incomplete_inherited_pipe_and_complete_other_stream() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("owned-descendant-pid");
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 60 2>/dev/null & printf '%s' \"$!\" > \"$1\"; printf '\\000\\377kept-output'; printf complete-error >&2; exit 0", "test"]).arg(&pid_file);
+        let captured = SessionSandbox::run_bounded_command_with_capture_owned(
+            command,
+            None,
+            Duration::from_secs(3),
+            3,
+            32,
+        )
+        .await;
+        // Clean up the deliberately inherited writer before any result assertion.
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        let cleanup = Command::new("kill")
+            .args(["-TERM", pid.trim()])
+            .status()
+            .await
+            .unwrap();
+        assert!(cleanup.success());
+        let captured = captured.unwrap();
+        assert_eq!(captured.status.and_then(|status| status.code()), Some(0));
+        let legacy = CapturedCommandOutput {
+            status: captured.status,
+            timed_out: captured.timed_out,
+            supervision_error: captured.supervision_error.clone(),
+            stdout: captured.stdout.clone(),
+            stderr: captured.stderr.clone(),
+        };
+        assert!(legacy.into_legacy().is_err());
+        let result = captured.into_observation();
+        assert_eq!(result.transport_exit_code, Some(0));
+        assert_eq!(result.exit_code, None);
+        assert_eq!(result.stdout.retained, [0, 255, b'k']);
+        assert_eq!(result.stdout.observed_bytes, 13);
+        assert_eq!(
+            result.stdout.observed_sha256,
+            format!("{:x}", Sha256::digest(b"\0\xffkept-output"))
+        );
+        assert!(!result.stdout.complete);
+        assert!(result.stdout.error.as_deref().unwrap().contains("EOF"));
+        assert!(result.stderr.complete);
+        assert!(result.stderr.error.is_none());
+        assert_eq!(result.stderr.retained, b"complete-error");
+    }
+
+    #[tokio::test]
+    async fn reader_error_keeps_observed_binary_prefix_and_successful_other_stream() {
+        struct ErrorAfterBytes(bool);
+        impl AsyncRead for ErrorAfterBytes {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+                buffer: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                if self.0 {
+                    std::task::Poll::Ready(Err(std::io::Error::other("controlled read failure")))
+                } else {
+                    self.0 = true;
+                    buffer.put_slice(b"\0\xffpartial");
+                    std::task::Poll::Ready(Ok(()))
+                }
+            }
+        }
+        let stdout = SessionSandbox::spawn_output_reader_with_limit(ErrorAfterBytes(false), 3);
+        let stderr = SessionSandbox::spawn_output_reader_with_limit(&b"complete stderr"[..], 32);
+        let (stdout, stderr) = tokio::join!(
+            SessionSandbox::collect_observed_output(stdout),
+            SessionSandbox::collect_observed_output(stderr),
+        );
+        assert_eq!(stdout.retained, [0, 255, b'p']);
+        assert_eq!(stdout.observed_bytes, 9);
+        assert_eq!(
+            stdout.observed_sha256,
+            format!("{:x}", Sha256::digest(b"\0\xffpartial"))
+        );
+        assert!(!stdout.complete);
+        assert!(stdout
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("controlled read failure"));
+        assert!(stderr.complete);
+        assert!(stderr.error.is_none());
+        assert_eq!(stderr.retained, b"complete stderr");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn observed_exec_preserves_streams_when_stdin_write_fails() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "printf before-stdin-error; printf diagnostic >&2; exec 0<&-; exec sleep 60",
+        ]);
+        let captured = SessionSandbox::run_bounded_command_with_capture_owned(
+            command,
+            Some(vec![b'x'; 1024 * 1024]),
+            Duration::from_secs(3),
+            32,
+            32,
+        )
+        .await
+        .unwrap();
+        let result = captured.into_observation();
+        assert!(result
+            .supervision_error
+            .as_deref()
+            .unwrap()
+            .contains("writing to or waiting"));
+        assert!(!result.client_timed_out);
+        assert_eq!(result.exit_code, None);
+        assert_eq!(result.stdout.retained, b"before-stdin-error");
+        assert_eq!(result.stderr.retained, b"diagnostic");
+    }
+
+    #[tokio::test]
+    async fn observed_exec_refuses_a_reusable_name_without_an_owned_incarnation() {
+        let directory = tempfile::tempdir().unwrap();
+        let sandbox = SessionSandbox::attach("unowned-container", directory.path());
+        assert!(sandbox.execution_identity().is_none());
+        assert!(sandbox
+            .exec_observed(&["sh", "-c", "exit 0"], Duration::from_secs(1), 16, 16)
+            .await
+            .is_err());
     }
 
     #[test]

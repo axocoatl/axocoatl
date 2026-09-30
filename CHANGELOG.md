@@ -5,9 +5,202 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-09-28
+
+### Security
+- Update rustls to 0.23.45 for RUSTSEC-2026-0285, which fixes TLS 1.3 handshake
+  messages being accepted across encryption-level boundaries.
+
+### Added
+- **Workspace knowledge.** Native Sessions can share versioned Markdown decisions,
+  conventions, and findings within a Workspace. Notes retain source hashes, typed
+  relationships, backlinks, provenance, and revision conflicts. Agent proposals stay
+  separate until accepted publication; isolated Ways additionally require their
+  exact retained Keep selection. Rejected or superseded work does not publish
+  automatically. The Session's Knowledge inspector supports editing, proposal review,
+  source/evidence navigation, a knowledge graph, explicit Markdown import/export, and exact-revision
+  attachment to chat.
+- **Source-aware code context.** A bounded, rebuildable source index parses Rust,
+  JavaScript, TypeScript/TSX, and Python definitions and import syntax. The observed
+  code map supports targeted reads, and source references expose changed or unavailable
+  evidence. This syntax index does not claim complete reference or call-graph resolution.
+- **Signal field for Session teams.** A Session work source that coordinates a team
+  through evidence left on the code. Each Agent watches repository path patterns, owns
+  some of them (or none, for a read-only reviewer), and has a threshold. Findings and pitfalls from completed turns, a person's flags, source
+  changes after a turn, and failed required checks deposit on paths; deposits evaporate
+  with a chosen half-life and stop counting once their cited source changes or a person
+  withdraws them. When the signal on an Agent's own paths crosses its threshold, one
+  targeted work item goes through the existing inbox, grants and allowance. Signaled
+  sources are rechecked before start, a crossing held by pending work dispatches when
+  that work clears, and during signal work file tools refuse paths the Agent does not
+  own; a read-only Agent's commands, its shell included, run under a kernel write
+  restriction and cannot change the repository; any other change outside an Agent's
+  owned paths fails that work and is kept for review. Work sources shows per-Agent intensity, why each deposit counts, and
+  a cause chain: each dispatch with the signals that caused it, how its work ended,
+  and the signals its turn left, beside a deposit → dispatch → turn → deposit graph.
+  A finding's cited files are either files that must change (they route the signal
+  to whoever watches them) or supporting evidence; proposing a finding reports which
+  Agent it will reach; the host reads each cited file when the finding is proposed and
+  records its digest, so a later fix retires it. Only published findings signal; a finding from a turn that
+  did not finish, or from work that was not accepted, waits for a person to accept
+  it. Signal work runs in episodes with a dispatch cap and
+  an optional token budget, holds when the same evidence repeats, and reports
+  "quiet on visible checks" rather than done. The field chooses who looks next;
+  it does not certify findings or results.
+- **Knowledge-directed investigation.** Investigate in chat prepares a source-checking
+  request with the selected note revision. Native Agents can use existing delegated
+  graph controls to request follow-up within the same authority and budget; a stored
+  note does not itself authorize execution or establish readiness.
+- **Explicit Session storage upgrade.** `axocoatl session upgrade --confirm`
+  converts a stopped legacy data root while retaining its writer fence, history,
+  checkpoint archives, and cumulative usage. Unrecorded historical roles produce
+  an empty future conversation instead of guessed or resumed private state.
+  Interrupted conversions resume from the exact recorded source.
+- **Recorded Agent execution inspector.** The Session's existing Agent graph now
+  opens in View mode. Select an Agent and activation to inspect its retained input,
+  output, partial output, usage, and causal evidence. Ordinary and directly targeted
+  turns remain inspectable alongside coordinated turns; missing or unknown evidence
+  is labeled explicitly. Historical evidence does not itself authorize controls;
+  native actions require the host's exact current capability or explicit revalidation.
+  Saved evidence references reopen their original activation after reload. Unstarted
+  descendants show Blocked when their current dependency cannot complete, while
+  later Retry generations preserve the earlier failure evidence.
+- **Native Session execution and controls.** New data roots use one canonical turn
+  controller for ordinary Send, dependent Agents, and approved Coordinator Workers.
+  Team & budget reviews immutable definitions and explicit limits for future turns.
+  The Session inspector exposes exact generation controls and reviewed Add/Replace
+  edits. A bounded request-local planner proposes controls for human review; it cannot
+  execute them. Guide and Revise retain the human instruction, selected context, and
+  attachments. Existing legacy roots retain their compatibility path.
+- **Reviewed partial finish.** Native cooperative turns can be finished partially
+  with explicit human confirmation of selected accepted results, work to stop,
+  never-started work, and missing checks. Safe settlement and usage evidence remain
+  required; normal Finish still requires the declared work and conditions.
+- **Embedded process supervision.** The single Axocoatl executable includes its Linux
+  process supervisor for x86_64 and aarch64. Local startup prepares the matching payload
+  automatically. Native repository tools and checks retain exact process-settlement
+  evidence through cancellation; unknown effects remain unresolved. Provider and tool
+  calls share cumulative grant reservations and the Stop gate. The native provider
+  boundary currently accepts reviewed local Ollama profiles with finite inference
+  bounds, retaining incomplete token observations separately from known-zero API cost.
+- **Native OpenRouter credit billing.** Eligible static text/tool models use a retained
+  endpoint with output and price ceilings, no automatic retry or fallback, and durable
+  whole-call budget reservations. Onboarding declares credit billing and supplies an
+  explicit output limit. Missing final usage remains unknown. BYOK support is deferred;
+  the supported account configuration has no connected provider keys.
+- **Standing Session work sources.** Manual events, configured signed webhooks, and
+  completion of a Session in the same Workspace can feed an explicitly armed team.
+  Receipts preserve the original source, candidate, and team/grant revisions. All work
+  shares the approved grant allowance. Required checks are explicit command argument
+  arrays; readiness requires their actual results against the recorded unchanged tree.
+- **Retained Ways decisions.** Native Ways retain bounded candidate Outcomes, Routes,
+  diffs, Checks, usage, Judge evidence, the human choice, and cleanup state after Keep
+  or finishing without keeping. History storage limits are explicit; capacity failure
+  preserves recovery evidence. History supports search, export, context attachment,
+  and a separate explicit deletion action. Keep remains an uncommitted Git decision.
+- **Durable Session coordination maps.** Autonomous multi-Agent Lattice and Custom turns now
+  activate from exact named dependencies, pass only the direct contributions that
+  caused each activation, continue independent work when one branch fails, and mark
+  unreachable descendants blocked. A downstream Agent can request one bounded
+  revision from an ancestor through an internal coordination signal; every completed
+  downstream result derived from that ancestor runs again before verification. The immutable graph, signals,
+  generations, lifecycle, summaries, and usage are retained in canonical Session
+  History and rendered inline with the request as a reload-safe Coordination card
+  connected to the existing Agent graph. This legacy coordination path remains
+  available alongside native turn graphs.
+- **Hosted-provider starter team configuration.** OpenRouter onboarding
+  retains the direct Assistant and also defines a small
+  autonomous Planner → Builder `plan-and-build` team. Native Sessions require supported
+  OpenRouter profiles and explicit Team & budget approval; direct Anthropic and OpenAI
+  templates currently execute only on compatibility paths. Onboarding remains user-level
+  and creates no project, Workspace, or Session.
 
 ### Fixed
+- **Paused turns no longer deadlock on a cancelled re-preparation.** Opening Files or
+  Terminal after a restart re-prepares a Ready local environment; if that request was
+  dropped (for example by navigating away) or the daemon shut down, the environment
+  became Failed while a paused turn pinned its generation, and Continue, Finish, Stop
+  and rebuild were all refused. A cancelled or shutdown-interrupted local
+  re-preparation now removes its container and dependency volume and returns to Ready
+  at the same generation. Rebuilding the unchanged plan of a failed local environment
+  while a paused turn waits prepares it again at that generation. A crash
+  mid-preparation and every E2B preparation still end Failed as before.
+- **Signal work keeps its budget for the host's checks and its context bounded.**
+  An activation keeps enough invocations for the host to observe its changes and
+  run required checks, and always leaves room for the model to answer after a tool
+  round is declined; a declined call is a tool error, not a failed activation.
+  Tool output, and long arguments of the model's own earlier calls, older than the
+  latest three to five tool rounds of a signal activation are replaced by a short
+  placeholder in later requests (the Session history keeps them), so repeated file
+  contents stop growing every request; a request that would still overflow a small
+  local context keeps only the latest round whole, and then leaves out the earliest
+  tool rounds with a note, instead of failing.
+- **An Ollama stream that ends without its final chunk is retried once.** This includes
+  a response Ollama ends with an error record, such as a tool call it could not parse.
+  The retry
+  is charged to the same grant, preflighted against what is left, recorded in the
+  activation's stream, and does not repeat. History shows only the retried text;
+  partial output marks where the abandoned attempt ended. A failed activation now
+  states its failure class (provider stream, budget, context limit, scope, capture,
+  admission) and a suggested next step.
+- **Closed work blocked only by unknown provider usage can be settled.** A person
+  can settle it at its reserved ceiling: every call with unknown usage is charged
+  its full reservation, and the receipt records that decision.
+- **Reviewed native tool iteration.** Native ordinary Agent turns now derive their
+  tool-round limit from the reviewed invocation allowance, with a 128-round safety
+  ceiling. They no longer stop at the compatibility default of ten rounds while
+  reviewed capacity remains. Every provider and tool invocation still requires
+  its own durable grant admission; the round ceiling grants no extra authority.
+- **Supported first-use provider choices.** Onboarding offers Ollama and OpenRouter,
+  matching native Session provider admission. Direct OpenAI and Anthropic adapters
+  remain available through manual compatibility configuration.
+- **Native repository backend admission.** Native Session execution rejects E2B
+  before provider or repository work because its backend does not implement the
+  required process-supervision interface. Legacy E2B execution remains available.
+- **OpenRouter JSON budget admission.** JSON output uses OpenRouter's single-request
+  token bound; Ollama's two-pass repair allowance no longer rejects otherwise eligible
+  OpenRouter profiles. Explicit output, token, and cost limits remain enforced.
+- **Retryable daemon shutdown ownership.** Failed or cancelled shutdown waits retain
+  the daemon and pending Agent joins for checked retry. Session repository cleanup
+  keeps its registered controller and Workspace ownership until the lifecycle action
+  succeeds. Standalone CLI commands retry incomplete shutdown and exit unsuccessfully
+  if cleanup still cannot finish.
+- **Exact Session-team authority.** Configuration validation now rejects empty or
+  duplicate workflow identities, unresolved or duplicate roster members,
+  out-of-roster entry Agents, ambiguous Coordinator/Worker ownership, and
+  autonomous dependency graphs that are not closed acyclic DAGs. Persisted
+  Sessions and History survive later team renames or removal; a new turn fails
+  before mutation until the named team is restored or a new Session is created.
+- **Exact coordination-feedback authority.** The internal `coordination_signal` tool is
+  now advertised only for an active activation with an unspent revision request and eligible
+  upstream targets, and its request schema enumerates those exact Agent IDs. Execution still
+  rechecks the active activation lease, allowance, and target against stale or fabricated calls.
+  An applied `changes_requested` transition atomically retains the requesting activation's
+  usage and completeness with the durable signal and rerun boundary. Non-empty Agent tool
+  allowlists now apply uniformly to executor, recall, and core-memory tools, so a coordinated
+  role cannot receive an undeclared memory capability alongside its internal signal.
+- **Crash-safe coordinated Session continuity.** Lattice and Custom actors, plus
+  a Coordinator selected by a single-Agent Session, now stage checkpoints behind
+  the canonical Session turn. A completed turn
+  promotes each Agent's own causal transcript; failed, cancelled, interrupted,
+  or crash-recovered turns restore the prior transcript, clear private
+  orchestration state, and retain incurred provider usage. Startup resolves any
+  unfinished checkpoint phase from durable History before actors can resume,
+  with a one-time accounting-safe adoption of pre-transaction caches. Before a
+  pending transaction publishes `Committing`, Axocoatl validates its staged
+  Agent namespaces and identities, accepts only exact canonical 16-digit
+  checkpoint filenames, and decodes the selected checkpoint set. Malformed
+  staged state fails closed while the manifest remains `Pending` and retryable.
+  Legacy
+  single-Agent Coordinators import checkpoint-only History before that adoption,
+  then rebuild completed conversation without reviving private plans or Worker state.
+  Transaction-scoped Agents can still read Tier 2–4 memory, but semantic auto-store,
+  daily-log archive writes, core edits, and core consolidation now fail closed for
+  the whole turn until those stores gain transactional promotion. Restart recovery
+  now closes every still-live coordination node and preserves any aggregate stream
+  only as explicitly unattributed evidence rather than inventing an Agent answer. Ordinary
+  single-Agent failed, cancelled, or interrupted boundaries likewise retain stop ownership and
+  block cached retries or new turns until the actor is proven stopped and rebuilt from History.
 - **Fail-closed release retries.** Normal releases and the incident-locked v1.0.1
   recovery now use deterministic archives, run-scoped byte-identical handoffs,
   complete stable-release frontier checks, exact Git tag and GitHub Release
@@ -24,7 +217,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source and audited delta without claiming that the films were captured with the
   v1.0.1 binary.
 
-## [1.0.1] — 2026-08-27
+### Deprecated
+- Per-Agent `activation_threshold` and `activation_decay` tune the process-wide
+  event lattice, which does not start Session work. The daemon logs a warning when
+  either is set. Configure thresholds and a half-life on a signal field instead.
+
+## [1.0.1] — unpublished draft
+
+The first-run corrections below are included in 1.1.0. The earlier 1.0.1 release
+remained a draft; its date is not a public-release claim.
 
 ### Fixed
 - **User-level first run.** `axocoatl onboard` now writes one owner-only user

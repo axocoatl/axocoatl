@@ -1,6 +1,9 @@
 //! Tool execution hooks — pre/post execution extensibility points.
 
 use serde::{Deserialize, Serialize};
+#[path = "hook_approval.rs"]
+mod approval;
+pub use approval::{HookApprovalBoundary, HookApprovalResolution, SharedHookApprovalBoundary};
 
 /// Phase of hook execution relative to the tool call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +51,16 @@ pub trait ToolHook: Send + Sync + 'static {
 
     /// Execute the hook and return an action.
     async fn execute(&self, ctx: &HookContext) -> HookAction;
+
+    /// Existing hooks keep their behavior. Human approval hooks can use the
+    /// actual invocation owner instead of reconstructing a wait from an ID.
+    async fn execute_with_approval(
+        &self,
+        ctx: &HookContext,
+        _approval: SharedHookApprovalBoundary,
+    ) -> HookAction {
+        self.execute(ctx).await
+    }
 }
 
 /// A hook that logs all tool executions.

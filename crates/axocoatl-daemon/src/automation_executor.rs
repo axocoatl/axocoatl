@@ -42,6 +42,10 @@ use crate::workflow::{AgentActivationOutput, WorkflowOutput};
 #[derive(Clone)]
 pub struct AutomationExecutionContext {
     agent_registry: axocoatl_actor::AgentRegistry,
+    /// Immutable authority snapshot for this execution context. Registry
+    /// membership is liveness, not permission: it also contains Session and
+    /// Coordinator-owned runtime actors that Automations must never address.
+    executable_agent_ids: Arc<HashSet<String>>,
     automation_store: Arc<tokio::sync::RwLock<crate::automation_store::AutomationStore>>,
     pending_interrupts: Arc<
         tokio::sync::RwLock<std::collections::HashMap<String, crate::interrupt::PendingInterrupt>>,
@@ -57,6 +61,9 @@ impl AutomationExecutionContext {
     pub fn from_daemon(daemon: &AxocoatlDaemon) -> Self {
         Self {
             agent_registry: daemon.agent_registry.clone(),
+            executable_agent_ids: Arc::new(crate::bootstrap::configured_executable_agent_ids(
+                &daemon.config,
+            )),
             automation_store: daemon.automation_store.clone(),
             pending_interrupts: daemon.pending_interrupts.clone(),
             run_store: daemon.run_store.clone(),
@@ -1583,6 +1590,13 @@ async fn run_agent_node(
     agent_id: &str,
     input: &str,
 ) -> Result<MeasuredAutomationAgentOutput, AutomationAgentFailure> {
+    if !daemon.executable_agent_ids.contains(agent_id) {
+        return Err(AutomationAgentFailure::before_dispatch(
+            DaemonError::AgentSpawn(format!(
+                "automation '{automation_id}' cannot execute '{agent_id}': it is not a configured top-level Agent"
+            )),
+        ));
+    }
     let actor = daemon
         .agent_registry
         .get(&axocoatl_core::AgentId::new(agent_id))
@@ -1689,6 +1703,27 @@ mod tests {
 
     struct MeasuredFailureBehavior {
         token_usage: axocoatl_core::MeasuredTokenUsage,
+    }
+
+    struct DispatchCountingBehavior {
+        dispatches: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl AgentBehavior for DispatchCountingBehavior {
+        async fn on_start(&mut self, _: &AgentConfig) -> Result<(), AgentError> {
+            Ok(())
+        }
+
+        async fn execute(&mut self, _: AgentInput) -> Result<AgentOutput, AgentError> {
+            self.dispatches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(AgentOutput::text("dispatched"))
+        }
+
+        async fn on_stop(&mut self) -> Result<(), AgentError> {
+            Ok(())
+        }
     }
 
     #[async_trait::async_trait]
@@ -1822,6 +1857,14 @@ mod tests {
         let stream_bus = crate::stream::StreamBus::new(16);
         AutomationExecutionContext {
             agent_registry: axocoatl_actor::AgentRegistry::new(),
+            executable_agent_ids: Arc::new(HashSet::from([
+                "failing-known".to_string(),
+                "failing-lower-bound".to_string(),
+                "failing-unknown".to_string(),
+                "map-agent".to_string(),
+                "missing-agent".to_string(),
+                "subgraph-agent".to_string(),
+            ])),
             automation_store,
             pending_interrupts: Arc::new(tokio::sync::RwLock::new(pending_interrupts)),
             run_store,
@@ -1886,6 +1929,57 @@ mod tests {
             enabled: true,
             folder: None,
         }
+    }
+
+    #[tokio::test]
+    async fn registered_session_actor_is_not_automation_execution_authority() {
+        let root = tmpdir("automation-scoped-agent-authority");
+        let automation_store = Arc::new(tokio::sync::RwLock::new(
+            crate::automation_store::AutomationStore::open(root.join("automations.json")).unwrap(),
+        ));
+        let run_store =
+            Arc::new(crate::automation_runs::AutomationRunStore::open(root.join("runs")).unwrap());
+        let context = test_context(automation_store, run_store, HashMap::new());
+        let scoped_id = AgentId::new("session-a:coder");
+        let dispatches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (actor, handle) = AgentActor::spawn(
+            Some(format!("automation-scoped-{}", uuid::Uuid::new_v4())),
+            AgentActor,
+            (
+                AgentConfig {
+                    id: scoped_id.clone(),
+                    ..AgentConfig::default()
+                },
+                Box::new(DispatchCountingBehavior {
+                    dispatches: dispatches.clone(),
+                }) as Box<dyn AgentBehavior>,
+            ),
+        )
+        .await
+        .unwrap();
+        context
+            .agent_registry
+            .register(scoped_id.clone(), actor.clone())
+            .await;
+
+        let automation = one_agent_automation("scoped-agent", &scoped_id.to_string());
+        let output = execute_automation_with_inputs_in_context(
+            &context,
+            &automation,
+            "must not run",
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(dispatches.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(output.failed_agents.len(), 1);
+        assert!(output.failed_agents[0]
+            .1
+            .contains("not a configured top-level Agent"));
+        assert!(context.agent_registry.get(&scoped_id).await.is_some());
+
+        actor.stop(None);
+        handle.await.unwrap();
     }
 
     #[tokio::test]

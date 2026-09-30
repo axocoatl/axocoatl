@@ -1,0 +1,65 @@
+{
+  "request": {
+    "schema_version": 1,
+    "command_id": "stop-tester-184",
+    "session_id": "session-qa",
+    "turn_id": "turn-build-184",
+    "execution_epoch_id": "epoch-1",
+    "expected_turn_revision": 7,
+    "expected_graph_revision": 2,
+    "issued_at_ms": 1789140000000,
+    "parameters": {
+      "kind": "stop_activation",
+      "activation": {
+        "session_id": "session-qa",
+        "turn_id": "turn-build-184",
+        "execution_epoch_id": "epoch-1",
+        "node_id": "tester",
+        "generation": 1,
+        "activation_id": "tester-1-epoch-1"
+      }
+    }
+  },
+  "updates": [
+    {
+      "update_id": "stop-tester-184-accepted",
+      "command_id": "stop-tester-184",
+      "session_id": "session-qa",
+      "turn_id": "turn-build-184",
+      "execution_epoch_id": "epoch-1",
+      "expected_receipt_revision": 1,
+      "transition": {
+        "state": "accepted",
+        "validation": "validation-7-2-human-stop",
+        "pending": "await-exact-generation-cancellation"
+      }
+    },
+    {
+      "update_id": "stop-tester-184-applied",
+      "command_id": "stop-tester-184",
+      "session_id": "session-qa",
+      "turn_id": "turn-build-184",
+      "execution_epoch_id": "epoch-1",
+      "expected_receipt_revision": 2,
+      "transition": {
+        "state": "applied",
+        "state_transition": "canonical-stop-batch-8",
+        "turn_revision": 8,
+        "graph_revision": 2,
+        "pending": "await-effect-safe-boundary"
+      }
+    },
+    {
+      "update_id": "stop-tester-184-settled",
+      "command_id": "stop-tester-184",
+      "session_id": "session-qa",
+      "turn_id": "turn-build-184",
+      "execution_epoch_id": "epoch-1",
+      "expected_receipt_revision": 3,
+      "transition": {
+        "state": "settled",
+        "result": "tester-safe-boundary-with-retained-tool-outcome"
+      }
+    }
+  ]
+}

@@ -23,24 +23,20 @@ Agent, and retain separate labeled outputs on one durable Turn.
 
 ## Start or reset
 
-After closing previous demo Sessions and stopping the daemon:
+Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
+`harbor-catalog` fixture, a fresh native data path, real local Ollama calls,
+and the exact candidate binary at `http://localhost:8080`. Retain the actual
+workspace path as `$AXO_DEMO_ROOT/workspace` (or record the equivalent isolated
+fixture path). Verify `history_version: execution_v2` and Ready, then explicitly
+review and apply **Team and budget** before sending.
 
-```bash
-./demo/one-app/prepare.sh --scenario harbor-catalog
-AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-harbor-catalog \
-  ./demo/one-app/start.sh
-```
-
-Create a Session for
-`/private/tmp/axocoatl-one-app-showcase-harbor-catalog/workspace` and choose
-**Custom workflow**. Select exactly:
-
-1. **Systems Architect** (`architect`)
-2. **Critical Reviewer** (`reviewer`), dependent on `architect`
-
-Confirm the creation summary shows `reviewer ← architect`, then create the
-Session and rename it **Film · Handoff sequence**. Before recording, confirm the
-Session header lists exactly those two Agents.
+Create the scenario team with **Systems Architect** followed by **Critical
+Reviewer**, and verify the exact dependency in the native team review. Use
+dedicated `architect` and `reviewer` templates with `tools: []`, not the coding
+templates' repository tools. Both use the recorded local model, temperature 0,
+700 maximum output tokens, and reviewed finite limits. This task needs text
+responses only. Retain the Preview and Apply responses proving the exact
+definitions, approved limits, and `slot-architect → slot-reviewer` dependency.
 
 ## Browser actions
 
@@ -76,7 +72,7 @@ Session header lists exactly those two Agents.
 ## Durable evidence
 
 ```bash
-export AXO_DEMO_URL='http://127.0.0.1:18080'
+export AXO_DEMO_URL='http://localhost:8080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-harbor-catalog'
 curl -sS "$AXO_DEMO_URL/api/sessions"
 ```
@@ -85,18 +81,26 @@ Copy the Film · Handoff sequence Session id, then:
 
 ```bash
 export AXO_SESSION_ID='ses-paste-the-id-here'
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns"
-grep -F "$AXO_SESSION_ID" \
-  "$AXO_DEMO_ROOT/data/session-history/turns.v1.jsonl"
+curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
+curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
 git -C "$AXO_DEMO_ROOT/workspace" status --short
 ```
 
-The Session record establishes the Custom multi-agent mode and configured
-roster. The canonical Turn response and ledger establish the two non-empty
-per-Agent outputs and completed lifecycle. An empty Git status confirms that
-this design-only prompt did not become a repository-edit claim. A scheduled
-Agent with a blank output must make the Turn fail; it must never be represented
-as a successful empty handoff.
+Copy the actual native turn id and retain
+`GET /api/sessions/{session_id}/turns/{turn_id}/control-plane`. Its graph and
+activation input manifests must show that the reviewer's exact parent activation
+and generation resolve to the architect's accepted output. Retain both separately
+labeled non-empty outputs and the closed lifecycle. Use the native
+`execution-v2/` canonical records from the same data root for durable evidence;
+legacy `turns.v1.jsonl` is not native execution authority. Record repository status
+before and after the handoff; another Session's changes are not evidence from
+this design-only turn. A scheduled Agent with a blank output must make the Turn
+fail; it must never be represented as a successful empty handoff.
+
+After both outputs settle, coordinate a daemon restart using the same data root
+and exact candidate binary. Reopen the Session and retain the same turn, accepted
+activation references, and output content references. Do not start another turn
+to imitate recovered history.
 
 ## Recording beats
 
@@ -113,14 +117,17 @@ enough of both sentences to make the handoff legible.
 
 1. Wait for the shared Turn to become completed, failed, or cancelled and
    capture its per-Agent evidence.
-2. Close the Session from **All sessions**, then stop `start.sh` with Ctrl-C.
+2. Close the Session from **All sessions**, then stop the owned native daemon
+   only after coordinating with other active captures.
 3. Reset with:
 
    ```bash
    ./demo/one-app/prepare.sh --scenario harbor-catalog
    ```
 
-   Do not delete a running Session container to interrupt the handoff.
+   Use a new isolated demo root for another native take. Preserve the captured
+   data root and evidence; do not delete a running Session container to interrupt
+   the handoff.
 
 ## Known constraints
 

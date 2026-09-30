@@ -1,12 +1,13 @@
 ---
 title: Upgrade
-description: Upgrade the binary with a cold backup and explicit validation; understand the narrow checkpoint compatibility path and absence of general migration or rollback commands.
+description: Upgrade the binary with a cold backup and explicitly convert legacy Session storage.
 ---
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Axocoatl has no general `upgrade`, schema-migration, or rollback command. Treat
-a binary replacement as an operator-controlled change with a cold backup. The
+Treat a binary replacement as an operator-controlled change with a cold backup.
+The explicit `axocoatl session upgrade` command converts supported legacy Session
+storage; it does not install a binary or provide rollback. The
 automatic 0.1 compatibility surface is deliberately narrow:
 
 - A pre-1.0 single-agent checkpoint transcript can be imported into canonical
@@ -27,6 +28,21 @@ These paths do not replace a complete backup or establish general forward/backwa
 schema compatibility.
 
 ## Upgrade procedure
+
+To convert an existing legacy data root to native Session execution, stop the daemon,
+make a cold backup, then run:
+
+```sh
+axocoatl session upgrade --config /absolute/path/to/axocoatl.yaml --confirm
+```
+
+Without `--confirm`, the command explains the conversion and exits without modifying
+data. It retains the old history, exact checkpoint archives, and cumulative usage.
+When an old Agent's role was not recorded, its private state stays archived and its
+future conversation starts empty. Review **Team & budget** before new work.
+The upgrade holds the same exclusive data-root leases as the daemon, and an interrupted
+conversion resumes from its recorded source. Older binaries cannot write the upgraded
+root. Ordinary startup never implicitly converts an existing legacy root.
 
 <Steps>
 
@@ -78,6 +94,12 @@ Install or point the service at the resulting `target/release/axocoatl` binary.
 
   </TabItem>
 </Tabs>
+
+The replacement remains one `axocoatl` executable. It includes Axocoatl's Linux
+process supervisor, so upgrading requires no separate supervisor command or
+download. Cargo and source builds compile the host application and retain the
+first-party prebuilt supervisor payloads included in the source package. Contributors
+can [rebuild those payloads explicitly](https://github.com/axocoatl/axocoatl/blob/main/docs/EXEC_SUPERVISOR_BUILD.md).
 
 Then verify:
 

@@ -227,12 +227,12 @@ pub struct AgentConfigYaml {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub role: AgentRoleYaml,
-    /// Override the lattice activation threshold for this agent. When unset, the
-    /// threshold is computed automatically (0.5 × the number of dependencies).
+    /// Deprecated. Tunes the process-wide event lattice, which does not start
+    /// Session work; the daemon warns when it is set. Threshold-triggered
+    /// Session work is configured per route on a signal field.
     #[serde(default)]
     pub activation_threshold: Option<f32>,
-    /// Override the lattice signal decay rate. When unset, the default applies
-    /// (0.0 for entry agents, 0.01 for downstream agents).
+    /// Deprecated with `activation_threshold`; signal fields use a half-life.
     #[serde(default)]
     pub activation_decay: Option<f32>,
     /// Sampling controls threaded into each LLM request this agent makes.
@@ -389,6 +389,18 @@ pub struct ProvidersConfigYaml {
     /// OpenAI provider with the right base URL and a "openrouter"
     /// provider id, so agents reference it via `provider: openrouter`.
     pub openrouter: Option<ProviderCredentials>,
+    /// Explicit billing configuration for bounded native OpenRouter execution.
+    /// Credits must match the account configuration; external BYOK changes are
+    /// outside this supported contract. BYOK execution is not implemented.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openrouter_billing: Option<OpenRouterBilling>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenRouterBilling {
+    Credits,
+    Byok,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

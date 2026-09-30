@@ -21,13 +21,26 @@ devcontainer command to checked on an unreviewed Session; a reviewed checked or
 unchecked choice wins, and lockfile-detected or edited commands remain outside
 that default.
 
+New data roots use native execution. Before Send, open **Team & budget**, choose
+**Edit**, and review the Agent definitions and dependencies. Enter explicit
+activation, invocation, token, cost, output, and expiry limits; preview the team
+and **Apply** it. This creates a durable Session configuration for future turns.
+[Provider eligibility](/configure/providers/) is checked during that review.
+Existing legacy data roots keep compatibility execution until explicitly upgraded.
+
+For native ordinary Agent turns, the reviewed invocation allowance also bounds tool
+iteration, up to a safety ceiling of 128 rounds. Each provider and tool call still
+requires durable budget admission, so the grant can run out before that ceiling.
+Compatibility Agents retain the default ten-round guard.
+
 <Steps>
 
 1. Open a Session from the left rail.
 2. State the outcome, the constraints, and the check that should pass.
 3. Attach context if the request depends on material outside the Workspace.
-4. Select a model override only when this turn needs one. In a multi-agent
-   Session, you can also target a particular Agent.
+4. Check the selected Agent and model. Native Sessions show their approved models
+   read-only; use **Team & budget** to change them. Compatibility Sessions allow a
+   one-turn model override. In a multi-agent Session, you can target a particular Agent.
 5. Press **Enter** to send. Use **Shift+Enter** for a newline.
 
 </Steps>
@@ -45,7 +58,7 @@ you need to inspect how the Agent reached its answer, not only what it claimed.
 
 ## Open the tool you need
 
-The Session header exposes the common tools directly:
+The Session header and controls above the composer expose the common tools:
 
 | Control | Use it for |
 | --- | --- |
@@ -54,13 +67,18 @@ The Session header exposes the common tools directly:
 | **Preview** | A running web app exposed from the Session sandbox |
 | **Ways** | Preparing and following several attempts at one task |
 | **Terminal** | Session-scoped PTYs in the bottom dock |
-| **History** | Search, export, context review, and rewind |
+| **History** | Search, export, recorded execution and Ways decisions; legacy rewind |
+| **Knowledge** | Accepted Workspace notes shared across Sessions, proposal review, and this Session's observed code index |
 | **More** | Agent graph and focused attempt review, or a tool pinned beside Conversation |
 
 Choosing a primary view focuses it. **More** can pin an additional surface
 beside Conversation when comparing information is useful. Ways is contextual:
 it opens while you prepare or monitor attempts and does not reserve an empty
 right column in ordinary work.
+
+In **Agent graph**, select an Agent to inspect the recorded input, output, usage,
+and evidence for an activation. The graph opens in View mode and labels unavailable
+historical details. See [Observe coordination](/understand/coordination/#observe-coordination).
 
 ## Follow a running turn
 
@@ -100,7 +118,17 @@ several ways currently requires the autonomous form. A multi-agent Session keeps
 and lets you target individual Agents, but it does not currently support the
 separate isolated Attempts workflow.
 
-A configured Agent acts as a template. An autonomous Agent's normal Session conversation,
+A configured Agent acts as a template. Native Sessions retain their reviewed
+team independently of later template edits. Use **Team & budget** to add or remove
+Agents, change dependencies, and review limits for future turns. The Agent inspector
+separately controls current work; see [native controls](/workbench/history/#control-native-work).
+Native model-facing state is owned by exact activations and accepted generations.
+Native Agents can retrieve and propose [workspace knowledge](/workbench/knowledge/)
+without sharing every Session's conversation. Accepted notes preserve revisions and
+source references. Compatibility daily-log, core-memory, and semantic-recall stores
+remain separate and are not attached to the native actor factory.
+
+In compatibility execution, an autonomous Agent's Session conversation,
 checkpoint, daily log, core memory, and semantic memory are scoped to that Session and survive
 actor restart. A Coordinator owns scoped Tier-1 conversation and orchestration checkpointing;
 each declared Worker owns its own scoped Tier 1–4 identity beneath the Coordinator. Ad-hoc
@@ -109,7 +137,10 @@ inherit those local memories; only core blocks explicitly configured with `share
 Session scopes. Terminal Completed, Cancelled, Failed, or Interrupted Coordinator work is not
 auto-resumed on a later turn.
 
-Changing the Agent roster after Session creation is not a hot-add workflow.
-Create a new Session when the composition or sandbox boundary needs to change.
+A legacy Custom Session keeps the Agent IDs selected at creation; create a new Session to
+change that composition. A legacy Lattice Session instead stores its config-owned team ID
+and resolves that team's current roster when each all-team turn begins, so a valid
+team edit affects future turns after configuration reload while earlier turn maps
+remain unchanged. Create a new Session when the sandbox boundary needs to change.
 
 Continue with [Files, Preview, and Terminal →](/workbench/tools/)

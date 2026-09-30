@@ -1,7 +1,7 @@
 # Axocoatl — the local-first workbench for coding agents
-> Axocoatl v1: agent work you can inspect, compare, and keep
+> Axocoatl v1.1: repository work with retained knowledge and inspectable evidence
 
-Axocoatl v1 is an Apache-2.0, local-first coding-agent workbench for real
+Axocoatl v1.1 is an Apache-2.0, local-first coding-agent workbench for real
 repositories. Open a repository and give one configured Agent—or a configured
 team—a durable, folder-anchored Session. The browser app keeps conversation at
 the center while Files, Source Control, Preview, Terminal, History, Agent
@@ -17,9 +17,9 @@ Each accepted Turn records its request and context before execution, then keeps
 the Agent output, final lifecycle state, and bounded tool Route in durable
 History. Source Control separately shows the repository as it exists now;
 Axocoatl does not make a commit or push unless the user deliberately asks for
-that Git action. Candidate comparison evidence remains durable while its Ways
-decision is unresolved. After Keep, v1 retains the selected task, output, and turn
-attribution; Finish without keeping removes the set without adding a selected result.
+that Git action. Native Ways retain bounded comparison evidence and the human decision after
+cleanup, including a decision to keep nothing. Keep also retains the selected task,
+output, and turn attribution in Session History. Explicit storage limits govern retention.
 
 ## Start
 
@@ -58,7 +58,7 @@ WSL2.
 
 The ordinary path is one Agent or configured team in one Session. Exploring
 several Ways is optional decision support, not the default interaction model.
-The 1.0 Ways boundary requires an autonomous single-Agent Session and local Podman; Session
+The current Ways boundary requires an autonomous single-Agent Session and local Podman; Session
 attachments, MCP tools, Skills, and web search are withheld from attempts.
 
 ## Runtime underneath
@@ -67,14 +67,22 @@ A Rust daemon supervises configured Agent actors and owns the canonical Session
 ledger, checkpoint recovery, memory, provider adapters, tool execution, typed
 events, Automations, and sandbox lifecycle.
 
-- Providers: Ollama, OpenAI, OpenRouter, Anthropic, Gemini, Mistral, and
-  OpenAI-compatible endpoints.
+- Native providers: reviewed Ollama profiles and eligible OpenRouter-credit
+  text/tool endpoints with whole-call limits. BYOK remains deferred. Direct OpenAI,
+  Anthropic, Gemini, Mistral, and other compatible adapters retain their supported
+  compatibility execution paths.
 - Tools: bounded built-ins plus approved tools discovered from configured stdio
   or streamable-HTTP MCP servers. Axocoatl can also expose Agents through its MCP
   server command.
-- Memory: live Session context, append-only daily logs, editable core-memory
-  blocks, and on-device semantic recall. Checkpoints are execution-recovery
-  caches; canonical History is the product record.
+- Native workspace knowledge: versioned Markdown notes, typed links, source hashes,
+  proposals, and accepted publication. Sessions in the same Workspace share the
+  notes; conversation and exact activation history remain separate. The Knowledge
+  inspector exposes notes, evidence, a graph, and a bounded source index. Rust,
+  JavaScript, TypeScript/TSX, and Python parsing provides definitions and import
+  syntax, not complete reference or call-graph resolution.
+- Compatibility memory: append-only daily logs, editable core-memory blocks,
+  and on-device semantic recall remain distinct from native workspace knowledge.
+  Checkpoints are execution-recovery caches; canonical History is the product record.
 - Automations: explicit durable graphs configured and reviewed in Settings,
   with manual, interval, event, or Skill triggers and separate run history.
 - Coordination: a configured coordinator Agent can decompose a goal, assign
@@ -84,8 +92,9 @@ events, Automations, and sandbox lifecycle.
 
 ## Isolation and network boundary
 
-Rootless Podman is the local sandbox default. E2B Cloud is an explicit remote
-option for normal Session work. A local Workspace remains a read-write host bind
+Rootless Podman is the local sandbox default and supplies native repository
+process supervision. E2B Cloud remains an explicit remote option on supported
+compatibility paths; native Sessions reject unsupported remote ownership. A local Workspace remains a read-write host bind
 inside its sandbox, so the boundary limits repository tools; it is not a defense
 against an authorized tool making an unwanted change within that Workspace.
 

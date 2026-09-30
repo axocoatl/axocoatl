@@ -81,6 +81,94 @@ provider inference, advertises no tools, and does not enter a tool loop.
 An execution error carries the same token fields. A false known flag marks the
 numeric value as a known subtotal rather than an exact total.
 
+## Workspace knowledge
+
+These routes resolve the Workspace through its owning Session. Human edits name
+the expected note revision; stale revisions are conflicts. The full inspector
+workflow is documented in [Workspace knowledge](/workbench/knowledge/).
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/sessions/{id}/knowledge` | Notes, proposals, source index and freshness; optional `q` search |
+| POST | `/api/sessions/{id}/knowledge` | Create a note with `expected_revision: 0` |
+| PUT | `/api/sessions/{id}/knowledge/{note_id}` | Edit this exact note with its recorded `expected_revision` |
+| POST | `/api/sessions/{id}/knowledge/index` | Refresh the observed source index |
+| GET | `/api/sessions/{id}/knowledge/export` | Download accepted knowledge as Markdown; `note_id` selects one round-trippable note |
+| POST | `/api/sessions/{id}/knowledge/import-preview` | `{markdown}`; validate one exported note and return an edit for explicit review/save |
+| POST | `/api/sessions/{id}/knowledge/{note_id}/attach` | Attach the selected `expected_revision` to Session context |
+| POST | `/api/sessions/{id}/knowledge/proposals/{proposal_id}/accept` | Explicitly accept the proposal at its `expected_revision` |
+| POST | `/api/sessions/{id}/knowledge/proposals/{proposal_id}/reject` | Retain an explicit rejection |
+
+Note edits include `id`, `title`, `body`, `kind`, `expected_revision`, `links`, and
+`sources`. Links contain a `kind` and target note ID. Sources contain a repository
+`path`, `sha256`, and optional `symbol`. Model provenance is assigned by the host;
+an API payload cannot claim an arbitrary accepted activation as its origin.
+
+## Native Session controls and standing work
+
+These routes use the same authenticated Session owner as ordinary Send. A preview
+is read-only; Apply binds the reviewed request and exact revisions. Retrying an
+uncertain reply must reuse that request unchanged. Stale revisions are conflicts,
+not permission to choose another activation or team.
+
+| Method | Path | Request / behavior |
+| --- | --- | --- |
+| GET | `/api/sessions/{id}/team` | Current team revision, selected templates, explicit limits, and expiry |
+| POST | `/api/sessions/{id}/team/preview` | Typed whole-team edit; resolves and reviews future-turn definitions and authority |
+| POST | `/api/sessions/{id}/team/apply` | `{edit, review_digest}`; exact reviewed future-turn edit |
+| POST | `/api/sessions/{id}/team/cancel` | Cancel the referenced team draft without changing current authority |
+| POST | `/api/sessions/{id}/turns/{turn_id}/control-commands` | Typed human action with exact command/activation/revision identities; returns the canonical receipt |
+| POST | `/api/sessions/{id}/turns/{turn_id}/control-plan` | Bounded request-local proposal from the selected planning Agent; no execution authority |
+| POST | `/api/sessions/{id}/turns/{turn_id}/graph-edits/preview` | Review AddAgent or ReplaceFutureAgent against the exact graph revision |
+| POST | `/api/sessions/{id}/turns/{turn_id}/graph-edits/apply` | Apply the original reviewed graph edit and digest |
+| GET | `/api/sessions/{id}/turns/{turn_id}/grants` | Current grants, cumulative usage, and retained expansion proposals |
+| POST | `/api/sessions/{id}/turns/{turn_id}/grants/preview` | Explicit total limits, expiry, delegated operations, graph bounds, and reason |
+| POST | `/api/sessions/{id}/turns/{turn_id}/grants/decide` | `{request, review_digest, approve, reason}`; exact approval or decline |
+| POST | `/api/sessions/{id}/turns/{turn_id}/grants/revoke` | `{grant_id, expected_grant_revision}`; closes new dispatch without undoing started effects |
+| GET | `/api/sessions/{id}/work` | Source bindings and receipts with queued/terminal state, reasons, and checked-tree readiness |
+| POST | `/api/sessions/{id}/work/bindings` | `{binding_id, expected_binding_revision, expected_team_revision, armed, source, event_kind, instruction, required_checks}` |
+| POST | `/api/sessions/{id}/work/bindings/{binding}/manual` | Declared candidate event with exact event/correlation identities and optional expected binding revision |
+| POST | `/api/sessions/{id}/work/bindings/{binding}/webhook` | Exact raw signed event body; also requires ordinary server authentication |
+| POST | `/api/sessions/{id}/work/receipts/{receipt}/run` | Try admission through the ordinary native Session driver; unresolved work stays queued |
+| POST | `/api/sessions/{id}/work/receipts/{receipt}/dismiss` | `{reason}`; retain the dismissal against the exact receipt |
+| POST | `/api/sessions/{id}/work/receipts/{receipt}/settle-at-ceiling` | A person accepts charging closed work's provider calls with unknown usage at their full admitted reservation, releasing the rest of the shared budget. Refused while the turn is open, a tool effect or check outcome is unknown, usage is already measured, or the total would exceed the grant's reviewed limits; repeating it after it succeeded returns the settled view |
+| GET | `/api/sessions/{id}/work/signals` | Each signal field: per-route intensity, threshold and state; every deposit with per-route exclusion reasons; dispatches with receipt and turn. Uses the last observation; never starts a runtime |
+| POST | `/api/sessions/{id}/work/signals/{binding}/sense` | Observe the running runtime's watched sources, record new deposits, and dispatch crossed routes |
+| POST | `/api/sessions/{id}/work/signals/{binding}/flags` | `{paths, summary}`; a person's deposit of 1.0 on up to 32 repository paths |
+| POST | `/api/sessions/{id}/work/signals/{binding}/deposits/{deposit}/withdraw` | `{reason}`; the deposit stays retained and stops counting |
+| POST | `/api/sessions/{id}/work/signals/{binding}/routes/{slot}/dispatch` | Send one route its current deposits below threshold, recorded as a manual dispatch |
+| GET | `/api/sessions/{id}/ways-history` | Retention limits, retained decision records, and deletion tombstones |
+| POST | `/api/sessions/{id}/ways-history/configuration` | `{limits: {version, field_bytes, record_bytes, aggregate_bytes, records, candidates, items_per_field}}`; every numerical limit is explicit |
+| GET | `/api/sessions/{id}/ways-history/{decision}` | Export the retained record and protected patch bodies |
+| DELETE | `/api/sessions/{id}/ways-history/{decision}` | Explicit deletion after runtime cleanup; retains a tombstone |
+
+A work source is `{kind: "manual"}`, `{kind: "signed_webhook", configuration_name}`,
+`{kind: "session_completion", session_id}`, or `{kind: "signal_field", routes:
+[{slot_id, watches, threshold_milli, owns?}], half_life_ms, max_dispatches,
+max_episode_tokens?}`. `max_dispatches` and the optional `max_episode_tokens` apply per
+episode: the work since the field was last quiet. A signal
+route names one applied team slot, repository path patterns it watches (`lib/`,
+`*.test.js`, `src/**/*.rs`), and a threshold in thousandths of one finding's deposit.
+`owns` lists the patterns it may change during signal work; omitted means its watched
+patterns and `[]` makes it read-only;
+`half_life_ms` may be `null` to disable evaporation. Session completion sources must share
+the Workspace; the host resolves causation from canonical source history. Manual and
+webhook events carry `{event_id, correlation_id, subject: {kind, reference_id, version},
+evidence_refs, caused_by_turn_id, expected_binding_revision?}`. A payload cannot
+establish verified internal causation. `required_checks` is an array of explicit
+argument arrays, such as `[["npm", "test"]]`. Events and checks share the approved
+team's grant allowance; an event does not refill it.
+
+Each readiness check retains its exact `run_id`, typed `process_status`, effect
+disposition, and bounded output when recorded. Timeout, interruption, launch failure,
+no dispatch, and missing outcomes remain distinct. A stale candidate assessment does
+not change the recorded process result; an explicitly skipped check has no invented
+process result. A successful process exit alone is not a readiness verdict.
+
+Signed bodies are limited to 32 KiB. Supply `x-axocoatl-signature: sha256=<hex>`
+containing the HMAC-SHA256 of the exact body bytes using the named configured webhook
+secret. Do not reserialize a body after signing it.
+
 ## MCP, configured Skills, and event projections
 
 | Method | Path | Request / behavior |
@@ -119,6 +207,7 @@ below.
 
 | Method | Path | Request / behavior |
 | --- | --- | --- |
+| GET | `/api/session-teams` | Config-owned Lattice teams available to Session creation; separate from mutable Automations |
 | GET | `/api/workspaces` | Every persisted named Workspace, including one with no Sessions |
 | POST | `/api/workspaces` | Register `{path, name?}`; canonical path is unique and an omitted name preserves an existing custom label |
 | GET | `/api/workspaces/{id}` | One Workspace |
@@ -138,9 +227,27 @@ below.
 | GET | `/api/sessions/{id}/turns` | Canonical visible durable turns |
 | GET | `/api/sessions/{id}/active-turn` | Exact live run/turn ownership for Stop, or `null` |
 | GET | `/api/sessions/{id}/turns/{turn_id}` | One canonical turn owned by this Session |
+| GET | `/api/sessions/{id}/turns/{turn_id}/control-plane` | Versioned read-only execution evidence for the exact Session and turn |
 | GET | `/api/session-turns/search?q=…&session_id=…` | Literal case-insensitive search; omit Session ID for all |
 | GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json` |
 | POST | `/api/sessions/{id}/rewind` | `{keep_through_turn_id?}`; legacy `{keep}` is raw message count |
+
+`GET /api/session-teams` returns config-owned records of this shape:
+
+```json
+[
+  {
+    "id": "feature-team",
+    "name": "Feature team",
+    "agents": ["planner", "coder", "reviewer"],
+    "entry_point": "planner"
+  }
+]
+```
+
+The `workflow_id` stored by a Lattice Session must be an `id` from this response.
+This inventory is deliberately independent of the mutable Automation records
+returned by `/api/workflows`.
 
 Workspace paths and Session `working_dir` values are canonical absolute paths.
 Every Session response carries its durable `workspace_id`; `working_dir` remains
@@ -174,7 +281,121 @@ default for the exact devcontainer command. A browser/API request with
 lockfile-detected commands are never covered by that policy.
 
 Session `mode` is tagged JSON such as
-`{"kind":"single_agent","agent_id":"coder"}` or `{"kind":"lattice"}`.
+`{"kind":"single_agent","agent_id":"coder"}` or
+`{"kind":"lattice","workflow_id":"feature-team"}` or
+`{"kind":"custom","agents":["planner","coder","reviewer"]}`. In compatibility
+(`legacy_v1`) execution, an all-team autonomous multi-Agent Lattice or Custom turn appends its immutable graph and causal
+coordination transitions to the returned turn's `execution_events`. A one-Agent
+team, a coordinator-led team, or a request targeted to one Agent runs directly
+and does not fabricate a Coordination map.
+
+For compatibility all-team turns, Lattice mode resolves its stored team ID and Custom mode
+resolves its stored Agent IDs against the current daemon configuration. Agent
+dependencies are validated before work starts. When the resolved path is a
+multi-Agent coordination graph, its first `coordination_planned` event
+snapshots the exact Agent names, dependencies, roots, sinks, and activation
+bound used for that turn. Changing configuration afterward affects a later
+turn, not this retained record.
+
+### Durable coordination records
+
+The `control-plane` endpoint returns `schema_version: 1`, the source
+`history_version`, exact Session and turn identities, nodes, activation histories,
+and causal evidence. Evidence values carry an explicit `status`: `available`,
+`not_recorded`, `unknown`, `missing`, `unavailable`, or `truncated`. A truncated
+preview includes its original byte length. Clients must not turn unavailable usage
+into zero or missing output into a successful empty answer.
+
+Compatibility Session history is identified as `legacy_v1`. Its activation references
+retain their recorded generation when available; they do not invent execution
+epochs or current Agent definitions. Per-activation Stop, Retry, Guide, and Revise
+capabilities are disabled for these historical identities. Reading this endpoint
+does not mutate the turn or start execution.
+
+Native `execution_v2` capability entries distinguish an enabled live action from
+an optional `requires_revalidation: true` request after restart. A recovery request
+keeps `enabled: false`: the read did not attach a runtime or establish authority.
+The existing control-command POST reconnects the Session and validates its exact
+revision, epoch, repository, grant, and remaining budget before applying it.
+Recovered Revise, Continue, and Finish retain their original identities and may
+be refused. Failed or interrupted work in a paused epoch is selected through
+Continue. Closed turns, superseded conversation history, and isolated Ways do
+not offer these cooperative recovery requests.
+
+Native turn history retains `repository_reattachments` with the exact original
+and reacquired repository descriptors; these records document host reattachment
+without changing original activation inputs or grants, authorizing work, or replaying it.
+
+Captured inline context has its own `reference_id` in the receiving turn. For a
+`coordination_reference`, `metadata.reference_id` identifies the original evidence
+alongside its exact source Session, turn, epoch, activation, and generation; for a
+`ways_decision`, `metadata.decision_id` identifies the retained decision.
+
+A native `coordination_control` `submit` or `canonical` call whose raw return was
+lost can retain a labeled reconciliation result from its exact accepted invocation
+binding and command receipt. The receipt's actual state stays explicit: a successful
+lookup does not mean the command was Applied or Settled. Recovery does not repeat
+the command or provider request. Rejected or mismatched bindings remain unknown;
+ordinary shell/tool effects are not automatically replayed.
+
+For native cooperative turns, `turn_controls.partial_finish` supplies the exact
+review for a human partial finish. The existing control-command POST uses
+`action: "finish"` and an optional `partial_finish` object containing
+`selected_activations`, `stop_activations`, `missing_conditions`, `unrun_nodes`, and
+`confirmed: true`. Selected results must be current accepted sinks; the other lists
+must match the reviewed state. Stale reviews are refused. Omitting `partial_finish`
+retains normal Finish semantics. Partial finish records missing work explicitly and
+waits for safe settlement; it does not grant an Agent permission to bypass checks.
+
+The `execution_events` array is the canonical ordered record. A live
+`coordination` WebSocket frame nests the `RecordTurnExecution` body under
+`event`; the HTTP turn representation flattens that body beside its durable
+identity:
+
+```json
+{
+  "operation_id": "coordination:turn-id:1:agent-activated",
+  "recorded_at": 1788800000000,
+  "kind": "coordination_agent_activated",
+  "execution_id": "turn-id",
+  "metadata": {
+    "session_id": "session-id",
+    "turn_id": "turn-id",
+    "agent_id": "builder",
+    "generation": 1,
+    "cause_signal_ids": ["coordination-signal:turn-id:planner:g1:completed"],
+    "parents": ["planner"]
+  }
+}
+```
+
+The coordination kinds are `coordination_planned`,
+`coordination_agent_activated`, `coordination_signal`,
+`agent_output_superseded`, `coordination_agent_reactivated`,
+`coordination_agent_completed`, `coordination_agent_failed`,
+`coordination_agent_blocked`, `coordination_agent_cancelled`,
+`coordination_recovery_partial`, and
+`coordination_completed`. See the
+[WebSocket coordination metadata table](/reference/websocket/#coordination-event-metadata)
+for every per-kind field and the live envelope.
+
+Each coordinated entry in `agent_outputs` also carries its generation-aware
+identity:
+
+| Field | Meaning |
+| --- | --- |
+| `operation_id` | Ledger operation that recorded this exact output |
+| `activation_generation` | One-based Agent activation represented by this output |
+| `disposition` | `completed`, `changes_requested`, `failed`, or `cancelled` |
+| `causal_signal_id` | Completion, failure, or feedback signal associated with the output, when one exists |
+| `superseded` | Whether a later accepted generation made this output stale |
+| `superseded_by_generation` | Replacement generation, when stale |
+| `superseded_by_signal_id` | Revision signal that caused the replacement, when stale |
+
+Canonical JSON retains superseded outputs as evidence. Normal conversation,
+checkpoint projection, search output matching, and Markdown export omit those
+stale Agent outputs so they cannot be mistaken for the current result.
+
 The directory must already exist when registering a new Workspace. The server has
 no configured folder allowlist.
 

@@ -42,6 +42,7 @@ const TEMPLATE = `
     padding: 0;
     transition: background .12s;
   }
+  button[hidden], .sep[hidden] { display: none; }
   button:hover:not(:disabled) { background: var(--ax-controls-hover, #181d27); }
   button:active:not(:disabled) { transform: translateY(1px); }
   button:disabled { opacity: .35; cursor: default; }
@@ -140,6 +141,10 @@ export class AxControlsElement extends HTMLElement {
 
   #reflectHistory(state) {
     if (!state) return;
+    const viewing = this.#target?.mode === 'view';
+    this.#undoBtn.hidden = viewing;
+    this.#redoBtn.hidden = viewing;
+    this.#root.querySelector('.sep').hidden = viewing;
     this.#undoBtn.disabled = !state.canUndo;
     this.#redoBtn.disabled = !state.canRedo;
   }

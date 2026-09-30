@@ -13,11 +13,13 @@ readme.workspace = true
 description = "Sandbox backends and terminal plumbing for Axocoatl sessions"
 
 [dependencies]
-axocoatl-core = { version = "1.0.0", path = "../axocoatl-core" }
+axocoatl-exec = { version = "=1.1.0", path = "../axocoatl-exec" }
+axocoatl-core = { version = "1.1.0", path = "../axocoatl-core" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
@@ -26,6 +28,10 @@ bytes = "1"
 reqwest = { workspace = true }
 base64 = { workspace = true }
 tokio-stream = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["process"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 tempfile = "3.27"

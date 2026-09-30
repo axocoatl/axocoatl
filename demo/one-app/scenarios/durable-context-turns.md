@@ -21,17 +21,14 @@ the next Turn without leaking the cancelled actor's output or tool work.
 
 ## Start or reset
 
-Close prior demo Sessions, stop the daemon, and prepare a fresh root:
+Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
+`harbor-catalog` fixture, a fresh native data path, real local Ollama calls,
+and the exact candidate binary at `http://localhost:8080`. Retain the actual
+workspace path as `$AXO_DEMO_ROOT/workspace` (or record the equivalent isolated
+fixture path). Verify `history_version: execution_v2` and Ready, then explicitly
+review and apply **Team and budget** before sending.
 
-```bash
-./demo/one-app/prepare.sh --scenario harbor-catalog
-AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-harbor-catalog \
-  ./demo/one-app/start.sh
-```
-
-Create a **Single agent** Session using **Minimal Coder** for
-`/private/tmp/axocoatl-one-app-showcase-harbor-catalog/workspace`. Keep
-**Explore several ways** off for this entire scenario.
+Use **Minimal Coder**. Keep **Explore several ways** off for this scenario.
 
 ## Browser actions
 
@@ -62,14 +59,14 @@ Create a **Single agent** Session using **Minimal Coder** for
 5. Send this long no-tool Turn:
 
    ```text
-   Using the retained AXOCOATL.md Session context, write a detailed 30-point repository handoff checklist. Do not call tools. /no_think
+   Using the retained AXOCOATL.md Session context, write a detailed 100-point repository handoff checklist. Do not call tools. /no_think
    ```
 
 6. Once streaming has begun, reload the browser.
 7. Confirm that partial output reappears and **Stop** belongs to the same active
    Turn. Choose **Stop** once.
 8. Wait for the safe cancellation boundary and open **History**. The Turn must
-   appear as cancelled with `Stopped by you` and any honest partial output.
+   appear with the native `Cancelled` status and any honest partial output.
 9. Close History and send this exact follow-up:
 
     ```text
@@ -93,7 +90,7 @@ Create a **Single agent** Session using **Minimal Coder** for
 ## Durable evidence
 
 ```bash
-export AXO_DEMO_URL='http://127.0.0.1:18080'
+export AXO_DEMO_URL='http://localhost:8080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-harbor-catalog'
 curl -sS "$AXO_DEMO_URL/api/sessions"
 ```
@@ -103,14 +100,13 @@ Copy the Session id, then:
 ```bash
 export AXO_SESSION_ID='ses-paste-the-id-here'
 curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/attachments"
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns"
-grep -F "$AXO_SESSION_ID" \
-  "$AXO_DEMO_ROOT/data/session-history/turns.v1.jsonl"
+curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
+curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
 sed -n '1,220p' \
-  "$AXO_DEMO_ROOT/data/session-history/session-attachments.v1.json"
+  "$AXO_NATIVE_DATA/session-history/session-attachments.v1.json"
 ```
 
-The Turn ledger is the lifecycle authority. The attachment relation store
+Native execution records are the lifecycle authority; the Turn API is their UI projection. The attachment relation store
 records name, scope, consumption, and historical ownership; immutable bytes
 live separately in the content-addressed file store. The Turn list must show
 the cancelled audit followed by a distinct completed `CLEAN NEXT TURN.` Turn
@@ -123,7 +119,7 @@ with no tool records.
 2. Start the long no-tool handoff checklist and reload while output is visibly
    partial.
 3. Show that the AXOCOATL.md Session chip remains selected.
-4. Show the restored **Stop**, press it, and wait for `Stopped by you`.
+4. Show the restored **Stop**, press it, and wait for the native `Cancelled` status.
 5. Open History and end on the cancelled Turn plus retained context evidence.
 6. Send the exact clean-next-Turn probe and show `CLEAN NEXT TURN.` with no
    tools.

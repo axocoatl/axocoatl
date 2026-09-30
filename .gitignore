@@ -66,8 +66,8 @@ sites/marketing/assets/*
 !sites/marketing/assets/demos/
 !sites/marketing/assets/demos/*.mp4
 !sites/marketing/assets/films/
-!sites/marketing/assets/films/*.mp4
-!sites/marketing/assets/films/*.jpg
+!sites/marketing/assets/films/**/*.mp4
+!sites/marketing/assets/films/**/*.jpg
 sites/marketing/vendor/
 sites/marketing/_drafts/
 sites/docs/dist/

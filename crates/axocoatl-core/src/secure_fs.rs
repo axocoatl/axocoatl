@@ -109,7 +109,16 @@ impl SecureDir {
     /// root. Product code should still prefer one `SecureDir` opened at the
     /// configured control-plane root and descendant [`SecureDir::child`] calls.
     pub fn open_or_create_all(path: impl AsRef<Path>) -> io::Result<Self> {
-        let path = path.as_ref();
+        Self::open_all(path.as_ref(), true)
+    }
+
+    /// Open an existing path using the same nofollow, platform-normalized walk
+    /// as [`Self::open_or_create_all`], without creating missing components.
+    pub fn open_existing_all(path: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open_all(path.as_ref(), false)
+    }
+
+    fn open_all(path: &Path, create: bool) -> io::Result<Self> {
         #[cfg(unix)]
         {
             let walk_path = normalize_platform_absolute_prefix(path)?;
@@ -131,11 +140,13 @@ impl SecureDir {
                     }
                 }
             }
-            anchor.child(relative)
+            anchor.child_impl(&relative, create)
         }
         #[cfg(not(unix))]
         {
-            std::fs::create_dir_all(path)?;
+            if create {
+                std::fs::create_dir_all(path)?;
+            }
             Self::open(path)
         }
     }
@@ -149,6 +160,109 @@ impl SecureDir {
     /// Open an existing descendant directory without following symlinks.
     pub fn existing_child(&self, relative: impl AsRef<Path>) -> io::Result<Self> {
         self.child_impl(relative.as_ref(), false)
+    }
+
+    /// Create exactly one direct child, refusing an existing entry. The caller
+    /// must sync the new directory and this parent before acknowledging it.
+    pub fn create_child(&self, name: impl AsRef<OsStr>) -> io::Result<Self> {
+        let name = name.as_ref();
+        require_direct_child(name)?;
+        #[cfg(unix)]
+        fs::mkdirat(self.fd.as_ref(), name, Mode::RUSR | Mode::WUSR | Mode::XUSR)
+            .map_err(io::Error::from)?;
+        #[cfg(not(unix))]
+        std::fs::create_dir(self.path.join(name))?;
+        self.existing_child(Path::new(name))
+    }
+
+    /// Make prior directory-entry changes durable through the retained handle.
+    pub fn sync_all(&self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            fs::fsync(self.fd.as_ref()).map_err(io::Error::from)
+        }
+        #[cfg(not(unix))]
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "durable directory sync requires a supported Unix host",
+            ))
+        }
+    }
+
+    /// Opaque device/inode identity of this exact opened directory. This is
+    /// useful for binding an ownership manifest, not for portable backup IDs.
+    pub fn inode_identity(&self) -> io::Result<String> {
+        #[cfg(unix)]
+        {
+            let stat = fs::fstat(self.fd.as_ref()).map_err(io::Error::from)?;
+            Ok(format!("{}:{}", stat.st_dev, stat.st_ino))
+        }
+        #[cfg(not(unix))]
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "directory inode identity requires a supported Unix host",
+            ))
+        }
+    }
+
+    /// Atomically exchange a uniquely linked regular file and a directory,
+    /// both direct children of this retained parent. There is no missing-name
+    /// interval. This does not fsync: the owner must sync after validating the
+    /// resulting entries and must withhold authority if that barrier fails.
+    /// Filesystems/hosts lacking atomic exchange are never emulated by unlink.
+    pub fn exchange_file_and_directory(
+        &self,
+        file: impl AsRef<OsStr>,
+        directory: impl AsRef<OsStr>,
+    ) -> io::Result<()> {
+        let file = file.as_ref();
+        let directory = directory.as_ref();
+        require_direct_child(file)?;
+        require_direct_child(directory)?;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let file_stat = fs::statat(self.fd.as_ref(), file, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(io::Error::from)?;
+            let dir_stat = fs::statat(self.fd.as_ref(), directory, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(io::Error::from)?;
+            if FileType::from_raw_mode(file_stat.st_mode) != FileType::RegularFile
+                || file_stat.st_nlink != 1
+                || FileType::from_raw_mode(dir_stat.st_mode) != FileType::Directory
+            {
+                return Err(invalid_path(
+                    &self.path,
+                    "exchange requires one uniquely linked regular file and one real directory",
+                ));
+            }
+            fs::renameat_with(
+                self.fd.as_ref(),
+                file,
+                self.fd.as_ref(),
+                directory,
+                fs::RenameFlags::EXCHANGE,
+            )
+            .map_err(|error| {
+                // With two validated direct children and the one fixed flag,
+                // EINVAL also denotes a filesystem that cannot do this exchange.
+                if error == rustix::io::Errno::NOSYS
+                    || error == rustix::io::Errno::OPNOTSUPP
+                    || error == rustix::io::Errno::INVAL
+                {
+                    io::Error::new(io::ErrorKind::Unsupported, "atomic exchange is unavailable")
+                } else {
+                    io::Error::from(error)
+                }
+            })
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "atomic file/directory exchange requires Linux or macOS",
+            ))
+        }
     }
 
     /// Ambient display path for compatibility and diagnostics.
@@ -1168,6 +1282,15 @@ fn validate_relative(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn require_direct_child(name: &OsStr) -> io::Result<()> {
+    let path = Path::new(name);
+    validate_relative(path)?;
+    if path.components().count() != 1 {
+        return Err(invalid_path(path, "is not one direct child name"));
+    }
+    Ok(())
+}
+
 fn invalid_path(path: &Path, reason: &str) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidInput,
@@ -1198,6 +1321,70 @@ fn ensure_regular_path(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn ownership_exchange_is_atomic_and_anchored_to_the_opened_parent() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("root");
+        std::fs::create_dir(&path).unwrap();
+        let root = SecureDir::open(&path).unwrap();
+        root.atomic_write("legacy", b"held inode").unwrap();
+        let candidate = root.create_child("candidate").unwrap();
+        candidate.atomic_write("format.json", b"complete").unwrap();
+        candidate.sync_all().unwrap();
+        root.sync_all().unwrap();
+        let original_identity = candidate.inode_identity().unwrap();
+        std::fs::rename(&path, parent.path().join("original")).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        root.exchange_file_and_directory("legacy", "candidate")
+            .unwrap();
+        root.sync_all().unwrap();
+        assert!(std::fs::read_dir(&path).unwrap().next().is_none());
+        assert_eq!(root.read("candidate").unwrap(), b"held inode");
+        assert_eq!(
+            root.existing_child("legacy")
+                .unwrap()
+                .inode_identity()
+                .unwrap(),
+            original_identity
+        );
+        assert_eq!(root.read("legacy/format.json").unwrap(), b"complete");
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn ownership_exchange_refuses_links_missing_entries_and_non_direct_names() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = SecureDir::open(temp.path()).unwrap();
+        root.atomic_write("file", b"retained").unwrap();
+        root.create_child("directory").unwrap();
+        symlink("file", temp.path().join("link")).unwrap();
+        assert!(root
+            .exchange_file_and_directory("link", "directory")
+            .is_err());
+        assert!(root
+            .exchange_file_and_directory("missing", "directory")
+            .is_err());
+        assert!(root
+            .exchange_file_and_directory("file", "../outside")
+            .is_err());
+        assert!(root
+            .exchange_file_and_directory("file", "directory/nested")
+            .is_err());
+        assert!(root.create_child("directory").is_err());
+        assert_eq!(root.read("file").unwrap(), b"retained");
+        assert!(!temp.path().join("missing").exists());
+    }
+
+    #[test]
+    fn existing_directory_walk_does_not_provision_missing_components() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("missing/nested");
+        assert!(SecureDir::open_existing_all(&path).is_err());
+        assert!(!temp.path().join("missing").exists());
+    }
 
     #[test]
     fn atomic_write_roundtrips_and_leaves_no_temporary_file() {
