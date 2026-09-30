@@ -33,7 +33,7 @@ helper answers remain in History after reload.
 Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
 `harbor-catalog` fixture, its own fresh root, real local Ollama calls, and the
 exact candidate binary at `http://127.0.0.1:18080`. Start the daemon with the
-team configuration so Team and budget proposes the helpers:
+team configuration so Team and budget offers the helpers:
 
 ```bash
 export AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-harbor-team
@@ -45,7 +45,7 @@ AXOCOATL_DEMO_CONFIG=axocoatl.team.yaml ./demo/one-app/start.sh
 `axocoatl init` writes: **Lead** (may change files), **Scout** and **Reviewer**
 (Workers with `writes: []`), each with a 4096-token maximum output. The other
 films use `axocoatl.demo.yaml`, which has no Worker templates, so their Team and
-budget does not propose helpers.
+budget does not offer helpers.
 
 Open the prepared Workspace and create a **Single agent** Session named
 `Film · Lead with helpers` with **Lead**, the detected image, and the detected
@@ -58,10 +58,10 @@ budget.
    provider, model, `Maximum output tokens per request`, and **May change: Any
    file**. Enter finite activation, invocation, and token limits, zero local
    cost, and a future expiry.
-2. Under **Helpers this Agent may delegate to**, keep **Let this Agent delegate
-   to helpers** and both **Use helper: Scout** and **Use helper: Reviewer**.
-   Keep the proposed graph bounds, and enter each helper's finite limits and
-   maximum output within the Lead's budget.
+2. Under **Helpers this Agent may delegate to**, select **Let this Agent
+   delegate to helpers** and keep both **Use helper: Scout** and **Use helper:
+   Reviewer**. Keep the offered graph bounds, and enter each helper's finite
+   limits and maximum output within the Lead's budget.
 3. Add the detected `npm run check` under **Required checks**. Do not add a
    required review. Choose **Preview changes**, inspect the result, and
    **Apply to this Session**. Hold on the reviewed team: Lead may change files,

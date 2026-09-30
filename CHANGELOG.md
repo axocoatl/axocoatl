@@ -148,11 +148,13 @@ harness adapter and the `axocoatl-coordination` crate.
   files, and Scout and Reviewer, Workers with `writes: []` that Lead can delegate to;
   onboarding also keeps the plain Assistant for `axocoatl chat`. `init` now writes a local
   Ollama configuration instead of an OpenAI one. A Worker no longer has to belong to a
-  coordinator-led workflow: outside every workflow it is a helper template. When a new
-  native Session's team is one Agent that may delegate, Team & budget drafts every Worker
-  template with `writes: []` as its helpers; every limit is still entered and applied by
-  the person. **Add Agent** adds the template chosen beside it. A configuration without
-  such Workers behaves as before.
+  coordinator-led workflow: outside every workflow it is a helper template. A new Session
+  starts with one Agent. When its team is that one Agent and it may delegate, Team &
+  budget offers every Worker template with `writes: []` as its helpers, not pre-selected,
+  and says they cost extra tokens; selecting **Let this Agent delegate to helpers** drafts
+  them, and every limit is still entered and applied by the person. Required review stays
+  opt-in. **Add Agent** adds the template chosen beside it. A configuration without such
+  Workers behaves as before.
 
 ### Changed
 - **`workspace_knowledge` follows the `tools` allowlist.** A native Agent is offered the
@@ -171,9 +173,9 @@ harness adapter and the `axocoatl-coordination` crate.
   change and to review the change against the task, documented contracts and tests before
   it finishes. Helper limits are stated in steps, where a step is one model call or one
   tool call, instead of "tool calls". The default Lead prompt says to look first, make the
-  change, run the check command from `AXOCOATL.md` and have reviewer review the diff; the
-  Reviewer prompt and the required review ask for every documented contract and edge case
-  to be checked one by one.
+  change, run the check command from `AXOCOATL.md` and check the diff against the task,
+  and asks scout and reviewer only if it has helpers; the Reviewer prompt and the required
+  review ask for every documented contract and edge case to be checked one by one.
 - **Multi-Agent turns on a 1.0 data root require the Session upgrade.** On a data root
   that still uses the 1.0 format, a Session turn that would run two or more Agents is
   refused before it starts, with a message to stop Axocoatl, make a cold backup, and run

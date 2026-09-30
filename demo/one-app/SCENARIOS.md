@@ -77,8 +77,8 @@ Repair the catalog cache-coherency defect: search results must reflect additions
 ```
 
 Start the daemon with `AXOCOATL_DEMO_CONFIG=axocoatl.team.yaml` and create the
-**Film · Lead with helpers** Session on **Lead**. Team and budget proposes Scout and
-Reviewer as read-only helpers; approve their limits and the required check
-`npm run check`. This proves one team result: the Lead is the only Agent that changes
-files, each helper run is recorded as delegated by the Lead, and the required check
-passes. It is not parallel Ways and does not use required review.
+**Film · Lead with helpers** Session on **Lead**. In Team and budget, select **Let this
+Agent delegate to helpers** to add Scout and Reviewer as read-only helpers; approve their
+limits and the required check `npm run check`. This proves one team result: the Lead is
+the only Agent that changes files, each helper run is recorded as delegated by the Lead,
+and the required check passes. It is not parallel Ways and does not use required review.

@@ -11,12 +11,13 @@ against a repository and records their work, and the browser app at `/` through 
 person uses it. It is not a collection of dashboards for runtime subsystems. The actors,
 Session ledger, grants, isolation, tools, MCP, and automation machinery are the engine.
 
-The default team is a lead Agent that writes and read-only helpers it can delegate to
-(Scout and Reviewer). A team can require checks and a review that the host runs before a
-turn completes. Per-Agent write scopes, grants, and budgets bound what each activation may
-do, and the Session records every activation, tool call, and budget decision. Small local
-models through Ollama are a first-class target, so the native path retries a stream that
-ends early, masks stale tool output, and fits requests to the model's context window.
+A new Session starts with one Agent, the lead that writes. Read-only helpers it can
+delegate to (Scout and Reviewer) are opt-in, and a team can require checks and a review
+that the host runs before a turn completes. Per-Agent write scopes, grants, and budgets
+bound what each activation may do, and the Session records every activation, tool call,
+and budget decision. Small local models through Ollama are a first-class target, so the
+native path retries a stream that ends early, masks stale tool output, and fits requests
+to the model's context window.
 
 A folder-anchored session is the unit of work. Its conversation is the permanent spine.
 Files/editor/Source Control, Preview, comparison, and agent graph open as focused tools;

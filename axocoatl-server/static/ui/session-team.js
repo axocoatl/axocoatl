@@ -1,5 +1,5 @@
 import { adopt } from './sheets.js';
-import { proposeDelegation, renderDelegationApproval, validateDelegationApproval } from './session-team-delegation.js';
+import { offeredHelpers, renderDelegationApproval, validateDelegationApproval } from './session-team-delegation.js';
 
 const clone = value => structuredClone(value);
 const node = (tag, text, attrs = {}) => { const element = document.createElement(tag); if (text != null) element.textContent = text; for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value); return element; };
@@ -83,12 +83,12 @@ export class AxSessionTeam extends HTMLElement {
       for (const section of this.shadowRoot.querySelectorAll('.checks,.review-setting')) section.hidden = false;
       this.q('.add-template').replaceChildren(...view.templates.map(template => node('option', templateText(template), { value: template.template_id })));
       this.draft = { command_id: `team-edit-${crypto.randomUUID()}`, expected_configuration_revision: view.configuration_revision, slots: clone(view.slots), dependencies: clone(view.dependencies), layout: clone(view.layout), required_checks: clone(view.required_checks || []), ...(view.required_review ? { required_review: clone(view.required_review) } : {}) };
-      const proposed = proposeDelegation(view, this.draft);
+      const lead = this.draft.slots.find(slot => slot.slot_id === view.proposed_delegation?.slot_id), offered = offeredHelpers(view, lead);
       this.undo = []; this.redo = []; this.review = null; this.writesModes = {}; this.selected = this.draft.slots[0]?.slot_id || null;
       const pending = JSON.parse(localStorage.getItem(this.storageKey) || 'null');
       if (pending?.edit && typeof pending.review_digest === 'string') { this.draft = pending.edit; this.review = pending; this.status('An Apply reply was not received. Retry that exact Apply to obtain its saved result.'); this.mode = 'view'; }
       else if (view.approved) this.status(`Saved Session configuration ${view.configuration_revision}. Select Edit to make changes.`);
-      else this.status(`Approve explicit budgets before sending the first request. Select Edit, then choose an Agent to enter its limits.${proposed ? ` ${proposed.slot.name} may delegate to the read-only helpers ${new Intl.ListFormat('en', { type: 'conjunction' }).format(proposed.helpers.map(template => template.name))}: enter their limits too, or clear Let this Agent delegate to helpers.` : ''}`);
+      else this.status(`Approve explicit budgets before sending the first request. Select Edit, then choose an Agent to enter its limits.${offered ? ` ${lead.name} works alone. To let it delegate to the read-only ${offered.count > 1 ? 'helpers' : 'helper'} ${offered.names}, select Let this Agent delegate to helpers and enter each helper's limits too.` : ''}`);
       this.renderGraph(); this.setMode(this.mode);
     } catch (error) { if (epoch === this.epoch) this.status(error.message, true); }
     finally { this.busy = false; this.controls(); }
