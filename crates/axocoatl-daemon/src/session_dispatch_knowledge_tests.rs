@@ -51,6 +51,9 @@ impl AutonomousActivationFactory for KnowledgeFactory {
     }
 }
 
+/// Agents whose `tools` list `workspace_knowledge`: only they are offered it.
+fn knowledge_fixture()->InputFixture {input_fixture_with_tools(false,&["effect","workspace_knowledge"])}
+
 fn store(fixture:&InputFixture)->Arc<Mutex<KnowledgeStore>> {
     let dir=axocoatl_core::SecureDir::open_or_create(fixture._root.path().join("knowledge-test")).unwrap();
     let mut store=KnowledgeStore::open(dir).unwrap();
@@ -61,7 +64,7 @@ fn store(fixture:&InputFixture)->Arc<Mutex<KnowledgeStore>> {
 
 #[tokio::test]
 async fn native_knowledge_proposal_is_audited_and_published_only_after_accepted_closure() {
-    let fixture=input_fixture();let store=store(&fixture);
+    let fixture=knowledge_fixture();let store=store(&fixture);
     let factory=Arc::new(KnowledgeFactory {parent:fixture.parent.clone(),child:fixture.child.clone(),provider:Arc::new(KnowledgeProvider::new(false)),store:store.clone()});
     let seeds=[&fixture.parent,&fixture.child].into_iter().map(|node|AutonomousNodeInput{node_id:node.input.activation.node_id.clone(),guidance:node.input.guidance.clone(),attachments:node.input.attachments.clone(),repository:node.input.repository.clone(),budget:node.input.budget.clone(),grant:node.input.grant.clone()}).collect();
     let outcome=fixture.controller.autonomous_turn_driver(seeds,factory).unwrap().run().await.unwrap();
@@ -78,7 +81,7 @@ async fn native_knowledge_proposal_is_audited_and_published_only_after_accepted_
 
 #[tokio::test]
 async fn native_failed_activation_keeps_knowledge_private() {
-    let fixture=input_fixture();let store=store(&fixture);
+    let fixture=knowledge_fixture();let store=store(&fixture);
     start_input(&fixture.controller,&fixture.parent);
     let mut resources=input_resources(&fixture.parent,InputProvider::new("unused",false,false));
     resources.provider=Arc::new(KnowledgeProvider::new(true));
@@ -91,7 +94,7 @@ async fn native_failed_activation_keeps_knowledge_private() {
 
 #[tokio::test]
 async fn an_omitted_revision_creates_and_never_overwrites_an_existing_note() {
-    let fixture=input_fixture();let store=store(&fixture);
+    let fixture=knowledge_fixture();let store=store(&fixture);
     let person=axocoatl_memory::knowledge::KnowledgeDraft{id:"retry-rule".into(),title:"Retry rule".into(),body:"A person's decision.".into(),kind:KnowledgeKind::Decision,links:Vec::new(),sources:Vec::new(),provenance:KnowledgeProvenance::Human{author:None}};
     store.lock().unwrap().save(person,0).unwrap();
     start_input(&fixture.controller,&fixture.parent);
@@ -102,4 +105,23 @@ async fn an_omitted_revision_creates_and_never_overwrites_an_existing_note() {
     fixture.controller.prepare_autonomous_activation(fixture.parent.input.activation.clone(),resources).unwrap().run().await.unwrap();
     assert!(store.lock().unwrap().proposals().unwrap().is_empty(),"nothing is staged over the person's note");
     assert_eq!(store.lock().unwrap().read("retry-rule",None).unwrap().body,"A person's decision.");
+}
+
+#[tokio::test]
+async fn workspace_knowledge_is_offered_only_to_an_agent_that_lists_it() {
+    let fixture=input_fixture();let _store=store(&fixture);
+    start_input(&fixture.controller,&fixture.parent);
+    let provider=InputProvider::new("answered without knowledge",false,false);
+    let prepared=fixture.controller.prepare_autonomous_activation(fixture.parent.input.activation.clone(),input_resources(&fixture.parent,provider)).unwrap();
+    assert!(fixture.controller.scoped_knowledge_tool(&fixture.parent.input.activation).unwrap().is_none(),"tools is an exact allowlist");
+    assert!(prepared.run().await.unwrap().accepted);
+
+    let fixture=knowledge_fixture();let _store=store(&fixture);
+    start_input(&fixture.controller,&fixture.parent);
+    let provider=InputProvider::new("unused",false,false);
+    let _prepared=fixture.controller.prepare_autonomous_activation(fixture.parent.input.activation.clone(),input_resources(&fixture.parent,provider)).unwrap();
+    let tool=fixture.controller.scoped_knowledge_tool(&fixture.parent.input.activation).unwrap().expect("listed");
+    let description=tool.description();
+    assert!(description.contains("Do not use this to report your work or your final answer"),"{description}");
+    assert!(!description.contains("should not change"),"{description}");
 }

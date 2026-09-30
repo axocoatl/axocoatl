@@ -138,6 +138,11 @@ fn input_fixture() -> InputFixture {
 }
 
 fn input_fixture_with_review(required_review: bool) -> InputFixture {
+    input_fixture_with_tools(required_review, &["effect"])
+}
+
+/// Both Agents list exactly `tools`.
+fn input_fixture_with_tools(required_review: bool, tools: &[&str]) -> InputFixture {
     let root = tempfile::tempdir().unwrap();
     let ownership = Arc::new(
         LegacyFormatOwnership::acquire(root.path())
@@ -191,7 +196,7 @@ fn input_fixture_with_review(required_review: bool) -> InputFixture {
             name: name.into(),
             provider: "controlled".into(),
             model: "controlled-model".into(),
-            tools: vec!["effect".into()],
+            tools: tools.iter().map(|tool| (*tool).into()).collect(),
             ..Default::default()
         };
         let profile = ExecutionProfile {

@@ -39,7 +39,7 @@ agents:
 | `name` | User-facing label |
 | `provider`, `model` | Model target for this Agent |
 | `system_prompt` | Persistent operating instructions |
-| `tools` | Empty inherits the execution path's baseline tools; non-empty is an exact advertisement and dispatch allowlist |
+| `tools` | Empty inherits the execution path's baseline tools; non-empty is an exact advertisement and dispatch allowlist. In a native Session, add `workspace_knowledge` to offer [Workspace knowledge](/workbench/knowledge/); `delegate` comes from Team & budget |
 | `writes` | Repository paths the Agent may change in a native Session. Omit it to allow any file; `[]` makes a read-only helper. See [Limit which files an Agent may change](#limit-which-files-an-agent-may-change) |
 | `depends_on` | Exact direct-parent completion predicate for a multi-Agent Session turn; also seeds legacy Automation edges during first-boot migration |
 | `role` | `autonomous`, `coordinator`, or `worker` |

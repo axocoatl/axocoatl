@@ -138,6 +138,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such Workers behaves as before.
 
 ### Changed
+- **`workspace_knowledge` follows the `tools` allowlist.** A native Agent is offered the
+  tool only when its `tools` list includes `workspace_knowledge`; the default team does not
+  list it. Its description no longer suggests that an Agent may not change code, and it
+  tells the Agent not to report its work or final answer through it.
 - **Multi-Agent turns on a 1.0 data root require the Session upgrade.** On a data root
   that still uses the 1.0 format, a Session turn that would run two or more Agents is
   refused before it starts, with a message to stop Axocoatl, make a cold backup, and run
