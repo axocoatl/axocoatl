@@ -20,6 +20,26 @@ impl AxocoatlDaemon {
         self.versioned_session_history_snapshot(session_id).await
     }
 
+    /// Whether a History read that names no version answers in the versioned
+    /// form: exactly when this Session's History holds native execution, which
+    /// the legacy readers refuse. Only a retained or upgraded Session can hold
+    /// it, so a legacy Session keeps its exact legacy path, and a read that
+    /// fails here leaves that path to give its original answer or error.
+    pub async fn session_history_is_versioned(&self, session_id: &str) -> bool {
+        let native = matches!(
+            self._data_dir_lease.ownership,
+            axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(_)
+        ) || self
+            .session_dispatch_lifecycles
+            .retains_session(session_id)
+            .unwrap_or(false);
+        native
+            && self
+                .versioned_session_history_snapshot(session_id)
+                .await
+                .is_ok_and(|history| history.requires_versioned_consumer())
+    }
+
     pub async fn list_versioned_session_turns(
         &self,
         session_id: &str,

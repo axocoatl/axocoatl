@@ -164,6 +164,7 @@ fn legacy_compatibility_preserves_exact_search_transcript_and_hidden_rows() {
     legacy.rewind("session-a", Some("first"), "rewind").unwrap();
     let history = SessionHistory::from_legacy(&legacy, "session-a").unwrap();
     assert_eq!(history.session_id(), "session-a");
+    assert!(!history.requires_versioned_consumer());
     assert_eq!(
         history.legacy_rows(HistoryVisibility::Visible).unwrap(),
         legacy.list("session-a")
@@ -356,6 +357,10 @@ fn sealed_frontier_remains_exact_when_mutable_legacy_source_later_changes() {
         expected
     );
     assert!(history.get("later-old-writer").is_none());
+    assert!(
+        !history.requires_versioned_consumer(),
+        "a sealed legacy prefix alone keeps exact legacy rows"
+    );
     assert_eq!(history.entries(HistoryVisibility::Visible).len(), 1);
     assert_eq!(
         history
@@ -407,6 +412,7 @@ fn canonical_begin_order_wins_over_clock_order_and_legacy_consumers_refuse_v2() 
             .collect::<Vec<_>>(),
         vec!["old", "turn-a", "turn-b"]
     );
+    assert!(history.requires_versioned_consumer());
     assert!(matches!(
         history.legacy_transcript(),
         Err(SessionHistoryError::RequiresVersionedConsumer)
