@@ -699,3 +699,104 @@ async fn actual_two_check_continue_after_the_tree_changed_reruns_every_check() {
         .iter()
         .any(|id| id.as_str() == "required-check:2"));
 }
+
+/// A check that keeps failing spends the paying Agent's budget one pass per
+/// Continue. Once what is left cannot pay for another pass, Continue no
+/// longer offers the checks and says why in words, and a Continue that
+/// selects them anyway is refused without changing the turn.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_required_checks_that_exhaust_the_budget_stop_being_offered() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    git_init(f._workspace.path());
+    std::fs::write(f._workspace.path().join("notes.txt"), "draft\n").unwrap();
+    let checks = vec![vec!["sh".into(), "-c".into(), "exit 3".into()]];
+    let r = run_checked(&mut f, &["bash"], &checks);
+    let authorized = r
+        .controller
+        .authorize_required_checks(r.resource.reference());
+    let provider = Provider::new(vec![]);
+    let factory = Arc::new(Factory {
+        config: r.config.clone(),
+        profile: r.profile.clone(),
+        provider: provider.clone(),
+    });
+    let now = || {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+    let mut continues = 0;
+    let mut outcome = None;
+    let mut refused = None;
+    for round in 0..6 {
+        let driven = tokio::time::timeout(Duration::from_secs(180), async {
+            r.controller
+                .autonomous_turn_driver(vec![seed(&r)], factory.clone())?
+                .run()
+                .await
+        })
+        .await;
+        outcome = Some(driven);
+        let view = r.controller.control_plane().unwrap();
+        let choice = view
+            .turn_controls
+            .unwrap()
+            .check_choices
+            .into_iter()
+            .find(|choice| choice.condition_id.as_str() == "required-check:1")
+            .unwrap();
+        if !choice.capability.enabled {
+            let mut request = rerun_check(&r.controller, "required-check:1");
+            request.command_id = CommandId::new(format!("refused-rerun-{round}")).unwrap();
+            let revision = r.controller.snapshot().unwrap().contract().revision();
+            refused = Some((
+                choice.capability.reason,
+                r.controller.submit_human_action(request, now()),
+                revision,
+                r.controller.snapshot().unwrap().contract().revision(),
+            ));
+            break;
+        }
+        continues += 1;
+        let mut request = rerun_check(&r.controller, "required-check:1");
+        request.command_id = CommandId::new(format!("rerun-{round}")).unwrap();
+        r.controller.submit_human_action(request, now()).unwrap();
+    }
+    let usage = r.controller.grant_usage_for_test("repository-grant");
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+
+    authorized.unwrap();
+    let outcome = outcome.unwrap().unwrap().unwrap();
+    assert_eq!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::NeedsAttention)
+    );
+    // Twelve invocations: the Agent's model call and its two captures, then
+    // three passes of Before capture, check and After capture, the last two
+    // after a Continue each.
+    assert_eq!(continues, 2);
+    assert_eq!(usage.invocations, 12);
+    assert_eq!(outcome.snapshot.contract().condition_runs().len(), 9);
+    let (reason, receipt, before, after) = refused.unwrap();
+    assert!(
+        reason.contains(
+            "The required checks cannot run again: Repository actor's budget has 0 \
+             invocations left; they need 3 invocations. You can use Finish partial result to \
+             finish without them"
+        ),
+        "{reason}"
+    );
+    assert!(
+        receipt.is_err()
+            || receipt.as_ref().is_ok_and(|receipt| receipt.state
+                == axocoatl_session::control_command::ControlCommandState::Rejected),
+        "{receipt:?}"
+    );
+    assert_eq!(before, after, "a refused Continue changes nothing");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert!(idle.unwrap());
+}
