@@ -9033,7 +9033,6 @@ customElements.whenDefined('ax-session-guidance').then(() => {
   const guidance = $('#session-guidance');
   guidance.commandHandler = submitCoordinationCommand;
   guidance.addEventListener('guidance-state-change', syncSessionComposerState);
-  guidance.addEventListener('plan-current-work', () => guidance.openPlanner($('#session-text').value, {references:canonicalInlineReferences(ensureRefs()),attachment_ids:$('#session-context')?.selectedReferenceIds?.() || []}));
   guidance.addEventListener('open-current-turn-controls', async event => {
     if (event.detail.sessionId !== S.session.id) return;
     openModule('trace'); await showCoordinationGraph(event.detail.turnId);

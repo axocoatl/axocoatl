@@ -322,10 +322,9 @@ identity and expose controls only through current host capabilities. Pending own
 resolve exact command retries before provider or repository reacquisition.
 
 The existing Session composer and Agent inspector expose native Guide, exact generation
-controls, reviewed current-turn Add/Replace, and explicit continuation. A request-local planner
-has no tools or repository access and returns one typed proposal for review; Apply still uses
-the ordinary human command handler. Team edits configure future turns separately. Environment
-review, close/reopen, and deletion retain the canonical Session owner through settlement.
+controls, reviewed current-turn Add/Replace, and explicit continuation. Team edits configure
+future turns separately. Environment review, close/reopen, and deletion retain the canonical
+Session owner through settlement.
 
 ### Legacy Session execution
 

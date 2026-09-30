@@ -53,8 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controller for ordinary Send, dependent Agents, and the helpers a lead delegates to.
   Team & budget reviews immutable definitions and explicit limits for future turns.
   The Session inspector exposes exact generation controls and reviewed Add/Replace
-  edits. A bounded request-local planner proposes controls for human review; it cannot
-  execute them. Guide and Revise retain the human instruction, selected context, and
+  edits. Guide and Revise retain the human instruction, selected context, and
   attachments. Existing legacy roots retain their compatibility path.
 - **Lead `delegate` tool.** In a native Session, an Agent whose Team & budget approval
   names helper templates gets a `delegate` tool. It hands one self-contained task to a

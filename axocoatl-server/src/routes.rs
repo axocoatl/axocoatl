@@ -1851,20 +1851,6 @@ pub async fn apply_session_graph_edit(
 /// POST /api/sessions/{id}/turns/{turn_id}/control-commands — exact human
 /// intervention. The outer local request middleware authenticates the channel;
 /// source attribution is constructed by the controller, never browser JSON.
-pub async fn plan_session_control(
-    State(state): State<AppState>,
-    Path((id, turn_id)): Path<(String, String)>,
-    Json(request): Json<axocoatl_daemon::ControlPlannerRequest>,
-) -> Result<Json<axocoatl_daemon::ControlPlannerResult>, (StatusCode, Json<ErrorResponse>)> {
-    state
-        .read()
-        .await
-        .plan_session_control(&id, &turn_id, request)
-        .await
-        .map(Json)
-        .map_err(attempt_err)
-}
-
 pub async fn submit_session_control_action(
     State(state): State<AppState>,
     Path((id, turn_id)): Path<(String, String)>,

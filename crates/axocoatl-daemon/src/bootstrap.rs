@@ -1,9 +1,6 @@
 //! Daemon bootstrap: config → providers → agents → coordination.
 //! This is the integration point that wires all subsystems together.
 
-#[path = "bootstrap_control_planner.rs"]
-pub(crate) mod control_planner;
-
 #[path = "bootstrap_coordination_reference.rs"]
 mod coordination_reference;
 

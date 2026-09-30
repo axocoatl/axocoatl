@@ -40,8 +40,6 @@ pub use bootstrap::session_graph::{
 };
 pub use bootstrap::ways_history::{WaysDecisionExport, WaysHistoryConfiguration, WaysHistoryView};
 
-pub use bootstrap::control_planner::{ControlPlannerRequest, ControlPlannerResult};
-
 pub use bootstrap::session_knowledge::{
     SessionKnowledgeEdit, SessionKnowledgeNote, SessionKnowledgeView,
 };

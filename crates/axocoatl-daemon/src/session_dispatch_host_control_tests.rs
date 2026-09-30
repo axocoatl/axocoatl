@@ -732,18 +732,3 @@ async fn human_normal_finish_receipt_waits_for_real_tool_settlement_and_survives
     assert_eq!(tool.count.load(Ordering::SeqCst), 1);
     assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
 }
-
-#[test]
-fn control_planner_proposal_keeps_exact_generation_and_cannot_approve_blockers() {
-    use crate::bootstrap::control_planner::{ControlPlannerRequest,interpret};
-    let fixture=run_fixture();
-    let before=fixture.controller.snapshot().unwrap();
-    let view=fixture.controller.control_plane().unwrap();
-    let request=ControlPlannerRequest{request_id:"planner-exact".into(),expected_turn_revision:before.contract().revision(),expected_graph_revision:before.contract().graph().unwrap().revision,agent_id:"planner".into(),max_output_tokens:256,instruction:"Stop this exact work".into(),selected_activation:Some(fixture.activation.clone()),context:crate::session_dispatch::HumanControlContext{references:Vec::new(),attachment_ids:Vec::new()}};
-    let response=serde_json::json!({"action":"stop","activation_id":fixture.activation.activation_id.as_str(),"instruction":null,"include_previous_output":false,"restart":[],"checks":[],"explanation":"Stop the selected activation"}).to_string();
-    let (proposal,_,_)=interpret(&view,&request,&response).unwrap();
-    assert_eq!(proposal.activation,Some(fixture.activation.clone()));assert_eq!(proposal.expected_turn_revision,request.expected_turn_revision);
-    assert_eq!(fixture.controller.snapshot().unwrap().contract().revision(),request.expected_turn_revision,"Planning cannot execute");
-    let unsafe_response=response.replace("\"stop\"","\"resume\"");assert!(interpret(&view,&request,&unsafe_response).is_err());
-    let wrong_response=response.replace(fixture.activation.activation_id.as_str(),"foreign-generation");assert!(interpret(&view,&request,&wrong_response).is_err());
-}

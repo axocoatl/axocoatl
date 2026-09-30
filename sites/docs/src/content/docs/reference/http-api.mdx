@@ -118,7 +118,6 @@ not permission to choose another activation or team.
 | POST | `/api/sessions/{id}/team/apply` | `{edit, review_digest}`; exact reviewed future-turn edit |
 | POST | `/api/sessions/{id}/team/cancel` | Cancel the referenced team draft without changing current authority |
 | POST | `/api/sessions/{id}/turns/{turn_id}/control-commands` | Typed human action with exact command/activation/revision identities; returns the canonical receipt |
-| POST | `/api/sessions/{id}/turns/{turn_id}/control-plan` | Bounded request-local proposal from the selected planning Agent; no execution authority |
 | POST | `/api/sessions/{id}/turns/{turn_id}/graph-edits/preview` | Review AddAgent or ReplaceFutureAgent against the exact graph revision. The new work starts from one of the Session team's Agents (`agent.source_slot_id`) or a configured template (`agent.template_id`), exactly one of the two, and keeps what that Agent may change; `agent.writes` may only narrow it |
 | POST | `/api/sessions/{id}/turns/{turn_id}/graph-edits/apply` | Apply the original reviewed graph edit and digest |
 | GET | `/api/sessions/{id}/turns/{turn_id}/grants` | Current grants, cumulative usage, and retained expansion proposals |

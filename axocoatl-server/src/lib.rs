@@ -202,10 +202,6 @@ pub fn build_router(
             post(routes::revoke_session_grant).layer(DefaultBodyLimit::max(4096)),
         )
         .route(
-            "/api/sessions/{id}/turns/{turn_id}/control-plan",
-            post(routes::plan_session_control).layer(DefaultBodyLimit::max(64 * 1024)),
-        )
-        .route(
             "/api/sessions/{id}/turns/{turn_id}/control-commands",
             post(routes::submit_session_control_action).layer(DefaultBodyLimit::max(
                 axocoatl_session::control_command::MAX_CONTROL_REQUEST_BYTES,
