@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::execution_content::{
     ConditionProcessStatus, ExecutionContentError, ExecutionContentStore,
-    RepositoryCheckDefinition, REPOSITORY_SNAPSHOT_COMMAND,
+    RepositoryCheckDefinition, REPOSITORY_SNAPSHOT_COMMAND, REPOSITORY_SNAPSHOT_COMMAND_V1,
 };
 use crate::execution_store::DurableTurnSnapshot;
 use crate::turn_contract::{
@@ -81,11 +81,58 @@ pub fn group_of(graph: &TurnGraphSnapshot) -> Option<(CheckGroup, usize)> {
     })
 }
 
+/// Capture commands a check group may carry, newest first. A turn keeps the
+/// capture it was admitted with.
+const CAPTURE_COMMANDS: [&str; 2] = [REPOSITORY_SNAPSHOT_COMMAND, REPOSITORY_SNAPSHOT_COMMAND_V1];
+
 /// The exact definitions of a group: a capture, each command, and a capture.
 /// The foreground command lifetime and capture ceilings apply; this adds no
 /// tool capability, cost or token grant.
 pub fn check_definitions(
     checks: &[Vec<String>],
+) -> Result<Vec<RepositoryCheckDefinition>, ExecutionContentError> {
+    check_definitions_with(checks, REPOSITORY_SNAPSHOT_COMMAND)
+}
+
+/// The definitions of `checks` in `group` as `graph` was admitted with them:
+/// the current form, or the form with an earlier capture command that a turn
+/// admitted before it changed still carries. Any other capture fails closed.
+pub fn admitted_check_definitions(
+    graph: &TurnGraphSnapshot,
+    content: &ExecutionContentStore,
+    group: &CheckGroup,
+    checks: &[Vec<String>],
+) -> Result<Vec<RepositoryCheckDefinition>, ExecutionContentError> {
+    let first = group.condition_id(0);
+    let Some(recorded) = graph
+        .conditions
+        .iter()
+        .find_map(|condition| match &condition.kind {
+            ConditionKind::RepositoryCheck { definition }
+                if condition.condition_id.as_str() == first =>
+            {
+                Some(definition)
+            }
+            _ => None,
+        })
+    else {
+        return check_definitions(checks);
+    };
+    let recorded = content.resolve_repository_check_definition(recorded)?;
+    for capture in CAPTURE_COMMANDS {
+        let definitions = check_definitions_with(checks, capture)?;
+        if definitions.first() == Some(recorded) {
+            return Ok(definitions);
+        }
+    }
+    Err(ExecutionContentError::Invalid(
+        "a check group's capture is not one this version can run",
+    ))
+}
+
+fn check_definitions_with(
+    checks: &[Vec<String>],
+    capture: &str,
 ) -> Result<Vec<RepositoryCheckDefinition>, ExecutionContentError> {
     if checks.is_empty() {
         return Ok(Vec::new());
@@ -94,7 +141,7 @@ pub fn check_definitions(
         return Err(ExecutionContentError::Capacity);
     }
     let capture = RepositoryCheckDefinition {
-        argv: vec!["sh".into(), "-c".into(), REPOSITORY_SNAPSHOT_COMMAND.into()],
+        argv: vec!["sh".into(), "-c".into(), capture.into()],
         timeout_ms: 180_000,
         stdout_bytes: 768 * 1024,
         stderr_bytes: 256 * 1024,
@@ -294,15 +341,14 @@ mod tests {
         assert_eq!(output_preview(b"ok", true), ("ok".into(), true));
     }
 
-    #[test]
-    fn check_definitions_fit_the_actual_condition_store_bound() {
+    /// An empty content store of its own; the directory must outlive it.
+    fn content_store(root: &std::path::Path) -> ExecutionContentStore {
         use crate::execution_namespace::ExecutionComponent;
         use crate::execution_ownership::LegacyFormatOwnership;
         use crate::execution_store::{ExecutionStoreOwner, SessionExecutionStore};
-        let root = tempfile::tempdir().unwrap();
         let canonical = SessionExecutionStore::open(
             std::sync::Arc::new(
-                LegacyFormatOwnership::acquire(root.path())
+                LegacyFormatOwnership::acquire(root)
                     .unwrap()
                     .upgrade()
                     .unwrap(),
@@ -313,12 +359,82 @@ mod tests {
             },
         )
         .unwrap();
-        let mut content = ExecutionContentStore::open_owned(
+        ExecutionContentStore::open_owned(
             canonical
                 .component_namespace(ExecutionComponent::ExecutionContent)
                 .unwrap(),
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    /// A graph whose group `group` carries `definitions`, retained in `content`.
+    fn graph_with(
+        content: &mut ExecutionContentStore,
+        group: &CheckGroup,
+        definitions: Vec<RepositoryCheckDefinition>,
+    ) -> TurnGraphSnapshot {
+        let conditions = definitions
+            .into_iter()
+            .enumerate()
+            .map(|(index, definition)| CompletionCondition {
+                condition_id: ConditionId::new(group.condition_id(index)).unwrap(),
+                kind: ConditionKind::RepositoryCheck {
+                    definition: content
+                        .retain_repository_check_definition(definition)
+                        .unwrap()
+                        .reference()
+                        .clone(),
+                },
+                nodes: vec![TurnNodeId::new("node").unwrap()],
+            })
+            .collect();
+        TurnGraphSnapshot {
+            snapshot_id: GraphSnapshotId::new("graph").unwrap(),
+            revision: 1,
+            nodes: vec![],
+            dependencies: vec![],
+            conditions,
+        }
+    }
+
+    /// A turn admitted with the earlier capture command keeps it, so its
+    /// graph still loads and its checks still run; an unknown capture fails
+    /// closed and a graph without the group gets the current form.
+    #[test]
+    fn admitted_checks_keep_the_capture_they_were_admitted_with() {
+        let root = tempfile::tempdir().unwrap();
+        let mut content = content_store(root.path());
+        let checks = vec![vec!["cargo".to_string(), "test".to_string()]];
+        let group = CheckGroup::required();
+        let current = check_definitions(&checks).unwrap();
+        let earlier = check_definitions_with(&checks, REPOSITORY_SNAPSHOT_COMMAND_V1).unwrap();
+        assert_ne!(current, earlier);
+        assert_eq!(current[0].argv[2], REPOSITORY_SNAPSHOT_COMMAND);
+        for definitions in [current.clone(), earlier] {
+            let graph = graph_with(&mut content, &group, definitions.clone());
+            assert_eq!(
+                admitted_check_definitions(&graph, &content, &group, &checks).unwrap(),
+                definitions
+            );
+        }
+        let mut unknown = current.clone();
+        unknown[0].argv[2] = "true".into();
+        let graph = graph_with(&mut content, &group, unknown);
+        assert!(admitted_check_definitions(&graph, &content, &group, &checks).is_err());
+        let other = CheckGroup {
+            prefix: "other-check:".into(),
+        };
+        let graph = graph_with(&mut content, &other, current.clone());
+        assert_eq!(
+            admitted_check_definitions(&graph, &content, &group, &checks).unwrap(),
+            current
+        );
+    }
+
+    #[test]
+    fn check_definitions_fit_the_actual_condition_store_bound() {
+        let root = tempfile::tempdir().unwrap();
+        let mut content = content_store(root.path());
         let commands = vec![vec!["cargo".into(), "test".into(), "--quiet".into()]];
         let definitions = check_definitions(&commands).unwrap();
         assert_eq!(definitions.len(), 3);

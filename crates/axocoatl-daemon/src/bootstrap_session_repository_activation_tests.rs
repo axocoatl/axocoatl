@@ -534,6 +534,9 @@ async fn closed_registration_cannot_execute_a_prepared_repository_activation() {
 #[tokio::test]
 async fn scoped_write_file_is_refused_before_any_effect() {
     let mut f = fixture().await;
+    std::fs::create_dir_all(f._workspace.path().join("config")).unwrap();
+    std::fs::write(f._workspace.path().join("config/x"), "original\n").unwrap();
+    std::fs::write(f._workspace.path().join("config/y"), "a\n").unwrap();
     let r = run_scoped(&mut f, &["write_file", "edit_file"], &["lib/"]);
     let provider = Provider::new(vec![
         (
@@ -565,17 +568,31 @@ async fn scoped_write_file_is_refused_before_any_effect() {
     assert!(provider.saw(2, "lib/../config/y uses '..'"));
     // Refused by the scope, never by the supervisor that would have run it.
     assert!(!provider.saw(1, "supervision") && !provider.saw(2, "supervision"));
-    assert!(!f._workspace.path().join("config").exists());
+    assert_eq!(
+        std::fs::read_to_string(f._workspace.path().join("config/x")).unwrap(),
+        "original\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f._workspace.path().join("config/y")).unwrap(),
+        "a\n"
+    );
     assert!(f.owner.execution_is_idle().unwrap());
     let snapshot = r.controller.snapshot().unwrap();
-    assert_eq!(snapshot.contract().invocations().len(), 2);
+    // Both refused calls, and the host's Before and After captures.
+    assert_eq!(snapshot.contract().invocations().len(), 4);
     assert!(snapshot
         .contract()
         .invocations()
         .iter()
         .all(|invocation| invocation.evidence.disposition() == EffectDisposition::OutcomeRecorded));
-    // Without a shell nothing outside the file tools could change the tree.
-    assert!(settled.accepted, "{:?}", settled.failure);
+    // Even without a shell its captures decide, and this fixture has no
+    // supervisor to take them: nothing establishes that only lib/ changed.
+    assert!(!settled.accepted);
+    let failure = settled.failure.unwrap();
+    assert!(
+        failure.starts_with("its repository captures cannot establish"),
+        "{failure}"
+    );
 }
 
 #[tokio::test]
@@ -884,6 +901,375 @@ async fn actual_shell_change_outside_scope_fails_the_activation() {
     let failure = settled.failure.unwrap();
     assert!(failure.starts_with("it changed config/x"), "{failure}");
     assert!(failure.contains("(lib/)"), "{failure}");
+}
+
+/// A read-only helper's shell writes configuration only to a scratch home of
+/// its own: the Session's shared home stays unwritable, so nothing the helper
+/// writes there reaches the host's captures or any later process.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_read_only_helper_shell_cannot_write_the_shared_home() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    git_init(f._workspace.path());
+    std::fs::write(f._workspace.path().join("existing.txt"), "original\n").unwrap();
+    let r = run_scoped(&mut f, &["bash", "read_file"], &[]);
+    let provider = Provider::new(vec![(
+        "bash",
+        serde_json::json!({"command":"case $HOME in /tmp/axocoatl-home.*) echo scratch-home ;; esac; \
+            printf '[core]\\n\\texcludesFile = /tmp/hide\\n' > \"$HOME/.gitconfig\" \
+            && echo scratch-written; \
+            for home in /root /home/*; do \
+              printf x > \"$home/.axocoatl-helper-probe\" 2>/dev/null && echo \"shared-written $home\"; \
+            done; true"}),
+    )]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert!(idle.unwrap());
+    assert!(provider.saw(1, "scratch-home"));
+    assert!(provider.saw(1, "scratch-written"));
+    assert!(!provider.saw(1, "shared-written"));
+    assert!(settled.accepted, "{:?}", settled.failure);
+}
+
+/// Configuration a scoped writer's shell writes in the shared home can
+/// neither hide its out-of-scope file from the host's After capture nor make
+/// that capture run a program.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_home_configuration_cannot_hide_a_change_or_run_in_the_capture() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    git_init(f._workspace.path());
+    std::fs::create_dir_all(f._workspace.path().join("lib")).unwrap();
+    std::fs::write(f._workspace.path().join("lib/y"), "original\n").unwrap();
+    let r = run_scoped(&mut f, &["bash"], &["lib/"]);
+    // Each configured program would leave a marker beside the workspace.
+    let command = "root=$(pwd -P); mark=\"$root/lib/ran\"; \
+        printf '#!/bin/sh\\ntouch %s\\ncat\\n' \"$mark\" > /tmp/axo-program && chmod +x /tmp/axo-program; \
+        printf 'config/\\n' > /tmp/axo-hide; \
+        mkdir -p \"$HOME/.config/git\"; \
+        printf '[core]\\n\\texcludesFile = /tmp/axo-hide\\n\\tfsmonitor = /tmp/axo-program\\n[diff]\\n\\texternal = /tmp/axo-program\\n[filter \"x\"]\\n\\tclean = /tmp/axo-program\\n' > \"$HOME/.gitconfig\"; \
+        printf '* filter=x\\n' > \"$HOME/.config/git/attributes\"; \
+        mkdir -p config && printf secret > config/secret.txt && printf y > lib/y && echo planted";
+    let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let ran = f._workspace.path().join("lib/ran").exists();
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert!(idle.unwrap());
+    assert!(provider.saw(1, "planted"));
+    assert!(!ran, "the host capture ran a program the Agent configured");
+    assert!(!settled.accepted);
+    // Where the home directory is inside the repository, the configuration
+    // files are named too.
+    let failure = settled.failure.unwrap();
+    assert!(failure.starts_with("it changed "), "{failure}");
+    assert!(failure.contains("config/secret.txt"), "{failure}");
+}
+
+/// A committed repository of 300 files, far beyond an 8 KiB manifest prefix.
+fn sizeable_repository(root: &std::path::Path) {
+    git_init(root);
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    for index in 0..300 {
+        std::fs::write(
+            root.join(format!("lib/file-{index}.js")),
+            format!("{index}\n"),
+        )
+        .unwrap();
+    }
+    std::fs::write(root.join("config/prod.js"), "prod\n").unwrap();
+    std::fs::write(root.join(".gitignore"), "build/\n").unwrap();
+    for args in [
+        &["add", "-A"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "base",
+        ],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .status()
+            .unwrap()
+            .success());
+    }
+}
+
+/// Runs one shell command as an Agent limited to `writes` in an actual
+/// sandbox and settles the activation.
+async fn settle_scoped_shell(
+    f: &mut Fixture,
+    writes: &[&str],
+    command: &str,
+) -> (crate::session_dispatch::SettledActivation, Arc<Provider>) {
+    let sandbox = actual_sandbox(f).await;
+    let r = run_scoped(f, &["bash"], writes);
+    let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
+    let result = tokio::time::timeout(Duration::from_secs(180), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    assert!(idle.unwrap());
+    (result.unwrap().unwrap(), provider)
+}
+
+/// In a repository far larger than an 8 KiB manifest, a scoped writer's
+/// shell hides an edit behind an index flag and a new file behind its own
+/// ignore file, and plants a Git hook. The complete comparison names each.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_scoped_shell_cannot_blind_the_complete_judgement() {
+    let mut f = fixture().await;
+    sizeable_repository(f._workspace.path());
+    let command = "git update-index --skip-worktree config/prod.js && printf x > config/prod.js \
+        && printf '*\\n' > config/.gitignore && printf e > config/evil.js \
+        && printf '#!/bin/sh\\n' > .git/hooks/pre-commit && printf y > lib/file-1.js \
+        && git diff --quiet HEAD -- config && git status --porcelain -- config | wc -l";
+    let (settled, provider) = settle_scoped_shell(&mut f, &["lib/"], command).await;
+    // Git itself no longer shows either change.
+    assert!(
+        provider.saw(1, "\"stdout\":\"0\\n\""),
+        "{:?}",
+        provider.requests.lock().unwrap()[1]
+    );
+    assert!(!settled.accepted);
+    let failure = settled.failure.unwrap();
+    assert!(
+        failure.starts_with(
+            "it changed .git/hooks/pre-commit, config/.gitignore, config/prod.js outside the \
+             paths this Agent may change (lib/)"
+        ),
+        "{failure}"
+    );
+}
+
+/// The kept Before manifest is inside the sandbox, where the Agent's shell
+/// can reach it. Removing or rewriting it fails the activation closed.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_tampering_with_the_kept_manifest_fails_closed() {
+    for tamper in [
+        "for kept in /tmp/axocoatl-baseline.*; do printf x >> \"$kept/manifest\"; done",
+        "rm -rf /tmp/axocoatl-baseline.*",
+    ] {
+        let mut f = fixture().await;
+        sizeable_repository(f._workspace.path());
+        let command = format!("{tamper}; printf x > config/prod.js; echo tampered");
+        let (settled, provider) = settle_scoped_shell(&mut f, &["lib/"], &command).await;
+        assert!(provider.saw(1, "tampered"));
+        assert!(!settled.accepted);
+        let failure = settled.failure.unwrap();
+        assert!(
+            failure.starts_with("its repository captures cannot establish"),
+            "{tamper}: {failure}"
+        );
+    }
+}
+
+/// Ordinary work inside the scope, staged with Git, is accepted.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_scoped_shell_work_inside_its_paths_is_accepted() {
+    let mut f = fixture().await;
+    sizeable_repository(f._workspace.path());
+    let command = "printf y > lib/file-1.js && printf n > lib/new.js && git add lib \
+        && mkdir -p build && printf o > build/out.js && git status --short | wc -l";
+    let (settled, _) = settle_scoped_shell(&mut f, &["lib/"], command).await;
+    assert!(settled.accepted, "{:?}", settled.failure);
+}
+
+/// The same refusals with an actual supervisor that would run the write: the
+/// existing files outside lib/ keep their exact bytes, and the captures
+/// confirm nothing changed.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_scoped_write_file_is_refused_before_any_effect() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    let root = f._workspace.path().to_owned();
+    git_init(&root);
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::write(root.join("config/x"), "original\n").unwrap();
+    std::fs::write(root.join("config/y"), "a\n").unwrap();
+    let r = run_scoped(&mut f, &["write_file", "edit_file"], &["lib/"]);
+    let provider = Provider::new(vec![
+        (
+            "write_file",
+            serde_json::json!({"path":"config/x", "content":"outside"}),
+        ),
+        (
+            "edit_file",
+            serde_json::json!({"path":"config/y", "old":"a", "new":"b"}),
+        ),
+    ]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let x = std::fs::read_to_string(root.join("config/x"));
+    let y = std::fs::read_to_string(root.join("config/y"));
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert!(idle.unwrap());
+    assert_eq!(x.unwrap(), "original\n");
+    assert_eq!(y.unwrap(), "a\n");
+    assert!(provider.saw(
+        1,
+        "config/x is outside the paths this Agent may change (lib/)"
+    ));
+    assert!(provider.saw(
+        2,
+        "config/y is outside the paths this Agent may change (lib/)"
+    ));
+    assert!(settled.accepted, "{:?}", settled.failure);
+}
+
+/// A file-tool-only writer limited to lib/ writes a file there that an
+/// earlier shell hard-linked to config/x. The write passes the path check,
+/// but the host's captures see config/x change and fail the activation.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_file_tool_writer_through_a_hard_link_is_judged() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    let root = f._workspace.path().to_owned();
+    git_init(&root);
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::create_dir_all(root.join("config")).unwrap();
+    std::fs::write(root.join("config/x"), "original\n").unwrap();
+    std::fs::hard_link(root.join("config/x"), root.join("lib/h")).unwrap();
+    let r = run_scoped(&mut f, &["write_file", "read_file"], &["lib/"]);
+    let provider = Provider::new(vec![(
+        "write_file",
+        serde_json::json!({"path":"lib/h", "content":"changed through the link\n"}),
+    )]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let outside = std::fs::read_to_string(root.join("config/x"));
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert!(idle.unwrap());
+    assert_eq!(outside.unwrap(), "changed through the link\n");
+    assert!(!settled.accepted);
+    let failure = settled.failure.unwrap();
+    assert!(failure.starts_with("it changed config/x"), "{failure}");
+    assert!(failure.contains("(lib/)"), "{failure}");
+    // The write, and the host's Before and After captures.
+    let snapshot = r.controller.snapshot().unwrap();
+    assert_eq!(snapshot.contract().invocations().len(), 3);
+}
+
+/// The host's capture port runs only in the host's own observation groups;
+/// an Agent's tool call naming it is refused before anything is recorded.
+#[tokio::test]
+async fn an_agent_cannot_call_the_host_capture_port() {
+    use axocoatl_actor::ToolInvocationRequest;
+    use axocoatl_llm::ToolCall;
+    let mut f = fixture().await;
+    let r = run_scoped(&mut f, &["write_file"], &["lib/"]);
+    let prepared = r
+        .controller
+        .prepare_repository_activation(
+            r.activation.clone(),
+            r.resources(Provider::new(vec![])),
+            r.resource.clone(),
+        )
+        .unwrap();
+    let request = ToolInvocationRequest {
+        actor_id: "conversation".into(),
+        provider_id: "controlled".into(),
+        model_id: "controlled-model".into(),
+        provider_response_group: 1,
+        provider_call_index: 0,
+        provider_call_count: 1,
+        tool_call: ToolCall {
+            id: "agent-capture".into(),
+            name: axocoatl_session::control_authority::REPOSITORY_CAPTURE_PORT.into(),
+            arguments: serde_json::json!({
+                "command": axocoatl_session::execution_content::REPOSITORY_SNAPSHOT_COMMAND
+            }),
+            provider_metadata: Default::default(),
+        },
+    };
+    let refused = prepared
+        .execution_boundary_for_test()
+        .admit(&request)
+        .await
+        .err()
+        .unwrap();
+    assert!(refused.contains("belongs to the host"), "{refused}");
+    assert!(r
+        .controller
+        .snapshot()
+        .unwrap()
+        .contract()
+        .invocations()
+        .is_empty());
 }
 
 #[tokio::test]

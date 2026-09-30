@@ -6,7 +6,7 @@ use super::*;
 use axocoatl_session::execution_content::{
     ActivationRepositorySnapshot, ConditionProcessStatus, RepositorySnapshotPhase,
 };
-use axocoatl_session::turn_checks::{check_definitions, group_of, CheckGroup};
+use axocoatl_session::turn_checks::{admitted_check_definitions, group_of, CheckGroup};
 
 /// One run per check, epoch and turn; an existing run is reconciled, never
 /// replayed.
@@ -69,7 +69,7 @@ pub(super) fn required_checks(
         .iter()
         .map(|definition| definition.argv.clone())
         .collect();
-    if check_definitions(&checks).map_err(error)? != definitions {
+    if admitted_check_definitions(graph, content, &group, &checks).map_err(error)? != definitions {
         return Err(error(
             "Required checks differ from the commands this turn was admitted with",
         ));
@@ -185,7 +185,11 @@ impl SessionDispatchController {
                 return Ok(false);
             };
             let group = CheckGroup::required();
-            let definitions = check_definitions(&checks).map_err(error)?;
+            let definitions = match contract.graph() {
+                Some(graph) => admitted_check_definitions(graph, &state.content, &group, &checks),
+                None => axocoatl_session::turn_checks::check_definitions(&checks),
+            }
+            .map_err(error)?;
             if definitions.is_empty() {
                 return Ok(false);
             }
@@ -300,9 +304,11 @@ impl SessionDispatchController {
                                 capture.outcome = Some(result.reference().clone());
                                 let bytes = result.stdout().retained_bytes().map_err(error)?;
                                 let value = serde_json::json!({"exit_code":match result.status() {ConditionProcessStatus::Exited {code} => Some(*code), _ => None}, "stdout":String::from_utf8_lossy(&bytes), "stdout_truncated":result.stdout().is_truncated()});
-                                if let Err(failure) =
-                                    repository_snapshot::parse_capture(&value, &mut capture)
-                                {
+                                if let Err(failure) = repository_snapshot::parse_capture(
+                                    &value,
+                                    &mut capture,
+                                    &repository_snapshot::CaptureMode::Observe,
+                                ) {
                                     capture.tree_sha256 = None;
                                     capture.unavailable = Some(failure.to_string());
                                 }

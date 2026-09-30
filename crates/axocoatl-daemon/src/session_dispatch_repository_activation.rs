@@ -12,6 +12,7 @@ use axocoatl_isolation::supervisor_transport::{
     RunningSupervisedCommand, SupervisedExecution, SupervisorCancellation,
 };
 use axocoatl_isolation::{BgTask, ExecResult, IsolationError, Sandbox};
+use axocoatl_session::control_authority::REPOSITORY_CAPTURE_PORT;
 use axocoatl_tools::{BuiltinTool, ToolError, ToolExecutor};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -106,6 +107,26 @@ impl AdmittedWriteScope {
     }
     pub(super) fn allows(&self, path: &str) -> bool {
         axocoatl_session::path_scope::scope_allows(self.0.as_deref(), path)
+    }
+    /// Whether a change to `path` may stand. An ignore file decides which
+    /// files the captures judge, so one may change only inside a directory
+    /// every scope names whole (such as `lib/`): then all it could hide is
+    /// in scope too.
+    pub(super) fn allows_change(&self, path: &str) -> bool {
+        self.allows(path) && (!is_ignore_file(path) || self.owns_ignore_file(path))
+    }
+    fn owns_ignore_file(&self, path: &str) -> bool {
+        let Some((directory, _)) = path.rsplit_once('/') else {
+            return false;
+        };
+        self.0.iter().all(|scope| {
+            scope.iter().any(|pattern| {
+                pattern.strip_suffix('/').is_some_and(|owned| {
+                    !owned.contains(['*', '?'])
+                        && (directory == owned || directory.starts_with(&format!("{owned}/")))
+                })
+            })
+        })
     }
     /// How the scope reads in messages to the Agent and the person.
     pub(super) fn describe(&self) -> String {
@@ -210,7 +231,8 @@ impl RepositoryInvocation {
         let Some(resource) = &bound.repository else {
             return Ok(None);
         };
-        if !SUPPORTED_TOOLS.contains(&intent.tool_name.as_str()) {
+        let capture_port = intent.tool_name == REPOSITORY_CAPTURE_PORT;
+        if !SUPPORTED_TOOLS.contains(&intent.tool_name.as_str()) && !capture_port {
             return Err(error(
                 "invocation has no owned repository tool implementation",
             ));
@@ -227,6 +249,13 @@ impl RepositoryInvocation {
             process_index: AtomicU64::new(0),
             require_complete_capture: AtomicBool::new(false),
         });
+        if capture_port {
+            // The port runs only the host's fixed capture and offers no tool.
+            return Ok(Some(Self {
+                scope,
+                executor: Arc::new(ToolExecutor::new()),
+            }));
+        }
         let backend = session_tools(Arc::new(RepositorySandbox {
             resource: resource.clone(),
             invocation: Some(scope.clone()),
@@ -254,7 +283,11 @@ impl RepositoryInvocation {
     /// The fixed host capture uses the existing supervisor stream ceiling;
     /// ordinary BashTool retains its smaller user-facing presentation prefix.
     pub(super) async fn capture_snapshot(&self, command: &str) -> Result<serde_json::Value> {
-        if self.scope.intent.tool_name != "bash" || command != super::repository_snapshot::CAPTURE {
+        if !matches!(
+            self.scope.intent.tool_name.as_str(),
+            "bash" | REPOSITORY_CAPTURE_PORT
+        ) || super::repository_snapshot::capture_command_mode(command).is_none()
+        {
             return Err(error(
                 "repository capture is not the fixed approved invocation",
             ));
@@ -390,6 +423,11 @@ impl InvocationTool {
     }
 }
 
+/// Whether `path` names a `.gitignore` file.
+fn is_ignore_file(path: &str) -> bool {
+    path.rsplit('/').next() == Some(".gitignore")
+}
+
 /// Why a file tool must not write `path` under `scope`, or `None` to allow it.
 fn write_refusal(scope: Result<AdmittedWriteScope>, root: &Path, path: &str) -> Option<String> {
     let scope = match scope {
@@ -410,9 +448,20 @@ fn write_refusal(scope: Result<AdmittedWriteScope>, root: &Path, path: &str) -> 
     let relative = scoped_relative_path(root, path);
     if relative
         .as_deref()
-        .is_some_and(|relative| scope.allows(relative))
+        .is_some_and(|relative| scope.allows_change(relative))
     {
         return None;
+    }
+    if relative
+        .as_deref()
+        .is_some_and(|relative| scope.allows(relative) && is_ignore_file(relative))
+    {
+        return Some(format!(
+            "{path} decides which files are checked for changes, so this Agent may change it \
+             only inside a directory it may change whole ({}). Leave it unchanged and describe \
+             the needed change in your answer.",
+            scope.describe()
+        ));
     }
     Some(format!(
         "{path} is outside the paths this Agent may change ({}). Leave it unchanged and \
@@ -577,10 +626,15 @@ impl InvocationScope {
                 value.checked_add(1)
             })
             .map_err(|_| isolation_error("repository process index exhausted"))?;
+        let argv = if write_restriction.is_some() {
+            with_scratch_home(argv)
+        } else {
+            argv.iter().map(|arg| (*arg).to_owned()).collect()
+        };
         let request = ExecRequest {
             protocol: PROTOCOL_VERSION,
             invocation_id: format!("{}:{index}", self.intent.invocation_id.as_str()),
-            argv: argv.iter().map(|arg| (*arg).to_owned()).collect(),
+            argv,
             timeout_ms: timeout
                 .as_millis()
                 .try_into()
@@ -713,11 +767,13 @@ impl InvocationScope {
 
 /// The kernel write restriction for one repository process. Only the Agent's
 /// own shell of a read-only activation runs under it: nothing beneath the
-/// repository can change. The host-authored file tools (`read_file`, `grep`,
-/// ...) keep their own fixed commands, and the host's repository captures and
-/// digest observations, though admitted as `bash`, are exempt so a read-only
-/// helper still yields its evidence. A supervisor that cannot apply the
-/// restriction refuses to launch that one process.
+/// repository can change, and neither can the Session's shared home
+/// directory, whose configuration later processes read. The host-authored
+/// file tools (`read_file`, `grep`, ...) keep their own fixed commands, and
+/// the host's repository captures and digest observations, though admitted as
+/// `bash`, are exempt so a read-only helper still yields its evidence. A
+/// supervisor that cannot apply the restriction refuses to launch that one
+/// process.
 fn process_write_restriction(
     read_only: bool,
     tool: &str,
@@ -726,15 +782,36 @@ fn process_write_restriction(
 ) -> Option<axocoatl_exec::protocol::WriteRestriction> {
     (read_only && tool == "bash" && !host_observation).then(|| {
         axocoatl_exec::protocol::WriteRestriction {
-            writable: vec![
-                "/tmp".into(),
-                "/var/tmp".into(),
-                "/dev".into(),
-                axocoatl_exec::protocol::HOME_PLACEHOLDER.into(),
-            ],
+            writable: vec!["/tmp".into(), "/var/tmp".into(), "/dev".into()],
             protected: vec![root.to_string_lossy().into_owned()],
         }
     })
+}
+
+/// Runs `"$@"` with a fresh home directory of its own under `/tmp`, removed
+/// when it ends, in place of the Session's shared one.
+const SCRATCH_HOME: &str = "home=$(mktemp -d /tmp/axocoatl-home.XXXXXX) || exit 125
+HOME=$home
+XDG_CONFIG_HOME=$home/.config
+XDG_CACHE_HOME=$home/.cache
+XDG_DATA_HOME=$home/.local/share
+XDG_STATE_HOME=$home/.local/state
+export HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME
+\"$@\"
+status=$?
+rm -rf -- \"$home\"
+exit \"$status\"
+";
+
+/// A restricted shell's argv, run with its own scratch home directory: a
+/// read-only helper can still write configuration or caches for itself, but
+/// nothing it writes there reaches any other process.
+fn with_scratch_home(argv: &[&str]) -> Vec<String> {
+    ["sh", "-c", SCRATCH_HOME, "sh"]
+        .iter()
+        .chain(argv)
+        .map(|arg| (*arg).to_owned())
+        .collect()
 }
 
 struct OwnedProcessWait {
@@ -963,8 +1040,35 @@ mod write_scope_tests {
                 restriction.validate().unwrap();
                 assert_eq!(restriction.protected, vec!["/workspace/repo".to_owned()]);
                 assert!(restriction.writable.iter().any(|path| path == "/tmp"));
+                // The shared home directory is never writable to a helper.
+                assert_eq!(
+                    restriction.effective_writable(Some("/home/agent")),
+                    ["/tmp", "/var/tmp", "/dev"]
+                );
             }
         }
+    }
+
+    /// A restricted shell runs with a fresh home directory under /tmp, never
+    /// the Session's shared one, and the directory is gone when it ends.
+    #[cfg(unix)]
+    #[test]
+    fn a_restricted_shell_gets_its_own_scratch_home() {
+        use super::with_scratch_home;
+        let argv = with_scratch_home(&[
+            "sh",
+            "-c",
+            "printf '%s' \"$HOME\"; printf x > \"$HOME/.gitconfig\"; exit 3",
+        ]);
+        let output = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .env("HOME", "/nonexistent-shared-home")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        let home = String::from_utf8(output.stdout).unwrap();
+        assert!(home.starts_with("/tmp/axocoatl-home."), "{home}");
+        assert!(!std::path::Path::new(&home).exists(), "{home}");
     }
 
     #[test]
@@ -1005,6 +1109,57 @@ mod write_scope_tests {
             unreadable.contains("Leave lib/a.js unchanged"),
             "{unreadable}"
         );
+    }
+
+    /// An ignore file may change only inside a directory the scope names
+    /// whole, since it decides what the captures see.
+    #[test]
+    fn ignore_files_change_only_inside_an_owned_directory() {
+        let root = Path::new("/workspace/repo");
+        let owned = scope(Some(&["lib/", "docs/*.md", ".gitignore", "src/**/"]));
+        assert!(owned.allows_change("lib/.gitignore"));
+        assert!(owned.allows_change("lib/deep/.gitignore"));
+        assert!(owned.allows_change("lib/a.js"));
+        for refused in [
+            ".gitignore",
+            "docs/.gitignore",
+            "src/x/.gitignore",
+            "library/.gitignore",
+        ] {
+            assert!(!owned.allows_change(refused), "{refused}");
+        }
+        let message = write_refusal(Ok(owned.clone()), root, ".gitignore").unwrap();
+        assert!(
+            message.contains("decides which files are checked"),
+            "{message}"
+        );
+        assert_eq!(write_refusal(Ok(owned), root, "lib/.gitignore"), None);
+        // A file pattern does not own its directory's ignore file.
+        let file = scope(Some(&["lib/a.js"]));
+        assert!(!file.allows_change("lib/.gitignore"));
+        assert!(file.allows_change("lib/a.js"));
+    }
+
+    /// No pattern opens Git's own directory to a file tool, although a
+    /// bare name or wildcard matches a path at any depth.
+    #[test]
+    fn file_tools_never_write_into_a_git_directory() {
+        let root = Path::new("/workspace/repo");
+        let names = scope(Some(&["config", "HEAD", "pre-commit", "exclude", "**"]));
+        for inside in [
+            ".git/config",
+            ".git/HEAD",
+            ".git/hooks/pre-commit",
+            "/workspace/repo/.git/info/exclude",
+            ".GIT/config",
+            "lib/../.git/config",
+        ] {
+            let refused = write_refusal(Ok(names.clone()), root, inside).unwrap();
+            assert!(refused.contains(inside), "{refused}");
+        }
+        assert_eq!(write_refusal(Ok(names.clone()), root, "lib/config"), None);
+        // An Agent without a write scope is not restricted by this rule.
+        assert_eq!(write_refusal(Ok(scope(None)), root, ".git/config"), None);
     }
 
     #[test]

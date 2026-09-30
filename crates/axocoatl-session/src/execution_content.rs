@@ -58,8 +58,9 @@ mod repository_snapshot;
 pub use attachment::RetainedBinaryAttachment;
 use repository_snapshot::StandingRepositoryCheck;
 pub use repository_snapshot::{
-    ActivationRepositorySnapshot, ActivationRepositorySnapshotView, RepositorySnapshotPhase,
-    REPOSITORY_SNAPSHOT_COMMAND,
+    is_capture_baseline, ActivationRepositorySnapshot, ActivationRepositorySnapshotView,
+    RepositoryComparison, RepositorySnapshotPhase, MAX_COMPARED_PATH_BYTES,
+    REPOSITORY_CAPTURE_SCRIPT, REPOSITORY_SNAPSHOT_COMMAND, REPOSITORY_SNAPSHOT_COMMAND_V1,
 };
 
 #[path = "execution_content_reattachment.rs"]

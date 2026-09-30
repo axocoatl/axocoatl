@@ -120,7 +120,7 @@ Required Agent fields are `id`, `name`, `provider`, and `model`.
 
 `writes` is optional: up to 64 repository path patterns the Agent may change in a
 native Session. Omit it to allow any file; `[]` makes a read-only helper. Absolute paths,
-`..` segments, empty entries, and repeated entries are rejected. See
+`..` segments, `.git` segments, empty entries, and repeated entries are rejected. See
 [Limit which files an Agent may change](/configure/agents/#limit-which-files-an-agent-may-change).
 
 A Coordinator must be the `entry_point` of exactly one workflow. A Worker must belong to that

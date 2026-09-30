@@ -2,7 +2,8 @@
 //! is checked against.
 
 /// A pattern is a repository-relative path that may end in `/` and may use
-/// `*`, `?` and `**`; it never escapes the repository.
+/// `*`, `?` and `**`; it never escapes the repository and never names Git's
+/// own directory.
 pub fn validate_pattern(pattern: &str) -> Result<(), String> {
     let trimmed = pattern.strip_suffix('/').unwrap_or(pattern);
     if trimmed.is_empty()
@@ -16,7 +17,21 @@ pub fn validate_pattern(pattern: &str) -> Result<(), String> {
     {
         return Err(format!("{pattern:?} is not a repository path pattern"));
     }
+    if in_git_directory(trimmed) {
+        return Err(format!(
+            "{pattern:?} names Git's own .git directory, which no Agent with a write scope may \
+             change"
+        ));
+    }
     Ok(())
+}
+
+/// Whether any segment of a repository path is `.git`, in any letter case:
+/// Git's own settings, hooks and history, or a nested repository's. A
+/// case-insensitive file system resolves `.GIT` to the same directory.
+pub fn in_git_directory(path: &str) -> bool {
+    path.split('/')
+        .any(|segment| segment.eq_ignore_ascii_case(".git"))
 }
 
 /// Most patterns one write scope may name.
@@ -55,9 +70,12 @@ pub fn write_scope_within(child: Option<&[String]>, parent: Option<&[String]>) -
     }
 }
 
-/// Whether a scope lets an Agent change the repository-relative `path`.
+/// Whether a scope lets an Agent change the repository-relative `path`. No
+/// write scope reaches inside a `.git` directory, whatever its patterns say.
 pub fn scope_allows(scope: Option<&[String]>, path: &str) -> bool {
-    scope.is_none_or(|scope| scope.iter().any(|pattern| pattern_matches(pattern, path)))
+    scope.is_none_or(|scope| {
+        !in_git_directory(path) && scope.iter().any(|pattern| pattern_matches(pattern, path))
+    })
 }
 
 /// Gitignore-flavoured matching. A pattern without `/` matches a file name at
@@ -124,6 +142,46 @@ mod tests {
         for bad in ["", "/", "/lib", "../lib", "lib/../x", "a\\b"] {
             assert!(validate_pattern(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn no_write_scope_reaches_into_a_git_directory() {
+        for bad in [
+            ".git",
+            ".git/",
+            ".GIT/config",
+            "lib/.git/",
+            ".Git/hooks/pre-commit",
+        ] {
+            let refused = validate_pattern(bad).unwrap_err();
+            assert!(refused.contains(".git directory"), "{refused}");
+        }
+        for good in [".github/", ".gitignore", "lib/.gitkeep", "git/", "*.git.md"] {
+            assert!(validate_pattern(good).is_ok(), "{good:?}");
+        }
+        // Wildcards and bare file names match at any depth, but never there.
+        let scope = |patterns: &[&str]| -> Vec<String> {
+            patterns
+                .iter()
+                .map(|pattern| (*pattern).to_owned())
+                .collect()
+        };
+        let wide = scope(&["**", "*", "config", "HEAD", "pre-commit", "exclude"]);
+        for inside in [
+            ".git/config",
+            ".git/HEAD",
+            ".git/hooks/pre-commit",
+            ".git/info/exclude",
+            ".GIT/config",
+            "vendor/lib/.git/config",
+        ] {
+            assert!(pattern_matches("**", inside));
+            assert!(!scope_allows(Some(&wide), inside), "{inside}");
+        }
+        assert!(scope_allows(Some(&wide), "lib/config"));
+        assert!(scope_allows(Some(&wide), ".github/workflows/ci.yml"));
+        // Without a write scope the Agent is unrestricted.
+        assert!(scope_allows(None, ".git/config"));
     }
 
     #[test]

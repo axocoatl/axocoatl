@@ -181,6 +181,7 @@ export async function launchTestDaemon({
   ollamaBaseUrl = 'http://127.0.0.1:9',
   skills = [],
   agentTools = [],
+  agentWrites,
   port: requestedPort = Number(process.env.AXOCOATL_E2E_PORT) || 0,
 } = {}) {
   const runRoot = await mkdtemp(path.join(tmpdir(), 'axocoatl-browser-e2e-'));
@@ -227,7 +228,8 @@ agents:
     model: browser-test-model
     system_prompt: Browser regression fixture. No turns are executed.
     depends_on: []
-    tools: ${JSON.stringify(agentTools)}
+    tools: ${JSON.stringify(agentTools)}${agentWrites === undefined ? '' : `
+    writes: ${JSON.stringify(agentWrites)}`}
 
 providers:
   ollama:

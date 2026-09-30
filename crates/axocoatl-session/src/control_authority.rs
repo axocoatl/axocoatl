@@ -44,6 +44,13 @@ const MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_GRANTS: usize = 64;
 const MAX_ACTIVATIONS: usize = 512;
 const MAX_CLAIMS: usize = 4096;
+/// The host's own repository capture of an activation whose writes are
+/// limited to named paths but that has no shell: one fixed, read-only
+/// observation before and one after it, so every change it makes is judged.
+/// It spends the activation's invocation allowance like any tool; an Agent
+/// cannot call it.
+pub const REPOSITORY_CAPTURE_PORT: &str = "repository_capture";
+
 pub const MAX_PROVIDER_REQUEST_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_PROVIDER_RESPONSE_BYTES: u64 = 1024 * 1024;
 // A terminal record has bounded enum/numeric/boolean fields only. Reserve its
@@ -2333,7 +2340,17 @@ fn validate_dispatch(
                 .policy
                 .descendants
                 .contains(&activation.activation.node_id));
-    if !delegate_port && !knowledge_port && !activation.profile.tools.iter().any(|t| t == tool) {
+    let capture_port = tool == REPOSITORY_CAPTURE_PORT
+        && activation
+            .profile
+            .write_scope
+            .as_ref()
+            .is_some_and(|scope| !scope.is_empty());
+    if !delegate_port
+        && !knowledge_port
+        && !capture_port
+        && !activation.profile.tools.iter().any(|t| t == tool)
+    {
         return Err(AuthorityError::Denied);
     }
     // A read-only activation may list the file-writing tools in its captured
@@ -4490,6 +4507,42 @@ mod provider_tests {
         }
         for tool in ["read_file", "bash"] {
             prepare(&read_only, &format!("read-only-{tool}"), tool).unwrap();
+        }
+    }
+
+    /// Only an activation limited to named paths may be charged for the
+    /// host's capture port, whatever tools its profile lists.
+    #[test]
+    fn only_a_path_scoped_activation_may_claim_the_capture_port() {
+        for (scope, allowed) in [
+            (None, false),
+            (Some(&[][..]), false),
+            (Some(&["lib/"][..]), true),
+        ] {
+            let (_root, gate) = scoped_gate(scoped_profile(None));
+            let lease = gate
+                .register_activation(
+                    activation("a"),
+                    "grant",
+                    scoped_profile(scope),
+                    gate.revision().unwrap(),
+                    100,
+                )
+                .unwrap();
+            let prepared = gate.prepare_dispatch(
+                &lease,
+                InvocationId::new("capture").unwrap(),
+                REPOSITORY_CAPTURE_PORT.into(),
+                DispatchReservation {
+                    tokens: 0,
+                    cost_microunits: 0,
+                },
+                100,
+            );
+            assert_eq!(prepared.is_ok(), allowed, "{scope:?}");
+            if !allowed {
+                assert!(matches!(prepared, Err(AuthorityError::Denied)));
+            }
         }
     }
 }

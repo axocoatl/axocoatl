@@ -71,7 +71,7 @@ test('native Team preview rejects unsupported repository tools before provider o
 test('actual Session team carries what each Agent may change into its reviewed profile',async()=>{
   unavailable=false;
   const id=runtime.fixtures.alpha.sessions[1].id,current=await call(id);assert.equal(current.status,200,JSON.stringify(current.value));
-  assert.equal(current.value.slots[0].writes,undefined,'an Agent configured without writes: may change any file');
+  assert.equal(current.value.slots[0].writes,null,'an Agent configured without writes: may change any file, and the view says so explicitly');
   const edit=(command_id,writes)=>({command_id,expected_configuration_revision:current.value.configuration_revision,slots:current.value.slots.map(slot=>({...slot,...(writes===undefined?{}:{writes}),max_output_tokens:128,limits:{activations:2,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),dependencies:current.value.dependencies,layout:current.value.layout});
   for(const [command,writes] of [['writes-open',undefined],['writes-read-only',[]],['writes-scoped',['lib/','docs/*.md']]]){
     const preview=await call(id,'/preview',edit(command,writes));assert.equal(preview.status,200,JSON.stringify(preview.value));
@@ -84,6 +84,27 @@ test('actual Session team carries what each Agent may change into its reviewed p
   const scoped=edit('writes-applied',['lib/']),preview=await call(id,'/preview',scoped);assert.equal(preview.status,200,JSON.stringify(preview.value));
   const applied=await call(id,'/apply',{edit:scoped,review_digest:preview.value.review_digest});assert.equal(applied.status,200,JSON.stringify(applied.value));
   const saved=await call(id);assert.deepEqual(saved.value.slots[0].writes,['lib/'],'the saved definition keeps its scope for the next edit');
+  // Leaving writes out keeps the saved scope; only an explicit null widens it.
+  const omitted={...edit('writes-omitted',undefined),expected_configuration_revision:saved.value.configuration_revision};
+  omitted.slots=saved.value.slots.map(({writes,...slot})=>({...slot,max_output_tokens:128,limits:{activations:2,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000}));
+  const kept=await call(id,'/preview',omitted);assert.equal(kept.status,200,JSON.stringify(kept.value));
+  assert.deepEqual(kept.value.profiles.map(profile=>profile.write_scope),[['lib/']],'omitting writes never widens what the Agent may change');
+  const opened=await call(id,'/preview',{...omitted,command_id:'writes-explicit-any',slots:omitted.slots.map(slot=>({...slot,writes:null}))});assert.equal(opened.status,200,JSON.stringify(opened.value));
+  assert.deepEqual(opened.value.profiles.map(profile=>profile.write_scope),[undefined]);
+});
+
+test('a Team edit that leaves writes out keeps the template\'s read-only scope',async()=>{
+  const readOnly=await launchTestDaemon({nativeDataRoot:true,agentWrites:[],ollamaBaseUrl:`http://127.0.0.1:${modelServer.address().port}`});
+  try{
+    const id=readOnly.fixtures.alpha.sessions[0].id,teamUrl=`${readOnly.baseUrl}/api/sessions/${id}/team`;
+    const current=await (await fetch(teamUrl)).json();assert.deepEqual(current.slots[0].writes,[]);
+    const edit={command_id:'template-scope-kept',expected_configuration_revision:0,
+      slots:current.slots.map(({writes,...slot})=>({...slot,max_output_tokens:128,limits:{activations:2,invocations:8,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000})),
+      dependencies:current.dependencies,layout:current.layout};
+    const response=await fetch(`${teamUrl}/preview`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(edit)});const preview=await response.json();
+    assert.equal(response.status,200,JSON.stringify(preview));
+    assert.deepEqual(preview.profiles.map(profile=>profile.write_scope),[[]],'the template\'s writes: [] still applies');
+  }finally{await readOnly.stop();}
 });
 
 test('actual Session team offers the detected check without enabling it and refuses checks nobody can pay for',async()=>{

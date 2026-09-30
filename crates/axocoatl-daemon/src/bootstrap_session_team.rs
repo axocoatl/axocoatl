@@ -14,6 +14,14 @@ use sha2::{Digest, Sha256};
 fn is_autonomous(role: &AgentRole) -> bool {
     *role == AgentRole::Autonomous
 }
+/// A present field, `null` included, is `Some`; only an absent one is `None`.
+fn explicit_value<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
 fn team_error(value: impl std::fmt::Display) -> DaemonError {
     DaemonError::SessionConflict(value.to_string())
 }
@@ -40,10 +48,17 @@ pub struct SessionTeamSlotEdit {
     pub model: String,
     pub instructions: Option<String>,
     pub max_output_tokens: Option<usize>,
-    /// Repository paths this Agent may change. The edit carries the whole
-    /// value: absent lets it change any file, empty makes it read-only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub writes: Option<Vec<String>>,
+    /// Repository paths this Agent may change. `null` lets it change any
+    /// file, an empty list makes it read-only and a list names the paths.
+    /// Leaving the field out keeps the scope of the template or definition
+    /// the slot starts from, so omitting it never widens what the Agent may
+    /// change. The app always sends the value.
+    #[serde(
+        default,
+        deserialize_with = "explicit_value",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub writes: Option<Option<Vec<String>>>,
     pub required: bool,
     pub reset_history: bool,
     pub limits: Option<GrantLimits>,
@@ -263,9 +278,17 @@ fn review_profiles(
     }
     Ok(profiles)
 }
-/// The slot's `writes` after checking the pattern grammar.
-fn checked_writes(slot: &SessionTeamSlotEdit) -> Result<Option<Vec<String>>, DaemonError> {
-    if let Some(writes) = &slot.writes {
+/// The paths the slot may change after checking the pattern grammar: its
+/// explicit `writes`, or `base`, the scope of the template or definition it
+/// starts from, when the edit leaves the field out.
+fn checked_writes(
+    slot: &SessionTeamSlotEdit,
+    base: Option<&[String]>,
+) -> Result<Option<Vec<String>>, DaemonError> {
+    let Some(writes) = &slot.writes else {
+        return Ok(base.map(<[String]>::to_vec));
+    };
+    if let Some(writes) = writes {
         axocoatl_session::path_scope::validate_write_scope(writes).map_err(|reason| {
             team_error(format!(
                 "{} has an invalid list of paths it may change: {reason}. Use repository paths \
@@ -274,7 +297,7 @@ fn checked_writes(slot: &SessionTeamSlotEdit) -> Result<Option<Vec<String>>, Dae
             ))
         })?;
     }
-    Ok(slot.writes.clone())
+    Ok(writes.clone())
 }
 /// The team's required checks must be exact commands that fit beside the
 /// team's own conditions.
@@ -346,7 +369,7 @@ fn slot_edit(
         model: config.model,
         instructions: config.system_prompt,
         max_output_tokens: config.sampling.max_tokens,
-        writes: config.writes,
+        writes: Some(config.writes),
         required: slot.required,
         reset_history: false,
         limits: Some(limits.clone()),
@@ -419,7 +442,7 @@ impl AxocoatlDaemon {
                     model: config.model,
                     instructions: config.system_prompt,
                     max_output_tokens: config.sampling.max_tokens,
-                    writes: config.writes,
+                    writes: Some(config.writes),
                     required: true,
                     reset_history: true,
                     limits: None,
@@ -695,7 +718,7 @@ impl AxocoatlDaemon {
                         _ => Err(team_error("Approved Worker profile is missing")),
                     },
                 )?;
-                let coordinator_writes = checked_writes(slot)?;
+                let coordinator_writes = checked_writes(slot, parent_config.writes.as_deref())?;
                 if !axocoatl_session::path_scope::write_scope_within(
                     worker_writes.as_deref(),
                     coordinator_writes.as_deref(),
@@ -1038,7 +1061,7 @@ impl AxocoatlDaemon {
             config.model = proposed.model.clone();
             config.system_prompt = proposed.instructions.clone();
             config.sampling.max_tokens = proposed.max_output_tokens;
-            config.writes = checked_writes(proposed)?;
+            config.writes = checked_writes(proposed, config.writes.as_deref())?;
             if let Some(old) = &old_config {
                 config.id = old.id.clone();
             }
@@ -1308,5 +1331,50 @@ impl AxocoatlDaemon {
         self.session_dispatch_lifecycles
             .session_team_token(id)
             .map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod writes_tests {
+    use super::*;
+
+    /// A slot edit as a client sends it; `None` leaves `writes` out.
+    fn slot(writes: Option<serde_json::Value>) -> SessionTeamSlotEdit {
+        let mut value = serde_json::json!({
+            "slot_id": "slot", "template_id": null, "source_slot_id": null,
+            "name": "Helper", "provider": "ollama", "model": "model",
+            "instructions": null, "max_output_tokens": null, "required": true,
+            "reset_history": false, "limits": null, "expires_at_ms": null
+        });
+        if let Some(writes) = writes {
+            value["writes"] = writes;
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    /// Leaving `writes` out keeps the scope the slot starts from; `null`
+    /// lets it change any file; a list is checked and replaces it.
+    #[test]
+    fn omitted_writes_keep_the_base_and_never_widen_it() {
+        let base = vec!["lib/".to_owned()];
+        let absent = slot(None);
+        assert_eq!(absent.writes, None);
+        assert_eq!(
+            checked_writes(&absent, Some(&base)).unwrap(),
+            Some(base.clone())
+        );
+        assert_eq!(checked_writes(&absent, Some(&[])).unwrap(), Some(vec![]));
+        assert_eq!(checked_writes(&absent, None).unwrap(), None);
+        let any = slot(Some(serde_json::Value::Null));
+        assert_eq!(any.writes, Some(None));
+        assert_eq!(checked_writes(&any, Some(&base)).unwrap(), None);
+        let read_only = slot(Some(serde_json::json!([])));
+        assert_eq!(checked_writes(&read_only, None).unwrap(), Some(vec![]));
+        assert!(checked_writes(&slot(Some(serde_json::json!([".git/"]))), None).is_err());
+        // Absent stays absent and null stays null when written back.
+        let written = serde_json::to_value(&absent).unwrap();
+        assert!(written.get("writes").is_none(), "{written}");
+        let written = serde_json::to_value(&any).unwrap();
+        assert_eq!(written.get("writes"), Some(&serde_json::Value::Null));
     }
 }
