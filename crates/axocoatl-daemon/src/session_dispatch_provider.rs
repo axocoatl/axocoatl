@@ -13,7 +13,7 @@ use std::task::{Context, Poll};
 use async_trait::async_trait;
 use axocoatl_core::{MeasuredTokenUsage, TokenUsageStats};
 use axocoatl_llm::{
-    AccountedChatOutcome, ChatRequest, ChatResponse, FinishReason, LlmProvider,
+    AccountedChatOutcome, ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderAllowance,
     ProviderCapabilities, ProviderError, ProviderExecutionBounds, StreamEvent,
 };
 use axocoatl_session::control_authority::{
@@ -70,7 +70,11 @@ impl SessionProvider {
         let claim = self
             .controller
             .admit_provider(&self.activation, digest, size as u64, bounds)
-            .map_err(|error| self.invalid(format!("provider admission failed: {error}")))?;
+            .map_err(|error| self.invalid(format!("provider admission failed: {error}")))?
+            .map_err(|message| ProviderError::BudgetExhausted {
+                provider: self.expected_provider.clone(),
+                message,
+            })?;
         Ok(PendingCall {
             controller: self.controller.clone(),
             claim: Some(claim),
@@ -113,6 +117,9 @@ impl LlmProvider for SessionProvider {
     }
     fn execution_bounds(&self, request: &ChatRequest) -> Option<ProviderExecutionBounds> {
         self.inner.execution_bounds(request)
+    }
+    fn remaining_allowance(&self) -> Option<ProviderAllowance> {
+        self.controller.agent_allowance(&self.activation)
     }
     fn validate_request(&self, request: &ChatRequest) -> Result<(), ProviderError> {
         if self.inner.provider_id() != self.expected_provider

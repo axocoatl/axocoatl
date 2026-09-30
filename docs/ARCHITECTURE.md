@@ -720,15 +720,25 @@ and streams that sometimes end early.
   when that capture lists the file, only the exact bytes it recorded are used, so the
   instructions never differ from the retained capture. The system prompt is rebuilt for
   each request and is not part of the checkpoint.
-- **Bounded context.** Tool output, and long string arguments of the model's own earlier
-  calls (such as a whole-file write), older than the latest three to five tool rounds are
-  replaced with a placeholder in later requests, moving in steps of three so the request
-  prefix stays stable. If a request would still pass the context threshold, only the
-  latest round stays whole and shorter output is elided too; as a last resort the Agent's
-  earliest tool rounds (each call with its results) are left out of the request with a
-  one-line note. A person's messages in the turn always stay, and Session History keeps
-  the full content. `workspace_knowledge` results are never masked; a helper's `delegate`
-  answer stays whole until a request would not fit.
+- **Bounded context.** A request fits when it and its answer allowance fit the model's
+  window less a 1/32 margin, counted as the provider counts once a call has shown its
+  tokenizer counts more than the local count. Tool output, and long string arguments of
+  the model's own earlier calls (such as a whole-file write), are replaced with a
+  placeholder in later requests only as far as needed to keep the conversation at 60% of
+  what fits (and at most 32,768 tokens whole), oldest first, never beyond the latest three
+  to five tool rounds, and moving in steps of three so the request prefix stays stable.
+  If a request would still not fit, only the latest round stays whole and shorter output
+  is elided too; as a last resort the Agent's oldest tool rounds (each call with its
+  results) are left out of the request with a one-line note, enough to be back at that
+  60%. They stay out for the rest of the activation, so later requests keep fitting with
+  the same prefix until new work overflows it. A person's messages in the turn always
+  stay, and Session History keeps the full content. `workspace_knowledge` results are
+  never masked; a helper's `delegate` answer stays whole until a request would not fit.
+- **Answering at the end of a budget.** When what is left of the Agent's token guard (once
+  it has spent some) or of its grant (tokens, invocations less the host's reserve, or
+  spending) cannot pay for another tool round and an answer, its next request goes
+  without tools and asks for the final answer. A limit that still stops it is named in
+  plain words in the failure.
 - **One retry for a broken stream.** A provider stream that ends early (for Ollama also
   one ended by an error record, such as an unparseable tool call) is retried once. Its
   estimated input and the output it had already streamed are charged to the same grant

@@ -856,10 +856,19 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
             "The next model call could not be admitted under the approved grant.",
             "inspect",
         )
-    } else if line.starts_with("Token budget exceeded") {
+    } else if line.starts_with("This Agent reached its token limit")
+        // Written before 1.1.0 named the limit in plain words.
+        || line.starts_with("Token budget exceeded")
+    {
         (
             "budget_limited",
             "The Agent used its whole per-execution token budget before answering.",
+            "finish_partial",
+        )
+    } else if line.starts_with("The Session budget for this Agent is used up") {
+        (
+            "budget_limited",
+            "The Session budget for this Agent ran out before it answered.",
             "finish_partial",
         )
     } else if line.starts_with("Current request needs") {
@@ -5104,6 +5113,18 @@ mod tests {
         );
         assert_eq!(
             class("Activation failed: Token budget exceeded: used 310594, budget 300000"),
+            Some(("budget_limited", "finish_partial"))
+        );
+        assert_eq!(
+            class("Activation failed: This Agent reached its token limit for this activation (600,000 tokens; 619,018 needed). Raise the Agent's token budget or narrow the task."),
+            Some(("budget_limited", "finish_partial"))
+        );
+        assert_eq!(
+            class("Activation failed: The Session budget for this Agent is used up: 1,000 of its 1,457,714 tokens remain and the next model call needs 36,864."),
+            Some(("budget_limited", "finish_partial"))
+        );
+        assert_eq!(
+            class("Activation failed: The Session budget for this Agent is used up: its last 4 invocation(s) are held for the host to observe its changes and run required checks."),
             Some(("budget_limited", "finish_partial"))
         );
         assert_eq!(

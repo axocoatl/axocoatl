@@ -44,4 +44,9 @@ pub enum ProviderError {
 
     #[error("Provider not found: {0}")]
     ProviderNotFound(String),
+
+    /// The host's budget for this caller cannot admit the call. `message`
+    /// names the limit in plain words; it is not a provider fault.
+    #[error("{message}")]
+    BudgetExhausted { provider: String, message: String },
 }

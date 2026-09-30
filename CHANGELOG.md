@@ -212,6 +212,30 @@ model-facing `coordination_control` tool, the external harness adapter and the
   recorded are used.
 - **`list_dir` with an empty path lists the repository root** instead of failing with
   `ls: cannot access ''`.
+- **A long tool loop on a small-context model no longer forgets its own work every
+  round.** A request was fitted against 85% of the context window on top of its full
+  answer allowance, so a 32,768-token model started removing tool rounds with more than
+  4,000 tokens still free; it then kept only the last two rounds, and because every
+  request is rebuilt from the whole history, each later request removed them again: the
+  Agent re-read the same files until its budget ran out. A request now fits when it and
+  its answer allowance fit the window less a 1/32 margin, counted the way the provider
+  counts once a call shows its tokenizer counts more than the local one. When rounds
+  must go, the oldest go first, enough to leave room to grow, and they stay out for the
+  rest of the activation, so later requests keep fitting with the same prefix until new
+  work overflows it; the note that says so stays. Stale tool output is masked only as
+  far as the context needs (keeping at most 32,768 tokens whole), so a small model keeps
+  what it just read.
+- **An Agent near the end of its budget answers instead of failing, and a spent budget
+  says so plainly.** When what is left of the Agent's own token guard (once it has spent
+  some) or of its Session budget (tokens, model and tool calls or spending, less what the
+  host holds back for its checks) cannot pay for another tool round and an answer, the
+  next request goes without tools and asks for the final answer, which is recorded.
+  When a limit does stop the Agent, the failure names it ("This Agent reached its token
+  limit for this activation (600,000 tokens; 619,018 needed)…", "The Session budget for
+  this Agent is used up: 1,000 of its 1,457,714 tokens remain and the next model call
+  needs 36,864.") instead of `Token budget exceeded: used …` or `LLM provider error:
+  Invalid request for ollama: provider admission failed: … authority budget or storage
+  capacity exhausted`.
 - **A misspelled `sandbox.network` no longer leaves the network on, and Podman no
   longer copies host proxy variables into containers.** Any `sandbox.network` other
   than exactly `bridge` or `none` (for example `None`, `off` or `disabled`) was

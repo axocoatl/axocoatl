@@ -100,7 +100,7 @@ impl LlmProvider for RunProvider {
             _ => 2,
         };
         assert!(call < call_bound, "controlled backend's fixed call bound exceeded");
-        self.requests.lock().unwrap().push(request.messages);
+        self.requests.lock().unwrap().push(request.messages.clone());
         let usage = self
             .controller
             .lock()
@@ -116,11 +116,13 @@ impl LlmProvider for RunProvider {
         if matches!(self.mode, RunProviderMode::Pending) {
             return Ok(Box::pin(tokio_stream::pending()));
         }
-        let tool_call = match self.mode {
-            RunProviderMode::Tools => call == 0,
-            RunProviderMode::ToolRounds(rounds) => call < rounds,
-            _ => false,
-        };
+        // Like a real model, it cannot call a tool it was not offered.
+        let tool_call = !request.tools.is_empty()
+            && match self.mode {
+                RunProviderMode::Tools => call == 0,
+                RunProviderMode::ToolRounds(rounds) => call < rounds,
+                _ => false,
+            };
         let mut events = if tool_call {
             vec![Ok(StreamEvent::ToolCallDelta {
                 index: Some(0),
@@ -179,9 +181,73 @@ fn resources(
     }
 }
 
+/// The 1.1.0 eval's grant ran out mid-loop and the failure read "LLM
+/// provider error: Invalid request for ollama: provider admission failed:
+/// Session dispatch: authority budget or storage capacity exhausted".
+#[tokio::test]
+async fn a_session_budget_short_of_a_tool_round_asks_for_the_answer_and_names_its_limit() {
+    let limits = |tokens| GrantLimits {
+        activations: 1,
+        invocations: 32,
+        tokens,
+        cost_microunits: 10_000,
+    };
+    // Room for one call (100 tokens each) but not a tool round and an answer.
+    let fixture = fixture_with_limits(limits(150), "in-process");
+    let provider = Arc::new(RunProvider::new(&fixture, RunProviderMode::Tools, true));
+    let tool = Arc::new(CountingTool::default());
+    let settled = fixture
+        .controller
+        .prepare_autonomous_activation(
+            fixture.activation.clone(),
+            resources(&fixture, provider.clone(), tool.clone()),
+        )
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    assert!(settled.accepted, "{:?}", settled.failure);
+    assert_eq!(settled.output.content().output.text, "done");
+    assert_eq!(tool.count.load(Ordering::SeqCst), 0);
+    let note = provider.requests.lock().unwrap()[0]
+        .last()
+        .and_then(ChatMessage::text_content)
+        .unwrap()
+        .to_string();
+    assert!(
+        note.contains("the Session budget has 150 tokens left and each model call reserves 100"),
+        "{note}"
+    );
+
+    // No room for even that call: the failure names the limit plainly.
+    let fixture = fixture_with_limits(limits(50), "in-process");
+    let provider = Arc::new(RunProvider::new(&fixture, RunProviderMode::Tools, true));
+    let settled = fixture
+        .controller
+        .prepare_autonomous_activation(
+            fixture.activation.clone(),
+            resources(&fixture, provider.clone(), tool.clone()),
+        )
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    assert!(!settled.accepted);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    let expected = "The Session budget for this Agent is used up: 50 of its 50 tokens remain \
+                    and the next model call needs 100.";
+    assert_eq!(settled.failure.as_deref(), Some(expected));
+    assert_eq!(
+        settled.output.content().output.text,
+        format!("Activation failed: {expected}")
+    );
+}
+
 #[tokio::test]
 async fn native_tool_rounds_use_reviewed_capacity_and_still_stop_at_durable_invocation_budget() {
-    for (invocations, accepted) in [(32, true), (6, false)] {
+    // Six invocations pay for two tool rounds; the third call cannot pay for
+    // another round and an answer, so it goes without tools and answers.
+    for (invocations, rounds) in [(32, 12), (6, 2)] {
         let fixture = fixture_with_limits(
             GrantLimits {
                 activations: 1,
@@ -197,17 +263,15 @@ async fn native_tool_rounds_use_reviewed_capacity_and_still_stop_at_durable_invo
             fixture.activation.clone(),
             resources(&fixture, provider.clone(), tool.clone()),
         ).unwrap().run().await.unwrap();
-        assert_eq!(settled.accepted, accepted, "{:?}", settled.failure);
-        if accepted {
-            assert_eq!(provider.calls.load(Ordering::SeqCst), 13);
-            assert_eq!(tool.count.load(Ordering::SeqCst), 12);
-            assert_eq!(settled.output.content().output.text, "done");
-        } else {
-            assert!(settled.failure.as_deref().unwrap().contains("authority budget"), "{:?}", settled.failure);
-            assert_eq!(provider.calls.load(Ordering::SeqCst), 3);
-            assert_eq!(tool.count.load(Ordering::SeqCst), 3);
-            assert_eq!(settled.output.content().output.kind, OutputKind::Partial);
-        }
+        assert!(settled.accepted, "{:?}", settled.failure);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), rounds + 1);
+        assert_eq!(tool.count.load(Ordering::SeqCst), rounds);
+        assert_eq!(settled.output.content().output.text, "done");
+        let wrapped_up = provider.requests.lock().unwrap()[rounds]
+            .last()
+            .and_then(ChatMessage::text_content)
+            .is_some_and(|text| text.contains("tools are no longer available"));
+        assert_eq!(wrapped_up, invocations == 6);
         let state = fixture.controller.lock().unwrap();
         let snapshot = state.canonical.snapshot(&state.turn_id).unwrap();
         assert_eq!(snapshot.contract().invocations().len(), tool.count.load(Ordering::SeqCst));

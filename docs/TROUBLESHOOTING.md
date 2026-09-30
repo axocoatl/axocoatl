@@ -103,14 +103,24 @@ is impossible, delete every sandbox whose metadata contains
 confirmation in **Review setup**. Confirmation only releases the durable
 record; it does not contact or delete E2B.
 
-**`Token budget exceeded: used N, budget M`**
+**`This Agent reached its token limit for this activation (M tokens; N needed)`**
+(before 1.1.0: `Token budget exceeded: used N, budget M`)
 Working as designed. Before each provider call, Axocoatl reserves the locally
 estimated input plus a bounded completion. With `overflow_policy: abort`, a call
-that cannot fit is not sent. A provider-reported overrun also stops the current
-turn, although those remote tokens may already have been incurred. Switch to
-`warn` to continue past the guard, or raise `per_call` / `per_execution`. Core
-memory and tool schemas count toward the input estimate. The guard is not an
-absolute provider billing cap.
+that cannot fit is not sent. When what is left cannot pay for another tool round
+and an answer, the Agent's next request goes without tools and asks for its
+final answer, so this error means even that answer did not fit. A
+provider-reported overrun also stops the current turn, although those remote
+tokens may already have been incurred. Switch to `warn` to continue past the
+guard, or raise `per_call` / `per_execution`. Core memory and tool schemas count
+toward the input estimate. The guard is not an absolute provider billing cap.
+
+**`The Session budget for this Agent is used up: ...`**
+The Session grant (Team & budget) has no room for the Agent's next model call:
+its tokens, model and tool calls, or spending limit, as the message says. The
+Agent asks for its final answer without tools before this happens when it can;
+the message means even that call could not be admitted. Raise the limit, then
+continue, or finish with the partial result.
 
 **`actor is likely terminated` after a budget abort**
 Expected: `abort` policy terminates the agent. Restart it

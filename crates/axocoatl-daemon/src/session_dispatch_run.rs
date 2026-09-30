@@ -386,13 +386,15 @@ impl SessionDispatchController {
         Ok(String::from_utf8(bytes).ok())
     }
 
+    /// Admit one model call. The inner `Err` is a budget refusal in plain
+    /// words (the host's reserve or the grant's own limit), not a fault.
     pub(super) fn admit_provider(
         &self,
         activation: &ActivationRef,
         request_digest: String,
         request_bytes: u64,
         bounds: ProviderExecutionBounds,
-    ) -> Result<ProviderCallClaim> {
+    ) -> Result<std::result::Result<ProviderCallClaim, String>> {
         let mut state = self.lock()?;
         state.execution_admission()?;
         let snapshot = state.current(activation)?;
@@ -424,8 +426,12 @@ impl SessionDispatchController {
             .cloned()
             .ok_or_else(|| error("provider activation has no current execution owner"))?;
         if let Some(reserve) = state.host_observation_shortfall(activation, 1) {
-            return Err(error(super::repository_snapshot::reserve_message(reserve)));
+            return Ok(Err(super::repository_snapshot::held_back_message(reserve)));
         }
+        let reservation = DispatchReservation {
+            tokens: bounds.token_limit,
+            cost_microunits: bounds.cost_microunits,
+        };
         let result = state.authority.claim_provider_call(
             &bound.lease,
             ProviderCallIntent {
@@ -434,10 +440,7 @@ impl SessionDispatchController {
                 model: bound.profile.model,
                 request_sha256: request_digest,
                 request_bytes,
-                reservation: DispatchReservation {
-                    tokens: bounds.token_limit,
-                    cost_microunits: bounds.cost_microunits,
-                },
+                reservation: reservation.clone(),
                 max_response_bytes: bounds.response_bytes as u64,
             },
             now_ms()?,
@@ -446,13 +449,31 @@ impl SessionDispatchController {
         // A failed or uncertain write must still fence every caller.
         use axocoatl_session::control_authority::AuthorityError;
         match result {
+            Err(AuthorityError::Capacity) => {
+                let grant = bound.grant.grant_id.as_str();
+                let exhausted = state
+                    .authority
+                    .grant_status(grant)
+                    .ok()
+                    .zip(state.authority.usage(grant).ok())
+                    .and_then(|(status, usage)| {
+                        super::repository_snapshot::grant_exhausted_message(
+                            &status.policy.limits,
+                            &usage,
+                            &reservation,
+                        )
+                    });
+                match exhausted {
+                    Some(message) => Ok(Err(message)),
+                    None => Err(error(AuthorityError::Capacity)),
+                }
+            }
             Err(
                 failure @ (AuthorityError::Denied
                 | AuthorityError::StaleLease
-                | AuthorityError::Capacity
                 | AuthorityError::Invalid(_)),
             ) => Err(error(failure)),
-            other => state.fail_closed(other.map_err(error)),
+            other => state.fail_closed(other.map_err(error)).map(Ok),
         }
     }
 

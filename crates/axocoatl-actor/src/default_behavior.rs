@@ -412,7 +412,29 @@ pub struct DefaultAgentBehavior {
     /// Estimated output a provider streamed before it ended early without
     /// reporting usage; charged with the retry so the budget sees it.
     abandoned_output_tokens: std::sync::atomic::AtomicUsize,
+    /// How many of this activation's oldest tool rounds its requests leave
+    /// out to fit the context. It only grows within an activation, so a
+    /// request that fits keeps its prefix until the context overflows again.
+    dropped_rounds: std::sync::atomic::AtomicUsize,
+    /// The provider's reported input over the local count of the same
+    /// request, in thousandths (at least 1,000), from the last complete call.
+    prompt_scale_milli: std::sync::atomic::AtomicUsize,
 }
+
+/// Share of the context window (1/32) left free for what the local count
+/// cannot see exactly. The output allowance is reserved on top of it.
+const CONTEXT_FIT_MARGIN_DIVISOR: usize = 32;
+/// Masking aims to leave the conversation at this share of what fits, so a
+/// tool loop has room to grow before anything more is removed...
+const COMFORTABLE_FIT_PERCENT: usize = 60;
+/// ...but keeps at most this many tokens of it whole while it could mask:
+/// a large window would otherwise re-send every result on every call.
+const COMFORTABLE_FIT_CAP: usize = 32_768;
+/// A tool round needs the call that asks for tools, at least one tool call,
+/// and the call that reads its results.
+const TOOL_ROUND_INVOCATIONS: u64 = 3;
+/// The smallest answer a final no-tool request is sent with.
+const MIN_FINAL_ANSWER_TOKENS: usize = 256;
 
 impl DefaultAgentBehavior {
     pub fn new(provider: Arc<dyn LlmProvider>, counter: Arc<dyn TokenCounter>) -> Self {
@@ -461,6 +483,8 @@ impl DefaultAgentBehavior {
             tool_round_limit: 10,
             stale_tool_results: None,
             abandoned_output_tokens: std::sync::atomic::AtomicUsize::new(0),
+            dropped_rounds: std::sync::atomic::AtomicUsize::new(0),
+            prompt_scale_milli: std::sync::atomic::AtomicUsize::new(1_000),
         }
     }
 
@@ -641,7 +665,7 @@ impl DefaultAgentBehavior {
             self.begin_provider_call();
             self.provider.chat_stream(request).await
         };
-        let mut stream = stream_result.map_err(|e| AgentError::Provider(e.to_string()))?;
+        let mut stream = stream_result.map_err(AgentError::from)?;
 
         let mut content = String::new();
         let mut usage = TokenUsageStats::default();
@@ -1466,6 +1490,129 @@ impl DefaultAgentBehavior {
         }
     }
 
+    /// The output a request reserves: its own limit, else the exact model's.
+    fn request_output_reservation(&self, request: &ChatRequest) -> usize {
+        request.max_tokens.unwrap_or_else(|| {
+            if self.provider.model_constraints_known(request) {
+                self.provider.capabilities_for(request).max_output_tokens
+            } else {
+                0
+            }
+        })
+    }
+
+    /// Why the next request must be the last one: what is left of this
+    /// Agent's budget cannot pay for another tool round (this call, its tool
+    /// calls and the call that reads them) and then a final answer. Checks the
+    /// actor's own abort guard once this activation has spent some of it (a
+    /// guard too small for even one round is a setting to fix, and keeps its
+    /// plain error), and, when the provider reports one, the host's budget
+    /// for this Agent.
+    fn budget_wrap_up(&self, request: &ChatRequest) -> Option<String> {
+        if request.tools.is_empty() {
+            return None;
+        }
+        if let Some(tracker) = self.tracker.as_ref().filter(|tracker| {
+            tracker.budget().overflow_policy == OverflowPolicy::Abort && tracker.total_used() > 0
+        }) {
+            let budget = tracker.budget().per_execution;
+            let used = tracker.total_used();
+            // This call and the next, each with its input and output; one
+            // more output allowance for what the tool round adds.
+            let need = self
+                .provider
+                .count_tokens(request)
+                .saturating_mul(2)
+                .saturating_add(self.request_output_reservation(request).saturating_mul(3));
+            if budget.saturating_sub(used) < need {
+                return Some(format!(
+                    "this activation has used {} of its {} tokens",
+                    crate::error::group_digits(used),
+                    crate::error::group_digits(budget)
+                ));
+            }
+        }
+        let allowance = self.provider.remaining_allowance()?;
+        if let Some(left) = allowance
+            .invocations
+            .filter(|left| *left < TOOL_ROUND_INVOCATIONS)
+        {
+            return Some(format!(
+                "the Session budget allows only {left} more model or tool call(s)"
+            ));
+        }
+        let bounds = self.provider.execution_bounds(request)?;
+        if let Some(left) = allowance
+            .tokens
+            .filter(|left| *left < bounds.token_limit.saturating_mul(2))
+        {
+            return Some(format!(
+                "the Session budget has {} tokens left and each model call reserves {}",
+                crate::error::group_digits(usize::try_from(left).unwrap_or(usize::MAX)),
+                crate::error::group_digits(
+                    usize::try_from(bounds.token_limit).unwrap_or(usize::MAX)
+                )
+            ));
+        }
+        if bounds.cost_microunits > 0
+            && allowance
+                .cost_microunits
+                .is_some_and(|left| left < bounds.cost_microunits.saturating_mul(2))
+        {
+            return Some("the Session budget's spending allowance is nearly used up".to_string());
+        }
+        None
+    }
+
+    /// Encode a request for the provider. When the budget cannot pay for
+    /// another tool round and a final answer, the request goes without tools
+    /// and asks for the answer now, so the activation ends with one instead
+    /// of failing at the limit.
+    fn prepare_provider_request(
+        &self,
+        mut request: ChatRequest,
+    ) -> Result<(ChatRequest, ProviderToolNameMap), AgentError> {
+        if !request.tools.is_empty() {
+            let (encoded, _) = Self::encode_provider_request(request.clone())?;
+            if let Some(reason) = self.budget_wrap_up(&encoded) {
+                tracing::info!(
+                    agent = %self.agent_id,
+                    reason = %reason,
+                    "Asking for the final answer without tools"
+                );
+                request.tools.clear();
+                request.messages.push(ChatMessage::user(format!(
+                    "[Note from the host: {reason}, so tools are no longer available. \
+                     Write your final answer now: what you did, what you checked, and what \
+                     is left undone.]"
+                )));
+                self.fit_final_answer_output(&mut request);
+            }
+        }
+        Self::encode_provider_request(request)
+    }
+
+    /// Shrink a final answer's output allowance to what the abort guard has
+    /// left, while that is still a useful answer.
+    fn fit_final_answer_output(&self, request: &mut ChatRequest) {
+        let Some(tracker) = self
+            .tracker
+            .as_ref()
+            .filter(|tracker| tracker.budget().overflow_policy == OverflowPolicy::Abort)
+        else {
+            return;
+        };
+        let room = tracker
+            .budget()
+            .per_execution
+            .saturating_sub(tracker.total_used())
+            .saturating_sub(self.provider.count_tokens(request));
+        if request.max_tokens.is_some_and(|output| room < output) && room >= MIN_FINAL_ANSWER_TOKENS
+        {
+            request.max_tokens = Some(room);
+        }
+    }
+
     fn request_system_message(&self, system_override: Option<&str>) -> Option<ChatMessage> {
         let mem_context = self.memory_context();
         let effective_system = system_override.or(self.system_prompt.as_deref());
@@ -1493,6 +1640,16 @@ impl DefaultAgentBehavior {
         request: &ChatRequest,
         capabilities: &axocoatl_llm::ProviderCapabilities,
     ) -> usize {
+        // Only an Abort guard without an explicit limit depends on the input;
+        // counting a long request is not free.
+        if request.max_tokens.is_some()
+            || !self
+                .tracker
+                .as_ref()
+                .is_some_and(|tracker| tracker.budget().overflow_policy == OverflowPolicy::Abort)
+        {
+            return request.max_tokens.unwrap_or(capabilities.max_output_tokens);
+        }
         crate::provider_budget::projected_output_allowance(
             request.max_tokens,
             capabilities.max_output_tokens,
@@ -1685,6 +1842,8 @@ impl DefaultAgentBehavior {
 
     fn begin_budgeted_operation(&mut self) {
         self.execution_usage.reset();
+        self.dropped_rounds
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         self.tracker = self
             .token_budget
             .clone()
@@ -1845,6 +2004,9 @@ impl DefaultAgentBehavior {
             .saturating_sub(plain_tokens)
     }
 
+    /// The exact model's capabilities when its context is known, with the
+    /// share of the window persistent compaction summarizes down to. A single
+    /// request may use more: see `context_fit_limit`.
     fn request_constraints(
         &self,
         request: &ChatRequest,
@@ -1861,22 +2023,82 @@ impl DefaultAgentBehavior {
         Some((capabilities, target))
     }
 
+    /// The most a request may take of the model's context, output included:
+    /// the window less a small margin. Compaction keeps its own, lower target.
+    fn context_fit_limit(capabilities: &axocoatl_llm::ProviderCapabilities) -> usize {
+        capabilities.max_context_tokens.saturating_sub(
+            capabilities
+                .max_context_tokens
+                .div_ceil(CONTEXT_FIT_MARGIN_DIVISOR),
+        )
+    }
+
+    fn prompt_scale_milli(&self) -> usize {
+        self.prompt_scale_milli
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .clamp(1_000, 2_000)
+    }
+
+    /// A local count as the provider is expected to count it.
+    fn scaled_prompt_tokens(&self, counted: usize) -> usize {
+        counted
+            .saturating_mul(self.prompt_scale_milli())
+            .div_ceil(1_000)
+    }
+
+    /// Locally counted tokens that messages and tool definitions together may
+    /// take once `reserved` (output allowance and attachments) is set aside.
+    fn counted_prompt_budget(
+        &self,
+        capabilities: &axocoatl_llm::ProviderCapabilities,
+        reserved: usize,
+    ) -> usize {
+        Self::context_fit_limit(capabilities)
+            .saturating_sub(reserved)
+            .saturating_mul(1_000)
+            / self.prompt_scale_milli()
+    }
+
+    /// The local count of a request's messages and tool definitions.
+    fn prompt_estimate(&self, request: &ChatRequest) -> usize {
+        self.counter
+            .count_messages(&request.messages)
+            .saturating_add(self.tool_definition_tokens(&request.tools))
+    }
+
+    /// Learn how the provider's tokenizer compares with the local count from
+    /// a complete call it reported, so the next fit is measured the same way.
+    /// Only a larger provider count moves the scale; small prompts are
+    /// dominated by template overhead and teach nothing.
+    fn observe_prompt_scale(&self, estimate: usize, reported_input: usize, complete: bool) {
+        if !complete || estimate < 1_024 || reported_input == 0 {
+            return;
+        }
+        let scale = reported_input
+            .saturating_mul(1_000)
+            .div_ceil(estimate)
+            .clamp(1_000, 2_000);
+        self.prompt_scale_milli
+            .store(scale, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// What a request needs of the context: its prompt as the provider is
+    /// expected to count it, plus its output allowance.
     fn request_context_tokens(
         &self,
         request: &ChatRequest,
         capabilities: &axocoatl_llm::ProviderCapabilities,
     ) -> usize {
-        self.counter
-            .count_messages(&request.messages)
-            .saturating_add(self.tool_definition_tokens(&request.tools))
+        self.scaled_prompt_tokens(self.prompt_estimate(request))
             .saturating_add(self.output_headroom_tokens(request, capabilities))
     }
 
     fn ensure_request_fits_context(&self, request: &ChatRequest) -> Result<(), AgentError> {
-        let Some((capabilities, limit)) = self.request_constraints(request) else {
+        let Some((capabilities, _)) = self.request_constraints(request) else {
             return Ok(());
         };
         let required = self.request_context_tokens(request, &capabilities);
+        let limit = Self::context_fit_limit(&capabilities);
         if required > limit {
             return Err(AgentError::ContextLimitExceeded { required, limit });
         }
@@ -1947,6 +2169,14 @@ impl DefaultAgentBehavior {
     /// this single call when `Some` — memory context still merges as usual.
     /// `model_override` swaps the model on the configured provider (same
     /// provider, same credentials — model name only).
+    ///
+    /// For a model with a known context, the request is fitted in order:
+    /// earlier rounds this activation already left out stay out; stale tool
+    /// output is masked only as far as needed to stay comfortable; a request
+    /// that still does not fit is masked tightly; then the oldest rounds are
+    /// left out until the rest is comfortable again (so the next requests
+    /// keep fitting, with the same prefix, until new work overflows it);
+    /// compression is the last resort.
     fn build_request_from_session(
         &self,
         system_override: Option<&str>,
@@ -1956,57 +2186,93 @@ impl DefaultAgentBehavior {
     ) -> Result<ChatRequest, AgentError> {
         let (mut request, session_message_start) =
             self.uncompressed_request_from_session(system_override, model_override);
-        if let Some(masking) = &self.stale_tool_results {
-            let masked = masking.apply(&mut request.messages);
-            if masked > 0 {
-                tracing::debug!(masked, "Masked stale tool output in follow-up request");
-            }
-        }
         let Some((capabilities, _)) = self.request_constraints(&request) else {
+            if let Some(masking) = &self.stale_tool_results {
+                let masked = masking.apply(&mut request.messages);
+                if masked > 0 {
+                    tracing::debug!(masked, "Masked stale tool output in follow-up request");
+                }
+            }
             return Ok(request);
         };
-        let fixed_tokens = self
-            .tool_definition_tokens(&request.tools)
-            .saturating_add(self.planning_output_headroom_tokens(
-                &request,
-                &capabilities,
-                attachment_tokens,
-            )?)
+        let tool_tokens = self.tool_definition_tokens(&request.tools);
+        let reserved = self
+            .planning_output_headroom_tokens(&request, &capabilities, attachment_tokens)?
             .saturating_add(attachment_tokens);
-        let pipeline = axocoatl_token::CompressionPipeline::new(
-            self.counter.clone(),
-            capabilities.max_context_tokens,
-        );
+        // Messages and tool definitions together, in local-count units.
+        let budget = self.counted_prompt_budget(&capabilities, reserved);
+        let limit = budget.saturating_sub(tool_tokens);
+        let comfortable =
+            (limit.saturating_mul(COMFORTABLE_FIT_PERCENT) / 100).min(COMFORTABLE_FIT_CAP);
+        let protected = session_message_start
+            .saturating_add(turn_start_session_index)
+            .min(request.messages.len());
+        let people_before_turn = request.messages[..protected]
+            .iter()
+            .filter(|message| message.role == MessageRole::User)
+            .count();
 
-        // A long tool loop can outgrow a small context even with stale output
-        // masked; mask harder before compressing, which cannot touch this
-        // turn's own messages.
         if let Some(masking) = &self.stale_tool_results {
-            if pipeline.needs_compression(&request.messages, fixed_tokens) {
-                let masked = masking.apply_tight(&mut request.messages);
-                tracing::info!(masked, "Masked tool output tightly to fit the context");
+            let counter = self.counter.as_ref();
+            let original = std::mem::take(&mut request.messages);
+            let shape = |dropped: usize| {
+                let mut messages = original.clone();
+                masking.drop_oldest_rounds(&mut messages, dropped);
+                let masked = masking.apply_by_pressure(&mut messages, counter, comfortable);
+                if masked > 0 {
+                    tracing::debug!(masked, "Masked stale tool output in follow-up request");
+                }
+                if counter.count_messages(&messages) > limit {
+                    let masked = masking.apply_tight(&mut messages);
+                    tracing::info!(masked, "Masked tool output tightly to fit the context");
+                }
+                messages
+            };
+            let dropped = self
+                .dropped_rounds
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let mut messages = shape(dropped);
+            if counter.count_messages(&messages) > limit {
+                let more = masking.rounds_to_drop(&messages, counter, comfortable);
+                if more > 0 {
+                    let dropped = dropped.saturating_add(more);
+                    messages = shape(dropped);
+                    self.dropped_rounds
+                        .store(dropped, std::sync::atomic::Ordering::Relaxed);
+                    tracing::info!(dropped, "Removed earlier tool rounds to fit the context");
+                }
             }
-            if pipeline.needs_compression(&request.messages, fixed_tokens) {
-                let dropped = masking.drop_stale_rounds(&mut request.messages, 2);
-                tracing::info!(dropped, "Removed earlier tool rounds to fit the context");
-            }
+            request.messages = messages;
         }
-        // Check if compression is needed (stages 1-2 only, pure computation)
-        if pipeline.needs_compression(&request.messages, fixed_tokens) {
+
+        // Last resort (stages 1-2 only, pure computation). Leaving rounds out
+        // keeps every person's message, so the turn's User message is found
+        // again by its position among them.
+        if self.counter.count_messages(&request.messages) > limit {
             tracing::info!(
                 tokens = self
                     .counter
                     .count_messages(&request.messages)
-                    .saturating_add(fixed_tokens),
+                    .saturating_add(tool_tokens),
+                budget,
                 "Context compression triggered (session follow-up)"
             );
+            let protected_suffix_start = request
+                .messages
+                .iter()
+                .enumerate()
+                .filter(|(_, message)| message.role == MessageRole::User)
+                .nth(people_before_turn)
+                .map_or(request.messages.len(), |(index, _)| index);
+            let pipeline = axocoatl_token::CompressionPipeline::new(
+                self.counter.clone(),
+                capabilities.max_context_tokens,
+            );
             request.messages = pipeline
-                .compress_sync(
+                .compress_sync_to(
                     request.messages,
-                    axocoatl_token::CompressionGuard::new(
-                        session_message_start.saturating_add(turn_start_session_index),
-                        fixed_tokens,
-                    ),
+                    axocoatl_token::CompressionGuard::new(protected_suffix_start, tool_tokens),
+                    budget,
                 )
                 .map_err(Self::compression_error)?
                 .messages;
@@ -2756,7 +3022,11 @@ impl AgentBehavior for DefaultAgentBehavior {
                 self.session.replace_last_user_content(&message.content, tokens);
             }
         }
-        let (mut request, provider_tool_names) = Self::encode_provider_request(request)?;
+        let (mut request, provider_tool_names) = if self.active_run_cancelled {
+            Self::encode_provider_request(request)?
+        } else {
+            self.prepare_provider_request(request)?
+        };
         if !self.active_run_cancelled {
             self.ensure_request_fits_context(&request)?;
         }
@@ -2770,6 +3040,7 @@ impl AgentBehavior for DefaultAgentBehavior {
         if !self.cancellation_requested() {
             self.ensure_request_fits_context(&request)?;
         }
+        let prompt_estimate = self.prompt_estimate(&request);
         let StreamChatResult {
             mut response,
             cancelled: provider_cancelled,
@@ -2780,6 +3051,8 @@ impl AgentBehavior for DefaultAgentBehavior {
         } = self.stream_chat(request, provider_tool_names).await?;
         if provider_cancelled {
             self.active_run_cancelled = true;
+        } else {
+            self.observe_prompt_scale(prompt_estimate, response.usage.input_tokens, usage_complete);
         }
         // Some providers' streams omit a final Usage event — fall back to a
         // local estimate so token accounting stays correct.
@@ -3368,16 +3641,23 @@ impl AgentBehavior for DefaultAgentBehavior {
                     0,
                 )?;
                 let (mut followup, provider_tool_names) =
-                    Self::encode_provider_request(followup)?;
+                    self.prepare_provider_request(followup)?;
                 self.ensure_request_fits_context(&followup)?;
                 let est = self.preflight_provider_spend(&mut followup)?;
                 self.ensure_request_fits_context(&followup)?;
+                let prompt_estimate = self.prompt_estimate(&followup);
                 let streamed = self.stream_chat(followup, provider_tool_names).await?;
                 let provider_cancelled = streamed.cancelled;
                 let usage_complete = streamed.usage_complete;
                 let usage_estimate_allowed = streamed.usage_estimate_allowed;
                 if provider_cancelled {
                     self.active_run_cancelled = true;
+                } else {
+                    self.observe_prompt_scale(
+                        prompt_estimate,
+                        streamed.response.usage.input_tokens,
+                        usage_complete,
+                    );
                 }
                 response = streamed.response;
                 if usage_estimate_allowed && response.usage.total() == 0
@@ -3447,12 +3727,15 @@ impl AgentBehavior for DefaultAgentBehavior {
             input.system_override.as_deref(), input.model_override.clone(),
             turn_start_session_index, 0,
         )?;
-        let (mut followup, provider_tool_names) = Self::encode_provider_request(followup)?;
+        let (mut followup, provider_tool_names) = self.prepare_provider_request(followup)?;
         self.ensure_request_fits_context(&followup)?;
         let est = self.preflight_provider_spend(&mut followup)?;
+        let prompt_estimate = self.prompt_estimate(&followup);
         let streamed = self.stream_chat(followup, provider_tool_names).await?;
         let provider_cancelled = streamed.cancelled;
-        if provider_cancelled { self.active_run_cancelled = true; }
+        if provider_cancelled { self.active_run_cancelled = true; } else {
+            self.observe_prompt_scale(prompt_estimate, streamed.response.usage.input_tokens, streamed.usage_complete);
+        }
         response = streamed.response;
         if streamed.usage_estimate_allowed && response.usage.total() == 0
             && (!provider_cancelled || !response.content.is_empty()) {
@@ -3716,7 +3999,7 @@ impl AgentBehavior for DefaultAgentBehavior {
         let mut response = match self.provider.chat(request).await {
             Ok(response) => response,
             Err(error) => {
-                let provider_error = AgentError::Provider(error.to_string());
+                let provider_error = AgentError::from(error);
                 return match self
                     .save_checkpoint_snapshot(self.session.messages().to_vec())
                     .await
@@ -3942,6 +4225,7 @@ mod tests {
     include!("default_behavior_steering_tests.rs");
     include!("default_behavior_checkpoint_tests.rs");
     include!("default_behavior_usage_tests.rs");
+    include!("default_behavior_context_fit_tests.rs");
     use axocoatl_core::{AgentConfig, AgentId, OverflowPolicy, TokenBudget, TokenUsageStats};
     use axocoatl_llm::{
         ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError, StreamEvent,
@@ -4359,12 +4643,17 @@ mod tests {
         assert!(last.iter().any(|message| message
             .text_content()
             .is_some_and(|text| text.contains("earlier tool rounds in this task were removed"))));
+        // The oldest rounds are left out; as many recent ones as fit stay.
+        let kept = last
+            .iter()
+            .filter(|message| message.role == MessageRole::Tool)
+            .count();
+        assert!((2..12).contains(&kept), "{kept} rounds kept");
         assert_eq!(
-            last.iter()
-                .filter(|message| message.role == MessageRole::Tool)
-                .count(),
-            2,
-            "only the latest two rounds remain"
+            last.last()
+                .and_then(|message| message.tool_call_id.as_deref()),
+            Some("call_11"),
+            "the latest round is kept"
         );
         // The session keeps everything.
         assert_eq!(
@@ -7084,9 +7373,17 @@ mod tests {
         assert!(encoded_required > canonical_required);
         let limit = encoded_required - 1;
         assert!(canonical_required <= limit);
+        // The window whose fit limit (the window less its margin) is `limit`.
+        let window = (limit..)
+            .find(|window| window - window.div_ceil(CONTEXT_FIT_MARGIN_DIVISOR) >= limit)
+            .unwrap();
         provider
             .max_context_tokens
-            .store(limit, std::sync::atomic::Ordering::SeqCst);
+            .store(window, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            DefaultAgentBehavior::context_fit_limit(&provider.capabilities()),
+            limit
+        );
 
         let error = behavior.execute(input).await.unwrap_err();
 
