@@ -224,7 +224,8 @@ checks leave the repository unchanged. A failing check leaves the turn needing
 attention, with each check's exit code and output in the turn controls. Above them the
 turn says whether the checks are ready and, if not, why: a check failed, a check
 changed files, some checks ran on an older tree, the checks could not run, or an Agent
-finished after they captured the repository. Fix the cause, select a check and choose
+finished after they captured the repository. The required reviewer only reads, so it
+does not count. Fix the cause, select a check and choose
 **Continue**: every check runs again between fresh captures, because each one must have
 passed on the same tree. Restarting an Agent with **Continue** also runs them all again
 after it finishes.

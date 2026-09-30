@@ -17,6 +17,17 @@ const FINDING: &str = "src/lib.rs:3: the new function has no test";
 /// One lead slot on a team whose Apply names a read-only reviewer for
 /// `max_rounds` rounds.
 async fn review_fixture(max_rounds: u32) -> NativeFixture {
+    review_fixture_with(max_rounds, &[], &[], &["read_file"]).await
+}
+
+/// As [`review_fixture`], with the Apply's required `checks` and each
+/// Agent's tools. A lead with bash pays for the checks.
+async fn review_fixture_with(
+    max_rounds: u32,
+    checks: &[Vec<String>],
+    lead_tools: &[&str],
+    reviewer_tools: &[&str],
+) -> NativeFixture {
     let mut fixture = native_fixture().await;
     let session_id = fixture.request.session_id.clone();
     let token = fixture
@@ -30,18 +41,21 @@ async fn review_fixture(max_rounds: u32) -> NativeFixture {
             let node_id = TurnNodeId::new("lead-node").unwrap();
             let conversation_id = NodeConversationId::new("lead-conversation").unwrap();
             let mut retained = vec![];
+            let owned = |tools: &[&str]| -> Vec<String> {
+                tools.iter().map(|tool| (*tool).to_owned()).collect()
+            };
             for (name, role, tools, writes, id) in [
                 (
                     "lead",
                     AgentRole::Autonomous,
-                    vec![],
+                    owned(lead_tools),
                     None,
                     conversation_id.as_str().to_owned(),
                 ),
                 (
                     "reviewer",
                     AgentRole::Worker,
-                    vec!["read_file".to_owned()],
+                    owned(reviewer_tools),
                     Some(vec![]),
                     "approved-reviewer-fixture".to_owned(),
                 ),
@@ -96,9 +110,10 @@ async fn review_fixture(max_rounds: u32) -> NativeFixture {
                     profile,
                 ));
             }
+            // Paying for checks keeps a pass per round back from the lead.
             let lead_limits = GrantLimits {
                 activations: 4,
-                invocations: 8,
+                invocations: if checks.is_empty() { 8 } else { 20 },
                 tokens: 100000,
                 cost_microunits: 0,
             };
@@ -108,19 +123,22 @@ async fn review_fixture(max_rounds: u32) -> NativeFixture {
                 tokens: 100000,
                 cost_microunits: 0,
             };
+            let mut approval = serde_json::json!({
+                "kind": "authenticated_session_team_apply",
+                "edit": {"command_id": "approve-review", "expected_configuration_revision": 1,
+                    "slots": [], "dependencies": [], "layout": [],
+                    "required_review": {"template_id": "reviewer", "max_rounds": max_rounds,
+                        "limits": review_limits}},
+                "templates": [[slot_id.as_str(), "lead"]],
+                "review": {"template_id": "reviewer", "definition": retained[1].0,
+                    "max_rounds": max_rounds, "limits": review_limits}
+            });
+            if !checks.is_empty() {
+                approval["edit"]["required_checks"] = serde_json::json!(checks);
+            }
             let issuer = content
                 .retain_activation_evidence(ActivationEvidenceContent::Guidance {
-                    text: serde_json::json!({
-                        "kind": "authenticated_session_team_apply",
-                        "edit": {"command_id": "approve-review", "expected_configuration_revision": 1,
-                            "slots": [], "dependencies": [], "layout": [],
-                            "required_review": {"template_id": "reviewer", "max_rounds": max_rounds,
-                                "limits": review_limits}},
-                        "templates": [[slot_id.as_str(), "lead"]],
-                        "review": {"template_id": "reviewer", "definition": retained[1].0,
-                            "max_rounds": max_rounds, "limits": review_limits}
-                    })
-                    .to_string(),
+                    text: approval.to_string(),
                 })
                 .unwrap()
                 .reference()
@@ -386,6 +404,18 @@ struct Run {
 }
 
 async fn run_turn(fixture: &NativeFixture, scenario: Arc<Scenario>) -> Run {
+    run_turn_within(fixture, scenario, Duration::from_secs(10))
+        .await
+        .unwrap()
+}
+
+/// Begin the turn and drive it to its first outcome within `limit`, or say
+/// why it did not get there.
+async fn run_turn_within(
+    fixture: &NativeFixture,
+    scenario: Arc<Scenario>,
+    limit: Duration,
+) -> std::result::Result<Run, String> {
     let (controller, repository) = begin(fixture, &fixture.request);
     let retained = repository.clone();
     let bus = crate::stream::StreamBus::new(64);
@@ -405,17 +435,17 @@ async fn run_turn(fixture: &NativeFixture, scenario: Arc<Scenario>) -> Run {
     .unwrap() else {
         panic!("owned native driver")
     };
-    let outcome = tokio::time::timeout(Duration::from_secs(10), prepared.run())
+    let outcome = tokio::time::timeout(limit, prepared.run())
         .await
-        .unwrap()
-        .unwrap();
-    Run {
+        .map_err(|_| format!("the turn did not settle within {limit:?}"))?
+        .map_err(|failure| failure.to_string())?;
+    Ok(Run {
         controller,
         factory,
         repository: retained,
         bus,
         outcome,
-    }
+    })
 }
 
 /// Continue the paused turn of `run`, restarting `restart` and running
@@ -844,4 +874,95 @@ async fn a_reviewer_left_blocked_by_a_continue_still_reviews_the_result() {
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].0.outcome, ConditionOutcome::Passed);
     assert_eq!(observations[0].0.activations[0].generation, 2);
+}
+
+/// Required checks and a required review together, on the actual supervised
+/// sandbox, with a reviewer that has bash and so captures the tree it reads.
+/// The host runs the checks on the lead's result and then the reviewer. The
+/// reviewer is read-only, so its acceptance leaves the checks' readiness
+/// current, and its verdict is recorded from its answer about the exact tree
+/// the checks passed on. An approval completes the turn. A request for
+/// changes sends the findings to the lead, the checks run again on its new
+/// result, and the second round's approval completes the turn.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_required_checks_and_review_complete_the_turn() {
+    use super::super::activation_tests::{actual_sandbox, git_init};
+    let ready = ConditionId::new("required-check:ready").unwrap();
+    for changes_first in [false, true] {
+        let checks = vec![vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "test -f notes.txt".to_owned(),
+        ]];
+        let mut fixture = review_fixture_with(2, &checks, &["bash"], &["read_file", "bash"]).await;
+        let sandbox = actual_sandbox(&mut fixture.repository).await;
+        git_init(fixture.repository._workspace.path());
+        std::fs::write(
+            fixture.repository._workspace.path().join("notes.txt"),
+            "draft\n",
+        )
+        .unwrap();
+        let changes = format!("VERDICT: CHANGES\n{FINDING}");
+        let verdicts: &[&str] = if changes_first {
+            &[&changes, "VERDICT: APPROVE"]
+        } else {
+            &["VERDICT: APPROVE\nNothing must change."]
+        };
+        let scenario = Scenario::new(verdicts);
+        let run = run_turn_within(&fixture, scenario.clone(), Duration::from_secs(300)).await;
+        sandbox.stop_checked().await.unwrap();
+
+        let run = run.unwrap();
+        let contract = run.outcome.snapshot.contract();
+        let view = run.controller.control_plane().unwrap();
+        let readiness = view.required_check_readiness.clone().unwrap();
+        let review = view.required_review.clone().unwrap();
+        assert_eq!(
+            contract.state(),
+            Some(LogicalTurnState::Completed),
+            "changes first: {changes_first}; readiness: {readiness:?}; review: {review:?}"
+        );
+        assert!(run.outcome.finalized.is_some());
+        // The checks' readiness is still current after the reviewer finished.
+        assert!(contract.condition_satisfied(&ready));
+        assert_eq!(readiness.state, "passed", "{readiness:?}");
+        let candidate = readiness.candidate_sha256.clone().unwrap();
+        let rounds = if changes_first { 2 } else { 1 };
+        // A pass of both captures and the check per round.
+        assert_eq!(contract.condition_runs().len(), 3 * rounds);
+        assert_eq!(
+            scenario.lead_generations(),
+            (1..=rounds as u32).collect::<Vec<_>>()
+        );
+        let requests = scenario.reviewer_requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), rounds);
+        let (_, prompt) = requests.last().unwrap();
+        assert!(
+            prompt.contains(&format!("Repository tree reviewed: {candidate}")),
+            "the reviewer is shown the tree the checks passed on: {prompt}"
+        );
+        let observations = review_observations(&run);
+        assert_eq!(observations.len(), rounds);
+        if changes_first {
+            let (first, proof) = &observations[0];
+            assert_eq!(first.outcome, ConditionOutcome::Failed);
+            assert_eq!(proof["verdict"], "changes");
+            assert_eq!(proof["continued"], true);
+            assert!(scenario.lead_requests.lock().unwrap()[1]
+                .1
+                .contains(FINDING));
+        }
+        let (last, proof) = observations.last().unwrap();
+        assert_eq!(last.outcome, ConditionOutcome::Passed, "{proof}");
+        assert_eq!(proof["verdict"], "approve");
+        assert_eq!(proof["round"], rounds);
+        // The reviewer's own capture saw the tree it was shown.
+        assert_eq!(proof["candidate_sha256"], candidate.as_str());
+        assert_eq!(proof["reviewed_sha256"], candidate.as_str());
+        assert_eq!(review.state, "approved");
+        assert_eq!(review.verdict, Some(ReviewVerdict::Approve));
+        assert_eq!(review.round, Some(rounds as u32));
+        assert!(review.current);
+    }
 }

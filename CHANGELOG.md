@@ -116,9 +116,9 @@ model-facing `coordination_control` tool, the external harness adapter and the
   Continue does not offer to rerun them. The turn's controls show each check's command,
   state, exit code and output, and above them whether the checks passed together on the
   current tree and, if not, why. Continue on any check, or on restarted work, runs every
-  check again between fresh captures; an Agent that finishes after the checks captured
-  the repository makes them not ready. A check whose record cannot be read shows as
-  unavailable instead of hiding the turn.
+  check again between fresh captures; an Agent other than the read-only required
+  reviewer that finishes after the checks captured the repository makes them not ready.
+  A check whose record cannot be read shows as unavailable instead of hiding the turn.
   Team & budget shows each check's arguments as a shell reads them and keeps a check's
   exact argument list unless you change its line. Required checks do not run on
   Explore several ways attempts, and Team & budget and Explore several ways say so.
