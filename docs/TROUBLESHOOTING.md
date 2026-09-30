@@ -116,12 +116,12 @@ absolute provider billing cap.
 Expected: `abort` policy terminates the agent. Restart it
 (`axocoatl agents restart <id>`) or use `warn`.
 
-**A Lattice team does not activate the expected Agent**
-Open the turn's **Coordination** card and inspect the Agent's named dependencies.
-Every direct parent must complete; a failed parent leaves the dependent visibly
-blocked. Ensure the Agent declares `depends_on: [<upstream>]`, both Agents belong
-to the selected team, and the base dependency graph has no cycle. Entry Agents
-must have `depends_on: []`.
+**A multi-Agent turn is refused on a 1.0 data root**
+Expected. A data root that still uses the 1.0 format runs one Agent per Session
+turn; single-Agent Sessions and a request targeted at one Agent keep working. To
+run a team, stop Axocoatl, make a cold backup, and run
+`axocoatl session upgrade --confirm`. The upgrade converts 1.0 Sessions,
+including multi-Agent Sessions, to native Sessions.
 
 **Workflow times out (300s)**
 A slow/unreachable provider, or an agent never completing. Check the daemon

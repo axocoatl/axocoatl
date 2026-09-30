@@ -706,60 +706,27 @@ and streams that sometimes end early.
 Native Sessions retain their approved whole-team revision and immutable definitions before
 Begin. Their common controller activates exact dependencies, records every generation, and
 admits Coordinator-created Worker instances from explicitly approved reusable templates. Each
-instance has a distinct conversation and authority allocation. The following describes the
-retained legacy configuration-driven coordination path.
+instance has a distinct conversation and authority allocation. The versioned
+`GET /api/sessions/{id}/turns/{turn_id}/control-plane` projection binds reads of that graph
+to the exact Session and turn. It distinguishes unknown, missing, unavailable, and unrecorded
+evidence; current Agent settings do not substitute for an absent historical definition.
 
-A Session retains either a selected legacy `workflows:` ID for `Lattice` mode or
-selected Agent IDs for `Custom` mode. At each all-team request that resolves to more
-than one autonomous Agent, the daemon resolves that selection against current Agent
-configuration and snapshots the validated membership and dependency graph into the
-turn. A Coordinator-led team remains a separate hierarchical direct execution and
-does not receive a synthetic peer graph. Configuration changes therefore affect
-future turns, never a retained turn map. Removing or renaming a referenced Agent or
-team does not quarantine the Session or hide its History; a genuinely new turn is
-rejected before durable Begin and tells the operator to restore the reference or
-create a new Session with an available selection. Roots activate from the accepted user request;
-an Agent with `depends_on` activates only after one distinct completion signal from
-every named parent in that Session graph. A downstream Agent receives the original
-request plus only the direct-parent contributions that caused its activation.
-Unrelated branches remain runnable after one branch fails, while descendants whose
-all-of predicate can no longer be satisfied become explicitly blocked.
+A Session on a 1.0-format data root retains either a selected legacy `workflows:` ID for
+`Lattice` mode or selected Agent IDs for `Custom` mode and resolves that selection against
+current Agent configuration at each all-team request. Legacy execution runs one Agent per
+turn: a single-Agent Session, a request targeted at one Agent, a one-Agent team, and a
+Coordinator-led team (which runs only its Coordinator) execute directly. A request that
+resolves to two or more Agents is refused before durable Begin; the error tells the operator
+to stop Axocoatl, make a cold backup, and run `axocoatl session upgrade --confirm`, which
+converts 1.0 Sessions, including multi-Agent Sessions, to native Sessions. Removing or
+renaming a referenced Agent or team does not quarantine the Session or hide its History; a
+genuinely new turn is rejected before durable Begin and tells the operator to restore the
+reference or create a new Session with an available selection. Retained legacy History still
+loads and renders each Agent's recorded output. The control-plane projection also reads
+legacy turns, and legacy activation identities confer no per-Agent command authority.
 
-Agents share the Session checkout, so ready nodes execute serially in deterministic
-graph order. That is a repository-safety boundary, not a claim that the graph lacks
-parallelism in principle. The internal `coordination_signal` tool is advertised only while
-the exact downstream activation is active, has not spent its one revision request, and has
-at least one eligible upstream target. Its request-local JSON Schema enumerates those exact
-Agent IDs, and the activation prompt names the same set without adding transitive ancestor
-outputs. Advertisement is not authority: execution rechecks the active lease, unspent
-allowance, and eligible target, so a stale or fabricated call fails. The
-target and every completed downstream result derived from it reactivate in dependency
-order, and the requester runs again against
-the newest direct-parent evidence; every Agent is capped at two activations for the
-turn. Targeting one Agent directly, a one-Agent team, and a coordinator-led workflow
-remain direct executions rather than fake coordination graphs.
-
-The immutable graph snapshot, causal signals, activation generations, completion,
-failure, blocked or stopped states, output disposition, summaries, and usage are appended to the
-canonical Session turn ledger before their matching `coordination` WebSocket frame
-is published. An applied revision is one atomic ledger batch: the requester's
-`changes_requested` output, the signal with that requesting activation's usage and
-completeness, every affected output supersession, and every reactivation append together or
-not at all; live frames publish only after that batch is durable.
-Conversation folds that evidence into an inline Coordination card,
-and the existing Agent graph shows the same node states. Reload reconstructs both
-from History. The graph runs in View mode, with a selected-activation inspector for
-retained input, output, partial output, usage, and causal evidence. The versioned
-`GET /api/sessions/{id}/turns/{turn_id}/control-plane` projection binds those reads
-to the exact Session and turn, including ordinary and directly targeted history.
-It distinguishes unknown, missing, unavailable, and unrecorded evidence; current
-Agent settings do not substitute for an absent historical definition. Legacy
-activation identities confer no per-Agent command authority.
-This is bounded foreground Session work, not a background
-config-owned workflow runner.
-
-Every Lattice or Custom Session turn uses a two-phase checkpoint cache boundary, including a
-targeted, one-Agent, or Coordinator-led turn that deliberately bypasses the graph. A SingleAgent
+Every legacy Lattice or Custom Session turn, whether targeted, one-Agent, or Coordinator-led,
+uses a two-phase checkpoint cache boundary. A SingleAgent
 Session also uses this boundary when its selected Agent is a Coordinator; ordinary autonomous
 SingleAgent Sessions retain their existing canonical-ledger checkpoint repair. A Completed
 ordinary turn may keep its live actor for conversation continuity. After Failed, Cancelled, or
@@ -799,26 +766,6 @@ mutation is disabled for the whole turn: no semantic auto-store, daily-log archi
 personal/shared core edit, or core consolidation is promoted, including after Completed. This
 fail-closed limit remains until those stores gain generation-aware transactional deltas.
 
-The durable fold uses one explicit protocol: `coordination_planned`,
-`coordination_agent_activated`, `coordination_signal`,
-`agent_output_superseded`, `coordination_agent_reactivated`,
-`coordination_agent_completed`, `coordination_agent_failed`,
-`coordination_agent_blocked`, `coordination_agent_cancelled`,
-`coordination_recovery_partial`, then
-`coordination_completed`. `agent_output_superseded` is also a recognized ledger
-operation: it marks the exact earlier Agent generation stale while retaining its
-output as evidence. HTTP turn JSON flattens `RecordTurnExecution` beside its
-operation ID and timestamp; the live frame nests the same execution body under
-`event` and repeats the durable identity in its envelope.
-
-If the daemon restarts during coordinated work, ledger recovery records
-`coordination_agent_cancelled` for every node still waiting or running before it
-terminalizes the turn as Interrupted. A pending reactivation does not pretend
-its next generation started. Any retained turn-wide stream is preserved through
-`coordination_recovery_partial` as explicitly unattributed evidence because
-tool-loop and multi-Agent boundaries cannot be reconstructed safely from text
-lengths after a process death.
-
 `EventFeed` (`axocoatl_core::event_feed`) is the process-wide event feed. The
 daemon publishes one kind of event on it: firing a Skill (the fire route or an
 Agent's `skill_<id>` tool) publishes one `Custom` event per name in the Skill's
@@ -830,8 +777,7 @@ with a startup warning. The Session scheduler is deliberately turn-scoped and
 predicate-based.
 
 The per-Agent `activation_threshold` / `activation_decay` keys were removed in 1.1.0 with
-the process-wide threshold counter; the daemon warns when a config still sets them. `TurnCoordinationScheduler`
-orders one turn's Agents by exact named dependencies and has no thresholds or decay.
+the process-wide threshold counter; the daemon warns when a config still sets them.
 
 The remaining reads of legacy `workflows:` are intentional: Lattice-session
 membership, coordinator worker selection, validation, and first-boot
@@ -935,8 +881,8 @@ use `SessionExecutionStore` for canonical history and `ActivationStateStore` for
 input, candidate checkpoints, and accepted-generation promotion. Their actor construction
 in `session_dispatch_run.rs` does not attach daily-log, core-memory, or semantic-memory
 stores, so the Tier 2–4 recall and core-edit capabilities below are not available on that
-path. Legacy coordinated turns may read their attached stores but cannot make speculative
-Tier 2–4 writes or run consolidation.
+path. Legacy Lattice, Custom, and Coordinator turns may read their attached stores but
+cannot make Tier 2–4 writes or run consolidation during the turn.
 
 | Tier | What | Persistence |
 |---|---|---|

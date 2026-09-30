@@ -46,7 +46,6 @@ impl NativeWayExecution {
             error,
             token_usage: usage.usage.clone(),
             token_usage_known: usage.complete,
-            coordinated_partial_output: None,
         };
         let result = match outcome {
             Ok(settled) if settled.accepted => Ok(axocoatl_actor::MeasuredAgentRunOutcome {

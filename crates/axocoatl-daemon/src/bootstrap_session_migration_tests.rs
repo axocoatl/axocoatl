@@ -239,6 +239,119 @@ async fn real_host_conversion_reconciles_staged_roles_seals_history_and_reopens_
     );
 }
 
+/// A 1.0 multi-Agent Session ran its Agents one after another and recorded
+/// each Agent's ordinary output. Those turns are refused on a 1.0 root now,
+/// and `axocoatl session upgrade --confirm` is how the Session keeps working:
+/// every Agent keeps its own completed answer and the request it received.
+#[tokio::test]
+async fn multi_agent_legacy_session_upgrades_each_agent_output() {
+    let root = tempfile::tempdir().unwrap();
+    let data = SecureDir::open(root.path()).unwrap();
+    let lease = DataDirLease::acquire(&data).unwrap();
+    let source =
+        CheckpointStore::new_in_secure(&data, "checkpoints", CheckpointPolicy::Manual).unwrap();
+    let mut ledger = SessionTurnStore::open_in_secure(&data, "session-history").unwrap();
+    let session = "team";
+    let turn = "turn-team";
+    ledger
+        .begin(BeginSessionTurn {
+            turn_id: Some(turn.to_owned()),
+            session_id: session.to_owned(),
+            user_input: "request turn-team".to_owned(),
+            agent_id: None,
+            model: None,
+            context: vec![],
+            idempotency_key: None,
+            metadata: serde_json::json!({"mode": "custom"})
+                .as_object()
+                .cloned()
+                .unwrap(),
+        })
+        .unwrap();
+    for agent in ["coder", "reviewer"] {
+        ledger
+            .record_agent_output(
+                turn,
+                format!("{turn}:{agent}:output"),
+                agent,
+                None,
+                format!("{agent} own completed answer"),
+                None,
+            )
+            .unwrap();
+        source
+            .save(&checkpoint(&format!("{session}:{agent}"), 1, true))
+            .await
+            .unwrap();
+    }
+    ledger
+        .transition(
+            turn,
+            format!("{turn}:terminal"),
+            TransitionSessionTurn {
+                status: SessionTurnLifecycle::Completed,
+                final_output: Some("aggregate output".to_owned()),
+                error: None,
+                metadata: serde_json::Map::new(),
+            },
+        )
+        .unwrap();
+    drop(ledger);
+    let specs = vec![LegacySessionMigration {
+        session_id: session.to_owned(),
+        workspace_id: "workspace".to_owned(),
+        actors: ["coder", "reviewer"]
+            .into_iter()
+            .map(|agent| LegacyActorMigration {
+                checkpoint_agent_id: format!("{session}:{agent}"),
+                recorded_agent_id: agent.to_owned(),
+                policy: LegacyActorProjectionPolicy::CompletedPerAgent,
+                tool_replay_policy: ToolReplayPolicy::CompleteNativeGroups,
+            })
+            .collect(),
+    }];
+    let actors = AgentRegistry::new();
+    let active = Mutex::new(HashMap::new());
+    let ownership = lease.ownership.into_upgraded().unwrap();
+    let migrated = migrate_held_session_state(
+        ownership,
+        &data,
+        &source,
+        &actors,
+        &active,
+        &specs,
+        &str::len,
+    )
+    .await
+    .unwrap();
+    assert_eq!(migrated.len(), 1);
+    let result = &migrated[0];
+    assert_eq!(
+        result
+            .content
+            .read_legacy_history(&result.seal)
+            .unwrap()
+            .turns
+            .len(),
+        1
+    );
+    let assignments = deterministic_assignments(&specs[0]).unwrap();
+    assert_eq!(assignments.len(), 2);
+    for assignment in &assignments {
+        let baseline = result
+            .activation_state
+            .committed_reference(&assignment.conversation_id)
+            .unwrap()
+            .unwrap();
+        let checkpoint = result.activation_state.checkpoint(&baseline).unwrap();
+        assert_eq!(checkpoint.session_messages[0].content, "request turn-team");
+        assert_eq!(
+            checkpoint.session_messages[1].content,
+            format!("{} own completed answer", assignment.recorded_agent_id)
+        );
+    }
+}
+
 struct NoopBehavior;
 #[async_trait::async_trait]
 impl AgentBehavior for NoopBehavior {

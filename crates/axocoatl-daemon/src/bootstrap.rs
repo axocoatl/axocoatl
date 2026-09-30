@@ -55,10 +55,6 @@ use axocoatl_actor::{
     CoordinatorBehavior, DefaultAgentBehavior, WorkerConfig,
 };
 use axocoatl_config::{AgentRoleYaml, AxocoatlConfig};
-use axocoatl_coordination::{
-    TurnAgentGraph, TurnAgentNode, TurnAgentState, TurnCoordinationEventKind,
-    TurnCoordinationScheduler, TurnSignalKind,
-};
 use axocoatl_core::event_feed::{EventFeed, FeedEvent};
 use axocoatl_core::{AgentId, AgentRole, SecureDir, SecureEntryType, SecureLeaf};
 use axocoatl_isolation::session_sandbox::{ExecResult, Sandbox, SessionSandbox};
@@ -80,10 +76,9 @@ use axocoatl_session::{
     RecordTurnExecution, Session, SessionAttachmentRef, SessionAttachmentStore,
     SessionEnvironmentState, SessionMode, SessionRuntimeCreationAttempt, SessionRuntimeIdentity,
     SessionRuntimeRecoveryRecord, SessionSetupResult, SessionStore, SessionTranscriptMessage,
-    SessionTranscriptRole, SessionTurn, SessionTurnAgentOutputDisposition,
-    SessionTurnAgentOutputIdentity, SessionTurnAtomicMutation, SessionTurnAtomicOperation,
-    SessionTurnContextReference, SessionTurnLifecycle, SessionTurnSearchHit, SessionTurnStore,
-    TransitionSessionTurn, TurnContextScope, Workspace, WorkspaceStore,
+    SessionTranscriptRole, SessionTurn, SessionTurnContextReference, SessionTurnLifecycle,
+    SessionTurnSearchHit, SessionTurnStore, TransitionSessionTurn, TurnContextScope, Workspace,
+    WorkspaceStore,
 };
 use axocoatl_token::{ApproximateCounter, TokenCounter};
 use axocoatl_tools::ToolExecutor;
@@ -1771,10 +1766,6 @@ struct StreamAgentRunOptions {
     turn_id: Option<String>,
     partial_ledger: Option<Arc<tokio::sync::Mutex<SessionTurnStore>>>,
     stream_commit_gate: Option<Arc<tokio::sync::Mutex<()>>>,
-    /// Distinguishes repeated activations of one logical Agent inside a
-    /// coordinated turn. Provider-local call ids and text sequence numbers may
-    /// restart at each activation and therefore cannot identify ledger writes.
-    coordination_generation: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -2101,11 +2092,6 @@ struct SessionRunFailure {
     error: DaemonError,
     token_usage: axocoatl_core::TokenUsageStats,
     token_usage_known: bool,
-    /// Text chunks that crossed the same persistence boundary as their live
-    /// frames before this activation failed. Coordinated callers use this to
-    /// give a failed Agent an exact durable output identity instead of leaving
-    /// its text as an unattributed aggregate turn tail.
-    coordinated_partial_output: Option<String>,
 }
 
 impl SessionRunFailure {
@@ -2114,7 +2100,6 @@ impl SessionRunFailure {
             error,
             token_usage: Default::default(),
             token_usage_known: true,
-            coordinated_partial_output: None,
         }
     }
 
@@ -2124,7 +2109,6 @@ impl SessionRunFailure {
             error: DaemonError::AgentSpawn(error.message),
             token_usage: token_usage.usage,
             token_usage_known: token_usage.complete,
-            coordinated_partial_output: None,
         }
     }
 
@@ -2149,7 +2133,6 @@ impl SessionRunFailure {
             error,
             token_usage: outcome.output().token_usage.clone(),
             token_usage_known,
-            coordinated_partial_output: None,
         }
     }
 }
@@ -2291,323 +2274,40 @@ fn require_session_agent_result(
     Ok(())
 }
 
-fn bounded_coordination_summary(value: &str, max_chars: usize) -> String {
-    let mut summary = value.chars().take(max_chars).collect::<String>();
-    if value.chars().count() > max_chars {
-        summary.push('…');
-    }
-    summary
+/// Coordinated multi-Agent turns run only on upgraded Session storage. A
+/// 1.0-format data root keeps running single-Agent turns.
+fn legacy_multi_agent_turn_refusal(agents: usize) -> DaemonError {
+    DaemonError::Session(format!(
+        "this Session would run {agents} Agents in one turn, which needs upgraded Session storage; stop Axocoatl, make a cold backup, then run `axocoatl session upgrade --confirm`. Single-Agent turns keep working without the upgrade"
+    ))
 }
 
-fn coordination_usage_value(
-    usage: &axocoatl_core::TokenUsageStats,
-    known: bool,
-) -> serde_json::Value {
-    serde_json::json!({
-        "input_tokens": usage.input_tokens,
-        "output_tokens": usage.output_tokens,
-        "reasoning_tokens": usage.reasoning_tokens,
-        "total_tokens": usage.total(),
-        "known": known,
-    })
-}
-
-fn coordinated_agent_graph(
-    agents: &[String],
+/// Refuse a new multi-Agent turn on a 1.0-format root before it is accepted.
+/// A turn aimed at one Agent of the Session still runs.
+fn refuse_legacy_multi_agent_turn(
     config: &AxocoatlConfig,
-) -> Result<TurnAgentGraph, DaemonError> {
-    let members = agents.iter().map(String::as_str).collect::<HashSet<_>>();
-    let nodes = agents
-        .iter()
-        .map(|agent_id| {
-            let configured = config
-                .agents
-                .iter()
-                .find(|agent| agent.id == *agent_id)
-                .ok_or_else(|| {
-                    DaemonError::Session(format!(
-                        "coordination Agent '{agent_id}' is not configured"
-                    ))
-                })?;
-            if !matches!(configured.role, AgentRoleYaml::Autonomous) {
-                return Err(DaemonError::Session(format!(
-                    "agent '{agent_id}' is not autonomous; a Session coordination graph may contain autonomous Agents only"
-                )));
+    mode: &SessionMode,
+    target_agent: Option<&str>,
+) -> Result<(), DaemonError> {
+    if target_agent.is_some() {
+        return Ok(());
+    }
+    let agents = match mode {
+        SessionMode::SingleAgent { .. } => 1,
+        SessionMode::Custom { agents } => agents.len(),
+        SessionMode::Lattice { workflow_id } => {
+            let workflow = match workflow_id.as_deref() {
+                Some(id) => config.workflows.iter().find(|workflow| workflow.id == id),
+                None => config.workflows.first(),
+            };
+            match workflow {
+                Some(workflow) => AxocoatlDaemon::session_workflow_agents(config, workflow)?.len(),
+                None => return Ok(()),
             }
-            if let Some(missing) = configured
-                .depends_on
-                .iter()
-                .find(|dependency| !members.contains(dependency.as_str()))
-            {
-                return Err(DaemonError::Session(format!(
-                    "coordination Agent '{agent_id}' depends on '{missing}', which is not selected in this Session"
-                )));
-            }
-            Ok(TurnAgentNode::new(
-                agent_id,
-                configured.depends_on.iter().cloned(),
-            ))
-        })
-        .collect::<Result<Vec<_>, DaemonError>>()?;
-    TurnAgentGraph::new(nodes).map_err(|error| {
-        DaemonError::Session(format!("invalid Session coordination graph: {error}"))
-    })
-}
-
-fn coordinated_graph_sinks(graph: &TurnAgentGraph) -> Vec<String> {
-    graph
-        .nodes()
-        .iter()
-        .filter(|candidate| {
-            !graph
-                .nodes()
-                .iter()
-                .any(|node| node.depends_on.iter().any(|parent| parent == &candidate.id))
-        })
-        .map(|node| node.id.clone())
-        .collect()
-}
-
-fn coordinated_revision_targets(
-    graph: &TurnAgentGraph,
-    scheduler: &TurnCoordinationScheduler,
-    agent_id: &str,
-    generation: u32,
-) -> Vec<String> {
-    if generation >= scheduler.max_activations_per_agent() {
-        return Vec::new();
-    }
-    graph
-        .nodes()
-        .iter()
-        .filter(|candidate| graph.is_ancestor(&candidate.id, agent_id))
-        .filter(|candidate| {
-            graph
-                .nodes()
-                .iter()
-                .filter(|affected| {
-                    affected.id == candidate.id
-                        || affected.id == agent_id
-                        || (graph.is_ancestor(&candidate.id, &affected.id)
-                            && scheduler.state(&affected.id).is_ok_and(|state| {
-                                matches!(state, TurnAgentState::Completed | TurnAgentState::Running)
-                            }))
-                })
-                .all(|affected| {
-                    scheduler.activation_count(&affected.id).unwrap_or_default()
-                        < scheduler.max_activations_per_agent()
-                })
-        })
-        .map(|candidate| candidate.id.clone())
-        .collect()
-}
-
-fn coordinated_activation_input(
-    original: &str,
-    activation: &axocoatl_coordination::TurnActivation,
-    output_by_signal: &HashMap<String, axocoatl_core::AgentOutput>,
-    eligible_revision_targets: &[String],
-) -> Result<String, DaemonError> {
-    let handoffs = activation
-        .inputs
-        .iter()
-        .filter(|signal| signal.kind == TurnSignalKind::Completed)
-        .map(|signal| {
-            output_by_signal
-                .get(&signal.id)
-                .map(|output| {
-                    format!(
-                        "### {} (generation {})\n{}",
-                        signal.source, signal.generation, output.content
-                    )
-                })
-                .ok_or_else(|| {
-                    DaemonError::Session(format!(
-                        "coordination input '{}' from Agent '{}' has no retained generation output",
-                        signal.id, signal.source
-                    ))
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let feedback = activation
-        .inputs
-        .iter()
-        .filter(|signal| signal.kind == TurnSignalKind::ChangesRequested)
-        .map(|signal| {
-            if signal.target.as_deref() == Some(activation.agent_id.as_str()) {
-                format!(
-                    "### Revise for {} (signal {}, requested by {}, generation {})\n{}",
-                    activation.agent_id,
-                    signal.id,
-                    signal.source,
-                    signal.generation,
-                    signal.summary
-                )
-            } else if signal.source == activation.agent_id {
-                format!(
-                    "### Verify requested revision (signal {}, target {}, generation {})\n{}",
-                    signal.id,
-                    signal.target.as_deref().unwrap_or("unknown"),
-                    signal.generation,
-                    signal.summary
-                )
-            } else {
-                format!(
-                    "### Coordination feedback (signal {}, from {}, to {}, generation {})\n{}",
-                    signal.id,
-                    signal.source,
-                    signal.target.as_deref().unwrap_or("unknown"),
-                    signal.generation,
-                    signal.summary
-                )
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut content = original.to_string();
-    if !handoffs.is_empty() {
-        content.push_str("\n\n## Direct coordination handoffs\n");
-        content.push_str(&handoffs.join("\n\n"));
-    }
-    if !feedback.is_empty() {
-        content.push_str("\n\n## Coordination feedback\n");
-        content.push_str(&feedback.join("\n"));
-    }
-    if !eligible_revision_targets.is_empty() {
-        let target_ids = eligible_revision_targets
-            .iter()
-            .map(|target| format!("`{target}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        content.push_str("\n\n## Coordination control\n");
-        content.push_str(&format!(
-            "For this activation, `coordination_signal` can accept at most one `changes_requested` signal. Set `target_agent` to exactly one of: {target_ids}. Include a concise `summary`. These are eligible ancestor IDs only; transitive outputs are not added unless they appear under Direct coordination handoffs."
-        ));
-    } else {
-        content.push_str("\n\n## Coordination control\n");
-        content.push_str(
-            "No upstream revision is available for this activation. Do not call `coordination_signal`; complete only your configured role and return its result.",
-        );
-    }
-    Ok(content)
-}
-
-fn coordinated_final_output(
-    sinks: &[String],
-    latest_completed: &HashMap<String, (u32, String, axocoatl_core::AgentOutput)>,
-    scheduler: &TurnCoordinationScheduler,
-    usage: axocoatl_core::TokenUsageStats,
-) -> Result<axocoatl_core::AgentOutput, DaemonError> {
-    let sink_outputs = sinks
-        .iter()
-        .map(|sink| {
-            let expected_generation = scheduler.activation_count(sink).unwrap_or_default();
-            latest_completed
-                .get(sink)
-                .filter(|(generation, _, _)| *generation == expected_generation)
-                .map(|(_, _, output)| (sink.clone(), output.clone()))
-                .ok_or_else(|| {
-                    DaemonError::Session(format!(
-                        "coordination sink '{sink}' has no current generation-{expected_generation} output"
-                    ))
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut output = if sink_outputs.len() == 1 {
-        sink_outputs[0].1.clone()
-    } else {
-        axocoatl_core::AgentOutput {
-            content: sink_outputs
-                .iter()
-                .map(|(agent, output)| format!("### {agent}\n{}", output.content))
-                .collect::<Vec<_>>()
-                .join("\n\n"),
-            tool_calls: sink_outputs
-                .iter()
-                .flat_map(|(_, output)| output.tool_calls.iter().cloned())
-                .collect(),
-            token_usage: Default::default(),
         }
     };
-    output.token_usage = usage;
-    Ok(output)
-}
-
-fn coordination_lifecycle_kind(kind: TurnCoordinationEventKind) -> Option<&'static str> {
-    match kind {
-        TurnCoordinationEventKind::AgentStarted => Some("coordination_agent_activated"),
-        TurnCoordinationEventKind::AgentCompleted => Some("coordination_agent_completed"),
-        TurnCoordinationEventKind::AgentFailed => Some("coordination_agent_failed"),
-        TurnCoordinationEventKind::AgentBlocked => Some("coordination_agent_blocked"),
-        TurnCoordinationEventKind::AgentReactivated => Some("coordination_agent_reactivated"),
-        TurnCoordinationEventKind::AgentCancelled => Some("coordination_agent_cancelled"),
-        TurnCoordinationEventKind::ChangesRequested => None,
-    }
-}
-
-fn invalidate_reactivated_outputs(
-    events: &[axocoatl_coordination::TurnCoordinationEvent],
-    latest_completed: &mut HashMap<String, (u32, String, axocoatl_core::AgentOutput)>,
-) -> Result<Vec<(String, u32, u32, String)>, DaemonError> {
-    let mut invalidated = Vec::new();
-    for event in events
-        .iter()
-        .filter(|event| event.kind == TurnCoordinationEventKind::AgentReactivated)
-    {
-        let previous_generation = event.generation.checked_sub(1).ok_or_else(|| {
-            DaemonError::Session(format!(
-                "reactivated Agent '{}' has invalid generation zero",
-                event.agent_id
-            ))
-        })?;
-        if let Some((generation, _, _)) = latest_completed.remove(&event.agent_id) {
-            if generation != previous_generation {
-                return Err(DaemonError::Session(format!(
-                    "reactivated Agent '{}' expected generation {previous_generation}, but its latest output is generation {generation}",
-                    event.agent_id
-                )));
-            }
-        }
-        let cause = event
-            .signal
-            .as_ref()
-            .map(|signal| signal.id.clone())
-            .or_else(|| event.cause_signal_ids.first().cloned())
-            .ok_or_else(|| {
-                DaemonError::Session(format!(
-                    "reactivated Agent '{}' has no causal coordination signal",
-                    event.agent_id
-                ))
-            })?;
-        invalidated.push((
-            event.agent_id.clone(),
-            previous_generation,
-            event.generation,
-            cause,
-        ));
-    }
-    Ok(invalidated)
-}
-
-fn validate_latest_completed_generations(
-    scheduler: &TurnCoordinationScheduler,
-    latest_completed: &HashMap<String, (u32, String, axocoatl_core::AgentOutput)>,
-) -> Result<(), DaemonError> {
-    for (agent_id, (generation, _, _)) in latest_completed {
-        let state = scheduler.state(agent_id).map_err(|error| {
-            DaemonError::Session(format!(
-                "could not validate coordinated output for Agent '{agent_id}': {error}"
-            ))
-        })?;
-        let current_generation = scheduler.activation_count(agent_id).map_err(|error| {
-            DaemonError::Session(format!(
-                "could not validate coordinated generation for Agent '{agent_id}': {error}"
-            ))
-        })?;
-        if state != TurnAgentState::Completed || current_generation != *generation {
-            return Err(DaemonError::Session(format!(
-                "stale coordinated output remained for Agent '{agent_id}' generation {generation}; scheduler is {state:?} at generation {current_generation}"
-            )));
-        }
+    if agents > 1 {
+        return Err(legacy_multi_agent_turn_refusal(agents));
     }
     Ok(())
 }
@@ -3187,9 +2887,6 @@ fn validate_session_mode(config: &AxocoatlConfig, mode: &SessionMode) -> Result<
                     )));
                 }
             }
-            if agents.len() > 1 {
-                coordinated_agent_graph(agents, config)?;
-            }
         }
         SessionMode::Lattice {
             workflow_id: Some(workflow_id),
@@ -3203,10 +2900,7 @@ fn validate_session_mode(config: &AxocoatlConfig, mode: &SessionMode) -> Result<
                         "workflow '{workflow_id}' is not in the current config; restore that team in config or create a new Session with an available team. This Session and its History remain available"
                     ))
                 })?;
-            let roster = AxocoatlDaemon::session_workflow_agents(config, workflow)?;
-            if roster.len() > 1 {
-                coordinated_agent_graph(&roster, config)?;
-            }
+            AxocoatlDaemon::session_workflow_agents(config, workflow)?;
         }
         SessionMode::Lattice { workflow_id: None } => {
             let workflow = config.workflows.first().ok_or_else(|| {
@@ -3215,10 +2909,7 @@ fn validate_session_mode(config: &AxocoatlConfig, mode: &SessionMode) -> Result<
                         .to_string(),
                 )
             })?;
-            let roster = AxocoatlDaemon::session_workflow_agents(config, workflow)?;
-            if roster.len() > 1 {
-                coordinated_agent_graph(&roster, config)?;
-            }
+            AxocoatlDaemon::session_workflow_agents(config, workflow)?;
         }
     }
     Ok(())
@@ -3372,20 +3063,6 @@ fn validate_automation_agent_authority(
         }
     }
     Ok(())
-}
-
-fn coordination_signal_owner<'a>(
-    mode: &SessionMode,
-    agent: &'a axocoatl_config::AgentConfigYaml,
-    coordinated_execution: bool,
-) -> Option<&'a str> {
-    (coordinated_execution
-        && matches!(
-            mode,
-            SessionMode::Lattice { .. } | SessionMode::Custom { .. }
-        )
-        && matches!(agent.role, AgentRoleYaml::Autonomous))
-    .then_some(agent.id.as_str())
 }
 
 fn single_agent_coordinator_id<'a>(
@@ -3786,10 +3463,6 @@ pub struct AxocoatlDaemon {
         StdMutex<HashMap<String, Arc<StdMutex<axocoatl_memory::knowledge::KnowledgeStore>>>>,
     /// Canonical, append-only user-visible Session conversation ledger.
     session_turn_store: Arc<tokio::sync::Mutex<SessionTurnStore>>,
-    /// Turn-scoped authority behind the internal multi-agent feedback tool.
-    /// Session actors outlive a turn, so the tool itself must not imply that a
-    /// revision route is active outside an exact coordinated generation.
-    coordination_signal_router: crate::session_coordination::CoordinationSignalRouter,
     /// Session-owned references to immutable blobs in [`Self::file_store`].
     pub session_attachment_store: Arc<tokio::sync::Mutex<SessionAttachmentStore>>,
     /// Persistent store for the retained lightweight-chat API (no directory or
@@ -5533,8 +5206,6 @@ impl AxocoatlDaemon {
             workspace_store,
             knowledge_stores: StdMutex::new(HashMap::new()),
             session_turn_store,
-            coordination_signal_router:
-                crate::session_coordination::CoordinationSignalRouter::default(),
             session_attachment_store,
             chat_store,
             file_store,
@@ -15359,7 +15030,7 @@ trap - 0 1 2 15
                 ))
             })?;
         let executor = self
-            .build_session_executor(session, sandbox.clone(), false, None)
+            .build_session_executor(session, sandbox.clone(), false)
             .await?;
         // Context path = the in-sandbox worktree (where the tools operate);
         // project instructions still come from the primary session's host repo.
@@ -15915,7 +15586,6 @@ trap - 0 1 2 15
                                 turn_id: None,
                                 partial_ledger: None,
                                 stream_commit_gate: None,
-                                coordination_generation: None,
                             },
                         )
                         .await
@@ -20279,6 +19949,7 @@ trap - 0 1 2 15
             // adoption, sandbox admission, attachment consumption, or Begin
             // can mutate any durable state.
             validate_session_mode(&self.config, &session.mode)?;
+            refuse_legacy_multi_agent_turn(&self.config, &session.mode, target_agent.as_deref())?;
         }
         self.ensure_session_turns_migrated(&session).await?;
         if checkpoint_transaction {
@@ -20389,7 +20060,6 @@ trap - 0 1 2 15
                     error,
                     token_usage,
                     token_usage_known,
-                    coordinated_partial_output: None,
                 });
             let frame = session_terminal_stream_frame(session_id, turn_id, &terminal, &[]);
             *lifecycle_publication_owned = true;
@@ -20579,7 +20249,7 @@ trap - 0 1 2 15
 
         let run = match &session.mode {
             SessionMode::SingleAgent { agent_id } => {
-                let actor = self.session_actor(&session, agent_id, turn_id, false).await;
+                let actor = self.session_actor(&session, agent_id, turn_id).await;
                 match actor {
                     Ok(actor) => {
                         let agent_input = axocoatl_core::AgentInput::text(input)
@@ -21319,7 +20989,6 @@ trap - 0 1 2 15
                 )),
                 token_usage,
                 token_usage_known,
-                coordinated_partial_output: None,
             });
         }
         outcome
@@ -21343,168 +21012,6 @@ trap - 0 1 2 15
         if let Ok(mut last_turn) = self.session_last_turn.lock() {
             last_turn.insert(session_id.to_string(), touched);
         }
-    }
-
-    async fn record_session_coordination_event(
-        &self,
-        session_id: &str,
-        turn_id: &str,
-        operation_id: String,
-        mut event: RecordTurnExecution,
-        usage: &axocoatl_core::TokenUsageStats,
-        token_usage_known: bool,
-    ) -> Result<(), SessionRunFailure> {
-        event
-            .metadata
-            .entry("session_id".to_string())
-            .or_insert_with(|| serde_json::Value::String(session_id.to_string()));
-        event
-            .metadata
-            .entry("turn_id".to_string())
-            .or_insert_with(|| serde_json::Value::String(turn_id.to_string()));
-        let stream_commit = self.stream_commit_gate.lock().await;
-        let persisted = self
-            .session_turn_store
-            .lock()
-            .await
-            .record_execution(turn_id, operation_id.clone(), event)
-            .map_err(|error| SessionRunFailure {
-                error: DaemonError::Session(format!(
-                    "could not persist Session coordination event: {error}"
-                )),
-                token_usage: usage.clone(),
-                token_usage_known,
-                coordinated_partial_output: None,
-            })?
-            .execution_events
-            .into_iter()
-            .find(|candidate| candidate.operation_id == operation_id)
-            .ok_or_else(|| SessionRunFailure {
-                error: DaemonError::Session(
-                    "persisted Session coordination event could not be rehydrated".to_string(),
-                ),
-                token_usage: usage.clone(),
-                token_usage_known,
-                coordinated_partial_output: None,
-            })?;
-        let _ = self
-            .stream_bus
-            .send(crate::stream::StreamFrame::Coordination {
-                session: session_id.to_string(),
-                turn_id: turn_id.to_string(),
-                operation_id: persisted.operation_id,
-                recorded_at: persisted.recorded_at,
-                event: persisted.event,
-            });
-        drop(stream_commit);
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn record_coordinated_agent_output(
-        &self,
-        turn_id: &str,
-        agent_id: &str,
-        model: Option<String>,
-        generation: u32,
-        disposition: SessionTurnAgentOutputDisposition,
-        causal_signal_id: Option<String>,
-        output: &axocoatl_core::AgentOutput,
-        usage: &axocoatl_core::TokenUsageStats,
-        token_usage_known: bool,
-    ) -> Result<(), SessionRunFailure> {
-        self.session_turn_store
-            .lock()
-            .await
-            .record_agent_output_with_coordination(
-                turn_id,
-                format!("agent-output:{turn_id}:{agent_id}:generation-{generation}"),
-                agent_id,
-                model,
-                output.content.clone(),
-                SessionTurnAgentOutputIdentity {
-                    activation_generation: generation,
-                    disposition,
-                    causal_signal_id,
-                },
-            )
-            .map_err(|error| SessionRunFailure {
-                error: DaemonError::Session(error.to_string()),
-                token_usage: usage.clone(),
-                token_usage_known,
-                coordinated_partial_output: None,
-            })?;
-        Ok(())
-    }
-
-    async fn record_coordination_feedback_batch(
-        &self,
-        session_id: &str,
-        turn_id: &str,
-        batch_operation_id: String,
-        mut operations: Vec<SessionTurnAtomicOperation>,
-        usage: &axocoatl_core::TokenUsageStats,
-        token_usage_known: bool,
-    ) -> Result<(), SessionRunFailure> {
-        let execution_operation_ids = operations
-            .iter_mut()
-            .filter_map(|operation| match &mut operation.mutation {
-                SessionTurnAtomicMutation::Execution { execution } => {
-                    execution
-                        .metadata
-                        .entry("session_id".to_string())
-                        .or_insert_with(|| serde_json::Value::String(session_id.to_string()));
-                    execution
-                        .metadata
-                        .entry("turn_id".to_string())
-                        .or_insert_with(|| serde_json::Value::String(turn_id.to_string()));
-                    Some(operation.operation_id.clone())
-                }
-                SessionTurnAtomicMutation::AgentOutput { .. } => None,
-            })
-            .collect::<Vec<_>>();
-        let stream_commit = self.stream_commit_gate.lock().await;
-        let persisted = self
-            .session_turn_store
-            .lock()
-            .await
-            .record_operations_atomically(turn_id, batch_operation_id, operations)
-            .map_err(|error| SessionRunFailure {
-                error: DaemonError::Session(format!(
-                    "could not persist atomic Session coordination feedback: {error}"
-                )),
-                token_usage: usage.clone(),
-                token_usage_known,
-                coordinated_partial_output: None,
-            })?;
-        let mut frames = Vec::with_capacity(execution_operation_ids.len());
-        for operation_id in execution_operation_ids {
-            let event = persisted
-                .execution_events
-                .iter()
-                .find(|candidate| candidate.operation_id == operation_id)
-                .cloned()
-                .ok_or_else(|| SessionRunFailure {
-                    error: DaemonError::Session(format!(
-                        "atomic Session coordination event '{operation_id}' could not be rehydrated"
-                    )),
-                    token_usage: usage.clone(),
-                    token_usage_known,
-                    coordinated_partial_output: None,
-                })?;
-            frames.push(crate::stream::StreamFrame::Coordination {
-                session: session_id.to_string(),
-                turn_id: turn_id.to_string(),
-                operation_id: event.operation_id,
-                recorded_at: event.recorded_at,
-                event: event.event,
-            });
-        }
-        for frame in frames {
-            let _ = self.stream_bus.send(frame);
-        }
-        drop(stream_commit);
-        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -21541,930 +21048,20 @@ trap - 0 1 2 15
                 )
                 .await;
         }
-        if agents.len() == 1 {
-            self.stop_session_agent_actor_checked(&session.id, &agents[0])
-                .await?;
-            return self
-                .execute_direct_session_agent_controlled(
-                    session,
-                    agents[0].clone(),
-                    input,
-                    model_override,
-                    attachments,
-                    control,
-                )
-                .await;
+        if agents.len() > 1 {
+            return Err(legacy_multi_agent_turn_refusal(agents.len()).into());
         }
-
-        self.execute_coordinated_session_agents(
+        self.stop_session_agent_actor_checked(&session.id, &agents[0])
+            .await?;
+        self.execute_direct_session_agent_controlled(
             session,
-            agents,
+            agents[0].clone(),
             input,
             model_override,
             attachments,
             control,
         )
         .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn execute_coordinated_session_agents(
-        &self,
-        session: &Session,
-        agents: Vec<String>,
-        input: &str,
-        model_override: Option<String>,
-        attachments: Vec<axocoatl_core::AgentAttachment>,
-        control: AgentRunControl,
-    ) -> Result<SessionAgentsRun, SessionRunFailure> {
-        let graph = coordinated_agent_graph(&agents, &self.config)?;
-        for agent_id in &agents {
-            self.stop_session_agent_actor_checked(&session.id, agent_id)
-                .await?;
-        }
-        let mut scheduler = TurnCoordinationScheduler::new(graph.clone());
-        let sinks = coordinated_graph_sinks(&graph);
-        let turn_id = control.id().to_string();
-        let mut event_sequence = 0_u64;
-        let mut next_operation = |kind: &str| {
-            let operation = format!("coordination:{turn_id}:{event_sequence}:{kind}");
-            event_sequence = event_sequence.saturating_add(1);
-            operation
-        };
-        let mut usage = axocoatl_core::TokenUsageStats::default();
-        let mut token_usage_known = true;
-        let mut outputs = Vec::new();
-        let mut output_by_signal = HashMap::<String, axocoatl_core::AgentOutput>::new();
-        let mut latest_completed =
-            HashMap::<String, (u32, String, axocoatl_core::AgentOutput)>::new();
-        let mut first_failure = None::<String>;
-        let mut touched_paths = HashSet::<String>::new();
-        let mut cancelled = false;
-
-        let agent_metadata = graph
-            .nodes()
-            .iter()
-            .map(|node| {
-                let name = self
-                    .config
-                    .agents
-                    .iter()
-                    .find(|agent| agent.id == node.id)
-                    .map(|agent| agent.name.clone())
-                    .unwrap_or_else(|| node.id.clone());
-                serde_json::json!({
-                    "id": node.id,
-                    "name": name,
-                    "depends_on": node.depends_on,
-                })
-            })
-            .collect::<Vec<_>>();
-        let roots = graph
-            .nodes()
-            .iter()
-            .filter(|node| node.depends_on.is_empty())
-            .map(|node| node.id.clone())
-            .collect::<Vec<_>>();
-        self.record_session_coordination_event(
-            &session.id,
-            &turn_id,
-            next_operation("planned"),
-            RecordTurnExecution {
-                kind: "coordination_planned".to_string(),
-                execution_id: Some(turn_id.clone()),
-                attempt_id: None,
-                metadata: serde_json::json!({
-                    "agents": agent_metadata,
-                    "roots": roots,
-                    "sinks": sinks,
-                    "max_generations": scheduler.max_activations_per_agent(),
-                })
-                .as_object()
-                .cloned()
-                .unwrap_or_default(),
-            },
-            &usage,
-            token_usage_known,
-        )
-        .await?;
-
-        loop {
-            if control.is_cancelled() {
-                let event_start = scheduler.events().len();
-                scheduler.cancel();
-                for event in scheduler.events()[event_start..].iter().cloned() {
-                    if event.kind != TurnCoordinationEventKind::AgentCancelled {
-                        continue;
-                    }
-                    self.record_session_coordination_event(
-                        &session.id,
-                        &turn_id,
-                        next_operation("agent-cancelled"),
-                        RecordTurnExecution {
-                            kind: "coordination_agent_cancelled".to_string(),
-                            execution_id: Some(turn_id.clone()),
-                            attempt_id: None,
-                            metadata: serde_json::json!({
-                                "agent_id": event.agent_id,
-                                "generation": event.generation,
-                                "cause_signal_ids": event.cause_signal_ids,
-                                "reason": "turn_stop",
-                                "usage": coordination_usage_value(&Default::default(), true),
-                            })
-                            .as_object()
-                            .cloned()
-                            .unwrap_or_default(),
-                        },
-                        &usage,
-                        token_usage_known,
-                    )
-                    .await?;
-                    let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
-                        event_type: "AgentCancelled".to_string(),
-                        agent: Some(event.agent_id),
-                        task: None,
-                        name: None,
-                        output: None,
-                        tokens: None,
-                        workflow: Some(session.id.clone()),
-                    });
-                }
-                cancelled = true;
-                break;
-            }
-
-            let Some(ready) = scheduler.ready_activations().into_iter().next() else {
-                break;
-            };
-            let activation = scheduler.start(&ready.agent_id).map_err(|error| {
-                SessionRunFailure::known_zero(DaemonError::Session(format!(
-                    "could not activate coordinated Agent '{}': {error}",
-                    ready.agent_id
-                )))
-                .with_prior_usage(&usage, token_usage_known)
-            })?;
-            let agent_id = activation.agent_id.clone();
-            let generation = activation.generation;
-            let cause_signal_ids = activation
-                .inputs
-                .iter()
-                .map(|signal| signal.id.clone())
-                .collect::<Vec<_>>();
-            self.record_session_coordination_event(
-                &session.id,
-                &turn_id,
-                next_operation("agent-activated"),
-                RecordTurnExecution {
-                    kind: "coordination_agent_activated".to_string(),
-                    execution_id: Some(turn_id.clone()),
-                    attempt_id: None,
-                    metadata: serde_json::json!({
-                        "agent_id": agent_id,
-                        "generation": generation,
-                        "cause_signal_ids": cause_signal_ids,
-                        "parents": graph.node(&agent_id).map(|node| node.depends_on.clone()).unwrap_or_default(),
-                    })
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default(),
-                },
-                &usage,
-                token_usage_known,
-            )
-            .await?;
-            let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
-                event_type: "AgentActivated".to_string(),
-                agent: Some(agent_id.clone()),
-                task: None,
-                name: None,
-                output: None,
-                tokens: None,
-                workflow: Some(session.id.clone()),
-            });
-
-            let allowed_targets =
-                coordinated_revision_targets(&graph, &scheduler, &agent_id, generation);
-            let signal_lease = self
-                .coordination_signal_router
-                .activate(
-                    &session.id,
-                    &turn_id,
-                    &agent_id,
-                    generation,
-                    allowed_targets.iter().cloned(),
-                )
-                .map_err(|error| SessionRunFailure {
-                    error: DaemonError::Session(error),
-                    token_usage: usage.clone(),
-                    token_usage_known,
-                    coordinated_partial_output: None,
-                })?;
-            let actor = match self.session_actor(session, &agent_id, &turn_id, true).await {
-                Ok(actor) => actor,
-                Err(error) => {
-                    drop(signal_lease);
-                    let summary = error.to_string();
-                    let signal_id =
-                        format!("coordination-signal:{turn_id}:{agent_id}:g{generation}:failed");
-                    let event_start = scheduler.events().len();
-                    scheduler
-                        .fail(&agent_id, &signal_id, bounded_coordination_summary(&summary, 512))
-                        .map_err(|scheduler_error| SessionRunFailure {
-                            error: DaemonError::Session(format!(
-                                "{summary}; coordination failure transition also failed: {scheduler_error}"
-                            )),
-                            token_usage: usage.clone(),
-                            token_usage_known,
-                            coordinated_partial_output: None,
-                        })?;
-                    first_failure.get_or_insert_with(|| summary.clone());
-                    for event in scheduler.events()[event_start..].iter().cloned() {
-                        if !matches!(
-                            event.kind,
-                            TurnCoordinationEventKind::AgentFailed
-                                | TurnCoordinationEventKind::AgentBlocked
-                        ) {
-                            continue;
-                        }
-                        let kind = coordination_lifecycle_kind(event.kind)
-                            .expect("failed and blocked events have ledger kinds");
-                        self.record_session_coordination_event(
-                            &session.id,
-                            &turn_id,
-                            next_operation(kind),
-                            RecordTurnExecution {
-                                kind: kind.to_string(),
-                                execution_id: Some(turn_id.clone()),
-                                attempt_id: None,
-                                metadata: serde_json::json!({
-                                    "agent_id": event.agent_id,
-                                    "generation": event.generation,
-                                    "cause_signal_ids": event.cause_signal_ids,
-                                    "summary": event.signal.as_ref().map(|signal| signal.summary.clone()),
-                                    "signal_id": event.signal.as_ref().map(|signal| signal.id.clone()),
-                                    "usage": coordination_usage_value(&Default::default(), true),
-                                })
-                                .as_object()
-                                .cloned()
-                                .unwrap_or_default(),
-                            },
-                            &usage,
-                            token_usage_known,
-                        )
-                        .await?;
-                    }
-                    let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
-                        event_type: "AgentFailed".to_string(),
-                        agent: Some(agent_id),
-                        task: None,
-                        name: None,
-                        output: Some(bounded_coordination_summary(&summary, 200)),
-                        tokens: Some(0),
-                        workflow: Some(session.id.clone()),
-                    });
-                    continue;
-                }
-            };
-            let content = coordinated_activation_input(
-                input,
-                &activation,
-                &output_by_signal,
-                &allowed_targets,
-            )
-            .map_err(|error| SessionRunFailure {
-                error,
-                token_usage: usage.clone(),
-                token_usage_known,
-                coordinated_partial_output: None,
-            })?;
-            let trace: Arc<StdMutex<Vec<crate::trajectory::Action>>> =
-                Arc::new(StdMutex::new(Vec::new()));
-            let run = Self::stream_agent_run(
-                self.stream_bus.clone(),
-                actor,
-                session.id.clone(),
-                agent_id.clone(),
-                content,
-                StreamAgentRunOptions {
-                    model_override: model_override.clone(),
-                    run_context: Some(serde_json::json!({
-                        "workflow_id": session.id,
-                        "coordination_turn_id": turn_id,
-                        "coordination_generation": generation,
-                    })),
-                    trace: Some(trace.clone()),
-                    supplied_history: None,
-                    attachments: attachments.clone(),
-                    control: Some(control.clone()),
-                    turn_id: Some(turn_id.clone()),
-                    partial_ledger: Some(self.session_turn_store.clone()),
-                    stream_commit_gate: Some(self.stream_commit_gate.clone()),
-                    coordination_generation: Some(generation),
-                },
-            )
-            .await;
-            let requested_changes = signal_lease.take_signals();
-            drop(signal_lease);
-            if let Ok(steps) = trace.lock() {
-                touched_paths.extend(session_write_paths(session, &steps));
-            }
-
-            let measured = match run {
-                Ok(measured) => measured,
-                Err(failure) => {
-                    usage.merge(&failure.token_usage);
-                    token_usage_known &= failure.token_usage_known;
-                    let summary = if failure.coordinated_partial_output.is_some() {
-                        failure.error.to_string()
-                    } else {
-                        format!(
-                            "{}; coordinated failure did not retain its streamed-output boundary",
-                            failure.error
-                        )
-                    };
-                    let signal_id =
-                        format!("coordination-signal:{turn_id}:{agent_id}:g{generation}:failed");
-                    let event_start = scheduler.events().len();
-                    scheduler
-                        .fail(&agent_id, &signal_id, bounded_coordination_summary(&summary, 512))
-                        .map_err(|scheduler_error| SessionRunFailure {
-                            error: DaemonError::Session(format!(
-                                "{summary}; coordination failure transition also failed: {scheduler_error}"
-                            )),
-                            token_usage: usage.clone(),
-                            token_usage_known,
-                            coordinated_partial_output: None,
-                        })?;
-                    first_failure.get_or_insert_with(|| summary.clone());
-                    for signal in requested_changes {
-                        self.record_session_coordination_event(
-                            &session.id,
-                            &turn_id,
-                            next_operation("signal"),
-                            RecordTurnExecution {
-                                kind: "coordination_signal".to_string(),
-                                execution_id: Some(turn_id.clone()),
-                                attempt_id: None,
-                                metadata: serde_json::json!({
-                                    "from_agent": signal.requester,
-                                    "to_agent": signal.target_agent,
-                                    "summary": signal.summary,
-                                    "generation": signal.generation,
-                                    "signal_id": format!("coordination-feedback:{turn_id}:{agent_id}:g{generation}"),
-                                    "applied": false,
-                                    "reason": "requesting Agent failed",
-                                }).as_object().cloned().unwrap_or_default(),
-                            },
-                            &usage,
-                            token_usage_known,
-                        ).await?;
-                    }
-                    for event in scheduler.events()[event_start..].iter().cloned() {
-                        if !matches!(
-                            event.kind,
-                            TurnCoordinationEventKind::AgentFailed
-                                | TurnCoordinationEventKind::AgentBlocked
-                        ) {
-                            continue;
-                        }
-                        let kind = coordination_lifecycle_kind(event.kind)
-                            .expect("failed and blocked events have ledger kinds");
-                        self.record_session_coordination_event(
-                            &session.id,
-                            &turn_id,
-                            next_operation(kind),
-                            RecordTurnExecution {
-                                kind: kind.to_string(),
-                                execution_id: Some(turn_id.clone()),
-                                attempt_id: None,
-                                metadata: serde_json::json!({
-                                    "agent_id": event.agent_id,
-                                    "generation": event.generation,
-                                    "cause_signal_ids": event.cause_signal_ids,
-                                    "summary": event.signal.as_ref().map(|signal| signal.summary.clone()),
-                                    "signal_id": event.signal.as_ref().map(|signal| signal.id.clone()),
-                                    "usage": if event.kind == TurnCoordinationEventKind::AgentBlocked {
-                                        coordination_usage_value(&Default::default(), true)
-                                    } else {
-                                        coordination_usage_value(&failure.token_usage, failure.token_usage_known)
-                                    },
-                                }).as_object().cloned().unwrap_or_default(),
-                            },
-                            &usage,
-                            token_usage_known,
-                        ).await?;
-                    }
-                    let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
-                        event_type: "AgentFailed".to_string(),
-                        agent: Some(agent_id),
-                        task: None,
-                        name: None,
-                        output: Some(bounded_coordination_summary(
-                            &failure.error.to_string(),
-                            200,
-                        )),
-                        tokens: Some(failure.token_usage.total() as u64),
-                        workflow: Some(session.id.clone()),
-                    });
-                    continue;
-                }
-            };
-            let mut outcome = measured.outcome;
-            set_outcome_token_usage(&mut outcome, measured.token_usage.usage.clone());
-            let output = outcome.output().clone();
-            usage.merge(&measured.token_usage.usage);
-            token_usage_known &= measured.token_usage.complete;
-
-            if outcome.is_cancelled() || control.is_cancelled() {
-                self.record_coordinated_agent_output(
-                    &turn_id,
-                    &agent_id,
-                    model_override.clone(),
-                    generation,
-                    SessionTurnAgentOutputDisposition::Cancelled,
-                    None,
-                    &output,
-                    &usage,
-                    token_usage_known,
-                )
-                .await?;
-                outputs.push((agent_id.clone(), output.clone()));
-                for signal in requested_changes {
-                    self.record_session_coordination_event(
-                        &session.id,
-                        &turn_id,
-                        next_operation("signal"),
-                        RecordTurnExecution {
-                            kind: "coordination_signal".to_string(),
-                            execution_id: Some(turn_id.clone()),
-                            attempt_id: None,
-                            metadata: serde_json::json!({
-                                "from_agent": signal.requester,
-                                "to_agent": signal.target_agent,
-                                "summary": signal.summary,
-                                "generation": signal.generation,
-                                "signal_id": format!("coordination-feedback:{turn_id}:{agent_id}:g{generation}"),
-                                "applied": false,
-                                "reason": "turn stopped",
-                            }).as_object().cloned().unwrap_or_default(),
-                        },
-                        &usage,
-                        token_usage_known,
-                    ).await?;
-                }
-                let event_start = scheduler.events().len();
-                scheduler.cancel();
-                let cancelled_agent = agent_id.clone();
-                for event in scheduler.events()[event_start..].iter().cloned() {
-                    if event.kind != TurnCoordinationEventKind::AgentCancelled {
-                        continue;
-                    }
-                    self.record_session_coordination_event(
-                        &session.id,
-                        &turn_id,
-                        next_operation("agent-cancelled"),
-                        RecordTurnExecution {
-                            kind: "coordination_agent_cancelled".to_string(),
-                            execution_id: Some(turn_id.clone()),
-                            attempt_id: None,
-                            metadata: serde_json::json!({
-                                "agent_id": event.agent_id,
-                                "generation": event.generation,
-                                "cause_signal_ids": event.cause_signal_ids,
-                                "reason": "turn_stop",
-                                "usage": if event.agent_id == cancelled_agent {
-                                    coordination_usage_value(&output.token_usage, measured.token_usage.complete)
-                                } else {
-                                    coordination_usage_value(&Default::default(), true)
-                                },
-                            }).as_object().cloned().unwrap_or_default(),
-                        },
-                        &usage,
-                        token_usage_known,
-                    ).await?;
-                    let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
-                        event_type: "AgentCancelled".to_string(),
-                        agent: Some(event.agent_id),
-                        task: None,
-                        name: None,
-                        output: None,
-                        tokens: None,
-                        workflow: Some(session.id.clone()),
-                    });
-                }
-                cancelled = true;
-                break;
-            }
-
-            if let Err(error) = require_session_agent_result(&agent_id, &outcome) {
-                let summary = error.to_string();
-                let failure_signal_id =
-                    format!("coordination-signal:{turn_id}:{agent_id}:g{generation}:failed");
-                self.record_coordinated_agent_output(
-                    &turn_id,
-                    &agent_id,
-                    model_override.clone(),
-                    generation,
-                    SessionTurnAgentOutputDisposition::Failed,
-                    Some(failure_signal_id.clone()),
-                    &output,
-                    &usage,
-                    token_usage_known,
-                )
-                .await?;
-                outputs.push((agent_id.clone(), output.clone()));
-                for signal in requested_changes {
-                    self.record_session_coordination_event(
-                        &session.id,
-                        &turn_id,
-                        next_operation("signal"),
-                        RecordTurnExecution {
-                            kind: "coordination_signal".to_string(),
-                            execution_id: Some(turn_id.clone()),
-                            attempt_id: None,
-                            metadata: serde_json::json!({
-                                "from_agent": signal.requester,
-                                "to_agent": signal.target_agent,
-                                "summary": signal.summary,
-                                "generation": signal.generation,
-                                "signal_id": format!("coordination-feedback:{turn_id}:{agent_id}:g{generation}"),
-                                "applied": false,
-                                "reason": "requesting Agent returned no usable handoff",
-                            })
-                            .as_object()
-                            .cloned()
-                            .unwrap_or_default(),
-                        },
-                        &usage,
-                        token_usage_known,
-                    )
-                    .await?;
-                }
-                let event_start = scheduler.events().len();
-                scheduler
-                    .fail(
-                        &agent_id,
-                        &failure_signal_id,
-                        bounded_coordination_summary(&summary, 512),
-                    )
-                    .map_err(|scheduler_error| SessionRunFailure {
-                        error: DaemonError::Session(format!(
-                            "{summary}; coordination failure transition also failed: {scheduler_error}"
-                        )),
-                        token_usage: usage.clone(),
-                        token_usage_known,
-                        coordinated_partial_output: None,
-                    })?;
-                first_failure.get_or_insert_with(|| summary.clone());
-                for event in scheduler.events()[event_start..].iter().cloned() {
-                    if !matches!(
-                        event.kind,
-                        TurnCoordinationEventKind::AgentFailed
-                            | TurnCoordinationEventKind::AgentBlocked
-                    ) {
-                        continue;
-                    }
-                    let kind = coordination_lifecycle_kind(event.kind)
-                        .expect("failed and blocked events have ledger kinds");
-                    self.record_session_coordination_event(
-                        &session.id,
-                        &turn_id,
-                        next_operation(kind),
-                        RecordTurnExecution {
-                            kind: kind.to_string(),
-                            execution_id: Some(turn_id.clone()),
-                            attempt_id: None,
-                            metadata: serde_json::json!({
-                                "agent_id": event.agent_id,
-                                "generation": event.generation,
-                                "cause_signal_ids": event.cause_signal_ids,
-                                "summary": event.signal.as_ref().map(|signal| signal.summary.clone()),
-                                "signal_id": event.signal.as_ref().map(|signal| signal.id.clone()),
-                                "usage": if event.kind == TurnCoordinationEventKind::AgentBlocked {
-                                    coordination_usage_value(&Default::default(), true)
-                                } else {
-                                    coordination_usage_value(&output.token_usage, measured.token_usage.complete)
-                                },
-                            }).as_object().cloned().unwrap_or_default(),
-                        },
-                        &usage,
-                        token_usage_known,
-                    ).await?;
-                }
-                let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
-                    event_type: "AgentFailed".to_string(),
-                    agent: Some(agent_id),
-                    task: None,
-                    name: None,
-                    output: Some(bounded_coordination_summary(&summary, 200)),
-                    tokens: Some(output.token_usage.total() as u64),
-                    workflow: Some(session.id.clone()),
-                });
-                continue;
-            }
-
-            if let Some(signal) = requested_changes.into_iter().next() {
-                let signal_id = format!("coordination-feedback:{turn_id}:{agent_id}:g{generation}");
-                let event_start = scheduler.events().len();
-                scheduler
-                    .request_changes(&agent_id, &signal.target_agent, &signal_id, &signal.summary)
-                    .map_err(|error| SessionRunFailure {
-                        error: DaemonError::Session(format!(
-                            "accepted coordination signal could not be scheduled: {error}"
-                        )),
-                        token_usage: usage.clone(),
-                        token_usage_known,
-                        coordinated_partial_output: None,
-                    })?;
-                let mut feedback_operations = vec![
-                    SessionTurnAtomicOperation {
-                        operation_id: format!(
-                            "agent-output:{turn_id}:{agent_id}:generation-{generation}"
-                        ),
-                        mutation: SessionTurnAtomicMutation::AgentOutput {
-                            agent_id: agent_id.clone(),
-                            model: model_override.clone(),
-                            output: output.content.clone(),
-                            attempt_id: None,
-                            identity: Some(SessionTurnAgentOutputIdentity {
-                                activation_generation: generation,
-                                disposition: SessionTurnAgentOutputDisposition::ChangesRequested,
-                                causal_signal_id: Some(signal_id.clone()),
-                            }),
-                        },
-                    },
-                    SessionTurnAtomicOperation {
-                        operation_id: next_operation("signal"),
-                        mutation: SessionTurnAtomicMutation::Execution {
-                            execution: RecordTurnExecution {
-                                kind: "coordination_signal".to_string(),
-                                execution_id: Some(turn_id.clone()),
-                                attempt_id: None,
-                                metadata: serde_json::json!({
-                                    "from_agent": signal.requester.clone(),
-                                    "to_agent": signal.target_agent.clone(),
-                                    "summary": signal.summary.clone(),
-                                    "generation": signal.generation,
-                                    "signal_id": signal_id.clone(),
-                                    "applied": true,
-                                    "usage": coordination_usage_value(
-                                        &output.token_usage,
-                                        measured.token_usage.complete,
-                                    ),
-                                })
-                                .as_object()
-                                .cloned()
-                                .unwrap_or_default(),
-                            },
-                        },
-                    },
-                ];
-                let feedback_events = scheduler.events()[event_start..].to_vec();
-                let invalidated =
-                    invalidate_reactivated_outputs(&feedback_events, &mut latest_completed)
-                        .map_err(|error| SessionRunFailure {
-                            error,
-                            token_usage: usage.clone(),
-                            token_usage_known,
-                            coordinated_partial_output: None,
-                        })?;
-                validate_latest_completed_generations(&scheduler, &latest_completed).map_err(
-                    |error| SessionRunFailure {
-                        error,
-                        token_usage: usage.clone(),
-                        token_usage_known,
-                        coordinated_partial_output: None,
-                    },
-                )?;
-                for (stale_agent, stale_generation, replacement_generation, cause_signal_id) in
-                    invalidated
-                {
-                    feedback_operations.push(SessionTurnAtomicOperation {
-                        operation_id: next_operation("agent-output-superseded"),
-                        mutation: SessionTurnAtomicMutation::Execution {
-                            execution: RecordTurnExecution {
-                                kind: "agent_output_superseded".to_string(),
-                                execution_id: None,
-                                attempt_id: None,
-                                metadata: serde_json::json!({
-                                    "agent_id": stale_agent,
-                                    "activation_generation": stale_generation,
-                                    "superseded_by_generation": replacement_generation,
-                                    "cause_signal_id": cause_signal_id,
-                                })
-                                .as_object()
-                                .cloned()
-                                .unwrap_or_default(),
-                            },
-                        },
-                    });
-                }
-                for event in feedback_events {
-                    if event.kind != TurnCoordinationEventKind::AgentReactivated {
-                        continue;
-                    }
-                    feedback_operations.push(SessionTurnAtomicOperation {
-                        operation_id: next_operation("agent-reactivated"),
-                        mutation: SessionTurnAtomicMutation::Execution {
-                            execution: RecordTurnExecution {
-                            kind: "coordination_agent_reactivated".to_string(),
-                            execution_id: Some(turn_id.clone()),
-                            attempt_id: None,
-                            metadata: serde_json::json!({
-                                "agent_id": event.agent_id,
-                                "generation": event.generation,
-                                "cause_signal_ids": event.cause_signal_ids,
-                                "summary": event.signal.as_ref().map(|signal| signal.summary.clone()),
-                                "signal_id": event.signal.as_ref().map(|signal| signal.id.clone()),
-                            })
-                            .as_object()
-                            .cloned()
-                            .unwrap_or_default(),
-                            },
-                        },
-                    });
-                }
-                let batch_operation_id = next_operation("feedback-batch");
-                self.record_coordination_feedback_batch(
-                    &session.id,
-                    &turn_id,
-                    batch_operation_id,
-                    feedback_operations,
-                    &usage,
-                    token_usage_known,
-                )
-                .await?;
-                outputs.push((agent_id.clone(), output.clone()));
-                continue;
-            }
-
-            let completion_signal =
-                format!("coordination-signal:{turn_id}:{agent_id}:g{generation}:completed");
-            scheduler
-                .complete(
-                    &agent_id,
-                    &completion_signal,
-                    bounded_coordination_summary(&output.content, 512),
-                )
-                .map_err(|error| SessionRunFailure {
-                    error: DaemonError::Session(format!(
-                        "could not complete coordinated Agent '{agent_id}': {error}"
-                    )),
-                    token_usage: usage.clone(),
-                    token_usage_known,
-                    coordinated_partial_output: None,
-                })?;
-            self.record_coordinated_agent_output(
-                &turn_id,
-                &agent_id,
-                model_override.clone(),
-                generation,
-                SessionTurnAgentOutputDisposition::Completed,
-                Some(completion_signal.clone()),
-                &output,
-                &usage,
-                token_usage_known,
-            )
-            .await?;
-            outputs.push((agent_id.clone(), output.clone()));
-            output_by_signal.insert(completion_signal.clone(), output.clone());
-            latest_completed.insert(
-                agent_id.clone(),
-                (generation, completion_signal.clone(), output.clone()),
-            );
-            self.record_session_coordination_event(
-                &session.id,
-                &turn_id,
-                next_operation("agent-completed"),
-                RecordTurnExecution {
-                    kind: "coordination_agent_completed".to_string(),
-                    execution_id: Some(turn_id.clone()),
-                    attempt_id: None,
-                    metadata: serde_json::json!({
-                        "agent_id": agent_id,
-                        "generation": generation,
-                        "signal_id": completion_signal,
-                        "cause_signal_ids": cause_signal_ids,
-                        "summary": bounded_coordination_summary(&output.content, 512),
-                        "usage": coordination_usage_value(&output.token_usage, measured.token_usage.complete),
-                    })
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default(),
-                },
-                &usage,
-                token_usage_known,
-            )
-            .await?;
-            let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
-                event_type: "TaskCompleted".to_string(),
-                agent: Some(agent_id),
-                task: None,
-                name: None,
-                output: Some(bounded_coordination_summary(&output.content, 200)),
-                tokens: Some(output.token_usage.total() as u64),
-                workflow: Some(session.id.clone()),
-            });
-        }
-
-        let mut touched_paths = touched_paths.into_iter().collect::<Vec<_>>();
-        touched_paths.sort();
-        self.remember_session_last_turn_files(&session.id, touched_paths);
-        let snapshot = scheduler.snapshot();
-        let completed_metadata = snapshot
-            .agents
-            .iter()
-            .map(|agent| {
-                serde_json::json!({
-                    "agent_id": agent.id,
-                    "state": agent.state,
-                    "generation": agent.generation,
-                })
-            })
-            .collect::<Vec<_>>();
-        let status = if cancelled {
-            "cancelled"
-        } else if first_failure.is_some()
-            || snapshot.agents.iter().any(|agent| {
-                matches!(
-                    agent.state,
-                    TurnAgentState::Failed | TurnAgentState::Blocked
-                )
-            })
-        {
-            "failed"
-        } else if snapshot
-            .agents
-            .iter()
-            .all(|agent| agent.state == TurnAgentState::Completed)
-        {
-            "completed"
-        } else {
-            first_failure.get_or_insert_with(|| {
-                "coordination reached a fixed point with agents still waiting".to_string()
-            });
-            "failed"
-        };
-        self.record_session_coordination_event(
-            &session.id,
-            &turn_id,
-            next_operation("completed"),
-            RecordTurnExecution {
-                kind: "coordination_completed".to_string(),
-                execution_id: Some(turn_id.clone()),
-                attempt_id: None,
-                metadata: serde_json::json!({
-                    "status": status,
-                    "agents": completed_metadata,
-                    "sinks": sinks,
-                    "usage": coordination_usage_value(&usage, token_usage_known),
-                })
-                .as_object()
-                .cloned()
-                .unwrap_or_default(),
-            },
-            &usage,
-            token_usage_known,
-        )
-        .await?;
-
-        if cancelled {
-            let mut partial = outputs
-                .last()
-                .map(|(_, output)| output.clone())
-                .unwrap_or_else(|| axocoatl_core::AgentOutput::text(""));
-            partial.token_usage = usage;
-            return Ok(SessionAgentsRun {
-                outcome: AgentRunOutcome::Cancelled {
-                    run_id: control.id().clone(),
-                    partial_output: partial,
-                },
-                outputs,
-                token_usage_known,
-            });
-        }
-        if let Some(error) = first_failure {
-            return Err(SessionRunFailure {
-                error: DaemonError::Session(error),
-                token_usage: usage,
-                token_usage_known,
-                coordinated_partial_output: None,
-            });
-        }
-
-        let final_output =
-            coordinated_final_output(&sinks, &latest_completed, &scheduler, usage.clone())
-                .map_err(|error| SessionRunFailure {
-                    error,
-                    token_usage: usage,
-                    token_usage_known,
-                    coordinated_partial_output: None,
-                })?;
-        Ok(SessionAgentsRun {
-            outcome: AgentRunOutcome::Completed(final_output),
-            outputs,
-            token_usage_known,
-        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -22515,7 +21112,7 @@ trap - 0 1 2 15
                 });
             }
             let actor = self
-                .session_actor(session, &agent_id, control.id().as_str(), false)
+                .session_actor(session, &agent_id, control.id().as_str())
                 .await
                 .map_err(SessionRunFailure::from)
                 .map_err(|failure| failure.with_prior_usage(&usage, token_usage_known))?;
@@ -22554,7 +21151,6 @@ trap - 0 1 2 15
                     turn_id: Some(control.id().to_string()),
                     partial_ledger: Some(self.session_turn_store.clone()),
                     stream_commit_gate: Some(self.stream_commit_gate.clone()),
-                    coordination_generation: None,
                 },
             )
             .await
@@ -22580,7 +21176,6 @@ trap - 0 1 2 15
                     error: DaemonError::Session(error.to_string()),
                     token_usage: usage.clone(),
                     token_usage_known,
-                    coordinated_partial_output: None,
                 })?;
             let handoff_result = require_session_agent_result(&agent_id, &outcome);
             let _ = self.stream_bus.send(crate::stream::StreamFrame::Event {
@@ -22613,7 +21208,6 @@ trap - 0 1 2 15
                     error,
                     token_usage: usage,
                     token_usage_known,
-                    coordinated_partial_output: None,
                 });
             }
         }
@@ -22692,7 +21286,6 @@ trap - 0 1 2 15
             turn_id,
             partial_ledger,
             stream_commit_gate,
-            coordination_generation,
         } = options;
         let (sink_tx, mut sink_rx) =
             tokio::sync::mpsc::unbounded_channel::<axocoatl_actor::AgentStreamChunk>();
@@ -22705,13 +21298,6 @@ trap - 0 1 2 15
             let stream_commit_gate = stream_commit_gate.clone();
             let partial_error: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
             let partial_error_task = partial_error.clone();
-            // Only coordinated executions need a second, attributed copy of
-            // the streamed text. Append after ledger persistence succeeds so
-            // this always describes the canonical text the UI was allowed to
-            // observe, including when the provider later fails.
-            let coordinated_partial_output =
-                coordination_generation.map(|_| Arc::new(StdMutex::new(String::new())));
-            let coordinated_partial_output_task = coordinated_partial_output.clone();
             let partial_control = control.clone();
             let partial_agent = agent_label.clone();
             let trace = trace.clone();
@@ -22781,18 +21367,8 @@ trap - 0 1 2 15
                         match &chunk {
                             C::Text(_) | C::ProviderRetry { .. } => {
                                 let delta = partial_output_text(&chunk).unwrap_or_default();
-                                let operation = coordination_generation.map_or_else(
-                                    || {
-                                        format!(
-                                            "partial:{turn_id}:{partial_agent}:{text_sequence}"
-                                        )
-                                    },
-                                    |generation| {
-                                        format!(
-                                            "partial:{turn_id}:{partial_agent}:generation-{generation}:{text_sequence}"
-                                        )
-                                    },
-                                );
+                                let operation =
+                                    format!("partial:{turn_id}:{partial_agent}:{text_sequence}");
                                 text_sequence = text_sequence.saturating_add(1);
                                 ledger
                                     .lock()
@@ -22812,7 +21388,7 @@ trap - 0 1 2 15
                                 assistant_content,
                                 provider_metadata,
                             } => {
-                                let (mut operation, mut event) =
+                                let (operation, event) =
                                     session_tool_execution_event_with_provider_metadata(
                                         turn_id,
                                         logical_tool_source_agent(
@@ -22833,13 +21409,6 @@ trap - 0 1 2 15
                                         provider_metadata,
                                         None,
                                     );
-                                if let Some(generation) = coordination_generation {
-                                    operation.push_str(&format!(":generation-{generation}"));
-                                    event.metadata.insert(
-                                        "generation".to_string(),
-                                        serde_json::Value::Number(generation.into()),
-                                    );
-                                }
                                 ledger
                                     .lock()
                                     .await
@@ -22853,7 +21422,7 @@ trap - 0 1 2 15
                                 result,
                                 is_error,
                             } => {
-                                let (mut operation, mut event) = session_tool_execution_event(
+                                let (operation, event) = session_tool_execution_event(
                                     turn_id,
                                     logical_tool_source_agent(
                                         source_agent.as_deref(),
@@ -22867,13 +21436,6 @@ trap - 0 1 2 15
                                     result,
                                     Some(*is_error),
                                 );
-                                if let Some(generation) = coordination_generation {
-                                    operation.push_str(&format!(":generation-{generation}"));
-                                    event.metadata.insert(
-                                        "generation".to_string(),
-                                        serde_json::Value::Number(generation.into()),
-                                    );
-                                }
                                 ledger
                                     .lock()
                                     .await
@@ -22895,33 +21457,20 @@ trap - 0 1 2 15
                         }
                         continue;
                     }
-                    if let (C::Text(delta), Some(output)) =
-                        (&chunk, &coordinated_partial_output_task)
-                    {
-                        output
-                            .lock()
-                            // This buffer has one writer and contains evidence
-                            // already accepted by the ledger. Recovering the
-                            // inner String after an unrelated unwind is safer
-                            // than panicking the daemon task and losing it.
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .push_str(delta);
-                    }
                     let frame = agent_chunk_stream_frame(
                         &chunk,
                         &rid,
                         &aid,
                         turn_id.as_deref(),
                         tool_occurrence,
-                        coordination_generation,
+                        None,
                     );
                     let _ = bus.send(frame);
                     drop(stream_commit);
                 }
             });
-            (handle, partial_error, coordinated_partial_output)
+            (handle, partial_error)
         };
-        let coordinated_model = model_override.clone();
         let mut agent_input =
             axocoatl_core::AgentInput::text(input).with_model_override(model_override);
         if let Some(context) = run_context {
@@ -22949,14 +21498,8 @@ trap - 0 1 2 15
                 .await
                 .map_err(SessionRunFailure::from_agent)
         };
-        let (fwd, partial_error, coordinated_partial_output) = fwd;
+        let (fwd, partial_error) = fwd;
         let _ = fwd.await;
-        let coordinated_partial_output = coordinated_partial_output.map(|output| {
-            output
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone()
-        });
         if let Some(error) = partial_error.lock().ok().and_then(|slot| slot.clone()) {
             let (token_usage, token_usage_known) = match &out {
                 Ok(measured) => (
@@ -22971,48 +21514,14 @@ trap - 0 1 2 15
                 )),
                 token_usage,
                 token_usage_known,
-                coordinated_partial_output: coordinated_partial_output.clone(),
             });
-        }
-        if let Err(failure) = &mut out {
-            failure.coordinated_partial_output = coordinated_partial_output.clone();
-            if let (Some(generation), Some(turn_id), Some(ledger)) = (
-                coordination_generation,
-                turn_id.as_deref(),
-                partial_ledger.as_ref(),
-            ) {
-                let stream_commit = match &stream_commit_gate {
-                    Some(gate) => Some(gate.lock().await),
-                    None => None,
-                };
-                let signal_id =
-                    format!("coordination-signal:{turn_id}:{agent_label}:g{generation}:failed");
-                if let Err(error) = ledger.lock().await.record_agent_output_with_coordination(
-                    turn_id,
-                    format!("agent-output:{turn_id}:{agent_label}:generation-{generation}"),
-                    &agent_label,
-                    coordinated_model,
-                    coordinated_partial_output.unwrap_or_default(),
-                    SessionTurnAgentOutputIdentity {
-                        activation_generation: generation,
-                        disposition: SessionTurnAgentOutputDisposition::Failed,
-                        causal_signal_id: Some(signal_id),
-                    },
-                ) {
-                    failure.error = DaemonError::Session(format!(
-                        "{}; could not persist failed coordinated Agent output: {error}",
-                        failure.error
-                    ));
-                }
-                drop(stream_commit);
-            }
         }
         out
     }
 
     /// Resolve the workflow roster. Autonomous workflows keep declaration
-    /// order for the turn scheduler; coordinator-led workflows enter only the
-    /// coordinator because it owns its worker execution internally.
+    /// order; coordinator-led workflows enter only the coordinator because it
+    /// owns its worker execution internally.
     fn session_workflow_agents(
         config: &AxocoatlConfig,
         workflow: &axocoatl_config::WorkflowConfigYaml,
@@ -23145,10 +21654,6 @@ trap - 0 1 2 15
                 )));
             }
         }
-        // Defense in depth for programmatically constructed configs: even a
-        // one-Agent roster must satisfy the same closed-DAG contract as the
-        // config loader before a Session can write canonical Begin.
-        coordinated_agent_graph(&workflow.agents, config)?;
         Ok(workflow.agents.clone())
     }
 
@@ -23245,7 +21750,6 @@ trap - 0 1 2 15
         session: &Session,
         agent_id: &str,
         turn_id: &str,
-        coordinated_execution: bool,
     ) -> Result<ractor::ActorRef<axocoatl_actor::AgentMessage>, DaemonError> {
         let agent_yaml = self
             .config
@@ -23273,11 +21777,7 @@ trap - 0 1 2 15
             .await?;
         let sandbox = self.ensure_sandbox(session).await?;
         let context_dir = sandbox.root().to_path_buf();
-        let coordination_agent =
-            coordination_signal_owner(&session.mode, &agent_yaml, coordinated_execution);
-        let executor = self
-            .build_session_executor(session, sandbox, true, coordination_agent)
-            .await?;
+        let executor = self.build_session_executor(session, sandbox, true).await?;
         let actor_checkpoint_store =
             if session_uses_checkpoint_transaction(&self.config, &session.mode) {
                 Arc::new(
@@ -23309,7 +21809,6 @@ trap - 0 1 2 15
         session: &Session,
         sandbox: Arc<dyn Sandbox>,
         include_integrations: bool,
-        coordination_agent: Option<&str>,
     ) -> Result<ToolExecutor, DaemonError> {
         let mut executor = ToolExecutor::new();
         axocoatl_tools::register_session_tools(&mut executor, sandbox);
@@ -23343,22 +21842,6 @@ trap - 0 1 2 15
             let reg = self.mcp_registry.read().await;
             register_discovered_mcp_tools(&mut executor, &reg);
         }
-        if let Some(agent_id) = coordination_agent {
-            let reserved = crate::session_coordination::COORDINATION_SIGNAL_TOOL;
-            if executor.tool_names().iter().any(|name| name == reserved) {
-                return Err(DaemonError::Session(format!(
-                    "reserved internal tool name '{reserved}' collides with a configured Session tool"
-                )));
-            }
-            executor.register_builtin(
-                reserved,
-                Arc::new(crate::session_coordination::CoordinationSignalTool::new(
-                    self.coordination_signal_router.clone(),
-                    &session.id,
-                    agent_id,
-                )),
-            );
-        }
         Ok(executor.with_mcp_registry(self.mcp_registry.clone()))
     }
 
@@ -23390,30 +21873,6 @@ trap - 0 1 2 15
         allow_provider_fallback: bool,
     ) -> Result<ractor::ActorRef<axocoatl_actor::AgentMessage>, DaemonError> {
         let mut agent_config = agent_yaml.to_core();
-
-        // A non-empty Agent tool list is an exact allowlist, so coordinated
-        // autonomous Session actors receive the internal signal tool by
-        // automatic injection. An empty list is expanded to the executor's
-        // full, deterministic inventory so adding the internal tool does not
-        // accidentally hide the ordinary repository tools.
-        if tool_executor
-            .tool_names()
-            .iter()
-            .any(|name| name == crate::session_coordination::COORDINATION_SIGNAL_TOOL)
-        {
-            if agent_config.tools.is_empty() {
-                agent_config.tools = tool_executor.tool_names();
-                agent_config.tools.sort();
-            } else if !agent_config
-                .tools
-                .iter()
-                .any(|name| name == crate::session_coordination::COORDINATION_SIGNAL_TOOL)
-            {
-                agent_config
-                    .tools
-                    .push(crate::session_coordination::COORDINATION_SIGNAL_TOOL.to_string());
-            }
-        }
 
         // Normal Sessions use the same fallback-aware provider path as global
         // actors. Ways deliberately retain the selected primary route only so
@@ -28814,35 +27273,6 @@ providers:
         .unwrap()
     }
 
-    fn coordination_adapter_test_config() -> AxocoatlConfig {
-        axocoatl_config::parse_config(
-            r#"
-agents:
-  - id: source
-    name: "Source"
-    provider: mock
-    model: source-model
-  - id: sibling
-    name: "Sibling sink"
-    provider: mock
-    model: sibling-model
-    depends_on: [source]
-  - id: reviewer
-    name: "Reviewer sink"
-    provider: mock
-    model: reviewer-model
-    depends_on: [source]
-workflows:
-  - id: coordination-team
-    name: "Coordination team"
-    agents: [source, sibling, reviewer]
-    entry_point: source
-"#,
-            &std::path::PathBuf::from("coordination-adapter.yaml"),
-        )
-        .unwrap()
-    }
-
     fn authority_test_automation(agent_id: &str) -> axocoatl_config::Automation {
         axocoatl_config::Automation {
             id: "authority-test".to_string(),
@@ -28888,14 +27318,6 @@ workflows:
         assert!(worker.contains("coordinator-owned worker"));
     }
 
-    fn coordination_test_output(content: &str) -> axocoatl_core::AgentOutput {
-        axocoatl_core::AgentOutput {
-            content: content.to_string(),
-            tool_calls: Vec::new(),
-            token_usage: axocoatl_core::TokenUsageStats::new(1, 1),
-        }
-    }
-
     fn coordination_checkpoint(
         agent_id: &str,
         version: u64,
@@ -28921,131 +27343,6 @@ workflows:
             cumulative_token_usage_known: true,
             behavior_state: behavior_state.map(str::to_string),
         }
-    }
-
-    #[tokio::test]
-    async fn coordinated_provider_failure_persists_exact_attributed_partial_after_reload() {
-        use ractor::Actor;
-
-        let history = tempfile::tempdir().unwrap();
-        let ledger = Arc::new(tokio::sync::Mutex::new(
-            SessionTurnStore::open(history.path()).unwrap(),
-        ));
-        let turn_id = "coordinated-partial-failure-turn";
-        ledger
-            .lock()
-            .await
-            .begin(BeginSessionTurn {
-                turn_id: Some(turn_id.to_string()),
-                session_id: "coordinated-partial-failure-session".to_string(),
-                user_input: "inspect the failure".to_string(),
-                agent_id: None,
-                model: None,
-                context: Vec::new(),
-                idempotency_key: Some(turn_id.to_string()),
-                metadata: serde_json::Map::new(),
-            })
-            .unwrap();
-
-        let behavior = CoordinatedPartialFailureBehavior::default();
-        let config = axocoatl_core::AgentConfig {
-            id: AgentId::new("reviewer"),
-            name: "Reviewer".to_string(),
-            ..Default::default()
-        };
-        let (actor, handle) = axocoatl_actor::AgentActor::spawn(
-            Some("coordinated-partial-failure-actor".to_string()),
-            axocoatl_actor::AgentActor,
-            (config, Box::new(behavior)),
-        )
-        .await
-        .unwrap();
-        let bus = crate::stream::StreamBus::new(16);
-        let _receiver = bus.subscribe();
-        let failure = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            AxocoatlDaemon::stream_agent_run(
-                bus,
-                actor.clone(),
-                "coordinated-partial-failure-session".to_string(),
-                "reviewer".to_string(),
-                "inspect the failure".to_string(),
-                StreamAgentRunOptions {
-                    model_override: Some("coordinated-partial-failure".to_string()),
-                    run_context: None,
-                    trace: None,
-                    supplied_history: None,
-                    attachments: Vec::new(),
-                    control: Some(AgentRunControl::new(AgentRunId::new(turn_id))),
-                    turn_id: Some(turn_id.to_string()),
-                    partial_ledger: Some(ledger.clone()),
-                    stream_commit_gate: Some(Arc::new(tokio::sync::Mutex::new(()))),
-                    coordination_generation: Some(1),
-                },
-            ),
-        )
-        .await
-        .expect("coordinated failed stream did not settle")
-        .unwrap_err();
-        assert!(failure
-            .error
-            .to_string()
-            .contains("provider failed after text"));
-        assert_eq!(
-            failure.coordinated_partial_output.as_deref(),
-            Some("partial 🦎 evidence")
-        );
-        assert_eq!(
-            failure.token_usage,
-            axocoatl_core::TokenUsageStats::new(7, 3)
-        );
-
-        ledger
-            .lock()
-            .await
-            .transition(
-                turn_id,
-                format!("terminal:{turn_id}"),
-                TransitionSessionTurn {
-                    status: SessionTurnLifecycle::Failed,
-                    final_output: None,
-                    error: Some(failure.error.to_string()),
-                    metadata: serde_json::Map::new(),
-                },
-            )
-            .unwrap();
-        actor.stop(None);
-        tokio::time::timeout(std::time::Duration::from_secs(5), handle)
-            .await
-            .expect("failed Agent actor did not stop")
-            .unwrap();
-        drop(ledger);
-
-        let reopened = SessionTurnStore::open(history.path()).unwrap();
-        let turn = reopened.get(turn_id).unwrap();
-        assert_eq!(turn.partial_output, "partial 🦎 evidence");
-        assert_eq!(turn.agent_outputs.len(), 1);
-        assert_eq!(turn.agent_outputs[0].agent_id, "reviewer");
-        assert_eq!(turn.agent_outputs[0].output, "partial 🦎 evidence");
-        assert_eq!(
-            turn.agent_outputs[0].disposition,
-            Some(SessionTurnAgentOutputDisposition::Failed)
-        );
-        assert_eq!(turn.agent_outputs[0].activation_generation, Some(1));
-
-        let transcript = reopened.transcript("coordinated-partial-failure-session");
-        assert_eq!(transcript.len(), 2);
-        assert_eq!(transcript[1].agent_id.as_deref(), Some("reviewer"));
-        assert_eq!(transcript[1].content, "partial 🦎 evidence");
-        let projected = checkpoint_projection(&ApproximateCounter::new().unwrap(), &[turn]);
-        assert_eq!(
-            projected
-                .iter()
-                .filter(|message| message.role == axocoatl_core::MessageRole::Assistant)
-                .map(|message| message.content.as_str())
-                .collect::<Vec<_>>(),
-            vec!["partial 🦎 evidence"]
-        );
     }
 
     #[test]
@@ -29156,442 +27453,6 @@ workflows:
     }
 
     #[test]
-    fn daemon_coordination_adapter_revises_target_and_every_stale_sink() {
-        let config = coordination_adapter_test_config();
-        let history = tempfile::tempdir().unwrap();
-        let mut ledger = SessionTurnStore::open(history.path()).unwrap();
-        let turn_id = "coordination-revision-turn";
-        ledger
-            .begin(BeginSessionTurn {
-                turn_id: Some(turn_id.to_string()),
-                session_id: "coordination-revision-session".to_string(),
-                user_input: "build it".to_string(),
-                agent_id: None,
-                model: None,
-                context: Vec::new(),
-                idempotency_key: Some("coordination-revision-request".to_string()),
-                metadata: serde_json::Map::new(),
-            })
-            .unwrap();
-        let members = vec![
-            "source".to_string(),
-            "sibling".to_string(),
-            "reviewer".to_string(),
-        ];
-        let graph = coordinated_agent_graph(&members, &config).unwrap();
-        let sinks = coordinated_graph_sinks(&graph);
-        assert_eq!(sinks, ["sibling", "reviewer"]);
-        let mut scheduler = TurnCoordinationScheduler::new(graph);
-        let mut by_signal = HashMap::new();
-        let mut latest = HashMap::new();
-
-        let source_1 = scheduler.start("source").unwrap();
-        let source_1_prompt =
-            coordinated_activation_input("build it", &source_1, &by_signal, &[]).unwrap();
-        assert!(source_1_prompt.starts_with("build it"));
-        assert!(source_1_prompt.contains("No upstream revision is available"));
-        assert!(source_1_prompt.contains("Do not call `coordination_signal`"));
-        let source_1_output = coordination_test_output("source generation one");
-        ledger
-            .record_agent_output_with_coordination(
-                turn_id,
-                "output-source-1",
-                "source",
-                Some("source-model".to_string()),
-                source_1_output.content.clone(),
-                SessionTurnAgentOutputIdentity {
-                    activation_generation: 1,
-                    disposition: SessionTurnAgentOutputDisposition::Completed,
-                    causal_signal_id: Some("source-1".to_string()),
-                },
-            )
-            .unwrap();
-        by_signal.insert("source-1".to_string(), source_1_output.clone());
-        latest.insert(
-            "source".to_string(),
-            (1, "source-1".to_string(), source_1_output),
-        );
-        scheduler
-            .complete("source", "source-1", "source one")
-            .unwrap();
-
-        let sibling_1 = scheduler.start("sibling").unwrap();
-        let sibling_1_prompt =
-            coordinated_activation_input("build it", &sibling_1, &by_signal, &[]).unwrap();
-        assert!(sibling_1_prompt.contains("source generation one"));
-        let sibling_1_output = coordination_test_output("stale sibling result");
-        ledger
-            .record_agent_output_with_coordination(
-                turn_id,
-                "output-sibling-1",
-                "sibling",
-                Some("sibling-model".to_string()),
-                sibling_1_output.content.clone(),
-                SessionTurnAgentOutputIdentity {
-                    activation_generation: 1,
-                    disposition: SessionTurnAgentOutputDisposition::Completed,
-                    causal_signal_id: Some("sibling-1".to_string()),
-                },
-            )
-            .unwrap();
-        by_signal.insert("sibling-1".to_string(), sibling_1_output.clone());
-        latest.insert(
-            "sibling".to_string(),
-            (1, "sibling-1".to_string(), sibling_1_output),
-        );
-        scheduler
-            .complete("sibling", "sibling-1", "sibling one")
-            .unwrap();
-
-        let reviewer_1 = scheduler.start("reviewer").unwrap();
-        assert!(
-            coordinated_activation_input("build it", &reviewer_1, &by_signal, &[])
-                .unwrap()
-                .contains("source generation one")
-        );
-        let before_feedback = scheduler.events().len();
-        scheduler
-            .request_changes(
-                "reviewer",
-                "source",
-                "feedback-1",
-                "replace the unsafe implementation",
-            )
-            .unwrap();
-        let feedback_events = scheduler.events()[before_feedback..].to_vec();
-        let invalidated = invalidate_reactivated_outputs(&feedback_events, &mut latest).unwrap();
-        validate_latest_completed_generations(&scheduler, &latest).unwrap();
-        assert_eq!(
-            invalidated,
-            vec![
-                ("source".to_string(), 1, 2, "feedback-1".to_string()),
-                ("sibling".to_string(), 1, 2, "feedback-1".to_string()),
-                ("reviewer".to_string(), 1, 2, "feedback-1".to_string()),
-            ]
-        );
-        let mut feedback_operations = vec![
-            SessionTurnAtomicOperation {
-                operation_id: "output-reviewer-1".to_string(),
-                mutation: SessionTurnAtomicMutation::AgentOutput {
-                    agent_id: "reviewer".to_string(),
-                    model: Some("reviewer-model".to_string()),
-                    output: "revision requested".to_string(),
-                    attempt_id: None,
-                    identity: Some(SessionTurnAgentOutputIdentity {
-                        activation_generation: 1,
-                        disposition: SessionTurnAgentOutputDisposition::ChangesRequested,
-                        causal_signal_id: Some("feedback-1".to_string()),
-                    }),
-                },
-            },
-            SessionTurnAtomicOperation {
-                operation_id: "feedback-signal-1".to_string(),
-                mutation: SessionTurnAtomicMutation::Execution {
-                    execution: RecordTurnExecution {
-                        kind: "coordination_signal".to_string(),
-                        execution_id: Some(turn_id.to_string()),
-                        attempt_id: None,
-                        metadata: serde_json::json!({
-                            "from_agent": "reviewer",
-                            "to_agent": "source",
-                            "summary": "replace the unsafe implementation",
-                            "generation": 1,
-                            "signal_id": "feedback-1",
-                            "applied": true,
-                            "usage": coordination_usage_value(
-                                &axocoatl_core::TokenUsageStats::new(3, 2),
-                                true,
-                            ),
-                        })
-                        .as_object()
-                        .cloned()
-                        .unwrap(),
-                    },
-                },
-            },
-        ];
-        for (agent_id, old_generation, new_generation, cause_signal_id) in &invalidated {
-            feedback_operations.push(SessionTurnAtomicOperation {
-                operation_id: format!("supersede-{agent_id}-{old_generation}"),
-                mutation: SessionTurnAtomicMutation::Execution {
-                    execution: RecordTurnExecution {
-                        kind: "agent_output_superseded".to_string(),
-                        execution_id: None,
-                        attempt_id: None,
-                        metadata: serde_json::json!({
-                            "agent_id": agent_id,
-                            "activation_generation": old_generation,
-                            "superseded_by_generation": new_generation,
-                            "cause_signal_id": cause_signal_id,
-                        })
-                        .as_object()
-                        .cloned()
-                        .unwrap(),
-                    },
-                },
-            });
-        }
-        for event in feedback_events
-            .iter()
-            .filter(|event| event.kind == TurnCoordinationEventKind::AgentReactivated)
-        {
-            feedback_operations.push(SessionTurnAtomicOperation {
-                operation_id: format!("reactivated-{}", event.agent_id),
-                mutation: SessionTurnAtomicMutation::Execution {
-                    execution: RecordTurnExecution {
-                        kind: "coordination_agent_reactivated".to_string(),
-                        execution_id: Some(turn_id.to_string()),
-                        attempt_id: None,
-                        metadata: serde_json::json!({
-                            "agent_id": event.agent_id,
-                            "generation": event.generation,
-                            "cause_signal_ids": event.cause_signal_ids,
-                        })
-                        .as_object()
-                        .cloned()
-                        .unwrap_or_default(),
-                    },
-                },
-            });
-        }
-        ledger
-            .record_operations_atomically(turn_id, "feedback-batch-1", feedback_operations)
-            .unwrap();
-        assert!(
-            latest.is_empty(),
-            "every stale descendant output is invalidated"
-        );
-        assert_eq!(
-            feedback_events
-                .iter()
-                .filter(|event| event.kind == TurnCoordinationEventKind::AgentReactivated)
-                .map(|event| event.agent_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["source", "sibling", "reviewer"]
-        );
-
-        let source_2 = scheduler.start("source").unwrap();
-        assert_eq!(source_2.generation, 2);
-        let source_2_prompt =
-            coordinated_activation_input("build it", &source_2, &by_signal, &[]).unwrap();
-        assert!(source_2_prompt.contains("Revise for source"));
-        assert!(source_2_prompt.contains("feedback-1"));
-        assert!(source_2_prompt.contains("replace the unsafe implementation"));
-        let source_2_output = coordination_test_output("source generation two");
-        ledger
-            .record_agent_output_with_coordination(
-                turn_id,
-                "output-source-2",
-                "source",
-                Some("source-model".to_string()),
-                source_2_output.content.clone(),
-                SessionTurnAgentOutputIdentity {
-                    activation_generation: 2,
-                    disposition: SessionTurnAgentOutputDisposition::Completed,
-                    causal_signal_id: Some("source-2".to_string()),
-                },
-            )
-            .unwrap();
-        by_signal.insert("source-2".to_string(), source_2_output.clone());
-        latest.insert(
-            "source".to_string(),
-            (2, "source-2".to_string(), source_2_output),
-        );
-        scheduler
-            .complete("source", "source-2", "source two")
-            .unwrap();
-
-        let sibling_2 = scheduler.start("sibling").unwrap();
-        let sibling_2_prompt =
-            coordinated_activation_input("build it", &sibling_2, &by_signal, &[]).unwrap();
-        assert!(sibling_2_prompt.contains("source generation two"));
-        assert!(!sibling_2_prompt.contains("source generation one"));
-        let sibling_2_output = coordination_test_output("current sibling result");
-        ledger
-            .record_agent_output_with_coordination(
-                turn_id,
-                "output-sibling-2",
-                "sibling",
-                Some("sibling-model".to_string()),
-                sibling_2_output.content.clone(),
-                SessionTurnAgentOutputIdentity {
-                    activation_generation: 2,
-                    disposition: SessionTurnAgentOutputDisposition::Completed,
-                    causal_signal_id: Some("sibling-2".to_string()),
-                },
-            )
-            .unwrap();
-        by_signal.insert("sibling-2".to_string(), sibling_2_output.clone());
-        latest.insert(
-            "sibling".to_string(),
-            (2, "sibling-2".to_string(), sibling_2_output),
-        );
-        scheduler
-            .complete("sibling", "sibling-2", "sibling two")
-            .unwrap();
-
-        let reviewer_2 = scheduler.start("reviewer").unwrap();
-        let reviewer_2_prompt =
-            coordinated_activation_input("build it", &reviewer_2, &by_signal, &[]).unwrap();
-        assert!(reviewer_2_prompt.contains("source generation two"));
-        assert!(reviewer_2_prompt.contains("Verify requested revision"));
-        assert!(reviewer_2_prompt.contains("feedback-1"));
-        let reviewer_2_output = coordination_test_output("verified current result");
-        ledger
-            .record_agent_output_with_coordination(
-                turn_id,
-                "output-reviewer-2",
-                "reviewer",
-                Some("reviewer-model".to_string()),
-                reviewer_2_output.content.clone(),
-                SessionTurnAgentOutputIdentity {
-                    activation_generation: 2,
-                    disposition: SessionTurnAgentOutputDisposition::Completed,
-                    causal_signal_id: Some("reviewer-2".to_string()),
-                },
-            )
-            .unwrap();
-        by_signal.insert("reviewer-2".to_string(), reviewer_2_output.clone());
-        latest.insert(
-            "reviewer".to_string(),
-            (2, "reviewer-2".to_string(), reviewer_2_output),
-        );
-        scheduler
-            .complete("reviewer", "reviewer-2", "reviewer two")
-            .unwrap();
-
-        let final_output = coordinated_final_output(
-            &sinks,
-            &latest,
-            &scheduler,
-            axocoatl_core::TokenUsageStats::new(9, 7),
-        )
-        .unwrap();
-        assert_eq!(
-            final_output.content,
-            "### sibling\ncurrent sibling result\n\n### reviewer\nverified current result"
-        );
-        assert_eq!(final_output.token_usage.total(), 16);
-
-        drop(ledger);
-        let reopened = SessionTurnStore::open(history.path()).unwrap();
-        let durable = reopened.get(turn_id).unwrap();
-        let durable_feedback = durable
-            .execution_events
-            .iter()
-            .find(|event| event.event.kind == "coordination_signal")
-            .expect("accepted feedback remains durable");
-        assert_eq!(durable_feedback.event.metadata["usage"]["input_tokens"], 3);
-        assert_eq!(durable_feedback.event.metadata["usage"]["output_tokens"], 2);
-        assert_eq!(durable_feedback.event.metadata["usage"]["total_tokens"], 5);
-        assert_eq!(durable_feedback.event.metadata["usage"]["known"], true);
-        assert_eq!(durable.agent_outputs.len(), 6);
-        assert_eq!(
-            durable
-                .agent_outputs
-                .iter()
-                .filter(|output| !output.superseded)
-                .map(|output| (output.agent_id.as_str(), output.activation_generation))
-                .collect::<Vec<_>>(),
-            vec![
-                ("source", Some(2)),
-                ("sibling", Some(2)),
-                ("reviewer", Some(2)),
-            ]
-        );
-        assert_eq!(
-            durable
-                .execution_events
-                .iter()
-                .filter(|event| event.event.kind == "coordination_agent_reactivated")
-                .map(|event| event.event.metadata["agent_id"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            vec!["source", "sibling", "reviewer"]
-        );
-        let projected = checkpoint_projection(&ApproximateCounter::new().unwrap(), &[durable]);
-        let projected_text = projected
-            .iter()
-            .map(|message| message.content.as_str())
-            .collect::<Vec<_>>();
-        assert!(projected_text.contains(&"source generation two"));
-        assert!(projected_text.contains(&"current sibling result"));
-        assert!(projected_text.contains(&"verified current result"));
-        assert!(!projected_text.contains(&"source generation one"));
-        assert!(!projected_text.contains(&"stale sibling result"));
-    }
-
-    #[test]
-    fn coordination_prompt_names_eligible_ancestors_without_leaking_transitive_output() {
-        let graph = TurnAgentGraph::new(vec![
-            TurnAgentNode::new("source", Vec::<String>::new()),
-            TurnAgentNode::new("implementer", ["source"]),
-            TurnAgentNode::new("reviewer", ["implementer"]),
-        ])
-        .unwrap();
-        let mut scheduler = TurnCoordinationScheduler::new(graph.clone());
-        let mut by_signal = HashMap::new();
-
-        scheduler.start("source").unwrap();
-        by_signal.insert(
-            "source-1".to_string(),
-            coordination_test_output("private transitive source result"),
-        );
-        scheduler
-            .complete("source", "source-1", "source complete")
-            .unwrap();
-
-        scheduler.start("implementer").unwrap();
-        by_signal.insert(
-            "implementer-1".to_string(),
-            coordination_test_output("direct implementer result"),
-        );
-        scheduler
-            .complete("implementer", "implementer-1", "implementation complete")
-            .unwrap();
-
-        let reviewer = scheduler.start("reviewer").unwrap();
-        let targets = coordinated_revision_targets(
-            &graph,
-            &scheduler,
-            &reviewer.agent_id,
-            reviewer.generation,
-        );
-        assert_eq!(targets, ["source", "implementer"]);
-        let prompt =
-            coordinated_activation_input("review the change", &reviewer, &by_signal, &targets)
-                .unwrap();
-        assert!(prompt.contains("## Coordination control"));
-        assert!(prompt.contains("at most one `changes_requested` signal"));
-        assert!(prompt.contains("`source`, `implementer`"));
-        assert!(prompt.contains("direct implementer result"));
-        assert!(!prompt.contains("private transitive source result"));
-
-        scheduler
-            .request_changes("reviewer", "source", "feedback-1", "revise the source")
-            .unwrap();
-        let source_retry = scheduler.start("source").unwrap();
-        assert_eq!(source_retry.generation, 2);
-        let retry_targets = coordinated_revision_targets(
-            &graph,
-            &scheduler,
-            &source_retry.agent_id,
-            source_retry.generation,
-        );
-        assert!(retry_targets.is_empty());
-        let retry_prompt = coordinated_activation_input(
-            "review the change",
-            &source_retry,
-            &by_signal,
-            &retry_targets,
-        )
-        .unwrap();
-        assert!(retry_prompt.contains("Revise for source"));
-        assert!(retry_prompt.contains("## Coordination control"));
-        assert!(retry_prompt.contains("No upstream revision is available"));
-        assert!(retry_prompt.contains("Do not call `coordination_signal`"));
-    }
-
-    #[test]
     fn one_app_release_review_demo_enforces_bounded_consistent_verdicts() {
         let source = Path::new("demo/one-app/axocoatl.demo.yaml");
         let config = axocoatl_config::parse_config(
@@ -29613,7 +27474,7 @@ workflows:
             .find(|agent| agent.id == "architect")
             .expect("architect exists");
         assert!(architect.depends_on.is_empty());
-        assert_eq!(architect.tools, ["coordination_signal"]);
+        assert!(architect.tools.is_empty());
         assert_eq!(architect.sampling.max_tokens, Some(700));
         let architect_budget = architect.token_budget.as_ref().expect("architect budget");
         assert_eq!(architect_budget.per_call, 5_000);
@@ -29633,7 +27494,7 @@ workflows:
             .find(|agent| agent.id == "reviewer")
             .expect("reviewer exists");
         assert_eq!(reviewer.depends_on, ["architect"]);
-        assert_eq!(reviewer.tools, ["coordination_signal"]);
+        assert!(reviewer.tools.is_empty());
         assert_eq!(reviewer.sampling.max_tokens, Some(2_000));
         let reviewer_budget = reviewer.token_budget.as_ref().expect("reviewer budget");
         assert_eq!(reviewer_budget.per_call, 5_000);
@@ -29643,216 +27504,64 @@ workflows:
             axocoatl_config::OverflowPolicyYaml::Abort
         ));
         let reviewer_prompt = reviewer.system_prompt.as_deref().unwrap_or_default();
-        assert!(reviewer_prompt.contains("Do not call any other tool"));
+        assert!(reviewer_prompt.contains("Do not call tools"));
         assert!(reviewer_prompt.contains("BLOCK if"));
         assert!(reviewer_prompt.contains("otherwise SHIP"));
         assert!(reviewer_prompt.contains("Never combine unresolved BLOCKING with SHIP"));
     }
 
     #[test]
-    fn daemon_coordination_adapter_maps_failure_blocking_and_stop() {
-        let history = tempfile::tempdir().unwrap();
-        let mut ledger = SessionTurnStore::open(history.path()).unwrap();
-        let turn_id = "coordination-failure-stop-turn";
-        ledger
-            .begin(BeginSessionTurn {
-                turn_id: Some(turn_id.to_string()),
-                session_id: "coordination-failure-stop-session".to_string(),
-                user_input: "run every independent branch".to_string(),
-                agent_id: None,
-                model: None,
-                context: Vec::new(),
-                idempotency_key: Some("coordination-failure-stop-request".to_string()),
-                metadata: serde_json::Map::new(),
-            })
-            .unwrap();
-        let graph = TurnAgentGraph::new(vec![
-            TurnAgentNode::new("source", Vec::<String>::new()),
-            TurnAgentNode::new("child", ["source"]),
-            TurnAgentNode::new("independent", Vec::<String>::new()),
-        ])
-        .unwrap();
-        let mut scheduler = TurnCoordinationScheduler::new(graph);
-        scheduler.start("source").unwrap();
-        let before_failure = scheduler.events().len();
-        scheduler
-            .fail("source", "failed-1", "provider failed")
-            .unwrap();
-        let failure_kinds = scheduler.events()[before_failure..]
-            .iter()
-            .filter_map(|event| coordination_lifecycle_kind(event.kind))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            failure_kinds,
-            ["coordination_agent_failed", "coordination_agent_blocked"]
-        );
-        for event in &scheduler.events()[before_failure..] {
-            let kind = coordination_lifecycle_kind(event.kind).unwrap();
-            let event_usage = if event.kind == TurnCoordinationEventKind::AgentBlocked {
-                axocoatl_core::TokenUsageStats::default()
-            } else {
-                axocoatl_core::TokenUsageStats::new(3, 2)
-            };
-            ledger
-                .record_execution(
-                    turn_id,
-                    format!("failure-event-{}", event.agent_id),
-                    RecordTurnExecution {
-                        kind: kind.to_string(),
-                        execution_id: Some(turn_id.to_string()),
-                        attempt_id: None,
-                        metadata: serde_json::json!({
-                            "agent_id": event.agent_id,
-                            "generation": event.generation,
-                            "cause_signal_ids": event.cause_signal_ids,
-                            "summary": event.signal.as_ref().map(|signal| signal.summary.clone()),
-                            "usage": coordination_usage_value(&event_usage, true),
-                        })
-                        .as_object()
-                        .cloned()
-                        .unwrap_or_default(),
-                    },
-                )
-                .unwrap();
-        }
-        assert_eq!(
-            scheduler
-                .ready_activations()
-                .into_iter()
-                .map(|activation| activation.agent_id)
-                .collect::<Vec<_>>(),
-            ["independent"]
-        );
-
-        let before_stop = scheduler.events().len();
-        scheduler.cancel();
-        assert_eq!(
-            scheduler.events()[before_stop..]
-                .iter()
-                .filter_map(|event| coordination_lifecycle_kind(event.kind))
-                .collect::<Vec<_>>(),
-            ["coordination_agent_cancelled"]
-        );
-        for event in &scheduler.events()[before_stop..] {
-            ledger
-                .record_execution(
-                    turn_id,
-                    format!("cancel-event-{}", event.agent_id),
-                    RecordTurnExecution {
-                        kind: coordination_lifecycle_kind(event.kind).unwrap().to_string(),
-                        execution_id: Some(turn_id.to_string()),
-                        attempt_id: None,
-                        metadata: serde_json::json!({
-                            "agent_id": event.agent_id,
-                            "generation": event.generation,
-                            "cause_signal_ids": event.cause_signal_ids,
-                            "reason": "turn_stop",
-                            "usage": coordination_usage_value(&Default::default(), true),
-                        })
-                        .as_object()
-                        .cloned()
-                        .unwrap_or_default(),
-                    },
-                )
-                .unwrap();
-        }
-        assert_eq!(scheduler.state("source").unwrap(), TurnAgentState::Failed);
-        assert_eq!(scheduler.state("child").unwrap(), TurnAgentState::Blocked);
-        assert_eq!(
-            scheduler.state("independent").unwrap(),
-            TurnAgentState::Cancelled
-        );
-        drop(ledger);
-        let reopened = SessionTurnStore::open(history.path()).unwrap();
-        let durable = reopened.get(turn_id).unwrap();
-        assert_eq!(
-            durable
-                .execution_events
-                .iter()
-                .map(|event| event.event.kind.as_str())
-                .collect::<Vec<_>>(),
-            vec![
-                "coordination_agent_failed",
-                "coordination_agent_blocked",
-                "coordination_agent_cancelled",
-            ]
-        );
-        let blocked = durable
-            .execution_events
-            .iter()
-            .find(|event| event.event.kind == "coordination_agent_blocked")
-            .unwrap();
-        assert_eq!(blocked.event.metadata["usage"]["total_tokens"], 0);
-        let cancelled = durable
-            .execution_events
-            .iter()
-            .find(|event| event.event.kind == "coordination_agent_cancelled")
-            .unwrap();
-        assert_eq!(cancelled.event.metadata["reason"], "turn_stop");
-    }
-
-    #[test]
-    fn daemon_coordination_graph_rejects_an_omitted_configured_parent() {
-        let mut config = coordination_adapter_test_config();
-        config.workflows[0].id = "missing-parent".to_string();
-        config.workflows[0].agents = vec!["sibling".to_string(), "reviewer".to_string()];
-        config.workflows[0].entry_point = Some("reviewer".to_string());
-        let error = coordinated_agent_graph(&["reviewer".to_string()], &config)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("depends on 'source'"), "{error}");
-        assert!(error.contains("not selected"), "{error}");
-        assert!(validate_session_mode(
-            &config,
-            &SessionMode::Custom {
-                agents: vec!["reviewer".to_string()]
-            }
-        )
-        .is_ok());
-        assert!(validate_session_mode(
-            &config,
-            &SessionMode::Custom {
-                agents: vec!["sibling".to_string(), "reviewer".to_string()]
-            }
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("not selected"));
-        assert!(validate_session_mode(
-            &config,
-            &SessionMode::Lattice {
-                workflow_id: Some("missing-parent".to_string())
-            }
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("not selected"));
-    }
-
-    #[test]
-    fn session_coordination_graph_accepts_autonomous_agents_only() {
+    fn legacy_multi_agent_turns_are_refused_with_the_upgrade_command() {
         let config = role_test_config();
-        let mixed = vec!["auto-code".to_string(), "lead".to_string()];
-        let error = coordinated_agent_graph(&mixed, &config)
+        let mixed = SessionMode::Custom {
+            agents: vec!["auto-code".to_string(), "lead".to_string()],
+        };
+        // A 1.0 Session with two Agents is still valid; only its turns stop.
+        assert!(validate_session_mode(&config, &mixed).is_ok());
+        let refusal = refuse_legacy_multi_agent_turn(&config, &mixed, None)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("autonomous Agents only"), "{error}");
-        assert!(validate_session_mode(
-            &config,
-            &SessionMode::Custom {
-                agents: mixed.clone()
-            }
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("autonomous Agents only"));
-        assert!(validate_session_mode(
-            &config,
-            &SessionMode::Custom {
-                agents: vec!["lead".to_string()]
-            }
-        )
-        .is_ok());
+        assert!(refusal.contains("2 Agents"), "{refusal}");
+        assert!(
+            refusal.contains("`axocoatl session upgrade --confirm`"),
+            "{refusal}"
+        );
+        let autonomous_team = SessionMode::Lattice {
+            workflow_id: Some("autonomous".to_string()),
+        };
+        assert!(
+            refuse_legacy_multi_agent_turn(&config, &autonomous_team, None)
+                .unwrap_err()
+                .to_string()
+                .contains("`axocoatl session upgrade --confirm`")
+        );
+
+        // Turns that run one Agent keep working on a 1.0 root.
+        for mode in [
+            SessionMode::SingleAgent {
+                agent_id: "auto-code".to_string(),
+            },
+            SessionMode::Custom {
+                agents: vec!["lead".to_string()],
+            },
+            SessionMode::Lattice {
+                workflow_id: Some("coordinated".to_string()),
+            },
+        ] {
+            assert!(
+                refuse_legacy_multi_agent_turn(&config, &mode, None).is_ok(),
+                "{mode:?}"
+            );
+        }
+        assert!(refuse_legacy_multi_agent_turn(&config, &mixed, Some("auto-code")).is_ok());
+        assert!(
+            refuse_legacy_multi_agent_turn(&config, &autonomous_team, Some("auto-review")).is_ok()
+        );
+    }
+
+    #[test]
+    fn coordinator_sessions_use_checkpoint_transactions() {
+        let config = role_test_config();
         assert!(session_uses_checkpoint_transaction(
             &config,
             &SessionMode::SingleAgent {
@@ -29871,34 +27580,6 @@ workflows:
                 agents: vec!["lead".to_string()]
             }
         ));
-
-        let coordinator = config
-            .agents
-            .iter()
-            .find(|agent| agent.id == "lead")
-            .unwrap();
-        let autonomous = config
-            .agents
-            .iter()
-            .find(|agent| agent.id == "auto-code")
-            .unwrap();
-        let multi = SessionMode::Custom { agents: mixed };
-        assert_eq!(
-            coordination_signal_owner(&multi, autonomous, true),
-            Some("auto-code")
-        );
-        assert_eq!(coordination_signal_owner(&multi, autonomous, false), None);
-        assert_eq!(coordination_signal_owner(&multi, coordinator, true), None);
-        assert_eq!(
-            coordination_signal_owner(
-                &SessionMode::SingleAgent {
-                    agent_id: "auto-code".to_string()
-                },
-                autonomous,
-                true
-            ),
-            None
-        );
     }
 
     #[tokio::test]
@@ -30154,22 +27835,15 @@ workflows:
         let interrupted = turn_store.get(interrupted_turn).unwrap();
         assert_eq!(interrupted.status, SessionTurnLifecycle::Interrupted);
         assert_eq!(interrupted.partial_output, "unattributed restart evidence");
-        assert!(interrupted.execution_events.iter().any(|event| {
-            event.event.kind == "coordination_recovery_partial"
-                && event.event.metadata["attribution"] == "unattributed"
-                && event.event.metadata["source"] == "turn.partial_output"
-        }));
+        // Coordination records from a 1.1.0 development build are kept as
+        // written; restart adds no coordination recovery records of its own.
         assert_eq!(
             interrupted
                 .execution_events
                 .iter()
-                .filter(|event| event.event.kind == "coordination_agent_cancelled")
-                .map(|event| (
-                    event.event.metadata["agent_id"].as_str().unwrap(),
-                    event.event.metadata["generation"].as_u64().unwrap(),
-                ))
+                .map(|event| event.event.kind.as_str())
                 .collect::<Vec<_>>(),
-            vec![("source", 1), ("tester", 0)]
+            ["coordination_planned", "coordination_agent_activated"]
         );
         let turn_store = tokio::sync::Mutex::new(turn_store);
         assert_eq!(
@@ -31227,18 +28901,6 @@ workflows:
             },
         )
         .is_ok());
-        let mixed_custom_error = validate_session_mode(
-            &config,
-            &SessionMode::Custom {
-                agents: vec!["auto-code".into(), "lead".into()],
-            },
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            mixed_custom_error.contains("autonomous Agents only"),
-            "{mixed_custom_error}"
-        );
 
         for mode in [
             SessionMode::SingleAgent {
@@ -31273,17 +28935,6 @@ workflows:
             AxocoatlDaemon::session_workflow_agents(&config, autonomous).unwrap(),
             vec!["auto-review", "auto-code"],
             "an autonomous lattice keeps its configured roster",
-        );
-        let graph = coordinated_agent_graph(&autonomous.agents, &config).unwrap();
-        let scheduler = TurnCoordinationScheduler::new(graph);
-        assert_eq!(
-            scheduler
-                .ready_activations()
-                .into_iter()
-                .map(|activation| activation.agent_id)
-                .collect::<Vec<_>>(),
-            vec!["auto-code"],
-            "the shared turn scheduler must activate the dependency root first",
         );
     }
 

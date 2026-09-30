@@ -1,7 +1,7 @@
 use super::*;
 use axocoatl_session::turn_ledger::{
     BeginSessionTurn, RecordTurnExecution, SessionTurnAgentOutput, SessionTurnExecutionEvent,
-    SessionTurnStore,
+    SessionTurnLifecycle, SessionTurnStore,
 };
 
 fn turn() -> SessionTurn {
@@ -34,141 +34,79 @@ fn event(kind: &str, id: &str, at: u64, metadata: Value) -> SessionTurnExecution
     }
 }
 
+/// History that 1.1.0 development builds recorded for a coordinated
+/// multi-Agent turn still renders: one node per Agent, one activation per
+/// recorded generation, and the superseded output marked as such. The removed
+/// coordination records no longer add states, signals or dependencies.
 #[test]
-fn legacy_fold_preserves_generations_causality_and_missing_identities() {
+fn legacy_coordinated_history_still_renders_each_agent_output() {
     let mut turn = turn();
+    turn.status = SessionTurnLifecycle::Completed;
     turn.execution_events = vec![
         event(
             "coordination_planned",
             "plan",
             1,
-            json!({"agents":[
-                {"id":"coder","name":"Coder","depends_on":[]},
-                {"id":"reviewer","name":"Review","depends_on":["coder"]}
-            ]}),
+            json!({"agents":[{"id":"coder","depends_on":[]},{"id":"reviewer","depends_on":["coder"]}]}),
         ),
         event(
             "coordination_agent_activated",
-            "start-1",
-            10,
+            "coder-start",
+            2,
             json!({"agent_id":"coder","generation":1}),
         ),
         event(
-            "coordination_agent_completed",
-            "complete-1",
-            20,
-            json!({"agent_id":"coder","generation":1,"usage":{"tokens":9,"cost_known":false}}),
-        ),
-        event(
             "coordination_signal",
-            "revise",
-            30,
-            json!({"from_agent":"reviewer","to_agent":"coder","generation":1,"signal_id":"signal-a","summary":"Fix failing test","applied":true}),
-        ),
-        // Journal order, not a sorting of wall clock timestamps, is authority.
-        event(
-            "coordination_agent_reactivated",
-            "queued-2",
-            5,
-            json!({"agent_id":"coder","generation":2,"cause_signal_ids":["signal-a"]}),
-        ),
-        event(
-            "coordination_agent_activated",
-            "start-2",
-            6,
-            json!({"agent_id":"coder","generation":2}),
-        ),
-        event(
-            "coordination_agent_blocked",
-            "blocked",
-            7,
-            json!({"agent_id":"reviewer","generation":2,"summary":"Parent still needs work"}),
+            "signal",
+            3,
+            json!({"signal_id":"signal-a","from_agent":"reviewer","to_agent":"coder","summary":"Fix the test","applied":true}),
         ),
     ];
-    turn.agent_outputs.push(SessionTurnAgentOutput {
-        operation_id: Some("old-output".into()),
-        agent_id: "coder".into(),
-        model: None,
-        output: "First implementation".into(),
-        attempt_id: None,
-        activation_generation: Some(1),
-        disposition: Some(SessionTurnAgentOutputDisposition::Completed),
-        causal_signal_id: None,
-        superseded: true,
-        superseded_by_generation: Some(2),
-        superseded_by_signal_id: Some("signal-a".into()),
-        recorded_at: 20,
-    });
+    for (id, agent, generation, superseded, output) in [
+        ("old-output", "coder", 1, true, "First implementation"),
+        ("review-output", "reviewer", 1, false, "Looks right"),
+        ("new-output", "coder", 2, false, "Second implementation"),
+    ] {
+        turn.agent_outputs.push(SessionTurnAgentOutput {
+            operation_id: Some(id.into()),
+            agent_id: agent.into(),
+            model: None,
+            output: output.into(),
+            attempt_id: None,
+            activation_generation: Some(generation),
+            superseded,
+            recorded_at: 20,
+        });
+    }
     let before = serde_json::to_value(&turn).unwrap();
     let view = SessionTurnControlPlane::from_legacy(&turn);
     assert_eq!(before, serde_json::to_value(&turn).unwrap());
-    assert_eq!(view.nodes[0].label, "Coder");
-    assert_eq!(view.nodes[0].activations.len(), 2);
-    assert_eq!(view.nodes[0].activations[0].state, "superseded");
-    assert_eq!(view.nodes[0].activations[1].state, "running");
-    assert_eq!(view.nodes[1].activations[0].state, "blocked");
-    assert!(matches!(
-        view.nodes[0].definition,
-        EvidenceValue::NotRecorded
-    ));
-    assert!(matches!(view.epochs, EvidenceValue::NotRecorded));
-    assert!(matches!(view.invocations, EvidenceValue::Unknown { .. }));
-    assert!(!view.nodes[0].activations[1].capabilities.stop.enabled);
-    assert!(view.edges.iter().any(|edge| edge.kind == "dependency"
-        && edge.source == "coder"
-        && edge.target == "reviewer"));
-    assert!(view
-        .edges
+    assert_eq!(view.history_version, "legacy_v1");
+    let nodes = view
+        .nodes
         .iter()
-        .any(|edge| edge.id == "signal-a" && edge.source == "reviewer" && edge.target == "coder"));
+        .map(|node| (node.node_id.as_str(), node.activations.len()))
+        .collect::<Vec<_>>();
+    assert_eq!(nodes, vec![("coder", 2), ("reviewer", 1)]);
+    assert_eq!(view.nodes[0].activations[0].state, "superseded");
+    assert_eq!(
+        view.nodes[0].activations[1].output,
+        EvidenceValue::available("Second implementation".to_string())
+    );
+    assert!(view.edges.is_empty());
+    assert!(view.nodes.iter().all(|node| node.dependencies.is_empty()));
+    assert!(view
+        .nodes
+        .iter()
+        .flat_map(|node| &node.activations)
+        .flat_map(|activation| &activation.evidence)
+        .all(|evidence| evidence.kind == "agent_output"));
+    assert!(!view.nodes[0].activations[1].capabilities.stop.enabled);
     let wire = serde_json::to_value(&view).unwrap();
     assert_eq!(
         wire["nodes"][0]["activations"][1]["reference"]["kind"],
         "legacy"
     );
-    assert!(wire["nodes"][0]["activations"][1]["reference"]
-        .get("activation_id")
-        .is_none());
-}
-
-#[test]
-fn legacy_missing_generation_is_not_invented_or_merged_with_generation_one() {
-    let mut turn = turn();
-    turn.agent_id = Some("coder".into());
-    turn.execution_events = vec![
-        event(
-            "coordination_agent_activated",
-            "unknown",
-            1,
-            json!({"agent_id":"coder"}),
-        ),
-        event(
-            "coordination_agent_activated",
-            "exact-generation",
-            2,
-            json!({"agent_id":"coder","generation":1}),
-        ),
-        event(
-            "coordination_agent_failed",
-            "other-session",
-            3,
-            json!({"session_id":"session-b","agent_id":"coder","generation":1}),
-        ),
-        event(
-            "coordination_agent_failed",
-            "other-turn",
-            4,
-            json!({"turn_id":"turn-b","agent_id":"coder","generation":1}),
-        ),
-    ];
-    let view = SessionTurnControlPlane::from_legacy(&turn);
-    assert_eq!(view.nodes[0].activations.len(), 2);
-    assert!(matches!(
-        view.nodes[0].activations[0].generation,
-        EvidenceValue::NotRecorded
-    ));
-    assert_eq!(view.nodes[0].activations[1].state, "running");
-    assert_eq!(view.warnings.len(), 3);
 }
 
 #[test]
@@ -198,27 +136,6 @@ fn bounded_utf8_evidence_declares_truncation_instead_of_silent_loss() {
     };
     assert_eq!(value.len(), TEXT_PREVIEW_BYTES);
     assert_eq!(original_byte_len, turn.user_input.len() as u64);
-}
-
-#[test]
-fn closed_legacy_turn_does_not_present_a_lost_activation_as_running() {
-    let mut turn = turn();
-    turn.execution_events.push(event(
-        "coordination_agent_activated",
-        "started",
-        1,
-        json!({"agent_id":"coder","generation":1}),
-    ));
-    turn.status = SessionTurnLifecycle::Interrupted;
-    let view = SessionTurnControlPlane::from_legacy(&turn);
-    assert_eq!(view.nodes[0].activations[0].state, "interrupted");
-    turn.status = SessionTurnLifecycle::Completed;
-    let view = SessionTurnControlPlane::from_legacy(&turn);
-    assert_eq!(view.nodes[0].activations[0].state, "unknown");
-    assert!(matches!(
-        view.nodes[0].activations[0].completed_at,
-        EvidenceValue::NotRecorded
-    ));
 }
 
 #[cfg(unix)]
@@ -1015,12 +932,6 @@ fn legacy_tools_keep_exact_event_identity_without_inventing_a_generation() {
     let mut source = turn();
     source.execution_events = vec![
         event(
-            "coordination_agent_activated",
-            "activation-start",
-            1,
-            json!({"agent_id":"coder","generation":1}),
-        ),
-        event(
             "tool_started",
             "tool-intent",
             2,
@@ -1047,13 +958,5 @@ fn legacy_tools_keep_exact_event_identity_without_inventing_a_generation() {
     assert!(serde_json::to_string(&historical.evidence[1])
         .unwrap()
         .contains("retained source"));
-    let numbered = node
-        .activations
-        .iter()
-        .find(|activation| matches!(activation.generation, EvidenceValue::Available { value: 1 }))
-        .unwrap();
-    assert!(!numbered
-        .evidence
-        .iter()
-        .any(|evidence| evidence.kind.starts_with("tool_")));
+    assert_eq!(node.activations.len(), 1);
 }

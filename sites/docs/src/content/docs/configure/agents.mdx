@@ -70,10 +70,9 @@ workflows:
 ```
 
 A legacy Session stores `feature-team`, then resolves current Agent membership and
-dependencies when each all-team turn begins. When the roster contains more than one
-autonomous Agent, that exact turn graph remains in History even if configuration changes
-later. A Coordinator-led team uses its separate hierarchical direct path and does not
-fabricate a peer Coordination map. The Automation editor and the
+dependencies when each all-team turn begins. On a 1.0 data root, a turn that would run
+two or more Agents is refused with a message to run `axocoatl session upgrade --confirm`;
+a Coordinator-led team runs only its Coordinator and keeps working. The Automation editor and the
 compatibility `/api/workflows` routes operate on the separate canonical
 Automation store; editing an Automation does not edit a Session team.
 

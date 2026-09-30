@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::checkpoint::{CheckpointStore, LegacySessionCheckpointSnapshot};
-use axocoatl_session::turn_ledger::SessionTurnAgentOutputDisposition;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -284,9 +283,6 @@ fn project_actor(
                 output.agent_id == assignment.recorded_agent_id
                     && !output.superseded
                     && output.attempt_id.is_none()
-                    && output
-                        .disposition
-                        .is_none_or(|state| state == SessionTurnAgentOutputDisposition::Completed)
             })
             .cloned()
             .collect();
@@ -323,8 +319,7 @@ fn project_actor(
             }
         }
         let mut own = turn.clone();
-        own.user_input =
-            legacy_graph_input(turn, &assignment.recorded_agent_id, selected_generation)?;
+        own.user_input = legacy_graph_input(turn, selected_generation)?;
         own.agent_outputs = outputs;
         own.partial_output.clear();
         if !has_own_final {
@@ -393,232 +388,19 @@ fn project_actor(
     ))
 }
 
-/// Reconstruct only provable semantic input for the selected completed graph
-/// generation. Legacy checkpoints do not identify their accepted generations,
-/// so neither their mixed transcript nor current runtime prompt configuration
-/// can supply missing causal authority.
-fn legacy_graph_input(turn: &SessionTurn, agent: &str, generation: Option<u32>) -> Result<String> {
-    let plans: Vec<_> = turn
+/// Only an ordinary turn has provable semantic input. Coordinated multi-Agent
+/// turns recorded by 1.1.0 development builds carry graph handoffs whose
+/// causal authority is no longer reconstructed, so they cannot become
+/// runnable context.
+fn legacy_graph_input(turn: &SessionTurn, generation: Option<u32>) -> Result<String> {
+    let planned = turn
         .execution_events
         .iter()
-        .filter(|record| record.event.kind == "coordination_planned")
-        .collect();
-    if plans.is_empty() && generation.is_none() {
+        .any(|record| record.event.kind == "coordination_planned");
+    if !planned && generation.is_none() {
         return Ok(turn.user_input.clone());
     }
-    if plans.len() != 1 || plans[0].event.attempt_id.is_some() {
-        return invalid("legacy graph input requires one recorded graph");
-    }
-    let generation = generation
-        .filter(|value| *value > 0)
-        .ok_or_else(|| invalid_error("legacy graph output has no exact generation"))?;
-    let list = |value: Option<&serde_json::Value>| -> Result<Vec<String>> {
-        let items = value
-            .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| invalid_error("legacy graph causal identity list is missing"))?;
-        let mut found = HashSet::new();
-        items
-            .iter()
-            .map(|item| {
-                let value = item
-                    .as_str()
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| invalid_error("legacy graph causal identity is invalid"))?;
-                if !found.insert(value) {
-                    return invalid("legacy graph causal identity is duplicated");
-                }
-                Ok(value.to_owned())
-            })
-            .collect()
-    };
-    let mut graph = std::collections::BTreeMap::new();
-    for node in plans[0]
-        .event
-        .metadata
-        .get("agents")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| invalid_error("legacy graph membership is missing"))?
-    {
-        let id = node
-            .get("id")
-            .and_then(serde_json::Value::as_str)
-            .filter(|id| !id.is_empty())
-            .ok_or_else(|| invalid_error("legacy graph member is invalid"))?;
-        if graph
-            .insert(id.to_owned(), list(node.get("depends_on"))?)
-            .is_some()
-        {
-            return invalid("legacy graph member is duplicated");
-        }
-    }
-    if graph
-        .values()
-        .flatten()
-        .any(|parent| !graph.contains_key(parent))
-    {
-        return invalid("legacy graph dependency has no recorded member");
-    }
-    if graph
-        .keys()
-        .any(|node| legacy_graph_ancestor(&graph, node, node))
-    {
-        return invalid("legacy recorded graph contains a dependency cycle");
-    }
-    let parents = graph
-        .get(agent)
-        .ok_or_else(|| invalid_error("legacy output is outside its recorded graph"))?;
-    let starts: Vec<_> = turn
-        .execution_events
-        .iter()
-        .filter(|record| {
-            record.event.kind == "coordination_agent_activated"
-                && record
-                    .event
-                    .metadata
-                    .get("agent_id")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(agent)
-                && record
-                    .event
-                    .metadata
-                    .get("generation")
-                    .and_then(serde_json::Value::as_u64)
-                    == Some(u64::from(generation))
-        })
-        .collect();
-    if starts.len() != 1 || starts[0].event.attempt_id.is_some() {
-        return invalid("legacy graph output has no unique exact activation input");
-    }
-    let recorded_parents = list(starts[0].event.metadata.get("parents"))?;
-    if parents.iter().collect::<BTreeSet<_>>() != recorded_parents.iter().collect::<BTreeSet<_>>() {
-        return invalid("legacy activation dependencies disagree with its recorded graph");
-    }
-    let causes = list(starts[0].event.metadata.get("cause_signal_ids"))?;
-    let mut retained_parents = HashSet::new();
-    let mut handoffs = Vec::new();
-    let mut feedback = Vec::new();
-    for cause in causes {
-        let outputs: Vec<_> = turn
-            .agent_outputs
-            .iter()
-            .filter(|output| {
-                output.causal_signal_id.as_deref() == Some(cause.as_str())
-                    && output.disposition == Some(SessionTurnAgentOutputDisposition::Completed)
-            })
-            .collect();
-        let signals: Vec<_> = turn
-            .execution_events
-            .iter()
-            .filter(|record| {
-                record.event.kind == "coordination_signal"
-                    && record
-                        .event
-                        .metadata
-                        .get("signal_id")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(cause.as_str())
-            })
-            .collect();
-        if outputs.len() == 1 && signals.is_empty() {
-            let output = outputs[0];
-            let parent_generation = output
-                .activation_generation
-                .filter(|value| *value > 0)
-                .ok_or_else(|| invalid_error("legacy parent output generation is missing"))?;
-            if output.superseded
-                || output.output.trim().is_empty()
-                || output.attempt_id.is_some()
-                || !parents.contains(&output.agent_id)
-                || !retained_parents.insert(output.agent_id.clone())
-            {
-                return invalid("legacy activation parent output is stale, duplicated or not a direct dependency");
-            }
-            handoffs.push(format!(
-                "### {} (generation {})\n{}",
-                output.agent_id, parent_generation, output.output
-            ));
-        } else if outputs.is_empty() && signals.len() == 1 {
-            let signal = &signals[0].event;
-            let text = |key| {
-                signal
-                    .metadata
-                    .get(key)
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| invalid_error("legacy revision feedback is incomplete"))
-            };
-            let from = text("from_agent")?;
-            let target = text("to_agent")?;
-            let summary = text("summary")?;
-            let requested_generation = signal
-                .metadata
-                .get("generation")
-                .and_then(serde_json::Value::as_u64)
-                .filter(|value| *value > 0)
-                .ok_or_else(|| invalid_error("legacy feedback generation is missing"))?;
-            let requests: Vec<_> = turn
-                .agent_outputs
-                .iter()
-                .filter(|output| {
-                    output.causal_signal_id.as_deref() == Some(cause.as_str())
-                        && output.agent_id == from
-                        && output.attempt_id.is_none()
-                        && output.disposition
-                            == Some(SessionTurnAgentOutputDisposition::ChangesRequested)
-                        && output.activation_generation.map(u64::from) == Some(requested_generation)
-                })
-                .collect();
-            if signal.attempt_id.is_some()
-                || signal
-                    .metadata
-                    .get("applied")
-                    .and_then(serde_json::Value::as_bool)
-                    != Some(true)
-                || requests.len() != 1
-                || !legacy_graph_ancestor(&graph, target, from)
-                || (agent != target && !legacy_graph_ancestor(&graph, target, agent))
-            {
-                return invalid("legacy feedback lacks exact applied revision authority");
-            }
-            feedback.push(format!("### Recorded revision (signal {cause}, from {from}, to {target}, generation {requested_generation})\n{summary}"));
-        } else {
-            return invalid("legacy activation causal input is missing or ambiguous");
-        }
-    }
-    if retained_parents.len() != parents.len() {
-        return invalid("legacy activation does not retain every required direct-parent output");
-    }
-    let mut input = turn.user_input.clone();
-    if !handoffs.is_empty() {
-        input.push_str("\n\n## Direct coordination handoffs\n");
-        input.push_str(&handoffs.join("\n\n"));
-    }
-    if !feedback.is_empty() {
-        input.push_str("\n\n## Coordination feedback\n");
-        input.push_str(&feedback.join("\n\n"));
-    }
-    Ok(input)
-}
-
-fn legacy_graph_ancestor(
-    graph: &std::collections::BTreeMap<String, Vec<String>>,
-    ancestor: &str,
-    node: &str,
-) -> bool {
-    let mut pending = vec![node];
-    let mut visited = HashSet::new();
-    while let Some(current) = pending.pop() {
-        if !visited.insert(current) {
-            continue;
-        }
-        for parent in graph.get(current).into_iter().flatten() {
-            if parent == ancestor {
-                return true;
-            }
-            pending.push(parent.as_str());
-        }
-    }
-    false
+    invalid("coordinated legacy history cannot become runnable Agent context")
 }
 
 fn accounting_only(

@@ -28,8 +28,8 @@ merely because it exists in the current working directory.
 2. Resume the last session or open a project directory as a named Workspace, then start a
    Session inside it.
 3. Add any files needed as **Once** or **Session** context, then ask the selected Agent or
-   configured team for one result. An autonomous multi-Agent Lattice or Custom turn keeps its
-   causal Coordination map with the conversation. A Coordinator can create Workers from
+   configured team for one result. A native team turn keeps its execution graph with the
+   conversation. A Coordinator can create Workers from
    explicitly approved templates and limits; their separate activations and parent ownership
    remain in the same turn history.
 4. When an implementation decision needs independent evidence, turn on **Explore several

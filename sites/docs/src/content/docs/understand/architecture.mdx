@@ -51,7 +51,9 @@ Existing legacy roots keep compatibility execution until an explicit offline
 
 1. The server validates the Session and appends a durable turn begin, including
    stable request identity and structured context references.
-2. The Session dispatches to its selected Agent or multi-Agent ordering.
+2. The Session dispatches to its one selected Agent. A turn that would run two or
+   more Agents is refused before it starts; run `axocoatl session upgrade --confirm`
+   to move multi-Agent Sessions to native execution.
 3. An autonomous Agent builds model input from its conversation, core memory,
    passive recall, tools, and current request. A Coordinator instead builds its
    decomposition/synthesis input from Tier-1 conversation and delegates to declared
@@ -123,7 +125,7 @@ bounded.
 Do not collapse all multi-Agent behavior into one scheduler:
 
 - **Automations** execute explicit persisted DAGs manually or from triggers.
-- **Multi-Agent Sessions** run selected configured Agents in dependency order
+- **Native multi-Agent Sessions** run selected configured Agents in dependency order
   inside one foreground Session sandbox.
 - **The event feed** carries the events a Skill publishes when it fires to
   triggers, webhooks, and observers; it never starts Agents on its own.
