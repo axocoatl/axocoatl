@@ -14,9 +14,9 @@ scenario can be reset and repeated from a fresh Axocoatl data directory.
 | Turn | One accepted request and its durable execution evidence inside a Session. | The whole Session. |
 | Single-agent Session | The ordinary path: one configured Agent works in the Session sandbox and conversation. | A reduced demo mode. It is the default product path. |
 | Multi-agent Session | A Session team shares one work context. Native generations bind accepted upstream outputs; team and turn controls can revise its work. | Parallel competing solutions in isolated repositories. |
-| Agent graph | The visible dependency and live-status view for the Agents in a Session. | The event lattice. |
+| Agent graph | The visible dependency and live-status view for the Agents in a Session. | The event feed. |
 | Ways | Independent candidate implementations created from the same repository snapshot and prompt, each in its own repository clone and sandbox. | A multi-agent handoff inside one Session. |
-| Event lattice | Typed events published by Skills and runtime activity, then consumed by Automations, webhooks, and observers. | The Agent graph or a visual workflow editor. |
+| Event feed | Events published when a Skill fires, then consumed by Automations, webhooks, and observers. | The Agent graph or a visual workflow editor. |
 | Automation | A durable executable DAG with triggers, inputs, run history, and optional human interrupts. | An Agent Session or a scheduled chat macro. |
 | Coordinator | A configured coordination role can propose work and dependencies inside the native turn contract. | A guarantee of better results or unlimited autonomous execution. |
 

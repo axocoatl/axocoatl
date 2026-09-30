@@ -81,8 +81,6 @@ before(async () => {
       name: 'Launch ready',
       description: 'Publish the typed launch signal.',
       emits: ['LaunchReady'],
-      agents: ['browser-test-coder'],
-      prompt: 'Publish the launch-ready signal.',
     }],
   });
   const executablePath = await resolveChromiumExecutable();
@@ -184,7 +182,10 @@ test('a Session-authorized Skill triggers a UI-created Automation whose result s
 
     await openSettingsSection(page, 'Skills What agents may call');
     const skills = page.locator('ax-settings-skills');
+    await skills.locator('.event-list .side-row', { hasText: 'LaunchReady' }).waitFor({ state: 'visible' });
+    assert.equal(await skills.locator('.columns').innerText(), 'NAME\n◆ EMITS');
     await skills.getByRole('button', { name: /Launch ready Publish the typed launch signal/ }).click();
+    assert.deepEqual(await skills.locator('.drawer-body h4').allTextContents(), ['◆ Emits']);
     await skills.getByRole('button', { name: '◆ Fire this Skill' }).click();
     await page.getByText("Fired 'Launch ready'").waitFor({ state: 'visible' });
 

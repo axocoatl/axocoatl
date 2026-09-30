@@ -125,8 +125,8 @@ pub struct ProactiveConfigYaml {
 pub enum ProactiveTrigger {
     /// Fire on a fixed interval — `"30s"`, `"5m"`, `"2h"`, `"1d"`.
     Schedule { every: String },
-    /// Fire whenever a named lattice event occurs (e.g. `"AgentFailed"`, or a
-    /// custom event name emitted by a Skill).
+    /// Fire whenever an event with this name is published on the event feed —
+    /// a name from some Skill's `emits` list.
     OnEvent { event: String },
 }
 
@@ -149,17 +149,17 @@ fn default_enabled() -> bool {
     true
 }
 
-/// An outbound webhook — **lattice event egress**. When the lattice publishes an
-/// event whose name matches `events` (or `events` is empty, i.e. all coordination
-/// events), Axocoatl sends a signed JSON `POST` to `url`. This is the outbound
-/// counterpart to inbound A2A: signals leave, opt-in, to systems you own.
+/// An outbound webhook — **event-feed egress**. When the event feed publishes an
+/// event whose name matches `events` (or `events` is empty, i.e. every event),
+/// Axocoatl sends a signed JSON `POST` to `url`. The daemon publishes a Skill's
+/// declared events when the Skill fires. This is the outbound counterpart to
+/// inbound A2A: signals leave, opt-in, to systems you own.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookConfigYaml {
     pub name: String,
     pub url: String,
-    /// Event names to dispatch — e.g. `["TaskCompleted", "AgentFailed"]`, or a
-    /// Skill's custom event name. Empty means all coordination events; pure
-    /// telemetry (`AgentActivated`) is excluded from "all" unless named explicitly.
+    /// Event names to dispatch — names from Skills' `emits` lists, e.g.
+    /// `["ReviewRequested"]`. Empty means every event.
     #[serde(default)]
     pub events: Vec<String>,
     /// Optional shared secret. When set, each delivery is HMAC-SHA256 signed over
@@ -175,26 +175,45 @@ pub struct WebhookConfigYaml {
     pub enabled: bool,
 }
 
-/// A Skill — Axocoatl's lattice-aware unit of capability.
-/// Differentiator vs. classic Skills: declares `emits` and `reacts_to` events,
-/// composing through the lattice without manual wiring.
+/// A Skill: a named set of events. Firing it (from Settings, the HTTP API or
+/// an Agent's `skill_<id>` tool) publishes each `emits` name on the event feed,
+/// where On-event and On-skill Automations and webhooks react to it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillConfigYaml {
     pub id: String,
     pub name: String,
     pub description: String,
-    /// Lattice events this Skill emits when it completes.
+    /// Event names published on the event feed when this Skill fires.
     #[serde(default)]
     pub emits: Vec<String>,
-    /// Lattice events this Skill reacts to (auto-activation).
+    /// Removed in 1.1.0. Still read so the daemon can warn that it is ignored
+    /// instead of dropping a 1.0 key silently; nothing ever reacted to it.
     #[serde(default)]
     pub reacts_to: Vec<String>,
-    /// Agents listed as holding this Skill; metadata only.
+    /// Removed in 1.1.0 with `reacts_to`; read only to warn.
     #[serde(default)]
     pub agents: Vec<String>,
-    /// Inline prompt template (rendered when the Skill fires).
+    /// Removed in 1.1.0 with `reacts_to`; read only to warn. Firing a Skill
+    /// never ran this prompt.
     #[serde(default)]
     pub prompt: String,
+}
+
+impl SkillConfigYaml {
+    /// The removed 1.0 keys this Skill still sets, for the startup warning.
+    pub fn removed_keys(&self) -> Vec<&'static str> {
+        let mut keys = Vec::new();
+        if !self.reacts_to.is_empty() {
+            keys.push("reacts_to");
+        }
+        if !self.agents.is_empty() {
+            keys.push("agents");
+        }
+        if !self.prompt.is_empty() {
+            keys.push("prompt");
+        }
+        keys
+    }
 }
 
 /// Role an agent plays in a multi-agent system.
@@ -662,7 +681,3 @@ pub struct HookConfigYaml {
 fn default_hook_timeout() -> u64 {
     30
 }
-
-// (Dead-code duplicate `SkillConfigYaml` removed during the Glyphs→Skills
-//  rename. There was a pre-existing unused struct for prompt templates;
-//  the real Skill type lives above with id/emits/reacts_to/agents/prompt.)

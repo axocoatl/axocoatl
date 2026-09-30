@@ -141,9 +141,9 @@ not permission to choose another activation or team.
 | GET | `/api/mcp/tools` | Discovered tool name, server, and description |
 | GET | `/api/mcp/permissions` | Durable saved permission decisions |
 | DELETE | `/api/mcp/permissions?server=…&agent_id=…&tool=…` | Revoke matching decision; Agent/tool are optional |
-| GET | `/api/skills` | Configured YAML Skills |
-| POST | `/api/skills/{id}/fire` | Publish every event in the Skill's `emits` list |
-| GET | `/api/events/recent` | In-memory recent typed-event log |
+| GET | `/api/skills` | Configured YAML Skills: `id`, `name`, `description`, `emits` |
+| POST | `/api/skills/{id}/fire` | Publish every event in the Skill's `emits` list on the event feed |
+| GET | `/api/events/recent` | The last 200 event-feed events, in memory |
 
 Catalog connection changes are not persisted to YAML and do not rebuild
 already-created Agent tool executors. Approval decisions use the WebSocket

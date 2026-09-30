@@ -906,7 +906,7 @@ async fn run_doctor_checks(config_path: &std::path::Path) -> bool {
                 .map(|w| w.name.as_str())
                 .collect();
             println!(
-                "  [EGRESS] {} webhook(s) active — lattice events leave the box to: {}",
+                "  [EGRESS] {} webhook(s) active — Skill events leave the box to: {}",
                 names.len(),
                 names.join(", ")
             );

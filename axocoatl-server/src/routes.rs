@@ -4892,8 +4892,6 @@ pub struct SkillEntry {
     pub name: String,
     pub description: String,
     pub emits: Vec<String>,
-    pub reacts_to: Vec<String>,
-    pub agents: Vec<String>,
 }
 
 pub async fn list_skills(State(state): State<AppState>) -> Json<Vec<SkillEntry>> {
@@ -4907,8 +4905,6 @@ pub async fn list_skills(State(state): State<AppState>) -> Json<Vec<SkillEntry>>
             name: g.name.clone(),
             description: g.description.clone(),
             emits: g.emits.clone(),
-            reacts_to: g.reacts_to.clone(),
-            agents: g.agents.clone(),
         })
         .collect();
     Json(entries)
@@ -4924,7 +4920,7 @@ pub async fn fire_skill(
     State(state): State<AppState>,
     Path(skill_id): Path<String>,
 ) -> Result<Json<FireSkillResponse>, (StatusCode, Json<ErrorResponse>)> {
-    use axocoatl_coordination::{EventId, EventType, LatticeEvent};
+    use axocoatl_core::event_feed::{EventId, EventType, FeedEvent};
     use std::time::{SystemTime, UNIX_EPOCH};
     let daemon = state.read().await;
     let g = daemon
@@ -4947,17 +4943,14 @@ pub async fn fire_skill(
         .unwrap_or(0);
     let mut published = Vec::new();
     for emit in &g.emits {
-        let ev = LatticeEvent {
+        let ev = FeedEvent {
             id: EventId::random(),
             event_type: EventType::Custom(emit.clone()),
-            payload: serde_json::json!({
-                "fired_by_skill": skill_id,
-                "agents_holding": g.agents,
-            }),
+            payload: serde_json::json!({ "fired_by_skill": skill_id }),
             produced_by: format!("skill:{skill_id}"),
             timestamp: ts,
         };
-        daemon.event_lattice.publish(ev);
+        daemon.event_feed.publish(ev);
         published.push(emit.clone());
     }
     Ok(Json(FireSkillResponse {
@@ -4966,7 +4959,7 @@ pub async fn fire_skill(
     }))
 }
 
-// --- Recent lattice events (retained integration/event-history API) ---
+// --- Recent event-feed events (retained integration/event-history API) ---
 
 #[derive(Serialize)]
 pub struct EventEntry {

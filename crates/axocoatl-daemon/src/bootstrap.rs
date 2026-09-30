@@ -57,9 +57,10 @@ use axocoatl_actor::{
 };
 use axocoatl_config::{AgentRoleYaml, AxocoatlConfig};
 use axocoatl_coordination::{
-    EventLattice, LatticeEvent, TurnAgentGraph, TurnAgentNode, TurnAgentState,
-    TurnCoordinationEventKind, TurnCoordinationScheduler, TurnSignalKind,
+    TurnAgentGraph, TurnAgentNode, TurnAgentState, TurnCoordinationEventKind,
+    TurnCoordinationScheduler, TurnSignalKind,
 };
+use axocoatl_core::event_feed::{EventFeed, FeedEvent};
 use axocoatl_core::{AgentId, AgentRole, SecureDir, SecureEntryType, SecureLeaf};
 use axocoatl_isolation::session_sandbox::{ExecResult, Sandbox, SessionSandbox};
 use axocoatl_llm::ProviderRegistry;
@@ -3758,7 +3759,7 @@ pub struct AxocoatlDaemon {
     pub agent_registry: AgentRegistry,
     pub counter: Arc<dyn TokenCounter>,
     pub checkpoint_store: Arc<CheckpointStore>,
-    pub event_lattice: Arc<EventLattice>,
+    pub event_feed: Arc<EventFeed>,
     /// MCP server registry. Held behind a `RwLock` because the dashboard's
     /// Gallery "Install" flow connects new servers at runtime — that mutates
     /// the index. Reads (tool listing, dispatch) take the read lock.
@@ -3843,8 +3844,8 @@ pub struct AxocoatlDaemon {
     /// fact that only exists while a tab is open is not one a reviewer can rely
     /// on. Replaced wholesale each turn — it answers *last*, not *ever*.
     session_last_turn: Arc<StdMutex<HashMap<String, Vec<String>>>>,
-    /// Ring buffer of the most recent lattice events (capped at 200).
-    pub event_log: Arc<StdMutex<VecDeque<LatticeEvent>>>,
+    /// Ring buffer of the most recent event-feed events (capped at 200).
+    pub event_log: Arc<StdMutex<VecDeque<FeedEvent>>>,
     /// The observability stream bus — flattened events + live agent tokens.
     /// Every app or compatibility WebSocket subscribes to this.
     pub stream_bus: crate::stream::StreamBus,
@@ -5015,10 +5016,21 @@ impl AxocoatlDaemon {
                 );
             }
         }
+        for skill in &config.skills {
+            let removed = skill.removed_keys();
+            if !removed.is_empty() {
+                tracing::warn!(
+                    skill = %skill.id,
+                    keys = %removed.join(", "),
+                    "Skill reacts_to, agents and prompt were removed in 1.1.0 and are \
+                     ignored: firing a Skill only publishes the events in its emits list"
+                );
+            }
+        }
 
         // 8. Set up the event feed used by Skills, Automation triggers,
         //    webhooks, the recent-events API, and compatibility event frames.
-        let event_lattice = Arc::new(EventLattice::new(256));
+        let event_feed = Arc::new(EventFeed::new(256));
 
         for agent_yaml in &config.agents {
             if agent_yaml.activation_threshold.is_some() || agent_yaml.activation_decay.is_some() {
@@ -5033,13 +5045,13 @@ impl AxocoatlDaemon {
         // 9b. StreamBus folds frames synchronously while assigning their
         // reconnect sequence. There is no asynchronous tracker lag window.
 
-        // 10. Spawn the event subscriber — keeps the last 200 lattice events in
+        // 10. Spawn the event subscriber — keeps the last 200 feed events in
         // a ring buffer for the integration API and bridges every event onto
         // the stream bus for app and compatibility WebSocket observers.
-        let event_log: Arc<StdMutex<VecDeque<LatticeEvent>>> =
+        let event_log: Arc<StdMutex<VecDeque<FeedEvent>>> =
             Arc::new(StdMutex::new(VecDeque::with_capacity(200)));
         let log_for_task = event_log.clone();
-        let mut event_rx = event_lattice.subscribe();
+        let mut event_rx = event_feed.subscribe();
         let bus_for_bridge = stream_bus.clone();
         tokio::spawn(async move {
             while let Ok(notif) = event_rx.recv().await {
@@ -5050,17 +5062,17 @@ impl AxocoatlDaemon {
                     if log.len() >= 200 {
                         log.pop_front();
                     }
-                    log.push_back(LatticeEvent::from(notif));
+                    log.push_back(FeedEvent::from(notif));
                 }
             }
         });
 
-        // 11. Spawn the lattice event-egress (webhook) dispatcher — only when
+        // 11. Spawn the event-feed egress (webhook) dispatcher — only when
         //     webhooks are configured, so a default install makes zero outbound
         //     requests and the air-gapped story holds.
         if !config.webhooks.is_empty() {
             tokio::spawn(crate::webhook::run_webhook_dispatcher(
-                event_lattice.subscribe(),
+                event_feed.subscribe(),
                 config.webhooks.clone(),
             ));
         }
@@ -5507,7 +5519,7 @@ impl AxocoatlDaemon {
             agent_registry,
             counter,
             checkpoint_store,
-            event_lattice,
+            event_feed,
             mcp_registry,
             mcp_permissions,
             mcp_approval_gate,
@@ -23305,11 +23317,11 @@ trap - 0 1 2 15
             return Ok(executor);
         }
         // Skills on the session's allowlist become callable tools — calling
-        // one fires it into the lattice.
+        // one publishes its events on the event feed.
         for skill_id in &session.enabled_skills {
             if let Some(skill) = self.config.skills.iter().find(|g| &g.id == skill_id) {
                 let tool =
-                    crate::skill_tool::SkillTool::new(skill.clone(), self.event_lattice.clone());
+                    crate::skill_tool::SkillTool::new(skill.clone(), self.event_feed.clone());
                 executor.register_builtin(tool.tool_name(), Arc::new(tool));
             }
         }

@@ -22,7 +22,7 @@ Axocoatl server and daemon
   ├── Sandbox and repository tools
   ├── MCP tool registry and approval gate
   ├── Automation store, DAG executor, and trigger dispatcher
-  └── Typed event lattice and webhook subscribers
+  └── Event feed and webhook subscribers
 ```
 
 The HTTP router embeds the static workbench at `/`. WebSocket frames carry live
@@ -125,9 +125,8 @@ Do not collapse all multi-Agent behavior into one scheduler:
 - **Automations** execute explicit persisted DAGs manually or from triggers.
 - **Multi-Agent Sessions** run selected configured Agents in dependency order
   inside one foreground Session sandbox.
-- **The event lattice** publishes typed notifications to triggers, webhooks,
-  and observers; signal-threshold library results do not execute Agents in the
-  product daemon.
+- **The event feed** carries the events a Skill publishes when it fires to
+  triggers, webhooks, and observers; it never starts Agents on its own.
 - **Native leads**, including Coordinator templates, delegate tasks to distinct
   read-only helper activations from explicitly approved Worker templates and limits
   in the Session controller.
@@ -166,7 +165,7 @@ daemon and copy the whole data root plus Workspace repositories and config.
 - `axocoatl-memory` — memory stores, embeddings, and checkpoints;
 - `axocoatl-isolation` — local Podman and the optional E2B Cloud backend;
 - `axocoatl-exec` — the embedded Linux supervisor for bounded repository commands;
-- `axocoatl-coordination` — event lattice and turn scheduling;
+- `axocoatl-coordination` — turn scheduling for coordinated multi-Agent Session turns;
 - `axocoatl-mcp` and `axocoatl-a2a` — interoperability;
 - `packages/lattice` — browser graph web components.
 

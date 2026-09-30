@@ -220,7 +220,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it no longer registers Agents, accumulates signal or keeps every event in
   memory for the life of the process. Per-Agent `activation_threshold` and
   `activation_decay` are ignored with a warning. The `stigmergic-workflow` and
-  `skills-lattice` examples and the routing benchmark are gone.
+  `skills-lattice` examples and the routing benchmark are gone. The feed moved
+  from `axocoatl-coordination` to `axocoatl_core::event_feed` as `EventFeed`
+  (`LatticeEvent` is now `FeedEvent`); WebSocket `event` frames, webhook payloads
+  and `GET /api/events/recent` are unchanged. The daemon only ever published the
+  events a Skill declares, so the sample configs, the `proactive-agents` example
+  and the docs now watch Skill events instead of `AgentFailed` or `TaskCompleted`.
+- Skill `reacts_to`, `agents` and `prompt`. They never ran anything: firing a
+  Skill only publishes the events in its `emits` list. A config that still sets
+  them loads, and the daemon warns that they are ignored. `GET /api/skills` no
+  longer returns them, a fired Skill's event payload no longer carries
+  `agents_holding`, and Settings → Skills groups Skills by the events they emit.
 - The Coordinator's worker auction. Each subtask now goes to the first declared
   Worker, in declaration order, whose callable tools cover its required tools,
   and falls back to an ad-hoc Worker as before. When several Workers can do a

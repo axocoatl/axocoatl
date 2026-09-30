@@ -7,7 +7,6 @@ publish = false
 [dependencies]
 axocoatl-core = { path = "../../crates/axocoatl-core" }
 axocoatl-actor = { path = "../../crates/axocoatl-actor" }
-axocoatl-coordination = { path = "../../crates/axocoatl-coordination" }
 axocoatl-config = { path = "../../crates/axocoatl-config" }
 axocoatl-llm = { path = "../../crates/axocoatl-llm" }
 

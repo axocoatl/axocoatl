@@ -1,3 +1,16 @@
+//! The process-wide event feed.
+//!
+//! Skills publish typed events here; On-event and On-skill Automations,
+//! outbound webhooks, the recent-events API and WebSocket `event` frames
+//! subscribe. The feed only broadcasts: it keeps no history and starts no
+//! work. Subscribers that need history keep their own.
+//!
+//! The daemon itself publishes one kind of event: [`EventType::Custom`], once
+//! for each name in a Skill's `emits` list when the Skill is fired (through
+//! `POST /api/skills/{id}/fire` or an Agent's `skill_<id>` tool). The other
+//! [`EventType`] variants are kept for embedders that publish their own events
+//! on a feed they own.
+
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
@@ -14,9 +27,9 @@ impl EventId {
     }
 }
 
-/// A single event in the lattice.
+/// A single event published on the feed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LatticeEvent {
+pub struct FeedEvent {
     pub id: EventId,
     pub event_type: EventType,
     pub payload: serde_json::Value,
@@ -24,7 +37,8 @@ pub struct LatticeEvent {
     pub timestamp: u64,
 }
 
-/// Types of events in the lattice.
+/// Types of events on the feed. The daemon publishes only `Custom` (a Skill's
+/// declared event name); see the module documentation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EventType {
     TaskAvailable { task_type: String },
@@ -56,43 +70,39 @@ impl EventType {
         }
     }
 
-    /// Whether this event is pure observability telemetry. Egress sinks
-    /// exclude these from the default "all events" set so a webhook is not
-    /// spammed on every agent activation.
+    /// Whether this event is pure observability telemetry. Webhooks leave
+    /// telemetry out of their default "all events" set unless it is named.
     pub fn is_telemetry(&self) -> bool {
         matches!(self, EventType::AgentActivated { .. })
     }
 }
 
-/// Notification sent when an event is published.
+/// Notification sent to subscribers when an event is published.
 #[derive(Debug, Clone)]
 pub struct EventNotification {
     pub event_id: EventId,
     pub event_type: EventType,
-    /// The published event's payload — carried so observers (e.g. the
-    /// dashboard's SSE stream) can surface details like an agent's output.
+    /// The published event's payload, carried so observers can surface it.
     pub payload: serde_json::Value,
-    /// The agent or source that produced the event (`LatticeEvent::produced_by`).
+    /// The Skill or source that produced the event (`FeedEvent::produced_by`).
     pub produced_by: String,
     /// Unix-seconds timestamp when the event was produced.
     pub timestamp: u64,
 }
 
-/// The process-wide event feed: Skills, Automation triggers, webhooks and
-/// the recent-events API publish to and subscribe from it. It keeps no
-/// history and starts no work; subscribers that need history keep their own.
-pub struct EventLattice {
+/// The process-wide event feed: a broadcast channel with no history.
+pub struct EventFeed {
     notify_tx: broadcast::Sender<EventNotification>,
 }
 
-impl EventLattice {
+impl EventFeed {
     pub fn new(channel_capacity: usize) -> Self {
         let (tx, _) = broadcast::channel(channel_capacity);
         Self { notify_tx: tx }
     }
 
     /// Broadcast an event to every current subscriber.
-    pub fn publish(&self, event: LatticeEvent) {
+    pub fn publish(&self, event: FeedEvent) {
         let _ = self.notify_tx.send(EventNotification {
             event_id: event.id,
             event_type: event.event_type,
@@ -108,7 +118,7 @@ impl EventLattice {
     }
 }
 
-impl From<EventNotification> for LatticeEvent {
+impl From<EventNotification> for FeedEvent {
     fn from(notification: EventNotification) -> Self {
         Self {
             id: notification.event_id,
@@ -124,40 +134,40 @@ impl From<EventNotification> for LatticeEvent {
 mod tests {
     use super::*;
 
-    fn now_timestamp() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-    }
-
-    fn task_event(task_type: &str) -> LatticeEvent {
-        LatticeEvent {
+    fn skill_event(name: &str) -> FeedEvent {
+        FeedEvent {
             id: EventId::random(),
-            event_type: EventType::TaskAvailable {
-                task_type: task_type.to_string(),
-            },
-            payload: serde_json::json!({}),
-            produced_by: "test".to_string(),
-            timestamp: now_timestamp(),
+            event_type: EventType::Custom(name.to_string()),
+            payload: serde_json::json!({ "fired_by_skill": "review" }),
+            produced_by: "skill:review".to_string(),
+            timestamp: 1,
         }
     }
 
-    #[tokio::test]
-    async fn a_published_event_reaches_subscribers_whole() {
-        let lattice = EventLattice::new(100);
-        let mut rx = lattice.subscribe();
-        let event = task_event("research");
+    #[test]
+    fn a_published_event_reaches_every_subscriber_whole() {
+        let feed = EventFeed::new(100);
+        let mut first = feed.subscribe();
+        let mut second = feed.subscribe();
+        let event = skill_event("CodeReady");
         let event_id = event.id.clone();
-        lattice.publish(event);
+        feed.publish(event);
 
-        let received = LatticeEvent::from(rx.recv().await.unwrap());
-        assert_eq!(received.id, event_id);
-        assert_eq!(received.produced_by, "test");
-        assert!(matches!(
-            received.event_type,
-            EventType::TaskAvailable { .. }
-        ));
+        for rx in [&mut first, &mut second] {
+            let received = FeedEvent::from(rx.try_recv().unwrap());
+            assert_eq!(received.id, event_id);
+            assert_eq!(received.produced_by, "skill:review");
+            assert_eq!(received.event_type, EventType::Custom("CodeReady".into()));
+            assert_eq!(received.payload["fired_by_skill"], "review");
+        }
+    }
+
+    #[test]
+    fn publishing_with_no_subscriber_keeps_nothing() {
+        let feed = EventFeed::new(100);
+        feed.publish(skill_event("Unheard"));
+        let mut late = feed.subscribe();
+        assert!(late.try_recv().is_err());
     }
 
     #[test]
@@ -171,27 +181,32 @@ mod tests {
         );
         assert_eq!(EventType::WorkflowCompleted.name(), "WorkflowCompleted");
         // Custom events are named by their own string, so a Skill-emitted event
-        // filters on its own name (the old Debug-parsing approach broke this).
+        // filters on its own name.
         assert_eq!(EventType::Custom("CodeReady".into()).name(), "CodeReady");
         // AgentActivated is the only pure-telemetry event.
         assert!(EventType::AgentActivated {
             agent_id: "a".into()
         }
         .is_telemetry());
-        assert!(!EventType::TaskCompleted {
-            task_id: "t".into()
-        }
-        .is_telemetry());
+        assert!(!EventType::Custom("CodeReady".into()).is_telemetry());
     }
 
-    #[tokio::test]
-    async fn subscribe_receives_notifications() {
-        let lattice = EventLattice::new(100);
-        let mut rx = lattice.subscribe();
-
-        lattice.publish(task_event("test"));
-
-        let notif = rx.recv().await.unwrap();
-        assert!(matches!(notif.event_type, EventType::TaskAvailable { .. }));
+    #[test]
+    fn a_feed_event_keeps_its_1_0_json_shape() {
+        let json = serde_json::to_value(skill_event("CodeReady")).unwrap();
+        assert_eq!(
+            json["event_type"],
+            serde_json::json!({ "Custom": "CodeReady" })
+        );
+        assert_eq!(json["produced_by"], "skill:review");
+        let failed = serde_json::to_value(EventType::AgentFailed {
+            agent_id: "coder".into(),
+            error: "timeout".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            failed,
+            serde_json::json!({ "AgentFailed": { "agent_id": "coder", "error": "timeout" } })
+        );
     }
 }

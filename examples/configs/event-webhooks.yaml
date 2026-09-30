@@ -1,39 +1,41 @@
-# event-webhooks — opt-in signed delivery of events from the lattice feed
+# event-webhooks — opt-in signed delivery of Skill events to your endpoint
 #
 # Prerequisites: ollama serve && ollama pull llama3.2
 #                export WEBHOOK_SECRET=any-value   # enables HMAC-SHA256 signing
 # Run:           axocoatl validate examples/configs/event-webhooks.yaml
 #                axocoatl dev -c examples/configs/event-webhooks.yaml
 # Expected:      validates; `axocoatl doctor` lists the configured webhook host.
-#                When the workflow runs (fire it
-#                from Settings), each TaskCompleted / AgentFailed sends a
-#                signed JSON POST to the URL. Remove the `webhooks:` section and
+#                Firing the Deploy finished Skill (Settings → Skills, or
+#                POST /api/skills/deploy-finished/fire) publishes DeployFinished
+#                and sends one signed JSON POST to the URL. In a Session that
+#                enables the Skill, the Agent can fire it as its
+#                `skill_deploy-finished` tool. Remove the `webhooks:` section and
 #                the webhook dispatcher sends no requests; providers, model
 #                downloads, MCP, and sandbox tools are separate egress paths.
 
 agents:
-  - id: researcher
-    name: "Researcher"
+  - id: deployer
+    name: "Deployer"
     provider: ollama
     model: llama3.2
-    system_prompt: "Research the question and summarize the key findings."
+    system_prompt: "You prepare and verify deploys. When a deploy is verified, fire the deploy-finished Skill."
     depends_on: []
 
-  - id: summarizer
-    name: "Summarizer"
-    provider: ollama
-    model: llama3.2
-    system_prompt: "Condense the research into a short brief."
-    depends_on: [researcher]
+# Firing a Skill publishes each event in `emits` on the event feed. Skills are
+# the only source of events, so webhook filters name Skill events.
+skills:
+  - id: deploy-finished
+    name: "Deploy finished"
+    description: "Announce that a deploy finished and was verified."
+    emits: ["DeployFinished"]
 
-# Lattice event egress: the outbound counterpart to inbound A2A. Opt-in — with no
+# Event-feed egress: the outbound counterpart to inbound A2A. Opt-in — with no
 # `webhooks:` section the webhook dispatcher sends no requests.
 webhooks:
   - name: deploy-alerts
     url: https://hooks.example.com/axocoatl
-    # Event names to send. Empty ([]) means all coordination events; pure
-    # telemetry like AgentActivated is excluded unless you name it explicitly.
-    events: [TaskCompleted, AgentFailed]
+    # Event names to send. Empty ([]) means every event.
+    events: [DeployFinished]
     # With a secret, each body is HMAC-SHA256 signed and the hex digest is sent
     # in `X-Axocoatl-Signature: sha256=…` so the receiver can verify it.
     secret: ${WEBHOOK_SECRET}

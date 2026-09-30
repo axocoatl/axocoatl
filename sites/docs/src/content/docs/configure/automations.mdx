@@ -7,7 +7,7 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 An Automation is an explicit directed acyclic graph. Nodes perform work and
 edges carry control flow. The canonical Automation store powers Settings, the
-HTTP API, manual runs, interval scheduling, and lattice event triggers.
+HTTP API, manual runs, interval scheduling, and Skill event triggers.
 
 ## Create a working graph
 
@@ -31,7 +31,7 @@ run them now, and inspect saved run detail from the same surface.
 | --- | --- |
 | **Manual** | Runs from Settings, CLI, or API with supplied inputs |
 | **Schedule** | Fires on a fixed interval such as `30s`, `5m`, `2h`, or `1d` |
-| **On event** | Matches a lattice event type exactly |
+| **On event** | Matches an event name exactly; firing a Skill publishes each name in its `emits` list |
 | **On Skill** | Matches a producer exactly as `skill:<skill-id>` |
 
 There is no cron syntax. Interval scheduling measures a cadence; it is not a

@@ -1,4 +1,4 @@
-# Skill, event lattice, and Automation
+# Skill, event feed, and Automation
 
 The prospective 1.1.0 take uses the existing configured Automation/runtime
 surface. Its run evidence is separate from native Session activation evidence;
@@ -11,13 +11,13 @@ substrate into another product destination.
 ## Claim
 
 Firing the configured **Release candidate ready** Skill publishes a typed
-`ReleaseCandidateReady` lattice event. The canonical Automation dispatcher
+`ReleaseCandidateReady` event on the event feed. The canonical Automation dispatcher
 matches the Skill trigger, starts the durable **Release gate review**
 Automation, records its run, and parks its operator-review Interrupt.
 
 ## Do not claim
 
-- The event lattice is not the Agent graph or the Automation canvas.
+- The event feed is not the Agent graph or the Automation canvas.
 - The recent-events endpoint is an in-memory, bounded observation window. The
   durable evidence in this scenario is the Automation run, not a permanent
   global event ledger.

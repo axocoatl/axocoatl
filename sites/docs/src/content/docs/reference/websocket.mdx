@@ -271,7 +271,7 @@ the durable event's `usage` object records the requesting activation's usage and
 
 | `kind` | Important fields | Meaning |
 | --- | --- | --- |
-| `event` | `type`, `agent?`, `task?`, `name?`, `output?`, `tokens?`, `workflow?` | Typed lattice/runtime notification |
+| `event` | `type`, `agent?`, `task?`, `name?`, `output?`, `tokens?`, `workflow?` | A Skill event from the event feed (`type` `Custom`, `name` the event name), or a Coordinator, Automation or legacy team lifecycle event |
 | `workflow-done` | `workflow`, `output`, `completed`, `tokens`, `token_usage_known` | Legacy manual workflow terminal success; a false known flag marks `tokens` as a subtotal |
 | `workflow-error` | `workflow`, `error`, input/output/reasoning tokens, `token_usage_known` | Legacy manual workflow terminal failure; paid Agent work before the structural error remains visible |
 

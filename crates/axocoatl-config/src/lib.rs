@@ -493,8 +493,8 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
                     return Err(ConfigError::InvalidField {
                         field: format!("agents[{}].depends_on", agent.id),
                         value: format!("{:?}", agent.depends_on),
-                        reason: "A worker is driven by its coordinator, not by the \
-                                 event lattice, so it must not declare depends_on"
+                        reason: "A worker is driven by its coordinator, so it must \
+                                 not declare depends_on"
                             .to_string(),
                         suggestion: "Remove depends_on from this worker agent.".to_string(),
                     });
@@ -780,6 +780,37 @@ agents:
         assert_eq!(config.agents[0].activation_decay, Some(0.05));
         assert_eq!(config.agents[1].activation_threshold, None);
         assert_eq!(config.agents[1].activation_decay, None);
+    }
+
+    #[test]
+    fn removed_skill_keys_still_parse_so_they_can_be_reported() {
+        let yaml = r#"
+agents:
+  - id: coder
+    name: "Coder"
+    provider: ollama
+    model: llama3
+skills:
+  - id: legacy
+    name: "Legacy"
+    description: "A 1.0 Skill"
+    emits: [CodeReady]
+    reacts_to: [ReviewRequested]
+    agents: [coder]
+    prompt: "Review the change."
+  - id: current
+    name: "Current"
+    description: "A 1.1 Skill"
+    emits: [ReviewRequested]
+"#;
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        // A 1.0 config that still sets them keeps loading; the daemon warns.
+        assert_eq!(
+            config.skills[0].removed_keys(),
+            vec!["reacts_to", "agents", "prompt"]
+        );
+        assert_eq!(config.skills[0].emits, vec!["CodeReady".to_string()]);
+        assert!(config.skills[1].removed_keys().is_empty());
     }
 
     #[test]

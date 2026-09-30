@@ -299,16 +299,15 @@ skills:
     name: Review ready
     description: Publish review readiness.
     emits: [ReviewReady]
-    reacts_to: []
-    agents: [reviewer]
-    prompt: Review the change.
 
 hooks: []
 ```
 
-Firing a configured Skill publishes `emits`. The other fields are capability
-metadata in the current daemon. A non-empty `hooks` block is parsed and logs a
-warning, but it does not execute. Hook entries contain `name`, `type`, optional
+Firing a configured Skill publishes each name in `emits` on the event feed; that
+is the only source of events that `on_event` triggers and webhooks match. The 1.0
+keys `reacts_to`, `agents` and `prompt` were removed in 1.1.0: a config that sets
+them still loads, and the daemon warns that they are ignored. A non-empty `hooks`
+block is parsed and logs a warning, but it does not execute. Hook entries contain `name`, `type`, optional
 `phase`, `tools`, `timeout_secs` (default 30), `url`, and `agent_id`.
 
 ## Legacy Automation seed
@@ -329,18 +328,18 @@ schedules:
     enabled: true
 
 proactive:
-  - id: failure-response
-    name: Failure response
+  - id: review-response
+    name: Review response
     agent: reviewer
     trigger:
       type: on_event
-      event: AgentFailed
-    input: Investigate the failure.
+      event: ReviewReady
+    input: Review the current change.
     enabled: true
 ```
 
 Proactive trigger types are `schedule` with `every`, or `on_event` with
-`event`. These three sections seed the canonical Automation store only when its
+`event`, a name from some Skill's `emits` list. These three sections seed the canonical Automation store only when its
 file does not exist. Once created, Settings/API records are authoritative for
 Automations. `workflows` still supplies config-owned Session team selections;
 editing an Automation does not edit that roster or a native Session's applied team.
@@ -368,14 +367,15 @@ normal Session Agents receive the tool; Attempts do not.
 webhooks:
   - name: internal-events
     url: "https://hooks.example.internal/axocoatl"
-    events: [TaskCompleted, AgentFailed]
+    events: [ReviewReady]
     secret: "${WEBHOOK_SECRET}"
     headers:
       Authorization: "${INTERNAL_TOKEN}"
     enabled: true
 ```
 
-`events: []` selects all coordination events except unnamed pure telemetry.
+`events` names Skill events, since firing a Skill is what publishes events;
+`events: []` selects every event.
 `secret` enables HMAC-SHA256 signing. Delivery is live-process best effort, not
 a durable queue.
 

@@ -18,7 +18,7 @@ Agent, and retain separate labeled outputs on one durable Turn.
   or design correctness. Neither Agent uses tools, files, or edits.
 - The reviewer's `SHIP` or `BLOCK` applies only to the architect's one-sentence
   proposal. It is not a release gate for working software.
-- The Agent graph is not the event lattice.
+- The Agent graph is not the event feed.
 - This fixed handoff is not the dynamic Coordinator decomposition path.
 
 ## Start or reset

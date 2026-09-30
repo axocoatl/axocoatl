@@ -361,8 +361,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
- "tokio",
- "uuid",
 ]
 
 [[package]]
@@ -374,6 +372,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "tokio",
  "uuid",
 ]
 
@@ -632,7 +631,6 @@ dependencies = [
  "axocoatl-a2a",
  "axocoatl-actor",
  "axocoatl-config",
- "axocoatl-coordination",
  "axocoatl-core",
  "axocoatl-daemon",
  "axocoatl-isolation",
@@ -3407,7 +3405,6 @@ dependencies = [
  "async-trait",
  "axocoatl-actor",
  "axocoatl-config",
- "axocoatl-coordination",
  "axocoatl-core",
  "axocoatl-llm",
  "ractor",

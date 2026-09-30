@@ -244,13 +244,14 @@ Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
   Agents' memory. Declared Coordinator Workers are not polled by that loop.
   Legacy coordinated turns can read these stores, but their speculative execution
   cannot write them or run core-memory consolidation.
-- **Event lattice** — Skills and runtime components publish typed events;
+- **Event feed** — firing a Skill publishes each event in its `emits` list;
   Automation triggers, webhooks, and retained API/WebSocket observers consume
-  the shared notification feed. Separately, each legacy all-team turn with more than one
-  autonomous Agent in a Lattice or Custom Session owns a scoped predicate lattice
-  whose signals activate exact dependencies and are retained as Session evidence.
-  Native turns use their canonical dependency graph and accepted-generation evidence.
-  The coordination crate exposes both signal models to library users.
+  that feed, which starts no Agents on its own. Separately, each legacy all-team turn
+  with more than one autonomous Agent in a Lattice or Custom Session owns a scoped
+  predicate lattice whose signals activate exact dependencies and are retained as
+  Session evidence. Native turns use their canonical dependency graph and
+  accepted-generation evidence. Library users get the feed from
+  `axocoatl_core::event_feed` and the turn scheduler from `axocoatl-coordination`.
 - **Coordinator role** — for explicit hierarchical work, an agent with
   `role: coordinator` decomposes a goal into subtasks with its model, assigns each
   to the first declared worker that can call its required tools, runs them in
@@ -263,7 +264,7 @@ Read [Workspace knowledge](https://docs.axocoatl.ai/workbench/knowledge/).
 - **Automations** — explicit DAGs created, inspected, edited, and run in
   Settings, with the HTTP API available for programmatic CRUD. New records start
   with a valid Input → Agent graph. They can fire manually, on a fixed interval, by
-  lattice event type, or by one Skill. The persisted Automation store is live in
+  the name of an event a Skill publishes, or by one Skill. The persisted Automation store is live in
   both `dev` and `serve`; legacy YAML is first-boot seed data only. A top-level
   Interrupt parked at an operator decision survives a daemon restart and resumes
   without replaying completed nodes; arbitrary in-flight calls and nested

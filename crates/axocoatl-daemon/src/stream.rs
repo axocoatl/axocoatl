@@ -1,14 +1,14 @@
 //! The observability stream bus.
 //!
 //! One broadcast channel carries the live session/run state the app observes,
-//! plus retained lattice/workflow/chat compatibility frames. The daemon owns
+//! plus retained event/workflow/chat compatibility frames. The daemon owns
 //! the sender; each WebSocket connection subscribes.
 
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use axocoatl_coordination::{EventNotification, EventType};
+use axocoatl_core::event_feed::{EventNotification, EventType};
 use axocoatl_mcp::approval::ApprovalContext;
 
 /// Why a run is blocked on a human, and what it needs to proceed.
@@ -94,7 +94,8 @@ pub enum StreamFrame {
         recorded_at: u64,
         event: axocoatl_session::RecordTurnExecution,
     },
-    /// A lattice coordination event (agent activation, completion, skill fire…).
+    /// A typed event: a Skill event from the event feed, or a Coordinator,
+    /// Automation or legacy team lifecycle event (activation, completion…).
     Event {
         #[serde(rename = "type")]
         event_type: String,
@@ -1115,8 +1116,8 @@ pub fn apply_frame(runs: &mut std::collections::HashMap<String, RunState>, frame
     }
 }
 
-/// Flatten a lattice notification into an `Event` frame. This is the single
-/// place lattice `EventType`s are mapped to the WebSocket wire shape.
+/// Flatten an event-feed notification into an `Event` frame. This is the
+/// single place feed `EventType`s are mapped to the WebSocket wire shape.
 pub fn event_frame(notif: &EventNotification) -> StreamFrame {
     let (kind, mut agent, task, name) = match &notif.event_type {
         EventType::TaskAvailable { task_type } => {

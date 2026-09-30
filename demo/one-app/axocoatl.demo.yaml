@@ -178,9 +178,6 @@ skills:
     name: "Release candidate ready"
     description: "Publish a typed release event for the automated gate review."
     emits: ["ReleaseCandidateReady"]
-    reacts_to: []
-    agents: [judge]
-    prompt: "Publish the release candidate evidence for an automated gate review."
 
 mcp_servers:
   - name: weather

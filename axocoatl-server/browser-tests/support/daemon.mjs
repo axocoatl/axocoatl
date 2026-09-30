@@ -215,10 +215,7 @@ skills:
 ${skills.map((skill) => `  - id: ${JSON.stringify(skill.id)}
     name: ${JSON.stringify(skill.name)}
     description: ${JSON.stringify(skill.description)}
-    emits: ${JSON.stringify(skill.emits || [])}
-    reacts_to: ${JSON.stringify(skill.reactsTo || [])}
-    agents: ${JSON.stringify(skill.agents || [])}
-    prompt: ${JSON.stringify(skill.prompt || '')}`).join('\n')}
+    emits: ${JSON.stringify(skill.emits || [])}`).join('\n')}
 ` : '';
   const config = `
 agents:

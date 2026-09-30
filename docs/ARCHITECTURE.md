@@ -6,7 +6,7 @@ A practical overview of how Axocoatl's one workbench runs and coordinates agents
 
 ```
             ┌─────────────────────────── axocoatl daemon ───────────────────────────┐
- App / CLI  │  ProviderRegistry   AgentRegistry   EventLattice   McpToolRegistry     │
+ App / CLI  │  ProviderRegistry   AgentRegistry   EventFeed      McpToolRegistry     │
  HTTP / WS ─┼─▶ (per-agent LLMs)  (ractor actors) (skills/events)  (MCP tools)         │
     / IPC   │        │                 │                │                            │
             │        └──────── DefaultAgentBehavior ─────┘                            │
@@ -15,7 +15,7 @@ A practical overview of how Axocoatl's one workbench runs and coordinates agents
 ```
 
 The **daemon** (`axocoatl-daemon`) bootstraps everything: providers, agents
-(spawned as `ractor` actors), the event lattice, MCP connections, and the
+(spawned as `ractor` actors), the event feed, MCP connections, and the
 canonical Automation trigger runtime. Both `axocoatl dev` and `axocoatl serve`
 expose the Unix-socket IPC server and HTTP/browser app from the same daemon
 state; `serve` is also what the installed background service runs.
@@ -58,10 +58,10 @@ state models identical or restore peer browser destinations. Changes at this sea
 run identity, transcript ownership, reconnect, cancellation, persistence, and cleanup end to
 end.
 
-`AutomationStore` is the canonical persisted configuration for manual, scheduled, lattice-
-event, and Skill-triggered automations. Legacy workflow/schedule/proactive YAML seeds the store
+`AutomationStore` is the canonical persisted configuration for manual, scheduled, event-
+and Skill-triggered automations. Legacy workflow/schedule/proactive YAML seeds the store
 only when its canonical file does not exist; it is not a parallel live registry. One dispatcher
-reconciles store changes and lattice notifications for both `dev` and `serve`, prevents
+reconciles store changes and event-feed notifications for both `dev` and `serve`, prevents
 overlapping automatic runs of the same automation, and records last outcome/count/error in
 compatibility views. It clones an owned
 execution context before provider/tool work, so neither the store nor the daemon state lock is
@@ -532,14 +532,14 @@ checkpoint-backed Agent total.
 ## Automations
 
 `AutomationStore` (`{data_dir}/automations.json`) is the single runtime source for
-manual, scheduled, lattice-event, and Skill-triggered DAGs. When that canonical file
+manual, scheduled, event- and Skill-triggered DAGs. When that canonical file
 does not exist, legacy `workflows:`, `schedules:`, and `proactive:` YAML seeds it once.
 An existing file remains authoritative even when the user has deleted every record;
 later YAML changes do not replace or resurrect Automations.
 
 One trigger runtime is started by both `axocoatl dev` and `axocoatl serve`. A single
-timer reconciles every `Schedule` record against the live store; one lattice
-subscriber matches `OnEvent` by canonical event type and `OnSkill` by exact
+timer reconciles every `Schedule` record against the live store; one event-feed
+subscriber matches `OnEvent` by canonical event name and `OnSkill` by exact
 `produced_by = skill:<id>`. It checks the current record again immediately before
 execution. Create, update, enable, cadence/event/Skill changes, and delete therefore
 affect subsequent dispatch without per-Automation tasks or stale runners.
@@ -682,7 +682,7 @@ and streams that sometimes end early.
 - **Failure classes.** A failed activation states its failure class (provider stream,
   budget, context limit, write scope, capture, admission) and a suggested next step.
 
-## Multi-agent sessions and event lattice
+## Multi-agent sessions and the event feed
 
 Native Sessions retain their approved whole-team revision and immutable definitions before
 Begin. Their common controller activates exact dependencies, records every generation, and
@@ -800,11 +800,15 @@ its next generation started. Any retained turn-wide stream is preserved through
 tool-loop and multi-Agent boundaries cannot be reconstructed safely from text
 lengths after a process death.
 
-`EventLattice` is the process-wide event feed. Skills publish into it; the
-canonical Automation dispatcher matches `OnEvent` and `OnSkill`; configured
-webhooks, the recent-events API, and WebSocket compatibility frames observe the
-same feed. It keeps no history and never starts Agents on its own. The Session
-scheduler is deliberately turn-scoped and predicate-based.
+`EventFeed` (`axocoatl_core::event_feed`) is the process-wide event feed. The
+daemon publishes one kind of event on it: firing a Skill (the fire route or an
+Agent's `skill_<id>` tool) publishes one `Custom` event per name in the Skill's
+`emits` list. The canonical Automation dispatcher matches `OnEvent` and `OnSkill`;
+configured webhooks, the recent-events API, and WebSocket compatibility frames
+observe the same feed. It keeps no history and never starts Agents on its own.
+A Skill's 1.0 `reacts_to`, `agents` and `prompt` keys still parse but are ignored
+with a startup warning. The Session scheduler is deliberately turn-scoped and
+predicate-based.
 
 The per-Agent `activation_threshold` / `activation_decay` keys were removed in 1.1.0 with
 the process-wide threshold counter; the daemon warns when a config still sets them. `TurnCoordinationScheduler`
@@ -1258,9 +1262,9 @@ Report security issues per [SECURITY.md](../SECURITY.md).
 
 ## Crate map
 
-`axocoatl-core` (types) · `axocoatl-token` (budgets) · `axocoatl-llm*`
+`axocoatl-core` (types, event feed) · `axocoatl-token` (budgets) · `axocoatl-llm*`
 (providers) · `axocoatl-config` · `axocoatl-actor` (runtime) ·
-`axocoatl-memory` · `axocoatl-coordination` (event lattice, turn scheduling) ·
+`axocoatl-memory` · `axocoatl-coordination` (turn scheduling) ·
 `axocoatl-graph` · `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` ·
 `axocoatl-isolation` (Podman sandbox) · `axocoatl-daemon` · `axocoatl-server` ·
 `axocoatl-cli`.

@@ -1,6 +1,6 @@
 //! Live trigger runtime for canonical [`axocoatl_config::Automation`] records.
 //!
-//! One dispatcher watches `AutomationStore` and the event lattice. It does not
+//! One dispatcher watches `AutomationStore` and the event feed. It does not
 //! create a task per Automation: schedules are planned by one timer and events
 //! are matched by one subscriber. Store edits are therefore observed live and
 //! deleted or changed records cannot leave stale runners behind.
@@ -20,7 +20,7 @@ use axocoatl_config::{
     Automation, AutomationNodeKind, AutomationTrigger, ProactiveConfigYaml, ProactiveTrigger,
     ScheduleConfigYaml,
 };
-use axocoatl_coordination::EventNotification;
+use axocoatl_core::event_feed::EventNotification;
 
 use crate::bootstrap::AxocoatlDaemon;
 use crate::error::DaemonError;
@@ -606,7 +606,7 @@ pub async fn start_automation_runtime(state: Arc<tokio::sync::RwLock<AxocoatlDae
             daemon.automation_store.clone(),
             daemon.schedule_table.clone(),
             daemon.proactive_table.clone(),
-            daemon.event_lattice.subscribe(),
+            daemon.event_feed.subscribe(),
         )
     };
     let active = Arc::new(Mutex::new(HashSet::new()));
@@ -646,7 +646,7 @@ pub async fn start_automation_runtime(state: Arc<tokio::sync::RwLock<AxocoatlDae
                     let notification = match notification {
                         Ok(notification) => notification,
                         Err(RecvError::Lagged(skipped)) => {
-                            tracing::warn!(skipped, "Automation trigger runtime lagged on lattice events");
+                            tracing::warn!(skipped, "Automation trigger runtime lagged on the event feed");
                             continue;
                         }
                         Err(RecvError::Closed) => break,
@@ -678,7 +678,7 @@ pub async fn start_automation_runtime(state: Arc<tokio::sync::RwLock<AxocoatlDae
 mod tests {
     use super::*;
     use axocoatl_config::{AutomationNode, NodeInput};
-    use axocoatl_coordination::{EventId, EventType};
+    use axocoatl_core::event_feed::{EventId, EventType};
 
     fn automation(id: &str, trigger: AutomationTrigger) -> Automation {
         Automation {

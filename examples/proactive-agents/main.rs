@@ -12,9 +12,11 @@
 //! 1. Parse the real legacy schema.
 //! 2. Project it through `Automation::from_legacy`, the seed conversion used by
 //!    `AutomationStore`.
-//! 3. Match `AgentFailed`, gate on the canonical `enabled` field, and suppress
-//!    a repeat inside a demo cooldown.
-//! 4. Activate a real `ractor` agent and show the event payload in its input.
+//! 3. Fire the configured Skills onto a real `EventFeed`, publishing exactly
+//!    the events `POST /api/skills/{id}/fire` publishes. A Skill's declared
+//!    event is the only kind of event the daemon puts on its feed.
+//! 4. Match `BuildFailed`, gate on the canonical `enabled` field, suppress a
+//!    repeat inside a demo cooldown, and activate a real `ractor` agent.
 //!
 //! The small `deliver` helper is deliberately not presented as the production
 //! dispatcher. Production uses one store-watching schedule/event/Skill runtime,
@@ -32,8 +34,10 @@ use tokio::sync::Mutex;
 use tokio_stream::Stream;
 
 use axocoatl_actor::{execute_agent, AgentActor, AgentBehavior, AgentError};
-use axocoatl_config::{parse_config, Automation, AutomationNodeKind, AutomationTrigger};
-use axocoatl_coordination::{EventId, EventLattice, EventNotification, EventType, LatticeEvent};
+use axocoatl_config::{
+    parse_config, Automation, AutomationNodeKind, AutomationTrigger, SkillConfigYaml,
+};
+use axocoatl_core::event_feed::{EventFeed, EventId, EventNotification, EventType, FeedEvent};
 use axocoatl_core::{AgentConfig, AgentId, AgentInput, AgentOutput, TokenUsageStats};
 use axocoatl_llm::{
     ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError,
@@ -53,8 +57,8 @@ fn now_unix() -> u64 {
 // ---------------------------------------------------------------------------
 // Mock LLM — one canned diagnostic, so the example runs with no API keys. In a
 // real deployment the `ops` agent points at an Ollama / OpenAI / Anthropic
-// provider. The mock echoes back the failure context it was handed so the
-// output visibly shows the event payload flowing into the prompt.
+// provider. The mock echoes back the trigger input it was handed so the output
+// visibly shows the Automation's instruction flowing into the prompt.
 // ---------------------------------------------------------------------------
 
 struct OpsDiagnosticLlm;
@@ -83,8 +87,8 @@ impl LlmProvider for OpsDiagnosticLlm {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError> {
-        // Pull the user turn (the diagnostic instruction + failure context the
-        // demo helper built) so the canned reply demonstrably reacts to it.
+        // Pull the user turn (the trigger input the demo helper resolved) so
+        // the canned reply demonstrably reacts to it.
         let context = request
             .messages
             .iter()
@@ -97,15 +101,14 @@ impl LlmProvider for OpsDiagnosticLlm {
             "DIAGNOSIS\n\
              ─────────\n\
              Triggering context:\n  {context}\n\n\
-             Likely cause: the failing agent hit an unhandled provider error \
-             mid-execution (timeout or rate limit), so its turn never produced \
-             output.\n\
+             Likely cause: a change landed whose tests were not run locally, \
+             or a dependency moved under an unpinned version range.\n\
              Suggested fix:\n\
-             1. Re-run the failed agent with an OverflowPolicy::Warn budget so \
-                the local token guard can't abort it silently.\n\
-             2. Add a retry-with-backoff around the provider call.\n\
-             3. If it recurs, fail the workflow loudly instead of leaving a \
-                half-finished DAG."
+             1. Re-run the failing job and compare its lockfile with the last \
+                green build.\n\
+             2. Reproduce the failing test locally before changing code.\n\
+             3. Pin the dependency if the lockfile changed without a commit \
+                that meant to change it."
         );
 
         Ok(ChatResponse {
@@ -194,6 +197,34 @@ fn describe(o: &FireOutcome) -> &'static str {
     }
 }
 
+/// Publish a Skill's declared events exactly as `POST /api/skills/{id}/fire`
+/// and an Agent's `skill_<id>` tool do: one `Custom` event per `emits` name,
+/// produced by `skill:<id>`, carrying only the Skill id.
+fn fire_skill(feed: &EventFeed, skill: &SkillConfigYaml) -> usize {
+    for emit in &skill.emits {
+        feed.publish(FeedEvent {
+            id: EventId::random(),
+            event_type: EventType::Custom(emit.clone()),
+            payload: serde_json::json!({ "fired_by_skill": skill.id }),
+            produced_by: format!("skill:{}", skill.id),
+            timestamp: now_unix(),
+        });
+    }
+    skill.emits.len()
+}
+
+/// The daemon's rule for an event trigger's input: a payload `input` or
+/// `content` string wins, then the Automation's configured input. A Skill's
+/// payload carries neither, so its configured input is what the Agent reads.
+fn trigger_input(payload: &serde_json::Value, fallback: &str) -> String {
+    payload
+        .get("input")
+        .or_else(|| payload.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(fallback)
+        .to_string()
+}
+
 /// Illustrate event match → enabled → cooldown → agent activation. This is an
 /// offline teaching helper, not a replacement for the production Automation
 /// dispatcher (which also owns single-flight and completion cooldown state).
@@ -227,15 +258,10 @@ async fn deliver(
         }
     }
 
-    // 4. Fire: build the agent input from the configured instruction plus the
-    //    event payload (so the diagnostic actually sees what failed), then run
-    //    the agent. The daemon's `fire()` does the analogous projection into
-    //    `execute_automation`; here we hand it straight to the actor.
-    let input_text = format!(
-        "{}\n\nFailing event payload:\n{}",
-        fallback_input,
-        serde_json::to_string_pretty(&notif.payload).unwrap_or_default()
-    );
+    // 4. Fire: resolve the input the way the daemon does, then run the agent.
+    //    The daemon hands this input to `execute_automation`; here it goes
+    //    straight to the actor.
+    let input_text = trigger_input(&notif.payload, &fallback_input);
 
     let output = execute_agent(ops_ref, AgentInput::text(&input_text))
         .await
@@ -265,8 +291,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         yaml_path.display()
     );
     println!(
-        "  {} agent(s), {} workflow(s), {} schedule(s), {} proactive agent(s).\n",
+        "  {} agent(s), {} Skill(s), {} workflow(s), {} schedule(s), {} proactive agent(s).\n",
         config.agents.len(),
+        config.skills.len(),
         config.workflows.len(),
         config.schedules.len(),
         config.proactive.len(),
@@ -376,45 +403,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // -----------------------------------------------------------------------
-    // 4. Build a real EventLattice. The demo publishes, reads the broadcast
-    //    notification, and hands it to the small illustrative guard helper.
+    // 4. Build a real EventFeed. The demo fires the configured Skills, reads
+    //    each broadcast notification, and hands it to the small illustrative
+    //    guard helper.
     // -----------------------------------------------------------------------
-    let lattice = EventLattice::new(64);
+    let skill = |id: &str| {
+        config
+            .skills
+            .iter()
+            .find(|skill| skill.id == id)
+            .expect("the companion YAML configures this Skill")
+    };
+    let build_failed = skill("build-failed");
+    let deploy_finished = skill("deploy-finished");
+
+    let feed = EventFeed::new(64);
     let mut published = 0;
-    let mut events = lattice.subscribe();
+    let mut events = feed.subscribe();
 
     println!(
-        "\n'{}' is watching the lattice for `{target_event}` events (agent: {}).",
+        "\n'{}' is watching the event feed for `{target_event}` (agent: {}).",
         watcher.id, watcher_agent
     );
 
-    // --- Event 1: a genuine AgentFailed → the watcher should activate. -------
-    println!("\n[1] Publishing a lattice event: AgentFailed (coder timed out)");
-    lattice.publish(LatticeEvent {
-        id: EventId::random(),
-        event_type: EventType::AgentFailed {
-            agent_id: "coder".to_string(),
-            error: "provider timeout after 30s".to_string(),
-        },
-        payload: serde_json::json!({
-            "agent_id": "coder",
-            "error": "provider timeout after 30s",
-            "workflow": "feature-dev",
-        }),
-        produced_by: "feature-dev".to_string(),
-        timestamp: now_unix(),
-    });
-    published += 1;
+    // --- Event 1: the build-failed Skill fires → the watcher should activate.
+    println!(
+        "\n[1] Firing the '{}' Skill, which publishes {:?}",
+        build_failed.id, build_failed.emits
+    );
+    published += fire_skill(&feed, build_failed);
 
     let notif = events.recv().await?;
     match deliver(&notif, &state, &ops_ref).await {
         FireOutcome::Fired { output } => {
             println!(
-                "    '{}' ACTIVATED — `{}` matched its OnEvent trigger.",
+                "    '{}' ACTIVATED — `{}` from {} matched its OnEvent trigger.",
                 watcher.id,
-                notif.event_type.name()
+                notif.event_type.name(),
+                notif.produced_by
             );
-            println!("    The {watcher_agent} agent ran with its diagnostic prompt:\n");
+            println!("    The {watcher_agent} agent ran with its configured input:\n");
             for line in output.lines() {
                 println!("      {line}");
             }
@@ -422,19 +450,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         other => println!("    (unexpected outcome: {})", describe(&other)),
     }
 
-    // --- Event 2: an unrelated event → must NOT activate. --------------------
+    // --- Event 2: an unrelated Skill event → must NOT activate. --------------
     println!("\n{}", "─".repeat(70));
-    println!("\n[2] Publishing an unrelated event: TaskCompleted");
-    lattice.publish(LatticeEvent {
-        id: EventId::random(),
-        event_type: EventType::TaskCompleted {
-            task_id: "doc-writer".to_string(),
-        },
-        payload: serde_json::json!({ "task_id": "doc-writer" }),
-        produced_by: "doc-writer".to_string(),
-        timestamp: now_unix(),
-    });
-    published += 1;
+    println!(
+        "\n[2] Firing the '{}' Skill, which publishes {:?}",
+        deploy_finished.id, deploy_finished.emits
+    );
+    published += fire_skill(&feed, deploy_finished);
     let notif = events.recv().await?;
     let outcome = deliver(&notif, &state, &ops_ref).await;
     println!(
@@ -443,33 +465,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         notif.event_type.name(),
     );
 
-    // --- Event 3: a second AgentFailed inside the cooldown → suppressed. ------
+    // --- Event 3: build-failed again inside the cooldown → suppressed. -------
     println!("\n{}", "─".repeat(70));
     println!(
-        "\n[3] Publishing a SECOND AgentFailed immediately (within the {DEMO_COOLDOWN_SECS}s demo cooldown)"
+        "\n[3] Firing '{}' AGAIN immediately (within the {DEMO_COOLDOWN_SECS}s demo cooldown)",
+        build_failed.id
     );
-    lattice.publish(LatticeEvent {
-        id: EventId::random(),
-        event_type: EventType::AgentFailed {
-            agent_id: "tester".to_string(),
-            error: "assertion failed".to_string(),
-        },
-        payload: serde_json::json!({ "agent_id": "tester", "error": "assertion failed" }),
-        produced_by: "release-checklist".to_string(),
-        timestamp: now_unix(),
-    });
-    published += 1;
+    published += fire_skill(&feed, build_failed);
     let notif = events.recv().await?;
     let outcome = deliver(&notif, &state, &ops_ref).await;
     println!(
-        "    {} — the cooldown stops a failure storm from re-firing the watcher (and stops",
+        "    {} — the cooldown stops a burst of failures from re-firing the watcher (and",
         describe(&outcome)
     );
-    println!("    a self-loop if the ops agent's own diagnosis ever emitted AgentFailed).");
+    println!("    stops a self-loop if the ops agent ever fired build-failed itself).");
 
     // --- Event 4: disable the watcher, then publish a matching event. --------
     println!("\n{}", "─".repeat(70));
-    println!("\n[4] Setting enabled=false on the watcher, then publishing AgentFailed again");
+    println!(
+        "\n[4] Setting enabled=false on the watcher, then firing '{}' again",
+        build_failed.id
+    );
     {
         let mut st = state.lock().await;
         st.automation.enabled = false;
@@ -477,17 +493,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // prove the *enabled* gate, in isolation.
         st.last_fired_unix = None;
     }
-    lattice.publish(LatticeEvent {
-        id: EventId::random(),
-        event_type: EventType::AgentFailed {
-            agent_id: "reviewer".to_string(),
-            error: "panic in review".to_string(),
-        },
-        payload: serde_json::json!({ "agent_id": "reviewer", "error": "panic in review" }),
-        produced_by: "feature-dev".to_string(),
-        timestamp: now_unix(),
-    });
-    published += 1;
+    published += fire_skill(&feed, build_failed);
     let notif = events.recv().await?;
     let outcome = deliver(&notif, &state, &ops_ref).await;
     println!(
@@ -505,7 +511,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "\n{} events published; the watcher fired {} time(s). The only fire was the first",
         published, runs,
     );
-    println!("AgentFailed — every other event was correctly gated out (wrong type, cooldown,");
+    println!("BuildFailed — every other event was correctly gated out (wrong event, cooldown,");
     println!("disabled). This offline helper illustrates the guards; the daemon's shared");
     println!("Automation runtime owns production dispatch and completion cooldown.");
 

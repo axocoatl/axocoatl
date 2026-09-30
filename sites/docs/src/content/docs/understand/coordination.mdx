@@ -12,7 +12,7 @@ question and owns a different recovery boundary.
 | --- | --- | --- |
 | Automation | The graph can be declared ahead of time | Explicit DAG nodes and edges |
 | Multi-Agent Session | Several configured Agents share one foreground task | Dependency order in one Session |
-| Event lattice | Producers and consumers should be decoupled | Typed publish/subscribe notification |
+| Event feed | A Skill should announce something that Automations and webhooks react to | Publish/subscribe notification of a Skill's declared events |
 | Lead with helpers | A native Agent needs a separate read-only look at part of its task | The lead picks an approved helper and writes its task; one helper runs at a time |
 | Coordinator Agent (legacy Sessions) | Task shape and worker choice emerge at runtime | Decomposition, then the first declared worker that can call each subtask's tools |
 
@@ -92,18 +92,22 @@ Explore several ways is a separate comparison mechanism and currently requires
 a single autonomous-Agent Session. Coordinator and worker roles remain on the normal Session
 path rather than becoming nested workers inside a comparison Way.
 
-## Typed event lattice
+## Event feed
 
-Skills and runtime components publish events with a type, payload, producer,
-and timestamp. Current consumers include:
+The daemon publishes one kind of event: firing a Skill publishes each name in its
+`emits` list, with producer `skill:<skill-id>`, payload `{"fired_by_skill": "<skill-id>"}`,
+and a timestamp. A Skill fires from **Settings → Skills**, from
+`POST /api/skills/{id}/fire`, or when an Agent calls its `skill_<id>` tool in a Session
+that enables the Skill. Consumers are:
 
-- enabled **On event** Automations matching the type exactly;
+- enabled **On event** Automations matching the event name exactly;
 - enabled **On Skill** Automations matching `skill:<skill-id>` exactly;
 - configured webhook filters;
-- recent-event API and WebSocket observers.
+- the recent-event API and `event` WebSocket frames.
 
-A YAML Skill's `reacts_to` and holder fields are metadata in the current daemon;
-they do not cause Agents to execute. Events never start Agents on their own.
+The feed keeps no history and starts no work on its own. A 1.0 Skill's `reacts_to`,
+`agents` and `prompt` keys were removed in 1.1.0: they never ran anything, and the
+daemon now warns that they are ignored.
 
 ## Legacy Coordinator execution
 
@@ -147,7 +151,7 @@ suffix, attachments, and canonical Session History remain intact. This is bounde
 projection, not the summarization pipeline used by a stateful autonomous Agent.
 
 <Aside type="note" title="Events do not choose workers">
-The lattice carries notifications. Worker arbitration happens inside a
+The event feed carries notifications. Worker arbitration happens inside a
 coordinator execution; Automation ordering happens in the DAG executor.
 </Aside>
 

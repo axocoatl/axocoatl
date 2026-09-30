@@ -1,8 +1,9 @@
 # Automatic Automations — legacy seed and event guards
 
 Axocoatl persists one canonical `AutomationStore`. Its graphs can run manually,
-on a fixed interval, when a lattice event type matches, or when a specific Skill
-publishes. `axocoatl dev` and `axocoatl serve` use the same live dispatcher.
+on a fixed interval, when an event with a given name is published on the event
+feed, or when a specific Skill publishes. The daemon publishes one kind of event:
+firing a Skill publishes each event named in its `emits` list. `axocoatl dev` and `axocoatl serve` use the same live dispatcher.
 
 The old `workflows:`, `schedules:`, and `proactive:` YAML shapes remain as
 first-boot migration input. When `automations.json` does not exist, the daemon projects
@@ -18,8 +19,8 @@ agents make the agents *act* while that process runs.
 
 | File | What it is |
 |------|------------|
-| `main.rs` | An offline mock: parses legacy YAML, projects canonical Automations, then illustrates event-name, enabled, and cooldown guards on a real lattice and actor. It is not the production dispatcher. |
-| `axocoatl.proactive.example.yaml` | Valid first-boot migration input containing legacy workflow, schedule, and proactive records. |
+| `main.rs` | An offline mock: parses legacy YAML, projects canonical Automations, fires the configured Skills on a real event feed, then illustrates event-name, enabled, and cooldown guards on a real actor. It is not the production dispatcher. |
+| `axocoatl.proactive.example.yaml` | Valid first-boot migration input containing two Skills and legacy workflow, schedule, and proactive records. |
 
 ## Run the demo
 
@@ -35,8 +36,10 @@ No API keys — it uses a mock LLM. The demo:
 2. Projects those sections through `Automation::from_legacy`, the conversion used
    to seed `AutomationStore`.
 3. Spawns the projected `ops` Agent node as a real `ractor` actor.
-4. Publishes on a real `EventLattice` and illustrates event-name match → canonical
-   `enabled` gate → demo cooldown → actor activation.
+4. Fires the configured `build-failed` and `deploy-finished` Skills on a real
+   `EventFeed`, publishing the same events `POST /api/skills/{id}/fire` does, and
+   illustrates event-name match → canonical `enabled` gate → demo cooldown →
+   actor activation.
 
 Production adds the pieces an offline helper cannot prove: one store-watching
 schedule/event/Skill dispatcher, a live pre-execution record check, single-flight
@@ -48,48 +51,48 @@ ownership, and cooldown at both dispatch and completion.
 === Axocoatl: legacy triggers → canonical Automations ===
 
 Loaded .../axocoatl.proactive.example.yaml (parsed by axocoatl_config::parse_config — the same parser the daemon uses).
-  2 agent(s), 1 workflow(s), 1 schedule(s), 2 proactive agent(s).
+  2 agent(s), 2 Skill(s), 1 workflow(s), 1 schedule(s), 2 proactive agent(s).
 
 First-boot AutomationStore projection:
   - daily-briefing         [enabled ] nodes=1  trigger=manual
-  - pro:failure-watch      [enabled ] nodes=1  trigger=on_event · AgentFailed
+  - pro:failure-watch      [enabled ] nodes=1  trigger=on_event · BuildFailed
   - pro:hourly-briefing    [enabled ] nodes=1  trigger=schedule · every 30s
   - sched:briefing-run     [enabled ] nodes=1  trigger=schedule · every 30s
 
 ...
 
-[1] Publishing a lattice event: AgentFailed (coder timed out)
-    'pro:failure-watch' ACTIVATED — `AgentFailed` matched its OnEvent trigger.
-    The ops agent ran with its diagnostic prompt:
+[1] Firing the 'build-failed' Skill, which publishes ["BuildFailed"]
+    'pro:failure-watch' ACTIVATED — `BuildFailed` from skill:build-failed matched its OnEvent trigger.
+    The ops agent ran with its configured input:
 
       DIAGNOSIS
       ─────────
       Triggering context:
-        An agent just failed. Diagnose the likely cause and suggest a concrete fix.
+        CI reported a failing build. Diagnose the likely cause and suggest a concrete fix.
 
-      Failing event payload:
-      { "agent_id": "coder", "error": "provider timeout after 30s", "workflow": "feature-dev" }
-
-      Likely cause: the failing agent hit an unhandled provider error ...
+      Likely cause: a change landed whose tests were not run locally, ...
       Suggested fix:
-      1. Re-run the failed agent with an OverflowPolicy::Warn budget ...
+      1. Re-run the failing job and compare its lockfile with the last green build.
+      ...
 
-[2] Publishing an unrelated event: TaskCompleted
-    IGNORED (no trigger match) — `TaskCompleted` is not the watcher's target event ...
+[2] Firing the 'deploy-finished' Skill, which publishes ["DeployFinished"]
+    IGNORED (no trigger match) — `DeployFinished` is not the watcher's target event ...
 
-[3] Publishing a SECOND AgentFailed immediately (within the 30s cooldown)
-    SKIPPED (cooldown) — the cooldown stops a failure storm from re-firing ...
+[3] Firing 'build-failed' AGAIN immediately (within the 30s demo cooldown)
+    SKIPPED (cooldown) — the cooldown stops a burst of failures from re-firing ...
 
-[4] Setting enabled=false on the watcher, then publishing AgentFailed again
-    SKIPPED (disabled) — the canonical `enabled` gate prevents the run ...
+[4] Setting enabled=false on the watcher, then firing 'build-failed' again
+    SKIPPED (disabled) — the canonical `enabled` gate prevents this Automation ...
 
 4 events published; the watcher fired 1 time(s). ...
 ```
 
-Event `[1]` shows the data path: a simulated `AgentFailed` activates the projected
-Agent node with its diagnostic prompt. Events `[2]`–`[4]` illustrate the matching,
-cooldown, and enabled principles. The production guarantees come from
-`automation_runtime`, not this example-only delivery helper.
+Event `[1]` shows the data path: firing a Skill publishes its declared event, which
+activates the projected Agent node. A Skill event's payload is only
+`{"fired_by_skill": "<id>"}`, so the Agent reads the Automation's configured input,
+as it does in the daemon. Events `[2]`–`[4]` illustrate the matching, cooldown,
+and enabled principles. The production guarantees come from `automation_runtime`,
+not this example-only delivery helper.
 
 ## What the legacy sections become
 
@@ -126,6 +129,9 @@ With the daemon running:
 - `/api/schedules` and `/api/proactive` project compatibility views with last
   run, outcome, error, and count observations.
 - The `pro:hourly-briefing` and `sched:briefing-run` records fire every `30s`.
+- Firing **Settings → Skills → Build failed** (or
+  `curl -X POST http://127.0.0.1:8080/api/skills/build-failed/fire`) publishes
+  `BuildFailed` and starts `pro:failure-watch`.
 
 ### Enabling / disabling
 

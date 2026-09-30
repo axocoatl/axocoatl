@@ -16,6 +16,8 @@ description = "Core types, traits, and errors for the Axocoatl agent runtime"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# Only the broadcast channel behind the event feed.
+tokio = { version = "1.48", features = ["sync"] }
 uuid = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

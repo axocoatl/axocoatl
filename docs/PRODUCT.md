@@ -282,7 +282,7 @@ The one app does not replace Axocoatl's runtime strengths. It makes them legible
   revision can reactivate the affected downstream graph. A native lead, including a
   Coordinator template, delegates tasks to distinct helper activations from approved
   Worker templates in that same controller. The process-wide
-  event lattice carries typed notifications for Skills, triggers, webhooks, and
+  event feed carries the events Skills publish to triggers, webhooks, and
   retained API/WebSocket observers.
 - MCP, Skills, and Automations extend what sessions and agents can do.
 

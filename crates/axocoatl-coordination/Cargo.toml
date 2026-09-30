@@ -10,14 +10,11 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme.workspace = true
-description = "Event lattice and turn scheduling for Axocoatl multi-agent systems"
+description = "Turn scheduling for Axocoatl's coordinated multi-agent Session turns"
 
 [dependencies]
-tokio = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
-uuid = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util", "macros"] }
+serde_json = { workspace = true }

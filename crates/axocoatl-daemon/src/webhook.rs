@@ -1,6 +1,7 @@
-//! Lattice event egress — outbound webhooks.
+//! Event-feed egress — outbound webhooks.
 //!
-//! When the lattice publishes an event, a background dispatcher matches it
+//! When the event feed publishes an event (a Skill's declared event, today the
+//! only kind the daemon publishes), a background dispatcher matches it
 //! against the configured webhooks and POSTs a signed JSON payload to each
 //! matching URL. This is the outbound counterpart to inbound A2A: signals leave,
 //! opt-in, to systems *you* own.
@@ -24,7 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axocoatl_config::WebhookConfigYaml;
-use axocoatl_coordination::EventNotification;
+use axocoatl_core::event_feed::EventNotification;
 use hmac::{Hmac, Mac};
 use reqwest::{Client, StatusCode};
 use sha2::Sha256;
@@ -69,8 +70,8 @@ impl Sink {
         }
     }
 
-    /// Whether this sink wants the given event. An empty filter means all
-    /// coordination events (pure telemetry excluded); a named filter matches
+    /// Whether this sink wants the given event. An empty filter means every
+    /// event (pure telemetry excluded); a named filter matches
     /// exactly and may opt back into telemetry by naming it.
     fn matches(&self, event_name: &str, is_telemetry: bool) -> bool {
         if self.events.is_empty() {
@@ -100,7 +101,7 @@ pub async fn run_webhook_dispatcher(
     info!(
         count = sinks.len(),
         ?hosts,
-        "Lattice event egress active — webhooks POST to these hosts"
+        "Event-feed egress active — webhooks POST to these hosts"
     );
 
     let client = Client::builder()
@@ -115,8 +116,8 @@ pub async fn run_webhook_dispatcher(
     loop {
         let notif = match rx.recv().await {
             Ok(n) => n,
-            // The lattice produced events faster than we drained them. Drop the
-            // skipped ones and keep going — never die, never block the lattice.
+            // The feed produced events faster than we drained them. Drop the
+            // skipped ones and keep going — never die, never block the feed.
             Err(RecvError::Lagged(skipped)) => {
                 warn!(skipped, "webhook dispatcher lagged; dropped events");
                 continue;
@@ -132,7 +133,7 @@ pub async fn run_webhook_dispatcher(
                 continue;
             }
             // Bound total in-flight deliveries. Under a flood, drop rather than
-            // spawn unbounded tasks or block the lattice receive loop.
+            // spawn unbounded tasks or block the feed receive loop.
             let Ok(permit) = limiter.clone().try_acquire_owned() else {
                 warn!(webhook = %sink.name, event = event_name, "egress saturated — delivery dropped");
                 continue;
@@ -273,7 +274,7 @@ fn host_of(url: &str) -> &str {
 mod tests {
     use super::*;
     use axocoatl_config::SecretString;
-    use axocoatl_coordination::{EventId, EventType};
+    use axocoatl_core::event_feed::{EventId, EventType};
     use std::collections::HashMap;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};

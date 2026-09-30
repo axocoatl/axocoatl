@@ -1,8 +1,8 @@
 //! Deterministic, turn-scoped coordination over an immutable agent graph.
 //!
-//! This scheduler is deliberately separate from [`crate::EventLattice`]. The
-//! event lattice remains a process-wide notification substrate; this module
-//! models the causal execution of one bounded multi-agent turn.
+//! This scheduler is deliberately separate from the process-wide event feed
+//! (`axocoatl_core::event_feed`); it models the causal execution of one
+//! bounded multi-agent turn.
 
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};

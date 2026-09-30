@@ -292,7 +292,7 @@ pub enum AutomationTrigger {
         #[serde(default)]
         input: Option<String>,
     },
-    /// Fires when a lattice event matches. Event name is the match key;
+    /// Fires when an event-feed event matches. Event name is the match key;
     /// `input` is the fallback prompt if the event payload doesn't carry one.
     OnEvent {
         event: String,
