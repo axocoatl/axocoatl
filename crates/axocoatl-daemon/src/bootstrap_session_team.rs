@@ -153,6 +153,57 @@ pub struct SessionTeamView {
     /// may add. It is only a suggestion: nothing runs it unless an Apply
     /// includes it.
     pub suggested_check: Option<Vec<String>>,
+    /// Helpers proposed for a new Session whose team is one Agent that may
+    /// delegate. Absent once a team is applied, and when no Worker template
+    /// has `writes: []`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposed_delegation: Option<ProposedDelegation>,
+}
+/// Graph bounds proposed with helpers: the lead and up to five helper runs in
+/// one turn. Helpers add no connection, so five leave room for a chain of six
+/// Agents the person builds later.
+const PROPOSED_MAX_NODES: u32 = 6;
+const PROPOSED_MAX_EDGES: u32 = 5;
+/// A helper approval nobody has made yet. Team and budget shows it as a draft
+/// whose helper limits the person enters, or removes, before Apply; nothing is
+/// approved until then.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct ProposedDelegation {
+    pub slot_id: String,
+    /// Worker template ids, in configuration order.
+    pub helpers: Vec<String>,
+    pub operations: Vec<DelegatedOperation>,
+    pub max_nodes: u32,
+    pub max_edges: u32,
+}
+/// When a new Session's team is one Agent that may delegate, the Worker
+/// templates made read-only with `writes: []` become its proposed helpers:
+/// those are the helpers `delegate` admits whatever their tools.
+fn proposed_delegation(
+    slots: &[SessionTeamSlotEdit],
+    templates: &[SessionTeamSlotEdit],
+) -> Option<ProposedDelegation> {
+    let [lead] = slots else {
+        return None;
+    };
+    if lead.role == AgentRole::Worker || lead.delegation.is_some() {
+        return None;
+    }
+    let helpers: Vec<String> = templates
+        .iter()
+        .filter(|template| {
+            template.role == AgentRole::Worker
+                && matches!(&template.writes, Some(Some(paths)) if paths.is_empty())
+        })
+        .filter_map(|template| template.template_id.clone())
+        .collect();
+    (!helpers.is_empty()).then(|| ProposedDelegation {
+        slot_id: lead.slot_id.clone(),
+        helpers,
+        operations: vec![DelegatedOperation::AddAgent],
+        max_nodes: PROPOSED_MAX_NODES,
+        max_edges: PROPOSED_MAX_EDGES,
+    })
 }
 #[derive(Serialize)]
 pub struct SessionTeamChange {
@@ -416,6 +467,7 @@ impl AxocoatlDaemon {
                 approved: false,
                 required_checks: vec![],
                 suggested_check: None,
+                proposed_delegation: None,
             });
         }
         let suggested_check = session
@@ -482,6 +534,7 @@ impl AxocoatlDaemon {
                         approved: current.graph.slots.iter().all(|slot| slot.grant.is_some()),
                         required_checks,
                         suggested_check,
+                        proposed_delegation: None,
                     });
                 }
                 let selected: Vec<String> = match &session.mode {
@@ -527,6 +580,7 @@ impl AxocoatlDaemon {
                             })
                     })
                     .collect();
+                let proposed_delegation = proposed_delegation(&slots, &templates);
                 Ok(SessionTeamView {
                     history_version: "execution_v2",
                     configuration_revision: 0,
@@ -537,6 +591,7 @@ impl AxocoatlDaemon {
                     approved: false,
                     required_checks: vec![],
                     suggested_check,
+                    proposed_delegation,
                 })
             },
         )
@@ -1356,7 +1411,7 @@ impl AxocoatlDaemon {
 }
 
 #[cfg(test)]
-mod writes_tests {
+mod tests {
     use super::*;
 
     /// A slot edit as a client sends it; `None` leaves `writes` out.
@@ -1397,5 +1452,54 @@ mod writes_tests {
         assert!(written.get("writes").is_none(), "{written}");
         let written = serde_json::to_value(&any).unwrap();
         assert_eq!(written.get("writes"), Some(&serde_json::Value::Null));
+    }
+
+    fn template(id: &str, role: AgentRole, writes: Option<Vec<String>>) -> SessionTeamSlotEdit {
+        let mut template = slot(None);
+        template.slot_id = format!("slot-{id}");
+        template.template_id = Some(id.into());
+        template.role = role;
+        template.writes = Some(writes);
+        template
+    }
+
+    /// A new Session's single lead is proposed the read-only Worker templates
+    /// as helpers; nothing else is, and a team without them is left as is.
+    #[test]
+    fn a_single_lead_is_proposed_only_the_read_only_workers() {
+        let lead = template("lead", AgentRole::Autonomous, None);
+        let templates = [
+            lead.clone(),
+            template("scout", AgentRole::Worker, Some(vec![])),
+            template("writer", AgentRole::Worker, None),
+            template("docs", AgentRole::Worker, Some(vec!["docs/".into()])),
+            template("peer", AgentRole::Autonomous, Some(vec![])),
+            template("reviewer", AgentRole::Worker, Some(vec![])),
+        ];
+        let alone = std::slice::from_ref(&lead);
+        let proposal = proposed_delegation(alone, &templates).unwrap();
+        assert_eq!(
+            proposal,
+            ProposedDelegation {
+                slot_id: "slot-lead".into(),
+                helpers: vec!["scout".into(), "reviewer".into()],
+                operations: vec![DelegatedOperation::AddAgent],
+                max_nodes: 6,
+                max_edges: 5,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&proposal).unwrap()["operations"],
+            serde_json::json!(["add_agent"])
+        );
+
+        let coordinator = template("lead", AgentRole::Coordinator, None);
+        assert!(proposed_delegation(&[coordinator], &templates).is_some());
+        let worker = template("scout", AgentRole::Worker, Some(vec![]));
+        assert_eq!(proposed_delegation(&[worker], &templates), None);
+        let pair = [lead.clone(), template("peer", AgentRole::Autonomous, None)];
+        assert_eq!(proposed_delegation(&pair, &templates), None);
+        assert_eq!(proposed_delegation(alone, &templates[2..4]), None);
+        assert_eq!(proposed_delegation(&[], &templates), None);
     }
 }

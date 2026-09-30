@@ -477,10 +477,11 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
         }
     }
 
-    // Role invariants: coordinators and workers only make sense inside a
-    // workflow — a worker is spawned and driven by its workflow's coordinator,
-    // never standalone. Reject a role with no workflow to back it so a
-    // half-wired multi-agent setup fails loudly at load time instead of at run.
+    // Role invariants: a coordinator only makes sense as a workflow's entry
+    // point, so a half-wired multi-agent setup fails loudly at load time
+    // instead of at run. A worker never runs on its own: its workflow's
+    // coordinator spawns it, or, outside any workflow, it is a helper template
+    // a native Session lead may delegate to once Team and budget approves it.
     let workflow_entry_points: std::collections::HashSet<&str> = config
         .workflows
         .iter()
@@ -497,19 +498,6 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
                                  event lattice, so it must not declare depends_on"
                             .to_string(),
                         suggestion: "Remove depends_on from this worker agent.".to_string(),
-                    });
-                }
-                if !worker_owners.contains_key(agent.id.as_str()) {
-                    return Err(ConfigError::InvalidField {
-                        field: format!("agents[{}].role", agent.id),
-                        value: "worker".to_string(),
-                        reason: "A worker must belong to a workflow whose entry_point is a \
-                                 coordinator; that coordinator spawns it on demand"
-                            .to_string(),
-                        suggestion: format!(
-                            "Add '{}' to a coordinator-led workflow's agents, or change its role.",
-                            agent.id
-                        ),
                     });
                 }
             }
@@ -809,20 +797,26 @@ workflows:
         );
     }
 
+    /// A Worker outside any workflow is a helper template: a native Session
+    /// lead can delegate to it once Team and budget approves it.
     #[test]
-    fn worker_without_workflow_rejected() {
+    fn worker_outside_any_workflow_is_a_helper_template() {
         let yaml = r#"
 agents:
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: llama3
   - id: w
     name: "W"
     provider: ollama
     model: llama3
     role: worker
+    writes: []
 "#;
-        let err = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap_err();
-        assert!(
-            matches!(err, ConfigError::InvalidField { ref reason, .. } if reason.contains("must belong to a workflow"))
-        );
+        let config = parse_config(yaml, &PathBuf::from("test.yaml")).unwrap();
+        assert!(matches!(config.agents[1].role, AgentRoleYaml::Worker));
+        assert_eq!(config.agents[1].writes, Some(vec![]));
     }
 
     #[test]

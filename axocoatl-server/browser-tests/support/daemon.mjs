@@ -182,6 +182,7 @@ export async function launchTestDaemon({
   skills = [],
   agentTools = [],
   agentWrites,
+  helpers = [],
   port: requestedPort = Number(process.env.AXOCOATL_E2E_PORT) || 0,
 } = {}) {
   const runRoot = await mkdtemp(path.join(tmpdir(), 'axocoatl-browser-e2e-'));
@@ -229,7 +230,14 @@ agents:
     system_prompt: Browser regression fixture. No turns are executed.
     depends_on: []
     tools: ${JSON.stringify(agentTools)}${agentWrites === undefined ? '' : `
-    writes: ${JSON.stringify(agentWrites)}`}
+    writes: ${JSON.stringify(agentWrites)}`}${helpers.map((helper) => `
+  - id: ${JSON.stringify(helper.id)}
+    name: ${JSON.stringify(helper.name)}
+    provider: ollama
+    model: browser-test-model
+    role: worker
+    tools: ${JSON.stringify(helper.tools || [])}${helper.writes === undefined ? '' : `
+    writes: ${JSON.stringify(helper.writes)}`}`).join('')}
 
 providers:
   ollama:
