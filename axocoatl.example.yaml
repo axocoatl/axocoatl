@@ -1,7 +1,8 @@
 # Axocoatl — minimal starter config
 #
-# Two agents, one legacy workflow seed, one Skill. Fits on a screen. Designed
-# for a first run with Ollama + llama3.2 (no hosted-provider API key needed).
+# The default team (a lead and two read-only helpers), one two-node legacy
+# workflow seed and one Skill. Designed for a first run with Ollama + llama3.2
+# (no hosted-provider API key needed).
 #
 # To use:
 #   cp axocoatl.example.yaml axocoatl.yaml
@@ -9,16 +10,52 @@
 #   ollama pull llama3.2
 #   axocoatl dev
 #
-# Then open http://localhost:8080, create a folder-anchored session, choose the
-# researcher agent, and ask a question in the session chat. On a fresh data
-# directory, the workflow below seeds a manual Automation that is also available
-# through the compatibility HTTP API.
+# Then open http://localhost:8080, create a folder-anchored Session on Lead, and
+# open Team & budget: it proposes Scout and Reviewer as Lead's helpers. Enter
+# the limits for all three, Apply, and send a request in the Session chat. On a
+# fresh data directory, the workflow below seeds a manual Automation that is
+# also available through the compatibility HTTP API.
 #
 # The larger demo config, including scheduled seeds and MCP servers, lives in
 # axocoatl.yaml. Use that once you're past first contact.
 
 # ─── Agents ─────────────────────────────────────────────────────────
 agents:
+  # Default team. Lead owns the change and is the only one that edits files.
+  # Scout and Reviewer are Workers with `writes: []`: read-only helpers Lead
+  # can delegate to once Team & budget approves their limits. To change the
+  # team, edit these entries (or add Workers with `writes: []`); to work with
+  # one Agent only, clear "Let this Agent delegate to helpers" in Team & budget.
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: llama3.2
+    role: autonomous
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
+    system_prompt: "You own this change. Read the relevant code before you edit it. Delegate a focused read-only question to scout. Before you finish, ask reviewer for an independent review of your change and fix what it finds. Verify with the tests, then summarize what you changed."
+    sampling: { max_tokens: 4096 }
+
+  - id: scout
+    name: "Scout"
+    provider: ollama
+    model: llama3.2
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: "Answer the lead's question with file paths, line numbers and short evidence. Change nothing."
+    sampling: { max_tokens: 4096 }
+
+  - id: reviewer
+    name: "Reviewer"
+    provider: ollama
+    model: llama3.2
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: "Review the described change against the code, docs and tests. Report each concrete defect with file:line, or say you found none. Change nothing."
+    sampling: { max_tokens: 4096 }
+
+  # A two-Agent Automation example, separate from the default team.
   - id: researcher
     name: "Researcher"
     provider: ollama

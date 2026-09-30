@@ -545,53 +545,127 @@ fn scaffold_project(
     Ok(())
 }
 
-/// Default OpenAI-based template used by `init`.
-const TEMPLATE_OPENAI: &str = r#"# Axocoatl Agent Configuration
-# See: https://github.com/axocoatl/axocoatl for full reference
+/// The default team in every starting configuration: Lead owns the change
+/// and is the only Agent that edits files; Scout and Reviewer are Workers with
+/// `writes: []`, read-only helpers Lead can delegate to. A new Session on Lead
+/// proposes both helpers in Team & budget, where the person approves every
+/// limit. `model` is an already-serialized YAML scalar.
+fn default_team_agents(provider_id: &str, model: &str, max_tokens: Option<u32>) -> String {
+    let sampling = max_tokens
+        .map(|max_tokens| format!("    sampling:\n      max_tokens: {max_tokens}\n"))
+        .unwrap_or_default();
+    format!(
+        r#"  # Default team. Lead owns the change; Scout and Reviewer are read-only
+  # helpers it can delegate to once Team & budget approves their limits.
+  - id: lead
+    name: "Lead"
+    provider: {provider_id}
+    model: {model}
+    role: autonomous
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
+    system_prompt: "{LEAD_PROMPT}"
+{sampling}
+  - id: scout
+    name: "Scout"
+    provider: {provider_id}
+    model: {model}
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: "{SCOUT_PROMPT}"
+{sampling}
+  - id: reviewer
+    name: "Reviewer"
+    provider: {provider_id}
+    model: {model}
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: "{REVIEWER_PROMPT}"
+{sampling}"#
+    )
+}
+
+const LEAD_PROMPT: &str = "You own this change. Read the relevant code before you edit it. \
+    Delegate a focused read-only question to scout. Before you finish, ask reviewer for an \
+    independent review of your change and fix what it finds. Verify with the tests, then \
+    summarize what you changed.";
+const SCOUT_PROMPT: &str = "Answer the lead's question with file paths, line numbers and short \
+    evidence. Change nothing.";
+const REVIEWER_PROMPT: &str = "Review the described change against the code, docs and tests. \
+    Report each concrete defect with file:line, or say you found none. Change nothing.";
+
+/// The Ollama model `init` configures and `onboard` offers first.
+const DEFAULT_OLLAMA_MODEL: &str = "llama3.2";
+
+/// The local Ollama configuration `init` scaffolds.
+fn init_configuration() -> String {
+    let team = default_team_agents("ollama", DEFAULT_OLLAMA_MODEL, Some(4096));
+    format!(
+        r#"# Axocoatl — project-local configuration (local Ollama)
+# See: https://docs.axocoatl.ai/configure/agents/
 
 agents:
+{team}
+  # Plain chat for `axocoatl chat`; not part of the default team.
   - id: assistant
-    name: "Assistant Agent"
-    provider: openai
-    model: gpt-4o
+    name: "Assistant"
+    provider: ollama
+    model: {DEFAULT_OLLAMA_MODEL}
     system_prompt: "You are a helpful assistant."
     token_budget:
-      per_execution: 20000
+      per_execution: 16000
       per_call: 8192
-      overflow_policy: summarize
+      overflow_policy: warn
 
 providers:
-  openai:
-    api_key: "${OPENAI_API_KEY}"
+  ollama:
+    base_url: "http://localhost:11434"
+  # A hosted provider reads its key from the process environment; see
+  # https://docs.axocoatl.ai/configure/providers/ and .env.example.
 
 server:
   port: 8080
   host: "127.0.0.1"
-"#;
+"#
+    )
+}
 
-const ENV_EXAMPLE: &str =
-    "OPENAI_API_KEY=sk-your-key-here\nANTHROPIC_API_KEY=sk-ant-your-key-here\n";
+const ENV_EXAMPLE: &str = concat!(
+    "# Keys for a hosted provider you add to axocoatl.yaml.\n",
+    "# The generated configuration uses local Ollama and needs none of them.\n",
+    "OPENROUTER_API_KEY=sk-or-your-key-here\n",
+    "OPENAI_API_KEY=sk-your-key-here\n",
+);
 
 fn next_steps_text(project_name: &str) -> String {
     format!(
         r#"
 Created Axocoatl project: {project_name}/
-  axocoatl.yaml    — Agent configuration
-  .env.example     — process-environment template
+  axocoatl.yaml    — Agent configuration: local Ollama, the default team
+  .env.example     — keys for a hosted provider, if you add one
   data/            — runtime data, created on first start
 
 Next steps — copy/paste:
 
   cd {project_name}
+  ollama pull {DEFAULT_OLLAMA_MODEL}
+  axocoatl doctor --config axocoatl.yaml
+  axocoatl validate axocoatl.yaml
+  axocoatl dev --config axocoatl.yaml
+
+Open http://localhost:8080, choose Open workspace…, and create a Session on
+Lead. Team & budget proposes Scout and Reviewer as its read-only helpers;
+enter the limits for all three and Apply before the first request. For plain
+chat without a Session: axocoatl chat --config axocoatl.yaml
+
+To add a hosted provider, keep its key out of the file and out of Git:
+
   mv .env.example .env       # edit provider keys; never commit this file
   chmod 600 .env
   set -a
   . ./.env
   set +a
-  axocoatl doctor --config axocoatl.yaml
-  axocoatl validate axocoatl.yaml
-  axocoatl dev --config axocoatl.yaml
-  axocoatl chat --config axocoatl.yaml -a assistant
 
 Axocoatl reads provider keys from its process environment and does not load
 .env automatically. Source it again in each new shell, or configure equivalent
@@ -709,7 +783,7 @@ async fn cmd_init(name: Option<String>) {
         std::process::exit(1);
     }
 
-    if let Err(e) = scaffold_project(&dir, TEMPLATE_OPENAI, ENV_EXAMPLE) {
+    if let Err(e) = scaffold_project(&dir, &init_configuration(), ENV_EXAMPLE) {
         eprintln!("Failed to scaffold project: {e}");
         std::process::exit(1);
     }
@@ -963,10 +1037,10 @@ fn onboard_completion_text(
     )
 }
 
-/// A hosted-provider first run keeps the direct Assistant path while also
-/// exposing one small, valid dependency graph to Lattice Session creation.
-/// Provider ids and display names are fixed call-site constants. The model is
-/// serialized here and the secret arrives as an already-quoted YAML scalar.
+/// A hosted-provider first run defines the default team and keeps the direct
+/// Assistant for `axocoatl chat`. Provider ids and display names are fixed
+/// call-site constants. The model is serialized here and the secret arrives as
+/// an already-quoted YAML scalar.
 fn hosted_onboarding_configuration(
     provider_name: &str,
     provider_id: &str,
@@ -987,14 +1061,16 @@ fn hosted_onboarding_configuration(
     } else {
         ""
     };
-    let sampling = if provider_id == "openrouter" {
-        "    sampling:\n      max_tokens: 2048\n"
-    } else {
-        ""
-    };
+    let max_tokens = (provider_id == "openrouter").then_some(2048);
+    let sampling = max_tokens
+        .map(|max_tokens| format!("    sampling:\n      max_tokens: {max_tokens}\n"))
+        .unwrap_or_default();
+    let team = default_team_agents(provider_id, &model_yaml, max_tokens);
     format!(
         r#"# Axocoatl — {provider_name} setup
 {provider_note}agents:
+{team}
+  # Plain chat for `axocoatl chat`; not part of the default team.
   - id: assistant
     name: "Assistant"
     provider: {provider_id}
@@ -1004,36 +1080,6 @@ fn hosted_onboarding_configuration(
       per_execution: {per_execution}
       per_call: 8192
       overflow_policy: {overflow_policy}
-
-  - id: planner
-    name: "Planner"
-    provider: {provider_id}
-    model: {model_yaml}
-    role: autonomous
-    system_prompt: "Analyze the request and repository. Return a concise implementation plan and risks without modifying files."
-    depends_on: []
-{sampling}    token_budget:
-      per_execution: {per_execution}
-      per_call: 8192
-      overflow_policy: {overflow_policy}
-
-  - id: builder
-    name: "Builder"
-    provider: {provider_id}
-    model: {model_yaml}
-    role: autonomous
-    system_prompt: "Implement the request using the Planner's direct handoff. Run relevant checks and return the verified result."
-    depends_on: [planner]
-{sampling}    token_budget:
-      per_execution: {per_execution}
-      per_call: 8192
-      overflow_policy: {overflow_policy}
-
-workflows:
-  - id: plan-and-build
-    name: "Plan and Build"
-    agents: [planner, builder]
-    entry_point: planner
 
 providers:
 {billing}  {provider_id}:
@@ -1089,10 +1135,13 @@ impl OnboardingProvider {
 fn local_onboarding_configuration(model: &str) -> String {
     let model_yaml =
         serde_json::to_string(model).expect("serializing a model identifier cannot fail");
+    let team = default_team_agents("ollama", &model_yaml, Some(4096));
 
     format!(
         r#"# Axocoatl — local Ollama setup
 agents:
+{team}
+  # Plain chat for `axocoatl chat`; not part of the default team.
   - id: assistant
     name: "Assistant"
     provider: ollama
@@ -1102,26 +1151,6 @@ agents:
       per_execution: 16000
       per_call: 8192
       overflow_policy: warn
-
-  - id: researcher
-    name: "Researcher"
-    provider: ollama
-    model: {model_yaml}
-    system_prompt: "You are a research assistant. Provide detailed, factual answers."
-    depends_on: []
-
-  - id: summarizer
-    name: "Summarizer"
-    provider: ollama
-    model: {model_yaml}
-    system_prompt: "Summarize the input in 1-2 sentences."
-    depends_on: [researcher]
-
-workflows:
-  - id: research-and-summarize
-    name: "Research and Summarize"
-    agents: [researcher, summarizer]
-    entry_point: researcher
 
 providers:
   ollama:
@@ -1212,9 +1241,9 @@ async fn cmd_onboard(install_daemon: bool) {
             }
             let model: String = Input::new()
                 .with_prompt("Ollama model")
-                .default("llama3.2".to_string())
+                .default(DEFAULT_OLLAMA_MODEL.to_string())
                 .interact_text()
-                .unwrap_or_else(|_| "llama3.2".to_string());
+                .unwrap_or_else(|_| DEFAULT_OLLAMA_MODEL.to_string());
 
             if which_ollama().is_some()
                 && Confirm::new()
@@ -2962,6 +2991,9 @@ mod tests {
         let steps = next_steps_text("demo-project");
 
         assert!(steps.contains("cd demo-project"));
+        assert!(steps.contains("ollama pull llama3.2"));
+        assert!(steps.contains("create a Session on\nLead"));
+        assert!(steps.contains("proposes Scout and Reviewer"));
         assert!(steps.contains("mv .env.example .env"));
         assert!(steps.contains("never commit this file"));
         assert!(steps.contains("set -a\n  . ./.env\n  set +a"));
@@ -2972,6 +3004,107 @@ mod tests {
         assert!(steps.contains("dev --config axocoatl.yaml"));
         assert!(steps.contains("chat --config axocoatl.yaml"));
         assert!(!steps.contains("cp .env.example .env"));
+    }
+
+    /// Lead, then Scout and Reviewer as read-only Worker helpers, then the
+    /// plain Assistant, all on one provider and model.
+    fn assert_default_team(
+        config: &axocoatl_config::AxocoatlConfig,
+        provider: &str,
+        model: &str,
+        max_tokens: Option<usize>,
+    ) {
+        let ids: Vec<_> = config
+            .agents
+            .iter()
+            .map(|agent| agent.id.as_str())
+            .collect();
+        assert_eq!(ids, ["lead", "scout", "reviewer", "assistant"]);
+        assert!(config
+            .agents
+            .iter()
+            .all(|agent| agent.provider == provider && agent.model == model));
+        let lead = &config.agents[0];
+        assert!(matches!(
+            lead.role,
+            axocoatl_config::AgentRoleYaml::Autonomous
+        ));
+        assert_eq!(
+            lead.tools,
+            [
+                "read_file",
+                "list_dir",
+                "grep",
+                "glob",
+                "write_file",
+                "edit_file",
+                "bash"
+            ]
+        );
+        assert_eq!(lead.writes, None, "the lead may change any file");
+        let prompt = lead.system_prompt.as_deref().unwrap();
+        assert!(prompt.contains("to scout") && prompt.contains("ask reviewer"));
+        for helper in &config.agents[1..3] {
+            assert!(matches!(
+                helper.role,
+                axocoatl_config::AgentRoleYaml::Worker
+            ));
+            assert_eq!(
+                helper.tools,
+                ["read_file", "list_dir", "grep", "glob", "bash"]
+            );
+            assert_eq!(helper.writes, Some(vec![]), "{} is read-only", helper.id);
+            assert!(helper
+                .system_prompt
+                .as_deref()
+                .unwrap()
+                .ends_with("Change nothing."));
+        }
+        for agent in &config.agents[..3] {
+            assert_eq!(agent.sampling.max_tokens, max_tokens, "{}", agent.id);
+            assert!(agent.depends_on.is_empty());
+        }
+        assert!(matches!(
+            config.agents[3].role,
+            axocoatl_config::AgentRoleYaml::Autonomous
+        ));
+        assert!(config.agents[3].tools.is_empty());
+        assert!(config.workflows.is_empty());
+    }
+
+    #[test]
+    fn init_scaffolds_the_local_default_team() {
+        let config = axocoatl_config::parse_config(
+            &init_configuration(),
+            std::path::Path::new("axocoatl.yaml"),
+        )
+        .expect("the init configuration is valid");
+        assert_default_team(&config, "ollama", "llama3.2", Some(4096));
+        assert_eq!(
+            config.providers.ollama.unwrap().base_url,
+            "http://localhost:11434"
+        );
+        assert!(config.providers.openai.is_none());
+        assert!(config.providers.openrouter.is_none());
+        assert!(ENV_EXAMPLE
+            .lines()
+            .all(|line| line.starts_with('#') || line.contains("your-key-here")));
+    }
+
+    #[test]
+    fn init_scaffold_writes_config_and_env_example_and_leaves_data_to_the_daemon() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("project");
+        scaffold_project(&dir, &init_configuration(), ENV_EXAMPLE).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("axocoatl.yaml")).unwrap(),
+            init_configuration()
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".env.example")).unwrap(),
+            ENV_EXAMPLE
+        );
+        assert!(!dir.join("data").exists());
     }
 
     #[test]
@@ -3017,12 +3150,15 @@ mod tests {
                 OnboardingProvider::OpenRouter => "openrouter",
             };
             assert_eq!(missing_variable, None);
-            assert_eq!(config.agents.len(), 3);
-            assert!(config.agents.iter().all(|agent| {
-                agent.provider == expected_provider
-                    && agent.model == model
-                    && matches!(agent.role, axocoatl_config::AgentRoleYaml::Autonomous)
-            }));
+            assert_default_team(
+                &config,
+                expected_provider,
+                model,
+                Some(match provider {
+                    OnboardingProvider::Ollama => 4096,
+                    OnboardingProvider::OpenRouter => 2048,
+                }),
+            );
             assert!(config.providers.openai.is_none());
             assert!(config.providers.anthropic.is_none());
             assert!(config.providers.gemini.is_none());
@@ -3035,7 +3171,6 @@ mod tests {
                     );
                     assert!(config.providers.openrouter.is_none());
                     assert_eq!(config.providers.openrouter_billing, None);
-                    assert_eq!(config.workflows[0].agents, ["researcher", "summarizer"]);
                 }
                 OnboardingProvider::OpenRouter => {
                     assert!(config.providers.ollama.is_none());
@@ -3051,7 +3186,6 @@ mod tests {
                         .agents
                         .iter()
                         .all(|agent| { agent.sampling.max_tokens == Some(2048) }));
-                    assert_eq!(config.workflows[0].agents, ["planner", "builder"]);
                 }
             }
         }
@@ -3071,7 +3205,7 @@ mod tests {
     }
 
     #[test]
-    fn hosted_starter_configurations_preserve_direct_agents_and_valid_lattice_teams() {
+    fn hosted_starter_configurations_define_the_default_team_and_keep_the_assistant() {
         let cases = [
             ("OpenRouter", "openrouter", "vendor/model:v1", 16000, "warn"),
             (
@@ -3098,58 +3232,17 @@ mod tests {
                     panic!("{provider_name} onboarding config is invalid: {error}")
                 });
 
-            assert_eq!(config.agents.len(), 3);
-            if provider_id == "openrouter" {
-                assert!(config
-                    .agents
-                    .iter()
-                    .all(|agent| agent.sampling.max_tokens == Some(2048)));
-            }
+            let openrouter = provider_id == "openrouter";
+            assert_default_team(&config, provider_id, model, openrouter.then_some(2048));
             assert_eq!(
                 config.providers.openrouter_billing,
-                (provider_id == "openrouter")
-                    .then_some(axocoatl_config::OpenRouterBilling::Credits),
+                openrouter.then_some(axocoatl_config::OpenRouterBilling::Credits),
             );
-            let assistant = config
-                .agents
-                .iter()
-                .find(|agent| agent.id == "assistant")
-                .unwrap();
-            assert_eq!(assistant.provider, provider_id);
-            assert_eq!(assistant.model, model);
-            assert!(assistant.depends_on.is_empty());
-
-            let planner = config
-                .agents
-                .iter()
-                .find(|agent| agent.id == "planner")
-                .unwrap();
-            assert!(matches!(
-                planner.role,
-                axocoatl_config::AgentRoleYaml::Autonomous
-            ));
-            assert!(planner.depends_on.is_empty());
-            assert_eq!(planner.provider, provider_id);
-            assert_eq!(planner.model, model);
-
-            let builder = config
-                .agents
-                .iter()
-                .find(|agent| agent.id == "builder")
-                .unwrap();
-            assert!(matches!(
-                builder.role,
-                axocoatl_config::AgentRoleYaml::Autonomous
-            ));
-            assert_eq!(builder.depends_on, ["planner"]);
-            assert_eq!(builder.provider, provider_id);
-            assert_eq!(builder.model, model);
-
-            assert_eq!(config.workflows.len(), 1);
-            let team = &config.workflows[0];
-            assert_eq!(team.id, "plan-and-build");
-            assert_eq!(team.agents, ["planner", "builder"]);
-            assert_eq!(team.entry_point.as_deref(), Some("planner"));
+            let assistant = &config.agents[3];
+            assert_eq!(assistant.id, "assistant");
+            assert_eq!(assistant.sampling.max_tokens, openrouter.then_some(2048));
+            let budget = assistant.token_budget.as_ref().unwrap();
+            assert_eq!(budget.per_execution, per_execution as usize);
         }
     }
 

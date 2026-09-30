@@ -56,8 +56,9 @@ curl -fsS http://localhost:8080/api/agents
 curl -fsS http://localhost:8080/api/automations
 ```
 
-The starter config has two Ollama agents. Its legacy `hello-world` record should
-appear as a manual record in the canonical Automation store on this first boot.
+The starter config defines the default team (Lead, Scout, Reviewer) and two Ollama
+Agents for its legacy `hello-world` record, which should appear as a manual record in
+the canonical Automation store on this first boot.
 If you reuse an existing data directory, its `automations.json` remains
 authoritative and YAML is not imported again.
 

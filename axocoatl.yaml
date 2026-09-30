@@ -8,58 +8,40 @@
 # ─────────────────────────── AGENTS ───────────────────────────
 
 agents:
-  # ── Engineering team ─────────────────────────────────────
-  - id: architect
-    name: "Architect"
+  # ── Default team ─────────────────────────────────────────
+  # Lead owns the change and is the only Agent here that edits files. Scout and
+  # Reviewer are Workers with `writes: []`: read-only helpers Lead can delegate
+  # to. A new Session on Lead proposes both in Team & budget, where you approve
+  # every limit before the first turn. qwen3:8b emits structured tool_calls on
+  # Ollama, so the tools actually run (qwen2.5-coder:14b returns them as text).
+  - id: lead
+    name: "Lead"
     provider: ollama
-    model: llama3.2
-    system_prompt: "You are a senior software architect. Break tasks into clear technical specifications. Be concise."
-    depends_on: []
-    token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
-
-  - id: planner
-    name: "Planner"
-    provider: ollama
-    model: llama3.2
-    system_prompt: "You are a project planner. Turn specs into actionable, ordered task lists."
-    depends_on: [architect]
-    token_budget: { per_execution: 4000, per_call: 2000, overflow_policy: warn }
-
-  - id: coder
-    name: "Coder"
-    provider: ollama
-    # qwen3:8b emits structured tool_calls on Ollama, so the coder can actually
-    # execute write_file/bash in a session. (qwen2.5-coder:14b does not support
-    # Ollama tool-calling — it returns tool calls as text, which never run.)
-    # /no_think suppresses qwen3's reasoning blocks for clean session output.
     model: qwen3:8b
-    system_prompt: "You are a senior software engineer working in a directory session. The user describes tasks to ACCOMPLISH, not to describe. When code needs to exist on disk, you MUST call the write_file tool with the full file contents — never paste code as chat. Use edit_file for targeted changes, bash for running tests/builds, read_file/list_dir/grep/glob to navigate. To run a dev server, call the bash_background tool with a plain command and NO trailing ampersand (it already backgrounds the process and keeps it alive; a trailing & breaks it). After each tool call, do not narrate at length — let the tool result speak. Only after the work is done, give a brief summary of what you built and how to run it. /no_think"
-    depends_on: [planner]
-    token_budget: { per_execution: 8000, per_call: 4000, overflow_policy: warn }
+    role: autonomous
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
+    system_prompt: "You own this change. Read the relevant code before you edit it. Delegate a focused read-only question to scout. Before you finish, ask reviewer for an independent review of your change and fix what it finds. Verify with the tests, then summarize what you changed."
+    sampling: { max_tokens: 4096 }
+
+  - id: scout
+    name: "Scout"
+    provider: ollama
+    model: qwen3:8b
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: "Answer the lead's question with file paths, line numbers and short evidence. Change nothing."
+    sampling: { max_tokens: 4096 }
 
   - id: reviewer
-    name: "Code Reviewer"
+    name: "Reviewer"
     provider: ollama
-    model: llama3.2
-    system_prompt: "You are a strict code reviewer. Find bugs, edge cases, and style issues. Be specific."
-    depends_on: [coder]
-    token_budget: { per_execution: 6000, per_call: 3000, overflow_policy: warn }
-
-  - id: tester
-    name: "Tester"
-    provider: ollama
-    model: llama3.2
-    system_prompt: "You are a QA engineer. Generate test cases including edge cases and adversarial inputs."
-    depends_on: [reviewer]
-    token_budget: { per_execution: 5000, per_call: 2500, overflow_policy: warn }
-
-  - id: doc-writer
-    name: "Doc Writer"
-    provider: ollama
-    model: llama3.2
-    system_prompt: "You are a technical writer. Produce clear, friendly documentation with examples."
-    depends_on: [reviewer]
-    token_budget: { per_execution: 4000, per_call: 2000, overflow_policy: warn }
+    model: qwen3:8b
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: "Review the described change against the code, docs and tests. Report each concrete defect with file:line, or say you found none. Change nothing."
+    sampling: { max_tokens: 4096 }
 
   # ── Research team ────────────────────────────────────────
   - id: researcher
@@ -92,7 +74,7 @@ agents:
     provider: ollama
     model: llama3.2
     system_prompt: "You are a site reliability engineer. Produce deployment plans and incident responses."
-    depends_on: [tester]
+    depends_on: []
     token_budget: { per_execution: 4000, per_call: 2000, overflow_policy: warn }
 
   # ── Customer-facing team ─────────────────────────────────
@@ -118,16 +100,6 @@ agents:
 # Automations in Settings; this YAML is no longer a second live registry.
 
 workflows:
-  - id: feature-dev
-    name: "Feature Development"
-    agents: [architect, planner, coder, reviewer, tester, doc-writer]
-    entry_point: architect
-
-  - id: bug-triage
-    name: "Bug Triage"
-    agents: [support, analyst, planner, coder]
-    entry_point: support
-
   - id: research-and-summarize
     name: "Research & Summarize"
     agents: [researcher, summarizer]
@@ -135,8 +107,8 @@ workflows:
 
   - id: release-checklist
     name: "Release Readiness"
-    agents: [tester, reviewer, ops]
-    entry_point: tester
+    agents: [ops]
+    entry_point: ops
 
   - id: daily-briefing
     name: "Daily Briefing"
@@ -180,7 +152,7 @@ skills:
     description: "Structured 12-point review across correctness, style, performance, security."
     emits: ["ReviewComplete", "BlockingIssueFound"]
     reacts_to: ["CodeReady", "PullRequestOpened"]
-    agents: [reviewer, coder]
+    agents: [reviewer, lead]
     prompt: "Review the code against: correctness, edge cases, error handling, performance, security, style, naming, tests. Return JSON with `issues` and `severity`."
 
   - id: incident-postmortem
@@ -204,7 +176,7 @@ skills:
     description: "Formats merged PR titles into user-facing release notes."
     emits: ["ReleaseNotesReady"]
     reacts_to: ["ReleaseReady"]
-    agents: [doc-writer]
+    agents: [summarizer]
     prompt: "Convert the given PR list into release notes grouped as: New, Improved, Fixed."
 
 # ─────────────────────────── PROVIDERS / SERVER ───────────────
