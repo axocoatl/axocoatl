@@ -162,12 +162,16 @@ if [ -n "$EXISTING_CONTAINERS" ]; then
         "axo-ses-$session_id"|"axo-ses-attempt-$session_key-"*) known=true ;;
       esac
     done
-    if [ "$known" != true ]; then
+    # A container that does not mount this demo root belongs to another
+    # daemon's Sessions and is left alone.
+    if [ "$known" != true ] &&
+      podman inspect "$container_name" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null |
+      grep -q -F -- "$DEMO_ROOT/"; then
       UNKNOWN_CONTAINERS="${UNKNOWN_CONTAINERS}${container_name}\n"
     fi
   done <<< "$EXISTING_CONTAINERS"
   if [ -n "$UNKNOWN_CONTAINERS" ]; then
-    echo "Refusing to start beside Axocoatl containers not owned by this demo:" >&2
+    echo "Refusing to start beside Axocoatl containers that use $DEMO_ROOT but are not its Sessions:" >&2
     printf '%b' "$UNKNOWN_CONTAINERS" >&2
     echo "Close them with their owning daemon before starting this demo." >&2
     exit 1

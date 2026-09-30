@@ -127,13 +127,18 @@ fi
 # Axocoatl publishes it on a dynamic loopback host port and Preview reaches it
 # through the daemon, so host port 8765 does not need to be free.
 
-AXO_SESSION_CONTAINERS="$(
-  podman ps -a --format '{{.Names}}' |
-    awk '/^axo-ses-/ { print }'
-)"
+# Only containers that mount this demo root matter here: Session containers
+# of other Axocoatl daemons on the same Podman machine are theirs to manage.
+AXO_SESSION_CONTAINERS=""
+for container_name in $(podman ps -a --format '{{.Names}}' | awk '/^axo-ses-/ { print }'); do
+  if podman inspect "$container_name" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null |
+    grep -q -F -- "$DEMO_ROOT/"; then
+    AXO_SESSION_CONTAINERS="${AXO_SESSION_CONTAINERS}${container_name}\n"
+  fi
+done
 if [ -n "$AXO_SESSION_CONTAINERS" ]; then
-  echo "Refusing to prepare while Axocoatl session containers exist:" >&2
-  printf '%s\n' "$AXO_SESSION_CONTAINERS" >&2
+  echo "Refusing to prepare while Axocoatl session containers use $DEMO_ROOT:" >&2
+  printf '%b' "$AXO_SESSION_CONTAINERS" >&2
   echo "Identify and close their owning sessions; this script will not remove them." >&2
   exit 1
 fi
