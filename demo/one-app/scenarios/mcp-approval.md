@@ -24,21 +24,28 @@ tool start and result on the Session Turn.
 
 ## Start or reset
 
-Use a separate, intentionally retained compatibility data root with the current
-release candidate. Verify the Session's execution ownership before the take.
-Do not relabel a new native Session or alter execution metadata to force this
-scenario. The following historical demo setup is applicable only when it
-preserves that verified compatibility owner. After closing prior Sessions and
-stopping the daemon:
+Use a separate compatibility data root with the current release candidate.
+`prepare.sh` leaves `data/` for the daemon, which would create a native root; a
+native Session is not offered MCP tools (native admission accepts only the
+repository tools and `workspace_knowledge`). An existing empty `data/` directory
+opens in the 1.0 format instead, so create it before the first start. Do not
+relabel a native Session or alter execution metadata to force this scenario.
+After closing prior Sessions and stopping the daemon:
 
 ```bash
+export AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-mcp-compat
 ./demo/one-app/prepare.sh
+# Compatibility root: an existing empty data directory opens in the 1.0 format.
+mkdir -m 700 "$AXOCOATL_DEMO_ROOT/data"
 ./demo/one-app/start.sh
 ```
 
 `start.sh` builds `mcp-bridge`, validates the MCP server entry in
 [the demo configuration](../axocoatl.demo.yaml), and starts the stdio child at
-daemon bootstrap.
+daemon bootstrap. After creating the Weather Session, retain
+`GET /api/sessions/{id}/team` and require `history_version: legacy_v1` before
+sending the first request. A root that reports `execution_v2` is native; prepare
+a new root instead of changing it.
 
 Before opening a Session, confirm discovery in a second terminal:
 
@@ -103,7 +110,7 @@ curl -sS http://127.0.0.1:18080/api/mcp/tools
 
 ```bash
 export AXO_DEMO_URL='http://127.0.0.1:18080'
-export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase'
+export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-mcp-compat'
 curl -sS "$AXO_DEMO_URL/api/mcp/servers"
 curl -sS "$AXO_DEMO_URL/api/mcp/tools"
 curl -sS "$AXO_DEMO_URL/api/mcp/permissions"
@@ -114,6 +121,7 @@ Copy the Weather Session id, then:
 
 ```bash
 export AXO_SESSION_ID='ses-paste-the-id-here'
+curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
 curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns"
 grep -F 'mcp__weather__get_weather' \
   "$AXO_DEMO_ROOT/data/session-history/turns.v1.jsonl"
@@ -141,9 +149,10 @@ decision is the film's center.
 1. Resolve the approval and wait for the Weather Turn to become terminal.
 2. Capture the Turn evidence and permissions response, then close the Session
    from **All sessions**.
-3. Stop `start.sh` with Ctrl-C and reset with
-   `./demo/one-app/prepare.sh`. A fresh data directory guarantees that no saved
-   permission from another rehearsal suppresses the approval modal.
+3. Stop `start.sh` with Ctrl-C and reset with the same `prepare.sh` and
+   `mkdir -m 700 "$AXOCOATL_DEMO_ROOT/data"` steps. A fresh data directory
+   guarantees that no saved permission from another rehearsal suppresses the
+   approval modal.
 
 ## Known constraints
 

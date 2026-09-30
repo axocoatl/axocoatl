@@ -92,7 +92,7 @@ node demo/one-app/films/record-capture.mjs \
   session-workbench \
   /private/tmp/axocoatl-v1.1.0-film-capture/session-workbench \
   --captured-at "$AXO_CAPTURED_AT" \
-  --url http://localhost:8080/
+  --url http://127.0.0.1:18080/
 
 node demo/one-app/films/stage-film.mjs \
   session-workbench \
@@ -242,15 +242,15 @@ checkout identifiers appropriate to that scenario. Run
 ## `multi-agent-handoff`
 
 - **Placement:** Showcase 5.
-- **Scenario:** [`multi-agent.md`](../scenarios/multi-agent.md), Harbor Catalog with a design-only prompt.
-- **Target:** 25–35 seconds. **Poster beat:** `dependency-edge`.
+- **Scenario:** [`multi-agent.md`](../scenarios/multi-agent.md), Harbor Catalog with the default Lead, Scout, and Reviewer team from `axocoatl.team.yaml` and real local Ollama Qwen calls.
+- **Target:** 35–50 seconds. **Poster beat:** `checked-result`.
 
 | Beat | Required visible evidence | Edit rule |
 | --- | --- | --- |
-| `dependency-edge` | Exactly `architect → reviewer` is visible before execution. | Do not confuse this graph with the event lattice. |
-| `architect` | Architect is active first and returns one non-empty sentence. | Do not cut the sequence to imply concurrency. |
-| `reviewer` | Reviewer activates second, receives the upstream sentence, and returns a decision. | A blank scheduled output is a failed take. |
-| `durable-outputs` | Reload restores two separate labeled outputs on one completed Turn. | Make no repository-edit or Ways claim. |
+| `team-review` | Team and budget shows Lead (may change files), Scout and Reviewer as read-only helpers with explicit limits and maximum output, and the required check `npm run check`. | Show the applied review, not an unsaved draft; add no required review. |
+| `scout` | The Scout helper run appears under the Lead through a `delegated_by` edge and answers with file paths. | Keep the order: Scout before the edit. |
+| `review` | The Lead's `lib/catalog.js` edit is visible, then the Reviewer helper run under the Lead with its findings. | Do not imply a helper changed files. |
+| `checked-result` | After reload, History shows the completed Turn, the passed required check, and both helper answers. | A failed check, a skipped helper, or a helper failure is a failed take. |
 
 ## `several-ways`
 
@@ -299,7 +299,9 @@ checkout identifiers appropriate to that scenario. Run
 ## `event-lattice-automation`
 
 This is the configured Automation runtime; its run identity is separate from a
-native Session Turn. The same release binary serves the Settings journey.
+native Session Turn. The Automation's `on_event` trigger matches the event name
+the Skill publishes, not the Skill itself. The same release binary serves the
+Settings journey.
 
 - **Placement:** Concepts 5; Showcase 9.
 - **Scenario:** [`event-lattice.md`](../scenarios/event-lattice.md), Signal Desk.
@@ -307,9 +309,9 @@ native Session Turn. The same release binary serves the Settings journey.
 
 | Beat | Required visible evidence | Edit rule |
 | --- | --- | --- |
-| `skill` | `Release candidate ready` declares `ReleaseCandidateReady` and fires once. | Do not use a manual Automation Run button. |
-| `event` | After firing, the Skills list retains `ReleaseCandidateReady` while the downstream waiting state appears. | Producer and payload belong to the captured API evidence; do not fabricate a raw-event UI. |
-| `trigger` | Exactly one matching Automation run identifies the Skill trigger. | Keep the causal transition continuous. |
+| `skill` | Filtered **By event** to `ReleaseCandidateReady`, `Release candidate ready` declares that event and fires once. | Do not use a manual Automation Run button. |
+| `event` | After firing, the Skills list, still filtered to `ReleaseCandidateReady`, retains the event while the downstream waiting state appears. | Producer and payload belong to the captured API evidence; do not fabricate a raw-event UI. |
+| `trigger` | The Automation's `⊛ on ReleaseCandidateReady` trigger shows exactly one new run, parked at its operator Interrupt. | Keep the causal transition continuous. |
 | `result` | After reload, completed run history shows the exact recorded `final_content` Result. | Do not end on a transient success toast or status badge alone. |
 
 ## `mcp-approval`

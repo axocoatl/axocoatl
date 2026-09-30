@@ -23,7 +23,7 @@ the next Turn without leaking the cancelled actor's output or tool work.
 
 Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
 `harbor-catalog` fixture, a fresh native data path, real local Ollama calls,
-and the exact candidate binary at `http://localhost:8080`. Retain the actual
+and the exact candidate binary at `http://127.0.0.1:18080`. Retain the actual
 workspace path as `$AXO_DEMO_ROOT/workspace` (or record the equivalent isolated
 fixture path). Verify `history_version: execution_v2` and Ready, then explicitly
 review and apply **Team and budget** before sending.
@@ -90,7 +90,7 @@ Use **Minimal Coder**. Keep **Explore several ways** off for this scenario.
 ## Durable evidence
 
 ```bash
-export AXO_DEMO_URL='http://localhost:8080'
+export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-harbor-catalog'
 curl -sS "$AXO_DEMO_URL/api/sessions"
 ```
@@ -103,7 +103,7 @@ curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/attachments"
 curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
 curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
 sed -n '1,220p' \
-  "$AXO_NATIVE_DATA/session-history/session-attachments.v1.json"
+  "$AXO_DEMO_ROOT/data/session-history/session-attachments.v1.json"
 ```
 
 Native execution records are the lifecycle authority; the Turn API is their UI projection. The attachment relation store

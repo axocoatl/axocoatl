@@ -11,9 +11,10 @@ substrate into another product destination.
 ## Claim
 
 Firing the configured **Release candidate ready** Skill publishes a typed
-`ReleaseCandidateReady` event on the event feed. The canonical Automation dispatcher
-matches the Skill trigger, starts the durable **Release gate review**
-Automation, records its run, and parks its operator-review Interrupt.
+`ReleaseCandidateReady` event on the event feed. The canonical Automation
+dispatcher matches the **Release gate review** Automation's `on_event` trigger
+by that event name, starts the durable Automation, records its run, and parks its
+operator-review Interrupt.
 
 ## Do not claim
 
@@ -21,9 +22,11 @@ Automation, records its run, and parks its operator-review Interrupt.
 - The recent-events endpoint is an in-memory, bounded observation window. The
   durable evidence in this scenario is the Automation run, not a permanent
   global event ledger.
-- This fixture uses an `on_skill` trigger keyed to
-  `release-candidate-ready`; it does not visibly exercise a separately authored
-  generic `on_event` trigger.
+- The trigger matches the event name, not the Skill: any producer of
+  `ReleaseCandidateReady` would start the same Automation. The film shows the
+  one Skill that declares it.
+- The dispatcher applies a per-Automation cooldown to event-triggered runs, so
+  fire the Skill only once per root; a quick second fire can be ignored.
 - Firing a Skill is not itself a multi-agent Session or a Coordinator run.
 
 ## Start or reset
@@ -50,13 +53,15 @@ objects in Settings.
 ## Browser actions
 
 1. Open **Settings → Skills**.
-2. Find **Release candidate ready**. Show its declared
+2. Choose `ReleaseCandidateReady` under **By event** so the list shows the
+   Skills that emit it. Select **Release candidate ready**, show its declared
    `ReleaseCandidateReady` event, then choose **Fire this Skill** once.
-3. After firing, show the Skills list still declaring
+3. After firing, show the Skills list still filtered to
    `ReleaseCandidateReady` while the rail exposes the downstream waiting item.
    The producer and exact payload are verified through the API evidence below,
    not presented as a raw-event screen that the product does not have.
-4. Open **Settings → Automations → Release gate review · event-driven**.
+4. Open **Settings → Automations → Release gate review · event-driven**. Its
+   trigger reads `⊛ on ReleaseCandidateReady`.
 5. Open **Runs**. Wait for the new run to progress from running to interrupted.
 6. Show the two-node graph: `gate-review → operator-review`.
 7. Choose the rail item **⏸ 1 waiting** or open the Interrupt panel. Confirm
@@ -75,6 +80,7 @@ objects in Settings.
 
 - The Skill declares the named typed event, and firing it produces the first
   visible downstream waiting state without a manual Automation Run.
+- The Automation's trigger names the event, not the Skill.
 - No manual Automation **Run** button is used before the run appears.
 - The event-triggered run appears in the canonical Automation's run history.
 - The gate-review Agent output flows to a top-level Interrupt and resumes under
@@ -110,9 +116,10 @@ retain after that observation window expires.
 
 ## Recording beats
 
-1. Start on the Skill row and its declared event.
+1. Start on the Skill row, filtered by its declared event.
 2. Fire once; hold briefly on the declared event plus downstream waiting state,
-   then cut directly to the automatically created Automation run.
+   then cut directly to the automatically created run under the
+   `on ReleaseCandidateReady` trigger.
 3. Show the two-node graph reaching the operator Interrupt.
 4. Reveal the waiting item, enter the operator decision, and resume.
 5. Reload and end on completed Runs history with the exact recorded Result,

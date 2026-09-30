@@ -89,7 +89,7 @@ git -C "$AXO_DEMO_ROOT/workspace" diff
 npm --prefix "$AXO_DEMO_ROOT/workspace" run check
 find "$AXO_DEMO_ROOT/workspace/.axo-variants" \
   -path '*/receipts/keep-*.json' -type f -print
-curl -sS "http://localhost:8080/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
+curl -sS "http://127.0.0.1:18080/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
 ```
 
 If the film includes staging, capture the boundary separately:

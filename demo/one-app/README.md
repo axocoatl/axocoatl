@@ -68,11 +68,14 @@ all-Session search, Markdown/JSON export, and logical rewind all passed in the r
 ## Prerequisites
 
 - macOS or Linux with Podman running;
-- Ollama listening on `127.0.0.1:11434`;
+- Ollama listening on `127.0.0.1:11434`, or on the port named by
+  `AXOCOATL_DEMO_OLLAMA_PORT`, with cloud models disabled (`OLLAMA_NO_CLOUD=1`;
+  native Sessions refuse a service whose `/api/status` does not report that);
 - the local model `qwen3:8b`;
 - host Node.js and npm (`prepare.sh` runs the fixture check on the host);
 - Rust and Cargo for the Axocoatl build;
-- ports `18080` and `8765` free.
+- port `18080` free. The storefront's port `8765` is published on a dynamic
+  loopback port per Session, so a host process on `8765` does not conflict.
 
 The first preparation may pull `node:22-alpine` and install a few Alpine packages into
 the local demo image. Attempts need no package install or network access after that image

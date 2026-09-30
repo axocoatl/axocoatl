@@ -21,7 +21,7 @@ until explicitly accepted or published under the native evidence contract.
 
 Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
 isolated Signal Desk fixture and exact release candidate at
-`http://localhost:8080`. Retain the explicit configuration, data root, binary
+`http://127.0.0.1:18080`. Retain the explicit configuration, data root, binary
 hash, source digest, installed local Qwen model identity, and Session limits.
 Start from a native data root and create a Ready Session with the existing
 **Open workspace…** and **New session** journey. Do not reuse a historical film

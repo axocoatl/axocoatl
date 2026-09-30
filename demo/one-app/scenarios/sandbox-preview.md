@@ -24,7 +24,7 @@ Preview of the process running from the current checkout.
 
 Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
 `northstar-storefront` fixture, a fresh native data path, real local Ollama calls,
-and the exact candidate binary at `http://localhost:8080`. Retain the actual
+and the exact candidate binary at `http://127.0.0.1:18080`. Retain the actual
 workspace path as `$AXO_DEMO_ROOT/workspace` (or record the equivalent isolated
 fixture path). Verify `history_version: execution_v2` and Ready, then explicitly
 review and apply **Team and budget** before sending.
@@ -77,7 +77,7 @@ Preview port `8765`. Keep repository checks as `npm run check`.
 ## Durable, filesystem, and runtime evidence
 
 ```bash
-export AXO_DEMO_URL='http://localhost:8080'
+export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase'
 curl -sS "$AXO_DEMO_URL/api/sessions"
 ```
@@ -90,7 +90,9 @@ curl -sS "$AXO_DEMO_URL/api/sessions" | grep -F "$AXO_SESSION_ID"
 podman inspect --format '{{.Name}} {{.ImageName}} {{index .Config.Labels "io.axocoatl.runtime-authority"}} {{json .Mounts}} {{json .NetworkSettings.Ports}}' \
   "axo-ses-$AXO_SESSION_ID"
 git -C "$AXO_DEMO_ROOT/workspace" status --short
-curl -sS http://127.0.0.1:8765/ | sed -n '1,20p'
+# Logical port 8765 is published on this Session's dynamic loopback port.
+AXO_PREVIEW_PORT="$(podman port "axo-ses-$AXO_SESSION_ID" 8765/tcp | sed -n '1s/.*://p')"
+curl -sS "http://127.0.0.1:$AXO_PREVIEW_PORT/" | sed -n '1,20p'
 ```
 
 The container inspection proves the data-root runtime-authority label, mount,

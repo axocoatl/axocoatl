@@ -28,10 +28,12 @@ placements, scenario and fixture, beats, evidence, duration, media paths,
 poster beat, and provenance path. The Showcase is the complete directory; Home,
 Concepts, and Why reuse selected films without changing their identity.
 
-The active entries require new captures of the 1.1.0 release candidate. Their
-`needs_recording` status is deliberate until each journey has been rehearsed and
-the final source-bound take accepted. New source, media, and provenance use
-`v1.1.0` subdirectories; unversioned historical recordings remain untouched.
+The active entries require new captures of the 1.1.0 release candidate. Each
+keeps the stable `required` status before and after capture: acceptance comes from
+reviewed media, passed per-beat evidence, provenance, and strict verification,
+never from a status edit (the manifest is part of the frozen source digest). New
+source, media, and provenance use `v1.1.0` subdirectories; unversioned historical
+recordings remain untouched.
 Workspace knowledge replaces legacy shared-core-memory in the active slot.
 MCP approval is explicitly a compatibility Session journey; configured
 Automations retain their distinct execution contract.
@@ -58,7 +60,7 @@ filmed-product content. It does not relabel any take as a `v1.0.1` capture.
 
 | Showcase | Film | User question | Required proof | Additional placement |
 | ---: | --- | --- | --- | --- |
-| 5 | **Multi-agent dependency handoff** | “How do Agents collaborate rather than compete?” | The architect → reviewer edge exists before execution; activation is sequential; both non-empty outputs survive reload. | — |
+| 5 | **Lead with read-only helpers** | “How do Agents collaborate rather than compete?” | The Lead delegates to read-only Scout and Reviewer helpers approved in Team and budget, is the only Agent that changes files, and completes after the required check passes; both helper answers survive reload. | — |
 | 6 | **Several checked Ways** | “What if the implementation choice is uncertain?” | Two independent non-empty candidates pass the same protected Check, expose Outcome and Route, receive unique Judge ranks, and leave Keep to the operator. | — |
 | 7 | **Git ownership and Last turn** | “What exactly did Keep change, and who owns Git?” | The kept patch remains uncommitted; Last turn shows exact hunks and rehydrates after restart; staging stays optional. | Why 2 |
 
@@ -67,7 +69,7 @@ filmed-product content. It does not relabel any take as a `v1.0.1` capture.
 | Showcase | Film | User question | Required proof | Additional placement |
 | ---: | --- | --- | --- | --- |
 | 8 | **Runtime configuration in Settings** | “Where do Agents, Skills, MCP, and Automations belong?” | All four are reachable inside Settings; the same selected Session remains visible behind the tour; a real completed run exposes Result. | Concepts 4 |
-| 9 | **Skill event to Automation Result** | “How does Axocoatl react to typed events?” | One typed Skill event creates one matching run, crosses its Interrupt, and retains exact `final_content` after reload. | Concepts 5 |
+| 9 | **Skill event to Automation Result** | “How does Axocoatl react to typed events?” | One typed Skill event matches an `on_event` trigger by name, creates one run, crosses its Interrupt, and retains exact `final_content` after reload. | Concepts 5 |
 | 10 | **Compatibility Session MCP approval** | “Can an Agent safely use an external tool?” | Pending approval survives reload and 30 seconds; Deny dispatches zero calls; a fresh Allow once dispatches exactly one; completed tool evidence persists. | Concepts 6 |
 | 11 | **Workspace knowledge across Sessions** | “What can my team retain about this project?” | Reviewed note revisions, source hashes, typed backlinks, restart, and native retrieval in another Session agree while chats stay separate. | Concepts 7 |
 | 12 | **Human-in-the-loop Automation recovery** | “Can a durable workflow stop for judgment and recover?” | A top-level Interrupt survives daemon restart, upstream nodes do not replay, Resume continues the same run, and completed history exposes Result. | — |
@@ -96,10 +98,11 @@ one feature wrapped around one discount bug.
   single-agent work, context, Terminal, Preview, Git, and durable Turns.
 - **`harbor-catalog`** — a stale search-cache contract with more than one
   defensible invalidation strategy. Best for deterministic Ways and comparison,
-  plus the design-only architect → reviewer handoff.
+  plus the default Lead delegating to read-only Scout and Reviewer helpers.
 - **`signal-desk`** — a noisy incident-correlation failure plus logs and a
-  runbook. Best for event-lattice, Automation, and the Settings/runtime tour;
-  the failed incident-repair handoff is not an active launch-film path.
+  runbook. Best for the Skill event feed with an `on_event` Automation, the
+  human-in-the-loop Automation, Workspace knowledge, and the Settings/runtime
+  tour; the failed incident-repair handoff is not an active launch-film path.
 
 Every scenario uses a fresh marked temporary root, a fresh Git repository copied
 from one immutable fixture, and a fresh Axocoatl data directory. This prevents an
@@ -115,7 +118,8 @@ A film is ready only when all of the following are true:
 3. The runtime result is independently inspectable in the relevant durable
    store, API, Git checkout, event record, or Automation run.
 4. Reload or navigation does not erase the evidence.
-5. The voiceover/caption describes the actual execution shape: sequential
-   dependency handoff, parallel Ways, or event reaction as appropriate.
+5. The voiceover/caption describes the actual execution shape: a lead
+   delegating to read-only helpers, parallel Ways, or event reaction as
+   appropriate.
 6. The recording contains one main idea and is short enough to understand
    without narration.

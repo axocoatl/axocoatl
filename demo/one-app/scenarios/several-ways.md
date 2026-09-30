@@ -24,7 +24,7 @@ and Route, asks a Judge to rank both passing non-empty survivors, and chooses
 
 Follow [Native Session capture setup](../films/NATIVE-CAPTURE.md) with the
 `harbor-catalog` fixture, a fresh native data path, real local Ollama calls,
-and the exact candidate binary at `http://localhost:8080`. Retain the actual
+and the exact candidate binary at `http://127.0.0.1:18080`. Retain the actual
 workspace path as `$AXO_DEMO_ROOT/workspace` (or record the equivalent isolated
 fixture path). Verify `history_version: execution_v2` and Ready, then explicitly
 review and apply **Team and budget** before sending.
@@ -86,7 +86,7 @@ HTTP fixture provider or relabel its responses as real native inference.
 Before Keep, copy the Session id and inspect the persisted attempt set:
 
 ```bash
-export AXO_DEMO_URL='http://localhost:8080'
+export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-harbor-native'
 export AXO_SESSION_ID='ses-paste-the-id-here'
 curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/variants/results"

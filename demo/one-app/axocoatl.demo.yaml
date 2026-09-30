@@ -19,6 +19,9 @@ agents:
     # Session selects, to use workspace_knowledge.
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash, workspace_knowledge]
     depends_on: []
+    # A native Session needs an explicit output maximum; its Warn budget below
+    # does not set one. Team and budget starts from this value.
+    sampling: { max_tokens: 4096 }
     memory:
       core:
         blocks:
@@ -39,6 +42,7 @@ agents:
       /no_think
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
     depends_on: []
+    sampling: { max_tokens: 4096 }
     memory:
       core:
         blocks:
@@ -184,9 +188,11 @@ mcp_servers:
     command: target/debug/mcp-bridge
     args: ["--mcp-server"]
 
+# start.sh exports AXOCOATL_DEMO_OLLAMA_PORT (default 11434) after checking
+# that this local Ollama service reports cloud models disabled.
 providers:
   ollama:
-    base_url: "http://127.0.0.1:11434"
+    base_url: "http://127.0.0.1:${AXOCOATL_DEMO_OLLAMA_PORT}"
 
 server:
   host: "127.0.0.1"

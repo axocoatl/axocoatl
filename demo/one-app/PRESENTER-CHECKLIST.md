@@ -8,8 +8,11 @@ Use this page at the podium. The full recovery detail is in
 - [ ] No Axocoatl daemon is running, including an earlier demo run, and no
   `axo-ses-*` container exists at all.
 - [ ] `podman system check --quick` is clean.
-- [ ] `ollama list` includes `qwen3:8b`.
-- [ ] Ports `18080` and `8765` are free.
+- [ ] The Ollama service on `AXOCOATL_DEMO_OLLAMA_PORT` (default `11434`) lists
+  `qwen3:8b` and reports cloud models disabled in `/api/status`; `start.sh`
+  checks both.
+- [ ] Port `18080` is free. Port `8765` is the storefront's logical port inside the
+  Session container and does not need to be free on the host.
 - [ ] `DEMO_ROOT` is `/private/tmp/axocoatl-one-app-showcase` on macOS or
   `/tmp/axocoatl-one-app-showcase` on Linux.
 - [ ] Run `./demo/one-app/prepare.sh` from the Axocoatl repository.
@@ -44,8 +47,10 @@ debug binary for rehearsal.
   write provenance using [`films/SHOT-MANIFEST.md`](films/SHOT-MANIFEST.md).
 - [ ] Inspect the encoded MP4, poster, light/dark use as applicable, narrow-page
   placement, and reduced-motion fallback on the built marketing site.
-- [ ] Mark a portfolio entry `ready` only after its scenario, media, duration,
-  poster beat, evidence, and provenance all pass.
+- [ ] Leave every portfolio entry at `required`; do not edit `portfolio.json`
+  after the freeze. A film is accepted when its scenario, media, duration, poster
+  beat, evidence, and provenance all pass verification, not by a status change,
+  and any edit outside the four recording-output trees changes the source digest.
 - [ ] Run `node demo/one-app/films/verify-film-set.mjs --source-bound`; all 12
   source digests must match the checkout used for a new capture and release.
 - [ ] For every new capture and ordinary future release, run unflagged

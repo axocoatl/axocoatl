@@ -1,0 +1,71 @@
+# Axocoatl presenter configuration for the Lead-with-helpers film.
+#
+# This is the default team `axocoatl init` writes: Lead owns the change and is
+# the only Agent that edits files; Scout and Reviewer are read-only Workers
+# (`writes: []`) that Lead can delegate to once Team and budget approves their
+# limits. It is a separate file because Worker templates make Team and budget
+# propose helpers for every new single-Agent Session; the other scenarios keep
+# axocoatl.demo.yaml. Start it with:
+#
+#   AXOCOATL_DEMO_CONFIG=axocoatl.team.yaml ./demo/one-app/start.sh
+
+agents:
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: qwen3:8b
+    role: autonomous
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
+    system_prompt: |
+      You own this change. 1. Look first: for code you do not know, ask scout
+      to find the relevant files and tests. 2. Make the change. 3. Run the
+      check command from the project instructions (AXOCOATL.md), or the tests,
+      and fix failures. 4. Ask reviewer to review your diff against the task
+      and fix what it finds. Then summarize what you changed. /no_think
+    sampling: { max_tokens: 4096 }
+
+  - id: scout
+    name: "Scout"
+    provider: ollama
+    model: qwen3:8b
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: |
+      Answer the lead's question with file paths, line numbers and short
+      evidence. Change nothing. /no_think
+    sampling: { max_tokens: 4096 }
+
+  - id: reviewer
+    name: "Reviewer"
+    provider: ollama
+    model: qwen3:8b
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: |
+      Review the described change. Check it against the task and against every
+      contract and edge case the docs, comments and tests describe, one by one.
+      Report each defect with file:line, or say you found none. Change nothing.
+      /no_think
+    sampling: { max_tokens: 4096 }
+
+# start.sh exports AXOCOATL_DEMO_OLLAMA_PORT (default 11434) after checking
+# that this local Ollama service reports cloud models disabled.
+providers:
+  ollama:
+    base_url: "http://127.0.0.1:${AXOCOATL_DEMO_OLLAMA_PORT}"
+
+server:
+  host: "127.0.0.1"
+  port: 18080
+
+sandbox:
+  backend: podman
+  allow_untrusted_images: true
+  allow_post_create_command: false
+  network: bridge
+  require_resource_limits: false
+
+consolidation:
+  enabled: false

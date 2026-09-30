@@ -55,15 +55,81 @@ if [ ! -f "$DEMO_ROOT/.axocoatl-showcase" ] || [ ! -d "$WORKSPACE/.git" ]; then
   exit 1
 fi
 
-if ! curl -fsS --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null; then
-  echo "Ollama is not listening on 127.0.0.1:11434." >&2
-  echo "Start it with: ollama serve" >&2
+if ! command -v node >/dev/null 2>&1; then
+  echo "Node.js is required to check the local Ollama service." >&2
   exit 1
 fi
-if ! ollama list | awk 'NR > 1 { print $1 }' | grep -qx 'qwen3:8b'; then
-  echo "Required model qwen3:8b is not installed. Run: ollama pull qwen3:8b" >&2
+
+# The presenter configuration. AXOCOATL_DEMO_CONFIG selects another reviewed
+# configuration in this directory (for example axocoatl.team.yaml) or an
+# absolute path; the default keeps every other scenario on axocoatl.demo.yaml.
+DEMO_CONFIG="${AXOCOATL_DEMO_CONFIG:-axocoatl.demo.yaml}"
+case "$DEMO_CONFIG" in
+  /*) ;;
+  *) DEMO_CONFIG="$SCRIPT_DIR/$DEMO_CONFIG" ;;
+esac
+if [ ! -f "$DEMO_CONFIG" ] || [ -L "$DEMO_CONFIG" ]; then
+  echo "AXOCOATL_DEMO_CONFIG is not a regular configuration file: $DEMO_CONFIG" >&2
+  exit 2
+fi
+
+# The configuration reads the Ollama port from this variable. Native Sessions
+# admit only an Ollama whose cloud models are disabled; point this at such a
+# service instead of reconfiguring the one you already run.
+AXOCOATL_DEMO_OLLAMA_PORT="${AXOCOATL_DEMO_OLLAMA_PORT:-11434}"
+case "$AXOCOATL_DEMO_OLLAMA_PORT" in
+  ''|*[!0-9]*)
+    echo "AXOCOATL_DEMO_OLLAMA_PORT must be a TCP port number." >&2
+    exit 2
+    ;;
+esac
+if [ "$AXOCOATL_DEMO_OLLAMA_PORT" -lt 1 ] || [ "$AXOCOATL_DEMO_OLLAMA_PORT" -gt 65535 ]; then
+  echo "AXOCOATL_DEMO_OLLAMA_PORT must be between 1 and 65535." >&2
+  exit 2
+fi
+export AXOCOATL_DEMO_OLLAMA_PORT
+OLLAMA_URL="http://127.0.0.1:$AXOCOATL_DEMO_OLLAMA_PORT"
+
+if ! OLLAMA_TAGS="$(curl -fsS --max-time 2 "$OLLAMA_URL/api/tags")"; then
+  echo "Ollama is not listening on 127.0.0.1:$AXOCOATL_DEMO_OLLAMA_PORT." >&2
+  echo "Start it with: ollama serve, or set AXOCOATL_DEMO_OLLAMA_PORT." >&2
   exit 1
 fi
+if ! OLLAMA_STATUS="$(curl -fsS --max-time 2 "$OLLAMA_URL/api/status")" ||
+  ! printf '%s' "$OLLAMA_STATUS" | node -e '
+    let body = "";
+    process.stdin.on("data", chunk => { body += chunk; });
+    process.stdin.on("end", () => {
+      try { process.exit(JSON.parse(body)?.cloud?.disabled === true ? 0 : 1); }
+      catch { process.exit(1); }
+    });
+  '; then
+  echo "The Ollama service on 127.0.0.1:$AXOCOATL_DEMO_OLLAMA_PORT does not report" >&2
+  echo "cloud models disabled in /api/status, so native Sessions refuse it." >&2
+  echo "Run a separate local service with OLLAMA_NO_CLOUD=1 and set" >&2
+  echo "AXOCOATL_DEMO_OLLAMA_PORT to its port. Do not reconfigure a service you" >&2
+  echo "did not start for this demo." >&2
+  exit 1
+fi
+# Every model the selected configuration names must be installed there.
+REQUIRED_MODELS="$(awk '/^[[:space:]]*model:/ { gsub(/["'\'']/, "", $2); print $2 }' "$DEMO_CONFIG" | sort -u)"
+for model in $REQUIRED_MODELS; do
+  if ! printf '%s' "$OLLAMA_TAGS" | MODEL="$model" node -e '
+    let body = "";
+    process.stdin.on("data", chunk => { body += chunk; });
+    process.stdin.on("end", () => {
+      try {
+        const names = new Set((JSON.parse(body).models || []).map(item => item.name));
+        process.exit(names.has(process.env.MODEL) ? 0 : 1);
+      } catch { process.exit(1); }
+    });
+  '; then
+    echo "Required model $model is not installed in the Ollama service on" >&2
+    echo "127.0.0.1:$AXOCOATL_DEMO_OLLAMA_PORT." >&2
+    echo "Run: OLLAMA_HOST=127.0.0.1:$AXOCOATL_DEMO_OLLAMA_PORT ollama pull $model" >&2
+    exit 1
+  fi
+done
 if ! podman info >/dev/null 2>&1; then
   echo "Podman is not ready. Run $SCRIPT_DIR/prepare.sh first." >&2
   exit 1
@@ -84,7 +150,6 @@ if tcp_port_open 18080; then
 fi
 
 EXISTING_CONTAINERS="$(podman ps -a --filter name=axo-ses- --format '{{.Names}} {{.Status}}')"
-KNOWN_CONTAINERS=""
 if [ -n "$EXISTING_CONTAINERS" ]; then
   UNKNOWN_CONTAINERS=""
   while IFS=' ' read -r container_name _container_status; do
@@ -99,8 +164,6 @@ if [ -n "$EXISTING_CONTAINERS" ]; then
     done
     if [ "$known" != true ]; then
       UNKNOWN_CONTAINERS="${UNKNOWN_CONTAINERS}${container_name}\n"
-    else
-      KNOWN_CONTAINERS="${KNOWN_CONTAINERS}${container_name}\n"
     fi
   done <<< "$EXISTING_CONTAINERS"
   if [ -n "$UNKNOWN_CONTAINERS" ]; then
@@ -112,28 +175,9 @@ if [ -n "$EXISTING_CONTAINERS" ]; then
   echo "Resuming containers already owned by this demo data directory."
 fi
 
-if tcp_port_open 8765; then
-  PORT_OWNERS="$(
-    podman ps --format '{{.Names}}\t{{.Ports}}' |
-      awk 'index($0, ":8765->") { print $1 }'
-  )"
-  UNKNOWN_PORT_OWNER=false
-  if [ -z "$PORT_OWNERS" ]; then
-    UNKNOWN_PORT_OWNER=true
-  else
-    while IFS= read -r owner; do
-      [ -n "$owner" ] || continue
-      if ! printf '%b' "$KNOWN_CONTAINERS" | grep -Fqx "$owner"; then
-        UNKNOWN_PORT_OWNER=true
-      fi
-    done <<< "$PORT_OWNERS"
-  fi
-  if [ "$UNKNOWN_PORT_OWNER" = true ]; then
-    echo "Port 8765 is already in use outside this demo's known session containers." >&2
-    exit 1
-  fi
-  echo "Port 8765 is already published by a resumable demo session container."
-fi
+# Port 8765 is the storefront's logical port inside a Session container. It is
+# published on a dynamic loopback host port and reached through Preview, so a
+# host process on 8765 does not conflict with the demo.
 
 CARGO_BIN="${CARGO_BIN:-$(command -v cargo || true)}"
 if [ -z "$CARGO_BIN" ]; then
@@ -162,19 +206,24 @@ if [ -n "$AXOCOATL_BIN" ]; then
     exit 1
   fi
   # The deterministic local MCP fixture remains a separate debug helper named
-  # by axocoatl.demo.yaml; only the product binary is overridden.
+  # by the demo configuration; only the product binary is overridden.
   "$CARGO_BIN" build -p mcp-bridge
 else
   "$CARGO_BIN" build -p axocoatl-cli -p mcp-bridge
   AXOCOATL_BIN="$REPO_ROOT/target/debug/axocoatl"
 fi
 
-"$AXOCOATL_BIN" validate "$SCRIPT_DIR/axocoatl.demo.yaml"
+"$AXOCOATL_BIN" validate "$DEMO_CONFIG"
 AXOCOATL_VERSION="$("$AXOCOATL_BIN" --version)"
 if command -v shasum >/dev/null 2>&1; then
   AXOCOATL_SHA256="$(shasum -a 256 "$AXOCOATL_BIN" | awk '{print $1}')"
 else
   AXOCOATL_SHA256="$(sha256sum "$AXOCOATL_BIN" | awk '{print $1}')"
+fi
+if command -v shasum >/dev/null 2>&1; then
+  CONFIG_SHA256="$(shasum -a 256 "$DEMO_CONFIG" | awk '{print $1}')"
+else
+  CONFIG_SHA256="$(sha256sum "$DEMO_CONFIG" | awk '{print $1}')"
 fi
 
 export AXOCOATL_DATA_DIR="$DEMO_ROOT/data"
@@ -188,8 +237,11 @@ echo "Workspace: $WORKSPACE"
 echo "Binary:    $AXOCOATL_BIN"
 echo "Version:   $AXOCOATL_VERSION"
 echo "SHA-256:   $AXOCOATL_SHA256"
+echo "Config:    $DEMO_CONFIG"
+echo "Config SHA-256: $CONFIG_SHA256"
+echo "Ollama:    $OLLAMA_URL (cloud models disabled)"
 echo "Prompts:   $SCRIPT_DIR/PROMPTS.md"
 echo "Seed:      $SCRIPT_DIR/seed-runtime-demos.sh"
 echo
 
-exec "$AXOCOATL_BIN" dev -c "$SCRIPT_DIR/axocoatl.demo.yaml"
+exec "$AXOCOATL_BIN" dev -c "$DEMO_CONFIG"

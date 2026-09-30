@@ -114,13 +114,13 @@
 
       <div class="stack">
       <article class="stack" id="multi-agent">
-        <div><span class="card-kicker">05 · Ordered team</span><h3>Architect → reviewer in one Custom Session</h3><p>This recording shows the Systems Architect and Critical Reviewer running in configured dependency order, with two distinct Agent outputs still present after reload. It shows the dependency-ordered team path. It does not show the default lead delegating to read-only helpers, required checks, or required review. This is one team result, not several competing Ways.</p></div>
+        <div><span class="card-kicker">05 · Default team</span><h3>A lead with read-only helpers</h3><p>This recording shows the default team: Lead owns the change and is the only Agent that edits files. It delegates a question to Scout and a review of its diff to Reviewer, both read-only helpers whose limits were approved in Team and budget, and the required check runs before the Turn completes. It does not show required review. This is one team result, not several competing Ways.</p></div>
         <ax-product-film
           film="multi-agent-handoff"
           src="/assets/films/v1.1.0/multi-agent-handoff.mp4"
           poster="/assets/films/v1.1.0/multi-agent-handoff.jpg"
-          label="An Axocoatl Systems Architect handing a design decision to a Critical Reviewer in one Custom Session"
-          caption="Architect → Reviewer runs in dependency order inside one Custom Session, with two separate durable outputs."
+          label="An Axocoatl Lead delegating to read-only Scout and Reviewer helpers before its required check passes"
+          caption="Lead delegates to read-only Scout and Reviewer helpers, edits the repository itself, and completes after the required check passes."
         ></ax-product-film>
       </article>
 
@@ -174,7 +174,7 @@
           src="/assets/films/v1.1.0/event-lattice-automation.mp4"
           poster="/assets/films/v1.1.0/event-lattice-automation.jpg"
           label="An Axocoatl Skill publishing a typed event that starts a durable Automation"
-          caption="Release candidate ready publishes ReleaseCandidateReady; the matching On Skill trigger starts release-gate review."
+          caption="Release candidate ready publishes ReleaseCandidateReady; an On event trigger for that event starts release-gate review."
         ></ax-product-film>
       </article>
 
