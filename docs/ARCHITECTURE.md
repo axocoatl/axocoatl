@@ -855,7 +855,7 @@ and proposal receipts together. Expected revisions prevent a concurrent edit fro
 silently overwriting another author; reopening validates referenced documents.
 The authorized Workspace owns the store, and its lifetime spans Sessions.
 
-Native `workspace_knowledge` is offered only to an Agent whose `tools` list it. Its operations read/search notes, search indexed code,
+Native `workspace_knowledge` is offered, and a new call admitted, only for an Agent whose `tools` list it; claims recorded before that rule still reload. Its operations read/search notes, search indexed code,
 expose a bounded observed code map, and stage proposals attributed to the exact
 activation. Publication uses the
 canonical accepted-state boundary or an explicit human decision. Isolated Ways

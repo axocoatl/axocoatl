@@ -139,8 +139,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **`workspace_knowledge` follows the `tools` allowlist.** A native Agent is offered the
-  tool only when its `tools` list includes `workspace_knowledge`; the default team does not
-  list it. Its description no longer suggests that an Agent may not change code, and it
+  tool, and the host admits a new call, only when its `tools` list includes
+  `workspace_knowledge`; calls already recorded still load. The default team does not list
+  it; the one-app demo's `coder` does. Its description no longer suggests that an Agent may not change code, and it
   tells the Agent not to report its work or final answer through it.
 - **Default team prompts and `delegate` guide the lead to use its helpers.** The `delegate`
   description tells the lead to ask a helper to find the relevant code and tests before a

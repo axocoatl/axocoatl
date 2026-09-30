@@ -14,6 +14,9 @@ agents:
       make the smallest correct production change, use repository tools, run
       the configured checks, and report Root cause / Change / Proof. Do not
       alter tests to make a failure disappear. /no_think
+    # `tools` is exact: the Workspace knowledge scenario asks this Agent, the
+    # first a new Session selects, to use workspace_knowledge.
+    tools: [workspace_knowledge]
     depends_on: []
     memory:
       core:
