@@ -7,7 +7,7 @@ use crate::bootstrap::native_turn::NativeStandingWork;
 use axocoatl_session::execution_content::{
     ActivationRepositorySnapshot, ConditionProcessStatus, RepositorySnapshotPhase,
 };
-use axocoatl_session::turn_checks::{check_definitions, group_of, CheckGroup};
+use axocoatl_session::turn_checks::{admitted_check_definitions, group_of, CheckGroup};
 
 /// Where a turn's host-run checks come from.
 pub(super) enum CheckSource {
@@ -121,7 +121,7 @@ pub(super) fn required_checks(
         .iter()
         .map(|definition| definition.argv.clone())
         .collect();
-    if check_definitions(&checks).map_err(error)? != definitions {
+    if admitted_check_definitions(graph, content, &group, &checks).map_err(error)? != definitions {
         return Err(error(
             "Required checks differ from the commands this turn was admitted with",
         ));
@@ -238,7 +238,11 @@ impl SessionDispatchController {
             };
             let group = source.group();
             let checks = source.checks();
-            let definitions = check_definitions(checks).map_err(error)?;
+            let definitions = match contract.graph() {
+                Some(graph) => admitted_check_definitions(graph, &state.content, &group, checks),
+                None => axocoatl_session::turn_checks::check_definitions(checks),
+            }
+            .map_err(error)?;
             if definitions.is_empty() {
                 return Ok(false);
             }

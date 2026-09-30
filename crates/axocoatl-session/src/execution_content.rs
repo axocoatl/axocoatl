@@ -59,6 +59,7 @@ pub use attachment::RetainedBinaryAttachment;
 pub use repository_snapshot::{
     ActivationRepositorySnapshot, ActivationRepositorySnapshotView, RepositorySnapshotPhase,
     StandingRepositoryCheck, StandingRepositoryCheckView, REPOSITORY_SNAPSHOT_COMMAND,
+    REPOSITORY_SNAPSHOT_COMMAND_V1,
 };
 
 #[path = "execution_content_reattachment.rs"]

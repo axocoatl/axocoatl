@@ -115,8 +115,13 @@ impl ControlAuthority {
             .filter(|node| node.required)
             .map(|node| node.node_id.clone())
             .collect();
-        let definitions = crate::team_work::standing_check_definitions(&allocation.required_checks)
-            .map_err(|_| AuthorityError::Denied)?;
+        let definitions = crate::turn_checks::admitted_check_definitions(
+            graph,
+            content,
+            &crate::turn_checks::CheckGroup::standing(&allocation.receipt_id),
+            &allocation.required_checks,
+        )
+        .map_err(|_| AuthorityError::Denied)?;
         let mut permissions = Vec::new();
         for (ordinal, definition) in definitions.iter().enumerate() {
             let reference = content

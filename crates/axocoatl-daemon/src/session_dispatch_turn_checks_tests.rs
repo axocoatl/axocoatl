@@ -5,7 +5,7 @@ use axocoatl_session::execution_content::{
 };
 use axocoatl_session::execution_ownership::LegacyFormatOwnership;
 use axocoatl_session::execution_store::ExecutionStoreOwner;
-use axocoatl_session::turn_checks::CheckGroup;
+use axocoatl_session::turn_checks::{check_definitions, CheckGroup};
 
 /// A shared check consumes both canonical outputs. A model's assertion that a
 /// peer finished cannot substitute for the peer's retained acceptance.

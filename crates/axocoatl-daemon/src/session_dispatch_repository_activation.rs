@@ -590,10 +590,15 @@ impl InvocationScope {
                 value.checked_add(1)
             })
             .map_err(|_| isolation_error("repository process index exhausted"))?;
+        let argv = if write_restriction.is_some() {
+            with_scratch_home(argv)
+        } else {
+            argv.iter().map(|arg| (*arg).to_owned()).collect()
+        };
         let request = ExecRequest {
             protocol: PROTOCOL_VERSION,
             invocation_id: format!("{}:{index}", self.intent.invocation_id.as_str()),
-            argv: argv.iter().map(|arg| (*arg).to_owned()).collect(),
+            argv,
             timeout_ms: timeout
                 .as_millis()
                 .try_into()
@@ -726,11 +731,13 @@ impl InvocationScope {
 
 /// The kernel write restriction for one repository process. Only the Agent's
 /// own shell of a read-only activation runs under it: nothing beneath the
-/// repository can change. The host-authored file tools (`read_file`, `grep`,
-/// ...) keep their own fixed commands, and the host's repository captures and
-/// digest observations, though admitted as `bash`, are exempt so a read-only
-/// helper still yields its evidence. A supervisor that cannot apply the
-/// restriction refuses to launch that one process.
+/// repository can change, and neither can the Session's shared home
+/// directory, whose configuration later processes read. The host-authored
+/// file tools (`read_file`, `grep`, ...) keep their own fixed commands, and
+/// the host's repository captures and digest observations, though admitted as
+/// `bash`, are exempt so a read-only helper still yields its evidence. A
+/// supervisor that cannot apply the restriction refuses to launch that one
+/// process.
 fn process_write_restriction(
     read_only: bool,
     tool: &str,
@@ -739,15 +746,36 @@ fn process_write_restriction(
 ) -> Option<axocoatl_exec::protocol::WriteRestriction> {
     (read_only && tool == "bash" && !host_observation).then(|| {
         axocoatl_exec::protocol::WriteRestriction {
-            writable: vec![
-                "/tmp".into(),
-                "/var/tmp".into(),
-                "/dev".into(),
-                axocoatl_exec::protocol::HOME_PLACEHOLDER.into(),
-            ],
+            writable: vec!["/tmp".into(), "/var/tmp".into(), "/dev".into()],
             protected: vec![root.to_string_lossy().into_owned()],
         }
     })
+}
+
+/// Runs `"$@"` with a fresh home directory of its own under `/tmp`, removed
+/// when it ends, in place of the Session's shared one.
+const SCRATCH_HOME: &str = "home=$(mktemp -d /tmp/axocoatl-home.XXXXXX) || exit 125
+HOME=$home
+XDG_CONFIG_HOME=$home/.config
+XDG_CACHE_HOME=$home/.cache
+XDG_DATA_HOME=$home/.local/share
+XDG_STATE_HOME=$home/.local/state
+export HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME
+\"$@\"
+status=$?
+rm -rf -- \"$home\"
+exit \"$status\"
+";
+
+/// A restricted shell's argv, run with its own scratch home directory: a
+/// read-only helper can still write configuration or caches for itself, but
+/// nothing it writes there reaches any other process.
+fn with_scratch_home(argv: &[&str]) -> Vec<String> {
+    ["sh", "-c", SCRATCH_HOME, "sh"]
+        .iter()
+        .chain(argv)
+        .map(|arg| (*arg).to_owned())
+        .collect()
 }
 
 struct OwnedProcessWait {
@@ -979,8 +1007,35 @@ mod write_scope_tests {
                 restriction.validate().unwrap();
                 assert_eq!(restriction.protected, vec!["/workspace/repo".to_owned()]);
                 assert!(restriction.writable.iter().any(|path| path == "/tmp"));
+                // The shared home directory is never writable to a helper.
+                assert_eq!(
+                    restriction.effective_writable(Some("/home/agent")),
+                    ["/tmp", "/var/tmp", "/dev"]
+                );
             }
         }
+    }
+
+    /// A restricted shell runs with a fresh home directory under /tmp, never
+    /// the Session's shared one, and the directory is gone when it ends.
+    #[cfg(unix)]
+    #[test]
+    fn a_restricted_shell_gets_its_own_scratch_home() {
+        use super::with_scratch_home;
+        let argv = with_scratch_home(&[
+            "sh",
+            "-c",
+            "printf '%s' \"$HOME\"; printf x > \"$HOME/.gitconfig\"; exit 3",
+        ]);
+        let output = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .env("HOME", "/nonexistent-shared-home")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        let home = String::from_utf8(output.stdout).unwrap();
+        assert!(home.starts_with("/tmp/axocoatl-home."), "{home}");
+        assert!(!std::path::Path::new(&home).exists(), "{home}");
     }
 
     #[test]

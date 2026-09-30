@@ -886,6 +886,96 @@ async fn actual_shell_change_outside_scope_fails_the_activation() {
     assert!(failure.contains("(lib/)"), "{failure}");
 }
 
+/// A read-only helper's shell writes configuration only to a scratch home of
+/// its own: the Session's shared home stays unwritable, so nothing the helper
+/// writes there reaches the host's captures or any later process.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_read_only_helper_shell_cannot_write_the_shared_home() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    git_init(f._workspace.path());
+    std::fs::write(f._workspace.path().join("existing.txt"), "original\n").unwrap();
+    let r = run_scoped(&mut f, &["bash", "read_file"], &[]);
+    let provider = Provider::new(vec![(
+        "bash",
+        serde_json::json!({"command":"case $HOME in /tmp/axocoatl-home.*) echo scratch-home ;; esac; \
+            printf '[core]\\n\\texcludesFile = /tmp/hide\\n' > \"$HOME/.gitconfig\" \
+            && echo scratch-written; \
+            for home in /root /home/*; do \
+              printf x > \"$home/.axocoatl-helper-probe\" 2>/dev/null && echo \"shared-written $home\"; \
+            done; true"}),
+    )]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert!(idle.unwrap());
+    assert!(provider.saw(1, "scratch-home"));
+    assert!(provider.saw(1, "scratch-written"));
+    assert!(!provider.saw(1, "shared-written"));
+    assert!(settled.accepted, "{:?}", settled.failure);
+}
+
+/// Configuration a scoped writer's shell writes in the shared home can
+/// neither hide its out-of-scope file from the host's After capture nor make
+/// that capture run a program.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_home_configuration_cannot_hide_a_change_or_run_in_the_capture() {
+    let mut f = fixture().await;
+    let sandbox = actual_sandbox(&mut f).await;
+    git_init(f._workspace.path());
+    std::fs::create_dir_all(f._workspace.path().join("lib")).unwrap();
+    std::fs::write(f._workspace.path().join("lib/y"), "original\n").unwrap();
+    let r = run_scoped(&mut f, &["bash"], &["lib/"]);
+    // Each configured program would leave a marker beside the workspace.
+    let command = "root=$(pwd -P); mark=\"$root/lib/ran\"; \
+        printf '#!/bin/sh\\ntouch %s\\ncat\\n' \"$mark\" > /tmp/axo-program && chmod +x /tmp/axo-program; \
+        printf 'config/\\n' > /tmp/axo-hide; \
+        mkdir -p \"$HOME/.config/git\"; \
+        printf '[core]\\n\\texcludesFile = /tmp/axo-hide\\n\\tfsmonitor = /tmp/axo-program\\n[diff]\\n\\texternal = /tmp/axo-program\\n[filter \"x\"]\\n\\tclean = /tmp/axo-program\\n' > \"$HOME/.gitconfig\"; \
+        printf '* filter=x\\n' > \"$HOME/.config/git/attributes\"; \
+        mkdir -p config && printf secret > config/secret.txt && printf y > lib/y && echo planted";
+    let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    let ran = f._workspace.path().join("lib/ran").exists();
+    let idle = f.owner.execution_is_idle();
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert!(idle.unwrap());
+    assert!(provider.saw(1, "planted"));
+    assert!(!ran, "the host capture ran a program the Agent configured");
+    assert!(!settled.accepted);
+    // Where the home directory is inside the repository, the configuration
+    // files are named too.
+    let failure = settled.failure.unwrap();
+    assert!(failure.starts_with("it changed "), "{failure}");
+    assert!(failure.contains("config/secret.txt"), "{failure}");
+}
+
 #[tokio::test]
 async fn exact_invocation_executor_cannot_change_arguments_replay_or_outlive_stop() {
     use axocoatl_actor::{ToolInvocationOutcome, ToolInvocationRequest};

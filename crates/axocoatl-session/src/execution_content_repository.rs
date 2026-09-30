@@ -4,9 +4,16 @@ use crate::turn_contract::InvocationEvidence;
 
 /// Run at the exact working root to observe HEAD, the file manifest and the
 /// patch against HEAD. It writes only under its own temporary directory and
-/// takes no git locks.
+/// takes no git locks. Git reads no configuration from outside the
+/// repository, and nothing the repository configures can run a program.
 pub const REPOSITORY_SNAPSHOT_COMMAND: &str =
     include_str!("execution_content_repository_snapshot.sh");
+
+/// The capture command of earlier releases, which let Git read the home
+/// directory's configuration. Turns admitted with it keep it: their recorded
+/// check definitions name it, so they still load, render and finish.
+pub const REPOSITORY_SNAPSHOT_COMMAND_V1: &str =
+    include_str!("execution_content_repository_snapshot_v1.sh");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -402,6 +409,160 @@ fn validate_observation(
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use base64::Engine as _;
+
+    /// One capture field of the command's output.
+    fn field<'a>(output: &'a str, name: &str) -> &'a str {
+        output
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}=")))
+            .unwrap_or_else(|| panic!("capture has no {name}: {output}"))
+    }
+
+    /// Paths named by a capture's manifest.
+    fn manifest_paths(output: &str) -> Vec<String> {
+        let manifest = base64::engine::general_purpose::STANDARD
+            .decode(field(output, "manifest_b64"))
+            .unwrap();
+        String::from_utf8(manifest)
+            .unwrap()
+            .lines()
+            .map(|line| {
+                let encoded = line.split('\t').next().unwrap();
+                String::from_utf8(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(encoded)
+                        .unwrap(),
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    fn git(root: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// Configuration an Agent's shell could write in the home directory, or a
+    /// writer in the repository itself, neither hides an untracked file from
+    /// the capture nor makes the capture run a program.
+    #[test]
+    fn repository_capture_ignores_outside_configuration_and_runs_no_configured_program() {
+        let repo = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        let markers = tempfile::tempdir().unwrap();
+        let program = |name: &str| {
+            let path = markers.path().join(format!("{name}.sh"));
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\ntouch '{}'\ncat\n",
+                    markers.path().join(format!("ran-{name}")).display()
+                ),
+            )
+            .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path.display().to_string()
+        };
+        git(root, &["init", "--quiet"]);
+        std::fs::write(root.join("tracked.txt"), "original\n").unwrap();
+        git(root, &["add", "tracked.txt"]);
+        git(
+            root,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "base",
+            ],
+        );
+        std::fs::write(root.join("tracked.txt"), "changed\n").unwrap();
+        std::fs::write(root.join("secret.txt"), "secret\n").unwrap();
+        let hide = home.path().join("hide");
+        std::fs::write(&hide, "secret.txt\n").unwrap();
+        std::fs::write(
+            home.path().join(".gitconfig"),
+            format!(
+                "[core]\n\texcludesFile = {}\n\tfsmonitor = {}\n[diff]\n\texternal = {}\n\
+                 [filter \"home\"]\n\tclean = {}\n\trequired = true\n",
+                hide.display(),
+                program("home-fsmonitor"),
+                program("home-diff"),
+                program("home-filter"),
+            ),
+        )
+        .unwrap();
+        let xdg = home.path().join(".config/git");
+        std::fs::create_dir_all(&xdg).unwrap();
+        std::fs::write(xdg.join("ignore"), "secret.txt\n").unwrap();
+        std::fs::write(xdg.join("attributes"), "* filter=home\n").unwrap();
+        // A writer could configure the repository itself the same way.
+        for (key, value) in [
+            ("core.fsmonitor", program("repo-fsmonitor")),
+            ("diff.external", program("repo-diff")),
+            ("filter.repo.clean", program("repo-filter")),
+            ("filter.repo.process", program("repo-process")),
+            ("filter.repo.required", "true".into()),
+            ("color.ui", "always".into()),
+            ("diff.noprefix", "true".into()),
+        ] {
+            git(root, &["config", key, &value]);
+        }
+        std::fs::write(
+            root.join(".git/info/attributes"),
+            "* filter=repo diff=repo\n",
+        )
+        .unwrap();
+        let capture = std::process::Command::new("sh")
+            .args(["-c", REPOSITORY_SNAPSHOT_COMMAND])
+            .current_dir(root)
+            .env("HOME", home.path())
+            .env("XDG_CONFIG_HOME", home.path().join(".config"))
+            .output()
+            .unwrap();
+        assert!(
+            capture.status.success(),
+            "{}",
+            String::from_utf8_lossy(&capture.stderr)
+        );
+        let output = String::from_utf8(capture.stdout).unwrap();
+        assert_eq!(manifest_paths(&output), ["secret.txt", "tracked.txt"]);
+        let patch = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(field(&output, "patch_b64"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            patch.contains("diff --git a/secret.txt b/secret.txt"),
+            "{patch}"
+        );
+        assert!(
+            patch.contains("diff --git a/tracked.txt b/tracked.txt"),
+            "{patch}"
+        );
+        assert!(patch.contains("+changed"), "{patch}");
+        assert!(!patch.contains('\u{1b}'), "{patch}");
+        let ran: Vec<_> = std::fs::read_dir(markers.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.starts_with("ran-"))
+            .collect();
+        assert!(ran.is_empty(), "the capture ran {ran:?}");
+    }
 
     #[test]
     fn repository_capture_handles_shared_sandbox_ownership_only_at_the_exact_root() {
