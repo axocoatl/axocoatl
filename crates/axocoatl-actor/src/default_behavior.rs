@@ -488,6 +488,20 @@ impl DefaultAgentBehavior {
         self
     }
 
+    /// Tools whose output the normal masking pass keeps whole, but the
+    /// tighter pass for a request that would not fit its context may mask.
+    /// Applies to the masking set by `with_stale_tool_result_masking`, so it
+    /// is called after it.
+    pub fn with_tool_results_kept_until_tight(
+        mut self,
+        names: impl IntoIterator<Item = String>,
+    ) -> Self {
+        self.stale_tool_results = self
+            .stale_tool_results
+            .map(|masking| masking.keep_until_tight(names));
+        self
+    }
+
     /// Consume the provider's token stream — forwarding each text/reasoning
     /// delta to the stream sink (if attached) — and assemble the equivalent
     /// `ChatResponse`. Used in place of the blocking `provider.chat()` so

@@ -290,13 +290,10 @@ impl SessionDispatchController {
             .with_executor_tool_allowlist(config.tools.clone())
             .with_activation_checkpoint_port(port.clone())
             .with_stream_observer(observer)
-            .with_stale_tool_result_masking(
-                KEPT_TOOL_ROUNDS,
-                [
-                    super::knowledge::NAME.to_string(),
-                    super::delegate::NAME.to_string(),
-                ],
-            );
+            .with_stale_tool_result_masking(KEPT_TOOL_ROUNDS, [super::knowledge::NAME.to_string()])
+            // A helper's answer stays whole until a request would not fit;
+            // many delegations must not overflow a small model's context.
+            .with_tool_results_kept_until_tight([super::delegate::NAME.to_string()]);
         if let Some(tool) = host_knowledge_tool {
             behavior = behavior.with_host_knowledge_tool(tool);
         }

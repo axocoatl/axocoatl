@@ -20,6 +20,10 @@ const TIGHT_MASKED_CHARS: usize = 160;
 pub(crate) struct StaleToolResultMasking {
     keep_rounds: usize,
     exempt: BTreeSet<String>,
+    /// Kept whole by the normal pass, like `exempt`, but masked by the tight
+    /// pass: one such answer is worth keeping, many can overflow a small
+    /// context.
+    kept_until_tight: BTreeSet<String>,
 }
 
 impl StaleToolResultMasking {
@@ -27,7 +31,13 @@ impl StaleToolResultMasking {
         Self {
             keep_rounds: keep_rounds.max(1),
             exempt: exempt.into_iter().collect(),
+            kept_until_tight: BTreeSet::new(),
         }
+    }
+
+    pub(crate) fn keep_until_tight(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        self.kept_until_tight.extend(names);
+        self
     }
 
     /// Mask tool results that come before the last `keep_rounds` assistant
@@ -40,7 +50,7 @@ impl StaleToolResultMasking {
         let rounds = tool_rounds(messages);
         let keep = self.keep_rounds;
         let stale = (rounds.len().saturating_sub(keep) / keep) * keep;
-        self.mask_before(messages, &rounds, stale, MIN_MASKED_CHARS)
+        self.mask_before(messages, &rounds, stale, MIN_MASKED_CHARS, false)
     }
 
     /// For a request that would not fit even after `apply`: keep only the
@@ -49,7 +59,7 @@ impl StaleToolResultMasking {
     pub(crate) fn apply_tight(&self, messages: &mut [ChatMessage]) -> usize {
         let rounds = tool_rounds(messages);
         let stale = rounds.len().saturating_sub(1);
-        self.mask_before(messages, &rounds, stale, TIGHT_MASKED_CHARS)
+        self.mask_before(messages, &rounds, stale, TIGHT_MASKED_CHARS, true)
     }
 
     /// Last resort before a request would fail for its context: remove the
@@ -88,10 +98,14 @@ impl StaleToolResultMasking {
         rounds: &[usize],
         stale: usize,
         min_chars: usize,
+        tight: bool,
     ) -> usize {
         if stale == 0 {
             return 0;
         }
+        let exempt = |name: &str| {
+            self.exempt.contains(name) || (!tight && self.kept_until_tight.contains(name))
+        };
         let cutoff = rounds[stale];
         let mut masked = 0;
         for message in &mut messages[..cutoff] {
@@ -109,7 +123,7 @@ impl StaleToolResultMasking {
                     .all(|call| call.provider_metadata.is_empty())
                 {
                     for call in &mut message.tool_calls {
-                        if !self.exempt.contains(&call.name) {
+                        if !exempt(&call.name) {
                             masked += elide_long_strings(&mut call.arguments, min_chars);
                         }
                     }
@@ -120,7 +134,7 @@ impl StaleToolResultMasking {
                 continue;
             }
             let name = message.name.as_deref().unwrap_or("tool");
-            if self.exempt.contains(name) {
+            if exempt(name) {
                 continue;
             }
             let MessageContent::Text(text) = &message.content else {
@@ -329,6 +343,33 @@ mod tests {
             0,
             "placeholders are not masked again"
         );
+    }
+
+    #[test]
+    fn results_kept_until_tight_survive_the_normal_pass_only() {
+        let long = "d".repeat(MIN_MASKED_CHARS * 2);
+        let mut messages = vec![ChatMessage::user("u")];
+        for id in ["a", "b", "c", "d"] {
+            messages.extend(round(id, "delegate", &long));
+        }
+        messages.extend(round("e", "workspace_knowledge", &long));
+        messages.extend(round("f", "read_file", "short"));
+        let masking = StaleToolResultMasking::new(2, ["workspace_knowledge".to_string()])
+            .keep_until_tight(["delegate".to_string()]);
+        assert_eq!(
+            masking.apply(&mut messages),
+            0,
+            "the normal pass keeps every helper answer"
+        );
+        assert!((0..4).all(|index| text(&messages[2 + 2 * index]) == long));
+        assert_eq!(masking.apply_tight(&mut messages), 4);
+        assert!((0..4).all(|index| text(&messages[2 + 2 * index])
+            .starts_with("[earlier delegate output (800 characters)")));
+        assert_eq!(text(&messages[10]), long, "exempt tools stay whole");
+        assert_eq!(masking.drop_stale_rounds(&mut messages, 2), 4);
+        assert!(messages
+            .iter()
+            .all(|message| message.tool_call_id.as_deref() != Some("a")));
     }
 
     #[test]
