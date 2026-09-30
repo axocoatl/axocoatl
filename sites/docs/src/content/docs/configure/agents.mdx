@@ -266,13 +266,17 @@ After the required Agents finish and the required checks pass, Axocoatl, not the
 starts the reviewer in a fresh conversation. It is shown the request, each required
 Agent's final answer (up to 16 KiB each) and the change the turn made: every file
 whose patch against HEAD differs from the one captured when the turn began, up to 48
-KiB, with a note when it was cut. Its answer must start with `VERDICT: APPROVE` or
-`VERDICT: CHANGES`, followed by findings as `path:line: what to change`. The turn
-completes only when the reviewer approves the exact result it was shown. An answer
-without a readable verdict approves nothing. The verdict is bound to the answers and
-the repository tree it judged: a later revision of the lead makes it stale, and when the
-reviewer can capture the repository, a tree that changed before or while it read fails
-the verdict.
+KiB, with a note when it was cut. It is asked to start its answer with `VERDICT: APPROVE`
+or `VERDICT: CHANGES`, followed by findings as `path:line: what to change`. A verdict
+line anywhere in the answer counts, ignoring case and Markdown emphasis, and the rest of
+the answer is the findings. The turn completes only when the reviewer approves the exact
+result it was shown. An answer without a readable verdict approves nothing: one with no
+verdict line, verdict lines that disagree, or a verdict line that says anything else.
+While a round remains, Axocoatl asks the reviewer once more, in the next round, about
+the same result, showing it the answer that had no verdict; that uses the round. The
+verdict is bound to the answers and the repository tree it judged: a later revision of
+the lead makes it stale, and when the reviewer can capture the repository, a tree that
+changed before or while it read fails the verdict.
 
 When the reviewer asks for changes, Axocoatl sends its findings to the lead as a
 revision in a new epoch, the way **Revise** does, then runs the required checks and the

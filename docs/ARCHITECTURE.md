@@ -103,7 +103,12 @@ passed: a reviewer activation whose input is the request, a bounded prompt with 
 required Agent's accepted answer and the change between the turn's first Before capture
 and the candidate tree, and the round. It records the verdict only from a reviewer
 accepted in the current epoch whose input names that exact prompt, and only an
-`APPROVE` whose own captures, when it has them, saw the same tree passes. `CHANGES`
+`APPROVE` whose own captures, when it has them, saw the same tree passes. The verdict is
+the answer's `VERDICT:` line, wherever it is; none, or lines that disagree, is
+unreadable. An unreadable answer about the tree it was shown records nothing while a
+round remains and the host has not yet asked again: the next round revises the reviewer
+in the same epoch with the same prompt, a host note and its previous answer as revision
+context. `CHANGES`
 with rounds left pauses the epoch and continues in a new one whose plan revises the
 single required sink with the findings, as a person's Revise does, and reruns every
 condition; the preview of those events must apply first, or the turn needs attention

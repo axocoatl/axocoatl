@@ -121,51 +121,75 @@ pub fn review_criterion(
     Ok(Some(criterion))
 }
 
-/// A reviewer's verdict, read from the first line of its answer.
+/// A reviewer's verdict, read from the verdict line of its answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewVerdict {
     Approve,
     Changes,
-    /// The answer does not start with a verdict. It never passes.
+    /// The answer has no verdict line, or verdict lines that disagree. It
+    /// never passes.
     Unreadable,
 }
 
-/// The verdict and findings of a reviewer's answer. The first line that is
-/// not blank must be `VERDICT: APPROVE` or `VERDICT: CHANGES`, ignoring case,
-/// surrounding spaces and Markdown emphasis; anything else is
-/// [`ReviewVerdict::Unreadable`]. The findings are the rest of the answer,
-/// bounded, or the whole answer when the verdict cannot be read.
-pub fn parse_verdict(answer: &str) -> (ReviewVerdict, String) {
-    let trimmed = answer.trim_start();
-    let (first, rest) = trimmed.split_once('\n').unwrap_or((trimmed, ""));
-    let line = first
+/// What one line of a reviewer's answer says as a verdict line: `None` when
+/// it is not one, [`ReviewVerdict::Unreadable`] when it is labelled a verdict
+/// but says neither `APPROVE` nor `CHANGES`. A line labelled `Verdict:` with
+/// nothing after it is a heading, not a verdict line.
+fn verdict_line(line: &str) -> Option<ReviewVerdict> {
+    let emphasis = |c: char| c == '*' || c == '_' || c == '`';
+    let line = line
         .trim()
-        .trim_matches(|c: char| c == '*' || c == '_' || c == '`' || c == '#')
+        .trim_matches(|c: char| emphasis(c) || c == '#')
         .trim();
-    let verdict = line
-        .split_once(':')
-        .filter(|(label, _)| label.trim().eq_ignore_ascii_case("verdict"))
-        .map(|(_, value)| {
-            let value = value
-                .trim()
-                .trim_matches(|c: char| c == '*' || c == '_' || c == '`')
-                .trim();
-            if value.eq_ignore_ascii_case("approve") {
-                ReviewVerdict::Approve
-            } else if value.eq_ignore_ascii_case("changes") {
-                ReviewVerdict::Changes
-            } else {
-                ReviewVerdict::Unreadable
-            }
-        })
-        .unwrap_or(ReviewVerdict::Unreadable);
-    let findings = if verdict == ReviewVerdict::Unreadable {
-        answer.trim()
+    let (label, value) = line.split_once(':')?;
+    if !label
+        .trim()
+        .trim_matches(emphasis)
+        .trim()
+        .eq_ignore_ascii_case("verdict")
+    {
+        return None;
+    }
+    let value = value.trim().trim_matches(emphasis).trim();
+    if value.is_empty() {
+        None
+    } else if value.eq_ignore_ascii_case("approve") {
+        Some(ReviewVerdict::Approve)
+    } else if value.eq_ignore_ascii_case("changes") {
+        Some(ReviewVerdict::Changes)
     } else {
-        rest.trim()
+        Some(ReviewVerdict::Unreadable)
+    }
+}
+
+/// The verdict and findings of a reviewer's answer. The verdict is its line
+/// `VERDICT: APPROVE` or `VERDICT: CHANGES`, anywhere in the answer, ignoring
+/// case, surrounding spaces and Markdown emphasis. Several verdict lines
+/// count only when they agree; none, lines that disagree, or a line labelled
+/// a verdict that says anything else is [`ReviewVerdict::Unreadable`]. The
+/// findings are the rest of the answer, bounded, or the whole answer when the
+/// verdict cannot be read.
+pub fn parse_verdict(answer: &str) -> (ReviewVerdict, String) {
+    let mut verdict = None;
+    let mut rest = Vec::new();
+    for line in answer.lines() {
+        match (verdict_line(line), verdict) {
+            (None, _) => rest.push(line),
+            (Some(said), None) => verdict = Some(said),
+            (Some(said), Some(earlier)) if said != earlier => {
+                verdict = Some(ReviewVerdict::Unreadable);
+            }
+            (Some(_), Some(_)) => {}
+        }
+    }
+    let verdict = verdict.unwrap_or(ReviewVerdict::Unreadable);
+    let findings = if verdict == ReviewVerdict::Unreadable {
+        answer.trim().to_owned()
+    } else {
+        rest.join("\n").trim().to_owned()
     };
-    (verdict, bounded(findings, MAX_FINDINGS_BYTES))
+    (verdict, bounded(&findings, MAX_FINDINGS_BYTES))
 }
 
 /// At most `max` bytes of `text`, cut on a character boundary, with a note
@@ -459,29 +483,90 @@ mod tests {
     }
 
     #[test]
-    fn a_verdict_is_the_first_line_and_anything_else_fails_closed() {
+    fn a_verdict_on_the_first_line_is_read() {
         assert_eq!(
             parse_verdict("VERDICT: APPROVE\nNo findings."),
             (ReviewVerdict::Approve, "No findings.".into())
         );
         assert_eq!(
-            parse_verdict("\n  **Verdict: changes**\nsrc/lib.rs:3: missing test\n"),
+            parse_verdict("VERDICT: CHANGES\nsrc/lib.rs:3: missing test\n"),
             (ReviewVerdict::Changes, "src/lib.rs:3: missing test".into())
         );
+        let (_, findings) = parse_verdict(&format!("VERDICT: CHANGES\n{}", "é".repeat(9000)));
+        assert!(findings.len() < MAX_FINDINGS_BYTES + 64);
+        assert!(findings.ends_with("bytes.]"), "{findings}");
+    }
+
+    /// The live reviewer's shape: findings first, the verdict last. The
+    /// findings are everything but the verdict line.
+    #[test]
+    fn a_verdict_on_the_last_line_or_between_findings_is_read() {
+        assert_eq!(
+            parse_verdict(
+                "Based on my review I found no defects.\n\n1. Every pair is checked.\n\n\
+                 VERDICT: APPROVE"
+            ),
+            (
+                ReviewVerdict::Approve,
+                "Based on my review I found no defects.\n\n1. Every pair is checked.".into()
+            )
+        );
+        assert_eq!(
+            parse_verdict("One defect.\nVERDICT: CHANGES\nsrc/lib.rs:3: missing test"),
+            (
+                ReviewVerdict::Changes,
+                "One defect.\nsrc/lib.rs:3: missing test".into()
+            )
+        );
+    }
+
+    #[test]
+    fn a_verdict_line_ignores_case_spaces_and_markdown_emphasis() {
+        for (answer, verdict) in [
+            (
+                "\n  **Verdict: changes**\nsrc/lib.rs:3: x\n",
+                ReviewVerdict::Changes,
+            ),
+            (
+                "src/lib.rs:3: x\n**VERDICT**: CHANGES",
+                ReviewVerdict::Changes,
+            ),
+            ("src/lib.rs:3: x\nverdict: approve", ReviewVerdict::Approve),
+            ("Fine.\n`VERDICT: APPROVE`  ", ReviewVerdict::Approve),
+            ("Fine.\n## Verdict: _Approve_", ReviewVerdict::Approve),
+            ("**Verdict:**\nVERDICT: APPROVE", ReviewVerdict::Approve),
+        ] {
+            assert_eq!(parse_verdict(answer).0, verdict, "{answer}");
+        }
+    }
+
+    /// Several verdict lines count only when they agree; the findings are
+    /// then everything else.
+    #[test]
+    fn agreeing_verdict_lines_are_one_verdict() {
+        assert_eq!(
+            parse_verdict("VERDICT: APPROVE\nNothing must change.\n**VERDICT: approve**"),
+            (ReviewVerdict::Approve, "Nothing must change.".into())
+        );
+    }
+
+    #[test]
+    fn conflicting_or_missing_verdict_lines_fail_closed() {
         for answer in [
             "",
-            "Looks good to me.\nVERDICT: APPROVE",
+            "Looks good to me.",
+            "VERDICT: APPROVE\nsrc/lib.rs:3: x\nVERDICT: CHANGES",
+            "VERDICT: CHANGES\nVERDICT: APPROVE",
+            "VERDICT: approve with nits\nVERDICT: APPROVE",
             "VERDICT: APPROVED",
             "VERDICT: approve with nits",
             "Decision: APPROVE",
+            "I would answer VERDICT: APPROVE here.",
         ] {
             let (verdict, findings) = parse_verdict(answer);
             assert_eq!(verdict, ReviewVerdict::Unreadable, "{answer}");
             assert_eq!(findings, answer.trim());
         }
-        let (_, findings) = parse_verdict(&format!("VERDICT: CHANGES\n{}", "é".repeat(9000)));
-        assert!(findings.len() < MAX_FINDINGS_BYTES + 64);
-        assert!(findings.ends_with("bytes.]"), "{findings}");
     }
 
     #[test]
