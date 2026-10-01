@@ -1,0 +1,133 @@
+---
+title: Cross-model review
+description: Have a stronger model review a local writer's change as the team's required review, on the same machine through Ollama or hosted through OpenRouter.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Each Agent template names its own provider and model, so the Agent that writes and the
+Agent that reviews do not have to share one. A common setup is a local model as the
+lead, which writes, and a stronger model as the team's required reviewer, which only
+reads. In [our benchmark](/understand/what-we-measured/), a stronger reviewer helped
+where more looks from the same model did not.
+
+The host, not the lead, runs a required reviewer: after the lead finishes and the
+[required checks](/configure/agents/#required-checks) pass, Axocoatl starts the reviewer
+in a fresh conversation on the exact result, sends requested changes back to the lead,
+and completes the turn only when the reviewer approves. Every activation, its model,
+usage, verdict and findings stay in the Session.
+
+## 1. Define a reviewer on another model
+
+Add a read-only Worker template with the stronger model. `writes: []` makes it
+read-only, which a required reviewer must be: it is not offered `write_file` or
+`edit_file`, and its `bash` runs where it cannot change the repository.
+
+<Tabs>
+<TabItem label="Bigger local model (Ollama)">
+
+```yaml
+agents:
+  - id: lead
+    name: Lead
+    provider: ollama
+    model: qwen3-coder:30b
+    role: autonomous
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
+    system_prompt: "You own this change. 1. Look first: find the relevant files and tests for code you do not know. 2. Make the change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Check your diff against the task. When a reviewer reports defects, check each reported defect against the requirements before changing code; fix only the ones the requirements support. Then summarize what you changed."
+    sampling: { max_tokens: 4096 }
+  - id: strong-reviewer
+    name: Strong reviewer
+    provider: ollama
+    model: gpt-oss:120b
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: "Review the described change. Check it against the task and against every contract and edge case the docs, comments and tests describe, one by one. Report each defect with file:line, or say you found none. Change nothing."
+    sampling: { max_tokens: 4096 }
+```
+
+Both models run on the same [native Ollama server](/configure/providers/#configure-ollama).
+Ollama has to hold both models: if they do not fit in memory together, it unloads one
+to load the other.
+
+</TabItem>
+<TabItem label="Hosted model (OpenRouter)">
+
+```yaml
+agents:
+  # lead: unchanged from the Ollama tab
+  - id: strong-reviewer
+    name: Strong reviewer
+    provider: openrouter
+    model: meta-llama/llama-3.3-70b-instruct   # an example; use any eligible model
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: "Review the described change. Check it against the task and against every contract and edge case the docs, comments and tests describe, one by one. Report each defect with file:line, or say you found none. Change nothing."
+    sampling: { max_tokens: 2048 }
+
+providers:
+  openrouter_billing: credits
+  openrouter:
+    api_key: "${OPENROUTER_API_KEY}"
+```
+
+The reviewer then uses an OpenRouter-credit profile with whole-call budget reservations,
+while the lead stays local. Only eligible models work: an exact endpoint with text
+output, tool calling, an enforced output limit and complete pricing. See
+[Configure OpenRouter](/configure/providers/#configure-openrouter). The reviewer is
+shown the request, the lead's answer and the change, so they leave your machine for
+OpenRouter.
+
+</TabItem>
+</Tabs>
+
+Restart the daemon after editing the configuration; see
+[Apply changes](/configure/agents/#apply-changes). You can keep the default `reviewer`
+helper beside the new template.
+
+## 2. Require the review in Team & budget
+
+<Steps>
+
+1. Open the Session's **Team & budget** and enter the lead's limits. Its activation
+   limit must be at least the number of review rounds.
+2. Open **Required review** and choose **Strong reviewer**.
+3. Choose how many rounds the host runs (1 to 3, two by default), the reviewer's
+   maximum output per request, and its budget for all rounds of one turn: one
+   activation and one invocation per round, three invocations per round with `bash`.
+4. Optionally add **Required checks**. They run before the review, and the reviewer
+   is shown only results that passed them.
+5. Choose **Apply**. Apply refuses a reviewer that could change files and a budget
+   that cannot pay for every round.
+
+</Steps>
+
+## 3. Tell the lead to weigh the findings
+
+Reviewers raise false alarms, and a lead that fixes every finding can make a correct
+change worse. The lead prompt above includes the line that guards against this:
+
+```text
+Check each reported defect against the requirements before changing code; fix only the ones the requirements support.
+```
+
+When the reviewer answers `VERDICT: CHANGES`, its findings reach the lead as a revision
+in a new epoch, the checks and the review run again, and the turn completes only when
+the reviewer answers `VERDICT: APPROVE` about that exact result. After the last round the
+turn needs your attention with the findings. The full rules are in
+[Required review](/configure/agents/#required-review).
+
+## A reviewer the lead asks, instead
+
+To leave the decision with the lead, approve the stronger template as one of the lead's
+helpers instead: select **Let this Agent delegate to helpers** and keep the template
+in the list. The lead then asks for a review when it chooses, and its answer is advice,
+not a gate. A required review runs every turn whatever the lead decides.
+
+<Aside type="caution">
+A review is another model's judgment, not a proof. A stronger reviewer can still miss
+a defect or report one that is not there, and every round costs tokens on top of the
+lead's. Required review does not run on attempts made with **Explore several ways**.
+</Aside>

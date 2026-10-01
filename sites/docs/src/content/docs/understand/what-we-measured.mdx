@@ -1,0 +1,85 @@
+---
+title: What we measured
+description: A pre-registered benchmark of review strategies with local models, what it shows, how it maps to Axocoatl, and its limits.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Axocoatl makes claims about results only from measurements. This page states them
+once, with the setup and the limits, so you can judge how far they reach.
+
+## The benchmark
+
+- **Pre-registered.** Six Python maintenance tasks were frozen on 2026-09-22, before
+  any run.
+- **Withheld tests.** Each result is scored by 25 tests the agents never see; they are
+  not in the repository the agents work on.
+- **Models.** The writer is qwen3-coder 30B, running locally. The stronger reviewer is
+  gpt-oss 120B, also running locally.
+- **Runs.** One run per task, at temperature 0.
+
+## Results
+
+{/* measured: plain-loop 2026-10-01 */}
+
+| Setup | Withheld tests passed | Tokens vs. one pass | What happened |
+| --- | --- | --- | --- |
+| One pass | 17 / 25 | 1× | The writer works once and stops. |
+| The same Agent reviews its own work | 17 / 25 | 3.5× | No change in the score. |
+| A fresh reviewer on the same model | 17 / 25 | 2.3× | It approved every change, including three with real defects. |
+| The same model writes its own tests | 18 / 25 | 9–15× | One more withheld test passed. |
+| A stronger reviewer (gpt-oss 120B, local) reviews the writer's change | 20 / 25 | 3.3× | It found 9 real defects and raised 2 false alarms; acting on one false alarm made a task worse. |
+
+These numbers come from a plain agent loop, not from an Axocoatl Session. That loop has
+none of Axocoatl's context fitting, budgets, sandboxed tools or host-run checks, which
+could change both scores and token use. An Axocoatl run of the same benchmark is in
+progress; its results will replace these.
+
+{/* /measured */}
+
+## What it shows
+
+Extra tokens helped when they bought a stronger model's judgment, not more looks from
+the same model. A second pass by the same model, whether as itself or as a fresh
+reviewer, cost more and changed nothing; the fresh reviewer agreed with the writer even
+where the writer was wrong. Having the same model write its own tests gained one test at the
+highest token cost. A stronger reviewer moved the score the most, for fewer tokens than self-review, and it
+was not free of mistakes: its false alarms are why the lead should check each finding against the
+requirements before acting on it.
+
+## How this maps to Axocoatl
+
+Each Agent template names its own provider and model, so the Agent that writes and the
+Agent that reviews need not share one. Make a stronger model the team's
+[required reviewer](/configure/agents/#required-review), and the host runs it on the
+exact result after your [required checks](/configure/agents/#required-checks) pass,
+sends its findings back to the lead, and records every step in the Session. The
+reviewer can be a bigger local model through Ollama or a hosted model through
+OpenRouter. [Set up cross-model review →](/configure/cross-model-review/)
+
+<Aside>
+None of this says the default team, a lead with helpers, beats a single Agent. In our
+evaluation before 1.1.0, a single Agent was as accurate as the lead with helpers and used
+the fewest tokens, and one Agent remains the cheaper choice for small tasks. See
+[What helpers cost](/understand/coordination/#what-helpers-cost).
+</Aside>
+
+## An earlier result: the coordination design we removed
+
+Axocoatl's first design had Agents coordinate through notes and failed checks left on
+shared files, with no Agent in charge. We built it during 1.1.0 development and measured
+it against a single Agent: a single Agent that reviewed its own work matched the best
+team's score at 28–48% of the tokens. We removed that design in 1.1.0 and moved to a
+lead that writes, read-only helpers it can delegate to, and checks and review that the
+host runs. The [1.1.0 changelog](https://github.com/axocoatl/axocoatl/blob/main/CHANGELOG.md)
+lists what was removed.
+
+## Limits
+
+- **One run per task, at temperature 0.** There is no estimate of run-to-run variance; a
+  repeated run could differ by a test or more.
+- **Six tasks, 25 tests, one language.** All tasks are Python maintenance work.
+- **Two local models.** Other writers, reviewers or hosted models may behave differently,
+  and a reviewer stronger than the writer is the comparison, not any particular model.
+- **Tokens, not time or money.** Token multiples are relative to one pass on the same
+  tasks. We did not measure wall-clock time and make no speed claim.

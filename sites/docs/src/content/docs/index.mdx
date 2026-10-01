@@ -1,37 +1,58 @@
 ---
 title: Axocoatl documentation
-description: Install Axocoatl, run the workbench, configure the runtime, and operate its local data.
+description: The harness you can trust to run coding agents on your own machine or infrastructure. Install it, run the workbench, configure Agents and models, and operate its local data.
 template: splash
 hero:
-  tagline: A lead that writes, helpers that only read, and a record of every step.
+  tagline: The harness you can trust to run coding agents on your own machine or infrastructure. Isolation built in, a complete record of every step, any model, local or hosted.
   actions:
     - text: Install Axocoatl
       link: /start/install/
       icon: right-arrow
       variant: primary
-    - text: Use the workbench
-      link: /workbench/session/
+    - text: What we measured
+      link: /understand/what-we-measured/
       icon: right-arrow
 ---
 
 import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 
-Axocoatl is a local-first harness for coding agents: a Rust daemon that runs
-Agents against your repository and records their work, and a browser workbench
-around one durable Session. It works with local models through Ollama and hosted
-models through OpenRouter.
+Axocoatl is an open-source harness for coding agents: a Rust daemon that runs Agents
+against your repository and records their work, and a browser workbench around one
+durable Session. A new Session starts with one Agent, the lead, which writes. Read-only
+helpers it can delegate to, and [required checks](/configure/agents/#required-checks)
+and a [required review](/configure/agents/#required-review) that the host runs before a
+turn completes, are opt-in.
 
-The [default team](/understand/coordination/#default-team) is a lead that edits
-files and read-only helpers it delegates questions and reviews to. A team can
-add [required checks](/configure/agents/#required-checks) and a
-[required review](/configure/agents/#required-review) that the host runs before
-a turn completes, and every Agent runs under limits you approve. The Session keeps
-conversation, context, files, terminal, Preview, history, and Git review together.
-Explore several Ways only when the task warrants comparison.
+<CardGrid>
+  <Card title="Isolation built in" icon="padlock">
+    Every Session's tools run in a rootless Podman container. Read-only helpers get no
+    file-writing tools, and the kernel blocks their shell from changing the repository
+    (Landlock, Linux 6.2 or later); otherwise they get no shell. Per-Agent write scopes
+    share one checkout, and every change is checked against complete, digest-verified
+    snapshots. [Where the boundary stops →](/operate/security/#what-axocoatl-controls-and-what-it-does-not)
+  </Card>
+  <Card title="A complete record" icon="list-format">
+    The host runs required checks on the exact final files. Budgets you approve are
+    charged with what each call actually used and carry across restarts. The Session
+    durably records every model call, tool call, budget decision and check.
+    [Native authority and budgets →](/configure/agents/#native-authority-and-budgets)
+  </Card>
+  <Card title="Any model, per Agent" icon="random">
+    Each Agent has its own provider and model: local models through Ollama, hosted models
+    through OpenRouter, with Anthropic, OpenAI, Gemini and Mistral adapters on the
+    compatibility path. A local writer can be reviewed by a stronger model.
+    [Cross-model review →](/configure/cross-model-review/)
+  </Card>
+</CardGrid>
 
+Claims about results come only from measurements, stated once with their setup and
+limits in [What we measured](/understand/what-we-measured/). One Agent remains the
+cheaper choice for small tasks.
+
+The Session keeps conversation, context, files, terminal, Preview, history, and Git
+review together. Explore several Ways only when the task warrants comparison.
 [Workspace knowledge](/workbench/knowledge/) retains source-linked decisions and
-findings across Sessions. Inspect and edit the notes, follow their evidence, and
-attach the relevant revision to the next request.
+findings across Sessions.
 
 ## The shortest path
 

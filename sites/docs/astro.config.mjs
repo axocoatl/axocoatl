@@ -33,7 +33,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Axocoatl',
-      description: 'A local-first coding workbench backed by a durable Rust agent runtime.',
+      description: 'The harness you can trust to run coding agents on your own machine or infrastructure: isolation built in, a complete record of every step, any model, local or hosted.',
       disable404Route: true,
       favicon: '/favicon.png',
       customCss: ['./src/styles/tokens.css', './src/styles/overrides.css'],
@@ -95,6 +95,7 @@ export default defineConfig({
             { label: 'Settings', slug: 'configure/settings' },
             { label: 'Providers', slug: 'configure/providers' },
             { label: 'Agents and budgets', slug: 'configure/agents' },
+            { label: 'Cross-model review', slug: 'configure/cross-model-review' },
             { label: 'Sandboxes', slug: 'configure/sandboxes' },
             { label: 'Skills and MCP', slug: 'configure/skills-mcp' },
             { label: 'Automations', slug: 'configure/automations' },
@@ -116,6 +117,7 @@ export default defineConfig({
           label: 'Understand',
           items: [
             { label: 'Product model', slug: 'understand/product-model' },
+            { label: 'What we measured', slug: 'understand/what-we-measured' },
             { label: 'Architecture', slug: 'understand/architecture' },
             { label: 'State and memory', slug: 'understand/state' },
             { label: 'Coordination and events', slug: 'understand/coordination' },
