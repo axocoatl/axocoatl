@@ -23,9 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The README, docs and marketing site describe Axocoatl as the harness to run coding
   agents on your own machine or infrastructure, with isolation built in, a complete
-  record of every step and any model, and publish what was measured: a stronger model
-  reviewing a local model's change found real defects, while the same model looking
-  again did not. A new docs page explains how to set up cross-model review.
+  record of every step and any model, and publish what was measured on a pre-registered
+  benchmark run through Axocoatl 1.1.0: a Required review by a stronger local model
+  raised a local writer from 17 to 19 of 25 withheld tests at 2.6 times the tokens, while
+  the same model looking again gained nothing. A new docs page explains how to set up
+  cross-model review, and the home page shows a recording of one of those reviews.
 
 ### Fixed
 - The release workflow looked up its draft with GitHub's release-by-tag endpoint, which
@@ -33,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tag in the release list.
 - The marketing site builds and deploys while a release's films are pending, with each
   film placement replaced by a short note.
+
+### Security
+- The docs site's build dependency `devalue` is updated to 5.9.4 for high-severity
+  advisories (GHSA-j22f-vq7h-c4qm and others). It is not part of the shipped binary.
 
 ## [1.1.0] - 2026-09-30
 
