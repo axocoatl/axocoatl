@@ -1,7 +1,7 @@
 const LINKS = [
   { id: 'product', href: '/concepts', label: 'Product' },
   { id: 'why', href: '/why', label: 'Why Axocoatl' },
-  { id: 'examples', href: '/showcase', label: 'Demos' },
+  { id: 'examples', href: '/showcase', label: 'Showcase' },
 ];
 
 class AxSiteNav extends HTMLElement {

@@ -1,17 +1,33 @@
 # Axocoatl — a local-first harness for coding agents
-> Axocoatl v1.1: a lead that writes, read-only helpers, optional required checks and review, and a durable record of every step
+> Axocoatl v1.1: the harness you can trust to run coding agents on your own machine or infrastructure. Isolation built in, a complete record of every step, any model, local or hosted.
 
 Axocoatl v1.1 is an Apache-2.0, local-first harness for coding agents working in
-real repositories, on local models through Ollama or hosted models through
-OpenRouter. One Rust executable runs a daemon that executes the Agents and a
+real repositories. One Rust executable runs a daemon that executes the Agents and a
 browser workbench. Open a repository and work in a
 durable, folder-anchored Session: conversation stays at the center while Files,
 Source Control, Preview, Terminal, History, Agent activity, and Settings open
 around it.
 
+- Isolation built in: every Session's tools run in a rootless Podman container
+  (E2B Cloud is an explicit remote option on the compatibility path). Read-only
+  helpers cannot write: they get no file-writing tools and the kernel blocks their
+  shell from changing the repository (Landlock, Linux 6.2 or later); otherwise they
+  get no shell. Per-Agent write scopes share one checkout, and every change is
+  checked against complete, digest-verified snapshots taken before and after the
+  Agent's work. For an Agent with a shell that check is review evidence, not
+  confinement. Container network access is on by default.
+- A complete record: required checks run by the host on the exact final files;
+  budgets a person approves, charged with what each model call actually used and
+  carried across restarts; a durable record of every model call, tool call, budget
+  decision and check.
+- Any model, per Agent: local models through Ollama and hosted models through
+  OpenRouter in native Sessions, each Agent with its own provider and model, so a
+  local writer can be reviewed by a stronger model. Anthropic, OpenAI, Gemini and
+  Mistral adapters remain on the compatibility path.
+
 The default team is Lead, an Agent that edits files, and two read-only helpers it
 can `delegate` to: Scout answers questions about the code and Reviewer reviews a
-change. Each helper starts in an empty conversation and returns its answer to the
+change. A new Session starts with Lead alone; the helpers are opt-in. Each helper starts in an empty conversation and returns its answer to the
 lead; several can run at once. A team can add required checks, commands the host
 runs after the Agents finish, and a required review, a read-only reviewer the host
 runs for a bounded number of rounds. The turn completes only when they pass on the
@@ -23,6 +39,25 @@ tool call, budget decision, Agent output, and final lifecycle state in durable
 History. Source Control separately shows the repository as it exists now;
 Axocoatl does not make a commit or push unless the user deliberately asks for
 that Git action.
+
+## What we measured
+
+<!-- measured: plain-loop 2026-10-01 -->
+A pre-registered benchmark of 6 Python maintenance tasks (frozen 2026-09-22), scored
+by 25 withheld tests the agents never see; writer qwen3-coder 30B running locally,
+one run per task, temperature 0, in a plain agent loop rather than an Axocoatl Session.
+One pass passed 17/25. The same Agent reviewing its own work: 17/25 at 3.5x the
+tokens. A fresh reviewer on the same model: 17/25 at 2.3x, approving every change,
+including three with real defects. The same model writing its own tests: one more
+test (18/25) at 9-15x. A stronger local reviewer (gpt-oss 120B): 20/25 at 3.3x; it
+found 9 real defects and raised 2 false alarms, one of which made a task worse.
+<!-- /measured -->
+
+Extra tokens helped when they bought a stronger model's judgment, not more looks from
+the same model. Axocoatl does not claim the default team beats a single Agent, and
+one Agent remains the cheaper choice for small tasks.
+
+## Several Ways
 
 When implementation choices need independent evidence, the same Session can run
 one task and repository snapshot several Ways with different Agent/model pairs,

@@ -152,9 +152,11 @@ ax-product-film.product-film-hero { margin-top: var(--s-5); }
 }
 .demo-video figcaption { color: var(--muted); font-size: var(--t-13); line-height: 1.55; }
 
-.measured { overflow-x: auto; }
-.measured table { min-width: 560px; }
-.measured td:nth-child(2), .measured td:nth-child(3), .measured th:nth-child(2), .measured th:nth-child(3) { white-space: nowrap; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+.measured td:nth-child(2), .measured td:nth-child(3) { white-space: nowrap; }
 .measured-note { margin-top: var(--s-4); color: var(--muted); font-size: var(--t-13); }
 
 .btn {
@@ -269,6 +271,9 @@ ax-cli-snippet[data-copied]::after { color: var(--accent); content: 'copied'; }
   .btn { width: 100%; }
   .hero-actions, .cta-actions { width: 100%; }
   table { display: block; overflow-x: auto; }
+  .measured table { display: table; }
+  .measured th, .measured td { padding: var(--s-3) var(--s-2); }
+  .measured td:nth-child(2), .measured td:nth-child(3) { white-space: normal; }
   ax-cli-snippet { gap: var(--s-2); padding-inline: var(--s-4); font-size: 12px; }
   ax-product-film { margin-top: var(--s-6); }
   ax-product-film.product-film-hero { margin-top: var(--s-4); }

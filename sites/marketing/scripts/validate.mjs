@@ -584,7 +584,8 @@ if (root === sourceRoot) {
   const readme = readRequired(join(repositoryRoot, readmeLabel), readmeLabel, 'utf8');
   if (readme) {
     for (const [contract, marker] of [
-      ['1.1 product category', 'An open-source, local-first harness for coding agents.'],
+      ['launch headline', 'The harness you can trust to run coding agents on your own machine or infrastructure.'],
+      ['measured-results section', '<!-- measured: '],
       ['current HTTP reference', 'https://docs.axocoatl.ai/reference/http-api/'],
     ]) {
       if (!readme.includes(marker)) fail(readmeLabel, `missing ${contract}`);

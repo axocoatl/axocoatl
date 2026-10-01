@@ -1,6 +1,8 @@
 # Axocoatl
 
-**An open-source, local-first harness for coding agents.**
+**The harness you can trust to run coding agents on your own machine or infrastructure.**
+
+Isolation built in. A complete record of every step. Any model, local or hosted.
 
 [![CI](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml/badge.svg)](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/axocoatl-cli.svg)](https://crates.io/crates/axocoatl-cli)
@@ -10,45 +12,76 @@
   <img src="sites/marketing/assets/og-home.png" alt="Axocoatl: the local-first workbench for coding agents" width="760">
 </p>
 
-<p align="center"><strong>A lead that writes, helpers that only read, and a record of every step.</strong></p>
+Axocoatl runs coding agents against your repository. It is one open-source Rust
+executable: a daemon that runs the Agents and records their work, and a web
+workbench you open in your browser. The default is one Agent, the Lead, which
+writes; read-only helpers it can delegate to, and checks and a review the host
+runs before a turn completes, are opt-in.
 
-Axocoatl runs coding agents against your repository, on local models through
-Ollama or hosted models through OpenRouter. It is one Rust executable: a daemon
-that runs the Agents and records their work, and a web workbench you open in
-your browser.
+### Isolation built in
 
-- **Lead and helpers.** The default team is a **Lead** that edits files and two
-  read-only helpers it can `delegate` to: **Scout** answers questions about the
-  code, **Reviewer** reviews a change. Each helper starts in an empty
-  conversation and hands its answer back to the lead. Several helpers can run
-  at once.
-- **Required checks and review, if you want them.** Required checks are
-  commands the host runs after the Agents finish; the turn completes only when
-  they pass on the exact final tree. Required review has the host run a
-  read-only reviewer; requested changes go back to the lead for a bounded
-  number of rounds. Both are off until you add them.
-- **Write scopes.** Read-only helpers get no file-writing tools, and their
-  shell runs under a Linux Landlock write restriction (Linux 6.2 or later);
-  where that is unavailable they get no shell. An Agent limited to some paths
-  has file tools that refuse other paths, and every change it made is checked
-  after it finishes. For an Agent with a shell, that check is review evidence,
-  not confinement.
-- **Budgets and a record.** Every Agent runs under a grant with limits you
-  approve. Grants and budgets survive restarts, and the Session records each
-  activation, tool call, and budget decision.
-- **Small local models.** An Ollama stream that ends early, including one that
-  fails on a tool call Ollama could not parse, is retried once. Older tool
-  output is replaced by a short placeholder in later requests, and a request
-  that would overflow a small context window is trimmed instead of failing.
+- **Every Session's tools run in a sandbox.** A rootless Podman container on your
+  machine by default; E2B Cloud is an explicit remote option on the compatibility
+  path. Network access is on by default; set `sandbox.network: none` for
+  repositories you don't trust.
+- **Read-only helpers cannot write.** They get no file-writing tools, and the
+  kernel blocks their shell from changing the repository (Landlock, Linux 6.2 or
+  later). Where Landlock is unavailable they get no shell.
+- **Per-Agent write scopes in one checkout.** An Agent's file tools refuse paths
+  outside its scope, and every change it made is checked against complete,
+  digest-verified snapshots of the repository from before and after its work. For
+  an Agent with a shell, that check is review evidence, not confinement.
 
-Tools run in a rootless Podman container. Network access is on by default;
-set `sandbox.network: none` for repositories you don't trust. Axocoatl adds no
-product telemetry and needs no Axocoatl account.
+### A complete record
 
-The same Session keeps conversation, Files, Terminal, Preview, History, and
-Git together. When an implementation choice needs independent evidence, run
-the task several Ways with different Agents and models, compare them, and Keep
-one result as uncommitted Git changes.
+- **The host runs your checks.** Required checks run after the Agents finish, on
+  the exact final files; a required review is run by the host with a read-only
+  reviewer, and requested changes go back to the Lead for a bounded number of rounds.
+- **Budgets you approve.** Every Agent runs under limits you set. A model call is
+  charged what it actually used once the provider reports it, and grants and budgets
+  carry across restarts.
+- **Every step is kept.** The Session durably records every model call, tool call,
+  budget decision and check, next to the conversation, Files, Terminal, Preview and Git.
+
+### Any model, per Agent
+
+- **Each Agent has its own provider and model.** Local models through Ollama,
+  hosted models through OpenRouter, with budgets enforced on both. Adapters for
+  Anthropic, OpenAI, Gemini and Mistral are included on the compatibility path.
+- **Small local models are a first-class target.** An Ollama stream that ends early
+  is retried once, older tool output is replaced by a short placeholder in later
+  requests, and a request that would overflow a small context window is trimmed
+  instead of failing.
+
+Axocoatl adds no product telemetry and needs no Axocoatl account.
+
+## What we measured
+
+<!-- measured: plain-loop 2026-10-01 -->
+A pre-registered benchmark: 6 Python maintenance tasks frozen on 2026-09-22, scored by
+25 withheld tests the agents never see. The writer is qwen3-coder 30B running locally;
+one run per task, temperature 0.
+
+| Setup | Withheld tests passed | Tokens vs. one pass |
+| --- | --- | --- |
+| One pass | 17 / 25 | 1× |
+| The same Agent reviews its own work | 17 / 25 | 3.5× |
+| A fresh reviewer on the same model | 17 / 25 | 2.3× |
+| The same model writes its own tests | 18 / 25 | 9–15× |
+| A stronger reviewer (gpt-oss 120B, also local) | 20 / 25 | 3.3× |
+
+The fresh same-model reviewer approved every change, including three with real
+defects. The stronger reviewer found 9 real defects and raised 2 false alarms, one of
+which made a task worse. These numbers come from a plain agent loop, not an Axocoatl
+Session; an Axocoatl run of the same benchmark is in progress.
+<!-- /measured -->
+
+Extra tokens helped when they bought a stronger model's judgment, not more looks
+from the same model. Axocoatl lets each Agent use its own model, so a local writer
+can be reviewed by a stronger model, and the host still runs your checks and records
+every step. We do not claim the default team beats a single Agent; one Agent remains
+the cheaper choice for small tasks. Details and limits:
+[What we measured](https://docs.axocoatl.ai/understand/what-we-measured/).
 
 ---
 
@@ -206,22 +239,6 @@ role was not recorded stays archived instead of becoming future model context.
 The exact storage, isolation, setup, recovery, and network contracts are documented
 in [`docs/PRODUCT.md`](docs/PRODUCT.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
 and [the security guide](https://docs.axocoatl.ai/operate/security/).
-
----
-
-## See v1 work
-
-**One Session, with the repository around it.**
-
-[![An Axocoatl Session with conversation, Files, Source Control, Preview, and Terminal](sites/marketing/assets/films/v1.1.0/session-workbench.jpg)](https://axocoatl.ai/assets/films/v1.1.0/session-workbench.mp4)
-
-**Several Ways, compared on evidence.**
-
-[![Several Axocoatl Ways compared by Outcome, Route, diff, Checks, cost, and Judge](sites/marketing/assets/films/v1.1.0/several-ways.jpg)](https://axocoatl.ai/assets/films/v1.1.0/several-ways.mp4)
-
-**One kept result, returned to normal Git review.**
-
-[![A kept Axocoatl result shown as uncommitted paths and hunks in Source Control](sites/marketing/assets/films/v1.1.0/git-last-turn.jpg)](https://axocoatl.ai/assets/films/v1.1.0/git-last-turn.mp4)
 
 ---
 

@@ -6,9 +6,19 @@ product speaks and looks; `ARCHITECTURE.md` explains the runtime beneath it.
 
 ## One product
 
-Axocoatl is a local-first harness for coding agents: a Rust daemon that runs Agents
-against a repository and records their work, and the browser app at `/` through which a
-person uses it. It is not a collection of dashboards for runtime subsystems. The actors,
+Axocoatl is the harness you can trust to run coding agents on your own machine or
+infrastructure: isolation built in, a complete record of every step, any model, local
+or hosted. Each of those is a mechanism, not an adjective: Session tools run in a
+rootless Podman container, read-only helpers are blocked from writing by the kernel or
+get no shell, write scopes are checked against digest-verified snapshots, the host runs
+required checks on the exact final files, approved budgets are charged with actual
+usage, every model call, tool call, budget decision and check is recorded, and each
+Agent has its own provider and model. Public performance claims come only from measured
+results (`BRAND.md`).
+
+Concretely, Axocoatl is a local-first harness for coding agents: a Rust daemon that
+runs Agents against a repository and records their work, and the browser app at `/`
+through which a person uses it. It is not a collection of dashboards for runtime subsystems. The actors,
 Session ledger, grants, isolation, tools, MCP, and automation machinery are the engine.
 
 A new Session starts with one Agent, the lead that writes. Read-only helpers it can

@@ -2,17 +2,42 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>How Axocoatl works — one durable coding workbench</title>
-  <meta name="description" content="How Axocoatl keeps conversation, context, files, Terminal, Preview, tools, history, and Git review around one durable Session.">
+  <title>How Axocoatl works — what the host enforces</title>
+  <meta name="description" content="How Axocoatl runs coding agents on your own machine: the sandbox for Session tools, write scopes the host checks, required checks and review, budgets, the record it keeps, and a model per Agent.">
   <meta name="theme-color" content="#3E7C5C"><link rel="canonical" href="https://axocoatl.ai/concepts">
-  <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/concepts"><meta property="og:title" content="How Axocoatl works"><meta property="og:description" content="One durable Session for conversation, context, repository tools, history, and Git review."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="How Axocoatl works"><meta name="twitter:description" content="One durable Session for conversation, context, repository tools, history, and Git review."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20260818-narrative"><link rel="stylesheet" href="/styles/finder.css">
-  <script type="module" src="/components/ax-site-nav.js?v=20260818-narrative"></script><script type="module" src="/components/ax-footer.js?v=20260818-narrative"></script><script type="module" src="/components/ax-theme-toggle.js"></script><script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script>
+  <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/concepts"><meta property="og:title" content="How Axocoatl works"><meta property="og:description" content="Isolation built in, a complete record of every step, and any model per Agent: what the host enforces, and where it stops."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="How Axocoatl works"><meta name="twitter:description" content="Isolation built in, a complete record of every step, and any model per Agent: what the host enforces, and where it stops."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
+  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20261001-launch"><link rel="stylesheet" href="/styles/finder.css">
+  <script type="module" src="/components/ax-site-nav.js?v=20261001-launch"></script><script type="module" src="/components/ax-footer.js?v=20260818-narrative"></script><script type="module" src="/components/ax-theme-toggle.js"></script><script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script>
 </head>
 <body>
   <ax-site-nav active="product"></ax-site-nav>
   <main id="main-content">
-    <header class="container hero"><span class="eyebrow">How it works</span><h1>The Session is the spine.</h1><p class="lede">Conversation, context, files, Terminal, Preview, tools, History, and Git review belong to one folder-anchored unit of work. Runtime machinery stays underneath it.</p></header>
+    <header class="container hero"><span class="eyebrow">How it works</span><h1>What the host enforces.</h1><p class="lede">Axocoatl runs coding agents on your own machine or infrastructure. Trust rests on things the host does whatever the model says: where tools run, who may write, which checks must pass, what a run may spend, what gets recorded, and which model each Agent uses. This page states each one and where it stops.</p></header>
+
+    <section class="container section section-rule" id="isolation">
+      <div class="split">
+        <div class="stack"><span class="eyebrow">Isolation built in</span><h2>Tools run in a sandbox. Helpers cannot write.</h2><p>Every Session's repository tools run in a rootless Podman container with <code>no-new-privileges</code> and dropped capabilities; E2B Cloud is an explicit remote option on the compatibility path. Model provider API keys stay in the daemon and are not passed into the container. Network access is on by default; set <code>network: none</code> for repositories you don't trust.</p><p>An Agent with <code>writes: []</code> is a read-only helper. It is not offered <code>write_file</code> or <code>edit_file</code>, and its shell runs under a Linux Landlock write restriction (Linux 6.2 or later) that leaves the repository unchanged. Where Landlock cannot be applied, its shell does not run.</p><p>Several Agents can share one checkout with their own write scopes. File tools refuse paths outside an Agent's scope before writing. After it finishes, Axocoatl compares complete, digest-verified snapshots of the repository from before and after its work; a change outside its paths fails that work and is kept for review. For an Agent with a shell, that check is review evidence, not confinement.</p></div>
+        <div class="callout"><p><strong>Where it stops:</strong> Axocoatl is not a sandbox runtime. Sandbox runtimes control what a process can reach: files, network destinations, and credentials. The Workspace is a read-write bind inside the container, files in it are visible to tools, and <code>network: none</code> does not stop the daemon itself from calling providers or MCP servers. <a href="https://docs.axocoatl.ai/operate/security/">Read the security boundary →</a></p></div>
+      </div>
+    </section>
+
+    <section class="container section section-rule" id="any-model">
+      <div class="split reverse">
+        <div class="code-pane"><div class="code-pane-head">one team · two models</div><pre><code><span class="code-key">lead</span>       ollama · <span class="code-string">qwen3-coder:30b</span>
+  writes the change
+       ↓
+<span class="code-key">checks</span>     host · exact final files
+       ↓
+<span class="code-key">reviewer</span>   ollama · <span class="code-string">gpt-oss:120b</span>
+  read-only · fresh conversation
+  <span class="code-comment">or any eligible OpenRouter model</span></code></pre></div>
+        <div class="stack"><span class="eyebrow">Any model, per Agent</span><h2>Pick the model for the job.</h2><p>Each Agent template names its own provider and model. Native Sessions, with approved budgets, run local models through Ollama and hosted models through OpenRouter; Anthropic, OpenAI, Gemini and Mistral adapters remain on the compatibility path. A writer and its required reviewer can therefore use different models.</p>
+          <!-- measured: plain-loop 2026-10-01 -->
+          <p>In a pre-registered benchmark (6 Python tasks, 25 withheld tests, local qwen3-coder 30B writer, one run per task, temperature 0, measured in a plain agent loop), one pass passed 17 of 25 tests, and a fresh reviewer on the same model added nothing at 2.3× the tokens. A stronger local reviewer, gpt-oss 120B, raised it to 20 of 25 at 3.3× the tokens, with 9 real defects found and 2 false alarms.</p>
+          <!-- /measured -->
+          <p><a href="/#measured">What we measured →</a> · <a href="https://docs.axocoatl.ai/configure/cross-model-review/">Set up cross-model review →</a></p></div>
+      </div>
+    </section>
 
     <section class="container section section-rule" id="workspace-sessions-turns">
       <div class="split">
@@ -24,6 +49,7 @@
         src="/assets/films/v1.1.0/workspace-sessions-turns.mp4"
         poster="/assets/films/v1.1.0/workspace-sessions-turns.jpg"
         label="An Axocoatl Workspace with two Sessions and a completed Turn restored after switching Sessions"
+        pending="omit"
         caption="One authorized Workspace groups durable Sessions. Switching away and back restores the selected Session and its accepted Turn."
       ></ax-product-film>
     </section>
@@ -47,6 +73,7 @@
         src="/assets/films/v1.1.0/durable-turn.mp4"
         poster="/assets/films/v1.1.0/durable-turn.jpg"
         label="An active Axocoatl Session turn reconnecting after reload and ending in History"
+        pending="omit"
         caption="Reloading reconnects to the exact active turn. Stop preserves an honest cancelled state in History."
       ></ax-product-film>
     </section>
@@ -64,16 +91,17 @@
         src="/assets/films/v1.1.0/sandbox-terminal-preview.mp4"
         poster="/assets/films/v1.1.0/sandbox-terminal-preview.jpg"
         label="An Axocoatl Session Terminal identifying its container and workspace before opening the running application in Preview"
+        pending="omit"
         caption="The Terminal runs the repository check inside the Session's local Podman sandbox. Preview opens the application served from that checkout through its explicitly published port."
       ></ax-product-film>
     </section>
 
     <section class="container section section-rule" id="execution-shapes">
-      <div class="section-head"><span class="eyebrow">Execution shapes</span><h2>Use the structure the work needs.</h2><p>New configurations start with a lead and two read-only helpers. One Agent on its own is the simplest shape; it works through the repository inside the Session sandbox. <a href="/showcase/#single-agent">Watch ordinary repository work →</a></p></div>
+      <div class="section-head"><span class="eyebrow">Execution shapes</span><h2>Use the structure the work needs.</h2><p>New configurations start with a lead and two read-only helpers. One Agent on its own is the simplest shape; it works through the repository inside the Session sandbox. <a href="/showcase/#single-agent">See ordinary repository work →</a></p></div>
       <div class="grid-3">
         <article class="card"><span class="card-kicker">Default</span><h3>Lead and helpers</h3><p>The lead edits files and delegates read-only questions or a review to helpers. Each helper starts in an empty conversation, its limits are reserved from the lead's grant, and its answer returns to the lead. <a href="https://docs.axocoatl.ai/understand/coordination/#default-team">Read about the default team →</a></p></article>
-        <article class="card"><span class="card-kicker">Ordered team</span><h3>Dependency order</h3><p>Exact named dependencies activate each configured role. Agents receive only the handoffs that caused them to run, and the causal graph stays with the Session turn. <a href="/showcase/#multi-agent">Watch the handoff →</a></p></article>
-        <article class="card"><span class="card-kicker">Decision mode</span><h3>Ways</h3><p>Independent attempts start from the same task and repository state, then run in separate working copies and sandboxes. <a href="/showcase/#ways">Watch the comparison →</a></p></article>
+        <article class="card"><span class="card-kicker">Ordered team</span><h3>Dependency order</h3><p>Exact named dependencies activate each configured role. Agents receive only the handoffs that caused them to run, and the causal graph stays with the Session turn.</p></article>
+        <article class="card"><span class="card-kicker">Decision mode</span><h3>Ways</h3><p>Independent attempts start from the same task and repository state, then run in separate working copies and sandboxes. <a href="/showcase/#ways">See the comparison →</a></p></article>
       </div>
       <div class="callout"><p><strong>The structures are different.</strong> A lead delegates read-only tasks to helpers inside one recorded turn. A dependency-ordered team runs configured roles in order and keeps their handoffs. Ways isolate competing implementations. The event feed carries the events Skills publish. An Automation graph executes durable work outside the canonical Session transcript.</p></div>
     </section>
@@ -90,7 +118,7 @@
        ↓
 <span class="code-key">complete</span> on the exact final tree
   <span class="code-comment">otherwise: needs attention</span></code></pre></div>
-        <div class="stack"><span class="eyebrow">Completion conditions</span><h2>The host decides when a turn is done.</h2><p>Required checks are commands Axocoatl runs in the Session's repository after the Agents finish, each between two captures of the repository. A required review runs a read-only reviewer in a fresh conversation, for 1 to 3 rounds; requested changes go back to the lead. The turn completes only when every check passes and the reviewer approves the exact final tree. Both are off until you add them in Team &amp; budget.</p><p>Each Agent's <code>writes</code> list names the paths it may change. Read-only helpers get no file-writing tools, and their shell runs under a Linux Landlock write restriction where Linux 6.2 or later allows it; otherwise they get no shell. A path-scoped writer's file tools refuse other paths, and every change it made is checked after it finishes. For a writer with a shell, that check is review evidence, not confinement.</p><p>Every Agent runs under a grant with the limits you approved. Each provider and tool call is reserved against it before it runs, and the Session records the decision.</p></div>
+        <div class="stack"><span class="eyebrow">A complete record</span><h2>The host decides when a turn is done.</h2><p>Required checks are commands Axocoatl runs in the Session's repository after the Agents finish, each between two captures of the repository. A required review runs a read-only reviewer in a fresh conversation, for 1 to 3 rounds; requested changes go back to the lead. The turn completes only when every check passes and the reviewer approves the exact final tree. Both are off until you add them in Team &amp; budget.</p><p>Each Agent's <code>writes</code> list names the paths it may change. Read-only helpers get no file-writing tools, and their shell runs under a Linux Landlock write restriction where Linux 6.2 or later allows it; otherwise they get no shell. A path-scoped writer's file tools refuse other paths, and every change it made is checked after it finishes. For a writer with a shell, that check is review evidence, not confinement.</p><p>Every Agent runs under a grant with the limits you approved. Each provider and tool call is reserved against it before it runs; once the provider reports what a call used, only that stays charged. Grants and budgets carry across restarts. The Session durably records every model call, tool call, budget decision and check.</p></div>
       </div>
     </section>
 
@@ -117,6 +145,7 @@
         src="/assets/films/v1.1.0/settings-runtime.mp4"
         poster="/assets/films/v1.1.0/settings-runtime.jpg"
         label="Axocoatl Settings for Agents, Skills, MCP servers, and Automations"
+        pending="omit"
         caption="Runtime configuration stays in Settings instead of becoming another work surface."
       ></ax-product-film>
     </section>
@@ -131,6 +160,7 @@
         src="/assets/films/v1.1.0/event-lattice-automation.mp4"
         poster="/assets/films/v1.1.0/event-lattice-automation.jpg"
         label="An Axocoatl Skill publishing a typed event that starts a durable Automation"
+        pending="omit"
         caption="Firing Release candidate ready publishes ReleaseCandidateReady; an On event trigger for that event starts release-gate review."
       ></ax-product-film>
     </section>
@@ -152,6 +182,7 @@
         src="/assets/films/v1.1.0/mcp-approval.mp4"
         poster="/assets/films/v1.1.0/mcp-approval.jpg"
         label="An Axocoatl compatibility Session Agent requesting approval before calling a local MCP tool"
+        pending="omit"
         caption="The compatibility Session pauses before get_weather, then retains the returned value and final answer in History."
       ></ax-product-film>
     </section>
@@ -179,6 +210,7 @@
         src="/assets/films/v1.1.0/workspace-knowledge.mp4"
         poster="/assets/films/v1.1.0/workspace-knowledge.jpg"
         label="Source-linked workspace knowledge, backlinks, and exact revision retrieval in a separate Axocoatl Session after restart"
+        pending="omit"
         caption="A saved decision retains its source and backlinks. After restart, a separate native Session retrieves the accepted note revision."
       ></ax-product-film>
     </section>

@@ -6,7 +6,7 @@ page, doc, or post conflicts with current product fact, fix the fact source and 
 file together. The goal is consistency that compounds: every page reinforces every
 other page, and a year from now we still sound like ourselves.
 
-Last updated: 2026-09-30.
+Last updated: 2026-10-01.
 
 ---
 
@@ -32,24 +32,41 @@ the copy is wrong.
 
 ## 2 · Positioning statement
 
-> Axocoatl is an open-source, local-first harness for coding agents. A lead Agent
-> writes; read-only helpers answer its questions and review its work; the host can
-> require checks and review before a turn completes. Every activation, tool call
-> and budget decision is recorded in one durable Session, with the repository,
-> terminal, preview and Git around it.
+> Axocoatl is the harness you can trust to run coding agents on your own machine or
+> infrastructure: isolation built in, a complete record of every step, any model,
+> local or hosted.
 
-Three pillars. Every page should reinforce one or more:
+The trust is earned by mechanisms we can name, never by adjectives. Three pillars;
+every page should reinforce one or more, each with its concrete facts:
 
-1. **A lead and read-only helpers.** The lead owns the change. Helpers start in an
-   empty conversation, answer one task, and cannot change files. Several can run at
-   once; the benefit is a clean lead context, not speed.
-2. **The host decides, and records.** Required checks, required review, write scopes,
-   grants and budgets are applied by Axocoatl, not requested of the model. Every
-   activation, tool call and budget decision is retained in the Session. Several
-   Ways are an optional decision mode inside this surface, not the product category.
-3. **Yours and local-first.** One executable on your machine, local models through
-   Ollama, hosted models through OpenRouter. Bring Agents, Skills, MCP servers, and
-   Automations. No Axocoatl telemetry; integration and network paths are explicit.
+1. **Isolation built in.** Every Session's tools run in a rootless Podman container
+   (E2B Cloud is an explicit remote option on the compatibility path). Read-only
+   helpers cannot write: they get no file-writing tools and the kernel blocks their
+   shell (Landlock, Linux 6.2 or later); otherwise they get no shell. Per-Agent write
+   scopes share one checkout, and every change is checked against complete,
+   digest-verified snapshots. Network access is on by default.
+2. **A complete record.** Required checks run by the host on the exact final files;
+   a required review the host runs; budgets a person approves, charged with what each
+   call actually used and carried across restarts; a durable record of every model
+   call, tool call, budget decision and check in the Session.
+3. **Any model, per Agent.** Each Agent has its own provider and model: local models
+   through Ollama, hosted models through OpenRouter, with Anthropic, OpenAI, Gemini and
+   Mistral adapters on the compatibility path. A local writer can be reviewed by a
+   stronger model. One executable on your machine; no Axocoatl account or telemetry.
+
+The lead and its read-only helpers, the Session workbench and several Ways are how the
+product is used, not the category. The default is one Agent; helpers are opt-in.
+
+### Claims come only from measured results
+
+A performance or quality claim needs a measured result behind it, stated with its
+setup and limits (tasks, model, runs, temperature). Our current numbers come from a
+pre-registered benchmark run in a plain agent loop; each public surface states them
+once, between `<!-- measured: … -->` and `<!-- /measured -->` (`{/* measured: … */}`
+in MDX), so they can be replaced in one edit when the Axocoatl run lands. The lesson
+we may draw: extra tokens helped when they bought a stronger model's judgment, not
+more looks from the same model. Do not generalize beyond that, do not claim speed,
+and do not claim the default team beats a single Agent.
 
 ### Claims we do not make
 
@@ -64,11 +81,12 @@ Three pillars. Every page should reinforce one or more:
   cost extra tokens and that one Agent is the cheaper choice for small tasks.
 - **No speed claims for helpers.** Helpers share one checkout, so their tool
   processes queue, and a local model server limits how many model calls run at once.
-- **Isolation is not the headline.** Say what runs where: "Tools run in a rootless
-  Podman container. Network access is on by default; set `network: none` for
-  repositories you don't trust." Do not call Axocoatl or its sandbox "secure",
-  "safe" or "hardened", and do not claim egress control, credential isolation or
-  zero trust.
+- **No superlatives about isolation.** Isolation is a pillar, stated as mechanisms:
+  "Tools run in a rootless Podman container. Network access is on by default; set
+  `network: none` for repositories you don't trust." Never call Axocoatl or its
+  sandbox the strongest, best, "secure", "safe" or "hardened", and do not claim egress
+  control, credential isolation or zero trust. Sandbox runtimes that control network
+  and credentials more strictly exist, and Axocoatl does not integrate with them.
 - **Write scopes, stated narrowly.** Read-only helpers get no file-writing tools, and
   their shell runs under Landlock where Linux 6.2 or later allows it; otherwise they
   get no shell. A path-scoped writer's file tools refuse other paths, and every change
@@ -310,6 +328,11 @@ exact unless it was compared to the current app in the same change.
 A homepage hero must show the current workbench rather than lead with Ways, the
 Agent graph, or another subsystem. Diagrams in code panes may explain the lead,
 helpers, checks and review, but they do not substitute for showing the workbench.
+
+While `demo/one-app/films/PENDING` declares the current version's films pending, the
+site ships without them: each placement becomes a static note naming what the film
+will show, or is omitted. Never substitute an older version's recording or a mock for
+a pending film.
 
 ## 10 · Comparison frame
 

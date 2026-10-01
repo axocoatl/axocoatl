@@ -1,9 +1,10 @@
 # Axocoatl marketing site
 
 Vanilla HTML, Web Components, and CSS. The public site tells one product story:
-an open-source, local-first harness for coding agents, where a lead writes, read-only
-helpers answer and review, and opt-in required checks and review decide when a turn
-is done, all inside one durable folder-anchored Session. Conversation, context, files,
+the harness you can trust to run coding agents on your own machine or infrastructure,
+with isolation built in, a complete record of every step, and any model, local or
+hosted. A lead writes, read-only helpers answer and review, and opt-in required checks
+and review decide when a turn is done, all inside one durable folder-anchored Session. Conversation, context, files,
 terminal, Preview, tools, history, and Git are the core work surface. Settings owns Agents, Skills, MCP servers, and Automations and
 shows each Agent's provider/model assignment. Normal onboarding writes one owner-only
 configuration for the current OS user; explicit project-local YAML remains an advanced
@@ -28,10 +29,10 @@ and reduced-motion states.
 
 | Path | Purpose |
 |---|---|
-| `/` | Harness positioning: lead and helpers, required checks and review, and the Session workbench |
-| `/concepts` | Workspace, Session, Turn, sandboxed work surface, execution shapes, completion conditions and write scopes, Settings, workspace knowledge, events, compatibility MCP approval, optional Ways, and runtime boundaries |
+| `/` | Positioning: isolation built in, a complete record, any model per Agent; what we measured; cross-model review with an optional demo video |
+| `/concepts` | What the host enforces and where it stops (isolation, any model per Agent, a short measured summary), then Workspace, Session, Turn, sandboxed work surface, execution shapes, completion conditions and write scopes, Settings, workspace knowledge, events, compatibility MCP approval, optional Ways, and runtime boundaries |
 | `/why` | Why agent work needs a durable workspace |
-| `/showcase` | Complete grouped directory of twelve product-film concepts, with the ordinary Session loop first and an evidence contract for each film |
+| `/showcase` | Complete directory of the twelve product films, grouped by what each proves (the record, isolation, model choice, the runtime), with an evidence contract for each film |
 | `/install` | Supported installation paths and first run |
 | `/pricing` | License and user-owned infrastructure costs |
 | `/integrations/openrouter` | OpenRouter provider setup |
@@ -80,8 +81,9 @@ visitor question.
 The normal single-Agent Session remains the homepage proof, followed by Turn durability
 before optional Ways. Why pairs its Session and Git-control claims with visible evidence.
 Concepts explains the workbench and runtime mechanisms in depth. Showcase is the complete
-grouped directory: the Session loop first, execution choices second, and supporting runtime
-proof last. It embeds each of the twelve film slugs exactly once in the portfolio's declared
+directory, grouped by what each film proves: the record first, isolation second, model and
+approach choices third, and the runtime underneath last. Measured numbers appear once per
+page, between `<!-- measured: … -->` and `<!-- /measured -->`. It embeds each of the twelve film slugs exactly once in the portfolio's declared
 order. Source GIFs, old workbench mocks, and the private brand reference stay in the
 repository but do not ship to the public site.
 
