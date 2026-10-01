@@ -1002,6 +1002,81 @@ async fn actual_read_only_helper_shell_cannot_write_the_shared_home() {
     assert!(settled.accepted, "{:?}", settled.failure);
 }
 
+/// A read-only helper's shell cannot open a TCP connection, even to a live
+/// listener on loopback, nor bind a port to listen on: the kernel refuses both
+/// (EACCES). A writer's identical command, scoped or not, connects to the
+/// same listener, and its attempt to reach an outside address fails only
+/// because this sandbox has no network.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_read_only_helper_shell_cannot_use_tcp_but_a_writer_can() {
+    // nc proves a connection to the live listener; wget names why a
+    // connection to a closed port or an outside address failed.
+    let command = "ok=no; for attempt in $(seq 1 50); do \
+          if echo from-agent | nc -w 2 127.0.0.1 4747; then ok=yes; break; fi; \
+          sleep 0.1; \
+        done; echo \"connect=$ok\"; \
+        wget -q -T 2 -O /dev/null http://127.0.0.1:4749/ 2>&1; \
+        wget -q -T 2 -O /dev/null http://1.1.1.1/ 2>&1; \
+        timeout 2 nc -l -p 4848 2>&1; true";
+    for writes in [Some(&[][..]), Some(&["lib/"][..]), None] {
+        let mut f = fixture().await;
+        let sandbox = actual_sandbox(&mut f).await;
+        git_init(f._workspace.path());
+        std::fs::write(f._workspace.path().join("existing.txt"), "original\n").unwrap();
+        // Outside the repository, so the listener changes nothing the
+        // activation's captures judge.
+        sandbox.spawn_background("while :; do nc -l -p 4747 >> /tmp/listener-received; done");
+        let r = match writes {
+            Some(writes) => run_scoped(&mut f, &["bash", "read_file"], writes),
+            None => run(&mut f, &["bash", "read_file"], true),
+        };
+        let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
+        let result = tokio::time::timeout(Duration::from_secs(120), async {
+            r.controller
+                .prepare_repository_activation(
+                    r.activation.clone(),
+                    r.resources(provider.clone()),
+                    r.resource.clone(),
+                )
+                .unwrap()
+                .run()
+                .await
+        })
+        .await;
+        let received = sandbox
+            .exec(&["cat", "/tmp/listener-received"], Duration::from_secs(10))
+            .await;
+        let idle = f.owner.execution_is_idle();
+        sandbox.stop_checked().await.unwrap();
+        let settled = result.unwrap().unwrap();
+        assert!(idle.unwrap());
+        assert!(settled.accepted, "{writes:?}: {:?}", settled.failure);
+        let received = received.unwrap().stdout;
+        if writes.is_some_and(<[&str]>::is_empty) {
+            assert!(provider.saw(1, "connect=no"));
+            assert!(provider.saw(1, "(127.0.0.1): Permission denied"));
+            assert!(provider.saw(1, "(1.1.1.1): Permission denied"));
+            assert!(provider.saw(1, "bind: Permission denied"));
+            assert!(!provider.saw(1, "Connection refused"));
+            assert!(!provider.saw(1, "Network unreachable"));
+            assert_eq!(received, "");
+        } else {
+            assert!(provider.saw(1, "connect=yes"), "{writes:?}");
+            assert!(
+                provider.saw(1, "(127.0.0.1): Connection refused"),
+                "{writes:?}"
+            );
+            assert!(
+                provider.saw(1, "(1.1.1.1): Network unreachable"),
+                "{writes:?}"
+            );
+            assert!(!provider.saw(1, "Permission denied"), "{writes:?}");
+            assert_eq!(received, "from-agent\n");
+        }
+    }
+}
+
 /// Configuration a scoped writer's shell writes in the shared home can
 /// neither hide its out-of-scope file from the host's After capture nor make
 /// that capture run a program.

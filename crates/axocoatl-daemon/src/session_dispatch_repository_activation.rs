@@ -770,15 +770,16 @@ impl InvocationScope {
     }
 }
 
-/// The kernel write restriction for one repository process. Only the Agent's
-/// own shell of a read-only activation runs under it: nothing beneath the
+/// The kernel restriction for one repository process. Only the Agent's own
+/// shell of a read-only activation runs under it: nothing beneath the
 /// repository can change, and neither can the Session's shared home
-/// directory, whose configuration later processes read. The host-authored
-/// file tools (`read_file`, `grep`, ...) keep their own fixed commands, and
-/// the host's repository captures and digest observations, though admitted as
-/// `bash`, are exempt so a read-only helper still yields its evidence. A
-/// supervisor that cannot apply the restriction refuses to launch that one
-/// process.
+/// directory, whose configuration later processes read, and the shell can
+/// neither connect nor bind a TCP socket, loopback included. The
+/// host-authored file tools (`read_file`, `grep`, ...) keep their own fixed
+/// commands, and the host's repository captures and digest observations,
+/// though admitted as `bash`, are exempt so a read-only helper still yields
+/// its evidence. A supervisor that cannot apply all of it refuses to launch
+/// that one process.
 fn process_write_restriction(
     read_only: bool,
     tool: &str,
@@ -789,8 +790,18 @@ fn process_write_restriction(
         axocoatl_exec::protocol::WriteRestriction {
             writable: vec!["/tmp".into(), "/var/tmp".into(), "/dev".into()],
             protected: vec![root.to_string_lossy().into_owned()],
+            deny_network: true,
         }
     })
+}
+
+/// Whether a supervisor refused to launch a restricted process because its
+/// kernel cannot apply the whole restriction. The read-only Agent then has no
+/// shell on this runtime, and its file tools still work.
+fn restriction_unavailable(request: &ExecRequest, outcome: &ProcessOutcome) -> bool {
+    matches!(outcome, ProcessOutcome::LaunchFailed { message }
+        if request.write_restriction.is_some()
+            && message.starts_with("write restriction unavailable"))
 }
 
 /// Runs `"$@"` with a fresh home directory of its own under `/tmp`, removed
@@ -881,15 +892,11 @@ fn observe_result(
         // A truncated success must never become EditFile's source bytes.
         return Err(isolation_error("repository command output is incomplete or exceeds its capture bound; partial bytes cannot become file input"));
     }
-    if let ProcessOutcome::LaunchFailed { message } = outcome {
-        if execution.request().write_restriction.is_some()
-            && message.starts_with("write restriction unavailable")
-        {
-            return Err(isolation_error(
-                "This Agent is read-only and this runtime cannot enforce it, so bash is \
-                 unavailable; use read_file, grep, glob or list_dir instead.",
-            ));
-        }
+    if restriction_unavailable(execution.request(), outcome) {
+        return Err(isolation_error(
+            "This Agent is read-only and this runtime cannot enforce it, so bash is \
+             unavailable; use read_file, grep, glob or list_dir instead.",
+        ));
     }
     let ProcessOutcome::Exited { code } = outcome else {
         return Err(isolation_error(format!(
@@ -1045,6 +1052,8 @@ mod write_scope_tests {
                 restriction.validate().unwrap();
                 assert_eq!(restriction.protected, vec!["/workspace/repo".to_owned()]);
                 assert!(restriction.writable.iter().any(|path| path == "/tmp"));
+                // Nor can the shell open or accept a TCP connection.
+                assert!(restriction.deny_network);
                 // The shared home directory is never writable to a helper.
                 assert_eq!(
                     restriction.effective_writable(Some("/home/agent")),
@@ -1052,6 +1061,59 @@ mod write_scope_tests {
                 );
             }
         }
+    }
+
+    /// A supervisor whose kernel cannot apply the whole restriction (Landlock
+    /// below ABI 3 for writes, below ABI 4 for TCP) refuses to launch the
+    /// shell, and the read-only Agent is told to use its file tools. Any
+    /// other launch failure, or one of an unrestricted process, stays one.
+    #[test]
+    fn an_unavailable_restriction_leaves_a_read_only_agent_without_a_shell() {
+        use super::restriction_unavailable;
+        use axocoatl_exec::protocol::{ExecRequest, ProcessOutcome, PROTOCOL_VERSION};
+        let restricted = ExecRequest {
+            protocol: PROTOCOL_VERSION,
+            invocation_id: "read-only:1".into(),
+            argv: vec!["sh".into(), "-c".into(), "curl example.com".into()],
+            stdin: None,
+            timeout_ms: 1000,
+            stdout_bytes: 16,
+            stderr_bytes: 16,
+            write_restriction: process_write_restriction(
+                true,
+                "bash",
+                false,
+                Path::new("/workspace/repo"),
+            ),
+        };
+        let unrestricted = ExecRequest {
+            write_restriction: None,
+            ..restricted.clone()
+        };
+        let refused = |message: &str| ProcessOutcome::LaunchFailed {
+            message: message.into(),
+        };
+        for kernel in [
+            "write restriction unavailable: Landlock ABI 2 cannot refuse truncating files; \
+             version 3 (Linux 6.2) or later is required",
+            "write restriction unavailable: Landlock ABI 3 cannot refuse TCP connections; \
+             version 4 (Linux 6.7) or later is required",
+            "write restriction unavailable: Landlock is not available: Function not implemented",
+        ] {
+            assert!(
+                restriction_unavailable(&restricted, &refused(kernel)),
+                "{kernel}"
+            );
+            assert!(!restriction_unavailable(&unrestricted, &refused(kernel)));
+        }
+        assert!(!restriction_unavailable(
+            &restricted,
+            &refused("No such file or directory (os error 2)")
+        ));
+        assert!(!restriction_unavailable(
+            &restricted,
+            &ProcessOutcome::Exited { code: 0 }
+        ));
     }
 
     /// A restricted shell runs with a fresh home directory under /tmp, never

@@ -803,8 +803,9 @@ fn bounded_error(message: String) -> String {
 }
 
 /// Kernel write restriction for a launched command tree (Landlock). Writes
-/// are refused everywhere except beneath the allowed roots; reading and
-/// execution stay unrestricted. Inherited by every descendant.
+/// are refused everywhere except beneath the allowed roots and, when the
+/// restriction denies the network, so is every TCP bind and connect; reading
+/// and execution stay unrestricted. Inherited by every descendant.
 mod landlock {
     use crate::protocol::WriteRestriction;
     use std::ffi::CString;
@@ -825,13 +826,18 @@ mod landlock {
     const MAKE_SYM: u64 = 1 << 12;
     const REFER: u64 = 1 << 13;
     const TRUNCATE: u64 = 1 << 14;
+    const NET_BIND_TCP: u64 = 1 << 0;
+    const NET_CONNECT_TCP: u64 = 1 << 1;
     const SYS_CREATE_RULESET: libc::c_long = 444;
     const SYS_ADD_RULE: libc::c_long = 445;
     const SYS_RESTRICT_SELF: libc::c_long = 446;
 
+    /// The ABI 4 layout. An older kernel accepts it while the network
+    /// field is zero, and a nonzero one is only sent from ABI 4 on.
     #[repr(C)]
     struct RulesetAttr {
         handled_access_fs: u64,
+        handled_access_net: u64,
     }
 
     #[repr(C, packed)]
@@ -861,34 +867,58 @@ mod landlock {
         format!("{what}: {}", io::Error::last_os_error())
     }
 
-    /// The write rights a ruleset handles on a kernel offering Landlock
-    /// `abi`. Before ABI 3 Landlock cannot refuse truncating an existing
-    /// file, which would let a read-only command empty any repository file,
-    /// so such a kernel offers no write restriction at all.
-    pub(super) fn handled_access(abi: i64) -> Result<u64, String> {
+    /// The rights a ruleset handles, each refused unless a rule allows it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) struct Handled {
+        fs: u64,
+        net: u64,
+    }
+
+    /// The rights a ruleset handles on a kernel offering Landlock `abi`.
+    /// Before ABI 3 Landlock cannot refuse truncating an existing file,
+    /// which would let a read-only command empty any repository file, so
+    /// such a kernel offers no write restriction at all. Before ABI 4
+    /// (Linux 6.7) it cannot refuse TCP, so a restriction that also denies
+    /// the network is unavailable there. TCP is handled with no allowed
+    /// port, so every bind and connect is refused.
+    pub(super) fn handled_access(abi: i64, deny_network: bool) -> Result<Handled, String> {
         if abi < 3 {
             return Err(format!(
                 "Landlock ABI {abi} cannot refuse truncating files; version 3 (Linux 6.2) or \
                  later is required"
             ));
         }
-        Ok(WRITE_FILE
-            | REMOVE_DIR
-            | REMOVE_FILE
-            | MAKE_CHAR
-            | MAKE_DIR
-            | MAKE_REG
-            | MAKE_SOCK
-            | MAKE_FIFO
-            | MAKE_BLOCK
-            | MAKE_SYM
-            | REFER
-            | TRUNCATE)
+        if deny_network && abi < 4 {
+            return Err(format!(
+                "Landlock ABI {abi} cannot refuse TCP connections; version 4 (Linux 6.7) or \
+                 later is required"
+            ));
+        }
+        Ok(Handled {
+            fs: WRITE_FILE
+                | REMOVE_DIR
+                | REMOVE_FILE
+                | MAKE_CHAR
+                | MAKE_DIR
+                | MAKE_REG
+                | MAKE_SOCK
+                | MAKE_FIFO
+                | MAKE_BLOCK
+                | MAKE_SYM
+                | REFER
+                | TRUNCATE,
+            net: if deny_network {
+                NET_BIND_TCP | NET_CONNECT_TCP
+            } else {
+                0
+            },
+        })
     }
 
     /// Create the ruleset in the supervisor. Fails when the kernel or the
     /// container's seccomp policy does not offer Landlock, or offers only a
-    /// version that cannot refuse every write.
+    /// version that cannot refuse every write or, when the restriction
+    /// denies the network, every TCP bind and connect.
     pub(super) fn prepare(restriction: &WriteRestriction) -> Result<Ruleset, String> {
         restriction.validate()?;
         // SAFETY: querying the ABI takes no attribute pointer.
@@ -903,9 +933,10 @@ mod landlock {
         if abi < 1 {
             return Err(last_error("Landlock is not available"));
         }
-        let handled = handled_access(abi)?;
+        let handled = handled_access(abi, restriction.deny_network)?;
         let attr = RulesetAttr {
-            handled_access_fs: handled,
+            handled_access_fs: handled.fs,
+            handled_access_net: handled.net,
         };
         // SAFETY: attr is a valid, correctly sized ruleset attribute.
         let fd = unsafe {
@@ -938,9 +969,9 @@ mod landlock {
                 && (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
             // A file accepts only file rights; a directory accepts all.
             let allowed = if is_dir {
-                handled
+                handled.fs
             } else {
-                handled & (WRITE_FILE | TRUNCATE)
+                handled.fs & (WRITE_FILE | TRUNCATE)
             };
             let rule = PathBeneathAttr {
                 allowed_access: allowed,
@@ -995,14 +1026,34 @@ mod landlock {
         #[test]
         fn a_kernel_that_cannot_refuse_truncation_offers_no_restriction() {
             for abi in [1, 2] {
-                let refused = handled_access(abi).unwrap_err();
-                assert!(refused.contains("truncating"), "{refused}");
+                for deny_network in [false, true] {
+                    let refused = handled_access(abi, deny_network).unwrap_err();
+                    assert!(refused.contains("truncating"), "{refused}");
+                }
             }
             for abi in [3, 4, 6] {
-                let handled = handled_access(abi).unwrap();
-                assert_eq!(handled & TRUNCATE, TRUNCATE);
-                assert_eq!(handled & REFER, REFER);
-                assert_eq!(handled & WRITE_FILE, WRITE_FILE);
+                let handled = handled_access(abi, false).unwrap();
+                assert_eq!(handled.fs & TRUNCATE, TRUNCATE);
+                assert_eq!(handled.fs & REFER, REFER);
+                assert_eq!(handled.fs & WRITE_FILE, WRITE_FILE);
+                assert_eq!(handled.net, 0);
+            }
+        }
+
+        /// A read-only shell's restriction denies the network. A kernel that
+        /// cannot refuse TCP offers no such restriction, so the command is
+        /// not launched; it never runs with only its writes restricted.
+        #[test]
+        fn a_kernel_that_cannot_refuse_tcp_offers_no_network_restriction() {
+            let refused = handled_access(3, true).unwrap_err();
+            assert!(refused.contains("TCP"), "{refused}");
+            assert!(refused.contains("Linux 6.7"), "{refused}");
+            for abi in [4, 5, 6, 7] {
+                let denied = handled_access(abi, true).unwrap();
+                assert_eq!(denied.net, NET_BIND_TCP | NET_CONNECT_TCP);
+                let open = handled_access(abi, false).unwrap();
+                assert_eq!(open.net, 0);
+                assert_eq!(denied.fs, open.fs);
             }
         }
     }
