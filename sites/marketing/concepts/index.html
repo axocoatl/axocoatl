@@ -32,8 +32,8 @@
   read-only · fresh conversation
   <span class="code-comment">or any eligible OpenRouter model</span></code></pre></div>
         <div class="stack"><span class="eyebrow">Any model, per Agent</span><h2>Pick the model for the job.</h2><p>Each Agent template names its own provider and model. Native Sessions, with approved budgets, run local models through Ollama and hosted models through OpenRouter; Anthropic, OpenAI, Gemini and Mistral adapters remain on the compatibility path. A writer and its required reviewer can therefore use different models.</p>
-          <!-- measured: plain-loop 2026-10-01 -->
-          <p>In a pre-registered benchmark (6 Python tasks, 25 withheld tests, local qwen3-coder 30B writer, one run per task, temperature 0, measured in a plain agent loop), one pass passed 17 of 25 tests, and a fresh reviewer on the same model added nothing at 2.3× the tokens. A stronger local reviewer, gpt-oss 120B, raised it to 20 of 25 at 3.3× the tokens, with 9 real defects found and 2 false alarms.</p>
+          <!-- measured: axocoatl-1.1.0 2026-10-01 -->
+          <p>In a pre-registered benchmark (6 Python tasks, 25 withheld tests, local qwen3-coder 30B writer, one run per task, temperature 0), one Axocoatl Agent passed 17 of 25 tests. With a Required review by a stronger local model, gpt-oss 120B, the same writer passed 19 of 25 at 2.6× the tokens; the reviewer reported 15 defects and 14 were real. More looks by the same model added nothing: a fresh same-model reviewer approved every change, including three with real defects.</p>
           <!-- /measured -->
           <p><a href="/#measured">What we measured →</a> · <a href="https://docs.axocoatl.ai/configure/cross-model-review/">Set up cross-model review →</a></p></div>
       </div>

@@ -57,23 +57,30 @@ Axocoatl adds no product telemetry and needs no Axocoatl account.
 
 ## What we measured
 
-<!-- measured: plain-loop 2026-10-01 -->
+<!-- measured: axocoatl-1.1.0 2026-10-01 -->
 A pre-registered benchmark: 6 Python maintenance tasks frozen on 2026-09-22, scored by
 25 withheld tests the agents never see. The writer is qwen3-coder 30B running locally;
 one run per task, temperature 0.
 
+**Through Axocoatl 1.1.0:**
+
 | Setup | Withheld tests passed | Tokens vs. one pass |
 | --- | --- | --- |
-| One pass | 17 / 25 | 1× |
-| The same Agent reviews its own work | 17 / 25 | 3.5× |
-| A fresh reviewer on the same model | 17 / 25 | 2.3× |
-| The same model writes its own tests | 18 / 25 | 9–15× |
-| A stronger reviewer (gpt-oss 120B, also local) | 20 / 25 | 3.3× |
+| One Agent, one pass | 17 / 25 | 1× |
+| The same writer with a Required review by a stronger local model (gpt-oss 120B) | **19 / 25** | 2.6× |
 
-The fresh same-model reviewer approved every change, including three with real
-defects. The stronger reviewer found 9 real defects and raised 2 false alarms, one of
-which made a task worse. These numbers come from a plain agent loop, not an Axocoatl
-Session; an Axocoatl run of the same benchmark is in progress.
+The reviewer reported 15 defects and 14 were real. The writer applied every finding it
+received, including the one false alarm, which cost a test; 6 real findings came in the
+second and last review round, after which Axocoatl stops revising.
+
+**Where extra tokens help** (same tasks, a plain agent loop without Axocoatl):
+
+| Setup | Withheld tests passed | Tokens vs. one pass |
+| --- | --- | --- |
+| The same Agent reviews its own work | 17 / 25 | 3.5× |
+| A fresh reviewer on the same model (it approved every change) | 17 / 25 | 2.3× |
+| The same model writes its own tests (4 of 6 tasks run) | one more test | 9–15× |
+| A stronger reviewer (gpt-oss 120B) | 20 / 25 | 3.3× |
 <!-- /measured -->
 
 Extra tokens helped when they bought a stronger model's judgment, not more looks

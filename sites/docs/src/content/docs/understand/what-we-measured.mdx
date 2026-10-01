@@ -20,20 +20,27 @@ once, with the setup and the limits, so you can judge how far they reach.
 
 ## Results
 
-{/* measured: plain-loop 2026-10-01 */}
+{/* measured: axocoatl-1.1.0 2026-10-01 */}
+
+**Through Axocoatl 1.1.0** (release build, native Sessions, tools in a rootless Podman sandbox, host-run checks):
 
 | Setup | Withheld tests passed | Tokens vs. one pass | What happened |
 | --- | --- | --- | --- |
-| One pass | 17 / 25 | 1× | The writer works once and stops. |
-| The same Agent reviews its own work | 17 / 25 | 3.5× | No change in the score. |
-| A fresh reviewer on the same model | 17 / 25 | 2.3× | It approved every change, including three with real defects. |
-| The same model writes its own tests | 18 / 25 | 9–15× | One more withheld test passed. |
-| A stronger reviewer (gpt-oss 120B, local) reviews the writer's change | 20 / 25 | 3.3× | It found 9 real defects and raised 2 false alarms; acting on one false alarm made a task worse. |
+| One Agent, one pass | 17 / 25 | 1× | The writer works once and stops. |
+| The same writer with a Required review by gpt-oss 120B (local), up to 2 rounds | **19 / 25** | 2.6× | 15 defects reported, 14 real. One task went from 1/4 to 4/4; the writer also applied the one false alarm, which cost a test on another. 6 real findings came in the last round, after which Axocoatl stops revising. |
 
-These numbers come from a plain agent loop, not from an Axocoatl Session. That loop has
-none of Axocoatl's context fitting, budgets, sandboxed tools or host-run checks, which
-could change both scores and token use. An Axocoatl run of the same benchmark is in
-progress; its results will replace these.
+**Where extra tokens help** (same tasks, a plain agent loop without Axocoatl):
+
+| Setup | Withheld tests passed | Tokens vs. one pass | What happened |
+| --- | --- | --- | --- |
+| One pass | 17 / 25 | 1× | |
+| The same Agent reviews its own work | 17 / 25 | 3.5× | Final files byte-identical to one pass. |
+| A fresh reviewer on the same model | 17 / 25 | 2.3× | It approved every change, including three with real defects. |
+| The same model writes its own tests (4 of 6 tasks run) | one more test | 9–15× | When its tests failed it often rewrote the tests, not the code. |
+| A stronger reviewer (gpt-oss 120B) | 20 / 25 | 3.3× | 9 real defects, 2 false alarms. |
+
+Axocoatl's token counts are higher than the plain loop's for the same work (a larger
+context is re-sent on every call), so compare tokens within a table, not across them.
 
 {/* /measured */}
 

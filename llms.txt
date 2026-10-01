@@ -42,15 +42,16 @@ that Git action.
 
 ## What we measured
 
-<!-- measured: plain-loop 2026-10-01 -->
+<!-- measured: axocoatl-1.1.0 2026-10-01 -->
 A pre-registered benchmark of 6 Python maintenance tasks (frozen 2026-09-22), scored
 by 25 withheld tests the agents never see; writer qwen3-coder 30B running locally,
-one run per task, temperature 0, in a plain agent loop rather than an Axocoatl Session.
-One pass passed 17/25. The same Agent reviewing its own work: 17/25 at 3.5x the
-tokens. A fresh reviewer on the same model: 17/25 at 2.3x, approving every change,
-including three with real defects. The same model writing its own tests: one more
-test (18/25) at 9-15x. A stronger local reviewer (gpt-oss 120B): 20/25 at 3.3x; it
-found 9 real defects and raised 2 false alarms, one of which made a task worse.
+one run per task, temperature 0. Through Axocoatl 1.1.0, one Agent passed 17/25; the
+same writer with a Required review by a stronger local model (gpt-oss 120B) passed
+19/25 at 2.6x the tokens. The reviewer reported 15 defects, 14 of them real; the writer
+applied the one false alarm too, which cost a test. In a plain agent loop on the same
+tasks, more looks by the same model added nothing: self-review 17/25 at 3.5x, a fresh
+same-model reviewer 17/25 at 2.3x (it approved every change), while the stronger
+reviewer reached 20/25 at 3.3x.
 <!-- /measured -->
 
 Extra tokens helped when they bought a stronger model's judgment, not more looks from

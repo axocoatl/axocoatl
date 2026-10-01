@@ -77,20 +77,19 @@
 
     <section class="container section section-rule" id="measured">
       <div class="section-head"><span class="eyebrow">What we measured</span><h2>Spend tokens on a stronger judge.</h2><p>Extra tokens helped when they bought a stronger model's judgment, not more looks from the same model. Axocoatl lets each Agent use its own model, so a local writer can be reviewed by a stronger one, while the host still runs your checks and records every step.</p></div>
-      <!-- measured: plain-loop 2026-10-01 -->
+      <!-- measured: axocoatl-1.1.0 2026-10-01 -->
       <div class="measured">
         <table>
           <caption class="sr-only">Withheld tests passed and tokens used for each setup</caption>
           <thead><tr><th scope="col">Setup · writer qwen3-coder 30B, local</th><th scope="col">Withheld tests passed</th><th scope="col">Tokens vs. one pass</th></tr></thead>
           <tbody>
-            <tr><td>One pass</td><td>17 / 25</td><td>1×</td></tr>
-            <tr><td>The same Agent reviews its own work</td><td>17 / 25</td><td>3.5×</td></tr>
-            <tr><td>A fresh reviewer on the same model; it approved every change, including three with real defects</td><td>17 / 25</td><td>2.3×</td></tr>
-            <tr><td>The same model writes its own tests</td><td>18 / 25</td><td>9–15×</td></tr>
-            <tr><td>A stronger reviewer, gpt-oss 120B, also local; 9 real defects found, 2 false alarms, one of which made a task worse</td><td>20 / 25</td><td>3.3×</td></tr>
+            <tr><td>Axocoatl 1.1.0: one Agent, one pass</td><td>17 / 25</td><td>1×</td></tr>
+            <tr><td>Axocoatl 1.1.0: the same writer with a Required review by a stronger local model, gpt-oss 120B; 15 defects reported, 14 real</td><td><strong>19 / 25</strong></td><td>2.6×</td></tr>
+            <tr><td>Plain loop: the same Agent reviews its own work</td><td>17 / 25</td><td>3.5×</td></tr>
+            <tr><td>Plain loop: a fresh reviewer on the same model; it approved every change, including three with real defects</td><td>17 / 25</td><td>2.3×</td></tr>
           </tbody>
         </table>
-        <p class="measured-note">Pre-registered: 6 Python maintenance tasks frozen on 2026-09-22, 25 withheld tests the agents never see, one run per task at temperature 0. Measured in a plain agent loop, not an Axocoatl Session; an Axocoatl run of the same benchmark is in progress.</p>
+        <p class="measured-note">Pre-registered: 6 Python maintenance tasks frozen on 2026-09-22, 25 withheld tests the agents never see, one run per task at temperature 0. The writer applied the reviewer's one false alarm too, which cost a test.</p>
       </div>
       <!-- /measured -->
       <p><a href="https://docs.axocoatl.ai/understand/what-we-measured/">The method, the full results, and their limits →</a></p>
@@ -123,7 +122,7 @@
       <!-- optional-demo: assets/demo/cross-model-review.mp4 assets/demo/cross-model-review.jpg -->
       <figure class="demo-video">
         <video controls playsinline preload="none" poster="/assets/demo/cross-model-review.jpg" src="/assets/demo/cross-model-review.mp4" aria-label="A local lead's change reviewed by a stronger model in an Axocoatl Session"></video>
-        <figcaption>A local lead writes the change; a stronger reviewer, required by the team, reads the exact result and asks for changes before the turn completes.</figcaption>
+        <figcaption>A real Axocoatl Session from the benchmark above, trimmed but not edited: a local writer makes the change, a Required review by gpt-oss 120B reads the exact result and asks for fixes, the writer fixes them, and the second review approves.</figcaption>
       </figure>
       <!-- /optional-demo -->
     </section>
