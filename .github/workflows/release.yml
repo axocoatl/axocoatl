@@ -1007,8 +1007,13 @@ jobs:
           # Reconcile the exact remote bytes only after every long registry
           # proof, then prove that neither the release nor its assets changed
           # while the release frontier was refreshed.
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" \
-            > before-publish-release.json
+          # GitHub's release-by-tag endpoint never returns drafts; find the
+          # one draft for this tag in the release list instead.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            | jq --slurp --exit-status --arg tag "$GITHUB_REF_NAME" '
+                [add[] | select(.tag_name == $tag and .draft == true)]
+                | if length == 1 then .[0] else error("expected exactly one draft for \($tag)") end
+              ' > before-publish-release.json
           jq --exit-status \
             --arg tag "$GITHUB_REF_NAME" --arg commit "$expected_commit" '
               .tag_name == $tag
