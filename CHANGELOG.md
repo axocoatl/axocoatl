@@ -5,6 +5,21 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-10-01
+
+### Added
+- **No TCP for read-only shells.** The `bash` commands of a read-only helper or required
+  reviewer (`writes: []`) can no longer open a TCP connection or bind a TCP port, on any
+  address including loopback, as well as being unable to change the repository. The
+  kernel refuses both through Landlock network rules, whatever the sandbox's `network`
+  setting. Landlock does not cover UDP, so name lookups and other UDP traffic still
+  follow `network`, nor a socket that listens on a random port without binding first.
+  This needs Landlock ABI 4 (Linux 6.7 or later). On an older
+  kernel, including Linux 6.2 to 6.6 where 1.1.0 restricted only writes, a read-only
+  Agent's `bash` commands do not run and its read-only file tools still work. Writers'
+  shells and Axocoatl's own repository captures are unchanged. Both embedded execution
+  supervisors are rebuilt from this source and re-pinned.
+
 ## [1.1.0] - 2026-09-30
 
 Axocoatl's founding thesis was stigmergy: Agents coordinating through signals left

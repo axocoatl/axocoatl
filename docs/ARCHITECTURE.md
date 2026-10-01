@@ -1221,20 +1221,28 @@ runs, and enforcement reads it from that admitted record, never from live config
 A scope that cannot be read refuses the write or process it was checking. A helper cannot
 be admitted with a wider scope than the lead that delegated to it, and `delegate` admits
 only a read-only helper: one whose template has no tool that writes files or runs
-commands, or whose scope is empty (`writes: []`), so its `bash` runs under the write
+commands, or whose scope is empty (`writes: []`), so its `bash` runs under the kernel
 restriction below and `write_file` and `edit_file` are withheld.
 
 - `write_file` and `edit_file` refuse paths outside the scope before any effect, refuse
   `..` and any path through a symbolic link, and tell the Agent to leave the file
   unchanged and describe the needed change in its answer.
-- A read-only Agent (`writes: []`) is not offered `write_file` or `edit_file`. Its own
-  `bash` commands run under a kernel write restriction (Landlock, applied by the
-  in-sandbox execution supervisor between fork and exec): only `/tmp`, `/var/tmp` and
-  `/dev` are writable, never the repository. `HOME` (and the XDG directories) point at a
-  scratch directory under `/tmp`, created for that command and removed when it ends, so
-  the Session's shared home stays unchanged. A supervisor that cannot
-  apply it refuses to launch that command. The read-only file tools and the host's own
-  repository captures run without the restriction.
+- A read-only Agent (`writes: []`), including a required reviewer with `bash`, is not
+  offered `write_file` or `edit_file`. Its own `bash` commands run under a kernel
+  restriction (Landlock, applied by the in-sandbox execution supervisor between fork and
+  exec): only `/tmp`, `/var/tmp` and `/dev` are writable, never the repository, and every
+  TCP bind and connect is refused on any address, loopback included (Landlock network
+  rules with no allowed port). Landlock does not cover UDP, or `listen` on an unbound
+  socket, which the kernel binds to an ephemeral port itself. The execution request names
+  this as `WriteRestriction.deny_network`, a protocol 3 field omitted while false, so
+  earlier requests keep their bytes and digest and an earlier supervisor rejects it
+  rather than ignore it. `HOME` (and the XDG directories) point at a scratch directory
+  under `/tmp`, created for that command and removed when it ends, so the Session's
+  shared home stays unchanged. A supervisor that cannot apply all of it (Landlock below
+  ABI 3, Linux 6.2, cannot refuse truncation; below ABI 4, Linux 6.7, cannot refuse TCP)
+  refuses to launch that command, and the Agent is told to use its read-only file tools
+  instead. The read-only file tools and the host's own repository captures run without
+  the restriction.
 - A writer's shell can still write outside its paths, so the activation's own Before and
   After repository captures decide: an equal tree digest means no change; otherwise
   complete manifests are compared exactly, or the retained patches against the same HEAD
@@ -1311,6 +1319,6 @@ Report security issues per [SECURITY.md](../SECURITY.md).
 (providers) · `axocoatl-config` · `axocoatl-actor` (runtime) ·
 `axocoatl-memory` · `axocoatl-graph` · `axocoatl-mcp` · `axocoatl-a2a` · `axocoatl-tools` ·
 `axocoatl-isolation` (Podman and E2B sandboxes) · `axocoatl-exec` (in-sandbox
-command supervisor; applies the Landlock write restriction) · `axocoatl-session`
+command supervisor; applies the Landlock write and TCP restriction) · `axocoatl-session`
 (durable Workspace, Session and turn storage) · `axocoatl-daemon` ·
 `axocoatl-server` · `axocoatl-service` (systemd / launchd) · `axocoatl-cli`.

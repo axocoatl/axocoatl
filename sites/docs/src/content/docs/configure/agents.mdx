@@ -197,10 +197,13 @@ In a native Session:
   is review evidence rather than confinement. Give an Agent that must stay within its
   paths the file tools without `bash`.
 - With `writes: []` the Agent is not offered `write_file` or `edit_file`. Its own `bash`
-  commands run under a Linux Landlock write restriction (Landlock ABI 3, Linux 6.2 or
-  later), so they cannot change the repository, and each command gets a fresh home
-  directory instead of the Session's. Where the runtime cannot apply that restriction,
-  its `bash` commands do not run and the read-only file tools still work.
+  commands run under a Linux Landlock restriction (Landlock ABI 4, Linux 6.7 or later):
+  they cannot change the repository, open a TCP connection or bind a TCP port, loopback
+  included. Each command gets a fresh home directory instead of the Session's. Landlock
+  does not cover UDP, so name lookups and other UDP traffic still follow the sandbox's
+  `network` setting; see [Security](/operate/security/) for what else it leaves open. Where the runtime cannot apply the whole
+  restriction, such as on Linux before 6.7, its `bash` commands do not run and the
+  read-only file tools still work.
 
 **Team & budget** offers the same choice for each Agent under **May change**: Any file,
 Only these paths, or Nothing – read-only helper. The review lists what each approved
