@@ -11,8 +11,8 @@ around it.
 - Isolation built in: every Session's tools run in a rootless Podman container
   (E2B Cloud is an explicit remote option on the compatibility path). Read-only
   helpers cannot write: they get no file-writing tools and the kernel blocks their
-  shell from changing the repository (Landlock, Linux 6.2 or later); otherwise they
-  get no shell. Per-Agent write scopes share one checkout, and every change is
+  shell from changing the repository or opening TCP connections (Landlock, Linux
+  6.7 or later); otherwise they get no shell. Per-Agent write scopes share one checkout, and every change is
   checked against complete, digest-verified snapshots taken before and after the
   Agent's work. For an Agent with a shell that check is review evidence, not
   confinement. Container network access is on by default.
@@ -132,8 +132,8 @@ events, Automations, and sandbox lifecycle.
 - Lead and helpers: in a native Session, an Agent approved to delegate hands a
   self-contained task to a read-only helper template and waits for its answer.
   The helper's limits are reserved from the lead's grant. Read-only helpers get no
-  file-writing tools; their shell runs under a Linux Landlock write restriction
-  where Linux 6.2 or later allows it, and otherwise they get no shell.
+  file-writing tools; their shell runs under Linux Landlock with no repository
+  writes and no TCP where Linux 6.7 or later allows it, and otherwise they get no shell.
 - Write scopes: an Agent limited to some paths has file tools that refuse other
   paths, and its changes are checked after it finishes. For an Agent with a shell,
   that check is review evidence, not confinement.

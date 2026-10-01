@@ -27,7 +27,7 @@ turn completes, are opt-in.
   <Card title="Isolation built in" icon="padlock">
     Every Session's tools run in a rootless Podman container. Read-only helpers get no
     file-writing tools, and the kernel blocks their shell from changing the repository
-    (Landlock, Linux 6.2 or later); otherwise they get no shell. Per-Agent write scopes
+    or opening TCP connections (Landlock, Linux 6.7 or later); otherwise they get no shell. Per-Agent write scopes
     share one checkout, and every change is checked against complete, digest-verified
     snapshots. [Where the boundary stops →](/operate/security/#what-axocoatl-controls-and-what-it-does-not)
   </Card>

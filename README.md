@@ -24,9 +24,9 @@ runs before a turn completes, are opt-in.
   machine by default; E2B Cloud is an explicit remote option on the compatibility
   path. Network access is on by default; set `sandbox.network: none` for
   repositories you don't trust.
-- **Read-only helpers cannot write.** They get no file-writing tools, and the
-  kernel blocks their shell from changing the repository (Landlock, Linux 6.2 or
-  later). Where Landlock is unavailable they get no shell.
+- **Read-only helpers cannot write or connect out.** They get no file-writing
+  tools, and the kernel blocks their shell from changing the repository or opening
+  TCP connections (Landlock, Linux 6.7 or later). Otherwise they get no shell.
 - **Per-Agent write scopes in one checkout.** An Agent's file tools refuse paths
   outside its scope, and every change it made is checked against complete,
   digest-verified snapshots of the repository from before and after its work. For

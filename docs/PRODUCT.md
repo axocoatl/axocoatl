@@ -314,7 +314,7 @@ The one app does not replace Axocoatl's runtime strengths. It makes them legible
 - Required checks and required review are completion conditions the host evaluates on
   the exact final tree; the lead cannot skip or answer them.
 - Write scopes bound which paths an Agent's file tools may change. Read-only helpers run
-  their shell under a Linux Landlock write restriction where available and otherwise get
+  their shell under Linux Landlock (no repository writes, no TCP) on Linux 6.7+ and otherwise get
   no shell; a path-scoped writer's changes are checked after it finishes.
 - The process-wide event feed carries the events Skills publish to triggers, webhooks,
   and retained API/WebSocket observers.

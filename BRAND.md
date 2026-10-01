@@ -42,7 +42,8 @@ every page should reinforce one or more, each with its concrete facts:
 1. **Isolation built in.** Every Session's tools run in a rootless Podman container
    (E2B Cloud is an explicit remote option on the compatibility path). Read-only
    helpers cannot write: they get no file-writing tools and the kernel blocks their
-   shell (Landlock, Linux 6.2 or later); otherwise they get no shell. Per-Agent write
+   shell from writing or opening TCP connections (Landlock, Linux 6.7 or later);
+   otherwise they get no shell. Per-Agent write
    scopes share one checkout, and every change is checked against complete,
    digest-verified snapshots. Network access is on by default.
 2. **A complete record.** Required checks run by the host on the exact final files;
@@ -88,7 +89,7 @@ and do not claim the default team beats a single Agent.
   control, credential isolation or zero trust. Sandbox runtimes that control network
   and credentials more strictly exist, and Axocoatl does not integrate with them.
 - **Write scopes, stated narrowly.** Read-only helpers get no file-writing tools, and
-  their shell runs under Landlock where Linux 6.2 or later allows it; otherwise they
+  their shell runs under Landlock (no repository writes, no TCP) where Linux 6.7 or later allows it; otherwise they
   get no shell. A path-scoped writer's file tools refuse other paths, and every change
   it made is checked after it finishes. For a writer with a shell, that check is
   review evidence, not confinement.
