@@ -132,6 +132,31 @@ ax-product-film.product-film-hero { margin-top: var(--s-5); }
 .product-film-breakout { padding-bottom: var(--s-9); }
 .product-film-breakout ax-product-film { margin-top: 0; }
 
+/* A film whose recording is pending: a static note, no media and no link. */
+.film-pending {
+  display: grid; gap: var(--s-2); width: min(100%, 1080px); margin: var(--s-7) auto 0;
+  padding: var(--s-5); border: 1px dashed var(--border-strong); border-radius: var(--radius);
+  background: var(--panel); text-align: left;
+}
+.film-pending-kicker { color: var(--muted); font-family: var(--font-mono); font-size: var(--t-13); }
+.film-pending-title { max-width: none; color: var(--fg); font-family: var(--font-display); font-weight: 600; }
+.film-pending-caption { max-width: none; color: var(--muted); font-size: var(--t-14); }
+.film-pending-title + .film-pending-caption { margin-top: 0; }
+
+/* An optional demo video; the build renders it only when its files exist. */
+.demo-video { display: grid; gap: var(--s-3); width: min(100%, 1080px); margin: var(--s-7) auto 0; }
+.demo-video video {
+  display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+  background: #060807; box-shadow: var(--shadow-2);
+}
+.demo-video figcaption { color: var(--muted); font-size: var(--t-13); line-height: 1.55; }
+
+.measured { overflow-x: auto; }
+.measured table { min-width: 560px; }
+.measured td:nth-child(2), .measured td:nth-child(3), .measured th:nth-child(2), .measured th:nth-child(3) { white-space: nowrap; }
+.measured-note { margin-top: var(--s-4); color: var(--muted); font-size: var(--t-13); }
+
 .btn {
   display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: var(--s-2);
   padding: 10px 17px; border: 1px solid transparent; border-radius: var(--radius-sm);

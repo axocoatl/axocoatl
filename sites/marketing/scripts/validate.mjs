@@ -2,21 +2,29 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { filmMode, pendingPath, resolveOptionalDemos } from './site-mode.mjs';
 
 const sourceRoot = resolve(import.meta.dirname, '..');
 const repositoryRoot = resolve(sourceRoot, '../..');
 const portfolioPath = resolve(repositoryRoot, 'demo/one-app/films/portfolio.json');
 const arguments_ = process.argv.slice(2);
 const strictFilms = arguments_.includes('--strict-films');
+const releaseBound = arguments_.includes('--release-bound');
 const positionalArguments = arguments_.filter((argument) => !argument.startsWith('--'));
-const unknownFlags = arguments_.filter((argument) => argument.startsWith('--') && argument !== '--strict-films');
+const unknownFlags = arguments_.filter((argument) => argument.startsWith('--') && !['--strict-films', '--release-bound'].includes(argument));
 
 if (unknownFlags.length || positionalArguments.length > 1) {
-  console.error('Usage: node sites/marketing/scripts/validate.mjs [marketing-root] [--strict-films]');
+  console.error('Usage: node sites/marketing/scripts/validate.mjs [marketing-root] [--strict-films] [--release-bound]');
   process.exit(64);
 }
 
 const root = resolve(positionalArguments[0] || sourceRoot);
+const builtRoot = root !== sourceRoot;
+// While demo/one-app/films/PENDING names the CLI version, the films are not
+// recorded: every non-film rule still applies, film media, provenance and asset
+// rules are skipped and reported, and a built site must contain no film at all.
+const { version: productVersion, pending: filmsPending } = filmMode(repositoryRoot);
+const skippedFilmRules = [];
 const pages = [
   'index.html', '404.html', 'changelog/index.html', 'concepts/index.html',
   'install/index.html', 'integrations/openrouter/index.html', 'pricing/index.html',
@@ -27,7 +35,7 @@ const scripts = [
   'components/ax-theme-toggle.js', 'components/ax-cli-snippet.js',
   'components/ax-comparison-row.js', 'components/ax-product-film.js',
 ];
-if (root === sourceRoot) scripts.push('scripts/build.mjs', 'scripts/validate.mjs');
+if (root === sourceRoot) scripts.push('scripts/build.mjs', 'scripts/validate.mjs', 'scripts/site-mode.mjs');
 
 const errors = [];
 const warnings = [];
@@ -51,6 +59,10 @@ function isRecord(value) { return value !== null && typeof value === 'object' &&
 function isNonEmptyString(value) { return typeof value === 'string' && value.trim().length > 0; }
 function isSha256(value) { return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value); }
 function isGitHead(value) { return typeof value === 'string' && /^[a-f0-9]{40}$/.test(value); }
+if (filmsPending && strictFilms) {
+  console.error(`Marketing validation failed (1)\n- film portfolio: films for ${productVersion} are pending (${pendingPath}); strict film validation needs the recordings`);
+  process.exit(1);
+}
 // Retired positioning. The changelog keeps its history; every other public
 // surface checked here must not use these terms.
 const retiredPositioning = [
@@ -392,7 +404,12 @@ if (filmBySlug.size !== 12) fail('demo/one-app/films/portfolio.json', `expected 
 if (mediaPaths.size !== 24) fail('demo/one-app/films/portfolio.json', `expected 24 unique media paths, found ${mediaPaths.size}`);
 
 const filmAssetDirectory = join(root, 'assets/films', recordingPrefix);
-if (!existsSync(filmAssetDirectory)) {
+if (filmsPending) {
+  skippedFilmRules.push('film asset directory');
+  if (builtRoot && existsSync(join(root, 'assets/films'))) {
+    fail('assets/films', `films for ${productVersion} are pending; a pending build must ship no film media or portfolio`);
+  }
+} else if (!existsSync(filmAssetDirectory)) {
   fail('assets/films', 'missing film asset directory');
 } else {
   const shippedMedia = readdirSync(filmAssetDirectory)
@@ -425,7 +442,7 @@ if (showcasePlacements.length !== 12 || new Set(showcasePlacements.map((placemen
   fail('showcase/index.html', 'the authoritative portfolio must place every one of the 12 films on Showcase exactly once');
 }
 
-if (root !== sourceRoot) {
+if (builtRoot && !filmsPending) {
   const builtPortfolioPath = join(root, 'assets/films/portfolio.json');
   const builtPortfolio = readRequired(builtPortfolioPath, 'assets/films/portfolio.json');
   const authoritativePortfolio = readRequired(portfolioPath, 'demo/one-app/films/portfolio.json');
@@ -434,10 +451,27 @@ if (root !== sourceRoot) {
   }
 }
 
+const declaredFilmMedia = new Set(films.filter(isRecord).flatMap((film) => [
+  `/assets/films/${recordingPrefix}${film.slug}.mp4`,
+  `/assets/films/${recordingPrefix}${film.slug}.jpg`,
+]));
+let skippedFilmReferences = 0;
+let pendingFilmNotes = 0;
+
 for (const page of pages) {
   const path = join(root, page);
-  const html = readRequired(path, page, 'utf8');
-  if (html === null) continue;
+  const rawHtml = readRequired(path, page, 'utf8');
+  if (rawHtml === null) continue;
+  // Validate a source page as it would be built: an optional demo slot whose files
+  // are absent is not rendered, so its references are not checked.
+  let html = rawHtml;
+  if (builtRoot) {
+    if (/<!--\s*\/?optional-demo\b/.test(html)) fail(page, 'optional demo slot was not resolved by the build');
+  } else {
+    const demos = resolveOptionalDemos(rawHtml, sourceRoot, page);
+    for (const error of demos.errors) fail(page, error.slice(`${page}: `.length));
+    html = demos.html;
+  }
   const h1s = html.match(/<h1\b/gi) || [];
   if (h1s.length !== 1) fail(page, `expected one h1, found ${h1s.length}`);
   if (!/<html\s+lang="en"/i.test(html)) fail(page, 'missing html language');
@@ -451,41 +485,61 @@ for (const page of pages) {
   for (const match of html.matchAll(/\b(?:href|src|poster)="([^"]+)"/gi)) {
     const url = match[1];
     if (/^(?:https?:|mailto:|tel:|#)/.test(url)) continue;
+    if (filmsPending && !builtRoot && declaredFilmMedia.has(url)) {
+      skippedFilmReferences += 1;
+      continue;
+    }
     if (!destinationExists(url)) fail(page, `broken local reference ${url}`);
   }
   for (const match of html.matchAll(/<a\b([^>]*)>/gi)) {
     if (/target="_blank"/i.test(match[1]) && !/rel="[^"]*noopener/i.test(match[1])) fail(page, 'target=_blank requires rel=noopener');
   }
 
-  const seenFilms = [];
-  for (const match of html.matchAll(/<ax-product-film\b([^>]*)>/gi)) {
-    const attributes = match[1];
-    for (const required of ['film', 'src', 'poster', 'label', 'caption']) {
-      if (!new RegExp(`\\b${required}="[^"]+"`, 'i').test(attributes)) {
-        fail(page, `product film is missing ${required}`);
+  const expectedFilms = (expectedFilmsByPage.get(page) || []).map((placement) => placement.slug);
+  if (filmsPending && builtRoot) {
+    // A pending build carries no film: every placement is a static note in
+    // portfolio order or is omitted, and nothing links to film media.
+    if (/<ax-product-film\b/i.test(html)) fail(page, `films for ${productVersion} are pending; the build must not contain a product film`);
+    for (const match of html.matchAll(/\b(?:href|src|poster)="([^"]*\/assets\/films\/[^"]*)"/gi)) {
+      fail(page, `films for ${productVersion} are pending; the build must not link film media: ${match[1]}`);
+    }
+    let cursor = 0;
+    for (const match of html.matchAll(/<aside class="film-pending" data-film="([^"]*)"/g)) {
+      pendingFilmNotes += 1;
+      const index = expectedFilms.indexOf(match[1], cursor);
+      if (index === -1) fail(page, `pending film note ${match[1]} is not a placement on this page in portfolio order`);
+      else cursor = index + 1;
+    }
+  } else {
+    const seenFilms = [];
+    for (const match of html.matchAll(/<ax-product-film\b([^>]*)>/gi)) {
+      const attributes = match[1];
+      for (const required of ['film', 'src', 'poster', 'label', 'caption']) {
+        if (!new RegExp(`\\b${required}="[^"]+"`, 'i').test(attributes)) {
+          fail(page, `product film is missing ${required}`);
+        }
+      }
+      const film = attributes.match(/\bfilm="([^"]+)"/i)?.[1];
+      const src = attributes.match(/\bsrc="([^"]+)"/i)?.[1];
+      const poster = attributes.match(/\bposter="([^"]+)"/i)?.[1];
+      if (film) {
+        seenFilms.push(film);
+        if (!filmBySlug.has(film)) fail(page, `product film ${film} is not declared in the authoritative portfolio`);
+        if (src !== `/assets/films/${recordingPrefix}${film}.mp4`) fail(page, `product film ${film} must use its matching MP4`);
+        if (poster !== `/assets/films/${recordingPrefix}${film}.jpg`) fail(page, `product film ${film} must use its matching JPEG poster`);
       }
     }
-    const film = attributes.match(/\bfilm="([^"]+)"/i)?.[1];
-    const src = attributes.match(/\bsrc="([^"]+)"/i)?.[1];
-    const poster = attributes.match(/\bposter="([^"]+)"/i)?.[1];
-    if (film) {
-      seenFilms.push(film);
-      if (!filmBySlug.has(film)) fail(page, `product film ${film} is not declared in the authoritative portfolio`);
-      if (src !== `/assets/films/${recordingPrefix}${film}.mp4`) fail(page, `product film ${film} must use its matching MP4`);
-      if (poster !== `/assets/films/${recordingPrefix}${film}.jpg`) fail(page, `product film ${film} must use its matching JPEG poster`);
-    }
-  }
 
-  const expectedFilms = (expectedFilmsByPage.get(page) || []).map((placement) => placement.slug);
-  for (const film of expectedFilms) {
-    const count = seenFilms.filter((candidate) => candidate === film).length;
-    if (count !== 1) fail(page, `expected product film ${film} exactly once, found ${count}`);
-  }
-  for (const film of seenFilms) {
-    if (!expectedFilms.includes(film)) fail(page, `unexpected product film placement ${film}`);
-  }
-  if (seenFilms.join('\n') !== expectedFilms.join('\n')) {
-    fail(page, `product films must appear in portfolio order: ${expectedFilms.join(', ')}`);
+    for (const film of expectedFilms) {
+      const count = seenFilms.filter((candidate) => candidate === film).length;
+      if (count !== 1) fail(page, `expected product film ${film} exactly once, found ${count}`);
+    }
+    for (const film of seenFilms) {
+      if (!expectedFilms.includes(film)) fail(page, `unexpected product film placement ${film}`);
+    }
+    if (seenFilms.join('\n') !== expectedFilms.join('\n')) {
+      fail(page, `product films must appear in portfolio order: ${expectedFilms.join(', ')}`);
+    }
   }
 
   if (page !== 'changelog/index.html') {
@@ -613,9 +667,11 @@ if (baseCss) {
   }
 }
 
-const ffprobeCheck = spawnSync('ffprobe', ['-version'], { encoding: 'utf8' });
-const ffprobeAvailable = !ffprobeCheck.error && ffprobeCheck.status === 0;
-if (!ffprobeAvailable) {
+const ffprobeCheck = filmsPending ? null : spawnSync('ffprobe', ['-version'], { encoding: 'utf8' });
+const ffprobeAvailable = !filmsPending && !ffprobeCheck.error && ffprobeCheck.status === 0;
+if (filmsPending) {
+  skippedFilmRules.push('ffprobe media probe');
+} else if (!ffprobeAvailable) {
   const requiresProbe = strictFilms || films.some((film) => ['ready', 'required'].includes(film.status));
   (requiresProbe ? fail : warn)('film portfolio', 'ffprobe is required to verify the exact film media contract');
 }
@@ -871,12 +927,38 @@ function validateProvenance(film, facts) {
   }
 }
 
-for (const film of films) {
-  if (!isRecord(film) || !isNonEmptyString(film.slug)) continue;
-  const facts = validateMedia(film);
-  validateProvenance(film, facts);
+if (filmsPending) {
+  skippedFilmRules.push(`media and provenance of ${films.length} films`);
+} else {
+  for (const film of films) {
+    if (!isRecord(film) || !isNonEmptyString(film.slug)) continue;
+    const facts = validateMedia(film);
+    validateProvenance(film, facts);
+  }
 }
 
+// Release binding that does not depend on films: the site being deployed for a
+// release must describe that release.
+if (releaseBound) {
+  const expectedTag = `v${productVersion}`;
+  if (recordingVersion !== expectedTag) {
+    fail('demo/one-app/films/portfolio.json', `recording_version ${recordingVersion ?? 'is missing'}; the release-bound site needs ${expectedTag}`);
+  }
+  const changelog = readRequired(join(root, 'changelog/index.html'), 'changelog/index.html', 'utf8');
+  const latestTag = changelog?.match(/<span class="release-tag">([^<]+)<\/span>/)?.[1];
+  if (changelog && latestTag !== expectedTag) {
+    fail('changelog/index.html', `newest release is ${latestTag || 'missing'}; the release-bound site needs ${expectedTag}`);
+  }
+}
+
+if (filmsPending) {
+  const references = builtRoot
+    ? `${pendingFilmNotes} static film note(s), no film element or film link`
+    : `${skippedFilmReferences} film media reference(s) not checked`;
+  console.log(
+    `Films for ${productVersion} are pending (${pendingPath}): skipped ${skippedFilmRules.join(', ')}; ${references}.`,
+  );
+}
 if (warnings.length) {
   console.warn(`Marketing film warnings (${warnings.length})\n${warnings.map((warning) => `- ${warning}`).join('\n')}`);
 }
@@ -884,4 +966,7 @@ if (errors.length) {
   console.error(`Marketing validation failed (${errors.length})\n${errors.map((error) => `- ${error}`).join('\n')}`);
   process.exit(1);
 }
-console.log(`Marketing validation passed: ${pages.length} pages, ${scripts.length} scripts, 12 manifest films${strictFilms ? ', strict film contract' : ''}.`);
+const filmSummary = filmsPending
+  ? `12 manifest films pending for ${productVersion}`
+  : `12 manifest films${strictFilms ? ', strict film contract' : ''}`;
+console.log(`Marketing validation passed: ${pages.length} pages, ${scripts.length} scripts, ${filmSummary}${releaseBound ? `, bound to v${productVersion}` : ''}.`);

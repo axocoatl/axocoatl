@@ -1,6 +1,7 @@
-import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { loadPortfolio } from '../../../demo/one-app/films/film-lib.mjs';
+import { filmMode, pendingPath, renderPendingFilms, resolveOptionalDemos } from './site-mode.mjs';
 
 const marketingRoot = resolve(import.meta.dirname, '..');
 const repositoryRoot = resolve(marketingRoot, '../..');
@@ -12,6 +13,11 @@ const output = resolve(process.argv[2] || resolve(marketingRoot, '.dist'));
 if (output === marketingRoot || !output) throw new Error('Refusing to replace the marketing source directory.');
 if (!existsSync(portfolioSource)) throw new Error('Missing authoritative film portfolio: demo/one-app/films/portfolio.json');
 if (!existsSync(llmsSource)) throw new Error('Missing public AI-readable product narrative: llms.txt');
+
+// When demo/one-app/films/PENDING names the CLI version, this version's films are
+// not recorded. The site is then built without them: each film placement becomes a
+// static note (or is omitted), and no film media or portfolio ships.
+const { version, pending: filmsPending } = filmMode(repositoryRoot);
 
 let portfolio;
 try {
@@ -48,13 +54,16 @@ if (new Set(filmFiles).size !== 24) {
   throw new Error('The 12-film portfolio must resolve to 24 unique MP4/poster build inputs.');
 }
 
-const files = [
-  'index.html', '404.html', 'robots.txt', 'sitemap.xml',
+const pages = [
+  'index.html', '404.html',
   'changelog/index.html', 'concepts/index.html', 'install/index.html',
   'integrations/openrouter/index.html', 'pricing/index.html',
   'showcase/index.html', 'why/index.html',
+];
+const files = [
+  'robots.txt', 'sitemap.xml',
   'assets/colors.json', 'assets/favicon.png', 'assets/og-home.png',
-  ...filmFiles,
+  ...(filmsPending ? [] : filmFiles),
   'components/ax-site-nav.js', 'components/ax-footer.js',
   'components/ax-theme-toggle.js', 'components/ax-cli-snippet.js',
   'components/ax-comparison-row.js', 'components/ax-product-film.js',
@@ -63,7 +72,8 @@ const files = [
 
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
-for (const file of files) {
+
+function copyInput(file) {
   const source = resolve(marketingRoot, file);
   if (!existsSync(source)) throw new Error(`Missing build input: ${file}`);
   const destination = resolve(output, file);
@@ -71,9 +81,43 @@ for (const file of files) {
   cpSync(source, destination);
 }
 
-const builtPortfolio = resolve(output, portfolioDestination);
-mkdirSync(dirname(builtPortfolio), { recursive: true });
-cpSync(portfolioSource, builtPortfolio);
+const demoFiles = new Set();
+const pendingNotes = [];
+const pendingOmitted = [];
+for (const page of pages) {
+  const source = resolve(marketingRoot, page);
+  if (!existsSync(source)) throw new Error(`Missing build input: ${page}`);
+  const demos = resolveOptionalDemos(readFileSync(source, 'utf8'), marketingRoot, page);
+  if (demos.errors.length) throw new Error(demos.errors.join('\n'));
+  for (const file of demos.files) demoFiles.add(file);
+  let html = demos.html;
+  if (filmsPending) {
+    const rendered = renderPendingFilms(html, version);
+    html = rendered.html;
+    pendingNotes.push(...rendered.notes.map((slug) => `${page}#${slug}`));
+    pendingOmitted.push(...rendered.omitted.map((slug) => `${page}#${slug}`));
+  }
+  const destination = resolve(output, page);
+  mkdirSync(dirname(destination), { recursive: true });
+  writeFileSync(destination, html);
+}
+for (const file of [...files, ...demoFiles]) copyInput(file);
+
+if (!filmsPending) {
+  const builtPortfolio = resolve(output, portfolioDestination);
+  mkdirSync(dirname(builtPortfolio), { recursive: true });
+  cpSync(portfolioSource, builtPortfolio);
+}
 cpSync(llmsSource, resolve(output, 'llms.txt'));
 
-console.log(`Built ${files.length} marketing files, llms.txt, and the authoritative 12-film portfolio in ${output}`);
+const total = pages.length + files.length + demoFiles.size;
+const demoSummary = demoFiles.size ? `, ${demoFiles.size} optional demo file(s)` : ', no optional demo media';
+if (filmsPending) {
+  console.log(
+    `Built ${total} marketing files and llms.txt in ${output}${demoSummary}. ` +
+    `Films for ${version} are pending (${pendingPath}): ${pendingNotes.length} film placement(s) shown as static notes, ` +
+    `${pendingOmitted.length} omitted; no film media or portfolio shipped.`,
+  );
+} else {
+  console.log(`Built ${total} marketing files, llms.txt, and the authoritative 12-film portfolio in ${output}${demoSummary}`);
+}

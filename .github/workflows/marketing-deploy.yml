@@ -3,6 +3,8 @@ name: marketing-deploy
 # Build sites/marketing/ after relevant main changes, but deploy only when the
 # CLI product version already has a public GitHub release. release.yml calls this
 # workflow after publishing that release and requires the deployment to finish.
+# While demo/one-app/films/PENDING names the CLI version, the marketing gate
+# builds and validates the site without films, and that site is deployed.
 on:
   push:
     branches: [main]

@@ -31,7 +31,8 @@ run_verifier() {
 
 # A product version may ship before its films are recorded. The committed
 # file demo/one-app/films/PENDING names that version; while it matches, code
-# gates pass on the manifest alone and a marketing deploy is refused.
+# gates pass on the manifest alone, a source-bound film proof is refused, and
+# the marketing gate builds and deploys the site without films.
 pending_path=demo/one-app/films/PENDING
 
 pending_version() {
@@ -55,7 +56,7 @@ films_pending_for() {
 
 pending_notice() {
   echo "film-gate: films for $1 are pending ($pending_path); the code may ship," \
-    "the marketing site may not deploy until they are recorded"
+    "and the marketing site deploys without films until they are recorded"
 }
 
 manifest_version() {
@@ -206,7 +207,7 @@ case "$mode" in
   source-bound)
     [[ $# -eq 1 ]] || usage
     if films_pending_for "$(working_manifest_version)"; then
-      fail "films for $(working_manifest_version) are pending ($pending_path); record them before a source-bound proof or a marketing deploy"
+      fail "films for $(working_manifest_version) are pending ($pending_path); record them before a source-bound film proof"
     fi
     run_verifier --source-bound
     ;;

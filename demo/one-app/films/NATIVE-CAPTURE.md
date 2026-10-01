@@ -73,10 +73,13 @@ Session merely to obtain a restart shot.
 
 `demo/one-app/films/PENDING` names a product version that shipped before its films
 were recorded (1.1.0 did). While it matches the CLI version, CI, preflight and the
-release pass the film and marketing gates on the manifest alone and say so, a
-source-bound proof fails, and the release does not build or deploy the marketing
-site. Delete the file in the same commit that adds the recordings; the gate refuses
-new captures while it still declares the version.
+release pass the film gate on the manifest alone and say so, and a source-bound film
+proof fails. The marketing gate still builds and validates the site, without films:
+each film placement becomes a static note naming what the film will show (or is
+removed when the element has `pending="omit"`), no film media or portfolio ships,
+and that site is what CI checks and the release and `marketing-deploy` deploy.
+Delete the file in the same commit that adds the recordings; the gate refuses new
+captures while it still declares the version.
 
 ## Freeze and accept recordings
 

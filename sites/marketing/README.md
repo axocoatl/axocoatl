@@ -37,6 +37,30 @@ and reduced-motion states.
 | `/integrations/openrouter` | OpenRouter provider setup |
 | `/changelog` | Published release history |
 
+## Films pending for a release
+
+When `demo/one-app/films/PENDING` names the CLI version, that version's films are not
+recorded and the site ships without them. `scripts/build.mjs` reads the same
+declaration as `scripts/verify-film-gate.sh`: it replaces each `<ax-product-film>` with
+a static note that names what the film will show (no media, no link), or removes it
+when the element has `pending="omit"`, and ships no film media or portfolio.
+`scripts/validate.mjs` applies every non-film rule to that build, refuses any film
+element or film link in it, skips the film media, provenance and asset rules and says
+which it skipped. `--strict-films` is refused while films are pending.
+`./scripts/verify-marketing-gate.sh portable|source-bound <out>` builds and validates
+that payload; `source-bound` still runs the installer tests and `--release-bound`
+(the portfolio and the newest changelog entry name the CLI version). CI, the release
+and `marketing-deploy` therefore deploy the pending site. Delete `PENDING` with the
+recordings and the full film contract applies again.
+
+## Optional demo video
+
+The homepage has one optional demo slot between `<!-- optional-demo: … -->` and
+`<!-- /optional-demo -->` markers. It names `assets/demo/cross-model-review.mp4` and
+`assets/demo/cross-model-review.jpg`. The build renders the slot and copies both files
+only when both exist; with neither it removes the slot, and with only one it fails.
+`.gitignore` keeps MP4 and JPEG files under `assets/demo/` tracked.
+
 ## Deployment payload
 
 `scripts/build.mjs` copies an explicit allowlist into a clean output directory, including
@@ -46,7 +70,8 @@ runtime-first narrative. The deployment expects twelve product-film MP4/JPEG pai
 `assets/films/<recording_version>/`. The current portfolio targets `v1.1.0`; each
 entry has the stable status `required`, which records an obligation, not acceptance.
 Acceptance requires the complete capture and evidence contract. Missing required media
-fails validation even outside strict mode, and ffprobe is required to verify the media.
+fails validation even outside strict mode, and ffprobe is required to verify the media,
+unless the films are pending (see above).
 Each accepted MP4/JPEG pair needs exact source-frame, capture-record, staged-frame,
 durable-evidence, and shipped-media hashes. New versioned captures never rewrite
 old media or provenance to claim the old recording used the new binary. Films
