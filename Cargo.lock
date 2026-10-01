@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-a2a"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-trait",
  "axocoatl-core",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-actor"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-cli"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-trait",
  "axocoatl-actor",
@@ -342,7 +342,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-config"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "axocoatl-core",
  "regex",
@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-core"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "rustix",
  "serde",
@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-daemon"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-trait",
  "axocoatl-actor",
@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-exec"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "libc",
  "serde",
@@ -420,7 +420,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-graph"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "axocoatl-core",
  "petgraph",
@@ -432,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-isolation"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-trait",
  "axocoatl-core",
@@ -455,7 +455,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-trait",
  "axocoatl-core",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm-anthropic"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -490,7 +490,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm-gemini"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm-mistral"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -524,7 +524,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm-ollama"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-llm-openai"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-openai",
  "async-stream",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-mcp"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-trait",
  "axocoatl-core",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-memory"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "axocoatl-core",
  "axocoatl-session",
@@ -616,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-server"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "axocoatl-a2a",
  "axocoatl-actor",
@@ -649,7 +649,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-service"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "thiserror 2.0.20",
  "tracing",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-session"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "axocoatl-core",
  "base64 0.22.1",
@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-token"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-trait",
  "axocoatl-core",
@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "axocoatl-tools"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "async-trait",
  "axocoatl-core",

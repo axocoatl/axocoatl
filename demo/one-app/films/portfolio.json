@@ -31,11 +31,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/session-workbench.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/session-workbench.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/session-workbench.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/session-workbench.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#session-workbench",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/session-workbench.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/session-workbench.json",
       "duration_seconds": {
         "min": 35,
         "max": 50
@@ -103,11 +103,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/workspace-sessions-turns.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/workspace-sessions-turns.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/workspace-sessions-turns.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/workspace-sessions-turns.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#workspace-sessions-turns",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/workspace-sessions-turns.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/workspace-sessions-turns.json",
       "duration_seconds": {
         "min": 25,
         "max": 35
@@ -170,11 +170,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/durable-turn.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/durable-turn.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/durable-turn.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/durable-turn.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#durable-turn",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/durable-turn.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/durable-turn.json",
       "duration_seconds": {
         "min": 40,
         "max": 55
@@ -233,11 +233,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/sandbox-terminal-preview.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/sandbox-terminal-preview.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/sandbox-terminal-preview.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/sandbox-terminal-preview.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#sandbox-terminal-preview",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/sandbox-terminal-preview.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/sandbox-terminal-preview.json",
       "duration_seconds": {
         "min": 25,
         "max": 35
@@ -296,11 +296,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/settings-runtime.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/settings-runtime.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/settings-runtime.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/settings-runtime.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#settings-runtime",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/settings-runtime.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/settings-runtime.json",
       "duration_seconds": {
         "min": 20,
         "max": 30
@@ -374,11 +374,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/event-lattice-automation.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/event-lattice-automation.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/event-lattice-automation.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/event-lattice-automation.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#event-lattice-automation",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/event-lattice-automation.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/event-lattice-automation.json",
       "duration_seconds": {
         "min": 30,
         "max": 45
@@ -438,11 +438,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/mcp-approval.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/mcp-approval.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/mcp-approval.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/mcp-approval.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#mcp-approval",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/mcp-approval.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/mcp-approval.json",
       "duration_seconds": {
         "min": 25,
         "max": 35
@@ -509,11 +509,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/workspace-knowledge.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/workspace-knowledge.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/workspace-knowledge.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/workspace-knowledge.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#workspace-knowledge",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/workspace-knowledge.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/workspace-knowledge.json",
       "duration_seconds": {
         "min": 35,
         "max": 50
@@ -578,11 +578,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/multi-agent-handoff.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/multi-agent-handoff.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/multi-agent-handoff.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/multi-agent-handoff.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#multi-agent-handoff",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/multi-agent-handoff.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/multi-agent-handoff.json",
       "duration_seconds": {
         "min": 35,
         "max": 50
@@ -642,11 +642,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/several-ways.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/several-ways.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/several-ways.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/several-ways.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#several-ways",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/several-ways.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/several-ways.json",
       "duration_seconds": {
         "min": 55,
         "max": 75
@@ -719,11 +719,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/git-last-turn.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/git-last-turn.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/git-last-turn.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/git-last-turn.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#git-last-turn",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/git-last-turn.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/git-last-turn.json",
       "duration_seconds": {
         "min": 20,
         "max": 30
@@ -786,11 +786,11 @@
         }
       ],
       "media": {
-        "mp4": "sites/marketing/assets/films/v1.1.0/automation-hitl-recovery.mp4",
-        "poster": "sites/marketing/assets/films/v1.1.0/automation-hitl-recovery.jpg"
+        "mp4": "sites/marketing/assets/films/v1.1.1/automation-hitl-recovery.mp4",
+        "poster": "sites/marketing/assets/films/v1.1.1/automation-hitl-recovery.jpg"
       },
       "shot_contract": "demo/one-app/films/SHOT-MANIFEST.md#automation-hitl-recovery",
-      "provenance": "demo/one-app/films/provenance/v1.1.0/automation-hitl-recovery.json",
+      "provenance": "demo/one-app/films/provenance/v1.1.1/automation-hitl-recovery.json",
       "duration_seconds": {
         "min": 45,
         "max": 65
@@ -841,5 +841,5 @@
       ]
     }
   ],
-  "recording_version": "v1.1.0"
+  "recording_version": "v1.1.1"
 }
