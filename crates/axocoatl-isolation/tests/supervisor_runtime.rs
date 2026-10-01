@@ -327,6 +327,7 @@ async fn a_read_only_command_cannot_write_the_repository_but_keeps_scratch() {
         input.write_restriction = Some(axocoatl_exec::protocol::WriteRestriction {
             writable: vec!["/tmp".into(), "/dev".into(), "$HOME".into()],
             protected: vec![root],
+            deny_network: false,
         });
         let prepared = sandbox.prepare_supervised_command(input).await.unwrap();
         let execution = prepared.dispatch().unwrap().finish().await.unwrap();
@@ -338,6 +339,83 @@ async fn a_read_only_command_cannot_write_the_repository_but_keeps_scratch() {
         );
         assert!(!fixture.workspace.join("created").exists());
         assert!(!fixture.workspace.join("link").exists());
+    })
+    .await;
+}
+
+/// A restriction that denies the network refuses TCP from the kernel
+/// (EACCES), even to a live loopback listener, where the same command without
+/// a restriction connects. The container has no network, so an outside
+/// address is unreachable without the restriction and refused with it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires an explicit prepared Podman image, expected USER uid, and configured connection"]
+async fn a_network_denying_command_cannot_connect_or_bind_even_on_loopback() {
+    with_fixture(|fixture| async move {
+        let sandbox = fixture.start().await;
+        sandbox.spawn_background("while :; do nc -l -p 4747 >> listener-received; done");
+        let root = sandbox.root().to_string_lossy().into_owned();
+        // nc proves a connection to the live listener; wget names why a
+        // connection to an outside address failed.
+        let open = request(
+            "open-network",
+            "ok=no; for attempt in $(seq 1 50); do \
+               if echo from-unrestricted | nc -w 2 127.0.0.1 4747; then ok=yes; break; fi; \
+               sleep 0.1; \
+             done; echo \"connect=$ok\"; wget -q -T 2 -O /dev/null http://1.1.1.1/; true",
+            30_000,
+        );
+        let prepared = sandbox.prepare_supervised_command(open).await.unwrap();
+        let execution = prepared.dispatch().unwrap().finish().await.unwrap();
+        let (stdout, stderr) = finished(&execution, &ProcessOutcome::Exited { code: 0 }, true);
+        let stdout = String::from_utf8(stdout.retained_bytes(4096).unwrap()).unwrap();
+        let stderr = String::from_utf8(stderr.retained_bytes(4096).unwrap()).unwrap();
+        assert!(stdout.contains("connect=yes"), "{stdout} {stderr}");
+        assert!(
+            stderr.contains("(1.1.1.1): Network unreachable"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("Permission denied"), "{stderr}");
+        wait_for_file(
+            &fixture.workspace.join("listener-received"),
+            b"from-unrestricted\n",
+        )
+        .await;
+
+        let mut denied = request(
+            "denied-network",
+            "echo from-restricted | nc -w 2 127.0.0.1 4747; echo \"connect=$?\"; \
+             wget -q -T 2 -O /dev/null http://127.0.0.1:4747/; echo \"loopback=$?\"; \
+             wget -q -T 2 -O /dev/null http://1.1.1.1/; echo \"external=$?\"; \
+             timeout 5 nc -l -p 4848; echo \"listen=$?\"",
+            30_000,
+        );
+        denied.write_restriction = Some(axocoatl_exec::protocol::WriteRestriction {
+            writable: vec!["/tmp".into(), "/dev".into()],
+            protected: vec![root],
+            deny_network: true,
+        });
+        let prepared = sandbox.prepare_supervised_command(denied).await.unwrap();
+        let execution = prepared.dispatch().unwrap().finish().await.unwrap();
+        let (stdout, stderr) = finished(&execution, &ProcessOutcome::Exited { code: 0 }, true);
+        let stdout = String::from_utf8(stdout.retained_bytes(4096).unwrap()).unwrap();
+        let stderr = String::from_utf8(stderr.retained_bytes(4096).unwrap()).unwrap();
+        assert!(stdout.contains("connect=1"), "{stdout}");
+        assert!(stdout.contains("loopback=1"), "{stdout}");
+        assert!(stdout.contains("external=1"), "{stdout}");
+        assert!(stdout.contains("listen=1"), "{stdout}");
+        for refused in [
+            "(127.0.0.1): Permission denied",
+            "(1.1.1.1): Permission denied",
+            "bind: Permission denied",
+        ] {
+            assert!(stderr.contains(refused), "{refused}: {stderr}");
+        }
+        assert!(!stderr.contains("Network unreachable"), "{stderr}");
+        // Nothing reached the live listener from the restricted command.
+        assert_eq!(
+            std::fs::read(fixture.workspace.join("listener-received")).unwrap(),
+            b"from-unrestricted\n"
+        );
     })
     .await;
 }

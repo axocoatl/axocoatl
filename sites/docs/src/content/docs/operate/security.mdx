@@ -166,18 +166,25 @@ host bind. Protected Axocoatl data and lease directories below that bind are
 automatically masked as described above. Keep all other secrets and unrelated data
 outside the Workspace.
 
-An Agent configured with `writes: []` is a read-only helper. It is not offered
+An Agent configured with `writes: []` is a read-only helper. A required reviewer that
+has `bash` must have `writes: []`, so the same applies to it. It is not offered
 `write_file` or `edit_file`, and the host refuses them if it asks. Its own `bash`
-commands run under a Linux Landlock write restriction: nothing in the repository,
-including `.git`, can change. Only `/tmp`, `/var/tmp` and `/dev` are writable. Each
-command gets a scratch home directory under `/tmp`, removed when it ends, so the helper
-cannot leave configuration in the Session's shared home for later commands. The
-restriction needs Landlock ABI 3 (Linux 6.2 or later) and a container runtime that
-allows it. Where it cannot be
-applied, the helper's `bash` commands do not run and its read-only file tools still
-work. Axocoatl's own before-and-after repository captures run without the restriction;
-they read no Git configuration, attributes or ignore file from outside the repository
-and run no program that the repository's configuration names.
+commands run under a Linux Landlock restriction: nothing in the repository, including
+`.git`, can change. Only `/tmp`, `/var/tmp` and `/dev` are writable. Each command gets a
+scratch home directory under `/tmp`, removed when it ends, so the helper cannot leave
+configuration in the Session's shared home for later commands. The same restriction
+refuses every TCP connection and every TCP bind, on any address including loopback,
+whatever the sandbox's `network` setting: the helper's shell cannot connect anywhere
+over TCP, with `curl`, `git` or a package manager for example, including to a server
+running in the container. Landlock does not cover UDP, so name lookups and other UDP
+traffic still follow `network`. Nor does it cover a socket that listens without binding
+first, which the kernel gives a random port that the host or other containers may be
+able to reach. `network: none` stops both. The restriction needs Landlock ABI 4 (Linux
+6.7 or later) and a container runtime that allows it. Where it cannot be applied in
+full, the helper's `bash` commands do not run and its read-only file tools still work.
+Axocoatl's own before-and-after repository captures run without the restriction; they
+read no Git configuration, attributes or ignore file from outside the repository and run
+no program that the repository's configuration names.
 
 An Agent that may change only some paths gets no kernel restriction. Its `write_file`
 and `edit_file` refuse other paths, and any path inside `.git`, before writing. Every

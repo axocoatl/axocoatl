@@ -5,6 +5,10 @@ use std::io::BufRead;
 // Version 2 adds an optional length/digest header and exact raw stdin bytes
 // before Ready. Version 1 peers cannot mistake payload bytes for controls.
 // Version 3 adds an optional kernel write restriction for the launched tree.
+// Within version 3 that restriction may also refuse TCP (`deny_network`). The
+// field is omitted while false, so a request without it keeps its exact bytes
+// and digest, and a supervisor that predates it rejects the unknown field
+// instead of launching without it.
 pub const PROTOCOL_VERSION: u32 = 3;
 /// Placeholder for the supervisor's own `HOME` in a write restriction.
 pub const HOME_PLACEHOLDER: &str = "$HOME";
@@ -51,6 +55,15 @@ pub struct ExecRequest {
 pub struct WriteRestriction {
     pub writable: Vec<String>,
     pub protected: Vec<String>,
+    /// Also refuse every TCP connect and bind, on any address and port,
+    /// loopback included. A supervisor whose kernel cannot refuse both
+    /// refuses to launch rather than run with the network open.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub deny_network: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl WriteRestriction {
@@ -464,6 +477,7 @@ mod write_restriction_tests {
                 "/work".into(),
             ],
             protected: vec!["/work/repo".into()],
+            deny_network: false,
         };
         restriction.validate().unwrap();
         assert_eq!(
@@ -482,5 +496,41 @@ mod write_restriction_tests {
         assert!(invalid.validate().is_err());
         invalid.protected = vec!["relative".into()];
         assert!(invalid.validate().is_err());
+    }
+
+    /// A restriction that leaves the network open keeps the exact bytes, and
+    /// so the request digest, it had before `deny_network` existed. One that
+    /// refuses it names the field, which a supervisor predating it rejects
+    /// as unknown instead of launching with the network open.
+    #[test]
+    fn deny_network_is_omitted_while_false_and_never_silently_dropped() {
+        let earlier = r#"{"writable":["/tmp"],"protected":["/work/repo"]}"#;
+        let parsed: WriteRestriction = serde_json::from_str(earlier).unwrap();
+        assert!(!parsed.deny_network);
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), earlier);
+        let denied = WriteRestriction {
+            deny_network: true,
+            ..parsed
+        };
+        let encoded = serde_json::to_string(&denied).unwrap();
+        assert_eq!(
+            encoded,
+            r#"{"writable":["/tmp"],"protected":["/work/repo"],"deny_network":true}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<WriteRestriction>(&encoded).unwrap(),
+            denied
+        );
+
+        /// The version 3 restriction as it was before `deny_network`.
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct EarlierRestriction {
+            writable: Vec<String>,
+            protected: Vec<String>,
+        }
+        assert!(serde_json::from_str::<EarlierRestriction>(&encoded).is_err());
+        assert!(serde_json::from_str::<EarlierRestriction>(earlier).is_ok());
     }
 }

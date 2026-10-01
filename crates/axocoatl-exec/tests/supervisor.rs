@@ -249,6 +249,7 @@ fn a_write_restriction_blocks_the_protected_tree_or_refuses_to_launch() {
             "$HOME".into(),
         ],
         protected: vec![protected.path().to_string_lossy().into_owned()],
+        deny_network: false,
     });
     let mut helper = Helper::start(input, None);
     helper.control(Control::Dispatch);
@@ -258,8 +259,8 @@ fn a_write_restriction_blocks_the_protected_tree_or_refuses_to_launch() {
     else {
         panic!("terminal")
     };
-    // SAFETY: querying the Landlock ABI takes no attribute pointer.
-    let landlock = unsafe { libc::syscall(444, std::ptr::null::<u8>(), 0usize, 1u32) } >= 1;
+    // Below ABI 3 Landlock cannot refuse truncation, so it offers none.
+    let landlock = landlock_abi() >= 3;
     match outcome {
         ProcessOutcome::LaunchFailed { message } => {
             assert!(
@@ -289,6 +290,73 @@ fn a_write_restriction_blocks_the_protected_tree_or_refuses_to_launch() {
                 "writes beneath an allowed root still work"
             );
         }
+    }
+}
+
+/// The kernel's Landlock ABI version, or a value below 1 without Landlock.
+fn landlock_abi() -> i64 {
+    // SAFETY: querying the Landlock ABI takes no attribute pointer.
+    unsafe { libc::syscall(444, std::ptr::null::<u8>(), 0usize, 1u32) }
+}
+
+/// A restriction that denies the network refuses every TCP connect and bind,
+/// loopback included, with EACCES from the kernel rather than any routing
+/// or listener outcome. The same restriction without it leaves TCP open. A
+/// kernel below Landlock ABI 4 cannot refuse TCP, so the denying restriction
+/// is not launched at all.
+#[test]
+fn a_network_restriction_refuses_tcp_or_refuses_to_launch() {
+    use axocoatl_exec::protocol::WriteRestriction;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let protected = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("port"),
+        listener.local_addr().unwrap().port().to_string(),
+    )
+    .unwrap();
+    let abi = landlock_abi();
+    for deny_network in [false, true] {
+        let mut input = fixture_request(10_000);
+        input.invocation_id = format!("network-{deny_network}");
+        input.write_restriction = Some(WriteRestriction {
+            writable: vec!["/tmp".into()],
+            protected: vec![protected.path().to_string_lossy().into_owned()],
+            deny_network,
+        });
+        let mut helper = Helper::start(input.clone(), Some(("tcp", directory.path())));
+        helper.control(Control::Dispatch);
+        let ServerMessage::Finished {
+            outcome,
+            launched,
+            stdout,
+            ..
+        } = helper.finished()
+        else {
+            panic!("terminal")
+        };
+        if abi < 3 || (deny_network && abi < 4) {
+            let ProcessOutcome::LaunchFailed { message } = outcome else {
+                panic!("Landlock ABI {abi} cannot apply this restriction: {outcome:?}");
+            };
+            assert!(!launched);
+            assert!(
+                message.starts_with("write restriction unavailable"),
+                "{message}"
+            );
+            if abi >= 3 {
+                assert!(message.contains("TCP"), "{message}");
+            }
+            continue;
+        }
+        assert_eq!(outcome, ProcessOutcome::Exited { code: 0 });
+        let stdout = String::from_utf8(stdout.retained_bytes(input.stdout_bytes).unwrap()).unwrap();
+        let expected = if deny_network {
+            format!("connect=errno-{} bind=errno-{}", libc::EACCES, libc::EACCES)
+        } else {
+            "connect=ok bind=ok".to_owned()
+        };
+        assert!(stdout.contains(&expected), "{deny_network}: {stdout}");
     }
 }
 
@@ -657,6 +725,22 @@ fn fixture_process() {
             std::io::stdout()
                 .write_all(b"{\"kind\":\"finished\",\"forged-child-output\":true}\n")
                 .unwrap();
+            std::process::exit(0);
+        }
+        "tcp" => {
+            // Reports how the kernel answers a TCP connect to the test's own
+            // loopback listener and a TCP bind of an ephemeral port.
+            let port: u16 = std::fs::read_to_string(directory.join("port"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let answer = |result: std::io::Result<()>| match result {
+                Ok(()) => "ok".to_owned(),
+                Err(error) => format!("errno-{}", error.raw_os_error().unwrap_or(-1)),
+            };
+            let connect = answer(std::net::TcpStream::connect(("127.0.0.1", port)).map(drop));
+            let bind = answer(std::net::TcpListener::bind("127.0.0.1:0").map(drop));
+            println!("connect={connect} bind={bind}");
             std::process::exit(0);
         }
         "double-root" => {
