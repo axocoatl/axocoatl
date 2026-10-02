@@ -13,8 +13,8 @@ readme.workspace = true
 description = "Anthropic Claude provider for Axocoatl LLM abstraction"
 
 [dependencies]
-axocoatl-core = { version = "1.1.1", path = "../axocoatl-core" }
-axocoatl-llm = { version = "1.1.1", path = "../axocoatl-llm" }
+axocoatl-core = { version = "1.1.2", path = "../axocoatl-core" }
+axocoatl-llm = { version = "1.1.2", path = "../axocoatl-llm" }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

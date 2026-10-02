@@ -116,6 +116,24 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v1.1.2</span>
+        <span class="release-date">2026-10-02</span>
+        <h2>The local API asks for a token.</h2>
+
+        <p>When Axocoatl runs on your own machine without configured credentials, its API
+          and WebSockets now require a per-daemon token. Open the sign-in link from
+          <code>axocoatl url</code> once per browser.</p>
+
+        <h3>Security</h3>
+        <ul>
+          <li>A random token in the data directory (mode 0600) is required on every API,
+              WebSocket and A2A route; the browser keeps it in an HttpOnly cookie.</li>
+          <li>A loopback listener also holds its port on the other loopback address family.</li>
+          <li>Configured credentials compare in constant time and never match an empty value.</li>
+        </ul>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v1.1.1</span>
         <span class="release-date">2026-10-01</span>
         <h2>Read-only helpers cannot connect out.</h2>

@@ -14,22 +14,22 @@ description = "Persistent agent daemon runtime for Axocoatl — bootstraps and o
 
 [dependencies]
 base64 = { workspace = true }
-axocoatl-exec = { version = "=1.1.1", path = "../axocoatl-exec" }
-axocoatl-core = { version = "1.1.1", path = "../axocoatl-core" }
-axocoatl-config = { version = "1.1.1", path = "../axocoatl-config" }
-axocoatl-llm = { version = "1.1.1", path = "../axocoatl-llm" }
-axocoatl-llm-openai = { version = "1.1.1", path = "../axocoatl-llm-openai" }
-axocoatl-llm-anthropic = { version = "1.1.1", path = "../axocoatl-llm-anthropic" }
-axocoatl-llm-ollama = { version = "1.1.1", path = "../axocoatl-llm-ollama" }
-axocoatl-llm-gemini = { version = "1.1.1", path = "../axocoatl-llm-gemini" }
-axocoatl-llm-mistral = { version = "1.1.1", path = "../axocoatl-llm-mistral" }
-axocoatl-actor = { version = "1.1.1", path = "../axocoatl-actor" }
-axocoatl-token = { version = "1.1.1", path = "../axocoatl-token" }
-axocoatl-memory = { version = "1.1.1", path = "../axocoatl-memory" }
-axocoatl-tools = { version = "1.1.1", path = "../axocoatl-tools" }
-axocoatl-mcp = { version = "1.1.1", path = "../axocoatl-mcp" }
-axocoatl-session = { version = "1.1.1", path = "../axocoatl-session" }
-axocoatl-isolation = { version = "1.1.1", path = "../axocoatl-isolation" }
+axocoatl-exec = { version = "=1.1.2", path = "../axocoatl-exec" }
+axocoatl-core = { version = "1.1.2", path = "../axocoatl-core" }
+axocoatl-config = { version = "1.1.2", path = "../axocoatl-config" }
+axocoatl-llm = { version = "1.1.2", path = "../axocoatl-llm" }
+axocoatl-llm-openai = { version = "1.1.2", path = "../axocoatl-llm-openai" }
+axocoatl-llm-anthropic = { version = "1.1.2", path = "../axocoatl-llm-anthropic" }
+axocoatl-llm-ollama = { version = "1.1.2", path = "../axocoatl-llm-ollama" }
+axocoatl-llm-gemini = { version = "1.1.2", path = "../axocoatl-llm-gemini" }
+axocoatl-llm-mistral = { version = "1.1.2", path = "../axocoatl-llm-mistral" }
+axocoatl-actor = { version = "1.1.2", path = "../axocoatl-actor" }
+axocoatl-token = { version = "1.1.2", path = "../axocoatl-token" }
+axocoatl-memory = { version = "1.1.2", path = "../axocoatl-memory" }
+axocoatl-tools = { version = "1.1.2", path = "../axocoatl-tools" }
+axocoatl-mcp = { version = "1.1.2", path = "../axocoatl-mcp" }
+axocoatl-session = { version = "1.1.2", path = "../axocoatl-session" }
+axocoatl-isolation = { version = "1.1.2", path = "../axocoatl-isolation" }
 uuid = { workspace = true }
 ractor = { workspace = true }
 tokio = { workspace = true }
