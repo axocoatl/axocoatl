@@ -97,8 +97,8 @@ ollama list
 ./demo/one-app/start.sh
 ```
 
-Confirm that `qwen3:8b` appears in `ollama list`, the launcher prints
-`http://127.0.0.1:18080`, and `http://127.0.0.1:18080/health/ready` responds. In a second
+Confirm that `qwen3:8b` appears in `ollama list`, the launcher prints a
+`Sign in: http://localhost:18080/?token=…` link, and `http://127.0.0.1:18080/health/ready` responds. In a second
 terminal, run `./demo/one-app/seed-automation.sh` after the daemon is healthy.
 
 Then complete one private warm-up through the first diagnosis. This catches model,
@@ -164,6 +164,10 @@ and IPC paths below `$DEMO_ROOT`, and starts Axocoatl at:
 ```text
 http://127.0.0.1:18080
 ```
+
+The local API requires the daemon's token, kept in `$DEMO_ROOT/data/local-api-token`.
+Open the `Sign in:` link that `axocoatl dev` prints, or print it again with
+`AXOCOATL_DATA_DIR="$DEMO_ROOT/data" axocoatl url -c demo/one-app/axocoatl.demo.yaml`.
 
 For a 1.0 recording, build the exact locked release candidate first and force
 the launcher to validate and run that binary:
@@ -242,7 +246,7 @@ their stated visible claims; it does not claim they were captured with the
 
 ## Create the presenter Session
 
-1. Open `http://127.0.0.1:18080`.
+1. Open the `Sign in:` link printed by the launcher.
 2. From the Workspace switcher, choose **Open workspace…**.
 3. Authorize `$DEMO_ROOT/workspace` using the expanded platform path from the table
    above and name it `Northstar Storefront`.

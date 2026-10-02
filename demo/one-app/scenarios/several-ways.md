@@ -88,8 +88,10 @@ Before Keep, copy the Session id and inspect the persisted attempt set:
 ```bash
 export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-harbor-native'
+# The local API needs this daemon's token; curl reads the header from stdin.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXO_DEMO_ROOT/data/local-api-token")" | curl -sS -H @- "$@"; }
 export AXO_SESSION_ID='ses-paste-the-id-here'
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/variants/results"
+axo_api "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/variants/results"
 find "$AXO_DEMO_ROOT/workspace/.axo-variants" -maxdepth 5 -type f -print
 ```
 
@@ -97,9 +99,9 @@ Copy `attempt_set.id` from the results response, then:
 
 ```bash
 export AXO_ATTEMPT_SET_ID='paste-the-attempt-set-uuid-here'
-curl -sS \
+axo_api \
   "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/variants/status?attempt_set_id=$AXO_ATTEMPT_SET_ID"
-curl -sS \
+axo_api \
   "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/variants/trajectories?attempt_set_id=$AXO_ATTEMPT_SET_ID&baseline=0"
 ```
 
@@ -115,7 +117,7 @@ git -C "$AXO_DEMO_ROOT/workspace" diff
 npm --prefix "$AXO_DEMO_ROOT/workspace" run check
 find "$AXO_DEMO_ROOT/workspace/.axo-variants" \
   -path '*/receipts/keep-*.json' -type f -print
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
+axo_api "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
 ```
 
 The pre-Keep APIs and manifests prove independent candidates and verdicts. The

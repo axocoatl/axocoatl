@@ -90,7 +90,7 @@ local port. If an execution sandbox blocks that bind, rerun the same test outsid
 the sandbox rather than treating it as a code failure.
 
 For a browser-app change, rebuild `axocoatl-cli`, restart the daemon, and verify the
-actual embedded page at `http://localhost:8080`. Exercise the affected journey,
+actual embedded page through the `Sign in:` link it prints (or `axocoatl url`). Exercise the affected journey,
 check the browser console, and inspect light, dark, narrow, and reduced-motion
 states when relevant. Automated DOM checks do not replace a screenshot or visual
 inspection.

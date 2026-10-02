@@ -87,9 +87,11 @@ Before and after restart:
 ```bash
 export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-signal-desk'
+# The local API needs this daemon's token; curl reads the header from stdin.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXO_DEMO_ROOT/data/local-api-token")" | curl -sS -H @- "$@"; }
 sed -n '1,160p' \
   "$AXO_DEMO_ROOT/data/memory/core/shared/team.json"
-curl -sS "$AXO_DEMO_URL/api/sessions"
+axo_api "$AXO_DEMO_URL/api/sessions"
 grep -F 'AXO-DEMO-JADE-731' \
   "$AXO_DEMO_ROOT/data/session-history/turns.v1.jsonl"
 ```
@@ -99,8 +101,8 @@ Copy each Session id and inspect both Turn lists independently:
 ```bash
 export AXO_WRITER_SESSION_ID='ses-paste-writer-id-here'
 export AXO_READER_SESSION_ID='ses-paste-reader-id-here'
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_WRITER_SESSION_ID/turns"
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_READER_SESSION_ID/turns"
+axo_api "$AXO_DEMO_URL/api/sessions/$AXO_WRITER_SESSION_ID/turns"
+axo_api "$AXO_DEMO_URL/api/sessions/$AXO_READER_SESSION_ID/turns"
 ```
 
 The shared block file is the Tier-3 persistence proof. The separate Turn lists

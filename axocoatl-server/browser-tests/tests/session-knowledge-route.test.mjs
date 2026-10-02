@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {after,before,test} from 'node:test';
 import {chromium} from 'playwright';
-import {launchTestDaemon,resolveChromiumExecutable} from '../support/daemon.mjs';
+import {launchTestDaemon,resolveChromiumExecutable,newAuthorizedContext} from '../support/daemon.mjs';
 
 let runtime,browser;
 before(async()=>{runtime=await launchTestDaemon({nativeDataRoot:true});const executablePath=await resolveChromiumExecutable();browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});});
@@ -29,7 +29,7 @@ test('Knowledge HTTP preserves workspace ownership, exact revisions and immutabl
 });
 
 test('visible Session Knowledge creates a note and attaches its exact revision without starting work',async()=>{
- const context=await browser.newContext({viewport:{width:1280,height:900},reducedMotion:'reduce'}),page=await context.newPage(),errors=[],mutations=[];
+ const context=await newAuthorizedContext(browser, {viewport:{width:1280,height:900},reducedMotion:'reduce'}),page=await context.newPage(),errors=[],mutations=[];
  page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST')mutations.push(new URL(request.url()).pathname);});
  try{
   await page.goto(`${runtime.baseUrl}/?session=${encodeURIComponent(runtime.fixtures.alpha.sessions[0].id)}`);

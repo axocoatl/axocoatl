@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
-import { launchTestDaemon, resolveChromiumExecutable } from '../support/daemon.mjs';
+import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext } from '../support/daemon.mjs';
 
 let runtime, browser;
 before(async () => {
@@ -38,7 +38,7 @@ function envelope(generation = 1, state = 'running') {
     nodes:[{node_id:'review',label:'QA reviewer <literal>',activations:[{reference:{kind:'exact',activation},capabilities:{guide:{enabled:state==='running'}}}]}]};
 }
 async function fixture(initial = envelope()) {
-  const context = await browser.newContext({viewport:{width:390,height:844},colorScheme:'dark',reducedMotion:'reduce'});
+  const context = await newAuthorizedContext(browser, {viewport:{width:390,height:844},colorScheme:'dark',reducedMotion:'reduce'});
   const page = await context.newPage(), errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/guidance-fixture', route => route.fulfill({contentType:'text/html',body:`<!doctype html><html data-theme="dark"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/tokens.css"><ax-session-guidance hidden></ax-session-guidance><script type="module">import '/ui/session-guidance.js';const guide=document.querySelector('ax-session-guidance');guide.setIdentity('session','turn');window.calls=[];guide.commandHandler=async input=>{window.calls.push(input);return {request:input.request||{command_id:'guidance-original',session_id:'session',turn_id:'turn',action:'guide',instruction:input.instruction},receipt:{state:'accepted'}};};</script></html>`}));

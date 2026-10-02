@@ -138,7 +138,9 @@ async function jsonApi(runtime, pathname, options) {
 
 function sendTurn(runtime, sessionId, turnId, references, input = 'Use the attached QA findings to explain the failure.') {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(`${runtime.baseUrl.replace(/^http/, 'ws')}/ws`);
+    const socket = new WebSocket(`${runtime.baseUrl.replace(/^http/, 'ws')}/ws`, {
+      headers: { authorization: `Bearer ${runtime.token}` },
+    });
     const frames = [];
     let settled = false;
     const finish = (error, frame) => {

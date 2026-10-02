@@ -10,12 +10,13 @@
 #   ollama pull llama3.2
 #   axocoatl dev
 #
-# Then open http://localhost:8080, create a folder-anchored Session on Lead, and
-# open Team & budget. The Session starts with Lead alone: enter its limits,
-# Apply, and send a request in the Session chat. To add Scout and Reviewer as
-# Lead's read-only helpers, select "Let this Agent delegate to helpers" and
-# enter their limits too. On a fresh data directory, the workflow below seeds a
-# manual Automation that is also available through the compatibility HTTP API.
+# Then open the sign-in link `axocoatl dev` prints (or run `axocoatl url`),
+# create a folder-anchored Session on Lead, and open Team & budget. The
+# Session starts with Lead alone: enter its limits, Apply, and send a request
+# in the Session chat. To add Scout and Reviewer as Lead's read-only helpers,
+# select "Let this Agent delegate to helpers" and enter their limits too. On
+# a fresh data directory, the workflow below seeds a manual Automation that is
+# also available through the compatibility HTTP API.
 #
 # The larger demo config, including scheduled seeds and MCP servers, lives in
 # axocoatl.yaml. Use that once you're past first contact.

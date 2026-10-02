@@ -41,7 +41,8 @@ AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-signal-desk \
 After `/health/ready` responds, seed the canonical Automation records:
 
 ```bash
-./demo/one-app/seed-runtime-demos.sh
+AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-signal-desk \
+  ./demo/one-app/seed-runtime-demos.sh
 ```
 
 Create or reopen one **Single agent** Session in the prepared Workspace. Run
@@ -81,11 +82,13 @@ this tour.
 ```bash
 export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-signal-desk'
-curl -sS "$AXO_DEMO_URL/api/agents"
-curl -sS "$AXO_DEMO_URL/api/skills"
-curl -sS "$AXO_DEMO_URL/api/mcp/servers"
-curl -sS "$AXO_DEMO_URL/api/mcp/tools"
-curl -sS "$AXO_DEMO_URL/api/automations"
+# The local API needs this daemon's token; curl reads the header from stdin.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXO_DEMO_ROOT/data/local-api-token")" | curl -sS -H @- "$@"; }
+axo_api "$AXO_DEMO_URL/api/agents"
+axo_api "$AXO_DEMO_URL/api/skills"
+axo_api "$AXO_DEMO_URL/api/mcp/servers"
+axo_api "$AXO_DEMO_URL/api/mcp/tools"
+axo_api "$AXO_DEMO_URL/api/automations"
 ```
 
 Copy the completed Automation and run ids shown in Settings, then inspect the
@@ -94,7 +97,7 @@ same canonical run record through its API and file:
 ```bash
 export AXO_AUTOMATION_ID='paste-the-automation-id-here'
 export AXO_RUN_ID='paste-the-run-uuid-here'
-curl -sS \
+axo_api \
   "$AXO_DEMO_URL/api/automations/$AXO_AUTOMATION_ID/runs/$AXO_RUN_ID"
 sed -n '1,280p' \
   "$AXO_DEMO_ROOT/data/automation/runs-v1/$AXO_AUTOMATION_ID/$AXO_RUN_ID.json"

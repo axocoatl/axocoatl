@@ -3,7 +3,7 @@ import {after,before,test} from 'node:test';
 import {chromium} from 'playwright';
 import {mkdir} from 'node:fs/promises';
 import path from 'node:path';
-import {launchTestDaemon,resolveChromiumExecutable} from '../support/daemon.mjs';
+import {launchTestDaemon,resolveChromiumExecutable,newAuthorizedContext} from '../support/daemon.mjs';
 
 let runtime,browser;
 before(async()=>{runtime=process.env.AXOCOATL_COMPONENT_BASE_URL?{baseUrl:process.env.AXOCOATL_COMPONENT_BASE_URL,stop:async()=>{}}:await launchTestDaemon();const executablePath=await resolveChromiumExecutable();browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});});
@@ -12,7 +12,7 @@ const hash='a'.repeat(64);
 const activation={session_id:'session',turn_id:'turn-recorded',execution_epoch_id:'epoch',node_id:'reviewer',generation:2,activation_id:'activation-exact'};
 function initialView(){return{workspace_id:'workspace',notes:[{id:'decision',revision:3,title:'Parser contract <literal>',body:'# Keep bytes exact\n\n<script>window.injection=true</script>',kind:'decision',freshness:'stale',links:[{kind:'supports',target:'architecture'}],sources:[{path:'src/parser.py',sha256:hash,symbol:'parse'}],provenance:{kind:'observed',journal_id:'journal',activation,evidence:['exact-check']},backlinks:[{id:'architecture',title:'Parser architecture',kind:'related'}]},{id:'architecture',revision:1,title:'Parser architecture',body:'Module boundaries.',kind:'architecture',freshness:'current',links:[],sources:[],provenance:{kind:'human'},backlinks:[]}],proposals:[{id:'proposal',status:'pending',expected_revision:3,note:{id:'decision',title:'Proposed parser contract',body:'Retain the empty-frame boundary.',kind:'finding',links:[{kind:'supports',target:'architecture'}],sources:[{path:'src/parser.py',sha256:hash}],provenance:{kind:'model',journal_id:'journal',activation}}}],code_index:{status:'current',files:1,symbols:1,entries:[{path:'src/parser.py',sha256:hash,symbols:[{name:'parse',kind:'function',line:7}]}]}};}
 async function fixture({theme='light',narrow=false,conflict=false,readError=false,delayGraph=false}={}){
- const context=await browser.newContext({viewport:narrow?{width:390,height:844}:{width:1280,height:900},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),calls=[],errors=[],view=initialView();page.on('pageerror',error=>errors.push(error.message));
+ const context=await newAuthorizedContext(browser, {viewport:narrow?{width:390,height:844}:{width:1280,height:900},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),calls=[],errors=[],view=initialView();page.on('pageerror',error=>errors.push(error.message));
  let releaseGraph;const graphGate=new Promise(resolve=>{releaseGraph=resolve;});let graphRequests=0;
  if(delayGraph)await page.route('**/lattice/index.js',async route=>{graphRequests++;await graphGate;await route.continue();});
  await page.route('**/knowledge-fixture',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html data-theme="${theme}"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/tokens.css"><ax-session-knowledge session="session"></ax-session-knowledge><script type="module" src="/ui/session-knowledge.js"></script></html>`}));

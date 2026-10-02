@@ -43,6 +43,9 @@ The HTTP server mounts:
 - `GET /.well-known/agent.json` for discovery;
 - `POST /a2a/tasks` for dispatch to a local `receiver_id`.
 
+Both need a credential: the local API token on a loopback daemon, or a
+configured API key or bearer token.
+
 A2A is inbound only. The running daemon does not include an outbound A2A client
 for delegating a local task to a remote A2A Agent.
 

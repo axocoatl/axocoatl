@@ -70,7 +70,7 @@ If you touch the browser app (`axocoatl-server/static/index.html` or
 `axocoatl-server/static/ui/*`):
 
 1. Run `cargo build -p axocoatl-cli` and restart the daemon.
-2. Open `http://localhost:8080` and exercise the affected session journey through
+2. Open the `Sign in:` link the daemon prints (or run `axocoatl url`) and exercise the affected session journey through
    the one app. Do not validate a retired feature tab or a stale standalone page.
 3. Check session restore, modules, Settings, the bottom terminal, and the browser
    console for errors where relevant.

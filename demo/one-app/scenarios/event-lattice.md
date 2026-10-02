@@ -44,7 +44,8 @@ After `/health/ready` responds, seed the canonical Automations in a second
 terminal:
 
 ```bash
-./demo/one-app/seed-runtime-demos.sh
+AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-signal-desk \
+  ./demo/one-app/seed-runtime-demos.sh
 ```
 
 No Session Turn is required. The Skill and Automation are configured runtime
@@ -93,9 +94,11 @@ objects in Settings.
 ```bash
 export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-signal-desk'
-curl -sS "$AXO_DEMO_URL/api/events/recent"
-curl -sS "$AXO_DEMO_URL/api/automations/release-gate-review/runs"
-curl -sS "$AXO_DEMO_URL/api/interrupts"
+# The local API needs this daemon's token; curl reads the header from stdin.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXO_DEMO_ROOT/data/local-api-token")" | curl -sS -H @- "$@"; }
+axo_api "$AXO_DEMO_URL/api/events/recent"
+axo_api "$AXO_DEMO_URL/api/automations/release-gate-review/runs"
+axo_api "$AXO_DEMO_URL/api/interrupts"
 find "$AXO_DEMO_ROOT/data/automation/runs-v1/release-gate-review" \
   -maxdepth 1 -type f -print
 ```
@@ -104,7 +107,7 @@ Copy the run id from the run list, then:
 
 ```bash
 export AXO_RUN_ID='paste-the-run-uuid-here'
-curl -sS \
+axo_api \
   "$AXO_DEMO_URL/api/automations/release-gate-review/runs/$AXO_RUN_ID"
 sed -n '1,260p' \
   "$AXO_DEMO_ROOT/data/automation/runs-v1/release-gate-review/$AXO_RUN_ID.json"
@@ -139,7 +142,8 @@ continuous enough that the causal link is unmistakable.
    ./demo/one-app/prepare.sh --scenario signal-desk
    ```
 
-   Re-run `seed-runtime-demos.sh` only after the fresh daemon is healthy.
+   Re-run `seed-runtime-demos.sh` with the same `AXOCOATL_DEMO_ROOT` only
+   after the fresh daemon is healthy.
 
 ## Known constraints
 

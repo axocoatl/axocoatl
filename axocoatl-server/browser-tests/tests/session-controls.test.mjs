@@ -3,7 +3,7 @@ import { after, before, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
 
-import { launchTestDaemon, resolveChromiumExecutable } from '../support/daemon.mjs';
+import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext } from '../support/daemon.mjs';
 
 let runtime;
 let browser;
@@ -171,7 +171,7 @@ async function openControlledSession({ turns, attachments = [] } = {}) {
     setup_results: [],
     error: null,
   };
-  const context = await browser.newContext({
+  const context = await newAuthorizedContext(browser, {
     viewport: { width: 1280, height: 800 },
     acceptDownloads: true,
   });

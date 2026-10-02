@@ -76,10 +76,96 @@ async function waitForHealth(baseUrl, child, logs) {
   throw new Error(`Axocoatl did not become healthy: ${lastError}\n${logs()}`);
 }
 
+// Each daemon requires its per-daemon local API token (`<data>/local-api-token`).
+// Running daemons are registered by origin so Node-side `fetch` calls and
+// browser contexts in this process can authenticate without per-call wiring.
+const LOCAL_TOKEN_FILE = 'local-api-token';
+const authorizedDaemons = new Map();
+const unauthenticatedFetch = globalThis.fetch;
+
+function daemonForUrl(url) {
+  try {
+    return authorizedDaemons.get(new URL(url).origin) || null;
+  } catch {
+    return null;
+  }
+}
+
+function hasCredential(headers) {
+  return headers.has('authorization') || headers.has('x-api-key') || headers.has('cookie');
+}
+
+// Adds the bearer token to requests for a registered daemon unless the caller
+// chose a credential itself. The workbench redirects `/` from a loopback IP to
+// `localhost`; fetch would drop Authorization on that cross-origin hop, so
+// redirects between registered origins are followed here with the header kept.
+async function authorizedFetch(input, init = undefined) {
+  if (typeof input !== 'string' && !(input instanceof URL)) return unauthenticatedFetch(input, init);
+  let url = String(input);
+  const daemon = daemonForUrl(url);
+  if (!daemon) return unauthenticatedFetch(input, init);
+  const headers = new Headers(init?.headers);
+  if (!hasCredential(headers)) headers.set('authorization', `Bearer ${daemon.token}`);
+  const redirect = init?.redirect || 'follow';
+  let method = (init?.method || 'GET').toUpperCase();
+  let response = await unauthenticatedFetch(url, { ...init, headers, redirect: 'manual' });
+  for (let hop = 0; redirect === 'follow' && hop < 5; hop += 1) {
+    const location = response.headers.get('location');
+    if (![301, 302, 303, 307, 308].includes(response.status) || !location) break;
+    url = new URL(location, url).href;
+    if (response.status === 303) method = 'GET';
+    if (!daemonForUrl(url) || !['GET', 'HEAD'].includes(method)) {
+      return unauthenticatedFetch(url, { ...init, method });
+    }
+    response = await unauthenticatedFetch(url, { ...init, method, headers, redirect: 'manual' });
+  }
+  return response;
+}
+
+function registerDaemon(port, token) {
+  const entry = { port, token };
+  for (const host of ['127.0.0.1', 'localhost']) authorizedDaemons.set(`http://${host}:${port}`, entry);
+  globalThis.fetch = authorizedFetch;
+}
+
+function unregisterDaemon(port) {
+  for (const host of ['127.0.0.1', 'localhost']) authorizedDaemons.delete(`http://${host}:${port}`);
+  if (authorizedDaemons.size === 0) globalThis.fetch = unauthenticatedFetch;
+}
+
+// Give a Playwright context the sign-in cookie of every daemon running in this
+// process, exactly as `/?token=` would set it. Component-mode runtimes
+// (AXOCOATL_COMPONENT_BASE_URL) register nothing, so this is then a no-op.
+export async function authorizeContext(context) {
+  const cookies = [];
+  for (const { port, token } of new Set(authorizedDaemons.values())) {
+    for (const host of ['localhost', '127.0.0.1']) {
+      cookies.push({
+        name: `axocoatl-token-${port}`,
+        value: token,
+        url: `http://${host}:${port}/`,
+        httpOnly: true,
+        sameSite: 'Strict',
+      });
+    }
+  }
+  if (cookies.length) await context.addCookies(cookies);
+  return context;
+}
+
+// `browser.newContext(options)` with the sign-in cookies already in place.
+export async function newAuthorizedContext(browser, options) {
+  return authorizeContext(await browser.newContext(options));
+}
+
 async function api(baseUrl, method, pathname, body) {
-  const response = await fetch(`${baseUrl}${pathname}`, {
+  const headers = new Headers();
+  if (body !== undefined) headers.set('content-type', 'application/json');
+  const daemon = daemonForUrl(baseUrl);
+  if (daemon) headers.set('authorization', `Bearer ${daemon.token}`);
+  const response = await unauthenticatedFetch(`${baseUrl}${pathname}`, {
     method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
@@ -209,7 +295,9 @@ export async function launchTestDaemon({
   const port = requestedPort || await freeLoopbackPort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const configPath = path.join(runRoot, 'axocoatl.e2e.yaml');
-  const socketPath = path.join(runRoot, 'axocoatl.sock');
+  // The daemon runs in runRoot with a relative socket path, so the Unix
+  // socket stays below SUN_LEN however long TMPDIR is.
+  const socketPath = './axocoatl.sock';
   const binary = process.env.AXOCOATL_E2E_BINARY
     ? path.resolve(process.env.AXOCOATL_E2E_BINARY)
     : path.join(REPOSITORY_ROOT, 'target', 'debug', 'axocoatl');
@@ -278,11 +366,12 @@ consolidation:
   let stderr = '';
   let child = null;
   let launchCount = 0;
+  let token = null;
   const startDaemon = async () => {
     launchCount += 1;
     if (launchCount > 1) stderr = boundedLog(stderr, `\n[restart ${launchCount - 1}]\n`);
     child = spawn(binary, ['serve', '--config', configPath], {
-      cwd: REPOSITORY_ROOT,
+      cwd: runRoot,
       env: {
         ...process.env,
         AXOCOATL_DATA_DIR: dataDirectory,
@@ -294,6 +383,9 @@ consolidation:
     child.stdout.on('data', (chunk) => { stdout = boundedLog(stdout, chunk); });
     child.stderr.on('data', (chunk) => { stderr = boundedLog(stderr, chunk); });
     await waitForHealth(baseUrl, child, logs);
+    // The daemon creates the token on first start and reuses it on restart.
+    token = (await readFile(path.join(dataDirectory, LOCAL_TOKEN_FILE), 'utf8')).trim();
+    registerDaemon(port, token);
     await retainVerifiedFixtureModel(dataDirectory, process.env.AXOCOATL_E2E_MODEL_CACHE);
   };
   const logs = () => `stdout:\n${stdout}\nstderr:\n${stderr}`;
@@ -315,6 +407,13 @@ consolidation:
       runRoot,
       fixtures,
       logs,
+      get token() { return token; },
+      cookieName: `axocoatl-token-${port}`,
+      get signInUrl() { return `http://localhost:${port}/?token=${token}`; },
+      // A plain fetch that sends no Axocoatl credential.
+      fetchWithoutToken(pathname, init) {
+        return unauthenticatedFetch(`${baseUrl}${pathname}`, init);
+      },
       async createProjectWorkspace(folderName, workspaceName, options = {}) {
         const projectPath = await makeProject(projectsDirectory, folderName, options);
         const workspace = await api(baseUrl, 'POST', '/api/workspaces', {
@@ -368,6 +467,7 @@ consolidation:
       },
       async stop() {
         await stopProcess(child);
+        unregisterDaemon(port);
         // Only the unique mkdtemp directory created above is eligible for
         // cleanup. The guard prevents a malformed path from widening scope.
         if (path.basename(runRoot).startsWith('axocoatl-browser-e2e-')) {
@@ -377,6 +477,7 @@ consolidation:
     };
   } catch (error) {
     await stopProcess(child);
+    unregisterDaemon(port);
     if (path.basename(runRoot).startsWith('axocoatl-browser-e2e-')) {
       await rm(runRoot, { recursive: true, force: true });
     }

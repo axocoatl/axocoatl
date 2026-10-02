@@ -58,6 +58,26 @@
   .session-turn-controls { align-self: flex-start; flex: 0 0 auto; margin-bottom: 8px; }
   @media(max-width:720px) { .session-graph-layout > ax-activation-inspector { flex: 0 0 0; } }
 </style>
+<!-- Signed out (expired sign-in cookie or a rotated local API token): the API
+     answers 401, and `/` then serves the sign-in page instead of this shell,
+     so reloading it cannot loop. -->
+<script>
+  (() => {
+    const send = window.fetch.bind(window);
+    let signingOut = false;
+    window.fetch = async (...args) => {
+      const response = await send(...args);
+      if (response.status === 401 && !signingOut) {
+        const url = new URL(response.url || '/', location.href);
+        if (url.origin === location.origin && url.pathname.startsWith('/api/')) {
+          signingOut = true;
+          location.replace('/');
+        }
+      }
+      return response;
+    };
+  })();
+</script>
 <!-- App UI modules. Transitional bridge: this document is still a classic
      script, so the module graph is loaded here and the one helper the classic
      code still needs is handed across. It goes away when the shell itself

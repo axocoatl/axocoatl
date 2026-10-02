@@ -12,6 +12,27 @@ through the public HTTP API. Chromium then drives the visible `/` product
 surface. The temporary daemon, socket, data, and projects are removed after the
 run; an already-running Axocoatl daemon is not touched.
 
+## Local API token
+
+Each daemon requires its per-daemon local API token, which it writes to
+`local-api-token` in its data directory. After the daemon is healthy, the
+harness reads that file and registers the daemon for the test process:
+
+- seeding and the runtime's helpers send `Authorization: Bearer <token>`;
+- Node-side `fetch` calls to a registered daemon origin get the same header
+  unless the caller set a credential, and the `/` redirect from `127.0.0.1` to
+  `localhost` is followed with the header kept;
+- `newAuthorizedContext(browser, options)` (or `authorizeContext(context)`)
+  adds the `axocoatl-token-<port>` cookie for `localhost` and `127.0.0.1`,
+  exactly as the sign-in link would;
+- Node `WebSocket` clients pass the header explicitly with `runtime.token`.
+
+`runtime.fetchWithoutToken`, `runtime.signInUrl`, and a plain
+`browser.newContext()` exercise the signed-out paths; `local-api-token.test.mjs`
+covers the real sign-in link. The daemon runs in its temporary directory with a
+relative IPC socket path, so a long `TMPDIR` cannot exceed the Unix socket path
+limit.
+
 ## Run
 
 ```bash

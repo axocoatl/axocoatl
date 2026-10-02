@@ -50,8 +50,11 @@ a new root instead of changing it.
 Before opening a Session, confirm discovery in a second terminal:
 
 ```bash
-curl -sS http://127.0.0.1:18080/api/mcp/servers
-curl -sS http://127.0.0.1:18080/api/mcp/tools
+export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-mcp-compat'
+# The local API needs this daemon's token; curl reads the header from stdin.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXO_DEMO_ROOT/data/local-api-token")" | curl -sS -H @- "$@"; }
+axo_api http://127.0.0.1:18080/api/mcp/servers
+axo_api http://127.0.0.1:18080/api/mcp/tools
 ```
 
 ## Browser actions
@@ -111,18 +114,20 @@ curl -sS http://127.0.0.1:18080/api/mcp/tools
 ```bash
 export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-mcp-compat'
-curl -sS "$AXO_DEMO_URL/api/mcp/servers"
-curl -sS "$AXO_DEMO_URL/api/mcp/tools"
-curl -sS "$AXO_DEMO_URL/api/mcp/permissions"
-curl -sS "$AXO_DEMO_URL/api/sessions"
+# The local API needs this daemon's token; curl reads the header from stdin.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXO_DEMO_ROOT/data/local-api-token")" | curl -sS -H @- "$@"; }
+axo_api "$AXO_DEMO_URL/api/mcp/servers"
+axo_api "$AXO_DEMO_URL/api/mcp/tools"
+axo_api "$AXO_DEMO_URL/api/mcp/permissions"
+axo_api "$AXO_DEMO_URL/api/sessions"
 ```
 
 Copy the Weather Session id, then:
 
 ```bash
 export AXO_SESSION_ID='ses-paste-the-id-here'
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns"
+axo_api "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
+axo_api "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns"
 grep -F 'mcp__weather__get_weather' \
   "$AXO_DEMO_ROOT/data/session-history/turns.v1.jsonl"
 ```

@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
 
-import { launchTestDaemon, resolveChromiumExecutable } from '../support/daemon.mjs';
+import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext } from '../support/daemon.mjs';
 
 let runtime;
 let browser;
@@ -94,7 +94,7 @@ after(async () => {
 });
 
 async function openSession(session) {
-  const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  const context = await newAuthorizedContext(browser, { viewport: { width: 1400, height: 900 } });
   const page = await context.newPage();
   const browserErrors = [];
   page.on('pageerror', (error) => browserErrors.push(`pageerror: ${error.message}`));

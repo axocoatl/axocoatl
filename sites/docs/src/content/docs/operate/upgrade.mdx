@@ -58,8 +58,21 @@ root. Ordinary startup never implicitly converts an existing legacy root.
 3. Replace the binary using the same installation path you chose originally.
 4. Validate configuration and run doctor before starting automatic work.
 5. Reinstall the service definition if the executable path changed.
-6. Start the daemon and inspect Sessions, Automation run history, Agent status,
-   and logs before resuming automatic triggers.
+6. Start the daemon. A loopback daemon without `server.auth` credentials
+   requires its [local API token](/operate/security/#the-local-api-token) on
+   the workbench and every API route; 1.1.1 and earlier did not. Print the
+   sign-in link with the daemon's config, and its `AXOCOATL_DATA_DIR` if it
+   sets one, then open the link and reload any workbench tab that was already
+   open:
+
+   ```sh
+   axocoatl url --config /absolute/path/to/axocoatl.yaml
+   ```
+
+   Scripts send `Authorization: Bearer <token>` with the contents of
+   `local-api-token` in the data root.
+7. Inspect Sessions, Automation run history, Agent status, and logs before
+   resuming automatic triggers.
 
 </Steps>
 

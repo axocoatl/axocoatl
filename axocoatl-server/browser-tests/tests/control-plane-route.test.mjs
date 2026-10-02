@@ -148,7 +148,9 @@ test('versioned legacy list, lookup, search and exports preserve opaque identity
 
 function sendTurn(sessionId, turnId, input) {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(`${runtime.baseUrl.replace(/^http/, 'ws')}/ws`);
+    const socket = new WebSocket(`${runtime.baseUrl.replace(/^http/, 'ws')}/ws`, {
+      headers: { authorization: `Bearer ${runtime.token}` },
+    });
     let settled = false;
     const finish = (error, frame) => {
       if (settled) return;

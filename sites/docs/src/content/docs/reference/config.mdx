@@ -199,9 +199,13 @@ server:
     window_secs: 60
 ```
 
-An empty CORS list means same-origin only. Non-loopback binding without an API
-key/bearer token fails unless `allow_unauthenticated` is explicitly true. The
-rate-limit values apply per client IP only when enabled.
+An empty CORS list means same-origin only. With no API key or bearer token, a
+loopback listener requires the per-daemon
+[local API token](/operate/security/#the-local-api-token), and non-loopback
+binding fails. `allow_unauthenticated: true` turns both off; use it only behind
+a proxy that enforces authentication. On loopback the Host check against DNS
+rebinding stays on, so a proxy on the same host must send `Host: localhost`. The rate-limit values apply per client IP
+only when enabled.
 
 ## Sandbox
 

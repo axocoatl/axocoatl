@@ -236,7 +236,8 @@ export RUST_LOG="${RUST_LOG:-info}"
 
 echo
 echo "Axocoatl demo"
-echo "App:       http://127.0.0.1:18080"
+echo "App:       open the Sign in link that axocoatl dev prints below, or run"
+echo "           AXOCOATL_DATA_DIR=\"$AXOCOATL_DATA_DIR\" \"$AXOCOATL_BIN\" url -c \"$DEMO_CONFIG\""
 echo "Workspace: $WORKSPACE"
 echo "Binary:    $AXOCOATL_BIN"
 echo "Version:   $AXOCOATL_VERSION"
@@ -245,7 +246,7 @@ echo "Config:    $DEMO_CONFIG"
 echo "Config SHA-256: $CONFIG_SHA256"
 echo "Ollama:    $OLLAMA_URL (cloud models disabled)"
 echo "Prompts:   $SCRIPT_DIR/PROMPTS.md"
-echo "Seed:      $SCRIPT_DIR/seed-runtime-demos.sh"
+echo "Seed:      AXOCOATL_DEMO_ROOT=\"$DEMO_ROOT\" \"$SCRIPT_DIR/seed-runtime-demos.sh\""
 echo
 
 exec "$AXOCOATL_BIN" dev -c "$DEMO_CONFIG"

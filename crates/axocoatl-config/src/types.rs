@@ -524,7 +524,8 @@ fn default_rate_window() -> u64 {
 }
 
 /// API authentication for the HTTP/WS server. Tokens support `${ENV_VAR}`
-/// interpolation so they need not be committed in plaintext.
+/// interpolation so they need not be committed in plaintext. With none
+/// configured, a loopback server requires its per-daemon local API token.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServerAuthYaml {
     /// Accepted `x-api-key` values. Held as `SecretString` so a stray `{:?}`
@@ -535,9 +536,10 @@ pub struct ServerAuthYaml {
     /// Accepted `Authorization: Bearer <token>` values. Redacted like `api_keys`.
     #[serde(default)]
     pub bearer_tokens: Vec<SecretString>,
-    /// Escape hatch: bind a non-loopback address **without** auth (e.g. when an
-    /// upstream proxy enforces it). The operator takes responsibility — the
-    /// fail-closed guard is skipped only when this is explicitly `true`.
+    /// Escape hatch: serve **without** auth (e.g. when an upstream proxy
+    /// enforces it). On a non-loopback address this skips the fail-closed
+    /// bind guard; on loopback it turns off the per-daemon local API token.
+    /// The operator takes responsibility — only an explicit `true` does this.
     #[serde(default)]
     pub allow_unauthenticated: bool,
 }

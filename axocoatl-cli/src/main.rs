@@ -95,6 +95,13 @@ enum Commands {
         config: PathBuf,
     },
 
+    /// Print the browser sign-in link for the local workbench
+    Url {
+        /// Path to config file
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
+        config: PathBuf,
+    },
+
     /// Interactive chat with an agent
     Chat {
         /// Agent ID to chat with
@@ -328,6 +335,7 @@ async fn main() {
         Commands::Validate { config } => cmd_validate(&config).await,
         Commands::Dev { config } => cmd_dev(&config).await,
         Commands::Serve { config } => cmd_serve(&config).await,
+        Commands::Url { config } => cmd_url(&config).await,
         Commands::Chat {
             agent,
             config,
@@ -455,6 +463,12 @@ fn cmd_service_install(config: &std::path::Path) {
                 println!("\n{hint}");
             }
             println!("\nStart it with:  axocoatl service start");
+            // `serve` prints its sign-in hint to the service log, which
+            // launchd discards, so give it here.
+            println!(
+                "Then open the workbench with the link from:  axocoatl url --config {}",
+                shell_word(&config_abs)
+            );
         }
         Err(e) => {
             eprintln!("✗ install failed: {e}");
@@ -463,11 +477,16 @@ fn cmd_service_install(config: &std::path::Path) {
     }
 }
 
+/// Service output goes to a log (launchd discards it), so service commands
+/// point at `axocoatl url` for the sign-in link.
+const SERVICE_SIGN_IN_HINT: &str = "Open the workbench with the link from `axocoatl url --config <config>`, using the config the service was installed with.";
+
 fn cmd_service_start() {
     with_manager(
         |m| m.start(),
         "Always-On Service started — the daemon now runs 24/7",
     );
+    println!("{SERVICE_SIGN_IN_HINT}");
 }
 
 fn cmd_service_stop() {
@@ -493,6 +512,9 @@ fn cmd_service_status() {
             println!("  running:   {}", if s.running { "yes" } else { "no" });
             println!("  at login:  {}", if s.enabled { "yes" } else { "no" });
             println!("  detail:    {}", s.detail);
+            if s.installed {
+                println!("\n{SERVICE_SIGN_IN_HINT}");
+            }
             println!(
                 "\nNote: this is the Always-On *Service* (keeps the daemon \
                  process alive).\nProactive Agents — agents that act on their \
@@ -659,7 +681,8 @@ Next steps — copy/paste:
   axocoatl validate axocoatl.yaml
   axocoatl dev --config axocoatl.yaml
 
-Open http://localhost:8080, choose Open workspace…, and create a Session on
+Open the sign-in link `axocoatl dev` prints (or run `axocoatl url --config
+axocoatl.yaml`), choose Open workspace…, and create a Session on
 Lead. It starts as one Agent: in Team & budget, enter its limits and Apply
 before the first request. To add Scout and Reviewer as read-only helpers,
 select Let this Agent delegate to helpers and enter their limits too. For plain
@@ -1053,7 +1076,7 @@ fn onboard_completion_text(
         .map(|variable| format!("Before starting Axocoatl, export {variable} in this shell.\n"))
         .unwrap_or_default();
     format!(
-        "\n✓ Axocoatl configured for this user.\n  Config: {}\n  Data:   {}\n\n{environment_hint}Next:\n  axocoatl dev\n  Open http://localhost:8080 and choose Open workspace…\n",
+        "\n✓ Axocoatl configured for this user.\n  Config: {}\n  Data:   {}\n\n{environment_hint}Next:\n  axocoatl dev\n  Open the sign-in link it prints (or run `axocoatl url`) and choose Open workspace…\n",
         paths.config_path.display(),
         paths.data_dir.display()
     )
@@ -1480,6 +1503,7 @@ async fn cmd_dev(config_path: &std::path::Path) {
 
     println!("  Server: http://{host}:{port}");
     println!("  Health: http://{host}:{port}/health");
+    print_sign_in(&state, &host, port, config_path).await;
     println!();
     println!("Axocoatl is running. Press Ctrl+C to stop.");
 
@@ -1519,6 +1543,7 @@ async fn cmd_serve(config_path: &std::path::Path) {
     // Shared runtime state for the HTTP server and background services.
     let state: std::sync::Arc<tokio::sync::RwLock<axocoatl_daemon::AxocoatlDaemon>> =
         std::sync::Arc::new(tokio::sync::RwLock::new(daemon));
+    print_sign_in(&state, &host, port, config_path).await;
     let ipc_handle = start_cli_ipc(ipc_reservation, state.clone());
     axocoatl_daemon::start_automation_runtime(state.clone()).await;
 
@@ -1536,6 +1561,109 @@ async fn cmd_serve(config_path: &std::path::Path) {
     if let Err(e) = server {
         eprintln!("Server error: {e}");
         std::process::exit(1);
+    }
+}
+
+/// What `dev` and `serve` print about browser sign-in. The full link holds
+/// the local API token, so it goes only to an interactive terminal; service
+/// managers and harnesses that capture stdout get the `axocoatl url` hint.
+fn sign_in_lines(link: Option<&str>, terminal: bool, config_path: &std::path::Path) -> Vec<String> {
+    match link {
+        None => Vec::new(),
+        Some(link) if terminal => vec![format!("  Sign in: {link}")],
+        Some(_) => vec![format!(
+            "  Sign in: run `axocoatl url --config {}` for the browser sign-in link",
+            shell_word(config_path)
+        )],
+    }
+}
+
+/// `path` as one shell word: unchanged when every character is one a POSIX
+/// shell leaves alone, otherwise single-quoted. The default macOS config
+/// path contains a space.
+fn shell_word(path: &std::path::Path) -> String {
+    let text = path.display().to_string();
+    let plain = !text.is_empty()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"/._-+,:=@%".contains(&byte));
+    if plain {
+        text
+    } else {
+        format!("'{}'", text.replace('\'', r"'\''"))
+    }
+}
+
+async fn print_sign_in(
+    state: &axocoatl_server::AppState,
+    host: &str,
+    port: u16,
+    config_path: &std::path::Path,
+) {
+    use std::io::IsTerminal;
+    // A token error here is reported again, with checked cleanup, when the
+    // server starts.
+    let link = axocoatl_server::sign_in_url(state, host, port)
+        .await
+        .ok()
+        .flatten();
+    for line in sign_in_lines(
+        link.as_deref(),
+        std::io::stdout().is_terminal(),
+        config_path,
+    ) {
+        println!("{line}");
+    }
+}
+
+fn plain_server_url(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("http://[{host}]:{port}/")
+    } else {
+        format!("http://{host}:{port}/")
+    }
+}
+
+/// Print the browser sign-in link from the configured port and the token in
+/// the data root. Reads only: it neither starts nor contacts the daemon and
+/// never creates the token.
+async fn cmd_url(config_path: &std::path::Path) {
+    let data_dir = match configure_data_dir(config_path) {
+        Ok(data_dir) => data_dir,
+        Err(error) => {
+            eprintln!("Configuration error:\n{error}");
+            std::process::exit(1);
+        }
+    };
+    let config = match load_cli_config(config_path).await {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("Configuration error:\n{error}");
+            std::process::exit(1);
+        }
+    };
+    let host = &config.server.host;
+    let port = config.server.port;
+    if !axocoatl_server::local_token_mode(host, &config.server.auth) {
+        println!("{}", plain_server_url(host, port));
+        eprintln!(
+            "This configuration does not use the local sign-in token: it sets server.auth credentials, server.auth.allow_unauthenticated, or a non-loopback host."
+        );
+        return;
+    }
+    match axocoatl_server::auth::read_local_token_at(&data_dir) {
+        Ok(Some(secret)) => println!("{}", axocoatl_server::auth::sign_in_url(port, &secret)),
+        Ok(None) => {
+            eprintln!(
+                "No sign-in token yet in {}. Start Axocoatl with `axocoatl dev` or `axocoatl serve`, then run `axocoatl url` again.",
+                data_dir.display()
+            );
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("Could not read the sign-in token: {error}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -3090,6 +3218,8 @@ mod tests {
         assert!(steps.contains("validate axocoatl.yaml"));
         assert!(steps.contains("dev --config axocoatl.yaml"));
         assert!(steps.contains("chat --config axocoatl.yaml"));
+        assert!(steps.contains("axocoatl url --config\naxocoatl.yaml"));
+        assert!(!steps.contains("http://localhost:8080"));
         assert!(!steps.contains("cp .env.example .env"));
     }
 
@@ -3214,6 +3344,8 @@ mod tests {
 
         assert!(completion.contains("configured for this user"));
         assert!(completion.contains("Open workspace"));
+        assert!(completion.contains("axocoatl url"));
+        assert!(!completion.contains("http://localhost:8080"));
         assert!(!completion.contains("Project"));
         assert!(!completion.contains(".env"));
 
@@ -3356,6 +3488,62 @@ mod tests {
             panic!("expected dev command");
         };
         assert_eq!(config, PathBuf::from("/tmp/custom.yaml"));
+    }
+
+    #[test]
+    fn url_command_takes_the_same_config_as_dev() {
+        let expected = user_paths::UserPaths::discover().unwrap().config_path;
+        let cli = Cli::try_parse_from(["axocoatl", "url"]).unwrap();
+        let Commands::Url { config } = cli.command else {
+            panic!("expected url command");
+        };
+        assert_eq!(config, expected);
+
+        let cli = Cli::try_parse_from(["axocoatl", "url", "-c", "/tmp/custom.yaml"]).unwrap();
+        let Commands::Url { config } = cli.command else {
+            panic!("expected url command");
+        };
+        assert_eq!(config, PathBuf::from("/tmp/custom.yaml"));
+    }
+
+    #[test]
+    fn sign_in_link_is_printed_only_to_a_terminal() {
+        let config = std::path::Path::new("/tmp/project/axocoatl.yaml");
+        let link = "http://localhost:8080/?token=secret-token";
+        assert_eq!(
+            sign_in_lines(Some(link), true, config),
+            vec![format!("  Sign in: {link}")]
+        );
+        let captured = sign_in_lines(Some(link), false, config);
+        assert_eq!(captured.len(), 1);
+        assert!(!captured[0].contains("secret-token"));
+        assert!(captured[0].contains("axocoatl url --config /tmp/project/axocoatl.yaml"));
+        assert!(sign_in_lines(None, true, config).is_empty());
+    }
+
+    #[test]
+    fn sign_in_hint_quotes_a_config_path_with_spaces() {
+        let config =
+            std::path::Path::new("/Users/alex/Library/Application Support/Axocoatl/config.yaml");
+        let captured = sign_in_lines(Some("http://localhost:8080/?token=t"), false, config);
+        assert!(captured[0].contains(
+            "axocoatl url --config '/Users/alex/Library/Application Support/Axocoatl/config.yaml'"
+        ));
+        assert_eq!(
+            shell_word(std::path::Path::new("/srv/axo/it's.yaml")),
+            r"'/srv/axo/it'\''s.yaml'"
+        );
+        assert_eq!(
+            shell_word(std::path::Path::new("/srv/axo-1/axocoatl.yaml")),
+            "/srv/axo-1/axocoatl.yaml"
+        );
+    }
+
+    #[test]
+    fn plain_server_url_brackets_ipv6_hosts() {
+        assert_eq!(plain_server_url("0.0.0.0", 8080), "http://0.0.0.0:8080/");
+        assert_eq!(plain_server_url("::", 8080), "http://[::]:8080/");
+        assert_eq!(plain_server_url("[::1]", 8080), "http://[::1]:8080/");
     }
 
     #[test]

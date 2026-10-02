@@ -23,6 +23,7 @@ axocoatl <command> --help
 | `axocoatl validate [CONFIG]` | Parse and validate a config path; an omitted path resolves the user configuration |
 | `axocoatl dev [-c, --config CONFIG]` | Run daemon, IPC, HTTP app, triggers, supervision, and consolidation in foreground; config defaults to the user configuration |
 | `axocoatl serve [-c, --config CONFIG]` | Run the same runtime entrypoint used by the installed service; config defaults to the user configuration |
+| `axocoatl url [-c, --config CONFIG]` | Print the browser sign-in link, `http://localhost:<port>/?token=<token>`, from the configured port and the data root's `local-api-token`. It reads only: it exits with status 1 when the daemon has not created the token yet, and prints the plain server URL when the configuration uses `server.auth` credentials, `allow_unauthenticated`, or a non-loopback host |
 
 The user configuration is
 `~/Library/Application Support/Axocoatl/config.yaml` on macOS. On Linux and
@@ -34,7 +35,13 @@ selected implicitly.
 Pass `--config /absolute/path/to/axocoatl.yaml` (or the positional path accepted
 by `validate`) for an advanced project-local configuration. `AXOCOATL_DATA_DIR`
 overrides its data location; otherwise an explicit configuration uses `data/`
-beside that file.
+beside that file. `axocoatl url` resolves the data root the same way, so pass
+the same `--config` and `AXOCOATL_DATA_DIR` the daemon uses.
+
+`dev` and `serve` print the full sign-in link only when standard output is a
+terminal; otherwise, for example under a service manager, they print a hint to
+run `axocoatl url` so the token stays out of logs. See
+[the local API token](/operate/security/#the-local-api-token).
 
 `dev` prints additional startup information, but neither command forces debug
 logging. Set `RUST_LOG`, for example:

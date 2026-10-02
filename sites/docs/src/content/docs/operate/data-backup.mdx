@@ -65,6 +65,7 @@ can include:
 | `memory/core/shared/v1/<block-key>.json` | Current shared core-memory blocks |
 | `memory/semantic/v1/agent_<agent-key>_semantic.json` | Current semantic records and vectors |
 | `models/` | Downloaded local embedding-model cache |
+| `local-api-token` | Per-daemon local API token (`0600`); a restore reuses it, deleting it issues a new one at the next start |
 | `automation/runs-v1/<automation-key>/<run-key>.json` | Current Automation run and node checkpoint records |
 | `automations.json` | Canonical Automation definitions |
 | `automation-folders.json` | Settings folder organization |

@@ -158,6 +158,7 @@ if (!['light', 'dark'].includes(theme)) fail('--theme must be light or dark.');
 try {
   const parsedUrl = new URL(url);
   if (!['http:', 'https:'].includes(parsedUrl.protocol)) fail('--url must use http or https.');
+  if (parsedUrl.searchParams.has('token')) fail('--url must not contain the sign-in token; record the workbench URL without it.');
 } catch (error) {
   if (error.message.startsWith('--url')) throw error;
   fail(`Invalid --url: ${url}`);

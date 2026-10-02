@@ -110,7 +110,8 @@ axocoatl doctor
 
 # 4. Start the daemon and open the one app
 axocoatl dev
-# http://localhost:8080
+# Open the "Sign in:" link it prints (http://localhost:8080/?token=…).
+# `axocoatl url` prints it again.
 # Choose Open workspace… in the app to authorize a repository.
 ```
 
@@ -165,7 +166,8 @@ tokens, and one Agent is cheaper for small tasks. To change the team, see
 ## What else the workbench does
 
 - **One executable, one browser surface.** `axocoatl dev` starts the local daemon
-  and serves the embedded workbench at `http://localhost:8080`. Conversation stays
+  and serves the embedded workbench at `http://localhost:8080`, behind a
+  per-daemon sign-in token. Conversation stays
   central while Files, Source Control, Preview, Terminal, History, and focused review
   open around the active Session.
 - **The Session survives the process.** Accepted turns have stable identities and
@@ -359,6 +361,7 @@ axocoatl doctor                  Environment / dependency health check
 axocoatl init <name>             Scaffold an explicit project-local config
 axocoatl validate <config>       Validate a config file
 axocoatl dev | serve             Run daemon (+ IPC) / production server
+axocoatl url                     Print the browser sign-in link
 axocoatl chat -a <agent>         Interactive chat
 axocoatl session upgrade --confirm  Convert stopped legacy Session storage after backup
 axocoatl workflow list | run     Compatibility view/run for manual Automations
@@ -371,7 +374,9 @@ axocoatl mcp servers|tools       Inspect connected MCP servers/tools
 
 This is a quick integration sketch, not an exhaustive route reference. See the
 [HTTP API overview](https://docs.axocoatl.ai/reference/http-api/) and current server
-router for the full surface.
+router for the full surface. Every route except the health probes and static assets
+needs a credential; locally, send `Authorization: Bearer <token>` with the token
+from `local-api-token` in the data directory.
 
 ```
 GET  /health                          POST /api/agents/{id}/execute

@@ -5,7 +5,9 @@ description: Complete current HTTP route inventory for health, Agents, Sessions,
 
 import { Aside } from '@astrojs/starlight/components';
 
-The daemon listens on `http://127.0.0.1:8080` by default. JSON errors generally
+The daemon listens on `http://127.0.0.1:8080` by default and, on loopback with
+no configured credentials, requires its per-daemon local API token (see below).
+JSON errors generally
 use `{ "error": "message" }`. The router in `axocoatl-server/src/lib.rs` and
 handler Serde types remain authoritative; there is not yet a generated OpenAPI
 document.
@@ -15,21 +17,51 @@ the [WebSocket reference](/reference/websocket/).
 
 ## Authentication, CORS, and rate limits
 
-Workbench and control-router routes other than `/health`, `/health/ready`, and
-`/health/live` pass through configured authentication. The dedicated Preview
-virtual Host is intercepted before that router and is constrained separately by
-its exact Session/port Host and browser-origin boundary. Send one of:
+Every workbench and control-router route that reads or changes state requires a
+credential. The dedicated Preview virtual Host is intercepted before that router
+and is constrained separately by its exact Session/port Host and browser-origin
+boundary.
+
+**Local token (default).** On a loopback listener with no `server.auth`
+credentials, the credential is the per-daemon token in the data root's
+`local-api-token` file. Send it in one of three forms:
+
+```http
+Authorization: Bearer <token>
+x-api-key: <token>
+Cookie: axocoatl-token-<port>=<token>
+```
+
+Browsers get the cookie by opening the sign-in link that `axocoatl dev`,
+`axocoatl serve`, or `axocoatl url` prints. `GET /?token=<token>` answers
+`303 See Other` to the same path and query without `token`, sets the cookie
+(HttpOnly, SameSite=Strict, `Path=/`, `Max-Age=2592000`), and sends
+`Referrer-Policy: no-referrer` and `Cache-Control: no-store`. A wrong token,
+or `/` without a credential, returns `401` with a short sign-in page. The cookie
+is ignored on requests marked `Sec-Fetch-Site: cross-site` or `same-site`.
+Public paths in this mode: `/health`, `/health/ready`, `/health/live`, `/ui/*`,
+`/vendor/*`, `/lattice/*`, `/brand/*`, `/axo-tap.js`, and the sign-in page at
+`/`. `server.auth.allow_unauthenticated: true` turns the token off but keeps
+the Host check described below.
+
+**Configured credentials.** With `server.auth.api_keys` or `bearer_tokens`,
+send one of:
 
 ```http
 x-api-key: <key>
 Authorization: Bearer <token>
 ```
 
-An empty `server.cors_origins` allows same-origin workbench requests only.
-Browser writes and WebSockets with an opaque `Origin: null` are always rejected;
-other cross-origin browser writes require an explicitly allowed origin. In the
-default unauthenticated loopback mode, an unknown Host is rejected independently
-to prevent DNS rebinding. Origin-less CLI clients remain supported. Cross-origin
+Only the health probes are public, there is no sign-in cookie, and an empty
+configured value never matches. All comparisons are constant time.
+
+Checks run in this order: an unexpected Host (`421`), a disallowed browser
+origin (`403`), then the credential (`401`). An empty `server.cors_origins`
+allows same-origin workbench requests only. Browser writes and WebSockets with
+an opaque `Origin: null` are always rejected; other cross-origin browser writes
+require an explicitly allowed origin. On a loopback listener without configured
+credentials, including with `allow_unauthenticated`, a Host other than
+`localhost` or a loopback IP literal is rejected to prevent DNS rebinding. Origin-less CLI clients remain supported. Cross-origin
 preflight for the control router advertises HEAD, GET, POST, PUT, PATCH, and
 DELETE. Control-router rate limiting is disabled by default and applies per
 client IP when enabled; Preview traffic stays outside that middleware.
@@ -50,16 +82,16 @@ asset URLs do not redirect.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/` | Embedded Session-first workbench; the only interactive browser destination |
-| GET | `/ui/{*file}` | Embedded UI modules and styles |
-| GET | `/vendor/{*file}` | Vendored Monaco, xterm, highlighting, fonts, and icons |
-| GET | `/lattice/{file}` | Lattice web-component assets |
-| GET | `/brand/{file}` | Canonical brand assets |
+| GET | `/` | Embedded Session-first workbench; the only interactive browser destination. With the local token: the sign-in redirect for `?token=`, and the sign-in page without a credential |
+| GET | `/ui/{*file}` | Embedded UI modules and styles (public with the local token) |
+| GET | `/vendor/{*file}` | Vendored Monaco, xterm, highlighting, fonts, and icons (public with the local token) |
+| GET | `/lattice/{file}` | Lattice web-component assets (public with the local token) |
+| GET | `/brand/{file}` | Canonical brand assets (public with the local token) |
 | GET | `/.axocoatl/preview-picker.js` on a Preview Host | Picker bridge for the dedicated Preview origin; communication is limited to source-and-origin-validated `postMessage` events |
-| GET | `/axo-tap.js` | Compatibility picker asset for the response-sandboxed legacy proxy |
-| GET | `/health` | Overall status and Agent count |
-| GET | `/health/ready` | `200` when at least one Agent is spawned, otherwise `503` |
-| GET | `/health/live` | Liveness probe |
+| GET | `/axo-tap.js` | Compatibility picker asset for the response-sandboxed legacy proxy (public with the local token) |
+| GET | `/health` | Overall status and Agent count (public) |
+| GET | `/health/ready` | `200` when at least one Agent is spawned, otherwise `503` (public) |
+| GET | `/health/live` | Liveness probe (public) |
 
 ## Models, Agents, and tokens
 
@@ -270,7 +302,10 @@ query parameter:
   Read each entry's `history_version` rather than assuming one shape.
 
 ```bash
-curl -s "http://127.0.0.1:8080/api/sessions/$SESSION/turns?history_version=2"
+# curl reads the header from stdin, so the token stays out of the process list.
+# DATA_ROOT is the daemon's data root, which holds local-api-token.
+printf 'Authorization: Bearer %s\n' "$(cat "$DATA_ROOT/local-api-token")" |
+  curl -s -H @- "http://127.0.0.1:8080/api/sessions/$SESSION/turns?history_version=2"
 ```
 
 ```json
@@ -453,7 +488,12 @@ Sibling Sessions can therefore use the same logical port without sharing a
 host port, browser origin, host-only cookies, or control-plane access. Rejection
 of a parent-domain cookie such as `Domain=localhost` is browser policy; the
 current Chromium journey verifies it, while the proxy forwards application
-`Set-Cookie` headers unchanged.
+`Set-Cookie` headers unchanged. Both proxies remove `axocoatl-token-*` cookies
+from forwarded requests and drop upstream `Set-Cookie` headers that would set
+one. The legacy `/api/sessions/{id}/proxy/{port}` path sits behind API
+authentication and never forwards Axocoatl credential headers. Its sandboxed
+page has an opaque origin, so its subresource requests carry no SameSite=Strict
+cookie; use it with a header credential.
 
 ## Session Git and Checks
 
@@ -592,7 +632,9 @@ the API accordingly. A2A is inbound only.
 ## WebSockets
 
 The unified live endpoint is `GET /ws`. Terminal PTYs use their separate
-Session route. See [WebSocket reference →](/reference/websocket/)
+Session route. Both upgrades need the same credential as other API routes: the
+workbench sends its sign-in cookie, and other clients send a header. See
+[WebSocket reference →](/reference/websocket/)
 
 <Aside type="note" title="No generated client contract yet">
 Route coverage is source-checked, but bodies are still hand documented. Pin a

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {after, before, test} from 'node:test';
 import {chromium} from 'playwright';
 import {historyPresentation, executionHistorySummary, createExecutionHistoryInvalidator} from '../../static/ui/execution-history.js';
-import {launchTestDaemon, resolveChromiumExecutable} from '../support/daemon.mjs';
+import {launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext} from '../support/daemon.mjs';
 
 function fixture() {
   const exact = generation => ({session_id:'history-session',turn_id:'native-turn',execution_epoch_id:`epoch-${generation}`,node_id:'reviewer',generation,activation_id:`activation-${generation}`});
@@ -65,7 +65,7 @@ test('a provider retry validates and drops only the abandoned round of observed 
 });
 
 test('retained native context reopens its exact prior generation and Ways decision after reload',async()=>{
- const context=await browser.newContext(),page=await context.newPage();try{
+ const context=await newAuthorizedContext(browser),page=await context.newPage();try{
   const reference={kind:'coordination_reference',reference_id:'context:native-turn:0',display_name:'Reviewer output · generation 2',metadata:{history_version:'execution_v2',source_session_id:'history-session',source_turn_id:'prior-turn',execution_epoch_id:'prior-epoch',node_id:'prior-reviewer',activation_id:'prior-activation',generation:2,reference_id:'prior-output',type:'output'}};
   const decision={kind:'ways_decision',reference_id:'context:native-turn:1',display_name:'Retained Ways decision',metadata:{source_session_id:'history-session',decision_id:'decision'}};
   const view=fixture();view.request.content.context=[reference,decision,...[
@@ -116,7 +116,7 @@ test('typed composer guidance presents human text while preserving exact retaine
 
 for(const options of [{theme:'light',width:1100},{theme:'dark',width:390}]) {
   test(`unfinished native history preserves evidence and disables rewind (${options.theme})`,async()=>{
-    const context=await browser.newContext({viewport:{width:options.width,height:840},reducedMotion:'reduce'});const page=await context.newPage();const errors=[];
+    const context=await newAuthorizedContext(browser, {viewport:{width:options.width,height:840},reducedMotion:'reduce'});const page=await context.newPage();const errors=[];
     page.on('pageerror',error=>errors.push(error.message));
     try {
       await page.route('**/execution-history-fixture',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html data-theme="${options.theme}"><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><main id="transcript"></main></body></html>`}));
@@ -166,7 +166,7 @@ test('Stop evidence preserves never-started nodes and rejects malformed or contr
 });
 
 test('Stopped-before-start transcript never gains a generation or action row',async()=>{
-  const context=await browser.newContext({viewport:{width:390,height:840},reducedMotion:'reduce'});const page=await context.newPage();
+  const context=await newAuthorizedContext(browser, {viewport:{width:390,height:840},reducedMotion:'reduce'});const page=await context.newPage();
   try {
     await page.route('**/stop-history-fixture',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><main></main>'}));
     await page.goto(`${runtime.baseUrl}/stop-history-fixture`);
@@ -230,7 +230,7 @@ test('guidance history binds exact amendments and separates recorded handoff, ac
 
 for(const options of [{theme:'light',width:1100},{theme:'dark',width:390}]) {
   test(`guidance stays visible in exact transcript, history and Context search (${options.theme})`,async()=>{
-    const context=await browser.newContext({viewport:{width:options.width,height:840},reducedMotion:'reduce'});const page=await context.newPage();const errors=[];const searches=[];
+    const context=await newAuthorizedContext(browser, {viewport:{width:options.width,height:840},reducedMotion:'reduce'});const page=await context.newPage();const errors=[];const searches=[];
     page.on('pageerror',error=>errors.push(error.message));
     try {
       const view=guidanceFixture();const entry={history_version:'execution_v2',turn:view};
@@ -294,7 +294,7 @@ test('exact human-wait invalidation reloads retained history without inventing a
 
 
 test('closed native history exposes exact rewind boundary while preserving evidence',async()=>{
-  const context=await browser.newContext({viewport:{width:1000,height:840}});const page=await context.newPage();
+  const context=await newAuthorizedContext(browser, {viewport:{width:1000,height:840}});const page=await context.newPage();
   const native=fixture();native.state='completed';
   let rows=[{history_version:'legacy_v1',turn:{id:'prior-turn',session_id:'history-session',user_input:'Prior request',status:'completed',context:[],created_at:500}},{history_version:'execution_v2',turn:native}];
   const requests=[];
@@ -332,7 +332,7 @@ test('Ways settlement shares bounded history invalidation with streams and ignor
 });
 
 test('actual Ways result consumer refreshes stale native conversation acceptance without a final token',async()=>{
-  const context=await browser.newContext({viewport:{width:1100,height:900}});const page=await context.newPage();
+  const context=await newAuthorizedContext(browser, {viewport:{width:1100,height:900}});const page=await context.newPage();
   const source=await fetch(`${runtime.baseUrl}/${process.env.AXOCOATL_COMPONENT_BASE_URL ? 'index.html' : ''}`).then(response=>response.text());
   let reads=0;
   const before=fixture();before.state='running';before.activations=before.activations.slice(2);before.activations[0].activation.state='running';before.activations[0].reserved_outputs=[];

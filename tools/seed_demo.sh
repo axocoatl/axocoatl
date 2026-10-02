@@ -6,11 +6,28 @@
 # Conflict if the id exists, in which case we PATCH it instead.
 #
 # Usage:
-#   bash tools/seed_demo.sh                       # defaults to localhost:8080
-#   AXO_URL=http://1.2.3.4:8080 bash tools/...    # remote
+#   AXOCOATL_DATA_DIR=<data dir> bash tools/seed_demo.sh   # localhost:8080
+#   AXO_URL=http://1.2.3.4:8080 AXO_TOKEN=<key> bash tools/...    # remote
+#
+# The local API needs the daemon's token: AXO_TOKEN, or the local-api-token
+# file in AXOCOATL_DATA_DIR. A server with configured credentials takes one
+# of those in AXO_TOKEN.
 set -euo pipefail
 
 URL="${AXO_URL:-http://127.0.0.1:8080}"
+TOKEN="${AXO_TOKEN:-}"
+if [ -z "$TOKEN" ]; then
+    if [ -z "${AXOCOATL_DATA_DIR:-}" ] || [ ! -r "$AXOCOATL_DATA_DIR/local-api-token" ]; then
+        echo "Set AXO_TOKEN, or AXOCOATL_DATA_DIR to the daemon's data directory (it holds local-api-token)." >&2
+        exit 1
+    fi
+    TOKEN="$(cat "$AXOCOATL_DATA_DIR/local-api-token")"
+fi
+# A private header file keeps the token out of the process list.
+HEADER_FILE="$(mktemp)"
+trap 'rm -f "$HEADER_FILE"' EXIT
+chmod 600 "$HEADER_FILE"
+printf 'Authorization: Bearer %s\n' "$TOKEN" > "$HEADER_FILE"
 JSON='{
   "id": "spec-review-demo",
   "name": "Spec Review · multi-perspective with HITL",
@@ -111,6 +128,7 @@ echo "→ POST $URL/api/automations  (spec-review-demo)"
 RESP_BODY="$(mktemp)"
 HTTP_CODE=$(curl -sS -o "$RESP_BODY" -w '%{http_code}' \
     -X POST "$URL/api/automations" \
+    -H "@$HEADER_FILE" \
     -H 'content-type: application/json' \
     -d "$JSON" || echo "000")
 
@@ -120,6 +138,7 @@ elif [ "$HTTP_CODE" = "400" ] && grep -q "already exists" "$RESP_BODY"; then
     echo "  exists already — updating in place via PATCH"
     curl -sS -o /dev/null -X PATCH \
         "$URL/api/automations/spec-review-demo" \
+        -H "@$HEADER_FILE" \
         -H 'content-type: application/json' -d "$JSON"
     echo "✓ updated"
 else

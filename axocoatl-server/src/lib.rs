@@ -17,7 +17,9 @@ pub type AppState = Arc<RwLock<AxocoatlDaemon>>;
 
 /// Build the Axum router with all API routes.
 ///
-/// `auth` gates every route except the health probes (see [`auth::enforce`]).
+/// `auth` gates every route that reads or changes state; health probes, and in
+/// local token mode the static assets and sign-in page, stay public (see
+/// [`auth::enforce`]).
 /// `cors_origins` is the cross-origin allow-list; empty means same-origin only.
 /// `rate_limiter` throttles per client IP (a no-op when disabled, the default).
 pub fn build_router(
@@ -475,6 +477,156 @@ fn is_loopback_host(host: &str) -> bool {
     }
 }
 
+/// For a loopback bind host, the address to serve on and the other loopback
+/// address family's address. `localhost` names both.
+fn loopback_bind_addresses(host: &str) -> Option<(std::net::IpAddr, std::net::IpAddr)> {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']');
+    if h.eq_ignore_ascii_case("localhost") {
+        return Some((
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+        ));
+    }
+    match h.parse::<IpAddr>().ok().filter(IpAddr::is_loopback)? {
+        ip @ IpAddr::V4(_) => Some((ip, IpAddr::V6(Ipv6Addr::LOCALHOST))),
+        ip @ IpAddr::V6(_) => Some((ip, IpAddr::V4(Ipv4Addr::LOCALHOST))),
+    }
+}
+
+/// Listen on `address` beside the main loopback listener. `Ok(None)` means
+/// this host has no loopback address in that family, so no other process can
+/// listen there either.
+fn bind_loopback_peer(
+    address: std::net::SocketAddr,
+) -> std::io::Result<Option<tokio::net::TcpListener>> {
+    let socket = if address.is_ipv4() {
+        tokio::net::TcpSocket::new_v4()
+    } else {
+        tokio::net::TcpSocket::new_v6()
+    };
+    // A kernel built without the address family cannot create the socket.
+    let Ok(socket) = socket else {
+        return Ok(None);
+    };
+    // Match `TcpListener::bind`, which sets SO_REUSEADDR on Unix.
+    #[cfg(unix)]
+    socket.set_reuseaddr(true)?;
+    match socket.bind(address) {
+        Ok(()) => socket.listen(1024).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrNotAvailable => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Bind the HTTP listeners for `host:port`. A loopback host also holds the
+/// same port on the other loopback address family: browsers, curl and Node
+/// try `[::1]` before `127.0.0.1` for `localhost`, so a process that listened
+/// there would receive the sign-in link and the workbench's cookies. Startup
+/// fails when another process already holds it.
+async fn bind_listeners(host: &str, port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
+    let Some((primary, peer)) = loopback_bind_addresses(host) else {
+        return Ok(vec![
+            tokio::net::TcpListener::bind(format!("{host}:{port}")).await?,
+        ]);
+    };
+    // An ephemeral port may already be taken in the other family; pick again.
+    let attempts = if port == 0 { 8 } else { 1 };
+    let mut last_error = None;
+    for _ in 0..attempts {
+        let listener =
+            tokio::net::TcpListener::bind(std::net::SocketAddr::new(primary, port)).await?;
+        let bound = listener.local_addr()?.port();
+        let peer_address = std::net::SocketAddr::new(peer, bound);
+        match bind_loopback_peer(peer_address) {
+            Ok(Some(peer_listener)) => return Ok(vec![listener, peer_listener]),
+            Ok(None) => {
+                tracing::debug!(addr = %peer_address, "no loopback address in this family; serving one listener");
+                return Ok(vec![listener]);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                last_error = Some(std::io::Error::new(
+                    std::io::ErrorKind::AddrInUse,
+                    format!(
+                        "another process is listening on {peer_address}. Browsers can send \
+                         `localhost:{bound}` requests there instead of to Axocoatl on \
+                         {primary}, so Axocoatl will not start beside it. Stop that process \
+                         or choose another server.port."
+                    ),
+                ));
+            }
+            Err(error) => {
+                return Err(std::io::Error::new(
+                    error.kind(),
+                    format!("could not also listen on {peer_address}: {error}"),
+                ))
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| std::io::Error::other("no listener was bound")))
+}
+
+/// Serve `app` on every listener until the graceful-shutdown signal. A
+/// listener that fails stops the others.
+async fn serve_listeners(
+    listeners: Vec<tokio::net::TcpListener>,
+    app: Router,
+    graceful: tokio::sync::watch::Receiver<bool>,
+) -> std::io::Result<()> {
+    use std::future::IntoFuture;
+    let servers = listeners.into_iter().map(|listener| {
+        let mut graceful = graceful.clone();
+        axum::serve(
+            listener,
+            app.clone()
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            while !*graceful.borrow() {
+                if graceful.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
+        .into_future()
+    });
+    futures_util::future::try_join_all(servers)
+        .await
+        .map(|_| ())
+}
+
+/// The configured credentials for a server on `host`. On loopback,
+/// `allow_unauthenticated` turns off only the local token: the Host check
+/// that stops DNS rebinding stays, so a same-host proxy must send
+/// `Host: localhost` or a loopback IP.
+fn server_auth_config(host: &str, auth: &axocoatl_config::ServerAuthYaml) -> auth::AuthConfig {
+    auth::AuthConfig::new(auth.api_keys.clone(), auth.bearer_tokens.clone())
+        .with_allow_unauthenticated_remote(auth.allow_unauthenticated && !is_loopback_host(host))
+}
+
+/// Whether the server on `host` requires the per-daemon local API token: a
+/// loopback bind with no configured credentials, unless the operator set
+/// `server.auth.allow_unauthenticated`.
+pub fn local_token_mode(host: &str, auth: &axocoatl_config::ServerAuthYaml) -> bool {
+    is_loopback_host(host) && !auth.is_enabled() && !auth.allow_unauthenticated
+}
+
+/// The browser sign-in link for a daemon about to serve on `host:port`, or
+/// `None` when the local token does not apply. Creates the token on first
+/// start; [`serve_shared`] loads the same file.
+pub async fn sign_in_url(
+    state: &AppState,
+    host: &str,
+    port: u16,
+) -> std::io::Result<Option<String>> {
+    let daemon = state.read().await;
+    if !local_token_mode(host, &daemon.config.server.auth) {
+        return Ok(None);
+    }
+    let secret = auth::load_or_create_local_token(daemon.data_root())?;
+    Ok(Some(auth::sign_in_url(port, &secret)))
+}
+
 /// Start the HTTP server.
 pub async fn serve(daemon: AxocoatlDaemon, host: &str, port: u16) -> std::io::Result<()> {
     let state: AppState = Arc::new(RwLock::new(daemon));
@@ -484,14 +636,14 @@ pub async fn serve(daemon: AxocoatlDaemon, host: &str, port: u16) -> std::io::Re
 /// Start the HTTP server with a shared daemon state (for use alongside IPC).
 pub async fn serve_shared(state: AppState, host: &str, port: u16) -> std::io::Result<()> {
     // Pull auth + CORS from the live config.
-    let (auth, cors_origins, allow_unauthenticated, rate_cfg) = {
+    let (auth, cors_origins, allow_unauthenticated, token_mode, rate_cfg) = {
         let d = state.read().await;
         let s = &d.config.server;
         (
-            auth::AuthConfig::new(s.auth.api_keys.clone(), s.auth.bearer_tokens.clone())
-                .with_allow_unauthenticated_remote(s.auth.allow_unauthenticated),
+            server_auth_config(host, &s.auth),
             s.cors_origins.clone(),
             s.auth.allow_unauthenticated,
+            local_token_mode(host, &s.auth),
             s.rate_limit.clone(),
         )
     };
@@ -517,12 +669,49 @@ pub async fn serve_shared(state: AppState, host: &str, port: u16) -> std::io::Re
             )),
         });
     }
-    if auth.enabled {
+    // Loopback without configured credentials: only callers that can read
+    // the data root (the user's own tools and browser sign-in) may use the
+    // API. Session containers never see the data root.
+    let local_token = if token_mode {
+        let loaded = {
+            let d = state.read().await;
+            auth::load_or_create_local_token(d.data_root())
+        };
+        match loaded {
+            Ok(secret) => Some(secret),
+            Err(error) => {
+                let msg = format!("could not load the local API token: {error}");
+                tracing::error!("{msg}");
+                state.read().await.begin_shutdown();
+                let cleanup = state.read().await.shutdown_session_runtimes_checked().await;
+                let error = std::io::Error::new(error.kind(), msg);
+                return Err(match cleanup {
+                    Ok(()) => error,
+                    Err(cleanup_error) => std::io::Error::other(format!(
+                        "{error}; Session runtime cleanup after the token failure was incomplete: {cleanup_error}"
+                    )),
+                });
+            }
+        }
+    } else {
+        None
+    };
+    if local_token.is_some() {
+        tracing::info!(
+            host,
+            "Axocoatl local API requires the per-daemon token; run `axocoatl url` for the sign-in link"
+        );
+    } else if auth.enabled {
         tracing::info!(host, "Axocoatl API authentication enabled");
+    } else if is_loopback_host(host) {
+        tracing::warn!(
+            host,
+            "Axocoatl API authentication disabled by server.auth.allow_unauthenticated — any local process can use the API; requests must still send Host: localhost or a loopback IP"
+        );
     } else {
         tracing::warn!(
             host,
-            "Axocoatl API authentication disabled — loopback/local use only"
+            "Axocoatl API authentication disabled by server.auth.allow_unauthenticated — an upstream proxy must enforce it"
         );
     }
 
@@ -539,13 +728,11 @@ pub async fn serve_shared(state: AppState, host: &str, port: u16) -> std::io::Re
         );
     }
 
-    let app = build_router(state.clone(), auth, cors_origins, rate_limiter);
-
     let addr = format!("{host}:{port}");
     tracing::info!(addr = %addr, "Starting Axocoatl API server");
 
-    let listener = match tokio::net::TcpListener::bind(&addr).await {
-        Ok(listener) => listener,
+    let listeners = match bind_listeners(host, port).await {
+        Ok(listeners) => listeners,
         Err(error) => {
             state.read().await.begin_shutdown();
             let cleanup = state.read().await.shutdown_session_runtimes_checked().await;
@@ -557,26 +744,26 @@ pub async fn serve_shared(state: AppState, host: &str, port: u16) -> std::io::Re
             });
         }
     };
+    // The browser cookie is named after the bound port (it differs from
+    // `port` only for an ephemeral `port: 0` bind).
+    let auth = match local_token {
+        Some(secret) => {
+            let bound_port = listeners
+                .first()
+                .and_then(|listener| listener.local_addr().ok())
+                .map_or(port, |address| address.port());
+            auth.with_local_token(secret, bound_port)
+        }
+        None => auth,
+    };
+    let app = build_router(state.clone(), auth, cors_origins, rate_limiter);
     // Start draining connections as soon as OS or IPC shutdown is requested,
     // while checked runtime cleanup proceeds concurrently. A stuck WebSocket
     // or request gets a bounded grace period; aborting the server then drops
     // that request so its runtime creation lease can roll back and cleanup can
     // finish rather than hanging forever.
-    let (graceful_tx, mut graceful_rx) = tokio::sync::watch::channel(false);
-    let mut server_task = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(async move {
-            while !*graceful_rx.borrow() {
-                if graceful_rx.changed().await.is_err() {
-                    break;
-                }
-            }
-        })
-        .await
-    });
+    let (graceful_tx, graceful_rx) = tokio::sync::watch::channel(false);
+    let mut server_task = tokio::spawn(serve_listeners(listeners, app, graceful_rx));
     let shutdown_request = wait_for_shutdown_request(state.clone());
     tokio::pin!(shutdown_request);
 
@@ -683,7 +870,128 @@ async fn wait_for_shutdown_request(state: AppState) {
 
 #[cfg(test)]
 mod tests {
-    use super::is_loopback_host;
+    use super::{bind_listeners, is_loopback_host, local_token_mode, server_auth_config};
+    use axocoatl_config::ServerAuthYaml;
+    use axum::http::{header, HeaderMap};
+
+    #[test]
+    fn allow_unauthenticated_keeps_the_host_check_on_loopback() {
+        let open = ServerAuthYaml {
+            allow_unauthenticated: true,
+            ..ServerAuthYaml::default()
+        };
+        let mut rebinding = HeaderMap::new();
+        rebinding.insert(header::HOST, "attacker.example:8080".parse().unwrap());
+        let mut local = HeaderMap::new();
+        local.insert(header::HOST, "localhost:8080".parse().unwrap());
+        for host in ["127.0.0.1", "localhost", "::1"] {
+            let config = server_auth_config(host, &open);
+            assert!(!config.enabled, "{host}");
+            assert!(
+                crate::auth::local_mode_rejects_host(&config, &rebinding),
+                "{host}"
+            );
+            assert!(
+                !crate::auth::local_mode_rejects_host(&config, &local),
+                "{host}"
+            );
+        }
+        let remote = server_auth_config("0.0.0.0", &open);
+        assert!(!crate::auth::local_mode_rejects_host(&remote, &rebinding));
+    }
+
+    fn ipv6_loopback_available() -> bool {
+        std::net::TcpListener::bind("[::1]:0").is_ok()
+    }
+
+    #[tokio::test]
+    async fn loopback_listener_holds_the_port_in_both_address_families() {
+        for host in ["127.0.0.1", "::1", "[::1]", "localhost"] {
+            if host != "127.0.0.1" && !ipv6_loopback_available() {
+                continue;
+            }
+            let listeners = bind_listeners(host, 0).await.unwrap();
+            let addresses: Vec<_> = listeners
+                .iter()
+                .map(|listener| listener.local_addr().unwrap())
+                .collect();
+            let port = addresses[0].port();
+            assert!(addresses.iter().all(|address| address.port() == port));
+            assert!(addresses.iter().any(|address| address.is_ipv4()), "{host}");
+            if ipv6_loopback_available() {
+                assert_eq!(addresses.len(), 2, "{host}");
+                assert!(addresses.iter().any(|address| address.is_ipv6()), "{host}");
+            }
+            for address in addresses {
+                let error = std::net::TcpListener::bind(address).unwrap_err();
+                assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "{address}");
+            }
+        }
+    }
+
+    /// A port where `taken` already has a listener and `free` has none.
+    fn held_port(taken: &str, free: &str) -> (std::net::TcpListener, u16) {
+        for _ in 0..20 {
+            let holder = std::net::TcpListener::bind(format!("{taken}:0")).unwrap();
+            let port = holder.local_addr().unwrap().port();
+            if std::net::TcpListener::bind(format!("{free}:{port}")).is_ok() {
+                return (holder, port);
+            }
+        }
+        panic!("no port free on {free} while held on {taken}");
+    }
+
+    #[tokio::test]
+    async fn a_listener_on_the_other_loopback_family_stops_startup() {
+        if !ipv6_loopback_available() {
+            return;
+        }
+        for (taken, host) in [("[::1]", "127.0.0.1"), ("127.0.0.1", "::1")] {
+            let (_holder, port) = held_port(taken, host_literal(host));
+            let error = bind_listeners(host, port).await.unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse, "{host}");
+            assert!(
+                error.to_string().contains(&format!("{taken}:{port}")),
+                "{error}"
+            );
+            // The listener on the requested address was released.
+            std::net::TcpListener::bind(format!("{}:{port}", host_literal(host))).unwrap();
+        }
+    }
+
+    fn host_literal(host: &str) -> &str {
+        if host == "::1" {
+            "[::1]"
+        } else {
+            host
+        }
+    }
+
+    #[test]
+    fn local_token_applies_to_loopback_without_credentials() {
+        let none = ServerAuthYaml::default();
+        for host in ["127.0.0.1", "localhost", "::1", "[::1]"] {
+            assert!(local_token_mode(host, &none), "{host}");
+        }
+        assert!(!local_token_mode("0.0.0.0", &none));
+        assert!(!local_token_mode("192.168.1.10", &none));
+
+        let configured = ServerAuthYaml {
+            api_keys: vec!["key".into()],
+            ..ServerAuthYaml::default()
+        };
+        assert!(!local_token_mode("127.0.0.1", &configured));
+        let bearer = ServerAuthYaml {
+            bearer_tokens: vec!["token".into()],
+            ..ServerAuthYaml::default()
+        };
+        assert!(!local_token_mode("127.0.0.1", &bearer));
+        let open = ServerAuthYaml {
+            allow_unauthenticated: true,
+            ..ServerAuthYaml::default()
+        };
+        assert!(!local_token_mode("127.0.0.1", &open));
+    }
 
     #[test]
     fn loopback_hosts_are_recognized() {

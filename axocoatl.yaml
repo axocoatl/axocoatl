@@ -173,7 +173,8 @@ providers:
 
 server:
   port: 8080
-  # Loopback by default — safe for local, single-user use (no auth needed).
+  # Loopback by default. With no auth below, the API requires the per-daemon
+  # token in <data>/local-api-token; `axocoatl url` prints the sign-in link.
   host: "127.0.0.1"
   # To expose Axocoatl on the network you MUST configure auth, or the server
   # refuses to start. Tokens support ${ENV_VAR} interpolation.

@@ -42,18 +42,25 @@ workflow-to-Automation seed:
 
 ```bash
 export AXOCOATL_TEST_DATA="$(mktemp -d)/data"
+echo "$AXOCOATL_TEST_DATA"
 AXOCOATL_DATA_DIR="$AXOCOATL_TEST_DATA" \
   cargo run -p axocoatl-cli -- dev -c axocoatl.example.yaml
 ```
 
 Expect the daemon to expose IPC and the browser app at
-`http://localhost:8080`. In another terminal:
+`http://localhost:8080`, and to print a `Sign in:` link. The API requires the
+per-daemon token from the data directory. In another terminal, set
+`AXOCOATL_TEST_DATA` to the path the `echo` printed, then run the checks there.
+Later steps use this second terminal too:
 
 ```bash
+export AXOCOATL_TEST_DATA='/path/printed/by/echo'
 curl -fsS http://localhost:8080/health
 curl -fsS http://localhost:8080/health/ready
-curl -fsS http://localhost:8080/api/agents
-curl -fsS http://localhost:8080/api/automations
+# curl reads the Authorization header from stdin, keeping the token out of argv.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXOCOATL_TEST_DATA/local-api-token")" | curl -fsS -H @- "$@"; }
+axo_api http://localhost:8080/api/agents
+axo_api http://localhost:8080/api/automations
 ```
 
 The starter config defines the default team (Lead, Scout, Reviewer) and two Ollama
@@ -64,7 +71,9 @@ authoritative and YAML is not imported again.
 
 ## 3. Exercise the one-app session loop
 
-Open `http://localhost:8080` and use a disposable Git repository.
+Open the `Sign in:` link the daemon printed (or run
+`AXOCOATL_DATA_DIR="$AXOCOATL_TEST_DATA" cargo run -p axocoatl-cli -- url -c axocoatl.example.yaml`)
+and use a disposable Git repository.
 
 1. Choose **Open workspace…**, authorize the repository, and confirm its Workspace name.
 2. With that Workspace selected, create a Session with the `researcher` agent.
@@ -123,7 +132,7 @@ the live dispatcher. Run the seeded manual record from **Settings →
 Automations**, or use the compatibility route:
 
 ```bash
-curl -fsS -X POST \
+axo_api -X POST \
   http://localhost:8080/api/workflows/hello-world/execute \
   -H 'Content-Type: application/json' \
   -d '{"input":"Explain ownership in two stages."}'

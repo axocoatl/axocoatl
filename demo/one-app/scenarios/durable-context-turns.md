@@ -92,16 +92,18 @@ Use **Minimal Coder**. Keep **Explore several ways** off for this scenario.
 ```bash
 export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-harbor-catalog'
-curl -sS "$AXO_DEMO_URL/api/sessions"
+# The local API needs this daemon's token; curl reads the header from stdin.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXO_DEMO_ROOT/data/local-api-token")" | curl -sS -H @- "$@"; }
+axo_api "$AXO_DEMO_URL/api/sessions"
 ```
 
 Copy the Session id, then:
 
 ```bash
 export AXO_SESSION_ID='ses-paste-the-id-here'
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/attachments"
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
+axo_api "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/attachments"
+axo_api "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
+axo_api "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
 sed -n '1,220p' \
   "$AXO_DEMO_ROOT/data/session-history/session-attachments.v1.json"
 ```

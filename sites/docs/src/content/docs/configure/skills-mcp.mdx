@@ -28,8 +28,14 @@ Choose **Settings → Skills**, select the record, and choose **Fire this Skill*
 or use the daemon API:
 
 ```sh
-curl -X POST http://127.0.0.1:8080/api/skills/review-requested/fire
+# The local API needs the daemon's token; curl reads the header from stdin.
+printf 'Authorization: Bearer %s\n' \
+  "$(cat ~/Library/Application\ Support/Axocoatl/data/local-api-token)" |
+  curl -H @- -X POST http://127.0.0.1:8080/api/skills/review-requested/fire
 ```
+
+On Linux, the token is in `~/.local/share/axocoatl/local-api-token` unless
+`XDG_DATA_HOME` or `AXOCOATL_DATA_DIR` says otherwise.
 
 The CLI commands named `axocoatl skills list` and `axocoatl skills run` belong
 to a separate registry of built-in prompt templates. `run` renders a template

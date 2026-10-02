@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {after, before, test} from 'node:test';
 import {chromium} from 'playwright';
-import {launchTestDaemon, resolveChromiumExecutable} from '../support/daemon.mjs';
+import {launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext} from '../support/daemon.mjs';
 
 let runtime, browser;
 before(async()=>{
@@ -12,7 +12,7 @@ before(async()=>{
 after(async()=>{await browser?.close();await runtime?.stop();});
 
 test('Settings reads global actor status without polling reusable Worker templates',async()=>{
-  const context=await browser.newContext(),page=await context.newPage();
+  const context=await newAuthorizedContext(browser),page=await context.newPage();
   const calls=[],errors=[];
   page.on('pageerror',error=>errors.push(error.message));
   page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});

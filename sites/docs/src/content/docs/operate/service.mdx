@@ -39,6 +39,16 @@ agent on macOS.
    axocoatl service status
    ```
 
+5. Print the browser sign-in link. The service does not print it, so the token
+   stays out of its logs:
+
+   ```sh
+   axocoatl url
+   ```
+
+   For a service installed with `--config`, pass the same path, and the same
+   `AXOCOATL_DATA_DIR` if the service sets one.
+
 </Steps>
 
 Install resolves both the current `axocoatl` executable and the config file to

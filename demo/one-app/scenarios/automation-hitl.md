@@ -38,7 +38,8 @@ AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-signal-desk \
 In a second terminal, after the daemon is healthy:
 
 ```bash
-./demo/one-app/seed-runtime-demos.sh
+AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-signal-desk \
+  ./demo/one-app/seed-runtime-demos.sh
 ```
 
 The seeder creates or updates `spec-review-demo` in the canonical Automation
@@ -100,15 +101,17 @@ While the run is parked:
 ```bash
 export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-signal-desk'
-curl -sS "$AXO_DEMO_URL/api/interrupts"
-curl -sS "$AXO_DEMO_URL/api/automations/spec-review-demo/runs"
+# The local API needs this daemon's token; curl reads the header from stdin.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXO_DEMO_ROOT/data/local-api-token")" | curl -sS -H @- "$@"; }
+axo_api "$AXO_DEMO_URL/api/interrupts"
+axo_api "$AXO_DEMO_URL/api/automations/spec-review-demo/runs"
 ```
 
 Copy the run id, then inspect it before and after Resume:
 
 ```bash
 export AXO_RUN_ID='paste-the-run-uuid-here'
-curl -sS \
+axo_api \
   "$AXO_DEMO_URL/api/automations/spec-review-demo/runs/$AXO_RUN_ID"
 sed -n '1,320p' \
   "$AXO_DEMO_ROOT/data/automation/runs-v1/spec-review-demo/$AXO_RUN_ID.json"
@@ -139,8 +142,13 @@ Map, branch, Interrupt, and Resume state transitions in order.
 2. Close any demo Session opened for navigation and stop `start.sh` with
    Ctrl-C.
 3. Reset with `./demo/one-app/prepare.sh --scenario signal-desk`, restart the
-   same Signal Desk root, and run `./demo/one-app/seed-runtime-demos.sh`
-   against the fresh daemon.
+   same Signal Desk root, and run the seeder against the fresh daemon with that
+   root, so it reads the fresh daemon's token:
+
+   ```bash
+   AXOCOATL_DEMO_ROOT=/private/tmp/axocoatl-one-app-showcase-signal-desk \
+     ./demo/one-app/seed-runtime-demos.sh
+   ```
 
 ## Known constraints
 

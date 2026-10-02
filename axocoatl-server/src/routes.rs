@@ -31,7 +31,15 @@ const DASHBOARD_HTML: &str = include_str!("../static/index.html");
 pub async fn dashboard(headers: HeaderMap, OriginalUri(uri): OriginalUri) -> Response {
     if let Some(location) = canonical_workbench_location(&headers, &uri) {
         let mut response = StatusCode::TEMPORARY_REDIRECT.into_response();
-        response.headers_mut().insert(header::LOCATION, location);
+        let response_headers = response.headers_mut();
+        response_headers.insert(header::LOCATION, location);
+        // The query may hold a sign-in token; keep it out of Referer and
+        // caches on the way to the canonical host.
+        response_headers.insert(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        );
+        response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         return response;
     }
     (
@@ -44,8 +52,9 @@ pub async fn dashboard(headers: HeaderMap, OriginalUri(uri): OriginalUri) -> Res
 /// Keep the browser workbench and its `<session>-p<port>.localhost` Preview
 /// frames on the same browser site so ordinary app cookies keep working. Only
 /// the exact dashboard route calls this helper: API, health, asset, CLI, and
-/// non-loopback operator hosts never redirect.
-fn canonical_workbench_location(headers: &HeaderMap, uri: &Uri) -> Option<HeaderValue> {
+/// non-loopback operator hosts never redirect. Local token auth calls it too,
+/// so sign-in always happens on the canonical host.
+pub(crate) fn canonical_workbench_location(headers: &HeaderMap, uri: &Uri) -> Option<HeaderValue> {
     let authority = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
@@ -6734,9 +6743,17 @@ fn preview_upstream_request(
 ) -> reqwest::RequestBuilder {
     let mut request = client.request(method, upstream);
     for (name, value) in request_headers {
-        if request_header_is_forwardable(name, mode) {
-            request = request.header(name, value);
+        if !request_header_is_forwardable(name, mode) {
+            continue;
         }
+        if name == header::COOKIE {
+            // Session code never receives the workbench sign-in cookie.
+            if let Some(value) = crate::auth::without_local_token_cookies(value) {
+                request = request.header(name, value);
+            }
+            continue;
+        }
+        request = request.header(name, value);
     }
     if let Some(host) = preview_http_upstream_host(mode, request_headers, logical_port) {
         // TCP still targets the resolved loopback transport. Keeping the
@@ -7044,6 +7061,9 @@ async fn proxy_preview_http_to_port(
         if !response_header_is_forwardable(name) {
             continue;
         }
+        if name == header::SET_COOKIE && crate::auth::sets_local_token_cookie(value) {
+            continue;
+        }
         let value = if name == header::LOCATION {
             rewrite_preview_location(value)
         } else {
@@ -7098,7 +7118,10 @@ async fn preview_websocket_proxy_to_port(
         .map(str::to_string);
     let preview_host = parts.headers.get(header::HOST).cloned();
     let origin = parts.headers.get(header::ORIGIN).cloned();
-    let cookie = parts.headers.get(header::COOKIE).cloned();
+    let cookie = parts
+        .headers
+        .get(header::COOKIE)
+        .and_then(crate::auth::without_local_token_cookies);
     let upgrade = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
         Ok(upgrade) => upgrade,
         Err(error) => return error.into_response(),
@@ -7212,7 +7235,10 @@ async fn bridge_preview_websocket(
 
 /// Compatibility proxy URL retained for older callers. The product iframe uses
 /// the per-Session/per-port Preview host; this path remains response-sandboxed
-/// because it shares the workbench origin.
+/// because it shares the workbench origin. It sits behind API auth: Axocoatl
+/// cookies and credential headers are never forwarded, and subresources the
+/// sandboxed (opaque-origin) page loads carry no SameSite=Strict cookie, so
+/// browser use needs a header credential.
 pub async fn session_browser_proxy(
     State(state): State<AppState>,
     Path((session_id, port, tail)): Path<(String, u16, String)>,
@@ -8539,6 +8565,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dashboard_canonical_redirect_sends_no_referrer() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "127.0.0.1:18080".parse().unwrap());
+        let response = dashboard(headers, OriginalUri("/?token=abc".parse().unwrap())).await;
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::REFERRER_POLICY)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-referrer")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+    }
+
+    #[tokio::test]
     async fn preview_upstream_observes_app_credentials_only_on_virtual_hosts() {
         async fn capture(mode: PreviewProxyMode) -> String {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -8580,6 +8628,12 @@ mod tests {
                 "Bearer control-token".parse().unwrap(),
             );
             headers.insert(header::ACCEPT_ENCODING, "gzip".parse().unwrap());
+            headers.insert(
+                header::COOKIE,
+                "axocoatl-token-18080=workbench-secret; app=1"
+                    .parse()
+                    .unwrap(),
+            );
 
             let client = reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -8607,6 +8661,9 @@ mod tests {
         assert!(virtual_request.contains("x-api-key: app-key\r\n"));
         assert!(virtual_request.contains("accept-encoding: identity\r\n"));
         assert!(!virtual_request.contains("proxy-authorization:"));
+        assert!(virtual_request.contains("cookie: app=1\r\n"));
+        assert!(!virtual_request.contains("axocoatl-token"));
+        assert!(!virtual_request.contains("workbench-secret"));
 
         let legacy_request = capture(PreviewProxyMode::LegacyOpaque {
             base: "/legacy/".into(),
@@ -8618,6 +8675,9 @@ mod tests {
         assert!(!legacy_request.contains("x-api-key:"));
         assert!(legacy_request.contains("accept-encoding: identity\r\n"));
         assert!(!legacy_request.contains("proxy-authorization:"));
+        assert!(legacy_request.contains("cookie: app=1\r\n"));
+        assert!(!legacy_request.contains("axocoatl-token"));
+        assert!(!legacy_request.contains("workbench-secret"));
     }
 
     #[tokio::test]
@@ -8671,7 +8731,7 @@ mod tests {
             let html_request = read_request(&mut html_socket).await;
             let html = b"<!doctype html><html><body><main>saved</main></body></html>";
             let response = format!(
-                "HTTP/1.1 201 Created\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nLocation: http://127.0.0.1:9999/done?ok=1#saved\r\nSet-Cookie: app_session=alpha; Path=/; HttpOnly\r\nX-Upstream: real-html\r\nContent-Security-Policy: default-src 'none'\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 201 Created\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nLocation: http://127.0.0.1:9999/done?ok=1#saved\r\nSet-Cookie: app_session=alpha; Path=/; HttpOnly\r\nSet-Cookie: axocoatl-token-18080=forged; Path=/\r\nX-Upstream: real-html\r\nContent-Security-Policy: default-src 'none'\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n",
                 html.len()
             );
             html_socket
@@ -8737,6 +8797,15 @@ mod tests {
                 .get(header::SET_COOKIE)
                 .and_then(|value| value.to_str().ok()),
             Some("app_session=alpha; Path=/; HttpOnly")
+        );
+        // Session code cannot plant or replace the workbench sign-in cookie.
+        assert_eq!(
+            html_response
+                .headers()
+                .get_all(header::SET_COOKIE)
+                .iter()
+                .count(),
+            1
         );
         assert_eq!(
             html_response

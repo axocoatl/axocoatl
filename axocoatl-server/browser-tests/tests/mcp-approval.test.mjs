@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
 
-import { launchTestDaemon, resolveChromiumExecutable } from '../support/daemon.mjs';
+import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext } from '../support/daemon.mjs';
 
 let runtime;
 let browser;
@@ -174,7 +174,7 @@ test('a Session MCP decision survives reconnect and renders honest denied and ap
   const errors = [];
   const failedResponses = [];
 
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const context = await newAuthorizedContext(browser, { viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
   page.on('console', (message) => {

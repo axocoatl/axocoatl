@@ -18,7 +18,7 @@ Use this page at the podium. The full recovery detail is in
 - [ ] Run `./demo/one-app/prepare.sh` from the Axocoatl repository.
 - [ ] In terminal A, run `./demo/one-app/start.sh` and leave it foregrounded.
 - [ ] In terminal B, run `./demo/one-app/seed-automation.sh` after readiness.
-- [ ] Open `http://127.0.0.1:18080` and create the prepared session:
+- [ ] Open the `Sign in:` link printed in terminal A and create the prepared session:
   - [ ] authorize `$DEMO_ROOT/workspace` using its expanded platform path;
   - [ ] choose **Single agent** with `Minimal Coder`;
   - [ ] keep the detected `npm run check` command;

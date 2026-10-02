@@ -4,14 +4,14 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {after,before,test} from 'node:test';
 import {chromium} from 'playwright';
-import {launchTestDaemon,resolveChromiumExecutable} from '../support/daemon.mjs';
+import {launchTestDaemon,resolveChromiumExecutable,newAuthorizedContext} from '../support/daemon.mjs';
 let runtime,browser,appSource,screenshots;
 before(async()=>{screenshots=await mkdtemp(join(tmpdir(),'axocoatl-ways-graph-'));runtime=process.env.AXOCOATL_COMPONENT_BASE_URL?{baseUrl:process.env.AXOCOATL_COMPONENT_BASE_URL,stop:async()=>{}}:await launchTestDaemon();const response=await fetch(`${runtime.baseUrl}/${process.env.AXOCOATL_COMPONENT_BASE_URL?'index.html':''}`);assert.equal(response.ok,true);appSource=await response.text();const executablePath=await resolveChromiumExecutable();browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});});
 after(async()=>{try{await browser?.close();await runtime?.stop();}finally{if(screenshots)await rm(screenshots,{recursive:true,force:true});}});
 const text=value=>({state:'complete',text:value,sha256:'a'.repeat(64)});
 function retained(){return{decision_id:'decision',session_id:'session',set_id:'set-original',task:text('Verify client change'),human_decision:{choice:{kind:'no_keep'},decided_at_unix_ms:1},application:{state:'no_keep_recorded'},cleanup:{completed_at_unix_ms:2},candidates:[{id:{set_id:'set-original',index:0},agent:'captured-agent',model:{state:'available',value:{provider_id:'ollama',model_id:'captured-model'}},isolation:{state:'available',value:'podman'},terminal:'failed',outcome:text('Recorded failure'),route:text('Exact recorded Route'),reviewable_diff:{state:'truncated',text:'diff body',original_bytes:99,offset_bytes:0},changed_paths:{items:['src/a.rs'],original_count:1},checks:[{command:{state:'available',value:'cargo test'},outcome:'failed',exit_code:{state:'available',value:1},duration_ms:{state:'available',value:2},output:text('actual failure')}],usage:{tokens:{kind:'unknown',known_subtotal:{input_tokens:3,output_tokens:1}},cost_usd_known_subtotal:0,cost_complete:false}}]};}
 async function fixture(theme='light'){
- const context=await browser.newContext({viewport:{width:theme==='dark'?390:1100,height:900},reducedMotion:'reduce'}),page=await context.newPage(),errors=[],calls=[];
+ const context=await newAuthorizedContext(browser, {viewport:{width:theme==='dark'?390:1100,height:900},reducedMotion:'reduce'}),page=await context.newPage(),errors=[],calls=[];
  const state={results:{attempt_set:{id:'set-original',session_id:'session',task:'Verify client change',state:'running',lanes:[{index:0,agent:'captured-agent',provider:'ollama',model:'captured-model',worktree:'/actual/clone'}]},lane_states:[{index:0,state:'running'}],usage:[],outputs:[],verdicts:[]},archive:{limits:{version:1,field_bytes:1024,record_bytes:1048576,aggregate_bytes:8388608,records:100,candidates:100,items_per_field:1000},decisions:[]}};
  page.on('pageerror',error=>errors.push(error.message));
  await page.route('**/fixture-app-source',route=>route.fulfill({contentType:'text/plain',body:appSource}));

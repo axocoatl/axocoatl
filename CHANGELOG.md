@@ -5,6 +5,34 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **The local API now requires a per-daemon token.** Before, when Axocoatl listened on
+  loopback with no `server.auth` credentials, any local process, and code in a Session
+  container that could reach the host's loopback address, could use the HTTP API and
+  WebSockets without a credential. On first start the daemon now writes a random token
+  to `local-api-token` in the data directory (mode `0600`) and reuses it on every
+  restart. `axocoatl dev` and `axocoatl serve` print a sign-in link when run in a
+  terminal, and the new `axocoatl url` command prints it again. Opening the link sets an
+  HttpOnly, SameSite=Strict cookie for that browser. Scripts send
+  `Authorization: Bearer <token>` or `x-api-key: <token>`. Health probes, the sign-in
+  page and static assets stay public. Configured `api_keys` and `bearer_tokens` work as
+  before, and `allow_unauthenticated: true` keeps the API open for an authenticating
+  proxy. On loopback it keeps the Host check against DNS rebinding, so a proxy on the
+  same host must send `Host: localhost`. To rotate the token, stop Axocoatl, delete the
+  file and start it again. After upgrading, open the link from `axocoatl url` and reload
+  any workbench tab that was already open. `axocoatl service install`, `start` and `status` point to
+  `axocoatl url`, because a service's own sign-in hint goes to its log.
+- A loopback listener now also holds its port on the other loopback address family
+  (`127.0.0.1` and `[::1]`), and does not start if another process already listens
+  there. Browsers try `[::1]` first for `localhost`, so such a process could otherwise
+  receive the sign-in link and the workbench's requests.
+- An empty configured credential, such as an unset `${ENV}` in `server.auth`, no longer
+  matches an empty `x-api-key` header. Credentials are compared in constant time.
+- Request logs show a `token=` query value as `token=REDACTED`, and the Preview proxies
+  never forward the sign-in cookie to Session apps.
+
 ## [1.1.1] - 2026-10-01
 
 ### Added

@@ -3654,6 +3654,12 @@ impl AxocoatlDaemon {
         self.shutting_down.load(Ordering::Acquire)
     }
 
+    /// The opened, leased data root. The HTTP server keeps its local API
+    /// token here, beside the other control-plane state Sessions cannot see.
+    pub fn data_root(&self) -> &SecureDir {
+        &self.data_root
+    }
+
     fn require_runtime_admission(&self) -> Result<(), DaemonError> {
         if self.shutting_down.load(Ordering::Acquire) {
             Err(DaemonError::Session(

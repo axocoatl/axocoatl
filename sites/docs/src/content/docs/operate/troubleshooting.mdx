@@ -52,6 +52,9 @@ workbench uses.
 | “Address/socket already in use” | Another daemon owns HTTP or IPC | Stop the service/other process; do not run two default daemons |
 | “Data directory is already owned” | Another daemon or direct CLI bootstrap holds the same durable runtime authority | Use the running daemon or stop that process; never point two live Axocoatl processes at one data root |
 | Non-loopback bind is refused | Authentication is absent | Configure API keys or bearer tokens; keep loopback for local use |
+| The browser shows **Sign in to Axocoatl** | This browser has no sign-in cookie for this daemon and port, the cookie expired, or the token was rotated | Run `axocoatl url` with the daemon's `--config` and `AXOCOATL_DATA_DIR`, and open the link |
+| A script or `curl` gets `401` | The local API requires the per-daemon token | Send `Authorization: Bearer <token>` with the contents of `local-api-token` in the data root |
+| “could not load the local API token” at startup | `local-api-token` is shared with other users, a symlink, or not a token | `chmod 600` it, or delete it and start again to create a new token |
 | `doctor` passes but a hosted request fails | Doctor checks key presence, not provider access | Verify exported key, model entitlement, endpoint, and provider response |
 | OpenRouter credential warning | The configured key is empty or an unresolved environment reference | Re-run onboarding to store the key in the owner-only user config, or export the referenced key in the process environment; doctor checks presence but does not make a live OpenRouter request |
 

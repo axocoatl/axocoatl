@@ -29,6 +29,62 @@ visible to tools, and on E2B the Git token is visible to every command in the VM
 The default listener is `127.0.0.1:8080`. Same-origin CORS is the default and
 rate limiting is off.
 
+### The local API token
+
+On a loopback listener with no configured credentials, the API requires a
+per-daemon token. The user's signed-in browser and tools that can read the data
+root can use it. Another user's process, or code in a Session container that
+reaches the host, cannot, unless the token reaches it another way. The most
+likely way is through a web server you open on another `localhost` port, as
+described after this list.
+
+- On first start the daemon creates 32 random bytes from the OS random number
+  generator, encodes them as base64url, and writes them to `local-api-token` in
+  the data root with mode `0600`. Later starts reuse the file. A file that is a
+  symlink, is not a regular file, is readable or writable by other users, or
+  does not hold a token stops startup.
+- `axocoatl dev` and `axocoatl serve` print a sign-in link,
+  `http://localhost:<port>/?token=<token>`, when their output is a terminal.
+  `axocoatl url` prints it again from the configured port and the token file.
+  Under a service manager, run `axocoatl url` with the same `--config` and
+  `AXOCOATL_DATA_DIR`.
+- Opening the link sets the cookie `axocoatl-token-<port>` (HttpOnly,
+  SameSite=Strict, `Path=/`, 30 days) and redirects to the same page without
+  the token, with `Referrer-Policy: no-referrer`. Request logs show the
+  parameter as `token=REDACTED`.
+- Scripts send the token as `Authorization: Bearer <token>` or
+  `x-api-key: <token>`. Comparisons are constant time.
+- The cookie counts only on same-origin requests, typed navigations, and
+  requests without Fetch Metadata such as WebSocket upgrades. A request marked
+  `Sec-Fetch-Site: cross-site` or `same-site` must send a header instead.
+- Health probes, the sign-in page, and static assets (`/ui/`, `/vendor/`,
+  `/lattice/`, `/brand/`, `/axo-tap.js`) stay public. Every route that reads
+  or changes state requires the token, including `/ws`, terminal WebSockets,
+  and `/a2a/*`.
+- A loopback listener holds its port on both `127.0.0.1` and `[::1]` when
+  the host has both. Browsers, curl, and Node try `[::1]` first for
+  `localhost`, so a process listening there would receive the sign-in link.
+  If another process already listens on either address and port, Axocoatl
+  does not start.
+- Rotate the token by stopping Axocoatl, deleting `local-api-token`, and
+  starting it again. Open the new link in each browser.
+
+The cookie value is the token itself, and browsers do not separate cookies by
+port. Any web server you open on another `localhost` port in the same browser
+receives the token in its request headers. It can then use the API from
+outside the browser, so the Fetch Metadata rule does not help. This includes
+another user's server and a Session port mapped to `localhost` that you open
+directly. Treat opening such a server like sharing the token, and rotate the
+token afterwards. Session containers have no mount of the data root, so Session
+code cannot read the token file, and Preview origins never receive the cookie.
+
+`server.auth.allow_unauthenticated: true` turns the token off on loopback, for
+an authenticating reverse proxy on the same host. Axocoatl logs a warning when
+it does. The Host check against DNS rebinding still applies, so the proxy must
+send `Host: localhost` or a loopback IP literal.
+
+### Configured credentials
+
 Binding to a non-loopback address fails closed unless API-key or bearer-token
 authentication is configured, or the operator explicitly opts out:
 
@@ -49,7 +105,8 @@ server:
 ```
 
 Clients may send either `x-api-key` or `Authorization: Bearer <token>`. The
-health probes remain public. CORS controls browser origins, not network access
+health probes remain public. Configured credentials replace the local token:
+there is no sign-in cookie, and an empty configured value never matches. CORS controls browser origins, not network access
 or authentication. Allowlisted cross-origin browser clients may preflight HEAD,
 GET, POST, PUT, PATCH, and DELETE.
 
@@ -65,8 +122,11 @@ Each local Preview is served from a validated
 `<session>-p<port>.localhost:<listener-port>` origin. The Host boundary
 runs before the workbench router and can reach only that Session's configured
 Preview transport; a Preview request cannot fall through to the app shell,
-control API, or workbench WebSockets. Unknown workbench Hosts are rejected to
-prevent DNS rebinding when loopback authentication is disabled.
+control API, or workbench WebSockets. On a loopback listener without configured
+credentials, even with `allow_unauthenticated`, Hosts other than `localhost` and
+loopback IP literals are rejected with 421 to prevent DNS rebinding. Preview origins never receive the workbench
+sign-in cookie, and the Preview proxies remove `axocoatl-token-*` cookies from
+forwarded requests and drop upstream `Set-Cookie` headers that would set one.
 
 If the workbench document is opened through a loopback IP literal, its exact
 root navigation redirects to `localhost` on the same listener. This gives the
@@ -250,6 +310,8 @@ It does not prove the safety of any destination.
   repository scripts and Agent commands.
 - Protect the data root, backups, config, service definition, and logs. Axocoatl
   has no application-level at-rest encryption.
+- The data root holds `local-api-token`. A backup includes it, and a restore
+  reuses it. Delete the file and restart to issue a new one.
 
 The runtime attempts to set its data root to mode `0700`; selected memory and
 checkpoint files use `0600`. Do not assume every persisted file is encrypted or

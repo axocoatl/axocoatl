@@ -79,14 +79,16 @@ Preview port `8765`. Keep repository checks as `npm run check`.
 ```bash
 export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase'
-curl -sS "$AXO_DEMO_URL/api/sessions"
+# The local API needs this daemon's token; curl reads the header from stdin.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXO_DEMO_ROOT/data/local-api-token")" | curl -sS -H @- "$@"; }
+axo_api "$AXO_DEMO_URL/api/sessions"
 ```
 
 Copy the Session id, then inspect its API record and deterministic container:
 
 ```bash
 export AXO_SESSION_ID='ses-paste-the-id-here'
-curl -sS "$AXO_DEMO_URL/api/sessions" | grep -F "$AXO_SESSION_ID"
+axo_api "$AXO_DEMO_URL/api/sessions" | grep -F "$AXO_SESSION_ID"
 podman inspect --format '{{.Name}} {{.ImageName}} {{index .Config.Labels "io.axocoatl.runtime-authority"}} {{json .Mounts}} {{json .NetworkSettings.Ports}}' \
   "axo-ses-$AXO_SESSION_ID"
 git -C "$AXO_DEMO_ROOT/workspace" status --short

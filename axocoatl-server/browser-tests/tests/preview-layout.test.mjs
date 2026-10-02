@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {after, before, test} from 'node:test';
 import {chromium} from 'playwright';
-import {launchTestDaemon, resolveChromiumExecutable} from '../support/daemon.mjs';
+import {launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext} from '../support/daemon.mjs';
 
 let runtime, browser, previewMarkup, togglePickerSource, pickerShellSource, tapSource;
 before(async()=>{
@@ -23,7 +23,7 @@ before(async()=>{
 });
 
 test('picker references exclude transient classes and still identify the clicked element after Add to chat',async()=>{
-  const context=await browser.newContext({viewport:{width:1280,height:720}});
+  const context=await newAuthorizedContext(browser, {viewport:{width:1280,height:720}});
   const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
   try{
     const previewOrigin=`http://ses-picker-test-p8765.localhost:${new URL(runtime.baseUrl).port}`;
@@ -84,7 +84,7 @@ test('picker references exclude transient classes and still identify the clicked
 });
 
 test('the visible Inspect element button uses the component current URL and blocks external pages',async()=>{
-  const context=await browser.newContext();
+  const context=await newAuthorizedContext(browser);
   const page=await context.newPage();
   try{
     await page.route('**/preview-picker',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html>${previewMarkup}<script type="module">
@@ -115,7 +115,7 @@ test('the visible Inspect element button uses the component current URL and bloc
 after(async()=>{await browser?.close();await runtime?.stop();});
 
 for(const [theme,width] of [['light',1280],['dark',390]])test(`Preview fills its body with a floating element inspector (${theme}, ${width}px)`,async()=>{
-  const context=await browser.newContext({viewport:{width,height:720},colorScheme:theme,reducedMotion:'reduce'});
+  const context=await newAuthorizedContext(browser, {viewport:{width,height:720},colorScheme:theme,reducedMotion:'reduce'});
   const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
   try{
     await page.route('**/preview-layout',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html data-theme="${theme}"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/tokens.css"><link rel="stylesheet" href="/ui/shell.css"><style>body{margin:0}#cockpit-browser{height:648px}</style>${previewMarkup}<script type="module" src="/ui/browser.js"></script></html>`}));

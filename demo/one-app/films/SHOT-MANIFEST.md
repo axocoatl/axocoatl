@@ -76,10 +76,13 @@ Each shot has `beat`, `hold_frames`, `steps`, and `evidence`. Steps use `action`
 (`click`, `fill`, `select`, `press`, `wait_visible`, `wait_text`, `reload`, `goto`,
 or a bounded `wait`) and an observed `selector` or accessible `role`/`name`.
 Evidence entries contain a filename-safe `name` and same-origin `/api/...` path.
-The helper does not restart the daemon or manufacture filesystem evidence;
+Set `AXOCOATL_DATA_DIR` to the daemon's data directory: the helper signs the
+browser in with its `local-api-token` cookie, and plans must not contain the
+token. The helper does not restart the daemon or manufacture filesystem evidence;
 retain those observed transitions separately before acceptance.
 
 ```bash
+AXOCOATL_DATA_DIR="$AXOCOATL_DEMO_ROOT/data" \
 PLAYWRIGHT_CHROMIUM_EXECUTABLE="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   node demo/one-app/films/capture-live.mjs \
   /private/tmp/reviewed-take-plan.json /private/tmp/new-take-directory

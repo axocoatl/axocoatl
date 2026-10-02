@@ -127,7 +127,7 @@ pub async fn rate_limit(
     }
 }
 
-/// Request logging middleware.
+/// Request logging middleware. Sign-in tokens in the query are redacted.
 pub async fn request_logging(request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let uri = request.uri().clone();
@@ -138,7 +138,7 @@ pub async fn request_logging(request: Request, next: Next) -> Response {
     let elapsed = start.elapsed();
     tracing::info!(
         method = %method,
-        uri = %uri,
+        uri = %crate::auth::loggable_uri(&uri),
         status = %response.status(),
         latency_ms = elapsed.as_millis(),
         "HTTP request"
@@ -241,6 +241,48 @@ mod tests {
         assert!(limiter.check("1.1.1.1"));
         assert!(!limiter.check("1.1.1.1")); // blocked
         assert!(limiter.check("2.2.2.2")); // different IP, allowed
+    }
+
+    #[tokio::test]
+    async fn request_log_never_contains_the_sign_in_token() {
+        #[derive(Clone, Default)]
+        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let app = Router::new()
+            .route("/", axum::routing::get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(request_logging));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/?token=s3cret-value&session=s1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let logged = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        assert!(logged.contains("HTTP request"), "{logged}");
+        assert!(logged.contains("token=REDACTED&session=s1"), "{logged}");
+        assert!(!logged.contains("s3cret-value"), "{logged}");
     }
 
     #[tokio::test]

@@ -129,9 +129,14 @@ With the daemon running:
 - `/api/schedules` and `/api/proactive` project compatibility views with last
   run, outcome, error, and count observations.
 - The `pro:hourly-briefing` and `sched:briefing-run` records fire every `30s`.
-- Firing **Settings → Skills → Build failed** (or
-  `curl -X POST http://127.0.0.1:8080/api/skills/build-failed/fire`) publishes
+- Firing **Settings → Skills → Build failed**, or the API call below, publishes
   `BuildFailed` and starts `pro:failure-watch`.
+
+```bash
+# The local API needs the daemon's token; curl reads the header from stdin.
+printf 'Authorization: Bearer %s\n' "$(cat /tmp/axocoatl-proactive-example/local-api-token)" |
+  curl -H @- -X POST http://127.0.0.1:8080/api/skills/build-failed/fire
+```
 
 ### Enabling / disabling
 
@@ -150,6 +155,7 @@ on macOS):
 axocoatl service install -c examples/proactive-agents/axocoatl.proactive.example.yaml
 axocoatl service start
 axocoatl service status     # is it installed + running?
+axocoatl url -c examples/proactive-agents/axocoatl.proactive.example.yaml  # workbench sign-in link
 axocoatl service stop
 axocoatl service uninstall
 ```

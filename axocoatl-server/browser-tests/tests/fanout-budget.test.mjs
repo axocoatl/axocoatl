@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import {after,before,test} from 'node:test';
 import {chromium} from 'playwright';
-import {launchTestDaemon,resolveChromiumExecutable} from '../support/daemon.mjs';
+import {launchTestDaemon,resolveChromiumExecutable,newAuthorizedContext} from '../support/daemon.mjs';
 let runtime,browser;
 before(async()=>{runtime=process.env.AXOCOATL_COMPONENT_BASE_URL?{baseUrl:process.env.AXOCOATL_COMPONENT_BASE_URL,stop:async()=>{}}:await launchTestDaemon();const executablePath=await resolveChromiumExecutable();browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});});
 after(async()=>{await browser?.close();await runtime?.stop();});
-test('Ways retains separate explicit budgets per heterogeneous attempt and rejects missing or expired approval',async()=>{const context=await browser.newContext({viewport:{width:390,height:844},colorScheme:'dark',reducedMotion:'reduce'}),page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));try{
+test('Ways retains separate explicit budgets per heterogeneous attempt and rejects missing or expired approval',async()=>{const context=await newAuthorizedContext(browser, {viewport:{width:390,height:844},colorScheme:'dark',reducedMotion:'reduce'}),page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));try{
  await page.route('**/budget-fixture',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><html data-theme="dark"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/tokens.css"><button>Explore several ways</button><ax-fanout open enabled></ax-fanout><script type="module" src="/ui/fanout.js"></script></html>'}));
  await page.route('**/api/agents',route=>route.fulfill({json:[{id:'coder',role:'autonomous',provider:'ollama',model:'code'},{id:'reviewer',role:'autonomous',provider:'ollama',model:'review'}]}));await page.route('**/api/llm/models?*',route=>route.fulfill({json:['code','review']}));
  await page.goto(`${runtime.baseUrl}/budget-fixture`);await page.waitForFunction(()=>customElements.get('ax-fanout'));await page.locator('ax-fanout').evaluate(element=>element.lanes=[{agent:'coder'},{agent:'reviewer'}]);
@@ -15,7 +15,7 @@ test('Ways retains separate explicit budgets per heterogeneous attempt and rejec
  await page.getByRole('button',{name:'+ Add an attempt',exact:true}).click();await page.locator('ax-fanout').evaluate(element=>{element.shadowRoot.querySelectorAll('details')[2].open=true;});await page.getByLabel('Attempt 3: Total token limit',{exact:true}).fill('30000');assert.equal(await page.locator('ax-fanout').evaluate(element=>element.lanes[1].approval.limits.tokens),20000,'Copied attempts do not share a mutable approval');await page.getByLabel('Attempt 3: Budget expires (your local time)',{exact:true}).fill('2000-10-10T10:00');assert.equal(await page.locator('ax-fanout').evaluate(element=>element.validateApprovals()),false);assert.deepEqual(errors,[]);
  }finally{await context.close();}});
 
-test('Ways says plainly that the Session team\'s required checks do not run on attempts',async()=>{const context=await browser.newContext({viewport:{width:390,height:844},colorScheme:'light',reducedMotion:'reduce'}),page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));try{
+test('Ways says plainly that the Session team\'s required checks do not run on attempts',async()=>{const context=await newAuthorizedContext(browser, {viewport:{width:390,height:844},colorScheme:'light',reducedMotion:'reduce'}),page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));try{
  await page.route('**/checks-fixture',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><html data-theme="light"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/tokens.css"><ax-fanout open enabled></ax-fanout><script type="module" src="/ui/fanout.js"></script></html>'}));
  await page.route('**/api/agents',route=>route.fulfill({json:[{id:'coder',role:'autonomous',provider:'ollama',model:'code'}]}));await page.route('**/api/llm/models?*',route=>route.fulfill({json:['code']}));
  await page.goto(`${runtime.baseUrl}/checks-fixture`);await page.waitForFunction(()=>customElements.get('ax-fanout'));

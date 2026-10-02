@@ -7,7 +7,13 @@ import { Aside } from '@astrojs/starlight/components';
 
 The unified live endpoint is `GET /ws`. It carries JSON text frames with a
 `kind` discriminator from server to client and a `cmd` discriminator from
-client to server. Authentication applies to the HTTP upgrade request.
+client to server. Authentication applies to the HTTP upgrade request: the
+workbench's same-origin upgrade carries its `axocoatl-token-<port>` sign-in
+cookie, and other clients send `Authorization: Bearer <token>` or
+`x-api-key: <token>` with the local API token or a configured credential. A
+missing or wrong credential gets `401` before the upgrade; a cross-origin or
+`Origin: null` browser upgrade gets `403`. See
+[authentication](/reference/http-api/#authentication-cors-and-rate-limits).
 
 On connect, the server sends `ready`, then an authoritative `snapshot` of live
 runs, every pending MCP approval, and any Session or Workspace Ways transition
@@ -307,7 +313,8 @@ frames. Send keystrokes as binary or text. Send resize as JSON text:
 { "kind": "resize", "rows": 40, "cols": 120 }
 ```
 
-An unknown terminal is rejected before upgrade with HTTP `404` JSON. If a
+The upgrade needs the same credential as `/ws`. An unknown terminal is rejected
+before upgrade with HTTP `404` JSON. If a
 connected client falls behind the bounded output broadcast, the server closes
 that socket with code `4001` and reason `terminal-resync-required`; clear the
 stale terminal view and reconnect for a fresh retained-scrollback snapshot

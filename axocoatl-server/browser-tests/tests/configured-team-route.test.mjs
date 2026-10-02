@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
-import { launchTestDaemon, resolveChromiumExecutable } from '../support/daemon.mjs';
+import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext } from '../support/daemon.mjs';
 
 let runtime, browser;
 before(async () => {
@@ -13,7 +13,7 @@ after(async () => { await browser?.close(); await runtime?.stop(); });
 
 test('before-turn graph adopts the approved native Session team when its response arrives late', async () => {
   const session = {...runtime.fixtures.alpha.sessions[0], mode:{kind:'custom',agents:['browser-test-coder','template-reviewer']}};
-  const context = await browser.newContext({viewport:{width:1280,height:800}});
+  const context = await newAuthorizedContext(browser, {viewport:{width:1280,height:800}});
   const page = await context.newPage(), errors=[];
   page.on('pageerror', error=>errors.push(error.message));
   let releaseTeam;

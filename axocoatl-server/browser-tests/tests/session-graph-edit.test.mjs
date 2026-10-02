@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { after,before,test } from 'node:test';
 import { chromium } from 'playwright';
-import {launchTestDaemon,resolveChromiumExecutable} from '../support/daemon.mjs';
+import {launchTestDaemon,resolveChromiumExecutable,newAuthorizedContext} from '../support/daemon.mjs';
 let runtime,browser;
 before(async()=>{runtime=process.env.AXOCOATL_COMPONENT_BASE_URL?{baseUrl:process.env.AXOCOATL_COMPONENT_BASE_URL,stop:async()=>{}}:await launchTestDaemon();const executablePath=await resolveChromiumExecutable();browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});});
 after(async()=>{await browser?.close();await runtime?.stop();});
-async function fixture(action,{loseReply=false,team=null}={}){const context=await browser.newContext({viewport:{width:1000,height:850}}),page=await context.newPage(),calls=[],errors=[];page.on('pageerror',error=>errors.push(error.message));
+async function fixture(action,{loseReply=false,team=null}={}){const context=await newAuthorizedContext(browser, {viewport:{width:1000,height:850}}),page=await context.newPage(),calls=[],errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.route('**/graph-fixture',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><html data-theme="light"><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-activation-inspector></ax-activation-inspector><script type="module" src="/ui/activation-inspector.js"></script></body></html>'}));
  await page.route('**/api/sessions/session/team',route=>route.fulfill({json:team||{templates:[{slot_id:'reviewer',template_id:'reviewer',source_slot_id:null,name:'Reviewer',provider:'ollama',model:'local-model',instructions:'Verify actual changes.',max_output_tokens:128,required:true,reset_history:true,limits:null,expires_at_ms:null}]}}));
  await page.route('**/api/sessions/session/turns/turn/graph-edits/**',route=>{const body=route.request().postDataJSON();calls.push(body);if(loseReply&&route.request().url().endsWith('/apply')){loseReply=false;return route.abort('failed');}return route.fulfill({json:route.request().url().endsWith('/preview')?{request:body,review_digest:'exact-graph',graph:{revision:2},receipt:null}:{request:body.request,review_digest:body.review_digest,graph:{revision:2},receipt:{state:'settled'}}});});

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
-import { launchTestDaemon, resolveChromiumExecutable } from '../support/daemon.mjs';
+import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext } from '../support/daemon.mjs';
 
 let runtime, browser;
 before(async () => {
@@ -46,7 +46,7 @@ test('Agent graph draws a delegated edge from a lead to its helper without makin
   const team = {history_version:'execution_v2', approved:true, configuration_revision:2,
     slots:[{slot_id:'slot-lead', name:'Lead reviewer', model:'native-model', provider:'ollama'}],
     dependencies:[], layout:[], templates:[]};
-  const context = await browser.newContext({viewport:{width:1280, height:800}});
+  const context = await newAuthorizedContext(browser, {viewport:{width:1280, height:800}});
   const page = await context.newPage(), errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/api/sessions', route => route.fulfill({json:[session]}));

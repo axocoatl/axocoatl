@@ -130,13 +130,14 @@ auth layer, so the routes differ slightly from the bare crate router used above:
 |---|---|---|
 | Card | `GET /.well-known/agent.json` | `GET /.well-known/agent.json` |
 | Task | `POST /tasks` | `POST /a2a/tasks` |
-| Auth | none | bearer token (server auth layer) |
+| Auth | none | the local API token or a configured credential (server auth layer) |
 | `receiver_id` | the single exposed agent | any agent id from the card's `capabilities` |
 
 Against a daemon, the card lists every configured agent in `capabilities`, and
 you address one by setting the task's `receiver_id` to its id. The task body and
 result shape are otherwise identical to the `curl` calls above (add
-`-H 'authorization: Bearer <token>'`).
+`-H 'authorization: Bearer <token>'`; on a loopback daemon without `server.auth`,
+the token is the `local-api-token` file in its data directory).
 
 ## When to use A2A vs MCP vs the HTTP execute endpoint
 

@@ -44,7 +44,9 @@ Lead-with-helpers, Ways, Git, and workspace-knowledge takes. `prepare.sh` and
    logical Preview port 8765 on a dynamic loopback port, so host port 8765 does
    not need to be free.
 
-6. In `http://127.0.0.1:18080`, use **Open workspace…** and create the scenario's
+6. Open the `Sign in:` link the launcher printed (or run
+   `AXOCOATL_DATA_DIR="$AXOCOATL_DEMO_ROOT/data" axocoatl url -c demo/one-app/axocoatl.demo.yaml`),
+   then use **Open workspace…** and create the scenario's
    Session. Review its image/setup explicitly and require Ready. Retain
    `GET /api/sessions/{id}/team` and require `history_version: execution_v2`
    before sending any recorded Turn. If it reports `legacy_v1`, preserve that

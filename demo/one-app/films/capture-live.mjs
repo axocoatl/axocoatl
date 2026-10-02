@@ -7,11 +7,15 @@ import {fileURLToPath} from 'node:url';
 import {findFilm, loadPortfolio, validateTimeline} from './film-lib.mjs';
 
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+// The local API token never belongs in a plan, a URL or an observation; the
+// browser gets it as the sign-in cookie instead.
+const carriesSignInToken = (path, origin) => new URL(path, origin).searchParams.has('token');
 export function validateCapturePlan(plan, portfolio = loadPortfolio()) {
   const film = findFilm(portfolio, plan.film);
   const origin = new URL(plan.base_url);
   if (!['localhost','127.0.0.1','[::1]'].includes(origin.hostname) || origin.protocol !== 'http:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) throw Error('Capture requires an explicit loopback HTTP origin.');
   if (plan.start_path && (!plan.start_path.startsWith('/') || new URL(plan.start_path,origin).origin !== origin.origin)) throw Error('Initial navigation must stay on the captured product origin.');
+  if (plan.start_path && carriesSignInToken(plan.start_path,origin)) throw Error('Capture plans must not contain the sign-in token.');
   if (!['light','dark'].includes(plan.theme)) throw Error('Capture theme must be light or dark.');
   if (!Array.isArray(plan.shots) || plan.shots.length !== film.beats.length) throw Error('One shot per portfolio beat is required.');
   const timeline = {schema_version:1,film:film.slug,input_fps:8,shots:plan.shots.map(shot=>({beat:shot.beat,source:`shot-${shot.beat}.jpg`,hold_frames:shot.hold_frames}))};
@@ -21,24 +25,31 @@ export function validateCapturePlan(plan, portfolio = loadPortfolio()) {
     for (const step of shot.steps) {
       if (!['click','fill','select','press','wait_visible','wait_text','reload','goto','wait'].includes(step.action)) throw Error(`Unsupported UI action: ${step.action}`);
       if (step.action === 'goto' && (!step.path?.startsWith('/') || new URL(step.path,origin).origin !== origin.origin)) throw Error('Navigation must stay on the captured product origin.');
+      if (step.action === 'goto' && carriesSignInToken(step.path,origin)) throw Error('Capture plans must not contain the sign-in token.');
       if (step.action === 'wait' && (!Number.isInteger(step.ms) || step.ms < 0 || step.ms > 60000)) throw Error('Wait must be 0–60000ms.');
       if (!['reload','goto','wait'].includes(step.action) && !(step.selector || (step.role && step.name))) throw Error('UI action requires a selector or accessible role/name.');
     }
     for (const proof of shot.evidence) {
       if (!/^[a-z0-9-]+$/.test(proof.name) || !proof.path?.startsWith('/api/') || new URL(proof.path,origin).origin !== origin.origin) throw Error('Evidence must name a same-origin API GET.');
+      if (carriesSignInToken(proof.path,origin)) throw Error('Capture plans must not contain the sign-in token.');
     }
   }
   return {film,timeline,origin:origin.origin};
 }
 
-export async function captureLive(plan, outputDirectory) {
+export async function captureLive(plan, outputDirectory, {token}) {
   const {film,timeline,origin} = validateCapturePlan(plan);
+  if (!/^[A-Za-z0-9_-]{43,}$/.test(token || '')) throw Error('Capture requires the daemon\'s local API token.');
   // Exclusive directory creation protects every previous take, including failed takes.
   await mkdir(outputDirectory,{recursive:false});
   const {chromium} = await import('../../../axocoatl-server/browser-tests/node_modules/playwright/index.mjs');
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
   const browser = await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
   const context = await browser.newContext({viewport:{width:1280,height:720},deviceScaleFactor:1,colorScheme:plan.theme,reducedMotion:'reduce'});
+  // Signed in as `/?token=` would: the workbench runs on localhost, and API
+  // evidence may also be read from the plan's loopback IP origin.
+  const port = new URL(origin).port || '80';
+  await context.addCookies([...new Set(['localhost',new URL(origin).hostname])].map(host=>({name:`axocoatl-token-${port}`,value:token,url:`http://${host}:${port}/`,httpOnly:true,sameSite:'Strict'})));
   const page = await context.newPage(),errors=[],observations=[];
   page.setDefaultTimeout(60000);
   page.on('pageerror',error=>errors.push(error.message));
@@ -84,6 +95,8 @@ export async function captureLive(plan, outputDirectory) {
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
   if(process.argv.length!==4)throw Error('Usage: capture-live.mjs <reviewed-plan.json> <new-output-dir>');
-  await captureLive(JSON.parse(await readFile(process.argv[2],'utf8')),resolve(process.argv[3]));
+  if(!process.env.AXOCOATL_DATA_DIR)throw Error('Set AXOCOATL_DATA_DIR to the captured daemon\'s data directory; its local-api-token signs the browser in.');
+  const token=(await readFile(resolve(process.env.AXOCOATL_DATA_DIR,'local-api-token'),'utf8')).trim();
+  await captureLive(JSON.parse(await readFile(process.argv[2],'utf8')),resolve(process.argv[3]),{token});
   console.log('Actual UI capture retained. Review every beat and durable evidence before writing passed acceptance.');
 }

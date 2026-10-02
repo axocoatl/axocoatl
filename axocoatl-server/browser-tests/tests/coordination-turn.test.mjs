@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
 
-import { launchTestDaemon, resolveChromiumExecutable } from '../support/daemon.mjs';
+import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext } from '../support/daemon.mjs';
 
 let runtime;
 let browser;
@@ -29,7 +29,7 @@ after(async () => {
 });
 
 async function componentPage(options = {}) {
-  const context = await browser.newContext({ viewport: options.viewport || { width: 1000, height: 760 } });
+  const context = await newAuthorizedContext(browser, { viewport: options.viewport || { width: 1000, height: 760 } });
   const page = await context.newPage();
   await page.route('**/fixture-app-source', route => route.fulfill({contentType:'text/plain',body:appSource}));
   const errors = [];

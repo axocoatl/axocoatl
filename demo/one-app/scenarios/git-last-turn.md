@@ -77,6 +77,8 @@ Use the same environment values captured for the Several Ways run:
 
 ```bash
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-harbor-native'
+# The local API needs this daemon's token; curl reads the header from stdin.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXO_DEMO_ROOT/data/local-api-token")" | curl -sS -H @- "$@"; }
 export AXO_SESSION_ID='ses-paste-the-id-here'
 ```
 
@@ -89,7 +91,7 @@ git -C "$AXO_DEMO_ROOT/workspace" diff
 npm --prefix "$AXO_DEMO_ROOT/workspace" run check
 find "$AXO_DEMO_ROOT/workspace/.axo-variants" \
   -path '*/receipts/keep-*.json' -type f -print
-curl -sS "http://127.0.0.1:18080/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
+axo_api "http://127.0.0.1:18080/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
 ```
 
 If the film includes staging, capture the boundary separately:

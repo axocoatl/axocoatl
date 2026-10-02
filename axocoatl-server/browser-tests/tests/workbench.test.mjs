@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-import { launchTestDaemon, resolveChromiumExecutable } from '../support/daemon.mjs';
+import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext } from '../support/daemon.mjs';
 
 test('a reconnect snapshot preserves its already-owned cold runtime preparation request', async () => {
   const session = readySessionFixture(runtime.fixtures.alpha.sessions[0]);
@@ -125,7 +125,7 @@ async function openSession(
   targetRuntime = runtime,
   beforeGoto = null,
 ) {
-  const context = await browser.newContext({ viewport });
+  const context = await newAuthorizedContext(browser, { viewport });
   const page = await context.newPage();
   const browserErrors = [];
   const browserRequests = [];
@@ -2955,9 +2955,12 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     assert.ok(otherPreviewCookieRequests.length > 0);
     assert.ok(otherPreviewCookieRequests.every((cookie) =>
       !cookie.includes('preview-parent-attempt=') && !cookie.includes('preview-host-only=')));
+    // The workbench sign-in cookie is host-only on localhost; Session code on
+    // a Preview origin never receives it.
+    assert.ok(otherPreviewCookieRequests.every((cookie) => !cookie.includes('axocoatl-token-')));
 
     // The valid Preview Host boundary owns every path. None of these direct
-    // URLs may fall through to the workbench when local auth is disabled.
+    // URLs may fall through to the workbench, even with the sign-in cookie.
     const directPage = await context.newPage();
     const missingOrigin = `http://ses-00000000-0000-0000-0000-000000000000-p3000.localhost:${listenerPort}`;
     for (const pathname of ['/', '/api/agents', '/ws', '/ui/shell.css']) {

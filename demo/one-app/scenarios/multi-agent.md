@@ -97,15 +97,17 @@ budget.
 ```bash
 export AXO_DEMO_URL='http://127.0.0.1:18080'
 export AXO_DEMO_ROOT='/private/tmp/axocoatl-one-app-showcase-harbor-team'
-curl -sS "$AXO_DEMO_URL/api/sessions"
+# The local API needs this daemon's token; curl reads the header from stdin.
+axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXO_DEMO_ROOT/data/local-api-token")" | curl -sS -H @- "$@"; }
+axo_api "$AXO_DEMO_URL/api/sessions"
 ```
 
 Copy the `Film · Lead with helpers` Session id, then:
 
 ```bash
 export AXO_SESSION_ID='ses-paste-the-id-here'
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
-curl -sS "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
+axo_api "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/team"
+axo_api "$AXO_DEMO_URL/api/sessions/$AXO_SESSION_ID/turns?history_version=2"
 git -C "$AXO_DEMO_ROOT/workspace" status --short
 git -C "$AXO_DEMO_ROOT/workspace" diff --stat
 npm --prefix "$AXO_DEMO_ROOT/workspace" run check

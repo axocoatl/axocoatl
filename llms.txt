@@ -78,7 +78,8 @@ axocoatl doctor
 axocoatl dev
 ```
 
-Open http://localhost:8080. The default listener is loopback-only.
+Open the sign-in link `axocoatl dev` prints (or run `axocoatl url`). The default
+listener is loopback-only, and its API requires a per-daemon token.
 
 The installed executable includes the CLI, Rust daemon, HTTP/WebSocket API, and
 workbench browser assets. Those assets are embedded, so using Axocoatl requires no
@@ -169,6 +170,7 @@ axocoatl onboard                 Configure Axocoatl for this OS user
 axocoatl doctor                  Environment and dependency checks
 axocoatl validate <config>       Validate configuration
 axocoatl dev | serve             Run the daemon and browser product
+axocoatl url                     Print the browser sign-in link
 axocoatl chat -a <agent>         Compatibility terminal chat
 axocoatl workflow list | run     Compatibility view/run for Automations
 axocoatl agents list|status|restart

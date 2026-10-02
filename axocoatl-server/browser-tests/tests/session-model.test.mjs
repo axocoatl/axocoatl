@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {after, before, test} from 'node:test';
 import {chromium} from 'playwright';
-import {launchTestDaemon, resolveChromiumExecutable} from '../support/daemon.mjs';
+import {launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext} from '../support/daemon.mjs';
 
 let runtime, browser, source, screenshots;
 before(async()=>{screenshots=await mkdtemp(join(tmpdir(),'axocoatl-session-model-'));
@@ -16,7 +16,7 @@ before(async()=>{screenshots=await mkdtemp(join(tmpdir(),'axocoatl-session-model
 after(async()=>{try{await browser?.close();await runtime?.stop();}finally{if(screenshots)await rm(screenshots,{recursive:true,force:true});}});
 function slice(start,end){const at=source.indexOf(start);assert.ok(at>=0,start);const until=source.indexOf(end,at);assert.ok(until>at,end);return source.slice(at,until);}
 async function fixture(theme='light'){
-  const context=await browser.newContext({viewport:{width:theme==='dark'?390:1100,height:820},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),errors=[],requests=[];
+  const context=await newAuthorizedContext(browser, {viewport:{width:theme==='dark'?390:1100,height:820},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),errors=[],requests=[];
   page.on('pageerror',error=>errors.push(error.message));
   const team={history_version:'execution_v2',approved:false,slots:[{slot_id:'session-author',model:'reviewed-model'}]};
   await page.route('**/model-fixture',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html data-theme="${theme}"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/tokens.css"><style>body{background:var(--bg);color:var(--text);padding:16px}.hide{display:none}</style><p>Session composer</p><ax-select id="session-model"></ax-select><ax-select id="session-target"></ax-select></html>`}));
