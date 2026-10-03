@@ -1372,6 +1372,277 @@ async fn actual_egress_writer_gets_a_bound_credential_and_a_read_only_helper_non
     }
 }
 
+/// Run one writer activation whose Agent runs `command` with `bash` in an
+/// egress Session decided by the real decision point (in-memory record,
+/// fake resolver). Returns what the model saw and the recorded events.
+async fn run_egress_writer(
+    upstream: &EgressUpstream,
+    allow: Vec<axocoatl_config::EgressAllowYaml>,
+    answers: &[(&str, &[&str])],
+    command: &str,
+) -> (
+    Arc<Provider>,
+    Vec<axocoatl_session::network_record::NetworkEvent>,
+    Arc<crate::session_egress::tests::FakeResolver>,
+) {
+    use crate::session_egress::tests::{FakeRecord, FakeResolver};
+    use crate::session_egress::{EgressPolicyConfig, SessionEgress};
+    let mut f = fixture().await;
+    let record = Arc::new(FakeRecord::default());
+    let resolver = FakeResolver::with(answers);
+    let egress = SessionEgress::open(
+        f.owner.metadata().session_id.clone(),
+        EgressPolicyConfig {
+            session_allow: allow,
+            session_private: vec![upstream.subnet.clone()],
+            browser: None,
+        },
+        record.clone(),
+        resolver.clone(),
+        Some(f.owner.inner.data_root.child("egress-env").unwrap()),
+    )
+    .await
+    .unwrap();
+    let sandbox = actual_egress_sandbox(&mut f, upstream, egress).await;
+    git_init(f._workspace.path());
+    let r = run(&mut f, &["bash"], true);
+    let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
+    let result = tokio::time::timeout(Duration::from_secs(180), async {
+        r.controller
+            .prepare_repository_activation(
+                r.activation.clone(),
+                r.resources(provider.clone()),
+                r.resource.clone(),
+            )
+            .unwrap()
+            .run()
+            .await
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    sandbox.stop_checked().await.unwrap();
+    let settled = result.unwrap().unwrap();
+    assert!(settled.accepted, "{:?}", settled.failure);
+    (provider, record.events(), resolver)
+}
+
+fn egress_host(host: &str, ports: &[u16]) -> axocoatl_config::EgressAllowYaml {
+    axocoatl_config::EgressAllowYaml::Host(axocoatl_config::EgressHostYaml {
+        host: host.into(),
+        ports: Some(ports.to_vec()),
+    })
+}
+
+/// The destinations an Agent might use to reach the host, the VM gateway,
+/// metadata services or loopback through an allowed name, each refused with
+/// its reason through the real proxy, and recorded. Unlisted names never
+/// reach the resolver.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION), AXO_SUPERVISOR_TEST_IMAGE and the egress-capable embedded helper"]
+async fn actual_egress_refuses_special_destinations_with_their_reasons() {
+    use axocoatl_session::network_record::{Decision as Recorded, NetworkEvent};
+    let upstream = EgressUpstream::start();
+    // The shell builds the proxy credential from its own environment, as a
+    // program that speaks CONNECT itself would.
+    let command = r#"tok=${HTTPS_PROXY#http://axo:}; tok=${tok%@127.0.0.1:3128}
+auth=$(printf 'axo:%s' "$tok" | base64 | tr -d '\n')
+try() { printf 'CONNECT %s HTTP/1.1\r\nProxy-Authorization: Basic %s\r\n\r\n' "$1" "$auth" | nc -w 5 127.0.0.1 3128 | head -1 | tr -d '\r'; }
+for target in localhost:8080 host.containers.internal:8080 192.168.127.254:8080 169.254.1.2:8080 metadata.google.internal:80 loop.test:8000 2130706433:80 '[::ffff:127.0.0.1]:8080' 1.1.1.1:443 data.attacker.test:443; do
+  echo "result $target $(try "$target")"
+done
+getent hosts data.attacker.test >/dev/null 2>&1 && echo dns=yes || echo dns=no
+env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy wget -q -T 3 -O /dev/null "http://upstream.test:8000/no-proxy" 2>&1; echo "noproxy=$?""#;
+    let (provider, events, resolver) = run_egress_writer(
+        &upstream,
+        vec![
+            egress_host("host.containers.internal", &[8080]),
+            egress_host("metadata.google.internal", &[80]),
+            egress_host("loop.test", &[8000]),
+        ],
+        &[
+            ("host.containers.internal", &["192.168.127.254"]),
+            ("metadata.google.internal", &["169.254.169.254"]),
+            ("loop.test", &["127.0.0.1"]),
+        ],
+        command,
+    )
+    .await;
+    let expected = [
+        ("localhost", 8080, 403, "not_allowed"),
+        ("host.containers.internal", 8080, 403, "private_destination"),
+        ("192.168.127.254", 8080, 403, "not_allowed"),
+        ("169.254.1.2", 8080, 403, "forbidden_destination"),
+        ("metadata.google.internal", 80, 403, "forbidden_destination"),
+        ("loop.test", 8000, 403, "forbidden_destination"),
+        ("2130706433", 80, 400, "invalid_host"),
+        ("[::ffff:127.0.0.1]", 8080, 403, "forbidden_destination"),
+        ("1.1.1.1", 443, 403, "not_allowed"),
+        ("data.attacker.test", 443, 403, "not_allowed"),
+    ];
+    for (host, port, status, reason) in expected {
+        assert!(
+            events.iter().any(|event| matches!(event,
+                NetworkEvent::Open { decision: Recorded::Deny, host: h, port: p, status: Some(s), reason: Some(r), token: Some(_), .. }
+                    if h == host && *p == port && *s == status && r == reason)),
+            "{host}:{port} {status} {reason}: {events:?}"
+        );
+        let seen = if status == 400 {
+            "HTTP/1.1 400"
+        } else {
+            "HTTP/1.1 403"
+        };
+        assert!(
+            provider.saw(1, &format!("result {host}:{port} {seen}")),
+            "{host}"
+        );
+    }
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        NetworkEvent::Open {
+            decision: Recorded::Allow,
+            ..
+        }
+    )));
+    // Only the listed names were resolved, on the host.
+    let mut queried = resolver.queries();
+    queried.sort();
+    assert_eq!(
+        queried,
+        [
+            "host.containers.internal",
+            "loop.test",
+            "metadata.google.internal"
+        ]
+    );
+    assert!(provider.saw(1, "dns=no"));
+    // Without the proxy variables there is no route and nothing reaches the
+    // proxy or its record.
+    assert!(provider.saw(1, "noproxy=1"));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, NetworkEvent::Open { host, .. } if host == "upstream.test")));
+}
+
+/// Two hundred parallel requests through a proxy capped at 32 connections:
+/// all complete, and the record has one allowed open per upstream access.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION), AXO_SUPERVISOR_TEST_IMAGE and the egress-capable embedded helper"]
+async fn actual_egress_records_every_one_of_two_hundred_parallel_requests() {
+    use axocoatl_session::network_record::{Decision as Recorded, NetworkEvent};
+    let upstream = EgressUpstream::start();
+    let command = "for i in $(seq 1 200); do wget -q -T 60 -O /dev/null http://upstream.test:8000/p$i & done; wait; echo done";
+    let (provider, events, _) = run_egress_writer(
+        &upstream,
+        vec![egress_host("upstream.test", &[8000])],
+        &[("upstream.test", &[upstream.ip.as_str()])],
+        command,
+    )
+    .await;
+    assert!(provider.saw(1, "done"));
+    let allowed = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                NetworkEvent::Open {
+                    decision: Recorded::Allow,
+                    ..
+                }
+            )
+        })
+        .count();
+    let closed = events
+        .iter()
+        .filter(|event| matches!(event, NetworkEvent::Close { down, .. } if *down > 0))
+        .count();
+    let accessed = upstream.access_log().matches("ACCESS /p").count();
+    assert_eq!((allowed, closed, accessed), (200, 200, 200));
+}
+
+/// Measurement, not a check: the wall time of 4 small `bash` tool calls in
+/// one writer activation under `network: none` and under `network: egress`
+/// (each egress call mints a credential, writes its env file and records
+/// bind and unbind). Each call writes one file, because the tool loop stops
+/// a run of calls that change nothing, and the fixture grant allows 12
+/// model and tool invocations. Prints the per-call times.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "measurement; requires Podman (CONTAINER_CONNECTION) and AXO_SUPERVISOR_TEST_IMAGE"]
+async fn actual_egress_tool_call_overhead_measurement() {
+    use crate::session_egress::tests::{FakeRecord, FakeResolver};
+    use crate::session_egress::{EgressPolicyConfig, SessionEgress};
+    const CALLS: usize = 4;
+    let upstream = EgressUpstream::start();
+    let mut results = Vec::new();
+    for round in 0..3 {
+        for egress in [false, true] {
+            let mut f = fixture().await;
+            let sandbox = if egress {
+                let authority = SessionEgress::open(
+                    f.owner.metadata().session_id.clone(),
+                    EgressPolicyConfig::default(),
+                    Arc::new(FakeRecord::default()),
+                    FakeResolver::with(&[]),
+                    Some(f.owner.inner.data_root.child("egress-env").unwrap()),
+                )
+                .await
+                .unwrap();
+                actual_egress_sandbox(&mut f, &upstream, authority).await
+            } else {
+                actual_sandbox(&mut f).await
+            };
+            git_init(f._workspace.path());
+            let r = run(&mut f, &["bash"], true);
+            let provider = Provider::new(
+                (0..CALLS)
+                    .map(|call| {
+                        (
+                            "bash",
+                            serde_json::json!({ "command": format!("echo {call} > call-{call}.txt") }),
+                        )
+                    })
+                    .collect(),
+            );
+            let started = std::time::Instant::now();
+            let result = r
+                .controller
+                .prepare_repository_activation(
+                    r.activation.clone(),
+                    r.resources(provider.clone()),
+                    r.resource.clone(),
+                )
+                .unwrap()
+                .run()
+                .await;
+            let elapsed = started.elapsed();
+            sandbox.stop_checked().await.unwrap();
+            let settled = result.unwrap();
+            assert!(settled.accepted, "{:?}", settled.failure);
+            assert_eq!(provider.calls.load(Ordering::SeqCst), CALLS + 1);
+            let per_call = elapsed.as_secs_f64() * 1000.0 / CALLS as f64;
+            eprintln!(
+                "measurement round {round} network {}: {CALLS} bash calls in {:.0} ms, {per_call:.1} ms per call",
+                if egress { "egress" } else { "none" },
+                elapsed.as_secs_f64() * 1000.0
+            );
+            results.push((egress, per_call));
+        }
+    }
+    let mean = |egress: bool| {
+        let values: Vec<f64> = results
+            .iter()
+            .filter(|(mode, _)| *mode == egress)
+            .map(|(_, value)| *value)
+            .collect();
+        values.iter().sum::<f64>() / values.len() as f64
+    };
+    eprintln!(
+        "measurement mean per call: none {:.1} ms, egress {:.1} ms, difference {:.1} ms",
+        mean(false),
+        mean(true),
+        mean(true) - mean(false)
+    );
+}
+
 /// Configuration a scoped writer's shell writes in the shared home can
 /// neither hide its out-of-scope file from the host's After capture nor make
 /// that capture run a program.

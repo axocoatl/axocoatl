@@ -156,7 +156,12 @@ Every connection the proxy allows or refuses is written to the Session's network
 record before it opens, with the host, port and the tool call whose credential it
 presented. Bytes and duration are added when it closes. If the record cannot be
 written, the connection is refused. Read the record with
-[`GET /api/sessions/{id}/network`](/reference/http-api/).
+[`GET /api/sessions/{id}/network`](/reference/http-api/), or open **Session network**
+from an Agent's details in the Session graph. It shows the policy, allowed and
+refused counts and each refused connection; a refused host can be allowed for that
+Session only with **Allow for this Session**, which is recorded and applies to new
+connections at once. Each activation's details also show its tool calls' network
+activity.
 
 If the proxy's control channel is lost, Axocoatl removes the proxy container and
 starts it again after 1, 5 and then 30 seconds. After five restarts in ten minutes

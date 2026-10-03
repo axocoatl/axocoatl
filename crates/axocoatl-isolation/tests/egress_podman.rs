@@ -1053,3 +1053,74 @@ async fn setup_provisioning_and_terminals_get_credentials_of_their_own() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_podman -- --ignored --test-threads=1"]
+async fn documented_residuals_a_lingering_setup_process_and_a_borrowed_credential() {
+    with_fixture("h", |fixture| async move {
+        // A setup command leaves a loop behind. Its credential ends with the
+        // setup step, so each later attempt is refused as unknown and
+        // recorded with the old credential's tag.
+        let session = format!("egress-test-{}", uuid::Uuid::new_v4().simple());
+        fixture.sessions.lock().unwrap().push(session.clone());
+        let workspace = fixture.root.child(&session).unwrap();
+        let sandbox = Arc::new(
+            SessionSandbox::start(
+                &session,
+                workspace.path(),
+                Some(&image("AXO_EGRESS_TEST_IMAGE", ROOT_IMAGE)),
+                &[],
+                &["nohup sh -c 'while :; do wget -q -O /dev/null http://upstream.test:8000/loop; sleep 1; done' >/dev/null 2>&1 &".to_string()],
+                &SandboxPolicy {
+                    allow_post_create: true,
+                    ..fixture.policy()
+                },
+            )
+            .await
+            .unwrap(),
+        );
+        fixture.sandboxes.lock().unwrap().push(sandbox.clone());
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let events = fixture.authority.events();
+        let setup_tag = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Bind { tag, kind: GrantKind::Setup } => Some(tag.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let unbound = events
+            .iter()
+            .position(|event| matches!(event, Event::Unbind { tag } if *tag == setup_tag))
+            .unwrap();
+        let refused_after = events[unbound..]
+            .iter()
+            .filter(|event| matches!(event,
+                Event::Open { host, status: Some(407), reason: Some(reason), tag: Some(tag), .. }
+                    if host == "upstream.test" && reason == "unknown_credential" && *tag == setup_tag))
+            .count();
+        assert!(refused_after >= 1, "{events:?}");
+
+        // Agents share the container: a process without a credential can
+        // read a running process's credential from /proc. This pins the
+        // documented residual; it must not start failing silently.
+        let container = format!("axo-ses-{session}");
+        let (grant, token) = fixture.grant().await;
+        let mut writer = tokio::process::Command::new("podman");
+        writer.args(["exec", "-d", "--env-file"]).arg(grant.env_file.as_ref().unwrap());
+        writer.args([container.as_str(), "sh", "-c", "exec sleep 30"]);
+        writer.stdout(std::process::Stdio::null());
+        assert!(writer.status().await.unwrap().success());
+        let (code, borrowed) = exec(
+            &container,
+            None,
+            Some("0"),
+            "for f in /proc/[0-9]*/environ; do tr '\\0' '\\n' < $f 2>/dev/null; done | grep '^HTTPS_PROXY=' | sort -u",
+        )
+        .await;
+        assert_eq!(code, 0);
+        assert!(borrowed.contains(&token), "the residual changed: {borrowed}");
+        drop(grant);
+    })
+    .await;
+}

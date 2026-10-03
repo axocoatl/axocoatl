@@ -2,6 +2,7 @@ import { adopt } from './sheets.js';
 import { stopIntentProblem } from './execution-history.js';
 import './session-graph-edit.js';
 import './session-grants.js';
+import './session-network.js';
 
 /**
  * `<ax-activation-inspector>` and the control-plane projection it shares with
@@ -347,6 +348,7 @@ export class AxActivationInspector extends HTMLElement {
   #continuationDraft = { restart: new Set(), checks: new Set() };
   #graphEditor = document.createElement('ax-session-graph-edit');
   #grants = document.createElement('ax-session-grants');
+  #network = document.createElement('ax-session-network');
   get suspended() { return this.#suspended; }
   set suspended(value) { this.#suspended = Boolean(value); this.#syncPresentation(); }
 
@@ -361,7 +363,7 @@ export class AxActivationInspector extends HTMLElement {
     this.#dialog.setAttribute('aria-label', 'Agent activation details');
     this.#content = element('div', 'content');
     this.#dialog.append(this.#content);
-    this.#root.append(this.#dialog, this.#graphEditor, this.#grants);
+    this.#root.append(this.#dialog, this.#graphEditor, this.#grants, this.#network);
     this.#dialog.addEventListener('cancel', (event) => { event.preventDefault(); this.close(); });
     this.#dialog.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return;
@@ -378,7 +380,7 @@ export class AxActivationInspector extends HTMLElement {
     if (this.#model?.turnId !== value?.turnId || this.#model?.sessionId !== value?.sessionId) {
       this.#generation = null; this.#activationKey = ''; this.#followLatest = true;
       this.#turnMode = false; this.#revisionDrafts.clear();
-      this.#graphEditor.close(true);this.#grants.close();
+      this.#graphEditor.close(true);this.#grants.close();this.#network.close();
       this.#continuationDraft = { restart: new Set(), checks: new Set() };
     }
     this.#model = value;
@@ -788,7 +790,10 @@ export class AxActivationInspector extends HTMLElement {
     const close = element('button', 'close', 'Close');
     close.type = 'button'; close.addEventListener('click', () => this.close());
     header.append(title, close); this.#content.append(header);
-    if (this.#model?.controlPlane?.history_version === 'execution_v2') {const grants=element('button','current-authority','Review current authority');grants.onclick=()=>void this.#grants.open(this.#model);this.#content.append(grants);}
+    if (this.#model?.controlPlane?.history_version === 'execution_v2') {const grants=element('button','current-authority','Review current authority');grants.onclick=()=>void this.#grants.open(this.#model);this.#content.append(grants);
+      const network = element('button', 'session-network', 'Session network');
+      network.type = 'button'; network.onclick = () => void this.#network.open({ sessionId: this.#model.sessionId });
+      this.#content.append(' ', network);}
     if (this.#graphEditor.pending(this.#model)) {
       const pendingGraph = element('button', 'resolve-graph-edit', 'Resolve pending graph change');
       pendingGraph.type = 'button'; pendingGraph.onclick = () => this.#graphEditor.resumePending(this.#model);

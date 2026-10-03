@@ -18,6 +18,7 @@ pub mod session_dispatch;
 pub mod session_egress;
 pub mod session_egress_policy;
 pub mod session_network;
+pub mod session_network_evidence;
 pub mod skill_tool;
 pub mod stream;
 pub mod supervision;

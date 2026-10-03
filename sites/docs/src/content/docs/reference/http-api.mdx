@@ -433,6 +433,15 @@ and causal evidence. Evidence values carry an explicit `status`: `available`,
 preview includes its original byte length. Clients must not turn unavailable usage
 into zero or missing output into a successful empty answer.
 
+Under `network: egress`, an activation whose tool calls opened or were refused
+connections has one evidence item of kind `network`. Its `summary` names each
+destination, such as `registry.npmjs.org:443 allowed ×3 (1.2 MB in); evil.test:443
+refused (not_allowed)`, and its `details` holds up to 200 of the matching `open`,
+`close` and `web` lines from the [network record](#session-network-record), with
+`truncated` set when there were more. Events are joined to the activation through the
+tool call whose credential they presented. Setup, terminal and unattributed events
+appear only in the network record.
+
 In a native turn, an edge of kind `delegated_by` runs from a lead's node to a helper
 node the lead admitted through `delegate`; its `summary` names the helper template and
 its `evidence` is the helper's admission grant. It is not a dependency: the lead

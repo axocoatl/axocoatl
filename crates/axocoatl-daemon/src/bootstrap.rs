@@ -3568,6 +3568,8 @@ pub struct AxocoatlDaemon {
     session_dispatch_lifecycles: Arc<session_dispatch::SessionDispatchRegistry>,
     /// One network record writer per Session, opened on first append.
     session_network_records: Arc<crate::session_network::SessionNetworkRecords>,
+    /// Folded network records for per-activation control-plane evidence.
+    session_network_evidence: Arc<crate::session_network_evidence::NetworkEvidenceIndex>,
     /// Under `network: egress`, one decision point per running Session.
     session_egress:
         Arc<tokio::sync::Mutex<HashMap<String, Arc<crate::session_egress::SessionEgress>>>>,
@@ -5330,6 +5332,9 @@ impl AxocoatlDaemon {
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             session_network_records,
             session_egress: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            session_network_evidence: Arc::new(
+                crate::session_network_evidence::NetworkEvidenceIndex::default(),
+            ),
             session_dispatch_lifecycles,
             attempt_recovery_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             sandbox_starts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -10847,6 +10852,7 @@ impl AxocoatlDaemon {
     async fn close_session_network(&self, session_id: &str) {
         self.session_egress.lock().await.remove(session_id);
         self.session_network_records.close(session_id).await;
+        self.session_network_evidence.forget(session_id).await;
     }
 
     /// The Session's network mode, egress policy and network record, for
@@ -10927,7 +10933,8 @@ impl AxocoatlDaemon {
                 "session '{session_id}' not found"
             )));
         }
-        self.session_dispatch_lifecycles
+        let mut view = self
+            .session_dispatch_lifecycles
             .lookup_control_plane(session_id, turn_id)?
             .resolve_with_legacy(&self._data_dir_lease.ownership, || async {
                 Ok(self
@@ -10936,7 +10943,13 @@ impl AxocoatlDaemon {
                     .as_ref()
                     .map(crate::session_control_plane::SessionTurnControlPlane::from_legacy))
             })
-            .await
+            .await?;
+        if let Some(view) = view.as_mut() {
+            self.session_network_evidence
+                .attach(&self.session_network_records, session_id, view)
+                .await;
+        }
+        Ok(view)
     }
 
     /// Return the exact turn this daemon process can currently stop for the

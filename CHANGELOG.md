@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Under `network: egress`, a person can allow one exact host for one Session, and
   revoke it, with `POST /api/sessions/{id}/network/allow` and `…/revoke`. The change
   is recorded in the Session's network record and applies to new connections at once.
+  The **Session network** panel, opened from an Agent's details in the Session graph,
+  shows the policy, allowed and refused counts and refused connections, with
+  **Allow for this Session** on hosts the list refused. An activation's details show
+  its tool calls' network activity as `network` evidence.
 - The configuration parses `web_search.provider: searxng` with a `searxng` block, and
   new `web_fetch` and `browser` blocks, for upcoming tools. They are validated but not
   yet run.
