@@ -125,6 +125,7 @@ fn config() -> EgressPolicyConfig {
         ],
         session_private: vec!["10.0.0.0/8".into()],
         browser: Some((vec![host("docs.test", None)], Vec::new())),
+        ..Default::default()
     }
 }
 
@@ -1717,6 +1718,7 @@ async fn host_gateways_are_refused_even_inside_listed_private_ranges() {
             ],
             session_private: vec!["192.168.0.0/16".into(), "10.0.0.0/8".into()],
             browser: None,
+            ..Default::default()
         },
         FakeResolver::with(&[
             ("gw.test", &["192.168.127.254"]),
@@ -2073,6 +2075,7 @@ async fn live_npm_ci_through_the_npm_preset_and_debian_provisioning() {
             session_allow: vec![EgressAllowYaml::Preset("npm".into())],
             session_private: Vec::new(),
             browser: None,
+            ..Default::default()
         },
         record.clone(),
         Arc::new(SystemResolver),
@@ -2203,6 +2206,7 @@ async fn live_alpine_provisioning_and_cargo_fetch_through_their_presets() {
                 session_allow: vec![EgressAllowYaml::Preset(preset.into())],
                 session_private: Vec::new(),
                 browser: None,
+                ..Default::default()
             },
             record.clone(),
             Arc::new(SystemResolver),

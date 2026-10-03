@@ -191,7 +191,7 @@ enum BrowserCommands {
 
 #[derive(Subcommand)]
 enum NetworkCommands {
-    /// Apply the config file's egress and browser allowlists to running Sessions
+    /// Apply the config file's egress and browser allowlists and egress routes to running Sessions
     Reload,
 }
 
@@ -445,7 +445,8 @@ async fn main() {
 }
 
 /// `axocoatl network reload`: the running daemon reads its config file
-/// again and applies the egress and browser allowlists to running Sessions.
+/// again and applies the egress and browser allowlists and the egress
+/// routes to running Sessions.
 /// Exits with status 1 when a running Session could not take them.
 async fn cmd_network_reload() {
     let mut client = session_ipc_client().await;
@@ -481,7 +482,7 @@ fn network_reload_lines(
 ) -> Vec<String> {
     let mut lines = Vec::new();
     if report.applied.is_empty() {
-        lines.push("✓ The allowlists are unchanged; nothing was applied.".to_string());
+        lines.push("✓ The allowlists and routes are unchanged; nothing was applied.".to_string());
     } else {
         lines.push(format!("✓ Applied: {}", report.applied.join(", ")));
         for change in &report.changes {
@@ -1309,12 +1310,23 @@ fn credentials_doctor_lines(config: &axocoatl_config::AxocoatlConfig) -> Vec<Cre
                 None => route.host.clone(),
             })
             .collect();
-        lines.push(CredentialDoctorLine {
-            text: format!(
-                "Egress routes: Axocoatl checks each request to {}",
-                names.join(", ")
-            ),
-            hint: None,
+        lines.push(if config.sandbox.network == "egress" {
+            CredentialDoctorLine {
+                text: format!(
+                    "Egress routes: Axocoatl ends TLS on this computer for {} and checks each request against the route's rules",
+                    names.join(", ")
+                ),
+                hint: None,
+            }
+        } else {
+            CredentialDoctorLine {
+                text: format!(
+                    "Egress routes: {} listed, but sandbox.network is {:?}, so Sessions do not use them",
+                    names.join(", "),
+                    config.sandbox.network
+                ),
+                hint: Some("Routes apply only under sandbox.network: egress."),
+            }
         });
     }
     let mut present = Vec::new();
@@ -3410,8 +3422,19 @@ mod tests {
         let text: Vec<String> = lines.iter().map(|line| line.text.clone()).collect();
         assert_eq!(
             text[0],
-            "Egress routes: Axocoatl checks each request to github.com (credential github), registry.npmjs.org"
+            "Egress routes: Axocoatl ends TLS on this computer for github.com (credential github), registry.npmjs.org and checks each request against the route's rules"
         );
+        assert!(lines[0].hint.is_none());
+        // Outside egress the routes are listed and do nothing; doctor says so.
+        let mut bridged = config.clone();
+        bridged.sandbox.network = "bridge".into();
+        let lines = credentials_doctor_lines(&bridged);
+        assert_eq!(
+            lines[0].text,
+            "Egress routes: github.com (credential github), registry.npmjs.org listed, but sandbox.network is \"bridge\", so Sessions do not use them"
+        );
+        assert!(lines[0].hint.is_some());
+        let lines = credentials_doctor_lines(&config);
         assert!(lines.iter().any(|line| line.hint.is_some()
             && line.text.starts_with("Credential open:")
             && line.text.contains("chmod 600")));
@@ -3966,7 +3989,7 @@ mod tests {
         assert_eq!(
             network_reload_lines(&unchanged),
             [
-                "✓ The allowlists are unchanged; nothing was applied.",
+                "✓ The allowlists and routes are unchanged; nothing was applied.",
                 "! Restart the daemon to apply: sandbox.network"
             ]
         );

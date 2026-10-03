@@ -430,22 +430,47 @@ pub(crate) fn exec_user_args(
     }
 }
 
-/// The egress authority of a container that uses another Session's proxy (a
-/// Ways attempt). Every credential it mints names the attempt, so the
-/// Session's record says which container presented it.
+/// The egress authority as one container's processes see it. A container
+/// that uses another Session's proxy (a Ways attempt) names the attempt in
+/// every credential it mints, so the Session's record says which container
+/// presented it; a container that mounts the Session's trust files says so,
+/// so credentials' env files point TLS clients at them.
 #[derive(Debug)]
-struct SharedSidecarAuthority {
+struct ContainerEgressAuthority {
     inner: Arc<dyn crate::egress::EgressAuthority>,
-    attempt_id: String,
+    attempt_id: Option<String>,
+    trust_mounted: bool,
+}
+
+impl ContainerEgressAuthority {
+    /// `attachment` as one container sees it, so every credential minted for
+    /// the container's processes says what the container is.
+    fn attach(
+        attachment: crate::egress::EgressAttachment,
+        attempt_id: Option<&str>,
+    ) -> crate::egress::EgressAttachment {
+        let trust_mounted = attachment.trust_files.is_some();
+        crate::egress::EgressAttachment {
+            authority: Arc::new(Self {
+                inner: attachment.authority.clone(),
+                attempt_id: attempt_id.map(str::to_string),
+                trust_mounted,
+            }),
+            ..attachment
+        }
+    }
 }
 
 #[async_trait::async_trait]
-impl crate::egress::EgressAuthority for SharedSidecarAuthority {
+impl crate::egress::EgressAuthority for ContainerEgressAuthority {
     async fn grant(
         &self,
         mut spec: crate::egress::GrantSpec,
     ) -> Result<crate::egress::EgressGrant, String> {
-        spec.attempt_id = Some(self.attempt_id.clone());
+        if let Some(attempt_id) = &self.attempt_id {
+            spec.attempt_id = Some(attempt_id.clone());
+        }
+        spec.trust_mounted = self.trust_mounted;
         self.inner.grant(spec).await
     }
     async fn decide(&self, open: crate::egress::OpenRequest) -> crate::egress::Decision {
@@ -456,6 +481,9 @@ impl crate::egress::EgressAuthority for SharedSidecarAuthority {
     }
     async fn sidecar_event(&self, event: crate::egress::SidecarEvent) {
         self.inner.sidecar_event(event).await
+    }
+    async fn relay(&self, open: crate::egress::RelayOpen, stream: crate::egress::RelayStream) {
+        self.inner.relay(open, stream).await
     }
 }
 
@@ -1303,6 +1331,31 @@ impl SessionSandbox {
             .await?;
             sidecar_guard.0 = Some(Arc::new(sidecar));
         }
+        // With egress routes the container mounts the Session's trust
+        // volume (an attempt its Session's), filled before the container
+        // exists. Every start writes the files again, so containers already
+        // using the volume see an authority the daemon renewed.
+        if let Some((attachment, files)) = policy
+            .egress
+            .as_ref()
+            .filter(|_| egress_mode)
+            .and_then(|attachment| Some((attachment, attachment.trust_files.as_ref()?)))
+        {
+            crate::session_trust::populate_trust_volume(
+                &crate::session_trust::TrustVolumeSpec {
+                    session_id: shared_sidecar.as_deref().unwrap_or(session_id).to_string(),
+                    runtime_authority: policy.runtime_authority.clone(),
+                    labels: attachment.labels.clone(),
+                },
+                files,
+            )
+            .await
+            .map_err(|error| {
+                IsolationError::OciSetupFailed(format!(
+                    "filling the Session's trust volume for egress routes: {error}"
+                ))
+            })?;
+        }
 
         // Start the long-lived idle container. Resource caps remain a
         // best-effort compatibility toggle. Ports are different: every
@@ -1481,19 +1534,12 @@ impl SessionSandbox {
             passive_exec_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             supervisor_program: effective_policy.supervisor_program.clone(),
             egress: if egress_mode {
-                policy
-                    .egress
-                    .clone()
-                    .map(|attachment| match &shared_sidecar {
-                        Some(_) => crate::egress::EgressAttachment {
-                            authority: Arc::new(SharedSidecarAuthority {
-                                inner: attachment.authority.clone(),
-                                attempt_id: session_id.to_string(),
-                            }),
-                            ..attachment
-                        },
-                        None => attachment,
-                    })
+                policy.egress.clone().map(|attachment| {
+                    ContainerEgressAuthority::attach(
+                        attachment,
+                        shared_sidecar.as_ref().map(|_| session_id),
+                    )
+                })
             } else {
                 None
             },
@@ -3007,6 +3053,23 @@ impl SessionSandbox {
         } else {
             ""
         };
+        // With egress routes, TLS clients trust the Session's authority
+        // through files in its trust volume (an attempt's are its Session's),
+        // read-only and holding certificates only.
+        if egress
+            && policy
+                .egress
+                .as_ref()
+                .is_some_and(|attachment| attachment.trust_files.is_some())
+        {
+            args.push("--mount".into());
+            args.push(crate::session_trust::trust_mount_arg(
+                policy
+                    .shared_sidecar_session
+                    .as_deref()
+                    .unwrap_or(session_id),
+            ));
+        }
 
         if with_limits {
             args.extend([
@@ -4369,6 +4432,24 @@ impl SessionSandbox {
         }
     }
 
+    /// Every volume named after these Sessions: the Node dependency volume,
+    /// the egress socket and service-socket volumes, and the trust volume.
+    fn session_volume_names(session_ids: &[String]) -> Vec<String> {
+        let mut seen = HashSet::new();
+        session_ids
+            .iter()
+            .flat_map(|session_id| {
+                [
+                    Self::dependency_volume_name(session_id),
+                    crate::egress_sidecar::egress_volume_name(session_id),
+                    crate::egress_sidecar::service_volume_name(session_id),
+                    crate::session_trust::trust_volume_name(session_id),
+                ]
+            })
+            .filter(|volume| seen.insert(volume.clone()))
+            .collect()
+    }
+
     /// Remove exact named sandboxes, then their exact derived Node dependency
     /// volumes. Container absence is proven before volume removal begins; a
     /// still-in-use volume is surfaced rather than force-removed.
@@ -4383,18 +4464,7 @@ impl SessionSandbox {
         }
         Self::remove_session_dependents(session_ids, timeout).await?;
 
-        let mut seen = HashSet::new();
-        let volumes = session_ids
-            .iter()
-            .flat_map(|session_id| {
-                [
-                    Self::dependency_volume_name(session_id),
-                    crate::egress_sidecar::egress_volume_name(session_id),
-                    crate::egress_sidecar::service_volume_name(session_id),
-                ]
-            })
-            .filter(|volume| seen.insert(volume.clone()))
-            .collect::<Vec<_>>();
+        let volumes = Self::session_volume_names(session_ids);
         if volumes.is_empty() {
             return Ok(());
         }
@@ -6328,6 +6398,77 @@ mod tests {
             .any(|a| a == "--user" || a.starts_with("--userns")));
     }
 
+    /// With egress routes the container mounts the Session's trust volume
+    /// read-only, an attempt its Session's; without them, or outside egress,
+    /// nothing is mounted at the trust directory.
+    #[cfg(unix)]
+    #[test]
+    fn run_args_mount_the_trust_volume_read_only_only_with_trust_files() {
+        let root = tempfile::tempdir().unwrap();
+        let program = installed_test_supervisor(root.path());
+        let trusted = crate::egress::EgressAttachment {
+            trust_files: trust_files(),
+            ..egress_attachment()
+        };
+        let args_for = |network, egress: crate::egress::EgressAttachment, shared: Option<&str>| {
+            SessionSandbox::build_run_args(
+                "ses-t",
+                "axo-ses-ses-t",
+                "/w",
+                DEFAULT_IMAGE,
+                None,
+                true,
+                &[],
+                &SandboxPolicy {
+                    network,
+                    supervisor_program: Some(program.clone()),
+                    egress: Some(egress),
+                    shared_sidecar_session: shared.map(str::to_string),
+                    ..SandboxPolicy::default()
+                },
+            )
+            .join(" ")
+        };
+        let joined = args_for(SandboxNetwork::Egress, trusted.clone(), None);
+        assert!(
+            joined.contains(
+                "--mount type=volume,source=axo-ca-ses-t,destination=/etc/axocoatl/ca,ro=true"
+            ),
+            "{joined}"
+        );
+        let joined = args_for(SandboxNetwork::Egress, trusted.clone(), Some("ses-parent"));
+        assert!(
+            joined.contains(
+                "--mount type=volume,source=axo-ca-ses-parent,destination=/etc/axocoatl/ca,ro=true"
+            ),
+            "{joined}"
+        );
+        assert!(!joined.contains("axo-ca-ses-t"), "{joined}");
+        for joined in [
+            args_for(SandboxNetwork::Egress, egress_attachment(), None),
+            args_for(SandboxNetwork::Bridge, trusted.clone(), None),
+            args_for(SandboxNetwork::None, trusted, None),
+        ] {
+            assert!(
+                !joined.contains("axo-ca-") && !joined.contains("/etc/axocoatl/ca"),
+                "{joined}"
+            );
+        }
+    }
+
+    #[test]
+    fn removing_a_session_removes_its_trust_volume_too() {
+        assert_eq!(
+            SessionSandbox::session_volume_names(&["s1".into(), "s1".into()]),
+            [
+                "axo-ses-s1-node-modules",
+                "axo-egr-s1",
+                "axo-svc-s1",
+                "axo-ca-s1"
+            ]
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_egress_session_container_never_mounts_the_service_sockets() {
@@ -6695,13 +6836,22 @@ mod tests {
         async fn sidecar_event(&self, _: crate::egress::SidecarEvent) {}
     }
 
-    #[tokio::test]
-    async fn an_attempts_credentials_name_the_attempt() {
-        let inner = Arc::new(RecordingAuthority::default());
-        let shared = SharedSidecarAuthority {
-            inner: inner.clone(),
-            attempt_id: "attempt-s-x-0".into(),
-        };
+    fn trust_files() -> Option<Arc<[crate::session_trust::TrustFile]>> {
+        Some(
+            vec![crate::session_trust::TrustFile {
+                name: "session-ca.pem".into(),
+                contents: b"ca".to_vec(),
+            }]
+            .into(),
+        )
+    }
+
+    /// Grant one credential of each kind through `attachment` and return the
+    /// specs the Session's authority received.
+    async fn granted_through(
+        attachment: &crate::egress::EgressAttachment,
+        inner: &RecordingAuthority,
+    ) -> Vec<crate::egress::GrantSpec> {
         for kind in [
             crate::egress::GrantKind::Agent,
             crate::egress::GrantKind::Setup,
@@ -6710,16 +6860,56 @@ mod tests {
         ] {
             let mut spec = crate::egress::GrantSpec::new(kind);
             spec.invocation_id = Some("inv".into());
-            crate::egress::EgressAuthority::grant(&shared, spec)
-                .await
-                .unwrap();
+            spec.trust_mounted = true;
+            attachment.authority.grant(spec).await.unwrap();
         }
-        let grants = inner.grants.lock().unwrap();
+        std::mem::take(&mut *inner.grants.lock().unwrap())
+    }
+
+    #[tokio::test]
+    async fn an_attempts_credentials_name_the_attempt() {
+        let inner = Arc::new(RecordingAuthority::default());
+        let attachment = ContainerEgressAuthority::attach(
+            crate::egress::EgressAttachment::new(inner.clone()),
+            Some("attempt-s-x-0"),
+        );
+        let grants = granted_through(&attachment, &inner).await;
         assert_eq!(grants.len(), 4);
+        // No trust files: a caller cannot claim them.
         assert!(grants
             .iter()
             .all(|spec| spec.attempt_id.as_deref() == Some("attempt-s-x-0")
-                && spec.invocation_id.as_deref() == Some("inv")));
+                && spec.invocation_id.as_deref() == Some("inv")
+                && !spec.trust_mounted));
+    }
+
+    /// Only a container that mounts the trust files says so in its
+    /// credentials, whatever the caller set.
+    #[tokio::test]
+    async fn credentials_say_whether_their_container_mounts_the_trust_files() {
+        let inner = Arc::new(RecordingAuthority::default());
+        let plain = ContainerEgressAuthority::attach(
+            crate::egress::EgressAttachment::new(inner.clone()),
+            None,
+        );
+        assert!(granted_through(&plain, &inner)
+            .await
+            .iter()
+            .all(|spec| !spec.trust_mounted && spec.attempt_id.is_none()));
+        for attempt in [None, Some("attempt-s-x-1")] {
+            let trusted = ContainerEgressAuthority::attach(
+                crate::egress::EgressAttachment {
+                    trust_files: trust_files(),
+                    ..crate::egress::EgressAttachment::new(inner.clone())
+                },
+                attempt,
+            );
+            let grants = granted_through(&trusted, &inner).await;
+            assert_eq!(grants.len(), 4);
+            assert!(grants
+                .iter()
+                .all(|spec| spec.trust_mounted && spec.attempt_id.as_deref() == attempt));
+        }
     }
 
     #[tokio::test]

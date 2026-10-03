@@ -6,30 +6,48 @@
 //! the allowlist before anything resolves it; allowed names are resolved here,
 //! on the host, and every resulting address is classified. Only addresses
 //! that pass are returned to the sidecar, which connects to nothing else.
+//!
+//! A `CONNECT` to a host and port under `sandbox.egress.routes`, from a
+//! process kind the route serves, is resolved and classified the same way and
+//! then answered with a relay: the sidecar carries the client's TLS bytes
+//! here, and the route broker ([`crate::egress_broker`]) ends TLS with a
+//! certificate from this Session's own authority, checks each request against
+//! the route's rules, adds the route's credential and sends the request to
+//! the addresses resolved for the connection. On a route's ports the route
+//! decides, whatever `allow` lists.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use axocoatl_config::AxocoatlConfig;
-use axocoatl_config::EgressAllowYaml;
+use axocoatl_config::{CredentialSourceYaml, EgressAllowYaml, EgressRouteYaml};
 use axocoatl_core::netaddr::{self, AddrClass};
 use axocoatl_core::SecureDir;
 use axocoatl_exec::egress::protocol::{credential_hash, credential_tag, MAX_ALLOW_ADDRS};
 use axocoatl_isolation::egress::{
     CloseReport, Decision, EgressAuthority, EgressGrant, GrantKind, GrantSpec, Liveness,
-    OpenRequest, ProxySecret, RequestKind, SidecarEvent,
+    OpenRequest, ProxySecret, RelayOpen, RelayStream, RequestKind, SidecarEvent,
 };
 use axocoatl_isolation::egress_control::ControlHandle;
+use axocoatl_isolation::session_trust::TrustFile;
 use axocoatl_session::network_record::{
     BindingKind, CloseOutcome, ConnKind, Decision as RecordDecision, EgressBinding, EgressScope,
     LimitKind, NetworkEvent, NetworkLine, PolicyChange, PolicyOp, PolicySource, ProposalState,
     SidecarState, UnbindReason, MAX_RECORDED_PATH_CHARS,
 };
 
-use crate::session_egress_policy::{validate_session_host, CompiledPolicy, SessionRule};
+use crate::egress_broker::terminate::BrokerTimeouts;
+use crate::egress_broker::{
+    BrokerRecordSink, RelayContext, Route, RouteTable, SessionBroker, SessionCa, TrustMaterial,
+    UpstreamConnector, WorkspaceRoots,
+};
+use crate::session_egress_policy::{
+    validate_session_host, CompiledPolicy, RoutePolicyEntry, SessionRule,
+};
 use crate::session_network::{PolicyRuleView, PolicyView, SessionNetworkRecords};
 use crate::session_network_proposals::{
     new_proposal_id, Deciding, ProposalBook, ProposalRequest, ProposalView, Proposed,
@@ -39,6 +57,10 @@ use crate::session_network_reload::{ConfigReload, ScopeReload, ScopeReloadFailur
 
 /// How long one name may take to resolve.
 pub const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
+/// A container start renews a Session's certificate authority with less
+/// than this left (it is valid for 30 days), so a running container trusts
+/// one that lasts at least this long.
+pub const CA_RENEW_BEFORE: Duration = Duration::from_secs(2 * 24 * 3600);
 /// Where processes reach the proxy inside the container.
 pub const PROXY_LISTEN: &str = "127.0.0.1:3128";
 /// Proxy user name; the credential is the password.
@@ -153,7 +175,7 @@ impl EgressRecordSink for SessionRecordSink {
     }
 }
 
-/// The allowlists a Session's policies compile from.
+/// The allowlists and routes a Session's policies compile from.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EgressPolicyConfig {
     pub session_allow: Vec<EgressAllowYaml>,
@@ -161,17 +183,22 @@ pub struct EgressPolicyConfig {
     /// `browser.allow` and `browser.private_destinations`; `None` when the
     /// browser tools are not configured.
     pub browser: Option<(Vec<EgressAllowYaml>, Vec<String>)>,
+    /// `sandbox.egress.routes`, part of the Session scope.
+    pub routes: Vec<EgressRouteYaml>,
+    /// `credentials`, where the routes' credentials are read. Never values.
+    pub credentials: BTreeMap<String, CredentialSourceYaml>,
 }
 
 impl EgressPolicyConfig {
     /// The policies of a Session's own decision point under `network:
-    /// egress`: the Session's list and, whenever `browser:` is configured,
-    /// the browser's declared hosts as a scope of their own. Under `egress`
-    /// the browser goes through the Session's own sidecar with a `browser`
-    /// credential, which is checked only against `browser.allow`, while the
-    /// Session's credentials are checked only against `sandbox.egress`.
-    /// Under `bridge` and `none` the browser opens a decision point of its
-    /// own instead ([`SessionEgress::open_browser_only`]).
+    /// egress`: the Session's list and routes and, whenever `browser:` is
+    /// configured, the browser's declared hosts as a scope of their own.
+    /// Under `egress` the browser goes through the Session's own sidecar
+    /// with a `browser` credential, which is checked only against
+    /// `browser.allow`, while the Session's credentials are checked only
+    /// against `sandbox.egress`. Under `bridge` and `none` the browser opens
+    /// a decision point of its own instead
+    /// ([`SessionEgress::open_browser_only`]).
     pub fn from_config(config: &AxocoatlConfig) -> Self {
         let egress = config.sandbox.egress.clone().unwrap_or_default();
         Self {
@@ -181,7 +208,66 @@ impl EgressPolicyConfig {
                 .browser
                 .as_ref()
                 .map(|browser| (browser.allow.clone(), browser.private_destinations.clone())),
+            routes: egress.routes,
+            credentials: config.credentials.clone(),
         }
+    }
+}
+
+/// What a decision point's route broker uses: the connector to route
+/// upstreams, the Workspaces a credential file or `upstream_ca` must stay
+/// out of, and its time limits.
+#[derive(Clone)]
+pub struct RouteSettings {
+    pub upstream: Arc<UpstreamConnector>,
+    pub workspaces: WorkspaceRoots,
+    pub timeouts: BrokerTimeouts,
+}
+
+impl Default for RouteSettings {
+    /// This computer's trust settings and own-address check, and no
+    /// Workspaces.
+    fn default() -> Self {
+        Self {
+            upstream: Arc::new(UpstreamConnector::new()),
+            workspaces: Arc::new(Vec::new),
+            timeouts: BrokerTimeouts::default(),
+        }
+    }
+}
+
+impl fmt::Debug for RouteSettings {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RouteSettings")
+            .field("timeouts", &self.timeouts)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The route broker of one decision point, made when it first has routes:
+/// the Session's certificate authority lives in it, and only in memory.
+struct RouteBroker {
+    broker: Arc<SessionBroker>,
+    /// The trust files for the authority, made on first use.
+    trust: Option<Arc<[TrustFile]>>,
+}
+
+impl RouteBroker {
+    fn new(session_id: &str, settings: &RouteSettings) -> Result<Self, String> {
+        let ca = SessionCa::new(session_id)
+            .map_err(|error| format!("creating the Session's certificate authority: {error}"))?;
+        Ok(Self {
+            broker: Arc::new(
+                SessionBroker::new(
+                    Arc::new(ca),
+                    settings.upstream.clone(),
+                    settings.workspaces.clone(),
+                )
+                .with_timeouts(settings.timeouts),
+            ),
+            trust: None,
+        })
     }
 }
 
@@ -208,6 +294,8 @@ pub enum EgressPolicyError {
 
 struct ScopeState {
     policy: Arc<CompiledPolicy>,
+    /// The routes `policy` names; only the Session scope has any.
+    routes: Arc<RouteTable>,
     session_rules: Vec<SessionRule>,
     revision: u64,
 }
@@ -225,6 +313,33 @@ struct OpenConnection {
     token_hash: Option<String>,
     rule_id: String,
     scope: EgressScope,
+    /// The destination as asked for, lowercase.
+    host: String,
+    port: u16,
+    /// Set for a connection answered with a relay.
+    relay: Option<RelayTarget>,
+}
+
+/// What the route broker needs for one relayed connection.
+#[derive(Clone)]
+struct RelayTarget {
+    route: Arc<Route>,
+    /// The addresses resolved and allowed for the connection.
+    addrs: Vec<IpAddr>,
+    binding: Option<EgressBinding>,
+    token_tag: Option<String>,
+}
+
+/// A relayed connection's close waits for the broker's outcome, so the
+/// `close` event says why the broker ended it (`sni_mismatch` and the like).
+enum RelaySlot {
+    /// Answered with a relay that the broker has not taken yet; the close,
+    /// if it came already.
+    Pending(Option<CloseReport>),
+    /// The broker is serving it; the close, if it came already.
+    Serving(Option<CloseReport>),
+    /// The broker ended it, for this reason; the close has not come yet.
+    Done(Option<String>),
 }
 
 /// Rate limit for recording refusals of connections without a valid
@@ -288,6 +403,8 @@ struct State {
     forbidden: HashSet<IpAddr>,
     /// The highest sidecar generation in this Session's record.
     last_generation: u32,
+    /// Relayed connections whose `close` is not recorded yet.
+    relays: HashMap<(u32, u64), RelaySlot>,
 }
 
 /// The policy decision point for one Session.
@@ -307,6 +424,10 @@ pub struct SessionEgress {
     this: Weak<SessionEgress>,
     /// Agents' requests for hosts, waiting for a person.
     proposals: Mutex<ProposalBook>,
+    /// What the route broker uses.
+    route_settings: RouteSettings,
+    /// The route broker, made when the Session scope first has routes.
+    broker: Mutex<Option<RouteBroker>>,
 }
 
 impl fmt::Debug for SessionEgress {
@@ -394,6 +515,12 @@ fn hint(reason: &str, host: &str, port: u16) -> String {
         "record_unavailable" => "The Session's network record is full or unavailable, so new connections are refused.".into(),
         "invalid_host" => format!("{host} is not a valid host name or IP address."),
         "resolve_failed" => format!("{host} could not be resolved."),
+        "tls_required" => format!(
+            "{host}:{port} is an egress route: Axocoatl reads its requests only over HTTPS, so send them with https:// through the proxy."
+        ),
+        "route_not_for_binding" => format!(
+            "{host}:{port} is an egress route that does not serve this kind of process. Add the kind to the route's for: list in sandbox.egress.routes."
+        ),
         _ => "Axocoatl refused this connection.".into(),
     }
 }
@@ -426,6 +553,8 @@ struct Verdict {
     rule: Option<String>,
     addrs: Vec<IpAddr>,
     revision: Option<u64>,
+    /// The route of a relay.
+    route: Option<Arc<Route>>,
 }
 
 impl Verdict {
@@ -437,7 +566,13 @@ impl Verdict {
             rule: None,
             addrs: Vec::new(),
             revision: None,
+            route: None,
         }
+    }
+
+    /// Whether the connection goes ahead, as a tunnel or a relay.
+    fn admitted(&self) -> bool {
+        matches!(self.decision, Decision::Allow { .. } | Decision::Relay)
     }
 }
 
@@ -469,6 +604,27 @@ impl SessionEgress {
         .await
     }
 
+    /// [`SessionEgress::open`] with the route broker's settings.
+    pub async fn open_with_routes(
+        session_id: impl Into<String>,
+        config: EgressPolicyConfig,
+        records: Arc<dyn EgressRecordSink>,
+        resolver: Arc<dyn EgressResolver>,
+        env_dir: Option<SecureDir>,
+        route_settings: RouteSettings,
+    ) -> Result<Arc<Self>, String> {
+        Self::open_session(
+            session_id,
+            config,
+            records,
+            resolver,
+            env_dir,
+            netaddr::classify,
+            route_settings,
+        )
+        .await
+    }
+
     pub(crate) async fn open_with_classifier(
         session_id: impl Into<String>,
         config: EgressPolicyConfig,
@@ -477,12 +633,42 @@ impl SessionEgress {
         env_dir: Option<SecureDir>,
         classify: fn(IpAddr) -> AddrClass,
     ) -> Result<Arc<Self>, String> {
+        Self::open_session(
+            session_id,
+            config,
+            records,
+            resolver,
+            env_dir,
+            classify,
+            RouteSettings::default(),
+        )
+        .await
+    }
+
+    /// A Session's decision point with every scope it has and the route
+    /// broker's settings.
+    pub(crate) async fn open_session(
+        session_id: impl Into<String>,
+        config: EgressPolicyConfig,
+        records: Arc<dyn EgressRecordSink>,
+        resolver: Arc<dyn EgressResolver>,
+        env_dir: Option<SecureDir>,
+        classify: fn(IpAddr) -> AddrClass,
+        route_settings: RouteSettings,
+    ) -> Result<Arc<Self>, String> {
         let mut scopes = vec![EgressScope::Session, EgressScope::Provisioning];
         if config.browser.is_some() {
             scopes.push(EgressScope::Browser);
         }
         Self::open_scopes_with_classifier(
-            session_id, config, records, resolver, env_dir, classify, &scopes,
+            session_id,
+            config,
+            records,
+            resolver,
+            env_dir,
+            classify,
+            &scopes,
+            route_settings,
         )
         .await
     }
@@ -507,6 +693,7 @@ impl SessionEgress {
             None,
             netaddr::classify,
             &[EgressScope::Browser],
+            RouteSettings::default(),
         )
         .await
     }
@@ -527,10 +714,12 @@ impl SessionEgress {
             None,
             classify,
             &[EgressScope::Browser],
+            RouteSettings::default(),
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn open_scopes_with_classifier(
         session_id: impl Into<String>,
         config: EgressPolicyConfig,
@@ -539,7 +728,10 @@ impl SessionEgress {
         env_dir: Option<SecureDir>,
         classify: fn(IpAddr) -> AddrClass,
         scopes: &[EgressScope],
+        route_settings: RouteSettings,
     ) -> Result<Arc<Self>, String> {
+        let session_id = session_id.into();
+        let workspaces = (route_settings.workspaces)();
         let history = records
             .history()
             .await
@@ -594,7 +786,8 @@ impl SessionEgress {
                     _ => {}
                 }
             }
-            let policy = Self::compile_scope(&config, scope, &session_rules)?;
+            let (policy, routes) =
+                Self::compile_scope(&config, scope, &session_rules, &workspaces)?;
             if digest.as_deref() != Some(policy.digest()) {
                 revision += 1;
                 records
@@ -614,12 +807,18 @@ impl SessionEgress {
                 scope,
                 ScopeState {
                     policy: Arc::new(policy),
+                    routes,
                     session_rules,
                     revision,
                 },
             );
         }
-        let session_id = session_id.into();
+        let broker = match states.get(&EgressScope::Session) {
+            Some(state) if !state.routes.is_empty() => {
+                Some(RouteBroker::new(&session_id, &route_settings)?)
+            }
+            _ => None,
+        };
         let last_generation = history
             .iter()
             .filter_map(|line| recorded_generation(&line.event))
@@ -646,27 +845,140 @@ impl SessionEgress {
             policy_changes: tokio::sync::Mutex::new(()),
             this: this.clone(),
             proposals: Mutex::new(proposals),
+            route_settings,
+            broker: Mutex::new(broker),
         }))
     }
 
+    /// Compile one scope's policy, and for the Session scope its routes,
+    /// which the policy's digest and rendering then cover. `workspaces` are
+    /// refused as places for a route's `upstream_ca`.
     fn compile_scope(
         config: &EgressPolicyConfig,
         scope: EgressScope,
         session_rules: &[SessionRule],
-    ) -> Result<CompiledPolicy, String> {
+        workspaces: &[PathBuf],
+    ) -> Result<(CompiledPolicy, Arc<RouteTable>), String> {
         match scope {
-            EgressScope::Session => CompiledPolicy::compile(
-                scope,
-                &config.session_allow,
-                &config.session_private,
-                session_rules,
-            ),
-            EgressScope::Provisioning => Ok(CompiledPolicy::provisioning()),
+            EgressScope::Session => {
+                let policy = CompiledPolicy::compile(
+                    scope,
+                    &config.session_allow,
+                    &config.session_private,
+                    session_rules,
+                )?;
+                let routes = RouteTable::compile(&config.routes, &config.credentials, workspaces)?;
+                let entries = routes
+                    .routes()
+                    .iter()
+                    .map(|route| RoutePolicyEntry {
+                        id: route.label(),
+                        text: route.policy_text(),
+                        canonical: route.canonical(),
+                    })
+                    .collect();
+                Ok((policy.with_routes(entries)?, Arc::new(routes)))
+            }
+            EgressScope::Provisioning => Ok((
+                CompiledPolicy::provisioning(),
+                Arc::new(RouteTable::default()),
+            )),
             EgressScope::Browser => {
                 let (allow, private) = config.browser.clone().unwrap_or_default();
-                CompiledPolicy::compile(scope, &allow, &private, session_rules)
+                Ok((
+                    CompiledPolicy::compile(scope, &allow, &private, session_rules)?,
+                    Arc::new(RouteTable::default()),
+                ))
             }
         }
+    }
+
+    /// The route broker, made now if there is none yet. Its authority then
+    /// stays for this decision point's lifetime, through reloads.
+    fn ensure_route_broker(&self) -> Result<Arc<SessionBroker>, String> {
+        let mut broker = self
+            .broker
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if broker.is_none() {
+            *broker = Some(RouteBroker::new(&self.session_id, &self.route_settings)?);
+        }
+        Ok(broker
+            .as_ref()
+            .map(|broker| broker.broker.clone())
+            .expect("made above"))
+    }
+
+    /// The route broker, if this decision point has had routes.
+    fn route_broker(&self) -> Option<Arc<SessionBroker>> {
+        self.broker
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .map(|broker| broker.broker.clone())
+    }
+
+    /// The files that make a container trust this Session's certificate
+    /// authority, while the Session has routes: the bundle of this
+    /// computer's roots plus the authority, and the authority alone. A
+    /// container started with them mounts them at `/etc/axocoatl/ca`; one
+    /// started without them never trusts a route's certificates. They hold
+    /// certificates only; the authority's key stays in the daemon.
+    pub fn trust_files(&self) -> Result<Option<Arc<[TrustFile]>>, String> {
+        let has_routes = self
+            .state()
+            .scopes
+            .get(&EgressScope::Session)
+            .is_some_and(|scope| !scope.routes.is_empty());
+        if !has_routes {
+            return Ok(None);
+        }
+        let mut broker = self
+            .broker
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        // Each start renews an authority close to its end, so a container
+        // started now trusts one that lasts.
+        let renew = broker.as_ref().is_none_or(|current| {
+            current.broker.ca().not_after() <= std::time::SystemTime::now() + CA_RENEW_BEFORE
+        });
+        if renew {
+            *broker = Some(RouteBroker::new(&self.session_id, &self.route_settings)?);
+        }
+        let Some(broker) = broker.as_mut() else {
+            return Ok(None);
+        };
+        if broker.trust.is_none() {
+            let material = TrustMaterial::new(broker.broker.ca());
+            if !material.host_root_errors.is_empty() || material.host_roots == 0 {
+                tracing::warn!(
+                    session = %self.session_id,
+                    roots = material.host_roots,
+                    errors = ?material.host_root_errors,
+                    "some of this computer's trusted roots could not be read for the Session's trust bundle"
+                );
+            }
+            broker.trust = Some(material.files().into());
+        }
+        Ok(broker.trust.clone())
+    }
+
+    /// The Session's certificate authority in PEM, while it has one.
+    pub fn authority_pem(&self) -> Option<String> {
+        self.broker
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .map(|broker| broker.broker.ca().pem())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn authority_der(&self) -> Option<rustls::pki_types::CertificateDer<'static>> {
+        self.broker
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .map(|broker| broker.broker.ca().der().clone())
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -712,6 +1024,17 @@ impl SessionEgress {
                         text: rule.text.clone(),
                         source: rule.source.as_str().to_string(),
                     })
+                    .chain(
+                        scope_state
+                            .policy
+                            .routes()
+                            .iter()
+                            .map(|route| PolicyRuleView {
+                                id: route.id.clone(),
+                                text: route.text.clone(),
+                                source: "route".to_string(),
+                            }),
+                    )
                     .collect(),
             })
             .collect();
@@ -939,28 +1262,39 @@ impl SessionEgress {
         actor: &str,
     ) -> Result<ConfigReload, EgressPolicyError> {
         let _serial = self.policy_changes.lock().await;
+        let workspaces = (self.route_settings.workspaces)();
         let planned = {
             let state = self.state();
             let mut scopes: Vec<(&EgressScope, &ScopeState)> = state.scopes.iter().collect();
             scopes.sort_by_key(|(scope, _)| scope.as_str());
             let mut planned = Vec::new();
             for (scope, scope_state) in scopes {
-                let policy = Self::compile_scope(&config, *scope, &scope_state.session_rules)
-                    .map_err(EgressPolicyError::Invalid)?;
+                let (policy, routes) =
+                    Self::compile_scope(&config, *scope, &scope_state.session_rules, &workspaces)
+                        .map_err(EgressPolicyError::Invalid)?;
                 if policy.digest() != scope_state.policy.digest() {
-                    planned.push((*scope, scope_state.revision + 1, policy));
+                    planned.push((*scope, scope_state.revision + 1, policy, routes));
                 }
             }
             planned
         };
+        // A Session that gains its first routes gets its authority before
+        // the new policy is recorded.
+        if planned
+            .iter()
+            .any(|(scope, _, _, routes)| *scope == EgressScope::Session && !routes.is_empty())
+        {
+            self.ensure_route_broker()
+                .map_err(EgressPolicyError::Unavailable)?;
+        }
         // A scope whose policy does not change compiles the same from either
         // list, and a scope this decision point does not have uses neither:
         // both take the new lists now. A changed scope takes them only once
         // its policy is recorded and in use.
-        let changing: Vec<EgressScope> = planned.iter().map(|(scope, _, _)| *scope).collect();
+        let changing: Vec<EgressScope> = planned.iter().map(|(scope, _, _, _)| *scope).collect();
         self.adopt_lists(&config, |scope| !changing.contains(&scope));
         let mut reload = ConfigReload::default();
-        for (scope, revision, policy) in planned {
+        for (scope, revision, policy, routes) in planned {
             let digest = policy.digest().to_string();
             let recorded = self
                 .records
@@ -990,25 +1324,29 @@ impl SessionEgress {
                 let generation = state.control.as_ref().map(ControlHandle::generation);
                 let scope_state = state.scopes.get_mut(&scope).expect("planned from a scope");
                 let old = std::mem::replace(&mut scope_state.policy, Arc::new(policy));
+                scope_state.routes = routes;
                 scope_state.revision = revision;
                 let new = scope_state.policy.clone();
                 let narrowed = old
                     .private_destinations()
                     .iter()
                     .any(|range| !new.private_destinations().contains(range));
-                let gone: HashSet<&str> = old
-                    .rules()
-                    .iter()
-                    .filter(|rule| !new.rules().contains(rule))
-                    .map(|rule| rule.id.as_str())
-                    .collect();
+                // A route that changed in any way closes its connections:
+                // they were served by its old rules or credential. A tunnel
+                // to a host and port a route now covers closes too: the
+                // route decides there.
+                let gone = old.removed_ids(&new);
+                let routes = scope_state.routes.clone();
                 let mut revoke_ids: Vec<u64> = state
                     .open
                     .iter()
                     .filter(|((connection_generation, _), connection)| {
                         Some(*connection_generation) == generation
                             && connection.scope == scope
-                            && (narrowed || gone.contains(connection.rule_id.as_str()))
+                            && (narrowed
+                                || gone.contains(&connection.rule_id)
+                                || (connection.relay.is_none()
+                                    && routes.find(&connection.host, connection.port).is_some()))
                     })
                     .map(|((_, id), _)| *id)
                     .collect();
@@ -1040,6 +1378,8 @@ impl SessionEgress {
         if adopt(EgressScope::Session) {
             applied.session_allow = config.session_allow.clone();
             applied.session_private = config.session_private.clone();
+            applied.routes = config.routes.clone();
+            applied.credentials = config.credentials.clone();
         }
         if adopt(EgressScope::Browser) {
             applied.browser = config.browser.clone();
@@ -1334,7 +1674,8 @@ impl SessionEgress {
         // record never holds a change that did not take effect.
         let _serial = self.policy_changes.lock().await;
         let config = self.policy_config();
-        let (revision, policy, session_rules, removed_ids) = {
+        let workspaces = (self.route_settings.workspaces)();
+        let (revision, policy, routes, session_rules, removed_ids) = {
             let state = self.state();
             if state.commands.contains(command_id) {
                 return Err(EgressPolicyError::Conflict(format!(
@@ -1368,9 +1709,9 @@ impl SessionEgress {
                     }
                 }
             }
-            let policy = Self::compile_scope(&config, scope, &session_rules)
+            let (policy, routes) = Self::compile_scope(&config, scope, &session_rules, &workspaces)
                 .map_err(EgressPolicyError::Invalid)?;
-            (revision, policy, session_rules, removed_ids)
+            (revision, policy, routes, session_rules, removed_ids)
         };
         self.records
             .append_control(NetworkEvent::Policy {
@@ -1404,6 +1745,7 @@ impl SessionEgress {
             let scope_state = state.scopes.get_mut(&scope).expect("scope checked above");
             scope_state.revision = revision;
             scope_state.policy = Arc::new(policy);
+            scope_state.routes = routes;
             scope_state.session_rules = session_rules;
             let generation = state.control.as_ref().map(ControlHandle::generation);
             let mut revoke_ids: Vec<u64> = state
@@ -1468,11 +1810,11 @@ impl SessionEgress {
         (caller, None)
     }
 
-    /// Whether `policy` still admits what `verdict` allowed: the rule that
+    /// Whether `scope` still admits what `verdict` allowed: the rule that
     /// matched still matches this host and port (a reload can give a rule id
-    /// another meaning), and every private address is still in a listed
-    /// range.
-    fn still_admits(&self, policy: &CompiledPolicy, open: &OpenRequest, verdict: &Verdict) -> bool {
+    /// another meaning), or the same route still covers them, and every
+    /// private address is still in a listed range.
+    fn still_admits(&self, scope: &ScopeState, open: &OpenRequest, verdict: &Verdict) -> bool {
         let Some(rule) = verdict.rule.as_deref() else {
             return false;
         };
@@ -1483,7 +1825,19 @@ impl SessionEgress {
                 Err(_) => return false,
             },
         };
-        policy.admits(rule, &host, open.port)
+        let policy = &scope.policy;
+        let matched = match &verdict.route {
+            Some(route) => scope
+                .routes
+                .find(&host, open.port)
+                .is_some_and(|current| current == *route),
+            None => {
+                // A route that now covers the host decides instead.
+                scope.routes.find(&host, open.port).is_none()
+                    && policy.admits(rule, &host, open.port)
+            }
+        };
+        matched
             && verdict.addrs.iter().all(|addr| {
                 !matches!((self.classify)(*addr), AddrClass::Private(_))
                     || policy.allows_private(*addr)
@@ -1500,12 +1854,21 @@ impl SessionEgress {
         state.forbidden.contains(&ip) || embedded.is_some_and(|v4| state.forbidden.contains(&v4))
     }
 
-    async fn verdict(&self, open: &OpenRequest, scope: EgressScope) -> Verdict {
-        let Some((policy, revision)) = self
+    /// Decide one request against `scope`. On a route's host and port (a
+    /// name, never an address) the route decides: only a `CONNECT` from a
+    /// process kind it serves is admitted, as a relay; elsewhere the
+    /// allowlist decides and admits a tunnel.
+    async fn verdict(
+        &self,
+        open: &OpenRequest,
+        scope: EgressScope,
+        kind: Option<BindingKind>,
+    ) -> Verdict {
+        let Some((policy, revision, routes)) = self
             .state()
             .scopes
             .get(&scope)
-            .map(|state| (state.policy.clone(), state.revision))
+            .map(|state| (state.policy.clone(), state.revision, state.routes.clone()))
         else {
             return Verdict::deny(403, "not_allowed", &open.host, open.port);
         };
@@ -1513,7 +1876,7 @@ impl SessionEgress {
             revision: Some(revision),
             ..Verdict::deny(status, reason, &open.host, open.port)
         };
-        let (rule, addrs) = if let Some(ip) = netaddr::parse_ip_literal(&open.host) {
+        let (rule, addrs, route) = if let Some(ip) = netaddr::parse_ip_literal(&open.host) {
             // A literal needs no resolution, so a never-allowed address is
             // named as such even when no range lists it.
             if (self.classify)(ip).is_forbidden() || self.is_host_gateway(ip) {
@@ -1523,26 +1886,49 @@ impl SessionEgress {
                 };
             }
             match policy.match_ip(ip, open.port) {
-                Some(rule) => (rule.id.clone(), vec![ip]),
+                Some(rule) => (rule.id.clone(), vec![ip], None),
                 None => return deny(403, "not_allowed"),
             }
         } else {
             let Ok(name) = netaddr::normalize_host_name(&open.host) else {
                 return deny(400, "invalid_host");
             };
-            let Some(rule) = policy.match_name(&name, open.port) else {
-                return deny(403, "not_allowed");
+            let route = routes.find(&name, open.port);
+            let rule = match &route {
+                Some(route) => {
+                    let refuse = |reason| Verdict {
+                        rule: Some(route.label()),
+                        ..deny(403, reason)
+                    };
+                    // The route reads requests only inside TLS it ends.
+                    if open.kind != RequestKind::Connect {
+                        return refuse("tls_required");
+                    }
+                    if !kind.is_some_and(|kind| route.allows_binding(kind)) {
+                        return refuse("route_not_for_binding");
+                    }
+                    route.label()
+                }
+                None => match policy.match_name(&name, open.port) {
+                    Some(rule) => rule.id.clone(),
+                    None => return deny(403, "not_allowed"),
+                },
             };
-            let rule = rule.id.clone();
-            // Only now, after the allowlist matched, does the name resolve.
+            // Only now, after the allowlist or a route matched, does the
+            // name resolve.
             let mut addrs = match self.resolver.resolve(&name, open.port).await {
                 Ok(addrs) if !addrs.is_empty() => addrs,
-                _ => return deny(502, "resolve_failed"),
+                _ => {
+                    return Verdict {
+                        rule: route.as_ref().map(|route| route.label()),
+                        ..deny(502, "resolve_failed")
+                    }
+                }
             };
             let mut seen = HashSet::new();
             addrs.retain(|addr| seen.insert(*addr));
             addrs.truncate(MAX_ALLOW_ADDRS);
-            (rule, addrs)
+            (rule, addrs, route)
         };
         let classes: Vec<AddrClass> = addrs.iter().map(|addr| (self.classify)(*addr)).collect();
         if classes.iter().any(|class| class.is_forbidden())
@@ -1564,14 +1950,18 @@ impl SessionEgress {
             };
         }
         Verdict {
-            decision: Decision::Allow {
-                addrs: addrs.clone(),
+            decision: match route {
+                Some(_) => Decision::Relay,
+                None => Decision::Allow {
+                    addrs: addrs.clone(),
+                },
             },
             reason: None,
             status: None,
             rule: Some(rule),
             addrs,
             revision: Some(revision),
+            route,
         }
     }
 }
@@ -1622,7 +2012,9 @@ impl EgressAuthority for SessionEgress {
                 .as_ref()
                 .ok_or("no directory for egress env files")?;
             let name = format!("egress-{tag}.env");
-            dir.atomic_write_with_mode(&name, env_file_contents(&token).as_bytes(), 0o600)
+            let contents =
+                env_file_contents(&token) + &self.route_env(spec.kind, spec.trust_mounted);
+            dir.atomic_write_with_mode(&name, contents.as_bytes(), 0o600)
                 .map_err(|error| format!("writing the egress env file: {error}"))?;
             Some(name)
         };
@@ -1673,8 +2065,9 @@ impl EgressAuthority for SessionEgress {
         self.note_generation(open.generation);
         let (caller, refusal) = self.caller(open.auth.as_deref());
         let scope = caller.scope.unwrap_or(EgressScope::Session);
+        let kind = caller.binding.as_ref().map(|binding| binding.kind);
         let mut verdict = match refusal {
-            None => self.verdict(&open, scope).await,
+            None => self.verdict(&open, scope, kind).await,
             // Without a credential nothing can be recorded once the record
             // is full; say so rather than blame the missing credential (a
             // setup step or terminal goes ahead without one then).
@@ -1684,7 +2077,7 @@ impl EgressAuthority for SessionEgress {
             Some((status, reason)) => Verdict::deny(status, reason, &open.host, open.port),
         };
         let key = (open.generation, open.id);
-        if matches!(verdict.decision, Decision::Allow { .. }) {
+        if verdict.admitted() {
             // The credential may have been released, or the rule revoked,
             // while the name resolved. Check again and register the
             // connection in one step under the lock that release and revoke
@@ -1699,7 +2092,7 @@ impl EgressAuthority for SessionEgress {
             let current = state.scopes.get(&scope).map(|scope_state| {
                 (
                     scope_state.revision,
-                    self.still_admits(&scope_state.policy, &open, &verdict),
+                    self.still_admits(scope_state, &open, &verdict),
                 )
             });
             if !bound {
@@ -1710,17 +2103,29 @@ impl EgressAuthority for SessionEgress {
                     ..Verdict::deny(403, "not_allowed", &open.host, open.port)
                 };
             } else {
+                let relay = verdict.route.clone().map(|route| RelayTarget {
+                    route,
+                    addrs: verdict.addrs.clone(),
+                    binding: caller.binding.clone(),
+                    token_tag: caller.tag.clone(),
+                });
+                if relay.is_some() {
+                    state.relays.insert(key, RelaySlot::Pending(None));
+                }
                 state.open.insert(
                     key,
                     OpenConnection {
                         token_hash: caller.hash.clone(),
                         rule_id: verdict.rule.clone().unwrap_or_default(),
                         scope,
+                        host: open.host.trim_end_matches('.').to_ascii_lowercase(),
+                        port: open.port,
+                        relay,
                     },
                 );
             }
         }
-        let allowed = matches!(verdict.decision, Decision::Allow { .. });
+        let allowed = verdict.admitted();
         let unattributed = matches!(verdict.reason, Some("no_credential" | "unknown_credential"));
         if unattributed && !self.admit_unattributed_refusal() {
             // Counted, not recorded; a refusal stands either way.
@@ -1783,7 +2188,10 @@ impl EgressAuthority for SessionEgress {
             return verdict.decision;
         }
         if recorded.is_err() {
-            self.state().open.remove(&key);
+            let mut state = self.state();
+            state.open.remove(&key);
+            state.relays.remove(&key);
+            drop(state);
             return Decision::deny(
                 503,
                 "record_unavailable",
@@ -1794,7 +2202,208 @@ impl EgressAuthority for SessionEgress {
     }
 
     async fn closed(&self, report: CloseReport) {
-        self.state().open.remove(&(report.generation, report.id));
+        let key = (report.generation, report.id);
+        let report = {
+            let mut state = self.state();
+            state.open.remove(&key);
+            match state.relays.remove(&key) {
+                // The broker has the connection, or is about to: its close
+                // is recorded when the broker ends, with the broker's reason.
+                Some(RelaySlot::Pending(_)) => {
+                    state.relays.insert(key, RelaySlot::Pending(Some(report)));
+                    return;
+                }
+                Some(RelaySlot::Serving(_)) => {
+                    state.relays.insert(key, RelaySlot::Serving(Some(report)));
+                    return;
+                }
+                Some(RelaySlot::Done(error)) => with_broker_error(report, error),
+                None => report,
+            }
+        };
+        self.record_close(report).await;
+    }
+
+    async fn relay(&self, open: RelayOpen, stream: RelayStream) {
+        let key = (open.generation, open.id);
+        let target = {
+            let mut state = self.state();
+            if let Some(RelaySlot::Pending(close)) = state.relays.remove(&key) {
+                state.relays.insert(key, RelaySlot::Serving(close));
+            }
+            state
+                .open
+                .get(&key)
+                .and_then(|connection| connection.relay.clone())
+        };
+        let error = match (target, self.route_broker(), self.this.upgrade()) {
+            (Some(target), Some(broker), Some(this)) => {
+                let context = RelayContext {
+                    session: self.session_id.clone(),
+                    conn: format!("g{}:{}", open.generation, open.id),
+                    route: target.route,
+                    host: open.open.host.clone(),
+                    port: open.open.port,
+                    addrs: target.addrs,
+                    binding: target.binding,
+                    token_tag: target.token_tag,
+                };
+                let sink: Arc<dyn BrokerRecordSink> = Arc::new(RouteRecordSink { egress: this });
+                broker.serve(context, stream, sink).await.error
+            }
+            // Closed or revoked before the broker could take it.
+            _ => {
+                drop(stream);
+                Some("route_closed: the connection ended before the route served it".into())
+            }
+        };
+        self.finish_relay(key, error).await;
+    }
+
+    fn attach_control(&self, handle: ControlHandle) {
+        SessionEgress::attach_control(self, handle);
+    }
+
+    fn first_generation(&self) -> u32 {
+        self.state().last_generation.saturating_add(1)
+    }
+
+    fn forbid_destinations(&self, addrs: &[IpAddr]) {
+        self.state().forbidden.extend(addrs.iter().copied());
+    }
+
+    async fn sidecar_event(&self, event: SidecarEvent) {
+        self.record_sidecar_event(event).await;
+    }
+}
+
+/// `report` with the broker's reason for ending the connection first.
+fn with_broker_error(mut report: CloseReport, error: Option<String>) -> CloseReport {
+    if let Some(error) = error {
+        report.error = Some(match report.error.take() {
+            Some(proxy) => format!("{error}; {proxy}"),
+            None => error,
+        });
+    }
+    report
+}
+
+/// The broker's `request` and `response` events go to the Session's
+/// network record, like its connections, and count against its cap.
+struct RouteRecordSink {
+    egress: Arc<SessionEgress>,
+}
+
+#[async_trait::async_trait]
+impl BrokerRecordSink for RouteRecordSink {
+    async fn append(&self, event: NetworkEvent) -> Result<(), String> {
+        self.egress
+            .record_open(event)
+            .await
+            .map(|_| ())
+            .map_err(|error| match error {
+                RecordFailure::Full => "the network record is full".to_string(),
+                RecordFailure::Unavailable(error) => error,
+            })
+    }
+}
+
+impl SessionEgress {
+    /// The broker ended a relayed connection: record its close now if the
+    /// sidecar reported it already, or keep the reason for when it does.
+    async fn finish_relay(&self, key: (u32, u64), error: Option<String>) {
+        let report = {
+            let mut state = self.state();
+            match state.relays.remove(&key) {
+                Some(RelaySlot::Serving(Some(report))) => Some(with_broker_error(report, error)),
+                Some(RelaySlot::Serving(None)) => {
+                    state.relays.insert(key, RelaySlot::Done(error));
+                    None
+                }
+                Some(other) => {
+                    state.relays.insert(key, other);
+                    None
+                }
+                None => None,
+            }
+        };
+        if let Some(report) = report {
+            self.record_close(report).await;
+        }
+    }
+
+    /// Environment a credential's env file adds for egress routes, for a
+    /// process kind some route serves: each such route's placeholders and,
+    /// when the process's container mounts the trust files, the variables
+    /// that point TLS clients at them.
+    fn route_env(&self, kind: GrantKind, trust_mounted: bool) -> String {
+        let binding = match kind {
+            GrantKind::Agent | GrantKind::Setup | GrantKind::Terminal => binding_kind(kind),
+            GrantKind::Provisioning | GrantKind::Browser => return String::new(),
+        };
+        let Some(routes) = self
+            .state()
+            .scopes
+            .get(&EgressScope::Session)
+            .map(|scope| scope.routes.clone())
+        else {
+            return String::new();
+        };
+        let served: Vec<&Arc<Route>> = routes
+            .routes()
+            .iter()
+            .filter(|route| route.allows_binding(binding))
+            .collect();
+        if served.is_empty() {
+            return String::new();
+        }
+        let mut contents = String::new();
+        if trust_mounted {
+            for (name, value) in crate::egress_broker::trust::trust_env() {
+                contents.push_str(&format!("{name}={value}\n"));
+            }
+        }
+        for route in served {
+            for name in &route.env_placeholders {
+                contents.push_str(&format!("{name}=axocoatl-route:{}\n", route.host));
+            }
+        }
+        contents
+    }
+
+    /// A sidecar generation ended: its connections are gone. A relay the
+    /// broker is serving ends with the channel and records its close
+    /// itself; one the broker never took, or that ended without a close, is
+    /// let go. Returns the closes such relays held, to record.
+    fn forget_generation(&self, generation: u32) -> Vec<CloseReport> {
+        let mut current = self.state();
+        if current
+            .control
+            .as_ref()
+            .is_some_and(|control| control.generation() == generation)
+        {
+            current.control = None;
+        }
+        current
+            .open
+            .retain(|(connection_generation, _), _| *connection_generation != generation);
+        let lost: Vec<(u32, u64)> = current
+            .relays
+            .iter()
+            .filter(|((connection_generation, _), slot)| {
+                *connection_generation == generation && !matches!(slot, RelaySlot::Serving(_))
+            })
+            .map(|(key, _)| *key)
+            .collect();
+        lost.into_iter()
+            .filter_map(|key| match current.relays.remove(&key) {
+                Some(RelaySlot::Pending(close)) => close,
+                _ => None,
+            })
+            .collect()
+    }
+
+    async fn record_close(&self, report: CloseReport) {
         let event = NetworkEvent::Close {
             conn: format!("g{}:{}", report.generation, report.id),
             ip: report.ip.map(|ip| ip.to_string()),
@@ -1818,19 +2427,7 @@ impl EgressAuthority for SessionEgress {
         }
     }
 
-    fn attach_control(&self, handle: ControlHandle) {
-        SessionEgress::attach_control(self, handle);
-    }
-
-    fn first_generation(&self) -> u32 {
-        self.state().last_generation.saturating_add(1)
-    }
-
-    fn forbid_destinations(&self, addrs: &[IpAddr]) {
-        self.state().forbidden.extend(addrs.iter().copied());
-    }
-
-    async fn sidecar_event(&self, event: SidecarEvent) {
+    async fn record_sidecar_event(&self, event: SidecarEvent) {
         let (state, generation, container, detail) = match event {
             SidecarEvent::Starting {
                 generation,
@@ -1874,17 +2471,10 @@ impl EgressAuthority for SessionEgress {
             state,
             SidecarState::ChannelLost | SidecarState::Failed | SidecarState::Stopped
         ) {
-            let mut current = self.state();
-            if current
-                .control
-                .as_ref()
-                .is_some_and(|control| control.generation() == generation)
-            {
-                current.control = None;
+            let held = self.forget_generation(generation);
+            for report in held {
+                self.record_close(report).await;
             }
-            current
-                .open
-                .retain(|(connection_generation, _), _| *connection_generation != generation);
         }
         if let Err(error) = self
             .records
@@ -1904,6 +2494,10 @@ impl EgressAuthority for SessionEgress {
 #[cfg(test)]
 #[path = "session_egress_attempt_tests.rs"]
 mod attempt_tests;
+
+#[cfg(test)]
+#[path = "session_egress_route_tests.rs"]
+pub(crate) mod route_tests;
 
 #[cfg(test)]
 #[path = "session_egress_tests.rs"]

@@ -126,7 +126,7 @@ async fn reload_child_body() {
     // Unchanged: nothing applied, nothing recorded.
     let report = daemon.reload_network_policy().await.unwrap();
     assert!(report.applied.is_empty(), "{report:?}");
-    assert_eq!(report.unchanged.len(), 4);
+    assert_eq!(report.unchanged.len(), 6);
     assert!(report.restart_required.is_empty() && report.revisions.is_empty());
 
     // A host added to each list applies to the running Session at once.
@@ -347,6 +347,107 @@ async fn a_reload_applies_the_files_allowlists_and_reports_what_needs_a_restart(
     run_child(
         CHILD,
         "bootstrap::session_network_reload_tests::a_reload_applies_the_files_allowlists_and_reports_what_needs_a_restart",
+    )
+    .await;
+}
+
+fn routes_yaml(rule_path: &str, variable: &str) -> String {
+    format!(
+        "agents: []\nconsolidation:\n  enabled: false\ncredentials:\n  api: {{env: {variable}}}\n\
+         sandbox:\n  network: egress\n  egress:\n    allow: [{{host: a.example.com}}]\n    routes:\n      \
+         - {{host: api.example.com, credential: api, inject: {{header: Authorization, format: 'Bearer {{}}'}}, \
+         rules: [{{methods: [GET], path: '{rule_path}'}}]}}\n"
+    )
+}
+
+async fn routes_reload_child_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("axocoatl.yaml");
+    std::fs::write(&path, routes_yaml("/v1/repos", "AXO_ROUTE_RELOAD_A")).unwrap();
+    let config = axocoatl_config::load_config(&path).await.unwrap();
+    let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
+    daemon.set_config_path(&path);
+    let work = tempfile::tempdir().unwrap();
+    let running = native_session(&daemon, work.path(), "Routed").await;
+    // The daemon's decision point has the configured route, an authority
+    // for it, and lists it in the Session policy.
+    let egress = daemon.session_egress(&running).await.unwrap();
+    let files = egress.trust_files().unwrap().unwrap();
+    assert_eq!(files.len(), 2);
+    assert!(egress.authority_pem().is_some());
+    let view = daemon.session_network(&running, None, None).await.unwrap();
+    let session = view
+        .policies
+        .iter()
+        .find(|policy| policy.scope == "session")
+        .unwrap();
+    let route = session
+        .rules
+        .iter()
+        .find(|rule| rule.source == "route")
+        .unwrap();
+    assert_eq!(route.id, "route#0");
+    assert_eq!(
+        route.text,
+        "api.example.com:443 (route#0: 1 rule, credential api, for agent)"
+    );
+    let revision = session.revision;
+
+    // A changed rule and a changed credential source apply with no restart.
+    std::fs::write(&path, routes_yaml("/v1/**", "AXO_ROUTE_RELOAD_B")).unwrap();
+    let report = daemon.reload_network_policy().await.unwrap();
+    assert_eq!(report.applied, ["sandbox.egress.routes", "credentials"]);
+    assert!(report.restart_required.is_empty(), "{report:?}");
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert_eq!(report.revisions.len(), 1, "{report:?}");
+    assert_eq!(report.revisions[0].scope, "session");
+    assert_eq!(report.revisions[0].revision, revision + 1);
+    let keys: Vec<&str> = report
+        .changes
+        .iter()
+        .map(|change| change.key.as_str())
+        .collect();
+    assert_eq!(keys, ["sandbox.egress.routes", "credentials"]);
+    assert_eq!(report.changes[1].added, ["api: env AXO_ROUTE_RELOAD_B"]);
+    assert_eq!(report.changes[1].removed, ["api: env AXO_ROUTE_RELOAD_A"]);
+    // The same authority serves the changed route.
+    assert!(Arc::ptr_eq(&files, &egress.trust_files().unwrap().unwrap()));
+    // The record holds the reloaded policy; nothing holds a value.
+    let records = daemon
+        .session_network(&running, None, None)
+        .await
+        .unwrap()
+        .events;
+    assert!(records.iter().any(|line| matches!(&line.event,
+        NetworkEvent::Policy { source: PolicySource::ConfigReload, rules, .. }
+            if rules.iter().any(|rule| rule.starts_with("api.example.com:443 (route#0")))));
+
+    // Without routes the Session has no trust files to mount.
+    std::fs::write(
+        &path,
+        yaml("egress", &["a.example.com"], &[]).replace("browser:\n  allow: []\n", ""),
+    )
+    .unwrap();
+    let report = daemon.reload_network_policy().await.unwrap();
+    assert!(
+        report
+            .applied
+            .contains(&"sandbox.egress.routes".to_string()),
+        "{report:?}"
+    );
+    assert!(egress.trust_files().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn routes_and_credentials_reload_into_a_running_sessions_policy() {
+    const CHILD: &str = "AXOCOATL_TEST_ROUTES_RELOAD_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        routes_reload_child_body().await;
+        return;
+    }
+    run_child(
+        CHILD,
+        "bootstrap::session_network_reload_tests::routes_and_credentials_reload_into_a_running_sessions_policy",
     )
     .await;
 }

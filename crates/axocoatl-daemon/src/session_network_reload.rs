@@ -1,12 +1,13 @@
 //! `axocoatl network reload` and `POST /api/network/reload`: apply the
-//! configuration file's allowlists to running Sessions.
+//! configuration file's allowlists and egress routes to running Sessions.
 //!
 //! The daemon reads the file it was started with again and validates all of
-//! it. Only four lists change while it runs: `sandbox.egress.allow`,
-//! `sandbox.egress.private_destinations`, `browser.allow` and
-//! `browser.private_destinations`. Each running decision point records its
-//! new policy (`policy`, `source: config_reload`), new connections use it at
-//! once, and open connections that no rule allows any more are closed. Every
+//! it. Only these change while it runs: `sandbox.egress.allow`,
+//! `sandbox.egress.private_destinations`, `sandbox.egress.routes`,
+//! `credentials`, `browser.allow` and `browser.private_destinations`. Each
+//! running decision point records its new policy (`policy`, `source:
+//! config_reload`), new connections use it at once, and open connections
+//! that no rule allows any more, or whose route changed, are closed. Every
 //! other difference from the configuration the daemon started with is
 //! reported under `restart_required` and not applied.
 //!
@@ -20,16 +21,18 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use axocoatl_config::{AxocoatlConfig, EgressAllowYaml};
+use axocoatl_config::{AxocoatlConfig, CredentialSourceYaml, EgressAllowYaml, EgressRouteYaml};
 use axocoatl_session::network_record::EgressScope;
 
 use crate::session_egress::{EgressPolicyConfig, SessionEgress};
 use crate::session_egress_policy::CompiledPolicy;
 
 /// The settings a reload applies, as dotted keys.
-pub const LIVE_KEYS: [&str; 4] = [
+pub const LIVE_KEYS: [&str; 6] = [
     "sandbox.egress.allow",
     "sandbox.egress.private_destinations",
+    "sandbox.egress.routes",
+    "credentials",
     "browser.allow",
     "browser.private_destinations",
 ];
@@ -214,6 +217,29 @@ fn list_entries(
     }
 }
 
+/// Each route as its configuration, in JSON.
+fn route_entries(routes: &[EgressRouteYaml]) -> Vec<String> {
+    routes
+        .iter()
+        .map(|route| serde_json::to_string(route).unwrap_or_default())
+        .collect()
+}
+
+/// Each credential as its name and where it is read; there is no value to
+/// show.
+fn credential_entries(
+    credentials: &std::collections::BTreeMap<String, CredentialSourceYaml>,
+) -> Vec<String> {
+    credentials
+        .iter()
+        .map(|(name, source)| match (&source.env, &source.file) {
+            (Some(variable), _) => format!("{name}: env {variable}"),
+            (None, Some(path)) => format!("{name}: file {path}"),
+            (None, None) => name.clone(),
+        })
+        .collect()
+}
+
 /// What each of [`LIVE_KEYS`] gains and loses from `current` to `next`;
 /// only lists that change are named.
 pub fn list_changes(current: &EgressPolicyConfig, next: &EgressPolicyConfig) -> Vec<ListChange> {
@@ -233,9 +259,16 @@ pub fn list_changes(current: &EgressPolicyConfig, next: &EgressPolicyConfig) -> 
     );
     let browser_before = list_entries(EgressScope::Browser, &current_browser.0, &current_browser.1);
     let browser_after = list_entries(EgressScope::Browser, &next_browser.0, &next_browser.1);
+    let routes = (route_entries(&current.routes), route_entries(&next.routes));
+    let credentials = (
+        credential_entries(&current.credentials),
+        credential_entries(&next.credentials),
+    );
     let pairs = [
         (&session_before.0, &session_after.0),
         (&session_before.1, &session_after.1),
+        (&routes.0, &routes.1),
+        (&credentials.0, &credentials.1),
         (&browser_before.0, &browser_after.0),
         (&browser_before.1, &browser_after.1),
     ];
@@ -290,6 +323,8 @@ pub fn live_changes(
     let pairs = [
         (current.session_allow != next.session_allow),
         (current.session_private != next.session_private),
+        (current.routes != next.routes),
+        (current.credentials != next.credentials),
         (current_browser.0 != next_browser.0),
         (current_browser.1 != next_browser.1),
     ];
@@ -313,6 +348,8 @@ fn without_live_lists(config: &AxocoatlConfig) -> Value {
     let egress = config.sandbox.egress.get_or_insert_with(Default::default);
     egress.allow.clear();
     egress.private_destinations.clear();
+    egress.routes.clear();
+    config.credentials.clear();
     if let Some(browser) = config.browser.as_mut() {
         browser.allow.clear();
         browser.private_destinations.clear();
@@ -394,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_four_lists_are_live_and_everything_else_needs_a_restart() {
+    fn only_the_live_lists_are_live_and_everything_else_needs_a_restart() {
         let started = config(&["a.example"], Some(&["fonts.example"]));
         let mut next = config(&["a.example", "b.example"], Some(&[]));
         assert!(restart_required(&started, &next).is_empty());
@@ -408,6 +445,8 @@ mod tests {
             same,
             [
                 "sandbox.egress.private_destinations",
+                "sandbox.egress.routes",
+                "credentials",
                 "browser.private_destinations"
             ]
         );
@@ -427,6 +466,57 @@ mod tests {
                 "server.port"
             ]
         );
+    }
+
+    fn route(yaml: &str) -> EgressRouteYaml {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    /// Routes and credentials reload like the allowlists: they need no
+    /// restart, a change is named entry by entry, and a credential is named
+    /// with where it is read, never a value (the configuration has none).
+    #[test]
+    fn routes_and_credentials_reload_live_and_are_named_without_values() {
+        let started = config(&["a.example"], None);
+        let mut next = config(&["a.example"], None);
+        next.sandbox.egress.as_mut().unwrap().routes = vec![
+            route("{host: api.example, credential: api, inject: {header: Authorization, format: 'Bearer {}'}, rules: [{methods: [GET], path: /v1/**}]}"),
+            route("{host: registry.example, access: read-only}"),
+        ];
+        next.credentials.insert(
+            "api".into(),
+            CredentialSourceYaml {
+                env: Some("API_TOKEN".into()),
+                file: None,
+            },
+        );
+        assert!(restart_required(&started, &next).is_empty());
+        let current = EgressPolicyConfig::from_config(&started);
+        let policy = applicable_policy(&started, &current, &next);
+        assert_eq!(policy.routes, next.sandbox.egress.as_ref().unwrap().routes);
+        assert_eq!(policy.credentials, next.credentials);
+        let (changed, _) = live_changes(&current, &policy);
+        assert_eq!(changed, ["sandbox.egress.routes", "credentials"]);
+        let changes = list_changes(&current, &policy);
+        let keys: Vec<&str> = changes.iter().map(|change| change.key.as_str()).collect();
+        assert_eq!(keys, ["sandbox.egress.routes", "credentials"]);
+        assert_eq!(changes[0].added.len(), 2);
+        assert!(changes[0].added[0].contains("\"host\":\"api.example\""));
+        assert!(changes[0].added[1].contains("read-only"));
+        assert_eq!(changes[1].added, ["api: env API_TOKEN"]);
+
+        // A rule changed is the route removed and added again.
+        let mut narrower = next.clone();
+        narrower.sandbox.egress.as_mut().unwrap().routes[0] =
+            route("{host: api.example, credential: api, inject: {header: Authorization, format: 'Bearer {}'}, rules: [{methods: [GET], path: /v1/repos}]}");
+        let changes = list_changes(
+            &EgressPolicyConfig::from_config(&next),
+            &EgressPolicyConfig::from_config(&narrower),
+        );
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].key, "sandbox.egress.routes");
+        assert!(changes[0].removed[0].contains("/v1/**"));
+        assert!(changes[0].added[0].contains("/v1/repos"));
     }
 
     #[test]

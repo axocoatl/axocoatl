@@ -71,7 +71,9 @@ sandbox:
             .iter()
             .any(|w| w.starts_with("sandbox.egress.routes[1].host")
                 && w.contains("preset npm")
-                && w.contains("the route decides")),
+                && w.contains(
+                    "on the route's ports (443) Sessions reach it only through the route"
+                )),
         "{warnings:?}"
     );
     assert!(

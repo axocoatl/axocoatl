@@ -266,9 +266,8 @@ impl BrowserService {
             .collect();
         sessions.sort_by(|left, right| left.0.cmp(&right.0));
         let config = EgressPolicyConfig {
-            session_allow: Vec::new(),
-            session_private: Vec::new(),
             browser: Some((allow, private_destinations)),
+            ..EgressPolicyConfig::default()
         };
         let mut points = Vec::new();
         for (session_id, session) in sessions {
@@ -437,9 +436,8 @@ impl BrowserService {
         let authority = SessionEgress::open_browser_only(
             session_id,
             EgressPolicyConfig {
-                session_allow: Vec::new(),
-                session_private: Vec::new(),
                 browser: Some(self.declared()),
+                ..EgressPolicyConfig::default()
             },
             Arc::new(SessionRecordSink::new(self.records.clone(), session_id)),
             Arc::new(SystemResolver),
@@ -964,6 +962,7 @@ pub(crate) mod tests {
                 session_allow: vec![EgressAllowYaml::Preset("npm".into())],
                 session_private: Vec::new(),
                 browser,
+                ..Default::default()
             },
             Arc::new(FakeRecord::default()),
             FakeResolver::with(&[]),
@@ -1057,6 +1056,7 @@ pub(crate) mod tests {
                 session_allow: Vec::new(),
                 session_private: Vec::new(),
                 browser: Some((docs.clone(), Vec::new())),
+                ..Default::default()
             },
             record.clone(),
             FakeResolver::with(&[]),
@@ -1071,6 +1071,7 @@ pub(crate) mod tests {
             session_allow: Vec::new(),
             session_private: Vec::new(),
             browser: Some((allow.to_vec(), Vec::new())),
+            ..Default::default()
         };
         let reloaded = reload_points(
             vec![("ses-1".to_string(), authority.clone(), browser_only(&fonts))],

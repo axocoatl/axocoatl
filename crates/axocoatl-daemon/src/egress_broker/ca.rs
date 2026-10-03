@@ -170,8 +170,8 @@ impl SessionCa {
         }
         if self.not_after <= now + LEAF_RENEW_BEFORE {
             return Err(BrokerError::Certificate(format!(
-                "the Session's certificate authority expires within the hour; restart the Session \
-                 for a new one ({})",
+                "the Session's certificate authority expires within the hour; restart the Session's \
+                 runtime for a new one ({})",
                 self.common_name
             )));
         }

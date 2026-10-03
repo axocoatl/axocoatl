@@ -607,7 +607,7 @@ pub fn validate_egress_routes(config: &AxocoatlConfig) -> Result<Vec<ConfigWarni
                 "List ports 1-65535 once each, such as [443].",
             )
         })?;
-        for port in ports {
+        for &port in &ports {
             if let Some(other) = seen.insert((host.clone(), port), index) {
                 return Err(invalid(
                     format!("{field}.host"),
@@ -631,7 +631,12 @@ pub fn validate_egress_routes(config: &AxocoatlConfig) -> Result<Vec<ConfigWarni
             warnings.push(ConfigWarning {
                 field: format!("{field}.host"),
                 message: format!(
-                    "{host} is also allowed by sandbox.egress.allow ({allowed}); the route decides for its ports"
+                    "{host} is also allowed by sandbox.egress.allow ({allowed}); on the route's ports ({}) Sessions reach it only through the route, under its rules and for the processes it lists",
+                    ports
+                        .iter()
+                        .map(u16::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
             });
         }

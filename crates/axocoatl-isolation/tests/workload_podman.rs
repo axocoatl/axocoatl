@@ -283,6 +283,7 @@ impl Fixture {
                 sidecar_network: Some(self.network.clone()),
                 max_connections: 64,
                 labels: vec![self.label.clone()],
+                trust_files: None,
             }),
             workload,
             ..SandboxPolicy::default()

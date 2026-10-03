@@ -1228,6 +1228,15 @@ async fn actual_egress_sandbox(
     upstream: &EgressUpstream,
     authority: Arc<crate::session_egress::SessionEgress>,
 ) -> Arc<axocoatl_isolation::SessionSandbox> {
+    actual_egress_sandbox_with(f, upstream, authority, None).await
+}
+
+async fn actual_egress_sandbox_with(
+    f: &mut Fixture,
+    upstream: &EgressUpstream,
+    authority: Arc<crate::session_egress::SessionEgress>,
+    workload: Option<axocoatl_isolation::WorkloadUsers>,
+) -> Arc<axocoatl_isolation::SessionSandbox> {
     use axocoatl_isolation::{SandboxNetwork, SandboxPolicy, SessionSandbox};
     use sha2::{Digest, Sha256};
     let image =
@@ -1246,12 +1255,16 @@ async fn actual_egress_sandbox(
                 .child("execution-supervisors")
                 .unwrap(),
         ),
+        // As a Session's start does: with routes the container mounts the
+        // trust files for the Session's authority.
         egress: Some(axocoatl_isolation::egress::EgressAttachment {
+            trust_files: authority.trust_files().unwrap(),
             authority,
             sidecar_network: Some(upstream.network.clone()),
             max_connections: 32,
             labels: vec![upstream.label.clone()],
         }),
+        workload,
         ..SandboxPolicy::default()
     };
     let sandbox = Arc::new(
@@ -1313,6 +1326,7 @@ async fn actual_egress_writer_gets_a_bound_credential_and_a_read_only_helper_non
                 )],
                 session_private: vec![upstream.subnet.clone()],
                 browser: None,
+                ..Default::default()
             },
             record.clone(),
             resolver.clone(),
@@ -1437,6 +1451,259 @@ async fn actual_egress_writer_gets_a_bound_credential_and_a_read_only_helper_non
     }
 }
 
+/// J1, end to end through real containers: a writer's `git` in an egress
+/// Session reaches a route host through the real proxy, which relays its TLS
+/// bytes to the daemon. The daemon ends TLS with the Session's authority,
+/// which `git` trusts only through the trust volume and `GIT_SSL_CAINFO`,
+/// checks each request against the route's rules, adds the credential read
+/// from its own environment in place of the client's, and connects to the
+/// upstream (a TLS server in this process, trusted through the route's
+/// `upstream_ca` and this computer's own verifier). A request no rule allows
+/// and a request for another `Host` are refused before they leave. The
+/// credential is nowhere in the container (environments, `/etc`, `/tmp`,
+/// the Workspace), the env files, the containers' configuration or the
+/// record. Run as the image's user and as hardened workload users.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman (CONTAINER_CONNECTION), AXO_SUPERVISOR_TEST_IMAGE and the egress-capable embedded helper"]
+async fn actual_egress_route_ends_tls_in_the_daemon_and_adds_the_credential() {
+    use crate::egress_broker::UpstreamConnector;
+    use crate::session_egress::route_tests::{credentials, loopback_is_public, secret, Upstream};
+    use crate::session_egress::tests::{FakeRecord, FakeResolver};
+    use crate::session_egress::{EgressPolicyConfig, RouteSettings, SessionEgress};
+    use axocoatl_session::network_record::{BindingKind, Decision as Recorded, NetworkEvent};
+    use base64::Engine as _;
+    use std::os::unix::fs::PermissionsExt;
+    let secret = secret();
+    let upstream_label = EgressUpstream::start();
+    let upstream = Upstream::start("git.test").await;
+    let port = upstream.addr.port();
+    // The upstream's own authority, owner-only and outside the Workspace.
+    let ca_dir = tempfile::tempdir().unwrap();
+    let ca_file = ca_dir.path().join("upstream-ca.pem");
+    std::fs::write(&ca_file, upstream.ca.pem()).unwrap();
+    std::fs::set_permissions(&ca_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let route: axocoatl_config::EgressRouteYaml = serde_yaml::from_str(&format!(
+        "{{host: git.test, ports: [{port}], credential: test, \
+          inject: {{basic: {{username: x-access-token}}}}, upstream_ca: '{}', \
+          env_placeholders: [API_TOKEN], \
+          rules: [{{methods: [GET], path: /acme/app.git/info/refs, query: {{service: git-upload-pack}}}}, \
+                  {{methods: [POST], path: /acme/app.git/git-upload-pack}}]}}",
+        ca_file.display()
+    ))
+    .unwrap();
+    let url = format!("https://git.test:{port}/acme/app.git");
+    let other = format!("https://git.test:{port}/acme/other.git");
+    let command = format!(
+        "env > /tmp/agent-env.txt; head -1 /etc/axocoatl/ca/session-ca.pem; \
+         echo \"ssl=$SSL_CERT_FILE git=$GIT_SSL_CAINFO token=$API_TOKEN\"; \
+         git ls-remote {url} 2>&1; echo \"rc=$?\"; \
+         git -c http.extraHeader='Authorization: Bearer client-own' ls-remote {url} >/dev/null 2>&1; echo \"own=$?\"; \
+         git ls-remote {other} 2>&1 | tail -1; \
+         git -c http.extraHeader='Host: other.test' ls-remote {url} 2>&1 | tail -1; true"
+    );
+    let users = axocoatl_isolation::WorkloadUsers {
+        writer: (1000, 1000),
+        helper: (1001, 1001),
+    };
+    for workload in [None, Some(users)] {
+        let mut f = fixture().await;
+        let record = Arc::new(FakeRecord::default());
+        let env_dir = f.owner.inner.data_root.child("egress-env").unwrap();
+        let workspace = f._workspace.path().to_path_buf();
+        let egress = SessionEgress::open_session(
+            f.owner.metadata().session_id.clone(),
+            EgressPolicyConfig {
+                routes: vec![route.clone()],
+                credentials: credentials(),
+                ..EgressPolicyConfig::default()
+            },
+            record.clone(),
+            FakeResolver::with(&[("git.test", &["127.0.0.1"])]),
+            Some(env_dir.clone()),
+            loopback_is_public,
+            RouteSettings {
+                upstream: Arc::new(UpstreamConnector::with_local_check(Arc::new(|_| false))),
+                workspaces: {
+                    let workspace = workspace.clone();
+                    Arc::new(move || vec![workspace.clone()])
+                },
+                ..RouteSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        let sandbox =
+            actual_egress_sandbox_with(&mut f, &upstream_label, egress.clone(), workload).await;
+        git_init(f._workspace.path());
+        let r = run(&mut f, &["bash"], true);
+        let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
+        let result = tokio::time::timeout(Duration::from_secs(180), async {
+            r.controller
+                .prepare_repository_activation(
+                    r.activation.clone(),
+                    r.resources(provider.clone()),
+                    r.resource.clone(),
+                )
+                .unwrap()
+                .run()
+                .await
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        // The credential is nowhere in the container: not in the Agent's
+        // environment, any process's, /etc, /tmp or the Workspace.
+        let environments = sandbox
+            .exec(
+                &[
+                    "sh",
+                    "-c",
+                    "cat /tmp/agent-env.txt; for f in /proc/[0-9]*/environ; do tr '\\0' '\\n' < $f; done 2>/dev/null; true",
+                ],
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap()
+            .stdout;
+        assert!(
+            environments.contains("GIT_SSL_CAINFO=/etc/axocoatl/ca/bundle.pem"),
+            "{workload:?}"
+        );
+        assert!(!environments.contains(secret), "{workload:?}");
+        let found = sandbox
+            .exec(
+                &[
+                    "sh",
+                    "-c",
+                    "grep -rIl -F -e \"$1\" /etc /tmp \"$2\" 2>/dev/null; true",
+                    "sh",
+                    secret,
+                    &workspace.display().to_string(),
+                ],
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap()
+            .stdout;
+        assert_eq!(found.trim(), "", "{workload:?}");
+        // Nor in the containers' configuration.
+        let session = f.owner.metadata().session_id.clone();
+        for container in [format!("axo-ses-{session}"), format!("axo-egr-{session}")] {
+            let inspect = std::process::Command::new("podman")
+                .args(["inspect", &container])
+                .output()
+                .unwrap();
+            assert!(inspect.status.success(), "{container}: {inspect:?}");
+            assert!(!String::from_utf8_lossy(&inspect.stdout).contains(secret));
+        }
+        let mounts = std::process::Command::new("podman")
+            .args([
+                "inspect",
+                "--format",
+                "{{range .Mounts}}{{.Name}}:{{.Destination}}:{{.RW}} {{end}}",
+                &format!("axo-ses-{session}"),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&mounts.stdout)
+                .contains(&format!("axo-ca-{session}:/etc/axocoatl/ca:false")),
+            "{mounts:?}"
+        );
+        let idle = f.owner.execution_is_idle();
+        sandbox.stop_checked().await.unwrap();
+        let settled = result.unwrap().unwrap();
+        assert!(idle.unwrap());
+        assert!(settled.accepted, "{workload:?}: {:?}", settled.failure);
+        let seen_text: Vec<String> = provider.requests.lock().unwrap()[1]
+            .iter()
+            .filter_map(ChatMessage::text_content)
+            .map(str::to_string)
+            .collect();
+        // Git trusted the Session's authority through the trust files, and
+        // the route's placeholder stands in for a token.
+        for wanted in [
+            "-----BEGIN CERTIFICATE-----",
+            "ssl=/etc/axocoatl/ca/bundle.pem git=/etc/axocoatl/ca/bundle.pem token=axocoatl-route:git.test",
+            // `git ls-remote` printed the advertised branch (the tool's
+            // output is JSON, so the tab is escaped).
+            "1111111111111111111111111111111111111111\\trefs/heads/main",
+            "rc=0",
+            "own=0",
+            "The requested URL returned error: 403",
+            "The requested URL returned error: 421",
+        ] {
+            assert!(provider.saw(1, wanted), "{workload:?}: {wanted}: {seen_text:?}");
+        }
+
+        // The upstream saw the allowed requests only, each with the route's
+        // credential and never the client's own header.
+        let basic = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{secret}"))
+        );
+        let seen = upstream.seen();
+        let ours: Vec<_> = seen
+            .iter()
+            .filter(|request| request.path.starts_with("/acme/"))
+            .collect();
+        assert!(ours.len() >= 2, "{seen:?}");
+        for request in &ours {
+            assert_eq!(request.path, "/acme/app.git/info/refs", "{seen:?}");
+            assert_eq!(
+                request.authorization,
+                std::slice::from_ref(&basic),
+                "{seen:?}"
+            );
+        }
+
+        // The record: the route's connections, each allowed request with
+        // the credential's name, the refusals with their reasons, and never
+        // the value.
+        let events = record.events();
+        for event in &events {
+            event.validate().unwrap();
+            assert!(!serde_json::to_string(event).unwrap().contains(secret));
+        }
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, NetworkEvent::Open {
+            decision: Recorded::Allow, rule: Some(rule), host, binding: Some(binding), ..
+        } if rule == "route#0" && host == "git.test" && binding.kind == BindingKind::Agent)),
+            "{events:#?}"
+        );
+        let requests = |decision: Recorded, reason: Option<&str>| {
+            events
+                .iter()
+                .filter(|event| {
+                    matches!(event, NetworkEvent::Request { decision: d, reason: r, .. }
+                    if *d == decision && r.as_deref() == reason)
+                })
+                .count()
+        };
+        assert!(requests(Recorded::Allow, None) >= 2, "{events:#?}");
+        assert!(events
+            .iter()
+            .all(|event| !matches!(event, NetworkEvent::Request {
+            decision: Recorded::Allow, credential, ..
+        } if credential.as_deref() != Some("test"))));
+        assert!(
+            requests(Recorded::Deny, Some("route_denied")) >= 1,
+            "{events:#?}"
+        );
+        assert!(
+            requests(Recorded::Deny, Some("host_mismatch")) >= 1,
+            "{events:#?}"
+        );
+        // The env files are gone with their grants, and none held the value.
+        for entry in std::fs::read_dir(env_dir.path()).unwrap() {
+            let contents = std::fs::read_to_string(entry.unwrap().path()).unwrap_or_default();
+            assert!(!contents.contains(secret));
+        }
+        assert_eq!(egress.live_bindings(), 0);
+    }
+}
+
 /// Run one writer activation whose Agent runs `command` with `bash` in an
 /// egress Session decided by the real decision point (in-memory record,
 /// fake resolver). Returns what the model saw and the recorded events.
@@ -1461,6 +1728,7 @@ async fn run_egress_writer(
             session_allow: allow,
             session_private: vec![upstream.subnet.clone()],
             browser: None,
+            ..Default::default()
         },
         record.clone(),
         resolver.clone(),

@@ -491,6 +491,7 @@ pub struct SidecarView {
 pub struct PolicyRuleView {
     pub id: String,
     pub text: String,
+    /// `preset`, `config`, `session`, or `route` for an egress route.
     pub source: String,
 }
 

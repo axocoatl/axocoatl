@@ -1,10 +1,13 @@
 //! Compiled egress policies. Pure: no resolution, no I/O.
 //!
 //! A policy is the config allowlist for one scope plus the per-Session allows
-//! that are still in force. Rules match an exact host name, a `*.` suffix or
-//! an address range, each with its ports. The digest is the SHA-256 of the
-//! policy's canonical JSON, so a replayed Session reproduces the same digest.
+//! that are still in force, and for the Session scope its egress routes.
+//! Rules match an exact host name, a `*.` suffix or an address range, each
+//! with its ports. The digest is the SHA-256 of the policy's canonical JSON,
+//! so a replayed Session reproduces the same digest; a policy without routes
+//! has the digest it had before routes existed.
 
+use std::collections::HashSet;
 use std::net::IpAddr;
 
 use axocoatl_config::egress::{
@@ -107,11 +110,31 @@ struct CanonicalRule<'a> {
 }
 
 #[derive(Serialize)]
+struct CanonicalRoute<'a> {
+    id: &'a str,
+    route: &'a serde_json::Value,
+}
+
+#[derive(Serialize)]
 struct Canonical<'a> {
     v: u32,
     scope: &'static str,
     rules: Vec<CanonicalRule<'a>>,
     private: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    routes: Vec<CanonicalRoute<'a>>,
+}
+
+/// One entry of `sandbox.egress.routes` as the Session policy names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutePolicyEntry {
+    /// `route#<n>`, the rule id of its connections.
+    pub id: String,
+    /// `github.com:443 (route#0: 2 rules, credential github, for agent)`.
+    pub text: String,
+    /// Everything the route decides with, never a credential value; part of
+    /// the digest.
+    pub canonical: serde_json::Value,
 }
 
 /// One scope's compiled policy.
@@ -120,7 +143,40 @@ pub struct CompiledPolicy {
     scope: EgressScope,
     rules: Vec<CompiledRule>,
     private: Vec<Cidr>,
+    routes: Vec<RoutePolicyEntry>,
     digest: String,
+}
+
+fn policy_digest(
+    scope: EgressScope,
+    rules: &[CompiledRule],
+    private: &[Cidr],
+    routes: &[RoutePolicyEntry],
+) -> Result<String, String> {
+    let canonical = Canonical {
+        v: 1,
+        scope: scope.as_str(),
+        rules: rules
+            .iter()
+            .map(|rule| CanonicalRule {
+                id: &rule.id,
+                matcher: rule.matcher.render(),
+                ports: &rule.ports,
+            })
+            .collect(),
+        private: private.iter().map(ToString::to_string).collect(),
+        routes: routes
+            .iter()
+            .map(|route| CanonicalRoute {
+                id: &route.id,
+                route: &route.canonical,
+            })
+            .collect(),
+    };
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&canonical).map_err(|error| error.to_string())?)
+    ))
 }
 
 impl CompiledPolicy {
@@ -194,29 +250,22 @@ impl CompiledPolicy {
                 "allowed for this Session",
             ));
         }
-        let canonical = Canonical {
-            v: 1,
-            scope: scope.as_str(),
-            rules: rules
-                .iter()
-                .map(|rule| CanonicalRule {
-                    id: &rule.id,
-                    matcher: rule.matcher.render(),
-                    ports: &rule.ports,
-                })
-                .collect(),
-            private: private.iter().map(ToString::to_string).collect(),
-        };
-        let digest = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&canonical).map_err(|error| error.to_string())?)
-        );
+        let digest = policy_digest(scope, &rules, &private, &[])?;
         Ok(Self {
             scope,
             rules,
             private,
+            routes: Vec::new(),
             digest,
         })
+    }
+
+    /// This policy with `routes`, which the digest and the rendered rules
+    /// then cover.
+    pub fn with_routes(mut self, routes: Vec<RoutePolicyEntry>) -> Result<Self, String> {
+        self.digest = policy_digest(self.scope, &self.rules, &self.private, &routes)?;
+        self.routes = routes;
+        Ok(self)
     }
 
     /// The provisioning policy: the distribution presets only.
@@ -245,9 +294,34 @@ impl CompiledPolicy {
         &self.private
     }
 
-    /// Rendered rules, for the record's `policy` events.
+    /// The routes, in `sandbox.egress.routes` order.
+    pub fn routes(&self) -> &[RoutePolicyEntry] {
+        &self.routes
+    }
+
+    /// Rendered rules and then routes, for the record's `policy` events.
     pub fn rendered(&self) -> Vec<String> {
-        self.rules.iter().map(|rule| rule.text.clone()).collect()
+        self.rules
+            .iter()
+            .map(|rule| rule.text.clone())
+            .chain(self.routes.iter().map(|route| route.text.clone()))
+            .collect()
+    }
+
+    /// Ids of the rules and routes of this policy that `newer` lacks or
+    /// changed: connections they admitted are no longer allowed by it.
+    pub fn removed_ids(&self, newer: &CompiledPolicy) -> HashSet<String> {
+        self.rules
+            .iter()
+            .filter(|rule| !newer.rules.contains(rule))
+            .map(|rule| rule.id.clone())
+            .chain(
+                self.routes
+                    .iter()
+                    .filter(|route| !newer.routes.contains(route))
+                    .map(|route| route.id.clone()),
+            )
+            .collect()
     }
 
     /// The first rule allowing a normalized host name on `port`.
@@ -432,6 +506,62 @@ mod tests {
         let empty = CompiledPolicy::compile(EgressScope::Session, &[], &[], &[]).unwrap();
         assert!(empty.rules().is_empty());
         assert!(empty.match_name("registry.npmjs.org", 443).is_none());
+    }
+
+    fn route_entry(id: &str, rules: &[&str]) -> RoutePolicyEntry {
+        RoutePolicyEntry {
+            id: id.into(),
+            text: format!("api.test:443 ({id})"),
+            canonical: serde_json::json!({ "host": "api.test", "rules": rules }),
+        }
+    }
+
+    /// Routes are part of the Session policy's digest and rendering; a
+    /// policy without routes keeps the digest it had before they existed.
+    #[test]
+    fn routes_change_the_digest_and_name_what_they_remove() {
+        let plain = sample();
+        assert_eq!(
+            plain.clone().with_routes(Vec::new()).unwrap().digest(),
+            plain.digest()
+        );
+        // The digest an empty Session policy had before routes existed.
+        assert_eq!(
+            CompiledPolicy::compile(EgressScope::Session, &[], &[], &[])
+                .unwrap()
+                .digest(),
+            "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1"
+        );
+        let routed = plain
+            .clone()
+            .with_routes(vec![route_entry("route#0", &["GET /a"])])
+            .unwrap();
+        assert_ne!(routed.digest(), plain.digest());
+        assert_eq!(routed.rules(), plain.rules());
+        assert_eq!(
+            routed.rendered().last().map(String::as_str),
+            Some("api.test:443 (route#0)")
+        );
+        let same = plain
+            .clone()
+            .with_routes(vec![route_entry("route#0", &["GET /a"])])
+            .unwrap();
+        assert_eq!(same.digest(), routed.digest());
+        assert!(routed.removed_ids(&same).is_empty());
+        let changed = plain
+            .clone()
+            .with_routes(vec![route_entry("route#0", &["GET /b"])])
+            .unwrap();
+        assert_ne!(changed.digest(), routed.digest());
+        assert_eq!(
+            routed.removed_ids(&changed),
+            HashSet::from(["route#0".to_string()])
+        );
+        assert_eq!(
+            routed.removed_ids(&plain),
+            HashSet::from(["route#0".to_string()])
+        );
+        assert!(plain.removed_ids(&routed).is_empty());
     }
 
     #[test]

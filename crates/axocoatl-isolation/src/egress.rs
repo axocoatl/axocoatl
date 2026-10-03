@@ -418,6 +418,10 @@ pub struct GrantSpec {
     /// The Ways attempt whose container the process runs in, when it is not
     /// the Session's own container.
     pub attempt_id: Option<String>,
+    /// The process's container mounts the Session's trust files at
+    /// [`crate::session_trust::TRUST_MOUNT_DIR`], so its env file may point
+    /// TLS clients at them. Set by the container's sandbox, never by callers.
+    pub trust_mounted: bool,
     pub liveness: Option<Liveness>,
 }
 
@@ -433,6 +437,7 @@ impl GrantSpec {
             terminal_id: None,
             setup_index: None,
             attempt_id: None,
+            trust_mounted: false,
             liveness: None,
         }
     }
@@ -449,6 +454,7 @@ impl fmt::Debug for GrantSpec {
             .field("terminal_id", &self.terminal_id)
             .field("setup_index", &self.setup_index)
             .field("attempt_id", &self.attempt_id)
+            .field("trust_mounted", &self.trust_mounted)
             .finish_non_exhaustive()
     }
 }
@@ -562,6 +568,10 @@ pub struct EgressAttachment {
     /// Extra `key=value` labels for the sidecar and its volumes (tests mark
     /// their objects with `io.axocoatl.test`).
     pub labels: Vec<String>,
+    /// The Session's trust files, when it has egress routes: the container
+    /// mounts the Session's trust volume, filled with them, read-only at
+    /// [`crate::session_trust::TRUST_MOUNT_DIR`]. `None` mounts nothing.
+    pub trust_files: Option<Arc<[crate::session_trust::TrustFile]>>,
 }
 
 impl EgressAttachment {
@@ -571,6 +581,7 @@ impl EgressAttachment {
             sidecar_network: None,
             max_connections: axocoatl_exec::egress::protocol::DEFAULT_MAX_CONNECTIONS,
             labels: Vec::new(),
+            trust_files: None,
         }
     }
 }

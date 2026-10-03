@@ -154,6 +154,7 @@ async fn egress_sandbox(
             sidecar_network: Some(upstream.network.clone()),
             max_connections: 32,
             labels: vec![upstream.label.clone()],
+            trust_files: None,
         }),
         ..SandboxPolicy::default()
     };

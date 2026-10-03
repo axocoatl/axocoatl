@@ -2,8 +2,9 @@ import { adopt } from './sheets.js';
 
 /**
  * `<ax-session-network>`: the Session's network mode, egress policy and
- * network record. A person can allow a refused host for this Session, and
- * approve or reject the hosts Agents asked for with `request_network_access`.
+ * network record, with each request on an egress route and how it ended. A
+ * person can allow a refused host for this Session, and approve or reject
+ * the hosts Agents asked for with `request_network_access`.
  *
  * `open({sessionId})` shows the dialog and reads
  * `GET /api/sessions/{id}/network`. "Allow for this Session" posts
@@ -26,6 +27,21 @@ const REASONS = {
   record_unavailable: 'The network record was full or unavailable, so new connections were refused.',
   invalid_host: 'Not a valid host name or IP address.',
   resolve_failed: 'The name did not resolve on this computer.',
+  tls_required: 'An egress route: Axocoatl reads its requests only over HTTPS.',
+  route_not_for_binding: 'An egress route that does not serve this kind of process.',
+};
+
+/** Why a route refused one request. */
+const REQUEST_REASONS = {
+  route_denied: 'No rule of the route allows this request.',
+  host_mismatch: 'The Host header named another site than the route\'s host.',
+  path_not_canonical: 'The path was not in canonical form.',
+  upgrade_not_allowed: 'Routes forward HTTP/1.1 requests only.',
+  override_header: 'A header named another method, path or host.',
+  route_not_for_binding: 'The route does not serve this kind of process.',
+  request_too_large: 'The body was larger than the route allows.',
+  credential_unavailable: 'The daemon could not read the route\'s credential.',
+  record_unavailable: 'The request could not be recorded, so it was not sent.',
 };
 
 /** Scopes a person can widen for one Session. Provisioning's is fixed. */
@@ -89,10 +105,15 @@ function bytes(count) {
 
 /** Fold network record lines into what the panel shows. Exported for tests. */
 export function summarizeNetwork(lines) {
-  const summary = { allowed: 0, refused: 0, bytesIn: 0, bytesOut: 0, refusedRows: [], web: [] };
+  const summary = { allowed: 0, refused: 0, bytesIn: 0, bytesOut: 0, refusedRows: [], web: [], requests: [] };
+  const owners = new Map();
+  const responses = new Map();
   for (const line of lines) {
     const event = line?.event;
     if (!event) continue;
+    if (event.kind === 'open') owners.set(event.conn, who(event.binding));
+    if (event.kind === 'request') summary.requests.push({ seq: line.seq, at: line.ts_ms, ...event });
+    if (event.kind === 'response') responses.set(`${event.conn}#${event.seq_in_conn}`, event);
     if (event.kind === 'open' && event.decision === 'allow') summary.allowed += 1;
     if (event.kind === 'open' && event.decision === 'deny') {
       summary.refused += 1;
@@ -105,6 +126,13 @@ export function summarizeNetwork(lines) {
     if (event.kind === 'web') summary.web.push({ seq: line.seq, at: line.ts_ms, ...event });
   }
   summary.refusedRows.reverse();
+  summary.requests = summary.requests
+    .map((request) => ({
+      ...request,
+      who: owners.get(request.conn) || 'unknown',
+      response: responses.get(`${request.conn}#${request.seq_in_conn}`) || null,
+    }))
+    .reverse();
   return summary;
 }
 
@@ -299,6 +327,39 @@ class AxSessionNetwork extends HTMLElement {
           action.append(allow);
         }
         tr.append(action);
+        rows.append(tr);
+      }
+      table.append(head, rows);
+      body.append(table);
+    }
+
+    if (summary.requests.length) {
+      body.append(element('h3', '', 'Requests on routes'));
+      body.append(element('p', 'muted', 'Axocoatl ends TLS for these hosts on this computer, checks each request against the route\'s rules and adds the route\'s credential. Each request is recorded before it is sent.'));
+      const table = element('table', 'requests');
+      const head = element('thead');
+      const headRow = element('tr');
+      for (const label of ['Time', 'Agent', 'Request', 'Result']) headRow.append(element('th', '', label));
+      head.append(headRow);
+      const rows = element('tbody');
+      for (const request of summary.requests) {
+        const tr = element('tr');
+        tr.dataset.seq = String(request.seq);
+        tr.dataset.decision = request.decision;
+        tr.append(element('td', 'muted', when(request.at)), element('td', '', request.who),
+          element('td', '', `${request.method} ${request.host}${request.path}`));
+        const result = element('td');
+        if (request.decision === 'allow') {
+          const response = request.response;
+          const parts = [request.rule || 'allowed'];
+          parts.push(response ? `${response.status} (${response.outcome})` : 'no response recorded');
+          if (request.credential) parts.push(`credential ${request.credential}`);
+          result.append(element('span', '', parts.join(' · ')));
+        } else {
+          result.append(element('code', '', request.reason || 'refused'),
+            element('div', 'muted', REQUEST_REASONS[request.reason] || ''));
+        }
+        tr.append(result);
         rows.append(tr);
       }
       table.append(head, rows);

@@ -562,6 +562,86 @@ impl Route {
         self.ports.contains(&port)
     }
 
+    /// Everything the route decides with, as JSON for the Session policy's
+    /// digest: never a credential value, only where it is read.
+    pub fn canonical(&self) -> serde_json::Value {
+        let credential = self.credential.as_ref().map(|credential| {
+            let source = match &credential.source {
+                CredentialSource::Env(variable) => serde_json::json!({ "env": variable }),
+                CredentialSource::File(path) => {
+                    serde_json::json!({ "file": path.display().to_string() })
+                }
+            };
+            let inject = match &credential.inject {
+                Injection::Basic { username } => serde_json::json!({ "basic": username }),
+                Injection::Header {
+                    name,
+                    prefix,
+                    suffix,
+                } => serde_json::json!({
+                    "header": name.as_str(),
+                    "prefix": prefix,
+                    "suffix": suffix,
+                }),
+            };
+            serde_json::json!({
+                "name": credential.name,
+                "source": source,
+                "inject": inject,
+            })
+        });
+        serde_json::json!({
+            "host": self.host,
+            "ports": self.ports,
+            "for": self.bindings,
+            "credential": credential,
+            "rules": self.describe(),
+            "upstream_ca": self.upstream_roots_id.map(hex::encode),
+            "env_placeholders": self.env_placeholders,
+            "allow_encoded_responses": self.allow_encoded_responses,
+            "max_request_bytes": self.max_request_bytes,
+        })
+    }
+
+    /// One line for the Session policy's rendered rules, such as
+    /// `github.com:443 (route#0: 2 rules, credential github, for agent)`.
+    pub fn policy_text(&self) -> String {
+        let ports = self
+            .ports
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let rules = match &self.rules {
+            Rules::Access(RouteAccessYaml::ReadOnly) => "access read-only".to_string(),
+            Rules::Access(RouteAccessYaml::Full) => "access full".to_string(),
+            Rules::List(rules) if rules.len() == 1 => "1 rule".to_string(),
+            Rules::List(rules) => format!("{} rules", rules.len()),
+        };
+        let credential = self
+            .credential
+            .as_ref()
+            .map(|credential| format!(", credential {}", credential.name))
+            .unwrap_or_default();
+        let kinds = self
+            .bindings
+            .iter()
+            .map(|kind| match kind {
+                BindingKind::Agent => "agent",
+                BindingKind::Terminal => "terminal",
+                BindingKind::Setup => "setup",
+                BindingKind::Provisioning => "provisioning",
+                BindingKind::Browser => "browser",
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "{}:{ports} ({}: {rules}{credential}, for {kinds})",
+            self.host,
+            self.label()
+        )
+    }
+
     /// Check one request whose path is already canonical.
     pub fn check(&self, method: &str, path: &CanonicalPath) -> RuleDecision {
         let label = self.label();
@@ -597,7 +677,7 @@ impl Route {
             reason: format!("no rule of {label} ({}) allows {method} {shown}", self.host),
             hint: format!(
                 "Add a rule to sandbox.egress.routes[{}] such as {{methods: [{method}], path: \"{shown}\"}}, \
-                 then run axocoatl network reload or restart the Session.",
+                 then run axocoatl network reload.",
                 self.index
             ),
         }

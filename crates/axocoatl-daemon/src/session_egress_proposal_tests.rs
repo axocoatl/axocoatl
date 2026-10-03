@@ -86,6 +86,7 @@ fn config() -> EgressPolicyConfig {
         })],
         session_private: Vec::new(),
         browser: None,
+        ..Default::default()
     }
 }
 

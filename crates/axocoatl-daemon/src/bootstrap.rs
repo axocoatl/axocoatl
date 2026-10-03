@@ -5348,6 +5348,7 @@ impl AxocoatlDaemon {
             network_policy.clone(),
             session_network_records.clone(),
             session_sandboxes.clone(),
+            session_network_policy::WorkspaceRoots::new(workspace_store.clone()),
         ));
         let browser_service =
             match crate::session_dispatch_browser::BrowserServiceConfig::from_config(
@@ -8449,11 +8450,24 @@ impl AxocoatlDaemon {
                         }
                     })?;
                     let settings = sc.egress.clone().unwrap_or_default();
+                    // With routes the container mounts the trust files for
+                    // the Session's certificate authority.
+                    let trust_files = authority.trust_files().map_err(|error| {
+                        SessionEnvironmentPreparationError {
+                            error: DaemonError::Session(format!(
+                                "preparing the Session's trust files for egress routes: {error}"
+                            )),
+                            effective_image: None,
+                            runtime: None,
+                            setup_results: Vec::new(),
+                        }
+                    })?;
                     Some(axocoatl_isolation::egress::EgressAttachment {
                         authority,
                         sidecar_network: settings.sidecar_network,
                         max_connections: settings.max_connections,
                         labels: Vec::new(),
+                        trust_files,
                     })
                 } else {
                     None
@@ -13856,11 +13870,20 @@ trap - 0 1 2 15
         // decision point, so its connections go to the Session's record.
         let egress = if network == axocoatl_isolation::session_sandbox::SandboxNetwork::Egress {
             let settings = config.egress.clone().unwrap_or_default();
+            let authority = self.session_egress(&session.id).await?;
+            // An attempt trusts its Session's authority, from the Session's
+            // trust volume.
+            let trust_files = authority.trust_files().map_err(|error| {
+                DaemonError::Session(format!(
+                    "preparing the Session's trust files for egress routes: {error}"
+                ))
+            })?;
             Some(axocoatl_isolation::egress::EgressAttachment {
-                authority: self.session_egress(&session.id).await?,
+                authority,
                 sidecar_network: settings.sidecar_network,
                 max_connections: settings.max_connections,
                 labels: Vec::new(),
+                trust_files,
             })
         } else {
             None

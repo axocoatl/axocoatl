@@ -163,6 +163,39 @@ test('a provisioning refusal cannot widen the Session policy, and Session warnin
   }
 });
 
+test('requests on egress routes show what each asked for and how it ended', async () => {
+  const route = { conn: 'g1:6', host: 'api.github.com' };
+  const extra = [
+    line(10, { kind: 'open', conn: route.conn, decision: 'allow', rule: 'route#0', host: route.host, port: 443, conn_kind: 'connect', addrs: ['140.82.112.6'], token: '0123456789abcdef', binding: agent, scope: 'session', policy_revision: 1 }),
+    line(11, { kind: 'request', conn: route.conn, seq_in_conn: 1, method: 'GET', path: '/repos/acme/app', host: route.host, rule: 'route#0.rules[0]', decision: 'allow', credential: 'github' }),
+    line(12, { kind: 'response', conn: route.conn, seq_in_conn: 1, status: 200, up: 0, down: 5120, ms: 80, outcome: 'completed' }),
+    line(13, { kind: 'request', conn: route.conn, seq_in_conn: 2, method: 'DELETE', path: '/repos/acme/app', host: route.host, decision: 'deny', reason: 'route_denied' }),
+    line(14, { kind: 'open', conn: 'g1:7', decision: 'deny', reason: 'route_not_for_binding', status: 403, rule: 'route#0', host: route.host, port: 443, conn_kind: 'connect', addrs: [], token: 'fedcba9876543210', binding: { kind: 'terminal', terminal_id: 'term-1' }, scope: 'session', policy_revision: 1 }),
+  ];
+  const { context, page, calls, errors } = await setup({ extra });
+  try {
+    const dialog = page.getByRole('dialog', { name: 'Session network', exact: true });
+    await dialog.getByRole('heading', { name: 'Requests on routes', exact: true }).waitFor();
+    const rows = dialog.locator('table.requests tbody tr');
+    assert.equal(await rows.count(), 2);
+    // Newest first: the refused DELETE, then the GET that went out.
+    assert.equal(await rows.nth(0).getAttribute('data-decision'), 'deny');
+    await rows.nth(0).getByRole('cell', { name: 'DELETE api.github.com/repos/acme/app', exact: true }).waitFor();
+    await rows.nth(0).getByText('route_denied', { exact: true }).waitFor();
+    await rows.nth(0).getByText('No rule of the route allows this request.', { exact: true }).waitFor();
+    await rows.nth(1).getByRole('cell', { name: 'writer', exact: true }).waitFor();
+    await rows.nth(1).getByText('route#0.rules[0] · 200 (completed) · credential github', { exact: true }).waitFor();
+    // A process kind the route does not serve is refused at the connection,
+    // with no button to widen the policy.
+    await dialog.getByText('An egress route that does not serve this kind of process.', { exact: true }).waitFor();
+    assert.equal(await dialog.getByRole('button', { name: /Allow api\.github\.com/ }).count(), 0);
+    assert.equal(calls.length, 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+});
+
 test('a lost allow is resent with the same command id and a 409 for it counts as applied', async () => {
   const { context, page, calls, errors } = await setup({ loseFirstAllow: true });
   try {
@@ -284,7 +317,10 @@ test('the reload and proposal routes of the real daemon answer as documented', {
     assert.equal(reload.status, 200, JSON.stringify(reload.body));
     assert.deepEqual(reload.body.applied, []);
     assert.deepEqual(reload.body.restart_required, []);
-    assert.equal(reload.body.unchanged.length, 4);
+    assert.deepEqual(reload.body.unchanged, [
+      'sandbox.egress.allow', 'sandbox.egress.private_destinations', 'sandbox.egress.routes',
+      'credentials', 'browser.allow', 'browser.private_destinations',
+    ]);
 
     await writeFile(configPath, original.replace('  network: none\n', '  network: none\n  egress:\n    allow: [npm]\n'));
     reload = await post('/api/network/reload');

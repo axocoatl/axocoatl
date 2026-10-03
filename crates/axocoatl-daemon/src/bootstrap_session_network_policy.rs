@@ -1,8 +1,8 @@
-//! Live network policy: the allowlists `axocoatl network reload` changes,
-//! the Session decision points they apply to, and a person's decisions on
-//! Agents' proposals.
+//! Live network policy: the allowlists and egress routes `axocoatl network
+//! reload` changes, the Session decision points they apply to, and a
+//! person's decisions on Agents' proposals.
 //!
-//! The daemon keeps the allowlists in force behind one lock. A Session's
+//! The daemon keeps the lists in force behind one lock. A Session's
 //! decision point opens with them; a reload validates the configuration
 //! file the daemon was started with, replaces them and applies them to every
 //! running decision point, the Sessions' and the browser's own, then reports
@@ -16,10 +16,12 @@ use crate::session_network_reload::{
     NetworkReloadReport, LIVE_KEYS,
 };
 use axocoatl_session::network_record::{is_proposal_id, ProposalState};
+use std::path::PathBuf;
 
 /// The allowlists in force and the configuration the daemon started with.
 pub(crate) struct LiveNetworkPolicy {
-    /// Every setting other than the four allowlists applies from this until
+    /// Every setting other than the live lists
+    /// ([`crate::session_network_reload::LIVE_KEYS`]) applies from this until
     /// the daemon restarts.
     started: AxocoatlConfig,
     current: StdMutex<EgressPolicyConfig>,
@@ -52,6 +54,56 @@ impl LiveNetworkPolicy {
     }
 }
 
+/// The Workspaces a route's credential file or `upstream_ca` must stay out
+/// of, read from the Workspace store whenever it is free and otherwise as it
+/// was last read. [`WorkspaceRoots::refresh`] reads it while waiting.
+#[derive(Clone)]
+pub(crate) struct WorkspaceRoots {
+    store: Arc<tokio::sync::Mutex<WorkspaceStore>>,
+    last: Arc<StdMutex<Vec<PathBuf>>>,
+}
+
+impl WorkspaceRoots {
+    pub(crate) fn new(store: Arc<tokio::sync::Mutex<WorkspaceStore>>) -> Self {
+        Self {
+            store,
+            last: Arc::new(StdMutex::new(Vec::new())),
+        }
+    }
+
+    fn remember(&self, store: &WorkspaceStore) -> Vec<PathBuf> {
+        let roots: Vec<PathBuf> = store
+            .list()
+            .into_iter()
+            .map(|workspace| workspace.canonical_path)
+            .collect();
+        *self
+            .last
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = roots.clone();
+        roots
+    }
+
+    /// Read the Workspaces now, waiting for the store.
+    pub(crate) async fn refresh(&self) {
+        let store = self.store.lock().await;
+        self.remember(&store);
+    }
+
+    /// The broker's view: the store now when it is free, else the last read.
+    pub(crate) fn roots(&self) -> crate::egress_broker::WorkspaceRoots {
+        let this = self.clone();
+        Arc::new(move || match this.store.try_lock() {
+            Ok(store) => this.remember(&store),
+            Err(_) => this
+                .last
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .clone(),
+        })
+    }
+}
+
 /// The daemon's Session decision points under `network: egress`, opened on
 /// first use. The daemon and the browser tools share it.
 pub(crate) struct SessionEgressPoints {
@@ -61,9 +113,14 @@ pub(crate) struct SessionEgressPoints {
     policy: Arc<LiveNetworkPolicy>,
     records: Arc<crate::session_network::SessionNetworkRecords>,
     sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
+    /// The route brokers' connector to route upstreams, shared by every
+    /// Session, and the Workspaces credentials stay out of.
+    upstream: Arc<crate::egress_broker::UpstreamConnector>,
+    workspaces: WorkspaceRoots,
 }
 
 impl SessionEgressPoints {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         lifecycles: Arc<session_dispatch::SessionDispatchRegistry>,
         points: Arc<tokio::sync::Mutex<HashMap<String, Arc<SessionEgress>>>>,
@@ -71,6 +128,7 @@ impl SessionEgressPoints {
         policy: Arc<LiveNetworkPolicy>,
         records: Arc<crate::session_network::SessionNetworkRecords>,
         sandboxes: Arc<tokio::sync::Mutex<HashMap<String, Arc<dyn Sandbox>>>>,
+        workspaces: WorkspaceRoots,
     ) -> Self {
         Self {
             lifecycles,
@@ -79,6 +137,8 @@ impl SessionEgressPoints {
             policy,
             records,
             sandboxes,
+            upstream: Arc::new(crate::egress_broker::UpstreamConnector::new()),
+            workspaces,
         }
     }
 
@@ -99,6 +159,9 @@ impl SessionEgressPoints {
                 EGRESS_NEEDS_NATIVE_SESSION.to_string(),
             ));
         }
+        // The Workspaces a route's `upstream_ca` must stay out of, read
+        // before the decision points' lock is taken.
+        self.workspaces.refresh().await;
         let mut decision_points = self.points.lock().await;
         if let Some(existing) = decision_points.get(session_id) {
             return Ok(existing.clone());
@@ -109,7 +172,7 @@ impl SessionEgressPoints {
         // Read under the decision points' lock, which a reload holds while it
         // replaces the policy: a decision point opened now either compiles
         // the new lists or is in the reload's list.
-        let egress = SessionEgress::open(
+        let egress = SessionEgress::open_with_routes(
             session_id,
             self.policy.current(),
             Arc::new(crate::session_egress::SessionRecordSink::new(
@@ -118,6 +181,11 @@ impl SessionEgressPoints {
             )),
             Arc::new(crate::session_egress::SystemResolver),
             Some(env_dir),
+            crate::session_egress::RouteSettings {
+                upstream: self.upstream.clone(),
+                workspaces: self.workspaces.roots(),
+                timeouts: Default::default(),
+            },
         )
         .await
         .map_err(|error| {
@@ -176,8 +244,9 @@ fn proposal_target(proposal_id: &str) -> Result<(), DaemonError> {
 
 impl AxocoatlDaemon {
     /// Read the configuration file this daemon was started with again,
-    /// validate all of it, and apply its allowlists (`sandbox.egress.allow`,
-    /// `sandbox.egress.private_destinations`, `browser.allow`,
+    /// validate all of it, and apply its allowlists and routes
+    /// (`sandbox.egress.allow`, `sandbox.egress.private_destinations`,
+    /// `sandbox.egress.routes`, `credentials`, `browser.allow`,
     /// `browser.private_destinations`) to new Sessions and to every running
     /// decision point that has not applied them, also one an earlier reload
     /// could not record. Other differences are reported, not applied. An
