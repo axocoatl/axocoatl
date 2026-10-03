@@ -124,7 +124,7 @@ skills:
 #       - npm                     # registry.npmjs.org
 #       - pypi                    # pypi.org, files.pythonhosted.org
 #       - host: api.example.com   # ports default to [443]
-#     routes:                     # TLS ended on this computer; each request checked
+#     routes:                     # validated; Sessions do not use routes yet
 #       - host: github.com
 #         credential: github      # added by the daemon, never in a container
 #         inject: {basic: {username: x-access-token}}

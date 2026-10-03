@@ -195,6 +195,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   about credentialed routes that allow every path and about stdio MCP servers that
   inherit `env` credentials, and `axocoatl doctor` reports routes and whether each
   credential's variable or file is there. See Configure > Credentials and routes.
+  Sessions do not use routes yet: the broker is not connected to the egress proxy, so
+  a route's host is reached only when `allow` or a preset lists it, as an opaque
+  tunnel without the route's rules or credential.
 
 ### Changed
 - `web_search.provider` must be `searxng` or the legacy `tavily`; any other non-empty value is
