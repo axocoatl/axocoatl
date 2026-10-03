@@ -189,6 +189,15 @@ pub fn build_router(
             get(routes::session_network_screenshot),
         )
         .route(
+            "/api/sessions/{id}/network/proposals/{proposal_id}/approve",
+            post(routes::approve_session_network_proposal),
+        )
+        .route(
+            "/api/sessions/{id}/network/proposals/{proposal_id}/reject",
+            post(routes::reject_session_network_proposal),
+        )
+        .route("/api/network/reload", post(routes::reload_network_policy))
+        .route(
             "/api/sessions/{id}/turns/{turn_id}/graph-edits/preview",
             post(routes::preview_session_graph_edit).layer(DefaultBodyLimit::max(
                 axocoatl_session::control_command::MAX_CONTROL_REQUEST_BYTES,

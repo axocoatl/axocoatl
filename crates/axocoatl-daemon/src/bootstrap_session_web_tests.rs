@@ -99,7 +99,9 @@ async fn child_body() {
         .iter()
         .map(|tool| tool.name())
         .collect();
-    assert_eq!(names, ["web_search", "web_fetch"]);
+    // `request_network_access` is always registered; outside `network:
+    // egress` it is withheld, so an Agent that lists it runs without it.
+    assert_eq!(names, ["web_search", "web_fetch", "request_network_access"]);
 
     // The team view marks the templates and slots that list a web tool.
     let work = tempfile::tempdir().unwrap();

@@ -320,7 +320,7 @@ and ports listed under `sandbox.egress`. The
 | The proxy stops or its control channel breaks | Connections are refused (`502` from the bridge, or `503` from the proxy) and connections in progress are recorded as `interrupted`. |
 | The record cannot be written | New connections are refused with `503 record_unavailable`. The cap holds for the Session's lifetime; setup commands, provisioning and terminals still run, without network. |
 | A process in the container replaces a port socket with a symlink | The bridge creates each port socket with its final mode instead of changing it afterwards. Under `bridge` and `none`, the browser's port sockets are made in a separate forwarder container that the Session container cannot reach. |
-| Axocoatl's config file is inside the Workspace | Agents can read it, and under `egress` send it to an allowed host that accepts uploads. **Session network** warns about it; keep secrets in environment variables. |
+| Axocoatl's config file is inside the Workspace | Agents can read it, and under `egress` send it to an allowed host that accepts uploads. **Session network** warns about it; keep secrets in environment variables. A writer can also edit it, so `axocoatl network reload` refuses to apply it; a restart still reads it. |
 
 What `egress` does not do:
 
@@ -330,6 +330,10 @@ What `egress` does not do:
 - Agents in one Session share its container, so a helper can read a running
   writer's credential from `/proc`. Per-Agent network limits are not enforced inside
   one Session container.
+- The browser's declared hosts and the Session's list are told apart by the
+  credential presented, not by the container. While a `browser_check` call runs, its
+  test holds the browser's credential and can pass it to the Session container; see
+  [Declared hosts](/configure/browser/#declared-hosts).
 - It does not inject or broker credentials. A `git push` from inside the container
   still needs a token there.
 - Traffic from Axocoatl itself (model providers, MCP servers, `web_search` and

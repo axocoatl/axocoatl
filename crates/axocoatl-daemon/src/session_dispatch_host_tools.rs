@@ -27,8 +27,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Every host tool name. Listing one is syntactically valid in a native
 /// Session; whether it is available is the registered tool's decision.
-pub(crate) const HOST_INVOCATION_TOOLS: [&str; 4] =
-    ["web_search", "web_fetch", "browser", "browser_check"];
+pub(crate) const HOST_INVOCATION_TOOLS: [&str; 5] = [
+    "web_search",
+    "web_fetch",
+    "browser",
+    "browser_check",
+    "request_network_access",
+];
 
 pub(crate) fn is_host_invocation_tool(name: &str) -> bool {
     HOST_INVOCATION_TOOLS.contains(&name)

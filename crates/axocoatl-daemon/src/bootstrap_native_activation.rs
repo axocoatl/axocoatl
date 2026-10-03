@@ -60,8 +60,9 @@ impl AxocoatlDaemon {
         .await
     }
 
-    /// The host tools native Session controllers register: the web tools
-    /// and, when `browser:` is configured, `browser` and `browser_check`.
+    /// The host tools native Session controllers register: the web tools,
+    /// when `browser:` is configured `browser` and `browser_check`, and
+    /// `request_network_access`, which is withheld outside `network: egress`.
     pub(crate) fn host_invocation_tools(
         &self,
     ) -> Vec<Arc<dyn crate::session_dispatch::HostInvocationTool>> {
@@ -74,6 +75,12 @@ impl AxocoatlDaemon {
                 crate::session_dispatch_browser::BrowserHostTool::browser_check(browser.clone()),
             ));
         }
+        tools.push(Arc::new(
+            crate::session_dispatch_network_tool::RequestNetworkAccessTool::new(
+                self.config.sandbox.network == "egress",
+                self.egress_points.clone(),
+            ),
+        ));
         tools
     }
 

@@ -1941,6 +1941,134 @@ pub async fn revoke_session_network_host(
         .map_err(|error| network_policy_err(&id, error))
 }
 
+/// Status for a proposal decision: 404 for an unknown Session or proposal,
+/// 400 for an invalid request, 409 for one already decided or a reused
+/// command id.
+fn network_proposal_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorResponse>) {
+    let status = match &error {
+        axocoatl_daemon::DaemonError::Session(message)
+            if (message.starts_with("session '") || message.starts_with("proposal '"))
+                && message.ends_with("' not found") =>
+        {
+            StatusCode::NOT_FOUND
+        }
+        axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+        axocoatl_daemon::DaemonError::SessionConflict(_) => StatusCode::CONFLICT,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    let message = match error {
+        axocoatl_daemon::DaemonError::SessionConflict(message)
+        | axocoatl_daemon::DaemonError::InvalidRequest(message)
+        | axocoatl_daemon::DaemonError::Session(message) => message,
+        other => other.to_string(),
+    };
+    err(status, message)
+}
+
+/// POST /api/sessions/{id}/network/proposals/{proposal_id}/approve — a
+/// person approves an Agent's request for a host: the host is allowed for
+/// this Session, recorded with the proposal's id, and the waiting tool call
+/// learns it. There is no agent-facing path to this route.
+pub async fn approve_session_network_proposal(
+    State(state): State<AppState>,
+    Path((id, proposal_id)): Path<(String, String)>,
+    Json(request): Json<axocoatl_daemon::session_network_proposals::NetworkProposalDecisionRequest>,
+) -> Result<
+    Json<axocoatl_daemon::session_network_proposals::NetworkProposalDecided>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    state
+        .read()
+        .await
+        .approve_session_network_proposal(&id, &proposal_id, request)
+        .await
+        .map(Json)
+        .map_err(network_proposal_err)
+}
+
+/// POST /api/sessions/{id}/network/proposals/{proposal_id}/reject — a
+/// person rejects an Agent's request for a host. Nothing is allowed.
+pub async fn reject_session_network_proposal(
+    State(state): State<AppState>,
+    Path((id, proposal_id)): Path<(String, String)>,
+    Json(request): Json<axocoatl_daemon::session_network_proposals::NetworkProposalDecisionRequest>,
+) -> Result<
+    Json<axocoatl_daemon::session_network_proposals::NetworkProposalDecided>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    state
+        .read()
+        .await
+        .reject_session_network_proposal(&id, &proposal_id, request)
+        .await
+        .map(Json)
+        .map_err(network_proposal_err)
+}
+
+/// Status for a reload: 400 when the file is invalid or the daemon was not
+/// started from one (nothing changed), 503 otherwise.
+fn network_reload_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorResponse>) {
+    match error {
+        axocoatl_daemon::DaemonError::InvalidRequest(message) => {
+            err(StatusCode::BAD_REQUEST, message)
+        }
+        other => err(StatusCode::SERVICE_UNAVAILABLE, other.to_string()),
+    }
+}
+
+/// A reload's report, with `error` set when a running Session could not
+/// take the new lists.
+#[derive(Debug, Serialize)]
+pub struct NetworkReloadAnswer {
+    #[serde(flatten)]
+    pub report: axocoatl_daemon::session_network_reload::NetworkReloadReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// The status and body for a reload that ran: 200, or 503 when a running
+/// Session keeps its policy because its new one could not be recorded. The
+/// lists apply to every other Session either way, and the next reload tries
+/// the failed ones again.
+fn network_reload_answer(
+    report: axocoatl_daemon::session_network_reload::NetworkReloadReport,
+) -> (StatusCode, Json<NetworkReloadAnswer>) {
+    if report.failed.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(NetworkReloadAnswer {
+                report,
+                error: None,
+            }),
+        );
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(NetworkReloadAnswer {
+            report,
+            error: Some(
+                "the Sessions under failed keep their policy because the new one could not be recorded; the other Sessions use the new lists, and a reload again retries these"
+                    .into(),
+            ),
+        }),
+    )
+}
+
+/// POST /api/network/reload — read the daemon's configuration file again
+/// and apply its `sandbox.egress` and `browser` allowlists to new and
+/// running Sessions. Other changed settings are listed, not applied.
+pub async fn reload_network_policy(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<NetworkReloadAnswer>), (StatusCode, Json<ErrorResponse>)> {
+    state
+        .read()
+        .await
+        .reload_network_policy()
+        .await
+        .map(network_reload_answer)
+        .map_err(network_reload_err)
+}
+
 /// GET /api/sessions/{id}/network/screenshots/{sha256} — one screenshot a
 /// browser tool kept in the Session's record. Screenshots are for people;
 /// no model sees them.
@@ -7480,6 +7608,82 @@ pub async fn a2a_receive_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_proposal_and_reload_errors_have_their_statuses() {
+        use axocoatl_daemon::DaemonError;
+        for (error, status) in [
+            (
+                DaemonError::Session("session 'ses-1' not found".into()),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                DaemonError::Session("proposal 'prop_0123456789abcdef' not found".into()),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                DaemonError::InvalidRequest(
+                    "a proposal id is prop_ and 16 lowercase hex digits".into(),
+                ),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                DaemonError::SessionConflict(
+                    "proposal prop_0123456789abcdef was already rejected".into(),
+                ),
+                StatusCode::CONFLICT,
+            ),
+            (
+                DaemonError::Session("recording the rejection failed: Full".into()),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            let message = error.to_string();
+            let (got, Json(body)) = network_proposal_err(error);
+            assert_eq!(got, status, "{message}");
+            assert!(!body.error.is_empty());
+        }
+        let (status, Json(body)) = network_reload_err(DaemonError::InvalidRequest(
+            "axocoatl.yaml is not valid; nothing was changed:\nsandbox.network".into(),
+        ));
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.error.contains("nothing was changed"));
+        let (status, _) = network_reload_err(DaemonError::Session("x".into()));
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        // A reload that ran answers with its report, and with 503 and an
+        // error when a running Session kept its policy.
+        use axocoatl_daemon::session_network_reload::{NetworkReloadReport, ReloadFailure};
+        let (status, Json(answer)) = network_reload_answer(NetworkReloadReport {
+            applied: vec!["sandbox.egress.allow".into()],
+            ..Default::default()
+        });
+        assert_eq!(status, StatusCode::OK);
+        let wire = serde_json::to_value(&answer).unwrap();
+        assert_eq!(wire["applied"][0], "sandbox.egress.allow");
+        assert!(wire.get("error").is_none() && wire.get("failed").is_none());
+        let (status, Json(answer)) = network_reload_answer(NetworkReloadReport {
+            applied: vec!["sandbox.egress.allow".into()],
+            failed: vec![ReloadFailure {
+                session_id: "ses-1".into(),
+                scope: Some("session".into()),
+                error: "recording the reloaded session policy failed: Full".into(),
+            }],
+            ..Default::default()
+        });
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let wire = serde_json::to_value(&answer).unwrap();
+        assert!(wire["error"].as_str().unwrap().contains("reload again"));
+        assert_eq!(wire["failed"][0]["scope"], "session");
+        assert_eq!(wire["applied"][0], "sandbox.egress.allow");
+        // The decision body is exactly a command id.
+        let parsed: axocoatl_daemon::session_network_proposals::NetworkProposalDecisionRequest =
+            serde_json::from_str(r#"{"command_id":"c-1"}"#).unwrap();
+        assert_eq!(parsed.command_id, "c-1");
+        assert!(serde_json::from_str::<
+            axocoatl_daemon::session_network_proposals::NetworkProposalDecisionRequest,
+        >(r#"{"command_id":"c-1","actor":"agent"}"#)
+        .is_err());
+    }
 
     #[test]
     fn session_team_projection_is_config_owned_and_deterministic() {

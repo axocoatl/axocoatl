@@ -131,6 +131,7 @@ async fn actual_read_only_helper_drives_the_browser_and_the_call_is_recorded() {
         vec![data_root.path().to_path_buf()],
         records.clone(),
         Arc::new(FixedPorts(vec![8765])),
+        crate::session_dispatch_browser::tests::no_session_egress(),
     ));
     controller
         .register_host_invocation_tool(Arc::new(BrowserHostTool::browser(service.clone())))

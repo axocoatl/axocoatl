@@ -114,26 +114,63 @@ browser:
       ports: [443]
 ```
 
-Chromium reaches those hosts only through Axocoatl's egress proxy, which runs as a
-sidecar container for the Session and asks the daemon about every connection. The
-daemon checks the host against `browser.allow` before anything resolves it, resolves
-allowed names on your computer, refuses loopback, link-local and other special
-addresses, refuses private addresses unless `private_destinations` lists their range,
-and writes each decision to the Session's network record before answering. Each call
-gets its own proxy credential, passed to the driver on its standard input and revoked
-when the call ends. The Session's own `sandbox.egress` list does not apply to the
-browser, and `browser.allow` does not apply to the Session.
+Chromium reaches those hosts only through Axocoatl's egress proxy, which asks the
+daemon about every connection. The daemon checks the host against `browser.allow`
+before anything resolves it, resolves allowed names on your computer, refuses
+loopback, link-local and other special addresses, refuses private addresses unless
+`private_destinations` lists their range, and writes each decision to the Session's
+network record before answering. Each call gets its own proxy credential, passed to
+the driver on its standard input and revoked when the call ends.
+
+- Under `network: egress` the browser uses the Session's own egress proxy,
+  `axo-egr-<session>`, and the Session's own decision point. `browser.allow` is a
+  policy of its own there, the `browser` scope: a browser credential is checked only
+  against it, and an Agent's credential only against `sandbox.egress`. A host listed
+  only under `sandbox.egress.allow` is refused to the browser, and one listed only
+  under `browser.allow` is refused to an Agent's commands. The browser's connections
+  are recorded in the Session's network record with the browser call that made them
+  (`binding.kind: browser`) and the `browser` policy's revision. The proxy starts with
+  the Session's runtime; while it is not running, a call that needs a declared host is
+  refused.
+- Under `bridge` the proxy runs as a sidecar container for the browser alone, with
+  the same name, started by the first call that needs it.
+
+The Session's own `sandbox.egress` list does not apply to the browser, and
+`browser.allow` does not apply to the Session.
+
+Under `network: egress` the proxy tells the browser and the Session apart only by the
+credential presented, not by the container it came from: the browser container and
+the Session container reach the same proxy. `browser_check` runs the test the model
+wrote with its call's browser credential in the test's environment. While that call
+runs, the test can hand the credential to a process in the Session container, for
+example by sending it to an app on an exposed port, and that process can then reach
+the hosts listed only under `browser.allow`; those connections are recorded under the
+browser call. The other way round, a test given an Agent's credential can reach the
+hosts under `sandbox.egress.allow` from the browser container, recorded under that
+Agent's command. Both take a writer Agent running `browser_check`, which can already
+send requests to the hosts under `browser.allow`. `browser` runs no code the model
+wrote, so its credential stays with the driver. Under `bridge` and `none` the
+browser's proxy is its own and the Session container cannot reach it.
 
 With declared hosts, Chromium finds the proxy on `127.0.0.1:3128` inside the browser
 container, or on the next free port when the Session exposes 3128 itself, so an app on
 3128 is never taken for the proxy.
 
-`browser.allow` must be empty with `network: none`, and is refused under `network:
-egress` for now (see [Limits](#limits)). To put the sidecar on a specific Podman
-network, set `sandbox.egress.sidecar_network`. When the sidecar's control channel is
-lost it is started again after 1, 5 and then 30 seconds, at most five times in ten
-minutes; after that the browser's declared hosts stay unreachable until the Session
-restarts.
+`browser.allow` must be empty with `network: none`. To put the sidecar on a specific
+Podman network, set `sandbox.egress.sidecar_network`. When the sidecar's control
+channel is lost it is started again after 1, 5 and then 30 seconds, at most five
+times in ten minutes; after that the browser's declared hosts stay unreachable until
+the Session restarts.
+
+Under `network: egress`, a refused browser request appears in **Session network**
+with **Allow for this Session**, which adds the host to the `browser` policy of that
+Session only. To change `browser.allow` or `browser.private_destinations` for every
+Session, edit the configuration file and run
+[`axocoatl network reload`](/reference/cli/#network-policy): running Sessions record
+and use the new list at once, and open connections it no longer allows are closed.
+The command lists each host the list gains and loses. Adding or removing the
+`browser` block itself needs a restart, and a configuration file inside a Session's
+Workspace is not reloaded.
 
 Chromium sends a proxy credential only after the proxy asks for one, so each call's
 first request through the proxy appears in the record as refused with
@@ -175,7 +212,9 @@ declared hosts, nothing else.
 `browser_check` runs the code the model wrote, as the browser container's user. It
 runs alone: other calls in the Session wait for it, and the browser container is
 replaced after it, so no file or process it leaves behind reaches a later call. The
-call's proxy credential is in its environment, which only its own test can read.
+call's proxy credential is in its environment, which only its own test can read;
+under `network: egress` the test can pass it on while the call runs (see
+[Declared hosts](#declared-hosts)).
 
 ## What is recorded
 
@@ -195,8 +234,9 @@ event names it by its SHA-256, and
 most 2000 screenshots of up to 1 MiB each, and 64 MiB of screenshots in all. Past
 that, calls still run and are recorded, with `screenshot_dropped: record_full`.
 
-With declared hosts, `GET /api/sessions/{id}/network` also shows the browser's
-sidecar and its `browser` policy once a call has started them.
+With declared hosts, `GET /api/sessions/{id}/network` also shows the `browser`
+policy: under `network: egress` beside the Session's own policies, and under `bridge`
+with the browser's sidecar once a call has started them.
 
 ## Helpers and reviewers
 
@@ -218,9 +258,6 @@ to drive.
 
 ## Limits
 
-- Under `network: egress`, `browser.allow` is refused until the browser uses the
-  Session's own egress proxy. With an empty `allow` the browser reaches the Session's
-  exposed ports as described above.
 - The browser tools are not offered in a Ways attempt: the browser reaches the primary
   Session container's ports, not the attempt's app.
 - The browser container keeps running until the Session stops, and is removed with it.

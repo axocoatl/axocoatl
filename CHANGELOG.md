@@ -95,8 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Session container's bridge already serves for Preview. It reaches the hosts listed
   under `browser.allow` only through Axocoatl's egress proxy, which checks each host
   against that list, resolves it on the host, refuses special and unlisted private
-  addresses and records every decision; under `network: egress`, `browser.allow` is
-  refused until the browser uses the Session's own egress proxy. Without declared
+  addresses and records every decision. Without declared
   hosts Chromium gets no proxy at all. Each call gets its own proxy
   credential, passed on the driver's standard input and revoked when the call ends.
   `browser_check` runs alone and the browser container is replaced after it, so
@@ -115,9 +114,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Axocoatl (Node 22 by digest, Playwright 1.60.0, Playwright's headless Chromium).
   `axocoatl doctor` reports whether it is present and what the browser can reach.
 - Native Session admission accepts `browser` and `browser_check` in an Agent's `tools`
-  and refuses them, with the reason, when no `browser` block is configured, the
-  backend is E2B or `browser.allow` lists hosts under `network: egress`, and refuses
-  `browser_check` for an Agent with `writes: []`.
+  and refuses them, with the reason, when no `browser` block is configured or the
+  backend is E2B, and refuses `browser_check` for an Agent with `writes: []`.
+- Under `network: egress`, the browser reaches the hosts listed under `browser.allow`
+  through the Session's own egress proxy, under a `browser` policy kept apart from the
+  Session's list: a browser credential is checked only against `browser.allow`, and an
+  Agent's only against `sandbox.egress`. Each of those connections is written to the
+  Session's network record with the browser call that made it, and a refused one can
+  be allowed for that Session in the `browser` scope. The proxy tells the two apart
+  by credential, not by container: while a `browser_check` call runs, its test holds
+  the browser credential and can pass it to a process in the Session container, which
+  then reaches hosts listed only under `browser.allow` (recorded under the browser
+  call), and a test given an Agent's credential can use it from the browser container.
+- `axocoatl network reload` and `POST /api/network/reload` read the daemon's
+  configuration file again, validate it, and apply `sandbox.egress.allow`,
+  `sandbox.egress.private_destinations`, `browser.allow` and
+  `browser.private_destinations` to new and running Sessions: each running Session
+  records its new policy (`source: config_reload`), new connections use it at once,
+  and open connections that no rule allows any more are closed. The report lists
+  every entry each list gains and loses. A running Session whose new policy cannot
+  be recorded keeps its old one and is listed under `failed`; the command then exits
+  with status 1, the route answers `503`, and the next reload, even of the same file,
+  tries that Session again. Other changed settings are listed as needing a restart
+  and are not applied; an invalid file changes nothing, and neither does a file
+  inside a Session's Workspace, which its Agents can edit.
+- `request_network_access`: under `network: egress` a writer Agent that lists it can
+  ask for one exact host it was refused, with a reason. The request is recorded as a
+  `proposal` and waits in **Session network**, where you approve or reject it
+  (`POST /api/sessions/{id}/network/proposals/{proposal_id}/approve` and `/reject`);
+  approval is the per-Session allow, recorded with the proposal's id. The tool call
+  waits up to `wait_secs` (default 120, at most 600) and returns the decision, or
+  `pending`. Nothing approves a request by itself, and no Agent can approve one.
 
 ### Changed
 - `web_search.provider` must be `searxng` or the legacy `tavily`; any other non-empty value is

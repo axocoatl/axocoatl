@@ -541,6 +541,10 @@ pub struct SessionNetworkView {
     /// a configuration file inside its Workspace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Agents' requests for hosts (`request_network_access`), pending ones
+    /// first. Only a person approves or rejects them.
+    #[serde(default)]
+    pub proposals: Vec<crate::session_network_proposals::ProposalView>,
 }
 
 /// Body of `POST /api/sessions/{id}/network/allow`.

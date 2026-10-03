@@ -11,6 +11,9 @@ use axocoatl_tools::fetch_guard::{FetchError, FetchedPage, PageFetcher};
 use axocoatl_tools::{SearchHit, ToolError, WebFetchTool, WebSearchBackend, WebSearchTool};
 use std::sync::atomic::AtomicBool;
 
+#[path = "session_dispatch_network_tool_tests.rs"]
+mod network_tool_tests;
+
 /// One scripted round of tool calls, then a final answer. Records the tools
 /// each request offered and the tool results the answer round saw.
 struct HostToolProvider {
