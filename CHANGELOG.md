@@ -165,12 +165,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   approval is the per-Session allow, recorded with the proposal's id. The tool call
   waits up to `wait_secs` (default 120, at most 600) and returns the decision, or
   `pending`. Nothing approves a request by itself, and no Agent can approve one.
-- The execution supervisor can relay connections to the daemon, report the program
-  behind each proxied connection and harden the commands it runs with a seccomp filter
-  and a Landlock domain that keeps them out of processes they did not start. These are
-  building blocks for later Session settings: the egress control protocol moves to
-  version 2, and a network record's `open` event can carry the program, its user and
-  SHA-256 in a new `peer` field.
+- In a hardened Session container (`sandbox.workload`, the default under `egress`),
+  every process of an Agent's tool call in a native Session, a read-only helper's
+  included, and every required check runs under a seccomp filter from the execution
+  supervisor, on top of Podman's profile: `ptrace`, cross-process memory access,
+  `userfaultfd`, `perf_event_open`, `bpf`, kernel keyrings, module loading, mounts,
+  `setns`, new user namespaces and packet, vsock, Bluetooth and key sockets fail with
+  `EPERM`, and `clone3` and `io_uring` with `ENOSYS`, so the C library and libuv fall
+  back to older calls. Each such command also runs in a Landlock domain of its own, so
+  it cannot trace a process it did not start or read its memory or environment.
+  Terminals you open, setup commands, background tasks and Ways checks run without the
+  filter. It needs Landlock (Linux 5.13 or later).
+- In a hardened egress Session the container reaches the proxy only through the
+  proxy's identity socket (in a volume of its own, `axo-egi-<session>`), and the
+  container's first process starts each connection with the identity of the program
+  that opened it, read from `/proc`; it keeps `CAP_SYS_PTRACE` for this. A network
+  record's `open` event carries it as `peer` (`pid`, `uid`, `gid`, `exe`,
+  `exe_sha256`, `ancestors`, `error`). **Session network** lists the latest
+  connections, with a **Program** column when the record names programs, and an
+  activation's network summary names the programs behind each destination. The record
+  names programs; allow entries and routes cannot yet be limited to some. The egress
+  control protocol is version 2.
 - `sandbox.egress.routes` and `credentials`, under `network: egress`. A route names
   one host whose HTTPS traffic the daemon ends itself: the egress proxy answers a
   `CONNECT` to the route's host and port with a relay that carries the client's TLS

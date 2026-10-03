@@ -392,7 +392,14 @@ event has a `kind`: `policy`, `sidecar`, `bind`, `unbind`, `open`, `close`,
 `conn_kind` (`connect` for a tunnel or `http`), the `decision` (`allow` or `deny`)
 with its `reason` and `status`, the `rule` that decided (`route#0` for an
 [egress route](/configure/credentials/)), the addresses used, and the tool call (`binding`)
-whose credential it presented. Credentials appear only as 16-hex tags. A `close`
+whose credential it presented. Credentials appear only as 16-hex tags. In a Session
+container with [workload users](/configure/sandboxes/#workload-users) under
+`network: egress`, an `open` event also has `peer`: the program that opened the
+connection as the container's first process found it, with `pid`, `uid`, `gid`, `exe`
+(its path), `exe_sha256` (of the file's contents), `ancestors` (the paths of up to 8
+parent programs, nearest first) and, for what it could not find, `error`
+(`no_access`, `not_found`, `timeout`, `foreign_namespace` for a program run from a
+mount namespace of its own, whose path is left out, or `unsupported`). A `close`
 event adds the bytes sent and received and the duration, and for a route's
 connection the reason the daemon ended it, if it was not an ordinary close. On a
 route, each HTTP request is a `request` event written before the request is sent
@@ -607,7 +614,8 @@ An activation whose tool calls opened or were refused connections through an egr
 proxy (under `network: egress`, or through the browser's declared hosts), or called
 `web_search` or `web_fetch`, has one evidence item of kind `network`. Its `summary`
 names each destination, such as `registry.npmjs.org:443 allowed ×3 (1.2 MB in);
-evil.test:443 refused (not_allowed)`, and counts web calls, followed by the
+evil.test:443 refused (not_allowed)`, with ` by node, curl` after a destination when
+the record names the programs behind its connections, and counts web calls, followed by the
 requests made on routes; its `details` holds up to 200 of the matching `open`, `close`, `request`, `response` and `web` lines from
 the [network record](#session-network-record), with
 `truncated` set when there were more. Events are joined to the activation through the

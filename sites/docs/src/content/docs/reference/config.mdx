@@ -391,7 +391,9 @@ under `network: egress` and `image` under `bridge` and `none`. `hardened` keeps 
 container's first process as root and runs Agents' commands, setup commands,
 terminals and required checks as `writer_user`, every process of a read-only helper
 as `helper_user`, and readiness provisioning as root; neither user has Linux
-capabilities. `image` runs every command as the image's own user. Ids run from 1 to
+capabilities. Agents' tool calls and required checks also run under a seccomp filter
+and in a Landlock domain of their own, and under `egress` each connection's record
+names the program that opened it. `image` runs every command as the image's own user. Ids run from 1 to
 65533, and the helper's uid and gid must differ from both of the writer's. `hardened`
 needs rootless Podman: under rootful Podman `auto` falls back to `image` with a
 `doctor` warning, and `hardened` refuses to start a Session. `backend: e2b` refuses

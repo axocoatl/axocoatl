@@ -188,8 +188,10 @@ it, and **Session network** says so. Keep secrets in environment variables. Read
 [`GET /api/sessions/{id}/network`](/reference/http-api/), or open **Session network**
 from an Agent's details in the Session graph. It shows the policy of each scope
 (the Session's list, provisioning and, with `browser:` configured, the browser's
-declared hosts), allowed and refused counts, each refused connection and each
-request on an [egress route](/configure/credentials/); a refused
+declared hosts), allowed and refused counts, the latest connections, each refused
+connection and each request on an [egress route](/configure/credentials/). With
+[workload users](#workload-users), the default under `egress`, each row also names the
+program that opened the connection. A refused
 host can be allowed for that Session only with **Allow for this Session**, which is
 recorded and applies to new connections at once, in the scope of the refused
 connection. Each activation's details also show its tool calls' network activity.
@@ -247,11 +249,12 @@ What egress does not cover:
   `web_search` and `web_fetch`, webhooks and Podman image pulls. The web tools run
   on your computer, so `sandbox.egress` does not limit them; their calls are kept in
   the Session's network record as `web_request` and `web` events.
-- Writers in one Session share its container and one user, so they can use each
-  other's credentials and files. A read-only helper cannot connect to the proxy over
-  TCP, and with [workload users](#workload-users), the default under `egress`, it
-  runs as a user of its own that cannot read a writer's credential. With
-  `sandbox.workload.mode: image` it can read a running writer's credential from that
+- Writers in one Session share its container and one user, so they can change each
+  other's files. A read-only helper cannot connect to the proxy over TCP, and with
+  [workload users](#workload-users), the default under `egress`, it runs as a user of
+  its own that cannot read a writer's credential, and each tool call's processes run
+  apart from other tool calls' (see below). With `sandbox.workload.mode: image` a
+  helper or another writer can read a running writer's credential from that
   process's environment under `/proc`.
 - Programs that ignore the proxy variables cannot connect at all, for example some
   Go and gRPC clients, and Node's `fetch` before Node supports
@@ -291,9 +294,31 @@ In a hardened container:
   with `no-new-privileges`, so `sudo` and setuid programs do not help.
 - A helper cannot read the environment of a writer's processes under `/proc`, so it
   cannot borrow a writer's proxy credential, and it cannot signal a writer's processes.
-- Under `network: egress` the proxy's socket is in a directory only root can enter.
-  The users reach the proxy only through `127.0.0.1:3128`, with a credential, and a
-  helper's shell cannot open TCP connections at all.
+- The commands Axocoatl runs through its execution supervisor also get a seccomp
+  filter on top of Podman's own: every process of an Agent's tool call in a native
+  Session, a read-only helper's included, and every required check. The filter refuses
+  `ptrace`, `process_vm_readv` and `process_vm_writev`, `pidfd_getfd`, `userfaultfd`,
+  `perf_event_open`, `bpf`, kernel keyrings, loading kernel modules, `mount` and the
+  other mount calls, `setns`, new user namespaces, and packet, `vsock`, Bluetooth and
+  key sockets with `EPERM`. `clone3` and the `io_uring` calls get `ENOSYS`, so the C
+  library and libuv fall back to older calls. Each such command also runs in a
+  Landlock domain of its own: it cannot trace a process it did not start, or read that
+  process's memory or environment, another writer's command included. Debuggers,
+  `strace` and LeakSanitizer do not work in these commands. Terminals you open,
+  approved setup commands, background tasks you start and Ways checks do not go
+  through the supervisor and run without the filter.
+- Under `network: egress` the only proxy socket in the container is the proxy's
+  identity socket, in a directory only root can enter. The users reach the proxy only
+  through `127.0.0.1:3128`, with a credential, and a helper's shell cannot open TCP
+  connections at all. The container's first process, which serves that address,
+  starts each connection with the identity of the program that opened it, which it
+  reads from `/proc`: the program's path, the SHA-256 of its file, its user and group,
+  and the paths of its parent programs. The proxy accepts no connection on that
+  socket without the line, and refuses a second one, so a program cannot claim to be
+  another. Each connection's record keeps the identity as `peer`, **Session network**
+  shows it in a **Program** column, and an activation's network summary names the
+  programs behind each destination. The first process keeps `CAP_SYS_PTRACE` to read
+  other users' processes in `/proc`; the workload users still have no capabilities.
 - The Workspace is mapped so that the writer owns it (`--userns=keep-id`), and files
   the writer creates belong to you on your computer. A Node project's root
   `node_modules` volume is handed to the writer when the Session starts.
@@ -307,8 +332,22 @@ and the helper's uid and gid must differ from both of the writer's.
 
 What it does not cover:
 
-- Writers share one user, so concurrent writers in one Session can use each other's
-  credentials and files.
+- Writers share one user, so concurrent writers in one Session can change each
+  other's files. A terminal you open, a setup command or a background task runs as the
+  writer outside the supervisor, so it can read the environment, and with it the
+  credential, of a writer's running command.
+- A program's identity is what the container's first process found when the
+  connection opened. A program can be made to act for another, for example with
+  `LD_PRELOAD`, through an interpreter, or by passing an open connection to another
+  process, so the identity says which program opened a connection, not what it sent.
+  A program run from a mount namespace of its own is named only by its user and its
+  file's SHA-256. The record names programs; allow entries and routes cannot yet be limited
+  to programs. The browser's connections come from its own container and name no
+  program.
+- The seccomp filter needs Landlock (Linux 5.13 or later, which Podman machine has);
+  without it, the commands that would get the filter do not run. Readiness
+  provisioning runs as root without it, and under `egress` root's commands keep
+  `CAP_SYS_PTRACE` like the first process.
 - Approved setup commands run as the writer, so they cannot install system packages
   with `apk` or `apt-get`. Choose an image that already has them, or set
   `mode: image`.
