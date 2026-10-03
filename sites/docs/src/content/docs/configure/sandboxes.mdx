@@ -120,8 +120,9 @@ How a Session runs under it:
   locally from Axocoatl's bundled execution supervisor and contains nothing else: no
   shell, no resolver and no environment. It needs no download.
 - The Session container runs with `--network none`. Its first process is Axocoatl's
-  bridge, which serves the proxy on `127.0.0.1:3128`, so the image's own
-  `ENTRYPOINT` does not run under `egress`.
+  bridge, which serves the proxy on `127.0.0.1:3128` and nothing else, so the image's
+  own `ENTRYPOINT` does not run under `egress`. By default the container's commands
+  run as two non-root users; see [Workload users](#workload-users).
 - Each `bash` command of an Agent that may change files, each approved setup
   command, readiness provisioning and each terminal you open gets its own proxy
   credential, in `HTTPS_PROXY`, `HTTP_PROXY`, their lowercase forms, the npm proxy
@@ -130,11 +131,17 @@ How a Session runs under it:
   environment file that Podman reads, never through a command line.
 - Read-only helpers, required checks, Axocoatl's own repository captures,
   background tasks and other commands get no credential, so they have no network.
-- Exposed ports still work in Preview. The Session container publishes nothing; its
-  first process serves each exposed port as a socket in a volume, and a third
-  container, `axo-pvw-<session>`, from the same image as the proxy, publishes those
-  sockets on your computer's loopback address. It reaches the Session's app only
-  through those sockets and never connects anywhere else.
+- Exposed ports still work in Preview. The Session container publishes nothing and
+  holds no port socket. A service forwarder, `axo-svc-<session>`, from the same image
+  as the proxy, joins only the Session container's network namespace and serves each
+  exposed port as a socket in a volume. A Preview container, `axo-pvw-<session>`,
+  publishes those sockets on your computer's loopback address. Neither connects
+  anywhere else. A read-only helper's shell may not open TCP connections, so it has
+  no way to the Session's apps.
+- A Ways attempt's container starts no proxy of its own. It uses its Session's proxy
+  and decision point: its Agents' `bash` commands and its setup commands get
+  credentials of their own, and their connections are written to the Session's
+  network record with the attempt's id. The Session must have been started first.
 - Readiness provisioning reaches only the Alpine, Debian and Ubuntu package mirrors.
   If an image needs another package manager, use an image that already has
   Axocoatl's required commands.
@@ -204,17 +211,82 @@ What egress does not cover:
   `web_search` and `web_fetch`, webhooks and Podman image pulls. The web tools run
   on your computer, so `sandbox.egress` does not limit them; their calls are kept in
   the Session's network record as `web_request` and `web` events.
-- Agents in one Session share its container. A read-only helper cannot connect to
-  the proxy over TCP, but it can read a running writer's credential from that
-  process's environment under `/proc`. Axocoatl does not separate Agents inside one
-  Session container.
+- Writers in one Session share its container and one user, so they can use each
+  other's credentials and files. A read-only helper cannot connect to the proxy over
+  TCP, and with [workload users](#workload-users), the default under `egress`, it
+  runs as a user of its own that cannot read a writer's credential. With
+  `sandbox.workload.mode: image` it can read a running writer's credential from that
+  process's environment under `/proc`.
 - Programs that ignore the proxy variables cannot connect at all, for example some
   Go and gRPC clients, and Node's `fetch` before Node supports
   `NODE_USE_ENV_PROXY`.
-- Ways attempt containers run with no network under `egress`.
 - A Session created before the native Session format cannot use `egress`; start a
   new Session.
 - `egress` needs local Podman. E2B is refused.
+
+## Workload users
+
+```yaml
+sandbox:
+  workload:
+    mode: auto               # auto (the default), hardened or image
+    writer_user: "1000:1000"
+    helper_user: "1001:1001"
+```
+
+`sandbox.workload` decides which users run commands in a local Podman Session
+container:
+
+- `auto` is `hardened` under `network: egress` and `image` under `bridge` and `none`.
+- `image` runs every command as the image's own user, often root, as Sessions did
+  before.
+- `hardened` keeps the container's first process as root and runs everything else as
+  one of two non-root users:
+  - Agents' commands, approved setup commands, terminals you open, required checks and
+    Axocoatl's own commands in the Workspace run as `writer_user`, with the home
+    directory `/home/axocoatl`.
+  - Every process of a read-only helper (`writes: []`), its file tools included, runs
+    as `helper_user`, with `HOME=/tmp`.
+  - Readiness provisioning runs as root.
+
+In a hardened container:
+
+- Neither user has any Linux capability, and neither can gain one: the container runs
+  with `no-new-privileges`, so `sudo` and setuid programs do not help.
+- A helper cannot read the environment of a writer's processes under `/proc`, so it
+  cannot borrow a writer's proxy credential, and it cannot signal a writer's processes.
+- Under `network: egress` the proxy's socket is in a directory only root can enter.
+  The users reach the proxy only through `127.0.0.1:3128`, with a credential, and a
+  helper's shell cannot open TCP connections at all.
+- The Workspace is mapped so that the writer owns it (`--userns=keep-id`), and files
+  the writer creates belong to you on your computer. A Node project's root
+  `node_modules` volume is handed to the writer when the Session starts.
+- Axocoatl adds `passwd` and `group` entries named `axocoatl` and `axocoatl-helper`
+  for the two ids when the image has none, so tools that look up their own user work.
+  An image user with the same id keeps its name.
+
+`axocoatl doctor` shows the result, for example `Sandbox workload: hardened (Agents
+run as 1000:1000, helpers as 1001:1001)`. The ids must be numeric, from 1 to 65533,
+and the helper's uid and gid must differ from both of the writer's.
+
+What it does not cover:
+
+- Writers share one user, so concurrent writers in one Session can use each other's
+  credentials and files.
+- Approved setup commands run as the writer, so they cannot install system packages
+  with `apk` or `apt-get`. Choose an image that already has them, or set
+  `mode: image`.
+- A helper can read whatever the file modes let any user read. On macOS the Podman
+  machine's shared folder reports every Workspace file as owned by whoever asks, so
+  file modes do not keep a helper from reading an owner-only Workspace file there.
+  A helper's shell still cannot change the Workspace.
+- It needs rootless Podman. Under rootful Podman, `auto` falls back to `image` and
+  `doctor` warns, and `hardened` refuses to start a Session. E2B refuses `hardened`.
+- The first start of an image takes longer while Podman prepares it for the user
+  mapping: on one Mac, 0.6 s for Node 20 slim and 1.9 s for Rust bookworm, then about
+  0.1 s.
+- Containers that only recover a stopped Ways attempt keep the image's user; they run
+  only Axocoatl's own Git commands.
 
 ## Remote E2B backend
 
