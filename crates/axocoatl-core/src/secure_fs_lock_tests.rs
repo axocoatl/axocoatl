@@ -150,7 +150,12 @@ fn a_child_between_fork_and_exec_holds_the_lock_of_a_dropped_store() {
 
 #[test]
 fn reopening_beside_a_fork_loop_never_fails_with_the_wait() {
-    const REOPENS: usize = 500;
+    // At least this many reopens, and enough of them finding the lock held
+    // for the wait to be what is tested: a quick run can otherwise pass with
+    // no contended reopen at all.
+    const MIN_REOPENS: usize = 500;
+    const MIN_CONTENDED: usize = 20;
+    const TIME_LIMIT: Duration = Duration::from_secs(5);
     let (_root, path) = store_dir();
     let done = Arc::new(AtomicBool::new(false));
     let spawned = Arc::new(AtomicUsize::new(0));
@@ -174,25 +179,35 @@ fn reopening_beside_a_fork_loop_never_fails_with_the_wait() {
         std::thread::sleep(Duration::from_millis(1));
     }
 
+    let started = Instant::now();
+    let mut reopens = 0usize;
     let mut contended = 0usize;
     let mut failures = Vec::new();
-    for attempt in 0..REOPENS {
+    while (reopens < MIN_REOPENS || contended < MIN_CONTENDED) && started.elapsed() < TIME_LIMIT {
         let dir = SecureDir::open(&path).unwrap();
         if would_block(dir.try_lock_exclusive()) {
             contended += 1;
             if let Err(error) = dir.lock_exclusive_waiting(LOCK_INHERITANCE_GRACE) {
-                failures.push(format!("reopen {attempt}: {error}"));
+                failures.push(format!("reopen {reopens}: {error}"));
             }
         }
         drop(dir);
+        reopens += 1;
     }
+    let elapsed = started.elapsed();
     done.store(true, Ordering::SeqCst);
     spawner.join().unwrap();
     eprintln!(
-        "{REOPENS} reopens beside {} fork-and-exec children: {contended} found the lock inherited",
+        "{reopens} reopens in {elapsed:?} beside {} fork-and-exec children: \
+         {contended} found the lock inherited",
         spawned.load(Ordering::SeqCst)
     );
     assert!(failures.is_empty(), "{failures:?}");
+    assert!(
+        contended >= MIN_CONTENDED,
+        "only {contended} of {reopens} reopens found the lock inherited in {elapsed:?}, \
+         so the wait was not exercised enough"
+    );
 }
 
 #[test]
