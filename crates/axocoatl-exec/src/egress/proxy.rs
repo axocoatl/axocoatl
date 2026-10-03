@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
 use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -82,8 +82,24 @@ impl ProxyExit {
     }
 }
 
+/// Make every Unix socket this process binds from now on connectable by
+/// every user (mode 0666). The proxy and bridge entry points call it once,
+/// before any listener exists.
+///
+/// The mode is set as the socket is created, never by a later `chmod` of its
+/// path: the socket directory can belong to the container's user, who could
+/// swap the new socket for a symlink before a `chmod` by path, and a root
+/// forwarder would then change the mode of the link's target.
+pub fn connectable_sockets_by_default() {
+    // SAFETY: umask only replaces the process's file-creation mask.
+    unsafe {
+        libc::umask(0o111);
+    }
+}
+
 /// Bind a Unix listener at `path`, replacing a stale socket but never any
-/// other file, and make it connectable by every user (mode 0666).
+/// other file. Its mode comes from the umask; see
+/// [`connectable_sockets_by_default`].
 pub fn bind_unix_listener(path: &Path) -> io::Result<UnixListener> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_socket() => std::fs::remove_file(path)?,
@@ -96,9 +112,7 @@ pub fn bind_unix_listener(path: &Path) -> io::Result<UnixListener> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    let listener = UnixListener::bind(path)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))?;
-    Ok(listener)
+    UnixListener::bind(path)
 }
 
 enum Verdict {
@@ -249,6 +263,13 @@ fn control_reader(shared: Arc<Shared>, input: Box<dyn Read + Send>) {
                 reason,
                 hint,
             } => {
+                // A revoke that arrived first for this id has nothing left to
+                // close; forget it so it cannot crowd out later ones.
+                shared
+                    .early_revokes
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .remove(&id);
                 if let Some(waiter) = shared
                     .pending
                     .lock()
@@ -367,6 +388,18 @@ fn close_frame(
             .error
             .map(|error| error.chars().take(protocol::MAX_DETAIL_CHARS).collect()),
     }
+}
+
+/// The answer for a connection revoked before its tunnel opened: its
+/// credential or allow rule ended while it was decided or connected.
+fn revoked_response(request: &ProxyRequest) -> Vec<u8> {
+    http::refusal_response(
+        403,
+        "revoked",
+        &request.host,
+        request.port,
+        "The credential or allow rule that admitted this connection ended before it opened; retry if it should still be allowed.",
+    )
 }
 
 fn failed(outcome: CloseOutcome, error: &str) -> pump::PumpReport {
@@ -508,6 +541,22 @@ fn handle(shared: Arc<Shared>, mut client: UnixStream) {
         ));
         return;
     }
+    // Revoked while the decision was on its way: never connect.
+    let revoked_early = shared
+        .early_revokes
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .remove(&id);
+    if revoked_early {
+        respond(&mut client, &revoked_response(&request));
+        shared.send(&close_frame(
+            id,
+            None,
+            started,
+            failed(CloseOutcome::Revoked, "revoked before the tunnel opened"),
+        ));
+        return;
+    }
     let (upstream, ip) = match connect_any(&addrs, request.port, shared.config.connect_timeout) {
         Ok(connected) => connected,
         Err(error) => {
@@ -534,6 +583,7 @@ fn handle(shared: Arc<Shared>, mut client: UnixStream) {
         }
     };
     let revoked = Arc::new(AtomicBool::new(false));
+    let revoked_while_connecting;
     {
         let mut connections = shared
             .connections
@@ -544,6 +594,7 @@ fn handle(shared: Arc<Shared>, mut client: UnixStream) {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .remove(&id);
+        revoked_while_connecting = early;
         if early || shared.stopped() {
             revoked.store(true, Ordering::Release);
         }
@@ -555,23 +606,27 @@ fn handle(shared: Arc<Shared>, mut client: UnixStream) {
             },
         );
     }
-    let initial = match request.kind {
-        RequestKind::Connect => {
-            if client.write_all(http::CONNECT_ESTABLISHED).is_err() {
-                Vec::new()
-            } else {
-                leftover.to_vec()
-            }
-        }
-        RequestKind::Http => {
-            let mut initial = request.upstream_head.clone().unwrap_or_default();
-            initial.extend_from_slice(leftover);
-            initial
-        }
-    };
-    let report = if revoked.load(Ordering::Acquire) {
+    let report = if revoked_while_connecting {
+        // Never announce a tunnel that was revoked while it was being made.
+        respond(&mut client, &revoked_response(&request));
+        failed(CloseOutcome::Revoked, "revoked before the tunnel opened")
+    } else if revoked.load(Ordering::Acquire) {
         failed(CloseOutcome::Revoked, "revoked before the tunnel opened")
     } else {
+        let initial = match request.kind {
+            RequestKind::Connect => {
+                if client.write_all(http::CONNECT_ESTABLISHED).is_err() {
+                    Vec::new()
+                } else {
+                    leftover.to_vec()
+                }
+            }
+            RequestKind::Http => {
+                let mut initial = request.upstream_head.clone().unwrap_or_default();
+                initial.extend_from_slice(leftover);
+                initial
+            }
+        };
         pump(
             client.as_raw_fd(),
             upstream.as_raw_fd(),
@@ -716,6 +771,7 @@ pub fn run(
 /// `--egress-proxy --socket <path> [--max-connections N]` with the process's
 /// stdin and stdout as the control channel. Returns the exit status.
 pub fn main(socket: PathBuf, max_connections: usize) -> i32 {
+    connectable_sockets_by_default();
     let listener = match bind_unix_listener(&socket) {
         Ok(listener) => listener,
         Err(error) => {
@@ -805,9 +861,9 @@ mod tests {
     fn start(configure: impl FnOnce(&mut ProxyConfig)) -> Harness {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("proxy.sock");
+        // The socket's mode comes from the umask; the binary sets it (see
+        // tests/egress_binary.rs), the test harness does not.
         let listener = bind_unix_listener(&socket).unwrap();
-        let mode = std::fs::metadata(&socket).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o666);
         let (daemon_end, proxy_end) = UnixStream::pair().unwrap();
         let mut config = ProxyConfig::new(8);
         config.never = allow_loopback;
@@ -1187,6 +1243,60 @@ mod tests {
         let _ = client.read_to_end(&mut rest);
         drop(client);
         upstream.join().unwrap();
+    }
+
+    /// The daemon may revoke a connection while its decision is still on the
+    /// way (its credential ended mid-decision). The revoke is held until the
+    /// allow arrives, and the proxy then refuses without connecting.
+    #[test]
+    fn a_revoke_that_overtakes_its_allow_refuses_without_connecting() {
+        let mut harness = start(|_| {});
+        // A revoke for a refused request is dropped with the refusal.
+        let mut refused = UnixStream::connect(&harness.socket).unwrap();
+        write!(refused, "CONNECT b.test:443 HTTP/1.1\r\n\r\n").unwrap();
+        let (refused_id, _, _, _) = harness.daemon.open();
+        harness.daemon.send(DaemonFrame::Revoke {
+            ids: vec![refused_id],
+        });
+        harness.daemon.send(DaemonFrame::Deny {
+            id: refused_id,
+            status: 407,
+            reason: "binding_ended".into(),
+            hint: "ended".into(),
+        });
+        assert!(read_response(&mut refused).starts_with("HTTP/1.1 407"));
+
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        upstream.set_nonblocking(true).unwrap();
+        let port = upstream.local_addr().unwrap().port();
+        let mut client = UnixStream::connect(&harness.socket).unwrap();
+        write!(client, "CONNECT a.test:{port} HTTP/1.1\r\n\r\nnever-sent").unwrap();
+        let (id, _, _, _) = harness.daemon.open();
+        harness.daemon.send(DaemonFrame::Revoke { ids: vec![id] });
+        harness.daemon.send(DaemonFrame::Allow {
+            id,
+            addrs: vec!["127.0.0.1".parse().unwrap()],
+        });
+        match harness.daemon.frame() {
+            SidecarFrame::Close {
+                id: closed,
+                outcome,
+                ip,
+                up,
+                ..
+            } => assert_eq!(
+                (closed, outcome, ip, up),
+                (id, CloseOutcome::Revoked, None, 0)
+            ),
+            other => panic!("{other:?}"),
+        }
+        let response = read_response(&mut client);
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        assert!(response.contains("reason=revoked"), "{response}");
+        assert_eq!(
+            upstream.accept().map(|_| ()).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
     }
 
     #[test]

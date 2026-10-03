@@ -380,6 +380,7 @@ pub fn main(arguments: &[String]) -> i32 {
         }
     };
     reap_orphans_if_init();
+    super::proxy::connectable_sockets_by_default();
     match Bridge::start(config) {
         Ok(bridge) => {
             // The bridge never exits after startup; removal kills it from
@@ -559,12 +560,8 @@ mod tests {
         client.read_to_end(&mut received).unwrap();
         sender.join().unwrap();
         assert_eq!(received, payload);
-        // The service socket is connectable by everyone.
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(&service).unwrap().permissions().mode() & 0o777,
-            0o666
-        );
+        // Its mode (0666) comes from the umask the binary sets; see
+        // tests/egress_binary.rs.
         assert!(probe_unix(service.clone()));
         bridge.stop();
         assert!(!probe_unix(dir.path().join("missing.sock")));
