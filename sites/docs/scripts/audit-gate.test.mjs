@@ -143,13 +143,14 @@ test('an unknown critical advisory fails', () => {
 test('a published fix voids the exception', () => {
   const result = gate({ latest: '4.2.1' });
   assert.equal(result.ok, false);
-  assert.match(result.failureText, /a fixed version exists: latest http-cache-semantics is 4\.2\.1, outside the recorded range "<=4\.2\.0"/);
+  assert.match(result.failureText, /a fixed version exists: latest http-cache-semantics is 4\.2\.1, outside the advisory range "<=4\.2\.0"; upgrade instead/);
 });
 
 test('a new release outside the recorded range needs a new review', () => {
   const result = gate({ exceptions: [{ ...EXCEPTION, vulnerable: '<=4.1.1' }] });
   assert.equal(result.ok, false);
-  assert.match(result.failureText, /latest http-cache-semantics is 4\.2\.0, outside the recorded range "<=4\.1\.1"/);
+  assert.match(result.failureText, /latest http-cache-semantics is 4\.2\.0, outside the reviewed range "<=4\.1\.1"; review the advisory again/);
+  assert.doesNotMatch(result.failureText, /a fixed version exists/);
 });
 
 test('a latest version that cannot be read fails', () => {
@@ -185,6 +186,12 @@ test('an aliased install of the package fails', () => {
   assert.match(result.failureText, /dependency path docs > hcs \(npm:http-cache-semantics\) does not go through astro/);
 });
 
+test('a missing package-lock.json fails closed', () => {
+  const result = gate({ lock: 'missing-lock.json' });
+  assert.equal(result.ok, false);
+  assert.match(result.failureText, /cannot read package-lock\.json: ENOENT/);
+});
+
 test('moderate advisories are reported but not gated', () => {
   const result = gate({ audit: 'audit-moderate.json' });
   assert.equal(result.ok, true, result.output);
@@ -213,7 +220,8 @@ test('an unexpected npm audit exit status fails closed', () => {
 test('an exception for another package does not cover the advisory', () => {
   const result = gate({ exceptions: [{ ...EXCEPTION, package: 'astro', dependents: ['@astrojs/starlight'] }] });
   assert.equal(result.ok, false);
-  assert.match(result.failureText, /the exception names package astro, but the advisory is on http-cache-semantics/);
+  assert.match(result.failureText, /the exception for GHSA-ch52-4w7c-c8xp names astro, not http-cache-semantics/);
+  assert.deepEqual(result.warnings, []);
 });
 
 test('an advisory without a GitHub advisory URL cannot be covered', () => {
@@ -236,7 +244,7 @@ test('an invalid exceptions file fails the gate', () => {
 test('an exception that matches no advisory is reported for removal', () => {
   const result = gate({ auditStdout: JSON.stringify({ auditReportVersion: 2, vulnerabilities: {}, metadata: {} }) });
   assert.equal(result.ok, true);
-  assert.match(result.warnings.join('\n'), /exception GHSA-ch52-4w7c-c8xp http-cache-semantics matched no advisory/);
+  assert.match(result.warnings.join('\n'), /exception GHSA-ch52-4w7c-c8xp http-cache-semantics matched no high or critical advisory/);
 });
 
 test('a high entry that no advisory explains fails closed', () => {
@@ -294,7 +302,8 @@ test('exception validation', () => {
   assert.equal(check({ ...EXCEPTION, expires: '2026-12-31' }), '');
   assert.match(check({ ...EXCEPTION, expires: '2027-01-01' }), /more than 90 days after reviewed/);
   assert.match(check(EXCEPTION, '2026-10-01'), /reviewed \(2026-10-02\) is after today/);
-  assert.match(validateExceptions([EXCEPTION, EXCEPTION], '2026-10-02').errors.join('\n'), /listed more than once/);
+  assert.match(validateExceptions([EXCEPTION, EXCEPTION], '2026-10-02').errors.join('\n'), /listed more than once for http-cache-semantics/);
+  assert.deepEqual(validateExceptions([EXCEPTION, { ...EXCEPTION, package: 'other-package', dependents: ['astro'] }], '2026-10-02').errors, []);
   assert.match(validateExceptions({}, '2026-10-02').errors.join('\n'), /must hold a JSON array/);
 });
 

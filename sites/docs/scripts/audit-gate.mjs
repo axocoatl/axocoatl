@@ -161,10 +161,10 @@ export function validateExceptions(value, today) {
     const { advisory, package: pkg, vulnerable, dependents, scope, reason, reviewed, expires } = entry;
     if (typeof advisory !== 'string' || !GHSA_ID.test(advisory)) {
       errors.push(`${label}: advisory must be a lowercase GitHub advisory id such as GHSA-xxxx-xxxx-xxxx`);
-    } else if (seen.has(advisory)) {
-      errors.push(`${label}: advisory ${advisory} is listed more than once`);
+    } else if (seen.has(`${advisory} ${pkg}`)) {
+      errors.push(`${label}: advisory ${advisory} is listed more than once for ${pkg}`);
     } else {
-      seen.add(advisory);
+      seen.add(`${advisory} ${pkg}`);
     }
     if (typeof pkg !== 'string' || !PACKAGE_NAME.test(pkg)) {
       errors.push(`${label}: package must be an npm package name`);
@@ -430,7 +430,15 @@ export function runGate({
 
   let graph = null;
   const lockGraphOnce = () => {
-    if (graph === null) graph = lockGraph(parseJson(read('package-lock.json'), 'package-lock.json'));
+    if (graph === null) {
+      let text;
+      try {
+        text = read('package-lock.json');
+      } catch (error) {
+        throw new GateError(`cannot read package-lock.json: ${error.message}`);
+      }
+      graph = lockGraph(parseJson(text, 'package-lock.json'));
+    }
     return graph;
   };
   const latestCache = new Map();
@@ -454,18 +462,20 @@ export function runGate({
   const used = new Set();
   for (const advisory of gated) {
     const name = `${advisory.id ?? advisory.url} ${advisory.package} (${advisory.severity})`;
-    const exception = advisory.id
-      ? exceptions.find((candidate) => candidate.advisory === advisory.id)
-      : undefined;
+    const sameAdvisory = advisory.id
+      ? exceptions.filter((candidate) => candidate.advisory === advisory.id)
+      : [];
+    const exception = sameAdvisory.find((candidate) => candidate.package === advisory.package);
     if (!exception) {
-      failures.push(`${name}: no exception in ${EXCEPTIONS_FILE}${advisory.title ? ` (${advisory.title})` : ''}`);
+      const other = sameAdvisory.map((candidate) => candidate.package).join(', ');
+      failures.push(other
+        ? `${name}: the exception for ${advisory.id} names ${other}, not ${advisory.package}`
+        : `${name}: no exception in ${EXCEPTIONS_FILE}${advisory.title ? ` (${advisory.title})` : ''}`);
+      for (const candidate of sameAdvisory) used.add(candidate);
       continue;
     }
     used.add(exception);
     const reasons = [];
-    if (exception.package !== advisory.package) {
-      reasons.push(`the exception names package ${exception.package}, but the advisory is on ${advisory.package}`);
-    }
     if (today > exception.expires) {
       reasons.push(`the exception expired on ${exception.expires}`);
     }
@@ -478,8 +488,10 @@ export function runGate({
         const inAdvisory = satisfies(latest, advisory.range);
         if (inRecorded === null || inAdvisory === null) {
           reasons.push(`cannot compare latest ${latest} with the ranges "${exception.vulnerable}" and "${advisory.range}"`);
-        } else if (!inRecorded || !inAdvisory) {
-          reasons.push(`a fixed version exists: latest ${advisory.package} is ${latest}, outside ${inRecorded ? `the advisory range "${advisory.range}"` : `the recorded range "${exception.vulnerable}"`}; upgrade instead`);
+        } else if (!inAdvisory) {
+          reasons.push(`a fixed version exists: latest ${advisory.package} is ${latest}, outside the advisory range "${advisory.range}"; upgrade instead`);
+        } else if (!inRecorded) {
+          reasons.push(`latest ${advisory.package} is ${latest}, outside the reviewed range "${exception.vulnerable}"; review the advisory again`);
         }
       }
       try {
@@ -513,7 +525,7 @@ export function runGate({
   }
   for (const exception of exceptions) {
     if (!used.has(exception)) {
-      warnings.push(`exception ${exception.advisory} ${exception.package} matched no advisory; remove it from ${EXCEPTIONS_FILE}`);
+      warnings.push(`exception ${exception.advisory} ${exception.package} matched no high or critical advisory; remove it from ${EXCEPTIONS_FILE}`);
     }
   }
   return finish();

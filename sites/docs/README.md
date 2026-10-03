@@ -57,9 +57,11 @@ own:
 
 When the gate fails on an exception, upgrade if a fix exists; otherwise review the
 advisory again and update `vulnerable`, `dependents`, `reviewed` and `expires`.
-The gate warns about exceptions that no longer match an advisory; remove them.
+The gate warns about exceptions that no longer match a high or critical advisory;
+remove them.
+
 `node --test scripts/audit-gate.test.mjs` tests the gate against recorded audit
-output in `scripts/audit-gate-fixtures/`.
+output in `scripts/audit-gate-fixtures/`; the documentation gate runs it too.
 
 ## Source discipline
 
