@@ -57,6 +57,8 @@ struct RelayingAuthority {
     opened: Mutex<Vec<Opened>>,
     closed: Mutex<Vec<CloseReport>>,
     relayed: Mutex<Vec<u64>>,
+    /// Where `tunnel.test` is allowed to, for the throughput comparison.
+    tunnel: Mutex<Option<std::net::IpAddr>>,
 }
 
 #[async_trait::async_trait]
@@ -71,8 +73,13 @@ impl EgressAuthority for RelayingAuthority {
             host: open.host.clone(),
             peer: open.peer.clone(),
         });
+        let tunnel = *self.tunnel.lock().unwrap();
         if open.host == "relay.test" {
             Decision::Relay
+        } else if let (Some(address), "tunnel.test") = (tunnel, open.host.as_str()) {
+            Decision::Allow {
+                addrs: vec![address],
+            }
         } else {
             Decision::deny(403, "not_allowed", format!("{} is not allowed", open.host))
         }
@@ -99,13 +106,34 @@ impl EgressAuthority for RelayingAuthority {
                 Ok(_) => {}
             }
         }
-        let body = format!("relayed {}\n", request_line.trim_end());
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
         let mut stream = stream.into_inner();
-        let _ = stream.write_all(response.as_bytes()).await;
+        // `GET /bytes/<n>` answers n zero bytes; anything else names itself.
+        let size = request_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|path| path.strip_prefix("/bytes/"))
+            .and_then(|count| count.parse::<usize>().ok());
+        if let Some(size) = size {
+            let head =
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(head.as_bytes()).await;
+            let chunk = vec![0u8; 64 * 1024];
+            let mut left = size;
+            while left > 0 {
+                let take = left.min(chunk.len());
+                if stream.write_all(&chunk[..take]).await.is_err() {
+                    return;
+                }
+                left -= take;
+            }
+        } else {
+            let body = format!("relayed {}\n", request_line.trim_end());
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
         let _ = stream.shutdown().await;
         // Wait for the client's end before dropping the stream.
         let mut rest = Vec::new();
@@ -516,6 +544,95 @@ async fn hardened_commands_run_in_real_images() {
                 (false, ProcessOutcome::Exited { code }) if *code != 0 => {}
                 _ => panic!("{image}: {script}: {outcome:?}"),
             }
+        }
+    })
+    .await;
+}
+
+/// Measurement, not a check: 50 MiB downloaded through a relay (bytes over
+/// the sidecar's control channel, through `podman` on this computer)
+/// against the same download through an ordinary tunnel to a container on
+/// Podman's network. Prints the speeds; asserts only that every byte came.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "measurement; requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_relay_podman -- --ignored --test-threads=1"]
+async fn relay_and_tunnel_throughput_measurement() {
+    with_fixture(|fixture| async move {
+        const SIZE: usize = 50 * 1024 * 1024;
+        let upstream = format!("axo-relay-upstream-{}", std::process::id());
+        fixture.containers.lock().unwrap().push(upstream.clone());
+        let client_image = image("AXO_RELAY_CLIENT_IMAGE", CLIENT_IMAGE);
+        let serve = format!(
+            "head -c {SIZE} /dev/zero > /tmp/blob && cd /tmp && exec python3 -m http.server 8000"
+        );
+        podman_ok(&[
+            "run",
+            "-d",
+            "--name",
+            &upstream,
+            "--label",
+            &fixture.label,
+            "--entrypoint",
+            "sh",
+            &client_image,
+            "-c",
+            &serve,
+        ])
+        .await;
+        let address = podman_ok(&[
+            "inspect",
+            "--format",
+            "{{.NetworkSettings.IPAddress}}",
+            &upstream,
+        ])
+        .await;
+        let address: std::net::IpAddr = address.trim().parse().unwrap();
+        *fixture.authority.tunnel.lock().unwrap() = Some(address);
+        fixture.start_sidecar().await;
+        let client = fixture.client("speed", false).await;
+        // The upstream needs a moment to write its file and listen.
+        for _ in 0..50 {
+            let (code, _) = exec(
+                &client,
+                "0",
+                "curl -sS --max-time 5 -p -x http://127.0.0.1:3129 http://tunnel.test:8000/ -o /dev/null",
+            )
+            .await;
+            if code == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let measure = |url: String| {
+            let client = client.clone();
+            async move {
+                let (code, output) = exec(
+                    &client,
+                    "0",
+                    &format!(
+                        "curl -sS --max-time 300 -p -x http://127.0.0.1:3129 {url} -o /dev/null -w '%{{size_download}} %{{speed_download}} %{{time_total}}'"
+                    ),
+                )
+                .await;
+                assert_eq!(code, 0, "{output}");
+                let fields: Vec<f64> = output
+                    .split_whitespace()
+                    .map(|field| field.parse().unwrap())
+                    .collect();
+                assert_eq!(fields[0] as usize, SIZE, "{output}");
+                (fields[1] / (1024.0 * 1024.0), fields[2])
+            }
+        };
+        let mut lines = Vec::new();
+        for run in 1..=3 {
+            let (relay, relay_time) = measure(format!("http://relay.test/bytes/{SIZE}")).await;
+            let (tunnel, tunnel_time) =
+                measure("http://tunnel.test:8000/blob".to_string()).await;
+            lines.push(format!(
+                "run {run}: relay {relay:.1} MiB/s ({relay_time:.2} s), tunnel {tunnel:.1} MiB/s ({tunnel_time:.2} s)"
+            ));
+        }
+        for line in &lines {
+            println!("throughput, 50 MiB download: {line}");
         }
     })
     .await;
