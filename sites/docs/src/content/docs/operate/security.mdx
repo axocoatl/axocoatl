@@ -25,7 +25,8 @@ rather than running Sessions in a sandbox runtime, so that it works in the Podma
 containers it already manages on macOS and Linux and so each connection is joined
 to the tool call that made it. It does not broker credentials, apply rules to the
 content of HTTPS requests, or tell programs in one container apart. See
-[Control network egress](#control-network-egress).
+[Control network egress](#control-network-egress) and
+[Compared with OpenShell](#compared-with-openshell).
 
 With local Podman, model provider API keys stay in the Axocoatl daemon and are not
 passed into the container. Files in the Workspace, such as a `.env` file, are
@@ -336,27 +337,56 @@ What `egress` does not do:
 - It does not see inside TLS. A tunnel to a listed host that fronts other sites, such
   as a CDN, can reach those sites, and a listed host that accepts uploads is a way
   for data to leave. The model you use is also a channel.
-- Agents in one Session share its container, so a helper can read a running
-  writer's credential from `/proc`. Per-Agent network limits are not enforced inside
-  one Session container.
+- Agents in one Session share its container. Writers share one user, so they can use
+  each other's credentials, and per-Agent network limits are not enforced inside one
+  Session container. With [workload users](/configure/sandboxes/#workload-users), the
+  default under `egress`, a helper cannot read a writer's credential; with
+  `sandbox.workload.mode: image` it can read a running writer's credential from
+  `/proc`.
 - The browser's declared hosts and the Session's list are told apart by the
   credential presented, not by the container. While a `browser_check` call runs, its
   test holds the browser's credential and can pass it to the Session container; see
   [Declared hosts](/configure/browser/#declared-hosts).
 - It does not inject or broker credentials. A `git push` from inside the container
-  still needs a token there.
+  still needs a token there. `validate` checks `sandbox.egress.routes` and
+  `credentials`, but Sessions do not use them yet.
 - Traffic from Axocoatl itself (model providers, MCP servers, `web_search` and
   `web_fetch`, webhooks, Podman image pulls) does not go through the proxy.
   `sandbox.egress` does not limit the web tools; their calls are written to the
   network record, and an Agent gets them only when its `tools` list them.
-- It is not available with E2B, for Ways attempt containers (they run with no
-  network), or for Sessions created before the native Session format.
+- It is not available with E2B or for Sessions created before the native Session
+  format. Ways attempt containers use their Session's proxy, with credentials of
+  their own.
 - The image `ENTRYPOINT` does not run under `egress`.
-- The container is otherwise unchanged: it may run as root, its root file system is
-  writable, it uses Podman's default seccomp profile, and on macOS the Podman VM
-  mounts your home directory.
+- With workload users the container's first process and readiness provisioning still
+  run as root; with `sandbox.workload.mode: image` every command runs as the image's
+  user, often root. The root file system is writable, the container uses Podman's
+  default seccomp profile, and on macOS the Podman VM mounts your home directory.
 - It has been tested on macOS with rootless Podman 5.8. Linux hosts, rootful Podman
   and WSL2 are not tested.
+
+### Compared with OpenShell
+
+How `network: egress` lines up with the mechanisms of a sandbox runtime such as
+NVIDIA OpenShell:
+
+| Mechanism | `network: egress` | Detail |
+| --- | --- | --- |
+| Workload without a network, supervisor over a socket | Match | The Session container has only loopback. The proxy runs in its own container, and the daemon decides each connection. |
+| Deny-by-default host and port allowlist | Match, with presets | |
+| No DNS in the workload | Stronger | There is no resolver in the container. Names resolve on your computer, after the allowlist check. |
+| SSRF and metadata block | Match | Includes IPv4 embedded in IPv6 forms and the Podman host gateways. |
+| UDP and IPv6 | Match | No interface carries them. |
+| Fail closed | Match | A lost proxy, a lost heartbeat or a decision that times out refuses connections. |
+| Enforce only | Match | There is no audit-only mode. |
+| Denial JSON with next steps | Match | `403` and `407` answers are JSON with a `hint`. |
+| Live policy change | Match for allowlists | `axocoatl network reload` applies `sandbox.egress` and `browser` allowlists to running Sessions, and an allow or revoke in **Session network** applies at once. The network mode, the sidecar network and the limits need a restart. |
+| Approve denied requests | Match, human approval only | You allow a refused host in **Session network**, or approve an Agent's `request_network_access` proposal. Nothing approves a request by itself. |
+| Audit record | Stronger | Each decision is written before the connection opens and is joined to the tool call that made it. |
+| Per-program identity | No | The record names the tool call and credential behind a connection, not the program. |
+| L7 rules and TLS termination | No | The proxy passes TLS through as an opaque tunnel. `validate` checks `sandbox.egress.routes`, but Sessions do not use them yet. |
+| Credential injection | No | A token that a command needs must be in the container. |
+| Non-root workload and seccomp hardening | Partial | With workload users, the default under `egress` with rootless Podman, Agents' commands, setup commands, terminals and required checks run as one non-root user and read-only helpers as another, neither with capabilities. The container keeps Podman's default seccomp profile. |
 
 ## Inventory egress
 
