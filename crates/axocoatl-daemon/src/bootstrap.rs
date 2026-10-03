@@ -3539,6 +3539,8 @@ pub struct AxocoatlDaemon {
     session_dispatch_lifecycles: Arc<session_dispatch::SessionDispatchRegistry>,
     /// One network record writer per Session, opened on first append.
     session_network_records: Arc<crate::session_network::SessionNetworkRecords>,
+    /// `web_search` and `web_fetch`, and the managed SearXNG behind search.
+    web_tools: Arc<crate::session_dispatch_web::WebTools>,
     /// Recovery-only primary handles used while resolving an Attempt set after
     /// restart. They must never enter the ordinary Ready fast path because
     /// they intentionally skip project setup.
@@ -5192,6 +5194,27 @@ impl AxocoatlDaemon {
                 |egress| u64::from(egress.record_max_events),
             ),
         ));
+        let web_tools = Arc::new(
+            crate::session_dispatch_web::WebTools::from_config(
+                &config,
+                &secure_data_dir,
+                &local_runtime_authority,
+                session_network_records.clone(),
+            )
+            .map_err(|error| DaemonError::Provider(format!("web tools: {error}")))?,
+        );
+        if web_tools.managed_searxng().is_some() {
+            // A SearXNG left by a daemon that did not stop cleanly holds
+            // memory until the next search would replace it.
+            let authority = local_runtime_authority.clone();
+            tokio::spawn(async move {
+                let removed =
+                    axocoatl_isolation::searxng::SearxngService::reap_orphans(&authority).await;
+                if removed > 0 {
+                    tracing::info!(removed, "removed SearXNG containers left by an earlier run");
+                }
+            });
+        }
         if let axocoatl_session::execution_ownership::DataRootFormatOwnership::Upgraded(ownership) =
             &data_dir_lease.ownership
         {
@@ -5286,6 +5309,7 @@ impl AxocoatlDaemon {
             run_store,
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             session_network_records,
+            web_tools,
             session_dispatch_lifecycles,
             attempt_recovery_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             sandbox_starts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -21946,13 +21970,13 @@ trap - 0 1 2 15
                 executor.register_builtin(tool.tool_name(), Arc::new(tool));
             }
         }
-        // Web search — offered when a provider is configured.
-        if let Some(ws) = &self.config.web_search {
-            let tool = axocoatl_tools::WebSearchTool::from_config(
-                &ws.provider,
-                ws.api_key.expose_secret(),
-            );
-            executor.register_builtin("web_search", Arc::new(tool));
+        // Web search and fetch — offered when configured. Legacy Sessions
+        // have no network record, so these calls are not recorded.
+        if let Some(tool) = self.web_tools.legacy_search_tool() {
+            executor.register_builtin("web_search", tool);
+        }
+        if let Some(tool) = self.web_tools.legacy_fetch_tool() {
+            executor.register_builtin("web_fetch", tool);
         }
         // Global MCP tools (discovered at bootstrap) are available to session
         // agents too, dispatched over the daemon's persistent connections.
@@ -22246,6 +22270,9 @@ trap - 0 1 2 15
                 ));
             }
         }
+        // Every Session is stopped, so no web call can still need the
+        // managed SearXNG. A later search would start it again.
+        self.web_tools.stop().await;
         if failures.is_empty() {
             Ok(())
         } else {
@@ -22317,6 +22344,10 @@ trap - 0 1 2 15
 #[cfg(all(test, unix))]
 #[path = "bootstrap_session_network_tests.rs"]
 mod session_network_tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_session_web_tests.rs"]
+mod session_web_tests;
 
 #[cfg(test)]
 mod tests {

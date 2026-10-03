@@ -151,6 +151,13 @@ impl AxocoatlDaemon {
         let root = Self::open_attempt_root_host(&session.working_dir, &session.id, &set.id)?;
         self.persist_native_ways_admission(set, &root, &preparation.admission)?;
         let factory = self.native_session_activation_factory(&controller)?;
+        // Like MCP tools and Skills in legacy Ways, web tools reach outside
+        // the attempt, so candidates do not get them.
+        for tool in crate::session_dispatch_web::withheld_web_tools() {
+            controller
+                .register_host_invocation_tool(tool)
+                .map_err(admission_error)?;
+        }
         let mut prepared = Vec::new();
         for (candidate, (captured, repository)) in preparation
             .admission

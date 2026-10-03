@@ -173,7 +173,29 @@ impl DispatchState {
                 }
             }
         }
+        join_web_sources(&self.canonical, &mut view);
         Ok(view)
+    }
+}
+
+/// Join the Session network record's `web` events to activations as
+/// `sources` evidence. The record is read without a lock or a writer; a
+/// record that cannot be read leaves a warning instead of that evidence.
+fn join_web_sources(
+    canonical: &SessionExecutionStore,
+    view: &mut crate::session_control_plane::SessionTurnControlPlane,
+) {
+    match axocoatl_session::network_record::NetworkRecord::read_existing_matching(
+        canonical,
+        axocoatl_session::network_record::RecordLimits::default(),
+        crate::session_dispatch_web::is_web_event,
+        crate::session_dispatch_web::projection_web_events_max(),
+    ) {
+        Ok(Some(lines)) => crate::session_dispatch_web::add_sources_evidence(view, &lines),
+        Ok(None) => {}
+        Err(error) => view.warnings.push(format!(
+            "Web sources are unavailable: the network record could not be read: {error}"
+        )),
     }
 }
 
@@ -288,6 +310,7 @@ impl SessionDispatchController {
                 },
             };
         view.expose_closed_turn_controls(snapshot)?;
+        join_web_sources(canonical, &mut view);
         Ok(view)
     }
 }

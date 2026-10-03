@@ -26,11 +26,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   special addresses (including IPv4 embedded in IPv6 forms) and unlisted private
   ones, and writes each decision to the Session's network record before answering.
   Session start does not use them yet.
-- The configuration parses `web_search.provider: searxng` with a `searxng` block, and
-  new `web_fetch` and `browser` blocks and `mcp_servers[].inherit_env`, for upcoming
-  tools. They are validated but not yet run.
+- Native `web_search` and `web_fetch` for Agents whose `tools` list them.
+  `web_search.provider: searxng` searches through a SearXNG container that Axocoatl
+  runs with local Podman (pinned image, loopback-only port, no capabilities, started
+  on the first search and removed when the daemon stops), or through your own
+  instance with `managed: false` and `url`. A `web_fetch` block enables
+  `web_fetch`, which reads one public page as numbered paragraphs. It refuses
+  private, loopback, link-local and other special addresses, including names that
+  resolve to them and every redirect hop (at most five), reads only HTML, text,
+  Markdown, JSON and XML, and caps the body at `max_bytes`. Both run on the host, not
+  in the Session container. Each result and page has a `source_id` for citations
+  (`[S1a2b3c4d]`, `[S1a2b3c4d ¶3]`), and every call appends a `web` event to the
+  Session's network record with the tool call, activation, Agent, source ids and
+  content hashes; a search records its query's hash, not its text. If the record
+  cannot be written the call fails. The turn's control plane adds `sources` evidence
+  per activation, marking which sources its final answer cites, and Team & budget
+  marks Agents that list a web tool with a **web** badge. Native Sessions refuse the
+  web tools under `sandbox.network: none`, and attempts made with Explore several
+  ways do not get them. See Configure > Web research.
+- Legacy (1.0-format) Sessions get `web_fetch` next to `web_search` when it is
+  configured, and `web_search` through SearXNG when `provider: searxng`.
+- The configuration parses new `browser` blocks and `mcp_servers[].inherit_env`, for
+  upcoming tools. They are validated but not yet run.
 
 ### Changed
+- `web_search.provider` must be `searxng` or the legacy `tavily`; any other non-empty value is
+  a configuration error, and `tavily` draws a warning because only legacy Sessions
+  use it. Native Sessions refuse `tavily`.
 - `sandbox.backend: e2b` now requires `sandbox.network: bridge` when the configuration
   loads. Before, `network: none` with E2B was accepted and refused only when a
   remote Session was prepared.

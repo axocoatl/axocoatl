@@ -198,6 +198,22 @@ impl EgressBinding {
     }
 }
 
+/// Longest URL recorded for one search result in a `web` event's `sources`.
+pub const MAX_RECORDED_SOURCE_URL_BYTES: usize = 512;
+/// Longest URL recorded in a `web` event's `url`, `final_url` or `redirects`.
+pub const MAX_RECORDED_WEB_URL_BYTES: usize = 1024;
+
+/// A search result's source id and URL, as recorded in a `web` event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebSource {
+    pub id: String,
+    pub url: String,
+    /// The URL was longer than [`MAX_RECORDED_SOURCE_URL_BYTES`] and was cut.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub url_truncated: bool,
+}
+
 /// One record event. The wire form is the contract for the network API and UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -305,6 +321,12 @@ pub enum NetworkEvent {
         text_sha256: Option<String>,
         #[serde(default)]
         source_ids: Vec<String>,
+        /// The URL behind each search result's source id, so a citation can
+        /// be joined to its page. URLs are bounded to
+        /// [`MAX_RECORDED_SOURCE_URL_BYTES`]. Empty for `web_fetch`, whose
+        /// `url` and `final_url` say the same.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sources: Vec<WebSource>,
         retrieved_at_ms: u64,
         ms: u64,
     },
@@ -751,6 +773,51 @@ impl NetworkRecord {
             })
             .collect::<Result<Vec<NetworkLine>, _>>()?;
         Ok(Some((lines, stats)))
+    }
+
+    /// Every stored line whose event `keep` accepts, oldest first, at most
+    /// `max`, read in one pass without opening a writer. Like
+    /// [`Self::read_existing`] it takes no lock, recovers nothing, creates
+    /// nothing and skips a torn tail. `Ok(None)` when the Session has no
+    /// record.
+    pub fn read_existing_matching(
+        canonical: &crate::execution_store::SessionExecutionStore,
+        limits: RecordLimits,
+        keep: impl Fn(&NetworkEvent) -> bool,
+        max: usize,
+    ) -> Result<Option<Vec<NetworkLine>>, NetworkRecordError> {
+        let bytes = match canonical.read_existing_component(
+            &ExecutionComponent::NetworkRecord,
+            Path::new(NETWORK_RECORD_FILE),
+            limits.read_ceiling(),
+        ) {
+            Ok(bytes) => bytes,
+            Err(crate::execution_store::ExecutionStoreError::Io(error))
+                if error.kind() == io::ErrorKind::NotFound =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(io::Error::other(error.to_string()).into()),
+        };
+        let loaded = load(&bytes)?;
+        let mut lines = Vec::new();
+        for line in bytes[..loaded.good_bytes as usize]
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+        {
+            if lines.len() >= max {
+                break;
+            }
+            let line: NetworkLine =
+                serde_json::from_slice(line).map_err(|error| NetworkRecordError::Damaged {
+                    line: 0,
+                    reason: error.to_string(),
+                })?;
+            if keep(&line.event) {
+                lines.push(line);
+            }
+        }
+        Ok(Some(lines))
     }
 
     pub fn stats(&self) -> RecordStats {
@@ -1292,6 +1359,11 @@ mod tests {
                 content_sha256: None,
                 text_sha256: None,
                 source_ids: vec!["S1a2b3c4d".into()],
+                sources: vec![WebSource {
+                    id: "S1a2b3c4d".into(),
+                    url: "https://example.com/".into(),
+                    url_truncated: false,
+                }],
                 retrieved_at_ms: 5,
                 ms: 1,
             },
@@ -1339,6 +1411,91 @@ mod tests {
         let tail = record.read_after(Some(9_000), 1000).unwrap();
         assert_eq!(tail.len(), 1000);
         assert_eq!(tail.last().unwrap().seq, 10_000);
+    }
+
+    fn web_event(activation: &str) -> NetworkEvent {
+        NetworkEvent::Web {
+            tool: WebTool::WebSearch,
+            invocation_id: "inv".into(),
+            activation_id: activation.into(),
+            agent: "researcher".into(),
+            decision: Decision::Allow,
+            reason: None,
+            url: None,
+            final_url: None,
+            status: None,
+            redirects: vec![],
+            query_sha256: Some("ab".repeat(32)),
+            query_bytes: Some(4),
+            results: Some(1),
+            unresponsive_engines: vec![],
+            bytes: None,
+            content_sha256: None,
+            text_sha256: None,
+            source_ids: vec!["S1a2b3c4d".into()],
+            sources: vec![WebSource {
+                id: "S1a2b3c4d".into(),
+                url: "https://example.com/".into(),
+                url_truncated: false,
+            }],
+            retrieved_at_ms: 5,
+            ms: 1,
+        }
+    }
+
+    #[test]
+    fn read_existing_matching_filters_in_one_pass_and_skips_a_torn_tail() {
+        let (_root, _ownership, store) = setup();
+        assert!(NetworkRecord::read_existing_matching(
+            &store,
+            RecordLimits::default(),
+            |_| true,
+            10
+        )
+        .unwrap()
+        .is_none());
+        let mut record = open(&store, RecordLimits::default());
+        for id in 0..2_500 {
+            let event = if id % 1_000 == 7 {
+                web_event(&format!("act-{id}"))
+            } else {
+                open_event(id, "registry.npmjs.org")
+            };
+            record.append(id, event).unwrap();
+        }
+        record.sync().unwrap();
+        // An interrupted append leaves a torn last line; a reader skips it.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(file_path(&store))
+            .unwrap()
+            .write_all(b"{\"v\":1,\"seq\":99999,\"ts_ms\":1,\"event\":{\"kind\":\"web\"")
+            .unwrap();
+        let web = NetworkRecord::read_existing_matching(
+            &store,
+            RecordLimits::default(),
+            |event| matches!(event, NetworkEvent::Web { .. }),
+            100,
+        )
+        .unwrap()
+        .unwrap();
+        let activations: Vec<String> = web
+            .iter()
+            .map(|line| match &line.event {
+                NetworkEvent::Web { activation_id, .. } => activation_id.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(activations, ["act-7", "act-1007", "act-2007"]);
+        let first_two = NetworkRecord::read_existing_matching(
+            &store,
+            RecordLimits::default(),
+            |event| matches!(event, NetworkEvent::Web { .. }),
+            2,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(first_two.len(), 2);
     }
 
     #[test]

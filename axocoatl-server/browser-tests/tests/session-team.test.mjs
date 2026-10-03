@@ -9,10 +9,12 @@ let runtime,browser,screenshots;
 before(async()=>{screenshots=await mkdtemp(join(tmpdir(),'axocoatl-session-team-'));runtime=process.env.AXOCOATL_COMPONENT_BASE_URL?{baseUrl:process.env.AXOCOATL_COMPONENT_BASE_URL,stop:async()=>{}}:await launchTestDaemon();const executablePath=await resolveChromiumExecutable();browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});});
 after(async()=>{try{await browser?.close();await runtime?.stop();}finally{if(screenshots)await rm(screenshots,{recursive:true,force:true});}});
 const template={slot_id:'slot-reviewer',template_id:'reviewer',source_slot_id:null,name:'QA reviewer <literal>',provider:'ollama',model:'local-model',instructions:'Inspect actual client changes.',max_output_tokens:128,required:true,reset_history:true,limits:null,expires_at_ms:null};
-async function fixture({theme='light',approved=false,reject=false,loseReply=false,coordinator=false,role=coordinator?'coordinator':null,helper=coordinator,legacy=false,suggested=false,checks=[],proposal=false,reviewers=[],requiredReview=null,toolless=false}={}){
+async function fixture({theme='light',approved=false,reject=false,loseReply=false,coordinator=false,role=coordinator?'coordinator':null,helper=coordinator,legacy=false,suggested=false,checks=[],proposal=false,reviewers=[],requiredReview=null,toolless=false,web=null}={}){
  const context=await newAuthorizedContext(browser, {viewport:theme==='dark'?{width:390,height:840}:{width:1100,height:820},colorScheme:theme,reducedMotion:'reduce'}),page=await context.newPage(),errors=[],calls=[];page.on('pageerror',error=>errors.push(error.message));
  const view={history_version:legacy?'legacy_v1':'execution_v2',configuration_revision:approved?1:0,slots:[{...structuredClone(template),template_id:approved?null:template.template_id,reset_history:!approved,...(approved?{limits:{activations:2,invocations:12,tokens:32768,cost_microunits:0},expires_at_ms:Date.now()+86400000}:{})}],dependencies:[],layout:[],templates:[structuredClone(template)],approved,required_checks:structuredClone(checks),suggested_check:suggested?['sh','-c','npm test']:null,reviewers,...(requiredReview?{required_review:structuredClone(requiredReview)}:{})};
  if(role){view.slots[0].role=role;view.templates[0].role=role;}
+ if(web==='template')view.web_templates=['reviewer'];
+ if(web==='slot')view.web_slots=['slot-reviewer'];
  if(helper)view.templates.push({...structuredClone(template),template_id:'worker',slot_id:'worker',name:'Worker reviewer',role:'worker'});
  if(proposal){for(const[id,name]of[['scout','Scout'],['critic','Critic']])view.templates.push({...structuredClone(template),template_id:id,slot_id:`slot-${id}`,name,role:'worker',writes:[],max_output_tokens:256});view.proposed_delegation={slot_id:'slot-reviewer',helpers:['scout','critic'],operations:['add_agent'],max_nodes:6,max_edges:5};}
  await page.route('**/team-fixture',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html data-theme="${theme}"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-session-team session="fixture-session"></ax-session-team><script type="module" src="/ui/session-team.js"></script></body></html>`}));
@@ -251,4 +253,15 @@ test('A saved required review is shown and kept exactly in the next edit',async(
   await page.getByRole('button',{name:'Edit',exact:true}).click();await review(page);
   assert.deepEqual(calls.filter(call=>call.suffix==='/preview').at(-1).body.required_review,saved);assert.deepEqual(errors,[]);
  }finally{await context.close();}
+});
+test('A slot whose Agent lists web tools shows a web badge',async()=>{
+ // A slot from a template follows the template; an applied slot its own definition.
+ for(const[options,expected]of[[{web:'template'},true],[{approved:true,web:'slot'},true],[{approved:true,web:'template'},false],[{},false]]){
+  const{page,context,errors}=await fixture(options);try{
+   const node=page.locator('ax-session-team').locator('ax-node').first();await node.waitFor();
+   const badge=node.locator('.node-badge');assert.equal(await badge.count(),expected?1:0,JSON.stringify(options));
+   if(expected){assert.equal(await badge.textContent(),'web');assert.match(await badge.getAttribute('title'),/from your computer and records/);}
+   assert.deepEqual(errors,[]);
+  }finally{await context.close();}
+ }
 });

@@ -15,6 +15,7 @@ pub mod proactive;
 pub mod scheduler;
 pub mod session_control_plane;
 pub mod session_dispatch;
+pub(crate) mod session_dispatch_web;
 pub mod session_egress;
 pub mod session_egress_policy;
 pub mod session_network;

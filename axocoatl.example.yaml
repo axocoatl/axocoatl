@@ -112,3 +112,13 @@ skills:
 #   enabled: true
 #   idle_threshold_secs: 120   # how long an agent must be idle before a pass runs
 #   interval_secs: 1800        # minimum time between passes for one agent
+
+# ─── Web research (optional) ────────────────────────────────────────
+# Agents whose `tools` list web_search or web_fetch can search the web
+# through a SearXNG container Axocoatl runs with Podman, and read public
+# pages. Both run on this computer, not in the Session container, and each
+# call is kept in the Session's network record. Search queries go to public
+# search engines. See the docs: Configure > Web research.
+# web_search:
+#   provider: searxng
+# web_fetch: {}

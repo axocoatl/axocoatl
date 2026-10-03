@@ -1,0 +1,163 @@
+---
+title: Web research
+description: Let Agents search the web through a SearXNG instance Axocoatl runs and read pages with web_fetch, with each source recorded for citation.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Agents can search the web through a SearXNG instance Axocoatl runs on your
+computer, and read pages with `web_fetch`. Both run on your computer, not in the
+Session container, and only Agents whose `tools` list them get them. Each result
+has a source id for citations, and the URL, time and content hash of every page an
+Agent reads are kept in the Session's network record. `web_fetch` refuses private
+and local addresses and checks every redirect.
+
+## Turn the tools on
+
+```yaml
+web_search:
+  provider: searxng
+  searxng:
+    managed: true        # Axocoatl runs the SearXNG container (the default)
+    engines: []          # keep only these engines; empty keeps SearXNG's defaults
+    language: all
+    safesearch: 0        # 0 off, 1 moderate, 2 strict
+    timeout_secs: 15     # 1-60
+
+web_fetch:
+  max_bytes: 4194304     # largest body read, 64 KiB-8 MiB
+  timeout_secs: 20       # whole fetch including redirects, 1-60
+```
+
+`web_search` needs `provider: searxng`; the `searxng` block is optional. The
+`web_fetch` block's presence enables `web_fetch`. `axocoatl validate` checks both
+blocks and their bounds.
+
+A managed instance needs local Podman. The first `web_search` starts a container
+named `axo-searxng-` plus a short hash of the data root, from a pinned SearXNG image
+(`docker.io/searxng/searxng:2026.10.2-19ffbcd30`, by digest). If the image is not
+present, Podman pulls it then, which can make the first search slow; pull it ahead
+with `podman pull` and the image from `web_search.searxng.image` or the pinned one.
+The container publishes its port on `127.0.0.1` only, runs with every Linux
+capability dropped and `no-new-privileges`, and has no host directory mounted.
+Axocoatl writes its settings, with a random secret kept in the data root, and
+copies them in. The daemon removes the container when it stops, and removes one
+left by an earlier run when it starts.
+
+To use an instance you already run, set `managed: false` and its `url`. Its JSON
+output format must be enabled (`search.formats` includes `json`). Axocoatl queries
+that URL as given, including a loopback or private address, because you named it.
+
+```yaml
+web_search:
+  provider: searxng
+  searxng:
+    managed: false
+    url: http://127.0.0.1:8888
+```
+
+## Give the tools to an Agent
+
+List `web_search`, `web_fetch` or both in an Agent's `tools`. The list is exact:
+an Agent that does not list a web tool is not offered it, and the default team
+lists neither. A listed tool that is not configured stops the team from being
+applied, with the reason:
+
+```text
+web_search is listed for researcher but web_search.provider is not configured; set web_search.provider: searxng
+```
+
+Read-only helpers and required reviewers follow the same rule: one gets a web
+tool only when its own template lists it. A lead cannot hand a web tool to a
+helper it adds, because a helper's tools come from its approved template. The web
+tools change nothing in the repository, so listing them does not make a
+read-only helper a writer, and the Team & budget view marks each Agent that lists
+one with a **web** badge.
+
+In native Sessions the web tools are refused when `sandbox.network` is `none`:
+they reach the internet from your computer, so they would undo that setting.
+They are also withheld from attempts made with **Explore several ways**.
+
+## Cite sources
+
+Every search result and every page `web_fetch` reads has a `source_id`, `S` plus
+eight hex digits taken from the SHA-256 of its normalized URL, so the same page
+has the same id in a search result and a fetch. `web_fetch` returns the page as
+numbered paragraphs (`¶1`, `¶2`, …) with its title, final URL, status and
+content hashes. Agents cite a claim as `[S1a2b3c4d]`, or a paragraph as
+`[S1a2b3c4d ¶3]`.
+
+A long page comes back in windows of `max_chars` characters (1,000-65,536, default
+32,768); `start_paragraph` reads the next one. HTML is reduced to its text:
+scripts, styles, `head` apart from the title, frames and embedded SVG are
+dropped. Plain text and Markdown split on blank lines; JSON and XML come back as
+one block. Other content types are refused by name.
+
+In the turn's inspector, an activation that used a web tool has **sources**
+evidence. Its summary counts the sources, how many were read and how many the
+final answer cites. Its recorded details list each source id with its URL, when
+it was retrieved, the hashes of a page that was read, and whether the final
+answer cites it. An id the answer cites that no web tool returned to that
+activation is listed as an unknown citation.
+
+## What is recorded
+
+Each call appends a `web` event to the Session's network record, readable with
+`GET /api/sessions/{id}/network`. The event names the tool, the tool call, the
+activation and the Agent, whether the call was allowed or refused and why, the
+source ids, and the time. A search records the SHA-256 and length of its query,
+not the query text, which is already in the call's recorded arguments, plus the
+result count and the engines that did not answer. A fetch records the URL, the
+final URL and each redirect, the status, the bytes read and the SHA-256 of the
+body and of the extracted text.
+
+If the record cannot be written, for example because it is full, the call fails
+and nothing it found reaches the Agent.
+
+## What leaves your computer
+
+- **Search queries.** SearXNG sends each query to public search engines from
+  Podman's default network. The model writes the queries, so anything in the
+  conversation can leave in one; treat a query like any other outbound message.
+  SearXNG's own requests to the engines are not in the network record.
+- **Fetches.** `web_fetch` requests pages from the daemon process, without any
+  proxy from the environment. It sends no credentials or cookies; it identifies
+  itself as `Axocoatl-web_fetch` in `User-Agent`.
+- **The image.** A managed instance pulls its image on first use unless it is
+  already present.
+
+None of this traffic passes through the Session container's network, and
+`sandbox.network` does not govern it apart from refusing the tools under
+`none`.
+
+## Private and local addresses
+
+`web_fetch` reads only public pages. It refuses a URL whose host is a private,
+loopback, link-local or other special address, including IPv4 written inside IPv6
+forms such as `::ffff:127.0.0.1` and numeric spellings such as `2130706433`. A host
+name is resolved on your computer, and the fetch is refused if any address it
+resolves to is not public, so a name cannot point it at your network. It follows
+at most five redirects and checks each one the same way, as well as its scheme
+and any `user:password@`. Only `http` and `https` URLs are read.
+
+<Aside type="caution">
+A public page can still contain instructions meant for the Agent that reads it.
+The web tools return text; they do not make it trustworthy. Review what an Agent
+did with what it read.
+</Aside>
+
+## Legacy Sessions and Tavily
+
+A legacy (1.0-format) Session gets `web_search` and `web_fetch` when they are
+configured, without network record events. A configuration that still names the
+hosted `tavily` provider keeps working for legacy Sessions only; native Sessions
+refuse it and `validate` warns. Use `provider: searxng`.
+
+## SearXNG
+
+[SearXNG](https://github.com/searxng/searxng) is licensed under the
+AGPL-3.0-or-later. Axocoatl runs the unmodified upstream image as a separate
+container and talks to it over HTTP. Public engines limit automated traffic, and
+SearXNG reports the ones that did not answer; `web_search` passes them on as
+`unresponsive_engines`. If one engine keeps failing, list the ones that work for
+you under `engines`.

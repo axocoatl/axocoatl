@@ -273,8 +273,9 @@ misled by what it reads in the repository. See
 [Required review](/configure/agents/#required-review).
 
 `network: none` blocks container egress and Preview ports, but does not block
-the host daemon itself from reaching model providers, MCP servers, web search,
-webhooks, a remote sandbox service, or a registry for a Podman image pull. It
+the host daemon itself from reaching model providers, MCP servers, web search in
+legacy Sessions, webhooks, a remote sandbox service, or a registry for a Podman
+image pull. Native Sessions refuse the web tools under `network: none`. It
 also prevents readiness/setup processes inside the container from downloading
 missing commands or dependencies, so use an image that already contains the
 required repository command surface.
@@ -286,7 +287,9 @@ Review every path by which content can leave the machine:
 - hosted model providers and an Ollama `base_url` that is not loopback;
 - E2B Cloud remote sandboxes, including repository transfer;
 - remote MCP servers and tools;
-- configured web search;
+- configured web search: a managed SearXNG sends model-written queries to public
+  search engines, and `web_fetch` requests public pages from the daemon process
+  (see [Web research](/configure/web/#what-leaves-your-computer));
 - event webhooks and their headers;
 - package downloads or repository scripts inside a bridged container;
 - embedding-model downloads during first use.

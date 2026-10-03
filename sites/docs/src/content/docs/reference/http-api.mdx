@@ -389,6 +389,23 @@ connections are refused; `gaps` counts places where a sequence number was skippe
 `sidecar` and `policies` stay empty until a Session runs under `network: egress`,
 which this build does not start yet.
 
+A `web` event records one `web_search` or `web_fetch` call: the `tool`, its
+`invocation_id`, `activation_id` and `agent`, the `decision` and `reason`, the
+`source_ids` it returned, `retrieved_at_ms` and `ms`. A search adds
+`query_sha256` and `query_bytes` (not the query text), `results`,
+`unresponsive_engines` and `sources` (each `{id, url}`, URLs cut to 512 bytes). A
+fetch adds `url`, `final_url`, `redirects`, `status`, `bytes`, `content_sha256` and
+`text_sha256`.
+
+```json
+{"v": 1, "seq": 7, "ts_ms": 1790000000000, "event": {"kind": "web", "tool": "web_fetch",
+  "invocation_id": "tool-…", "activation_id": "…", "agent": "…", "decision": "allow",
+  "url": "https://www.rust-lang.org/", "final_url": "https://www.rust-lang.org/",
+  "status": 200, "redirects": [], "unresponsive_engines": [], "bytes": 18234,
+  "content_sha256": "…", "text_sha256": "…", "source_ids": ["S1a2b3c4d"],
+  "retrieved_at_ms": 1790000000000, "ms": 412}}
+```
+
 ### Turn control plane
 
 The `control-plane` endpoint returns `schema_version: 1`, the source
@@ -397,6 +414,14 @@ and causal evidence. Evidence values carry an explicit `status`: `available`,
 `not_recorded`, `unknown`, `missing`, `unavailable`, or `truncated`. A truncated
 preview includes its original byte length. Clients must not turn unavailable usage
 into zero or missing output into a successful empty answer.
+
+An activation that used `web_search` or `web_fetch` has one evidence item of kind
+`sources`. Its `details.sources` lists each source id the activation received with
+`url`, `final_url`, `searched`, `fetched`, `status`, `retrieved_at_ms`,
+`content_sha256`, `text_sha256`, the `invocations` that returned it and `cited`,
+which is true when the activation's final output cites the id in square brackets
+(`[S1a2b3c4d]` or `[S1a2b3c4d ¶3]`). `details.unknown_citations` lists ids the
+output cites that no web tool returned to that activation.
 
 In a native turn, an edge of kind `delegated_by` runs from a lead's node to a helper
 node the lead admitted through `delegate`; its `summary` names the helper template and

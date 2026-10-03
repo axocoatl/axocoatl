@@ -7,6 +7,9 @@ mod driver_tests;
 #[path = "session_dispatch_knowledge_tests.rs"]
 mod knowledge_tests;
 
+#[path = "session_dispatch_host_tools_tests.rs"]
+mod host_tools_tests;
+
 const REQUEST: &str = "Produce and verify the requested change";
 const PARENT_V1: &str = "parent-final-generation-one";
 const PARENT_V2: &str = "parent-final-generation-two";
@@ -143,6 +146,15 @@ fn input_fixture_with_review(required_review: bool) -> InputFixture {
 
 /// Both Agents list exactly `tools`.
 fn input_fixture_with_tools(required_review: bool, tools: &[&str]) -> InputFixture {
+    input_fixture_with_nodes(required_review, [(tools, None), (tools, None)])
+}
+
+/// The parent and the child each list their own tools and write scope;
+/// `Some(vec![])` makes one read-only.
+fn input_fixture_with_nodes(
+    required_review: bool,
+    node_tools: [(&[&str], Option<Vec<String>>); 2],
+) -> InputFixture {
     let root = tempfile::tempdir().unwrap();
     let ownership = Arc::new(
         LegacyFormatOwnership::acquire(root.path())
@@ -190,13 +202,14 @@ fn input_fixture_with_tools(required_review: bool, tools: &[&str]) -> InputFixtu
         })
         .unwrap();
     let mut nodes = Vec::new();
-    for name in ["parent", "child"] {
+    for (name, (tools, writes)) in ["parent", "child"].into_iter().zip(node_tools) {
         let config = AgentConfig {
             id: AgentId::new(format!("{name}-conversation")),
             name: name.into(),
             provider: "controlled".into(),
             model: "controlled-model".into(),
             tools: tools.iter().map(|tool| (*tool).into()).collect(),
+            writes: writes.clone(),
             ..Default::default()
         };
         let profile = ExecutionProfile {
@@ -205,7 +218,7 @@ fn input_fixture_with_tools(required_review: bool, tools: &[&str]) -> InputFixtu
             model: config.model.clone(),
             isolation: "in-process".into(),
             tools: config.tools.clone(),
-            write_scope: None,
+            write_scope: writes,
         };
         let definition_id = AgentDefinitionId::new(name).unwrap();
         let definition = content

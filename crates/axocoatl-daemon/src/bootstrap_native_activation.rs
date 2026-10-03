@@ -40,6 +40,11 @@ impl AxocoatlDaemon {
         initial_limits: GrantLimits,
     ) -> Result<CapturedNativeDefinition, DaemonError> {
         crate::session_dispatch::validate_repository_tools(&config.tools).map_err(native_error)?;
+        // A listed host tool (web_search, web_fetch, browser) must be
+        // available before the team is admitted.
+        if let Some(reason) = self.host_tool_refusal(&config, &definition_id) {
+            return Err(DaemonError::Session(reason));
+        }
         let credentials = self.configured_native_provider_credentials();
         let config = native_agent_config(&self.config, &self.provider_registry, config)?;
         let preparation =
@@ -55,6 +60,49 @@ impl AxocoatlDaemon {
         .await
     }
 
+    /// The host tools native Session controllers register.
+    pub(crate) fn host_invocation_tools(
+        &self,
+    ) -> Vec<Arc<dyn crate::session_dispatch::HostInvocationTool>> {
+        self.web_tools.host_tools()
+    }
+
+    /// Why an Agent with `config` cannot have a host tool it lists.
+    pub(crate) fn host_tool_refusal(
+        &self,
+        config: &AgentConfig,
+        definition_id: &AgentDefinitionId,
+    ) -> Option<String> {
+        if !config
+            .tools
+            .iter()
+            .any(|tool| crate::session_dispatch::is_host_invocation_tool(tool))
+        {
+            return None;
+        }
+        let registered = self
+            .host_invocation_tools()
+            .into_iter()
+            .map(|tool| (tool.name(), tool))
+            .collect();
+        // The refusal names the Agent the person configured; the definition
+        // id is an internal identity.
+        let label = if config.name.trim().is_empty() {
+            definition_id.as_str().to_string()
+        } else {
+            config.name.clone()
+        };
+        let profile = axocoatl_session::control_authority::ExecutionProfile {
+            definition: label,
+            provider: config.provider.clone(),
+            model: config.model.clone(),
+            isolation: "in-process".into(),
+            tools: config.tools.clone(),
+            write_scope: config.writes.clone(),
+        };
+        crate::session_dispatch::host_tool_refusal(&registered, &profile)
+    }
+
     pub(crate) fn native_session_activation_factory(
         &self,
         controller: &SessionDispatchController,
@@ -63,6 +111,11 @@ impl AxocoatlDaemon {
         controller
             .attach_workspace_knowledge(self.workspace_knowledge_store(&workspace_id)?)
             .map_err(native_error)?;
+        for tool in self.host_invocation_tools() {
+            controller
+                .register_host_invocation_tool(tool)
+                .map_err(native_error)?;
+        }
         controller
             .native_provider_factory(
                 &self.data_root,
