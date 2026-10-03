@@ -129,8 +129,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - A store reopened while the daemon started a terminal or another process could fail
-  with "Resource temporarily unavailable" (os error 35), because the starting process
-  briefly shared the store's lock; it now waits up to 250 ms for the lock.
+  with "Resource temporarily unavailable" (os error 35 on macOS, 11 on Linux), because
+  the starting process briefly shared the store's lock; it now waits up to 250 ms for
+  the lock.
 
 ### Compatibility
 - A data root used with this version may be refused by 1.1.2 and earlier once a
