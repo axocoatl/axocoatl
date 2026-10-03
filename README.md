@@ -20,13 +20,19 @@ runs before a turn completes, are opt-in.
 
 ### Isolation built in
 
-- **Every Session's tools run in a sandbox.** A rootless Podman container on your
-  machine by default; E2B Cloud is an explicit remote option on the compatibility
-  path. Network access is on by default; set `sandbox.network: none` for
-  repositories you don't trust.
-- **Read-only helpers cannot write or connect out.** They get no file-writing
-  tools, and the kernel blocks their shell from changing the repository or opening
-  TCP connections (Landlock, Linux 6.7 or later). Otherwise they get no shell.
+- **Every Session's repository tools run in a sandbox.** File, shell and terminal
+  tools run in a rootless Podman container on your machine by default; E2B Cloud is
+  an explicit remote option on the compatibility path. The web and MCP tools run on
+  the host, and the browser tools in a container of their own. Network access is on
+  by default; set `sandbox.network: none` for repositories you don't trust.
+- **Read-only helpers cannot write files or open TCP connections.** They get no
+  file-writing tools, and the kernel blocks their shell from writing, creating,
+  renaming or deleting repository files and from opening TCP connections (Landlock,
+  Linux 6.7 or later). Otherwise they get no shell. A helper's shell that runs as
+  root, or any on macOS, can still change permission bits and timestamps; UDP
+  follows the sandbox's network setting; and web or browser tools its template
+  lists still reach out. See
+  [the security guide](https://docs.axocoatl.ai/operate/security/#constrain-sandbox-execution).
 - **Per-Agent write scopes in one checkout.** An Agent's file tools refuse paths
   outside its scope, and every change it made is checked against complete,
   digest-verified snapshots of the repository from before and after its work. For
@@ -246,8 +252,12 @@ role was not recorded stays archived instead of becoming future model context.
   per-turn patch.
 - **Local-first, not an offline guarantee.** Axocoatl adds no product telemetry,
   hosted control plane, or Axocoatl account. Configured providers, MCP servers, web
-  search, webhooks, E2B Cloud, Podman image or package downloads, repository traffic,
-  and the embedding-model download can use the network.
+  search and `web_fetch`, webhooks, E2B Cloud, Podman image or package downloads,
+  repository traffic, the browser tool's declared hosts and the downloads
+  `axocoatl browser install` makes, requests the daemon sends on egress routes, and
+  the embedding-model download can use the network. `sandbox.network: none` blocks
+  the local container and turns off native Sessions' web tools; the daemon's other
+  integrations remain separate paths.
 
 The exact storage, isolation, setup, recovery, and network contracts are documented
 in [`docs/PRODUCT.md`](docs/PRODUCT.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),

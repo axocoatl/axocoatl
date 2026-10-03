@@ -18,19 +18,24 @@ every grant, budget decision, activation, and tool invocation.
 Sandbox runtimes, for example NVIDIA OpenShell, control what a process can reach:
 files, network destinations, and credentials. Axocoatl runs repository tools in a
 rootless Podman container with the defaults described below. With
-`network: egress` it also controls network egress for Session containers: they
-reach only the hosts you list, through a proxy that writes each decision to the
-Session's record before the connection opens. Axocoatl implements this itself,
-rather than running Sessions in a sandbox runtime, so that it works in the Podman
+`network: egress` it also controls network egress for Session containers: an Agent's
+commands reach only the hosts and routes you list and the hosts you allow for one
+Session, through a proxy that writes each connection it allows, and each refusal of a
+connection that presents a valid credential, to the Session's record before the
+connection opens. Axocoatl implements this itself, rather than running Sessions in a
+sandbox runtime, so that it works in the Podman
 containers it already manages on macOS and Linux and so each connection is joined
 to the tool call that made it. For hosts you list as egress routes it also ends TLS
 on your computer, checks each request's method, path and query, and adds the
-route's credential there, so the token never enters the container. In a Session
+route's credential there, so the token never enters the container; a token or
+session the host issues in return can (see
+[Credentials the host issues](/configure/credentials/#responses)). In a Session
 container with [workload users](/configure/sandboxes/#workload-users), the default
 under `egress`, the record of each connection also names the program that opened it,
-with its path, SHA-256 and user, as the container's first process found it; Agents
-can neither stop that process nor stand in for it. The record names programs; it does
-not yet limit a host to some of them. See
+with its path, SHA-256 and user, when the container's first process finds it in time;
+otherwise the connection is still allowed and recorded with only its user and the
+reason. Agents can neither stop that process nor stand in for it. The record names
+programs; it does not yet limit a host to some of them. See
 [Control network egress](#control-network-egress) and
 [Compared with OpenShell](#compared-with-openshell).
 
@@ -330,11 +335,11 @@ and ports listed under `sandbox.egress`. The
 | An allowed name or listed range leads to the Podman host gateway | Refused as `forbidden_destination` even when you list a range that contains it: `192.168.127.1` and `192.168.127.254` in a Podman machine, `10.88.0.1` on Podman's default network, and the gateway of `sidecar_network`. Through them the proxy could reach services on your computer. `validate` warns about a range that contains one. |
 | An allowed name resolves to another private address | Refused as `private_destination` unless you list the range. |
 | A container's own resolver is poisoned | Not used: names resolve on your computer, after the allowlist check. |
-| A command needs a token for a host, such as a `git push` or an API call | Under a [route](/configure/credentials/) the daemon adds the credential to the requests the route's rules allow. The token is never in the Session container, the proxy container, the record or the logs. Without a route, the token must be in the container. |
+| A command needs a token for a host, such as a `git push` or an API call | Under a [route](/configure/credentials/) the daemon adds the credential to the requests the route's rules allow. The token is never in the Session container, the proxy container, the record or the logs. A credentialed route removes `Set-Cookie` from responses, but a token the host issues in a response body, such as from a login or `/token` endpoint the rules allow, reaches the container. Without a route, the token must be in the container. |
 | A command uses an allowed host for something else: another repository, a delete, another site on the same CDN | For a route's host each request's method, path and query must match the route's rules, and the TLS server name and `Host` must be the route's host; anything else gets a JSON refusal, is recorded, and is never sent. A host listed only under `allow` is an opaque tunnel. |
 | A read-only helper or required check uses the network | They get no credential; a helper's TCP connection to the proxy is refused by Landlock. With workload users, the default under `egress`, a helper runs as a user of its own: it cannot read a running writer's credential under `/proc`, and the proxy's socket is in a directory only root can enter. With `sandbox.workload.mode: image`, a direct connection to the proxy's socket gets `407`, which is recorded. |
-| You need to know which program made a connection | With workload users each connection's record names the program that opened it: its path, the SHA-256 of its file, its user and group, and its parent programs, found by the container's first process in `/proc`. The workload users cannot reach the proxy's socket, and a line a program writes to claim another identity is refused. A program made to act for another, for example with `LD_PRELOAD`, is named as itself. |
-| A command uses kernel interfaces to inspect other processes or leave the container: `ptrace`, user namespaces, `io_uring`, keyrings, mounts | With workload users, every process of an Agent's tool call in a native Session and every required check runs under Axocoatl's seccomp filter, on top of Podman's, which refuses them, and in a Landlock domain of its own, so it cannot read the memory or environment of a process it did not start. Terminals you open and setup commands run without the filter. |
+| You need to know which program made a connection | With workload users each connection's record names the program that opened it: its path, the SHA-256 of its file, its user and group, and its parent programs, found by the container's first process in `/proc`. The workload users cannot reach the proxy's socket, and a line a program writes to claim another identity is refused. A program made to act for another, for example with `LD_PRELOAD`, is named as itself. When the first process cannot find or read the program in time, the connection is still allowed and recorded with only its user and the reason (`timeout`, `not_found` or `no_access`); **Session network** shows it as an unknown program. |
+| A command uses kernel interfaces to inspect other processes or leave the container: `ptrace`, user namespaces, `io_uring`, keyrings, mounts | With workload users, every process of an Agent's tool call in a native Session and every required check runs under Axocoatl's seccomp filter, on top of Podman's, which refuses them, and in a Landlock domain of its own, so it cannot read the memory or environment of a process it did not start. Terminals you open, setup commands, background tasks you start and Ways checks run without the filter. |
 | A process started during setup keeps running afterwards | Its credential ended with the setup step; each later attempt gets `407 unknown_credential`. The first 20 are recorded with the old credential's tag, then one every 5 seconds, and the rest are counted in a `limit` event, so the process cannot fill the record. |
 | A credential ends, or a host is revoked, while a connection is being decided | The connection is refused before its tunnel opens (`407 binding_ended`, `403 not_allowed` or `403 revoked`). |
 | The proxy stops or its control channel breaks | Connections are refused (`502` from the bridge, or `503` from the proxy) and connections in progress are recorded as `interrupted`. |
@@ -358,7 +363,16 @@ What `egress` does not do:
   from `/proc`.
 - The program named in the record is the one that opened the connection. Allow
   entries and routes cannot be limited to some programs, and a program can be made to
-  act for another (`LD_PRELOAD`, an interpreter, a connection passed to a child).
+  act for another (`LD_PRELOAD`, an interpreter, a connection passed to a child). The
+  first process looks for the program for at most 100 ms and in at most 4096
+  processes, lowest ids first; when it cannot find or read it, the connection is still
+  allowed and recorded with only its user and the reason (`timeout`, `not_found` or
+  `no_access`). The record is not complete attribution.
+- `for` on a route tells processes apart by the kind of credential they present, not
+  by who controls them. Agents' commands share the writer's user, home directory and
+  Workspace with terminals and setup commands, so an Agent can leave code that a
+  terminal or setup step runs later and use a `for: [terminal]` or `for: [setup]` route
+  that way; see [Who `for` keeps out](/configure/credentials/#who-for-keeps-out).
 - The browser's declared hosts and the Session's list are told apart by the
   credential presented, not by the container. While a `browser_check` call runs, its
   test holds the browser's credential and can pass it to the Session container; see
@@ -383,9 +397,10 @@ What `egress` does not do:
 - With workload users the container's first process and readiness provisioning still
   run as root, and keep `CAP_SYS_PTRACE` to name programs; with
   `sandbox.workload.mode: image` every command runs as the image's user, often root.
-  The root file system is writable; terminals you open, setup commands and, without
-  workload users, every command have only Podman's default seccomp profile; and on
-  macOS the Podman VM mounts your home directory.
+  The root file system is writable; terminals you open, setup commands, background
+  tasks you start, Ways checks and, without workload users, every command have only
+  Podman's default seccomp profile; and on macOS the Podman VM mounts your home
+  directory.
 - It has been tested on macOS with rootless Podman 5.8. Linux hosts, rootful Podman
   and WSL2 are not tested.
 
@@ -406,11 +421,11 @@ NVIDIA OpenShell:
 | Denial JSON with next steps | Match | `403` and `407` answers are JSON with a `hint`. |
 | Live policy change | Match for allowlists and routes | `axocoatl network reload` applies `sandbox.egress` and `browser` allowlists, routes and credentials to running Sessions, and an allow or revoke in **Session network** applies at once. The network mode, the sidecar network and the limits need a restart. |
 | Approve denied requests | Match, human approval only | You allow a refused host in **Session network**, or approve an Agent's `request_network_access` proposal. Nothing approves a request by itself. |
-| Audit record | Stronger | Each decision is written before the connection opens, and each request on a route before it is sent; both are joined to the tool call that made them. |
-| Per-program identity | Partial: recorded, not enforced | With workload users, the default under `egress` with rootless Podman, each connection's record names the program that opened it (path, SHA-256, user and parents), as the container's first process found it. Allow entries and routes cannot yet be limited to programs. As with any such identity, a program can be made to act for another. |
+| Audit record | Stronger | Each allowed connection, and each refusal of one that presents a valid credential, is written before the connection opens, and each request on a route before it is sent; both are joined to the tool call that made them. Refusals without a valid credential are rate-limited and counted. |
+| Per-program identity | Partial: recorded, not enforced | With workload users, the default under `egress` with rootless Podman, each connection's record names the program that opened it (path, SHA-256, user and parents), as the container's first process found it. When it cannot find the program in time, the connection is still allowed and recorded with only its user and the reason. Allow entries and routes cannot yet be limited to programs. As with any such identity, a program can be made to act for another. |
 | L7 rules and TLS termination | Match for REST over HTTP/1.1 | For hosts under `sandbox.egress.routes`, TLS ends in the daemon with a certificate from an authority made for the Session, and each request's method, path and query must match the route's rules; the server name and `Host` must be the route's host. No WebSocket, GraphQL, MCP or JSON-RPC rules. Hosts listed only under `allow` stay opaque tunnels. |
-| Credential injection | Match for header credentials | The daemon reads a route's credential when a request needs it and adds it as `Authorization` or a named header; it never enters a container. No query, path or body rewriting, SigV4 or OAuth token grants. |
-| Non-root workload and seccomp hardening | Match for Agents' commands | With workload users, the default under `egress` with rootless Podman, Agents' commands, setup commands, terminals and required checks run as one non-root user and read-only helpers as another, neither with capabilities. Agents' tool calls and required checks also run under a seccomp denylist from Axocoatl's supervisor, on top of Podman's profile, each in a Landlock domain of its own. Terminals you open and setup commands run as the non-root writer without that filter. |
+| Credential injection | Match for header credentials | The daemon reads a route's credential when a request needs it and adds it as `Authorization` or a named header; it never enters a container. A token or session the host issues in return does, unless it comes as a cookie, which credentialed routes remove. No query, path or body rewriting, SigV4 or OAuth token grants. |
+| Non-root workload and seccomp hardening | Match for Agents' commands | With workload users, the default under `egress` with rootless Podman, Agents' commands, setup commands, terminals and required checks run as one non-root user and read-only helpers as another, neither with capabilities. Agents' tool calls and required checks also run under a seccomp denylist from Axocoatl's supervisor, on top of Podman's profile, each in a Landlock domain of its own. Terminals you open, setup commands, background tasks you start and Ways checks run as the non-root writer without that filter. |
 
 ## Inventory egress
 

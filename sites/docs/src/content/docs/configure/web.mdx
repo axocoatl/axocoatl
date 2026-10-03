@@ -150,7 +150,11 @@ global IPv6 address, and a server may have a public IPv4 address; either reaches
 every service listening on all interfaces, such as a development server or a
 database. So `web_fetch` also refuses any address of your computer's own network
 interfaces, read again for every fetch, and any address on a network one of them is
-directly connected to (the interface's prefix, such as your home network's `/64`).
+directly connected to (the interface's prefix, such as your home network's `/24` or
+`/64`). A network counts as directly connected only when its prefix is `/16` or longer
+for IPv4, or `/48` or longer for IPv6; on an interface with a wider prefix, such as a
+`/8`, only the interface's own address is refused. A point-to-point link, as many VPNs
+use, has no network of its own, so only its own address is refused.
 
 A host name is resolved on your computer, and the fetch is refused if any address
 it resolves to is refused, so a name cannot point it at your computer or the

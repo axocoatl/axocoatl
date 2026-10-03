@@ -21,7 +21,9 @@ usage, verdict and findings stay in the Session.
 
 Add a read-only Worker template with the stronger model. `writes: []` makes it
 read-only, which a required reviewer must be: it is not offered `write_file` or
-`edit_file`, and its `bash` runs where it cannot change the repository.
+`edit_file`, and its `bash` runs where it cannot write, create, rename or delete
+repository files (see [Security](/operate/security/#constrain-sandbox-execution) for
+what that leaves open).
 
 <Tabs>
 <TabItem label="Bigger local model (Ollama)">

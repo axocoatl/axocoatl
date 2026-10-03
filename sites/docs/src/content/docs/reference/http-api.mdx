@@ -406,7 +406,8 @@ route, each HTTP request is a `request` event written before the request is sent
 (`conn`, `seq_in_conn`, `method`, `path` without its query, `host`, the `rule` that
 allowed it, `decision`, `reason`, and the `credential`'s name, never its value), and
 a `response` event says how an allowed one ended (`status`, `up`, `down`, `ms`,
-`outcome`). `record.full` means new
+`outcome`, and `cookies_dropped` when a credentialed route removed `Set-Cookie` or
+`Set-Cookie2` fields). `record.full` means new
 connections are refused; `gaps` counts places where a sequence number was skipped.
 An `open` or `close` event's `conn` is `g<generation>:<id>`; generations continue
 across proxy restarts and runtime starts, so `conn` is unique in one record. A

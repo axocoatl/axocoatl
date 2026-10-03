@@ -25,9 +25,11 @@ turn completes, are opt-in.
 
 <CardGrid>
   <Card title="Isolation built in" icon="padlock">
-    Every Session's tools run in a rootless Podman container. Read-only helpers get no
-    file-writing tools, and the kernel blocks their shell from changing the repository
-    or opening TCP connections (Landlock, Linux 6.7 or later); otherwise they get no shell. Per-Agent write scopes
+    Every Session's repository tools run in a rootless Podman container; the web and
+    MCP tools run on the host. Read-only helpers get no file-writing tools, and the
+    kernel blocks their shell from writing, creating, renaming or deleting repository
+    files or opening TCP connections (Landlock, Linux 6.7 or later); otherwise they get
+    no shell. Per-Agent write scopes
     share one checkout, and every change is checked against complete, digest-verified
     snapshots. [Where the boundary stops →](/operate/security/#what-axocoatl-controls-and-what-it-does-not)
   </Card>

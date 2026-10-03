@@ -102,7 +102,7 @@
       <div class="section-head">
         <span class="eyebrow">Isolation built in</span>
         <h2>Tools run in a sandbox. One Agent writes.</h2>
-        <p>Every Session's tools run in a rootless Podman container. Read-only helpers get no file-writing tools, and the kernel blocks their shell from changing the repository (Landlock, Linux 6.2 or later); otherwise they get no shell.</p>
+        <p>Every Session's repository tools run in a rootless Podman container. Read-only helpers get no file-writing tools, and the kernel blocks their shell from writing, creating, renaming or deleting repository files and from opening TCP connections (Landlock, Linux 6.7 or later); otherwise they get no shell.</p>
       </div>
 
       <div class="stack">

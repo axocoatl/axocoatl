@@ -303,8 +303,11 @@ private destination must be wholly private (such as `10.0.0.0/8` or `fd00::/8`).
 Loopback, link-local, multicast, documentation and other special ranges are refused,
 including IPv4 addresses embedded in IPv6 forms. Validation warns about wildcard
 entries, CDN-fronted presets (a tunnel to them can reach other sites on the same
-CDN) and hosts that accept uploads (`github`, `npm`, `pypi`, `crates`). An `egress`
-block under another network mode is ignored with a warning. Native repository tools and required checks need local Podman. E2B supports
+CDN) and hosts that accept uploads (`github`, `npm`, `pypi`, `crates`). Under
+another network mode, `allow`, `private_destinations` and `routes` do nothing, and
+validation warns about them. The browser's own proxy still uses `sidecar_network` and
+`max_connections` there (see [Browser](/configure/browser/)), and `record_max_events`
+caps the Session network record in every mode. Native repository tools and required checks need local Podman. E2B supports
 compatibility execution; it does not implement the native supervised command boundary.
 For E2B:
 
@@ -354,6 +357,7 @@ sandbox:
           - {methods: [POST], path: "/acme/app.git/git-upload-pack"}
         env_placeholders: [GITHUB_TOKEN]
         allow_encoded_responses: false
+        allow_set_cookie: false      # true passes Set-Cookie on a credentialed route
         max_request_bytes: 1073741824
       - host: registry.npmjs.org
         access: read-only            # GET, HEAD, OPTIONS; or full
@@ -373,8 +377,10 @@ variables); an `upstream_ca` that is not an owner-only regular file holding a PE
 certificate; and `max_request_bytes` outside 1 KiB-1 TiB. At most 64 routes, 64 rules
 per route, 16 methods and 16 query parameters per rule. It warns when a credentialed
 route allows every path (a `**` rule, `access: read-only` or `access: full`), when it
-passes compressed responses, and when a route's host is also allowed by `allow` or a
-preset.
+passes compressed responses or `Set-Cookie`, and when a route's host is also allowed by
+`allow` or a preset. A refusal does not repeat a value written in a credential's
+`env` or `file`, `inject.format` or `inject.basic.username`, where a pasted token may
+be.
 
 ### sandbox.workload
 

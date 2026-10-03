@@ -143,9 +143,13 @@ Use an attachment when the Agent needs an immutable copy of an external file.
 | Files, Terminal, or Preview reports a lifecycle conflict | Review or rebuild the Session environment and wait for Ready; the tool will not fall back to the host |
 
 <Aside type="note" title="Network policy still applies">
-Exposing a port publishes a service from the Session sandbox. A sandbox with
-`network_mode: none` cannot publish ports, and no Preview setting bypasses that
-boundary.
+Under `sandbox.network: bridge`, exposing a port publishes a service from the Session
+sandbox. A sandbox with `sandbox.network: none` cannot publish ports, and no Preview
+setting bypasses that boundary. Under `sandbox.network: egress` the Session container
+publishes nothing: a service forwarder (`axo-svc-<session>`) serves each exposed port
+as a socket, and a Preview container (`axo-pvw-<session>`) publishes those sockets on
+your computer's loopback address; see
+[Network egress](/configure/sandboxes/#network-egress).
 </Aside>
 
 Continue with [Explore several Ways →](/workbench/ways/)

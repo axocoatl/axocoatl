@@ -8,11 +8,14 @@ durable, folder-anchored Session: conversation stays at the center while Files,
 Source Control, Preview, Terminal, History, Agent activity, and Settings open
 around it.
 
-- Isolation built in: every Session's tools run in a rootless Podman container
-  (E2B Cloud is an explicit remote option on the compatibility path). Read-only
-  helpers cannot write: they get no file-writing tools and the kernel blocks their
-  shell from changing the repository or opening TCP connections (Landlock, Linux
-  6.7 or later); otherwise they get no shell. Per-Agent write scopes share one checkout, and every change is
+- Isolation built in: every Session's repository tools (file, shell, terminal) run
+  in a rootless Podman container (E2B Cloud is an explicit remote option on the
+  compatibility path); the web and MCP tools run on the host, and the browser tools
+  in a container of their own. Read-only helpers cannot write files: they get no
+  file-writing tools and the kernel blocks their shell from writing, creating,
+  renaming or deleting repository files or opening TCP connections (Landlock, Linux
+  6.7 or later); otherwise they get no shell. Run as root, or on macOS, that shell
+  can still change permission bits and timestamps. Per-Agent write scopes share one checkout, and every change is
   checked against complete, digest-verified snapshots taken before and after the
   Agent's work. For an Agent with a shell that check is review evidence, not
   confinement. Container network access is on by default.
@@ -156,12 +159,15 @@ against an authorized tool making an unwanted change within that Workspace.
 
 Axocoatl adds no product telemetry, hosted control plane, or Axocoatl account.
 Local-first does not mean every configured path is offline. Hosted model
-providers, MCP servers, web search, webhooks, the optional E2B Cloud sandbox,
-Podman image and package downloads, repository traffic, and the one-time Hugging
-Face embedding-model download can use the network. Container network access is
-on by default (`sandbox.network: bridge`); set `sandbox.network: none` for
-repositories you don't trust. `none` blocks only code and commands inside the
-local Podman sandbox; daemon-side integrations remain separate paths.
+providers, MCP servers, web search and `web_fetch`, webhooks, the optional E2B
+Cloud sandbox, Podman image pulls, package downloads and repository traffic, the
+hosts declared for the browser tool and the downloads `axocoatl browser install`
+makes, requests the daemon sends on egress routes, and the one-time Hugging Face
+embedding-model download can use the network. Container network access is on by
+default (`sandbox.network: bridge`); set `sandbox.network: none` for repositories
+you don't trust. `none` blocks code and commands inside the local Podman sandbox,
+turns off native Sessions' `web_search` and `web_fetch`, and leaves the browser only
+the app under test; the daemon's other integrations remain separate paths.
 
 ## Selected interfaces
 

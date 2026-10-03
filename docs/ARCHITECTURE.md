@@ -1060,21 +1060,35 @@ agent:**
 - **Privileges.** The container runs with `--security-opt=no-new-privileges` and
   drops the escape/recon capabilities (`SYS_ADMIN`, `SYS_PTRACE`, `NET_ADMIN`,
   `NET_RAW`, `DAC_READ_SEARCH`, …), so a setuid binary can't escalate and the
-  classic namespace/mount escape levers are gone.
+  classic namespace/mount escape levers are gone. A hardened `network: egress`
+  container keeps `SYS_PTRACE` for its first process (and root's readiness commands),
+  which reads `/proc` to name the program behind each proxied connection; the workload
+  users run Agents' commands and helpers without capabilities. See
+  [`sandbox.workload`](https://docs.axocoatl.ai/configure/sandboxes/#workload-users).
 - **Network.** The default is bridged networking so installs and development
   servers work. Set `sandbox.network: none` for repositories you do not trust, or
   whenever repository code and commands in the local container must have no
   outbound connection; this also disables
-  network-dependent setup and commands in that container. Only `bridge` and `none`
-  are accepted; any other value fails config validation, `axocoatl doctor` and daemon
-  start rather than falling back to bridge. Every `podman run` passes
+  network-dependent setup and commands in that container. `sandbox.network: egress`
+  gives the container only loopback and Axocoatl's egress proxy, which reaches only
+  the hosts under `sandbox.egress` and records each connection; see
+  [Network egress](https://docs.axocoatl.ai/configure/sandboxes/#network-egress) and
+  [the security guide](https://docs.axocoatl.ai/operate/security/#control-network-egress).
+  Only `bridge`, `none` and `egress` are accepted; any other value fails config
+  validation, `axocoatl doctor` and daemon start rather than falling back to bridge.
+  Every `podman run` passes
   `--http-proxy=false`, so the host's proxy variables (which can hold a proxy user
   name and password) are not copied into the container. It does not govern
-  daemon-side model providers, MCP, web search, webhooks, remote sandboxes, the
-  embedding-model download, or image-registry access. Configured Preview ports
+  daemon-side model providers, MCP, `web_search` and `web_fetch` (which run in the
+  daemon), webhooks, remote sandboxes, the embedding-model download, or
+  image-registry access. The browser tools run in a container of their own that
+  reaches the Session's exposed ports and, through the egress proxy, the hosts under
+  `browser.allow`. Configured Preview ports
   remain logical container-port identities; local Podman assigns each Session its
   own loopback host mapping, and the Session-aware proxy resolves that mapping
-  without exposing arbitrary host services.
+  without exposing arbitrary host services. Under `egress` the Session container
+  publishes nothing: a service forwarder serves each port as a socket and a separate
+  Preview container publishes it.
 - **Resources.** Memory, CPU, and PID caps (2 GB / 2 CPUs / 512 pids) bound a
   runaway loop or fork bomb, where the host's cgroup delegation allows it. With the
   default `require_resource_limits: false`, a host that cannot apply them starts the

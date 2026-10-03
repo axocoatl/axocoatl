@@ -24,10 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Podman machine, `10.88.0.1`, and the gateway of `sidecar_network`) even inside a
   listed range; other private addresses are refused unless listed. A credential that
   ends, or a host that is revoked, while a connection is being decided admits
-  nothing. Every allowed or refused connection is written to the Session's network
-  record before it opens; refusals of connections without a valid credential are
-  recorded up to 20 at once and then one every 5 seconds, and the rest are counted in
-  a `limit` event, so a process in the container cannot fill the record. When the
+  nothing. Every allowed connection, and every refusal of a connection with a valid
+  credential, is written to the Session's network record before it opens; refusals of
+  connections without a valid credential are recorded up to 20 at once and then one
+  every 5 seconds, and the rest are counted in a `limit` event, so a process in the
+  container cannot fill the record. When the
   record is full, setup commands, provisioning and terminals still run, without
   network. The Session container's first process is Axocoatl's bridge, which serves
   only the proxy, so the image `ENTRYPOINT` does not run. The Session container holds
@@ -40,7 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   proxy and decision point, with credentials of their own that the network record
   names with the attempt (`binding.attempt_id`). `validate`, `doctor` and daemon start warn about wildcard entries,
   CDN-fronted presets, hosts that accept uploads and ranges that contain a Podman host
-  gateway. When Axocoatl's config file is inside a Session's Workspace, **Session
+  gateway. Under `bridge` and `none` they warn that `allow`, `private_destinations`
+  and `routes` do nothing; the browser's own proxy still uses `sidecar_network` and
+  `max_connections`, and `record_max_events` caps the network record in every mode.
+  `doctor` says what an Agent's commands reach: the `allow` list, the route hosts and
+  hosts allowed for one Session, while readiness provisioning reaches the Alpine,
+  Debian and Ubuntu mirrors. When Axocoatl's config file is inside a Session's Workspace, **Session
   network** and `GET /api/sessions/{id}/network` warn that Agents can read it. See the
   Sandboxes and Security pages for what it does not cover.
 - `sandbox.workload` (`mode: auto | hardened | image`, `writer_user`, `helper_user`).
@@ -81,7 +87,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `web_fetch`, which reads one public page as numbered paragraphs. It refuses
   private, loopback, link-local and other special addresses, this computer's own
   interface addresses (such as its global IPv6 address) and addresses on a network
-  it is directly connected to, including names that resolve to them and every
+  it is directly connected to (an IPv4 prefix of /16 or longer, an IPv6 prefix of /48
+  or longer, never a point-to-point link), including names that resolve to them and every
   redirect hop (at most five), reads only HTML, text, Markdown, JSON and XML, and
   caps the body at `max_bytes`. Both run on the host, not in the Session container.
   Each result and page has a `source_id` for citations (`[S1a2b3c4d]`,
@@ -200,7 +207,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path (no dot segments, including `..;` path-parameter forms, and no escaped or
   twice-escaped separators), ask for no upgrade, carry no method, URL or host override
   header (`X-HTTP-Method-Override`, `X-Original-URL`, `Forwarded`, `X-Forwarded-*` and
-  the like) and match the route's rules (methods, path globs with `*` and `**`,
+  the like, also with `_` in place of `-`) and match the route's rules (methods, path globs with `*` and `**`,
   required query parameters, which a raw `;` in the query never satisfies) or an
   `access` preset; anything else gets a JSON refusal naming the missing rule. A route's
   credential comes from an environment variable of the daemon or an owner-only file
@@ -208,8 +215,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Authorization: Basic` or a named header after the client's own credentials are
   removed; it never enters a container, the egress proxy, the record or the logs.
   Credentialed routes refuse compressed responses unless `allow_encoded_responses` is
-  set, and stop a response whose status line, headers, body or trailers carry the
-  credential before that part reaches the client. Every route request is written to
+  set, stop a response whose status line, headers, body or trailers carry the
+  credential before that part reaches the client, and remove `Set-Cookie` and
+  `Set-Cookie2` unless `allow_set_cookie` is set, counting them in the `response`
+  event (`cookies_dropped`). A token the host issues in a response body, such as from
+  a login or `/token` endpoint the rules allow, is not the credential and reaches the
+  container. Every route request is written to
   the Session's network record before it is sent (`request`), and how it ended after
   (`response`); a relayed connection's `close` says why the daemon ended it (for
   example `sni_mismatch`). Activation evidence and **Session network** list them.
@@ -219,7 +230,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`,
   `CARGO_HTTP_CAINFO`, `NODE_EXTRA_CA_CERTS` and `DENO_CERT` to it, plus each route's
   `env_placeholders`. Validation refuses `${...}` and plain values in `credentials`
-  and routes, warns about credentialed routes that allow every path and about stdio
+  and routes without repeating a value written in `credentials.<name>.env`, `file`,
+  `inject.format` or `inject.basic.username`, warns about credentialed routes that
+  allow every path (including login and token endpoints), set `allow_set_cookie` or
+  `allow_encoded_responses`, and about stdio
   MCP servers that inherit `env` credentials, and `axocoatl doctor` reports routes
   and whether each credential's variable or file is there. See Configure >
   Credentials and routes.
@@ -242,7 +256,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   features were on, and doctor reported it OK, although native Sessions refuse such a
   server. Onboarding now asks for the Ollama server URL and checks that it is a
   loopback address, runs Ollama 0.20.6 and reports its cloud features disabled in
-  `GET /api/status`. When a check fails it says which one and how to fix it: add
+  `GET /api/status`. A URL that is not a loopback address is refused and asked for
+  again. When another check fails it says which one and how to fix it: add
   `{"disable_ollama_cloud": true}` to `~/.ollama/server.json`, or start the server
   with `OLLAMA_NO_CLOUD=1`, then restart Ollama. It offers to check again, to use a
   different server URL, or to continue. Doctor reports each of these requirements as
@@ -270,8 +285,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A data root used with this version may be refused by 1.1.2 and earlier once a
   Session has a network record, because they do not know the record's directory.
 - Removing a Session's runtime now also removes its `axo-egr-`, `axo-brw-`, `axo-pvw-`
-  and `axo-svc-` containers, and deleting it also removes its `axo-egr-` and `axo-svc-`
-  volumes. Removing a Session container also removes containers that joined its
+  and `axo-svc-` containers, and deleting it also removes its `axo-egr-`, `axo-egi-`,
+  `axo-svc-` and `axo-ca-` volumes. Removing a Session container also removes containers that joined its
   network namespace (`podman rm --depend`).
 
 ### Security
@@ -317,7 +332,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **No TCP for read-only shells.** The `bash` commands of a read-only helper or required
   reviewer (`writes: []`) can no longer open a TCP connection or bind a TCP port, on any
-  address including loopback, as well as being unable to change the repository. The
+  address including loopback, as well as being unable to write, create, rename or
+  delete repository files. The
   kernel refuses both through Landlock network rules, whatever the sandbox's `network`
   setting. Landlock does not cover UDP, so name lookups and other UDP traffic still
   follow `network`, nor a socket that listens on a random port without binding first.
@@ -431,7 +447,8 @@ harness adapter and the `axocoatl-coordination` crate.
   the restart came before the helper was admitted. Older helper answers stay whole in
   later requests until the context runs short. A helper must be read-only: its template
   has no tool that writes files or runs commands, or it has `writes: []`, which withholds
-  `write_file` and `edit_file` and runs its `bash` where it cannot change the repository.
+  `write_file` and `edit_file` and runs its `bash` where it cannot write, create, rename
+  or delete repository files.
   Any other helper is refused, and the refusal says to set `writes: []` on it.
   A Coordinator template in a native Session team runs as such a lead over its approved
   Worker templates. Legacy Sessions keep the Coordinator's own decomposition. The Agent

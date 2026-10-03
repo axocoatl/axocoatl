@@ -136,10 +136,11 @@
       <article class="release">
         <span class="release-tag">v1.1.1</span>
         <span class="release-date">2026-10-01</span>
-        <h2>Read-only helpers cannot connect out.</h2>
+        <h2>Read-only shells cannot open TCP connections.</h2>
 
-        <p>The shell of a read-only helper or required reviewer can neither change the
-          repository nor open or accept TCP connections. The kernel enforces both.</p>
+        <p>The shell of a read-only helper or required reviewer can neither write, create,
+          rename or delete repository files nor connect or bind over TCP. The kernel
+          enforces both. UDP still follows the sandbox's network setting.</p>
 
         <h3>Added</h3>
         <ul>

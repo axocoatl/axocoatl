@@ -42,8 +42,9 @@ only when it:
 - reports its cloud features disabled in `GET /api/status`
   (`"cloud": {"disabled": true}`).
 
-If the server fails a check, the wizard says which one and offers to check
-again, to use a different server URL, or to continue with this one. Native
+A URL that is not a loopback address is refused, and the wizard asks for the URL
+again. If the server fails another check, the wizard says which one and offers to
+check again, to use a different server URL, or to continue with this one. Native
 Sessions refuse that server until it is fixed, and `axocoatl doctor` reports it
 as a failure. To turn Ollama's cloud features off, do one of these and restart
 Ollama:

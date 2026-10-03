@@ -171,13 +171,14 @@ that resolves to a refused address gets `403` with `private_destination` or
 host, while its connection is being decided, the connection is refused; one already
 open is closed.
 
-Every connection the proxy allows or refuses is written to the Session's network
-record before it opens, with the host, port and the tool call whose credential it
-presented. Bytes and duration are added when it closes. If the record cannot be
-written, the connection is refused. Refusals of connections without a valid
-credential, which any process in the container can cause, are recorded one by one
-up to 20 at once and then one every 5 seconds; the others are counted in a `limit`
-event once a minute, so they cannot fill the record. The record's cap
+Every connection the proxy allows, and every refusal of a connection with a valid
+credential, is written to the Session's network record before it opens, with the
+host, port and the tool call whose credential it presented. Bytes and duration are
+added when it closes. If the record cannot be written, the connection is refused.
+Refusals of connections without a valid credential, which any process in the
+container can cause, are recorded one by one up to 20 at once and then one every 5
+seconds; the others are counted in a `limit` event once a minute, so they cannot fill
+the record. The record's cap
 (`record_max_events`) applies to the Session for as long as it exists, across
 runtime restarts. Once it is reached, new connections get `503 record_unavailable`
 until you raise the cap and restart the daemon; setup commands, provisioning and
@@ -341,7 +342,11 @@ What it does not cover:
   `LD_PRELOAD`, through an interpreter, or by passing an open connection to another
   process, so the identity says which program opened a connection, not what it sent.
   A program run from a mount namespace of its own is named only by its user and its
-  file's SHA-256. The record names programs; allow entries and routes cannot yet be limited
+  file's SHA-256. The first process looks for the program for at most 100 ms and in at
+  most 4096 processes, lowest ids first. When it cannot find or read the program in
+  time, the connection is still allowed and recorded with only its user and the reason
+  (`timeout`, `not_found` or `no_access`), and **Session network** shows it as an
+  unknown program. The record names programs; allow entries and routes cannot yet be limited
   to programs. The browser's connections come from its own container and name no
   program.
 - The seccomp filter needs Landlock (Linux 5.13 or later, which Podman machine has);
