@@ -716,6 +716,13 @@ async fn write_scope_lookup_fails_closed() {
 }
 
 pub(super) async fn actual_sandbox(f: &mut Fixture) -> Arc<axocoatl_isolation::SessionSandbox> {
+    actual_sandbox_with(f, None).await
+}
+
+async fn actual_sandbox_with(
+    f: &mut Fixture,
+    workload: Option<axocoatl_isolation::WorkloadUsers>,
+) -> Arc<axocoatl_isolation::SessionSandbox> {
     use axocoatl_isolation::{SandboxNetwork, SandboxPolicy, SessionSandbox};
     use sha2::{Digest, Sha256};
     let image =
@@ -734,6 +741,7 @@ pub(super) async fn actual_sandbox(f: &mut Fixture) -> Arc<axocoatl_isolation::S
                 .child("execution-supervisors")
                 .unwrap(),
         ),
+        workload,
         ..SandboxPolicy::default()
     };
     let sandbox = Arc::new(
@@ -760,6 +768,63 @@ pub(super) async fn actual_sandbox(f: &mut Fixture) -> Arc<axocoatl_isolation::S
             .insert(inner.metadata.session_id.clone(), registered);
     }
     sandbox
+}
+
+/// In a hardened Session container a writer's tools run as the writer user
+/// and every process of a read-only helper as the helper user, both without
+/// capabilities; the host's captures of the helper's work still run as the
+/// writer, so the helper's answer is accepted.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_hardened_activations_run_as_their_workload_users() {
+    let users = axocoatl_isolation::WorkloadUsers {
+        writer: (1000, 1000),
+        helper: (1001, 1001),
+    };
+    let command =
+        "echo uid=$(id -u); echo home=$HOME; echo cap=$(grep '^CapEff:' /proc/self/status | cut -f2)";
+    for (writes, uid, home) in [
+        (None, "uid=1000", "home=/home/axocoatl"),
+        (Some(&[][..]), "uid=1001", "home=/tmp/axocoatl-home."),
+    ] {
+        let mut f = fixture().await;
+        let sandbox = actual_sandbox_with(&mut f, Some(users)).await;
+        git_init(f._workspace.path());
+        std::fs::write(f._workspace.path().join("readme.txt"), "hello\n").unwrap();
+        let r = match writes {
+            Some(writes) => run_scoped(&mut f, &["bash", "read_file"], writes),
+            None => run(&mut f, &["bash"], true),
+        };
+        let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
+        let result = tokio::time::timeout(Duration::from_secs(120), async {
+            r.controller
+                .prepare_repository_activation(
+                    r.activation.clone(),
+                    r.resources(provider.clone()),
+                    r.resource.clone(),
+                )
+                .unwrap()
+                .run()
+                .await
+        })
+        .await;
+        let idle = f.owner.execution_is_idle();
+        sandbox.stop_checked().await.unwrap();
+        let settled = result.unwrap().unwrap();
+        assert!(idle.unwrap());
+        let seen: Vec<String> = provider.requests.lock().unwrap()[1]
+            .iter()
+            .filter_map(ChatMessage::text_content)
+            .map(str::to_string)
+            .collect();
+        assert!(provider.saw(1, uid), "{writes:?}: {seen:?}");
+        assert!(provider.saw(1, home), "{writes:?}: {seen:?}");
+        assert!(
+            provider.saw(1, "cap=0000000000000000"),
+            "{writes:?}: {seen:?}"
+        );
+        assert!(settled.accepted, "{writes:?}: {:?}", settled.failure);
+    }
 }
 
 #[tokio::test]

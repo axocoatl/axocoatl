@@ -742,16 +742,63 @@ fn configured_sandbox_network(
     }
 }
 
-/// Ways attempt containers have no egress sidecar in this version: under
-/// `network: egress` an attempt runs with no network at all.
+/// A Ways attempt container's network is its Session's. Under
+/// `network: egress` it starts no proxy of its own: it uses the Session's
+/// running one, with credentials that name the attempt, and its connections
+/// go to the Session's network record.
 fn attempt_sandbox_network(
     value: &str,
 ) -> Result<axocoatl_isolation::session_sandbox::SandboxNetwork, DaemonError> {
+    configured_sandbox_network(value)
+}
+
+/// The non-root users of a local Session container under `network`, from
+/// `sandbox.workload`, given whether Podman runs rootless. `auto` falls back
+/// to the image's user under rootful Podman; an explicit `hardened` is passed
+/// on, and the container's start refuses it there.
+fn workload_users_for(
+    settings: &axocoatl_config::workload::WorkloadSettings,
+    network: axocoatl_isolation::session_sandbox::SandboxNetwork,
+    rootless: bool,
+) -> Option<axocoatl_isolation::session_sandbox::WorkloadUsers> {
+    use axocoatl_config::workload::WorkloadPlan;
     use axocoatl_isolation::session_sandbox::SandboxNetwork;
-    Ok(match configured_sandbox_network(value)? {
-        SandboxNetwork::Egress | SandboxNetwork::None => SandboxNetwork::None,
-        SandboxNetwork::Bridge => SandboxNetwork::Bridge,
-    })
+    let network = match network {
+        SandboxNetwork::Bridge => "bridge",
+        SandboxNetwork::None => "none",
+        SandboxNetwork::Egress => "egress",
+    };
+    match settings.plan(network) {
+        WorkloadPlan::Image => None,
+        WorkloadPlan::Hardened { required: false } if !rootless => None,
+        WorkloadPlan::Hardened { .. } => Some(axocoatl_isolation::session_sandbox::WorkloadUsers {
+            writer: settings.writer,
+            helper: settings.helper,
+        }),
+    }
+}
+
+/// [`workload_users_for`], asking Podman whether it runs rootless only when
+/// the answer matters.
+async fn configured_workload_users(
+    sandbox: &axocoatl_config::SandboxConfigYaml,
+    network: axocoatl_isolation::session_sandbox::SandboxNetwork,
+) -> Result<Option<axocoatl_isolation::session_sandbox::WorkloadUsers>, DaemonError> {
+    let settings = axocoatl_config::workload::workload_settings(sandbox)?;
+    let rootless = match workload_users_for(&settings, network, true) {
+        None => return Ok(None),
+        Some(_) => axocoatl_isolation::session_sandbox::podman_rootless()
+            .await
+            .map_err(|error| DaemonError::Session(error.to_string()))?,
+    };
+    let users = workload_users_for(&settings, network, rootless);
+    if users.is_none() {
+        tracing::warn!(
+            "sandbox.workload: auto runs this Session's commands as the image's user, because \
+             Podman runs as root; hardened workload users need rootless Podman"
+        );
+    }
+    Ok(users)
 }
 
 /// Directory under the data root for egress credentials' 0600 env files.
@@ -8411,6 +8458,14 @@ impl AxocoatlDaemon {
                 } else {
                     None
                 };
+                let workload = configured_workload_users(sc, network)
+                    .await
+                    .map_err(|error| SessionEnvironmentPreparationError {
+                        error,
+                        effective_image: None,
+                        runtime: None,
+                        setup_results: Vec::new(),
+                    })?;
                 let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
                     supervisor_program: None,
                     supervisor_installation: Some(
@@ -8446,6 +8501,8 @@ impl AxocoatlDaemon {
                     ],
                     // The browser reaches the app under test through them.
                     egress,
+                    workload,
+                    shared_sidecar_session: None,
                 };
                 let sandbox = match SessionSandbox::start_in(
                     &session.id,
@@ -9699,6 +9756,8 @@ impl AxocoatlDaemon {
                 self.ipc_root.clone(),
             ],
             egress: None,
+            workload: None,
+            shared_sidecar_session: None,
         };
         let started = tokio::select! {
             result = SessionSandbox::start_in(
@@ -13792,6 +13851,20 @@ trap - 0 1 2 15
             ))
         })?;
         let config = &self.config.sandbox;
+        let network = attempt_sandbox_network(&config.network)?;
+        // Under egress the attempt uses its Session's running proxy and
+        // decision point, so its connections go to the Session's record.
+        let egress = if network == axocoatl_isolation::session_sandbox::SandboxNetwork::Egress {
+            let settings = config.egress.clone().unwrap_or_default();
+            Some(axocoatl_isolation::egress::EgressAttachment {
+                authority: self.session_egress(&session.id).await?,
+                sidecar_network: settings.sidecar_network,
+                max_connections: settings.max_connections,
+                labels: Vec::new(),
+            })
+        } else {
+            None
+        };
         let policy = axocoatl_isolation::session_sandbox::SandboxPolicy {
             supervisor_program: None,
             supervisor_installation: Some(self.data_root.child("execution-supervisors").map_err(
@@ -13803,7 +13876,7 @@ trap - 0 1 2 15
             )?),
             allow_post_create: false,
             allow_untrusted_image: config.allow_untrusted_images,
-            network: attempt_sandbox_network(&config.network)?,
+            network,
             require_resource_limits: config.require_resource_limits,
             passive_start: false,
             runtime_authority: Some(self.local_runtime_authority.clone()),
@@ -13817,7 +13890,9 @@ trap - 0 1 2 15
                 self._data_dir_lease.external_root().clone(),
                 self.ipc_root.clone(),
             ],
-            egress: None,
+            shared_sidecar_session: egress.as_ref().map(|_| session.id.clone()),
+            egress,
+            workload: configured_workload_users(config, network).await?,
         };
         let sandbox = SessionSandbox::start_in(
             container_id,
@@ -22735,6 +22810,64 @@ mod tests {
 
     include!("bootstrap_runtime_cache_tests.rs");
 
+    #[test]
+    fn workload_users_follow_the_mode_the_network_and_rootless_podman() {
+        use axocoatl_config::workload::workload_settings;
+        use axocoatl_isolation::session_sandbox::{SandboxNetwork, WorkloadUsers};
+        let users = Some(WorkloadUsers {
+            writer: (1000, 1000),
+            helper: (1001, 1001),
+        });
+        let settings = |workload: &str| {
+            let config = axocoatl_config::parse_config(
+                &format!("sandbox:\n  backend: podman\n  {workload}\n"),
+                std::path::Path::new("test.yaml"),
+            )
+            .unwrap();
+            workload_settings(&config.sandbox).unwrap()
+        };
+        let auto = settings("");
+        // auto: hardened only under egress, and only with rootless Podman.
+        assert_eq!(
+            workload_users_for(&auto, SandboxNetwork::Egress, true),
+            users
+        );
+        assert_eq!(
+            workload_users_for(&auto, SandboxNetwork::Egress, false),
+            None
+        );
+        for network in [SandboxNetwork::Bridge, SandboxNetwork::None] {
+            assert_eq!(workload_users_for(&auto, network, true), None);
+        }
+        // hardened: every network mode; rootful Podman is refused at start,
+        // not silently downgraded here.
+        let hardened = settings("workload: {mode: hardened}");
+        for network in [
+            SandboxNetwork::Bridge,
+            SandboxNetwork::None,
+            SandboxNetwork::Egress,
+        ] {
+            for rootless in [true, false] {
+                assert_eq!(workload_users_for(&hardened, network, rootless), users);
+            }
+        }
+        let image = settings("workload: {mode: image}");
+        assert_eq!(
+            workload_users_for(&image, SandboxNetwork::Egress, true),
+            None
+        );
+        let custom = settings(
+            "workload: {mode: hardened, writer_user: \"2000:2001\", helper_user: \"3000:3001\"}",
+        );
+        assert_eq!(
+            workload_users_for(&custom, SandboxNetwork::Bridge, true),
+            Some(WorkloadUsers {
+                writer: (2000, 2001),
+                helper: (3000, 3001),
+            })
+        );
+    }
+
     #[tokio::test]
     async fn unknown_sandbox_network_is_refused_not_bridged() {
         use axocoatl_isolation::session_sandbox::SandboxNetwork;
@@ -22755,13 +22888,14 @@ mod tests {
             );
         }
         // `egress` maps to its own mode and never falls through to bridge;
-        // Ways attempts, which have no sidecar, get no network at all.
+        // Ways attempts get the Session's mode, and under egress use the
+        // Session's proxy.
         assert!(matches!(
             configured_sandbox_network("egress").unwrap(),
             SandboxNetwork::Egress
         ));
         for (configured, attempt) in [
-            ("egress", SandboxNetwork::None),
+            ("egress", SandboxNetwork::Egress),
             ("none", SandboxNetwork::None),
             ("bridge", SandboxNetwork::Bridge),
         ] {

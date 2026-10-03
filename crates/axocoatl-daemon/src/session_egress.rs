@@ -1612,6 +1612,7 @@ impl EgressAuthority for SessionEgress {
             process: spec.process.clone(),
             terminal_id: spec.terminal_id.clone(),
             setup_index: spec.setup_index,
+            attempt_id: spec.attempt_id.clone(),
         };
         let env_file = if spec.kind == GrantKind::Browser {
             None
@@ -1876,6 +1877,10 @@ impl EgressAuthority for SessionEgress {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "session_egress_attempt_tests.rs"]
+mod attempt_tests;
 
 #[cfg(test)]
 #[path = "session_egress_tests.rs"]

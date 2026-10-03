@@ -40,8 +40,8 @@ use std::sync::{Arc, Mutex};
 use axocoatl_config::EgressAllowYaml;
 use axocoatl_core::SecureDir;
 use axocoatl_isolation::browser_container::{
-    browser_proxy_port, check_session_served_sockets, ensure_service_sockets, BrowserContainer,
-    BrowserLaunch, ServiceSocketsLaunch,
+    browser_proxy_port, ensure_service_sockets, BrowserContainer, BrowserLaunch,
+    ServiceSocketsLaunch,
 };
 use axocoatl_isolation::egress::{EgressAuthority, GrantKind, GrantSpec};
 use axocoatl_isolation::egress_control::ControlTiming;
@@ -325,8 +325,9 @@ impl BrowserService {
         Ok(image)
     }
 
-    /// Serve the Session's exposed ports as sockets for the browser. Under
-    /// `network: egress` the Session container's bridge serves them already.
+    /// Serve the Session's exposed ports as sockets for the browser through
+    /// the service forwarder. Under `network: egress` the Session's start
+    /// already ran it for Preview, and this keeps it.
     async fn ensure_service_sockets(
         &self,
         session_id: &str,
@@ -334,11 +335,8 @@ impl BrowserService {
         ports: &[u16],
     ) -> Result<(), String> {
         let _sockets = session.sockets.lock().await;
-        if self.config.session_network == "egress" {
-            return check_session_served_sockets(session_id, ports)
-                .await
-                .map_err(|error| error.to_string());
-        }
+        // Under egress this finds the forwarder serving the same ports for
+        // the same Session container and keeps it.
         let image = self.forwarder_image().await?;
         let result = ensure_service_sockets(&ServiceSocketsLaunch {
             session_id: session_id.to_string(),

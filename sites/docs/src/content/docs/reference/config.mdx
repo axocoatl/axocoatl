@@ -261,7 +261,7 @@ because the remote backend cannot prove that policy.
 `sandbox.egress`, through Axocoatl's egress proxy. Only the `bash` commands of an
 Agent that may change files, approved setup commands, readiness provisioning and
 terminals get a credential for it; read-only helpers and required checks have no
-network. See
+network. Ways attempts use their Session's proxy. See
 [Network egress](/configure/sandboxes/#network-egress) for how it runs and what it
 does not cover.
 
@@ -325,6 +325,27 @@ token authentication for an origin-scoped helper; other hosts may require a
 different credential flow. Ready E2B Sessions retain their exact runtime ID and
 remote root: Close pauses, Reopen reconnects, and Delete Session or Change/Rebuild
 runtime performs checked deletion.
+
+### sandbox.workload
+
+```yaml
+sandbox:
+  workload:
+    mode: auto               # auto (the default), hardened or image
+    writer_user: "1000:1000" # numeric uid:gid
+    helper_user: "1001:1001" # shares no id with writer_user
+```
+
+Which users run commands in a local Podman Session container. `auto` is `hardened`
+under `network: egress` and `image` under `bridge` and `none`. `hardened` keeps the
+container's first process as root and runs Agents' commands, setup commands,
+terminals and required checks as `writer_user`, every process of a read-only helper
+as `helper_user`, and readiness provisioning as root; neither user has Linux
+capabilities. `image` runs every command as the image's own user. Ids run from 1 to
+65533, and the helper's uid and gid must differ from both of the writer's. `hardened`
+needs rootless Podman: under rootful Podman `auto` falls back to `image` with a
+`doctor` warning, and `hardened` refuses to start a Session. `backend: e2b` refuses
+`hardened`. See [Workload users](/configure/sandboxes/#workload-users).
 
 ## MCP servers
 

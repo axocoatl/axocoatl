@@ -282,6 +282,10 @@ pub struct EgressBinding {
     pub terminal_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_index: Option<u32>,
+    /// The Ways attempt whose container presented the credential. Attempts
+    /// under `network: egress` share their Session's proxy and record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
 }
 
 impl EgressBinding {
@@ -295,9 +299,14 @@ impl EgressBinding {
             process: None,
             terminal_id: None,
             setup_index: None,
+            attempt_id: None,
         }
     }
 }
+
+#[cfg(test)]
+#[path = "network_record_attempt_tests.rs"]
+mod attempt_tests;
 
 /// Longest URL recorded for one search result in a `web` event's `sources`.
 pub const MAX_RECORDED_SOURCE_URL_BYTES: usize = 512;

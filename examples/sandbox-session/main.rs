@@ -323,6 +323,9 @@ sandbox:
             control_plane_dirs: Vec::new(),
             control_plane_roots: Vec::new(),
             egress: None,
+            // `sandbox.workload: auto` is the image's user outside egress.
+            workload: None,
+            shared_sidecar_session: None,
         };
 
         assert!(!policy.allow_post_create);

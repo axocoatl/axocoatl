@@ -29,14 +29,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recorded up to 20 at once and then one every 5 seconds, and the rest are counted in
   a `limit` event, so a process in the container cannot fill the record. When the
   record is full, setup commands, provisioning and terminals still run, without
-  network. The Session container's first process is Axocoatl's bridge, so the image
-  `ENTRYPOINT` does not run. Exposed ports reach Preview through a separate
-  `axo-pvw-<session>` container that publishes each port's socket on host loopback
-  and never connects out. Ways attempts run with no network under `egress`. `validate`, `doctor` and daemon start warn about wildcard entries,
+  network. The Session container's first process is Axocoatl's bridge, which serves
+  only the proxy, so the image `ENTRYPOINT` does not run. The Session container holds
+  no port socket: a service forwarder (`axo-svc-<session>`) that joins only its
+  network namespace serves each exposed port as a socket, and a separate
+  `axo-pvw-<session>` container publishes those sockets on host loopback for Preview;
+  neither connects out. A read-only helper, whose shell may not open TCP connections,
+  cannot reach the Session's apps over TCP or through the port sockets; an app that
+  listens on a Unix socket of its own, or on UDP, is still reachable. Ways attempts use their Session's
+  proxy and decision point, with credentials of their own that the network record
+  names with the attempt (`binding.attempt_id`). `validate`, `doctor` and daemon start warn about wildcard entries,
   CDN-fronted presets, hosts that accept uploads and ranges that contain a Podman host
   gateway. When Axocoatl's config file is inside a Session's Workspace, **Session
   network** and `GET /api/sessions/{id}/network` warn that Agents can read it. See the
   Sandboxes and Security pages for what it does not cover.
+- `sandbox.workload` (`mode: auto | hardened | image`, `writer_user`, `helper_user`).
+  `auto`, the default, is `hardened` under `network: egress` and `image` (the image's
+  own user, as before) under `bridge` and `none`. A hardened Session container keeps
+  root only for its first process and readiness provisioning: Agents' commands, setup
+  commands, terminals, required checks and Axocoatl's own commands run as
+  `writer_user` (default `1000:1000`, home `/home/axocoatl`), and every process of a
+  read-only helper as `helper_user` (default `1001:1001`), both with no Linux
+  capabilities and no way to gain one. A helper cannot read the environment of a
+  writer's processes, so it cannot borrow a writer's egress credential, and cannot
+  signal them. The Workspace is mapped to the writer with `--userns=keep-id`, the
+  egress proxy's socket sits in a directory only root can enter, and a Node project's
+  dependency volume is handed to the writer. It needs rootless Podman: under rootful
+  Podman `auto` falls back to `image` with a `doctor` warning and `hardened` refuses to
+  start a Session. `doctor` prints the users, and E2B refuses `hardened`.
 - Each native Session can keep a network record, an append-only log of egress
   decisions, connection closes, policy changes and web-tool calls, and
   `GET /api/sessions/{id}/network` reads it. Reading never creates a record.

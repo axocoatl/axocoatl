@@ -124,6 +124,9 @@ pub struct GrantSpec {
     pub process: Option<String>,
     pub terminal_id: Option<String>,
     pub setup_index: Option<u32>,
+    /// The Ways attempt whose container the process runs in, when it is not
+    /// the Session's own container.
+    pub attempt_id: Option<String>,
     pub liveness: Option<Liveness>,
 }
 
@@ -138,6 +141,7 @@ impl GrantSpec {
             process: None,
             terminal_id: None,
             setup_index: None,
+            attempt_id: None,
             liveness: None,
         }
     }
@@ -153,6 +157,7 @@ impl fmt::Debug for GrantSpec {
             .field("agent", &self.agent)
             .field("terminal_id", &self.terminal_id)
             .field("setup_index", &self.setup_index)
+            .field("attempt_id", &self.attempt_id)
             .finish_non_exhaustive()
     }
 }

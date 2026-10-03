@@ -12,7 +12,7 @@ use axocoatl_isolation::egress::{GrantKind, GrantSpec, ProcessEnv};
 use axocoatl_isolation::supervisor_transport::{
     RunningSupervisedCommand, SupervisedExecution, SupervisorCancellation,
 };
-use axocoatl_isolation::{BgTask, ExecResult, IsolationError, Sandbox};
+use axocoatl_isolation::{BgTask, ExecIdentity, ExecResult, IsolationError, Sandbox};
 use axocoatl_session::control_authority::REPOSITORY_CAPTURE_PORT;
 use axocoatl_tools::{BuiltinTool, ToolError, ToolExecutor};
 use std::path::Path;
@@ -640,13 +640,14 @@ impl InvocationScope {
             lease = self.resource.owner.queued_execution_lease() => lease.map_err(isolation_error)?,
             _ = self.control.cancelled() => return Err(isolation_error("repository tool cancelled before process admission")),
         };
-        let (write_restriction, writer, agent) = {
+        let (write_restriction, writer, agent, identity) = {
             let state = self.controller.lock().map_err(isolation_error)?;
             self.validate(&state).map_err(isolation_error)?;
             let read_only = state
                 .admitted_write_scope(&self.intent.activation)
                 .map_err(isolation_error)?
                 .is_read_only();
+            let host_observation = self.require_complete_capture.load(Ordering::Acquire);
             let agent = state
                 .current(&self.intent.activation)
                 .ok()
@@ -662,11 +663,12 @@ impl InvocationScope {
                 process_write_restriction(
                     read_only,
                     &self.intent.tool_name,
-                    self.require_complete_capture.load(Ordering::Acquire),
+                    host_observation,
                     self.resource.owner.root(),
                 ),
                 !read_only,
                 agent,
+                process_identity(read_only, host_observation),
             )
         };
         let index = self
@@ -735,12 +737,13 @@ impl InvocationScope {
         };
         let command = lease
             .sandbox()
-            .prepare_supervised_command_with_env(
+            .prepare_supervised_command_as(
                 request.clone(),
                 stdin.map(|bytes| bytes.as_bytes().to_vec()),
                 ProcessEnv {
                     env_file: grant.as_ref().and_then(|grant| grant.env_file.as_deref()),
                 },
+                identity,
             )
             .await?;
         if command.request() != &request {
@@ -864,6 +867,19 @@ fn process_write_restriction(
             deny_network: true,
         }
     })
+}
+
+/// The user one repository process runs as in a hardened Session container.
+/// Every process of a read-only activation, its file tools included, runs as
+/// the helper user, which cannot read a writer's process environment or
+/// signal its processes. The host's own captures and digest observations run
+/// as the writer, whose files they must read whole.
+fn process_identity(read_only: bool, host_observation: bool) -> ExecIdentity {
+    if read_only && !host_observation {
+        ExecIdentity::Helper
+    } else {
+        ExecIdentity::Writer
+    }
 }
 
 /// Whether a supervisor refused to launch a restricted process because its
@@ -1095,6 +1111,15 @@ mod write_scope_tests {
         AdmittedWriteScope(
             scope.map(|scope| scope.iter().map(|pattern| (*pattern).to_owned()).collect()),
         )
+    }
+
+    #[test]
+    fn read_only_activations_run_as_the_helper_except_host_observations() {
+        use axocoatl_isolation::ExecIdentity;
+        assert_eq!(super::process_identity(true, false), ExecIdentity::Helper);
+        assert_eq!(super::process_identity(true, true), ExecIdentity::Writer);
+        assert_eq!(super::process_identity(false, false), ExecIdentity::Writer);
+        assert_eq!(super::process_identity(false, true), ExecIdentity::Writer);
     }
 
     #[test]
