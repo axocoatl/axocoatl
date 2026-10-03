@@ -1,0 +1,29 @@
+{
+  "name": "docs",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "docs",
+      "workspaces": [
+        "tools/*"
+      ]
+    },
+    "node_modules/http-cache-semantics": {
+      "version": "4.2.0",
+      "resolved": "https://registry.npmjs.org/http-cache-semantics/-/http-cache-semantics-4.2.0.tgz",
+      "integrity": "sha512-dTxcvPXqPvXBQpq5dUr6mEMJX4oIEFv6bwom3FDwKRDsuIjjJGANqhBuoAn9c1RQJIdAKav33ED65E2ys+87QQ==",
+      "license": "BSD-2-Clause"
+    },
+    "node_modules/tool": {
+      "resolved": "tools/tool",
+      "link": true
+    },
+    "tools/tool": {
+      "version": "1.0.0",
+      "dependencies": {
+        "http-cache-semantics": "4.2.0"
+      }
+    }
+  }
+}

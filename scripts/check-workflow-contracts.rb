@@ -120,6 +120,12 @@ contracts = {
     "./scripts/verify-public-release.sh",
     "./scripts/verify-docs-gate.sh",
   ],
+  ".github/workflows/security.yml" => [
+    "node scripts/audit-gate.mjs --package-lock-only",
+  ],
+  "scripts/verify-docs-gate.sh" => [
+    "node ./scripts/audit-gate.mjs",
+  ],
   "scripts/verify-native-gate.sh" => [
     "cargo +1.88.0 check --locked --workspace --all-targets --all-features --jobs 1",
     "cargo clippy --locked --workspace --all-targets --all-features --jobs 1",

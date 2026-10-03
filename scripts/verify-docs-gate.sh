@@ -12,7 +12,8 @@ repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 cd "$repo_root/sites/docs"
 
 npm ci
-npm audit --audit-level=high
+node --test ./scripts/audit-gate.test.mjs
+node ./scripts/audit-gate.mjs
 npm run check:content
 npm run build
 npm run check:links

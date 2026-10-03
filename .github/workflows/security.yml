@@ -9,6 +9,8 @@ on:
       - 'Cargo.lock'
       - 'sites/docs/package.json'
       - 'sites/docs/package-lock.json'
+      - 'sites/docs/audit-exceptions.json'
+      - 'sites/docs/scripts/audit-gate.mjs'
       - 'axocoatl-server/browser-tests/package.json'
       - 'axocoatl-server/browser-tests/package-lock.json'
       - 'about.hbs'
@@ -28,6 +30,8 @@ on:
       - 'Cargo.lock'
       - 'sites/docs/package.json'
       - 'sites/docs/package-lock.json'
+      - 'sites/docs/audit-exceptions.json'
+      - 'sites/docs/scripts/audit-gate.mjs'
       - 'axocoatl-server/browser-tests/package.json'
       - 'axocoatl-server/browser-tests/package-lock.json'
       - 'about.hbs'
@@ -74,7 +78,7 @@ jobs:
           node-version: '22'
       - name: Audit documentation dependencies
         working-directory: sites/docs
-        run: npm audit --package-lock-only --audit-level=high
+        run: node scripts/audit-gate.mjs --package-lock-only
       - name: Audit product-browser dependencies
         working-directory: axocoatl-server/browser-tests
         run: npm audit --package-lock-only --audit-level=high
