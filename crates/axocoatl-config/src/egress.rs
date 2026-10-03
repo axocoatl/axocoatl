@@ -395,16 +395,6 @@ pub fn network_warnings(config: &AxocoatlConfig) -> Vec<ConfigWarning> {
     let mut warnings = validate_egress(config).unwrap_or_default();
     warnings.extend(crate::web::validate_web(config).unwrap_or_default());
     warnings.extend(crate::browser::validate_browser(config).unwrap_or_default());
-    for server in &config.mcp_servers {
-        if !server.inherit_env && server.transport == "stdio" {
-            warnings.push(ConfigWarning {
-                field: format!("mcp_servers[{}].inherit_env", server.name),
-                message: "false is not applied by this build yet; the server still \
-                          inherits the daemon's environment"
-                    .into(),
-            });
-        }
-    }
     warnings
 }
 

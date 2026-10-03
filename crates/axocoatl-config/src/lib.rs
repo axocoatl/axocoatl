@@ -1857,11 +1857,11 @@ mcp_servers:
                 .any(|w| w.starts_with("sandbox.egress.allow[0]")),
             "{warnings:?}"
         );
+        // `inherit_env: false` is applied, so it no longer warns.
         assert!(
-            warnings
+            !warnings
                 .iter()
-                .any(|w| w.starts_with("mcp_servers[local].inherit_env")
-                    && w.contains("not applied")),
+                .any(|w| w.starts_with("mcp_servers[local].inherit_env")),
             "{warnings:?}"
         );
 

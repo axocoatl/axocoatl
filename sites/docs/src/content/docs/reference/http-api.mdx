@@ -221,6 +221,8 @@ below.
 | GET | `/api/sessions/{id}/turns/{turn_id}` | One canonical turn owned by this Session, in the same [form](#session-history-versions) as the list |
 | GET | `/api/sessions/{id}/turns/{turn_id}/control-plane` | Versioned read-only execution evidence for the exact Session and turn |
 | GET | `/api/sessions/{id}/network?after=<seq>&limit=<1-1000>` | The Session's [network record](#session-network-record): mode, egress policy and recorded events after `after` (default `limit` 200) |
+| POST | `/api/sessions/{id}/network/allow` | `{command_id, scope, host, ports?}`; under `network: egress`, allow one exact host for this Session. Returns `{revision, digest}` |
+| POST | `/api/sessions/{id}/network/revoke` | `{command_id, scope, host}`; remove this Session's allows for one host and close the connections they admitted. Returns `{revision, digest}` |
 | GET | `/api/session-turns/search?q=…&session_id=…` | Literal case-insensitive search; omit Session ID for all |
 | GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json` |
 | POST | `/api/sessions/{id}/rewind` | `{keep_through_turn_id?}`; legacy `{keep}` is raw message count |
@@ -393,6 +395,34 @@ policy: `session` (your `sandbox.egress` list plus this Session's allows),
 `provisioning` (the Alpine, Debian and Ubuntu mirrors) and `browser` when the browser
 tool is configured. Each rule has an `id`, its `text` and its `source`. Both are empty
 under `bridge` and `none`, and while the Session has no running runtime.
+
+#### Allow or revoke a host for one Session
+
+Under `network: egress`, a person can allow a host that the Session's list refuses,
+for this Session only, and take that back:
+
+```json
+POST /api/sessions/{id}/network/allow
+{"command_id": "c-41f2", "scope": "session", "host": "api.example.com", "ports": [443]}
+
+{"revision": 4, "digest": "9f47a9dc…"}
+```
+
+- `scope` is `session` or, when the browser tool is configured, `browser`.
+- `host` is one exact host name. A wildcard, an IP address or a private range is
+  refused; put those under `sandbox.egress` instead. `ports` defaults to `[443]`.
+- The change is written to the Session's network record as a `policy` event with
+  `source` `session_allow` or `session_revoke`, the `change` (including the
+  `command_id`) and `actor` `human`, then applies to new connections at once, also
+  while the Session's runtime is stopped. The answer is the scope's new policy
+  `revision` and `digest`.
+- Revoke removes every allow this Session added for the host and closes the open
+  connections they admitted. A host from your configuration cannot be revoked here.
+- Each `command_id` (1 to 128 characters) is used once. A resend, also after a
+  daemon restart, gets `409`. A validation failure gets `400` with the reason, a
+  closed Session `409`, and an unknown Session `404`.
+
+Agents have no tool or route that reaches these changes.
 
 ### Turn control plane
 

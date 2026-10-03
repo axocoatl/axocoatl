@@ -463,6 +463,37 @@ pub struct SessionNetworkView {
     pub next_after: Option<u64>,
 }
 
+/// Body of `POST /api/sessions/{id}/network/allow`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkAllowRequest {
+    /// The person's id for this change; a resend with the same id is refused.
+    pub command_id: String,
+    /// `session` or `browser`.
+    pub scope: String,
+    /// One exact host name: no wildcard, IP address or private range.
+    pub host: String,
+    /// Defaults to `[443]`.
+    #[serde(default)]
+    pub ports: Option<Vec<u16>>,
+}
+
+/// Body of `POST /api/sessions/{id}/network/revoke`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkRevokeRequest {
+    pub command_id: String,
+    pub scope: String,
+    pub host: String,
+}
+
+/// Answer to an allow or revoke: the scope's new policy revision and digest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkPolicyChanged {
+    pub revision: u64,
+    pub digest: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

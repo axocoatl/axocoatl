@@ -339,10 +339,14 @@ mcp_servers:
 ```
 
 Persistent transports are `stdio` and `streamable_http`/`http`. Stdio requires
-`command`; HTTP requires `url`. `inherit_env` (default `true`) is parsed for stdio
-servers; with `false` a server is meant to receive only `PATH`, `HOME`, `USER`,
-`LANG`, `LC_*`, `TMPDIR` and its `env`. This build parses the key but does not yet
-apply it. Bootstrap logs connection failure and continues.
+`command`; HTTP requires `url`. A stdio server inherits the daemon's whole
+environment by default, including any provider API keys in it. Set
+`inherit_env: false` to start it with only `PATH`, `HOME`, `USER`, `LANG`, `LC_*`
+and `TMPDIR` (plus `SYSTEMROOT` on Windows) from that environment, then its `env`;
+we recommend it for every stdio server. A server added from Settings inherits the
+environment. A stdio server still runs on your computer, outside any Session
+sandbox, and its traffic is not in a Session's network record. Bootstrap logs
+connection failure and continues.
 Settings catalog connect/remove changes only the live registry and does not
 rewrite this list.
 

@@ -273,6 +273,43 @@ struct StagedTool {
     definition_bytes: usize,
 }
 
+/// Variables a stdio MCP server keeps from the daemon's environment when it
+/// does not inherit the rest.
+const KEPT_ENVIRONMENT: [&str; 5] = ["PATH", "HOME", "USER", "LANG", "TMPDIR"];
+
+/// The environment to set on a stdio server's process. With `inherit`, only
+/// the configured `env` (layered over the inherited environment). Without
+/// it, the kept variables, every `LC_*` (and `SYSTEMROOT` on Windows), then
+/// the configured `env`; the caller clears the rest.
+fn stdio_environment(
+    inherit: bool,
+    daemon: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    configured: &HashMap<String, String>,
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    let mut environment = Vec::new();
+    if !inherit {
+        for (name, value) in daemon {
+            let Some(text) = name.to_str() else {
+                continue;
+            };
+            if KEPT_ENVIRONMENT.contains(&text)
+                || text.starts_with("LC_")
+                || (cfg!(windows) && text.eq_ignore_ascii_case("SYSTEMROOT"))
+            {
+                environment.push((name, value));
+            }
+        }
+    }
+    let mut configured: Vec<_> = configured.iter().collect();
+    configured.sort();
+    environment.extend(
+        configured
+            .into_iter()
+            .map(|(name, value)| (name.into(), value.into())),
+    );
+    environment
+}
+
 /// Transport types for connecting to MCP servers.
 #[derive(Debug, Clone)]
 pub enum McpTransportType {
@@ -285,6 +322,11 @@ pub enum McpTransportType {
         command: String,
         args: Vec<String>,
         env: HashMap<String, String>,
+        /// `false` starts the server with only `PATH`, `HOME`, `USER`, `LANG`,
+        /// `LC_*` and `TMPDIR` (plus `SYSTEMROOT` on Windows) from the
+        /// daemon's environment, then `env`. `true` passes the whole
+        /// environment, including any provider API keys in it.
+        inherit_env: bool,
     },
     /// Remote server via Streamable HTTP (rmcp feature: transport-streamable-http-client-reqwest).
     /// NOTE: SSE was removed in rmcp 0.11.0.
@@ -620,19 +662,28 @@ impl McpToolRegistry {
         let cached_transport = transport.clone();
 
         match &transport {
-            McpTransportType::Stdio { command, args, env } => {
+            McpTransportType::Stdio {
+                command,
+                args,
+                env,
+                inherit_env,
+            } => {
                 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
                 use rmcp::ServiceExt;
                 use tokio::process::Command;
 
                 let args = args.clone();
-                let env = env.clone();
+                let env = stdio_environment(*inherit_env, std::env::vars_os(), env);
+                let inherit = *inherit_env;
                 let client = tokio::time::timeout(
                     MCP_HANDSHAKE_TIMEOUT,
                     ().serve(
                         TokioChildProcess::new(Command::new(command).configure(|cmd| {
                             cmd.args(&args);
-                            cmd.envs(&env);
+                            if !inherit {
+                                cmd.env_clear();
+                            }
+                            cmd.envs(env.iter().map(|(name, value)| (name, value)));
                         }))
                         .map_err(|error| {
                             McpError::ConnectionFailed(bounded_display(
@@ -841,6 +892,60 @@ impl Default for McpToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_server_that_does_not_inherit_keeps_only_basic_variables_and_its_own() {
+        let daemon = [
+            ("PATH", "/usr/bin"),
+            ("HOME", "/home/me"),
+            ("LC_ALL", "C.UTF-8"),
+            ("OPENROUTER_API_KEY", "sk-or-secret"),
+            ("ANTHROPIC_API_KEY", "sk-ant-secret"),
+            ("E2B_API_KEY", "e2b-secret"),
+        ]
+        .map(|(name, value)| (name.into(), value.into()));
+        let configured = HashMap::from([("BRAVE_API_KEY".to_string(), "mine".to_string())]);
+        let kept = stdio_environment(false, daemon.clone().into_iter(), &configured);
+        let names: Vec<String> = kept
+            .iter()
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["PATH", "HOME", "LC_ALL", "BRAVE_API_KEY"]);
+        // Inheriting servers get only the configured values layered on top.
+        let layered = stdio_environment(true, daemon.into_iter(), &configured);
+        assert_eq!(layered, vec![("BRAVE_API_KEY".into(), "mine".into())]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stdio_server_without_inherit_env_does_not_see_the_daemons_variables() {
+        // The "server" writes its environment and exits, so the handshake
+        // fails; the environment it ran with is what matters. Cargo sets
+        // CARGO_PKG_NAME for this test process.
+        for inherit_env in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let dump = dir.path().join("env");
+            let mut registry = McpToolRegistry::new();
+            let _ = registry
+                .connect_server(
+                    "dump",
+                    McpTransportType::Stdio {
+                        command: "/bin/sh".into(),
+                        args: vec!["-c".into(), "env > \"$DUMP\"".into()],
+                        env: HashMap::from([(
+                            "DUMP".to_string(),
+                            dump.to_string_lossy().into_owned(),
+                        )]),
+                        inherit_env,
+                    },
+                )
+                .await;
+            let seen = std::fs::read_to_string(&dump).unwrap();
+            assert!(seen.contains("PATH="), "{seen}");
+            assert!(seen.contains("DUMP="), "{seen}");
+            assert_eq!(seen.contains("CARGO_PKG_NAME="), inherit_env, "{seen}");
+        }
+    }
 
     #[test]
     fn empty_registry() {

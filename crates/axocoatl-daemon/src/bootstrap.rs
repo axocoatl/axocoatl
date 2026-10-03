@@ -745,6 +745,24 @@ fn attempt_sandbox_network(
 /// Directory under the data root for egress credentials' 0600 env files.
 const EGRESS_ENV_DIR: &str = "egress-env";
 
+/// Who per-Session allows and revokes are recorded as: the person using the
+/// authenticated local API. Agents have no path to these changes.
+const SESSION_NETWORK_ACTOR: &str = "human";
+
+fn egress_policy_error(error: crate::session_egress::EgressPolicyError) -> DaemonError {
+    match error {
+        crate::session_egress::EgressPolicyError::Invalid(message) => {
+            DaemonError::InvalidRequest(message)
+        }
+        crate::session_egress::EgressPolicyError::Conflict(message) => {
+            DaemonError::SessionConflict(message)
+        }
+        crate::session_egress::EgressPolicyError::Unavailable(message) => {
+            DaemonError::Session(message)
+        }
+    }
+}
+
 /// Refusal for `network: egress` on a Session without native history.
 pub(crate) const EGRESS_NEEDS_NATIVE_SESSION: &str =
     "network: egress needs a native Session; this Session predates the native Session format";
@@ -4680,6 +4698,7 @@ impl AxocoatlDaemon {
                         command,
                         args: mcp.args.clone(),
                         env: mcp.env.clone(),
+                        inherit_env: mcp.inherit_env,
                     }
                 }
                 "streamable_http" | "http" => {
@@ -10729,6 +10748,98 @@ impl AxocoatlDaemon {
         })?;
         decision_points.insert(session_id.to_string(), egress.clone());
         Ok(egress)
+    }
+
+    /// Allow one exact host for one Session, at a person's request. The
+    /// change is recorded and applies to new connections at once, also while
+    /// the Session's runtime is stopped.
+    pub async fn allow_session_network_host(
+        &self,
+        session_id: &str,
+        request: crate::session_network::NetworkAllowRequest,
+    ) -> Result<crate::session_network::NetworkPolicyChanged, DaemonError> {
+        let (egress, scope) = self
+            .session_network_policy_target(session_id, &request.scope)
+            .await?;
+        let (revision, digest) = egress
+            .allow(
+                scope,
+                &request.host,
+                request.ports,
+                SESSION_NETWORK_ACTOR,
+                &request.command_id,
+            )
+            .await
+            .map_err(egress_policy_error)?;
+        Ok(crate::session_network::NetworkPolicyChanged { revision, digest })
+    }
+
+    /// Remove this Session's allows for one host and close the connections
+    /// they admitted. Hosts listed in the configuration are not revocable here.
+    pub async fn revoke_session_network_host(
+        &self,
+        session_id: &str,
+        request: crate::session_network::NetworkRevokeRequest,
+    ) -> Result<crate::session_network::NetworkPolicyChanged, DaemonError> {
+        let (egress, scope) = self
+            .session_network_policy_target(session_id, &request.scope)
+            .await?;
+        let (revision, digest) = egress
+            .revoke(
+                scope,
+                &request.host,
+                SESSION_NETWORK_ACTOR,
+                &request.command_id,
+            )
+            .await
+            .map_err(egress_policy_error)?;
+        Ok(crate::session_network::NetworkPolicyChanged { revision, digest })
+    }
+
+    async fn session_network_policy_target(
+        &self,
+        session_id: &str,
+        scope: &str,
+    ) -> Result<
+        (
+            Arc<crate::session_egress::SessionEgress>,
+            axocoatl_session::network_record::EgressScope,
+        ),
+        DaemonError,
+    > {
+        let session = self
+            .get_session(session_id)
+            .await
+            .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
+        if self.config.sandbox.network != "egress" {
+            return Err(DaemonError::InvalidRequest(
+                "this daemon does not run Sessions under sandbox.network: egress".to_string(),
+            ));
+        }
+        if session.status == axocoatl_session::SessionStatus::Closed {
+            return Err(DaemonError::SessionConflict(
+                "Reopen this Session before changing its network policy".to_string(),
+            ));
+        }
+        let scope = match scope {
+            "session" => axocoatl_session::network_record::EgressScope::Session,
+            "browser" => axocoatl_session::network_record::EgressScope::Browser,
+            other => {
+                return Err(DaemonError::InvalidRequest(format!(
+                    "scope must be \"session\" or \"browser\", not {other:?}"
+                )))
+            }
+        };
+        let egress = self
+            .session_egress(session_id)
+            .await
+            .map_err(|error| match error {
+                DaemonError::Session(message) if message == EGRESS_NEEDS_NATIVE_SESSION => {
+                    DaemonError::InvalidRequest(message)
+                }
+                other => other,
+            })?;
+        Ok((egress, scope))
     }
 
     /// Release a Session's egress decision point and close its network

@@ -1270,7 +1270,14 @@ pub async fn install_mcp(
                         .collect()
                 })
                 .unwrap_or_default();
-            axocoatl_mcp::McpTransportType::Stdio { command, args, env }
+            // A server added from the dashboard keeps today's behaviour: it
+            // inherits the daemon's environment.
+            axocoatl_mcp::McpTransportType::Stdio {
+                command,
+                args,
+                env,
+                inherit_env: true,
+            }
         }
         "streamable_http" | "http" => {
             let url = substitute(entry["url"].as_str().unwrap_or(""));
@@ -1873,6 +1880,65 @@ pub async fn session_network(
             }
             _ => attempt_err(error),
         })
+}
+
+fn network_policy_err(
+    id: &str,
+    error: axocoatl_daemon::DaemonError,
+) -> (StatusCode, Json<ErrorResponse>) {
+    let status = match &error {
+        axocoatl_daemon::DaemonError::Session(message)
+            if message == &format!("session '{id}' not found") =>
+        {
+            StatusCode::NOT_FOUND
+        }
+        axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+        axocoatl_daemon::DaemonError::SessionConflict(_) => StatusCode::CONFLICT,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    let message = match error {
+        axocoatl_daemon::DaemonError::SessionConflict(message) => message,
+        other => other.to_string(),
+    };
+    err(status, message)
+}
+
+/// POST /api/sessions/{id}/network/allow — allow one exact host for this
+/// Session's egress. Recorded; applies to new connections at once.
+pub async fn allow_session_network_host(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<axocoatl_daemon::session_network::NetworkAllowRequest>,
+) -> Result<
+    Json<axocoatl_daemon::session_network::NetworkPolicyChanged>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    state
+        .read()
+        .await
+        .allow_session_network_host(&id, request)
+        .await
+        .map(Json)
+        .map_err(|error| network_policy_err(&id, error))
+}
+
+/// POST /api/sessions/{id}/network/revoke — remove this Session's allows for
+/// one host and close the connections they admitted.
+pub async fn revoke_session_network_host(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<axocoatl_daemon::session_network::NetworkRevokeRequest>,
+) -> Result<
+    Json<axocoatl_daemon::session_network::NetworkPolicyChanged>,
+    (StatusCode, Json<ErrorResponse>),
+> {
+    state
+        .read()
+        .await
+        .revoke_session_network_host(&id, request)
+        .await
+        .map(Json)
+        .map_err(|error| network_policy_err(&id, error))
 }
 
 pub async fn preview_session_graph_edit(

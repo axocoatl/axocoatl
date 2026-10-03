@@ -378,6 +378,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         command: self_exe.to_string_lossy().into_owned(),
         args: vec!["--mcp-server".to_string()],
         env: HashMap::new(),
+        inherit_env: true,
     };
 
     // -----------------------------------------------------------------------

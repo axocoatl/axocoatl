@@ -12,17 +12,12 @@ fn sidecar(state: SidecarState) -> NetworkEvent {
     }
 }
 
-async fn child_body() {
-    let mut config = axocoatl_config::AxocoatlConfig::default();
-    config.agents.clear();
-    config.consolidation.enabled = false;
-    let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
-    let work = tempfile::tempdir().unwrap();
+async fn native_session(daemon: &AxocoatlDaemon, work: &std::path::Path) -> String {
     let workspace = daemon
         .workspace_store
         .lock()
         .await
-        .register(work.path(), Some("Network record"))
+        .register(work, Some("Network record"))
         .unwrap();
     let DataRootFormatOwnership::Upgraded(ownership) = &daemon._data_dir_lease.ownership else {
         panic!("fresh data roots must use native ownership");
@@ -51,7 +46,33 @@ async fn child_body() {
         .session_dispatch_lifecycles
         .retain_native_session(ownership.clone(), receipt)
         .unwrap();
-    let id = session.id.clone();
+    session.id.clone()
+}
+
+async fn child_body() {
+    let mut config = axocoatl_config::AxocoatlConfig::default();
+    config.agents.clear();
+    config.consolidation.enabled = false;
+    let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let id = native_session(&daemon, work.path()).await;
+    // Per-Session allows exist only under network: egress.
+    let refused = daemon
+        .allow_session_network_host(
+            &id,
+            crate::session_network::NetworkAllowRequest {
+                command_id: "c1".into(),
+                scope: "session".into(),
+                host: "api.example.com".into(),
+                ports: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(refused, DaemonError::InvalidRequest(_)),
+        "{refused}"
+    );
 
     // A Session that never had network activity reads as empty, and the read
     // creates nothing.
@@ -133,6 +154,176 @@ async fn child_body() {
     daemon.shutdown().await.unwrap();
 }
 
+async fn egress_child_body() {
+    use crate::session_network::{NetworkAllowRequest, NetworkRevokeRequest};
+    let mut config = axocoatl_config::AxocoatlConfig::default();
+    config.agents.clear();
+    config.consolidation.enabled = false;
+    config.sandbox.network = "egress".into();
+    config.sandbox.egress = Some(axocoatl_config::EgressConfigYaml {
+        allow: vec![axocoatl_config::EgressAllowYaml::Preset("npm".into())],
+        ..Default::default()
+    });
+    let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let id = native_session(&daemon, work.path()).await;
+    let allow = |command: &str, host: &str, ports: Option<Vec<u16>>| NetworkAllowRequest {
+        command_id: command.into(),
+        scope: "session".into(),
+        host: host.into(),
+        ports,
+    };
+
+    // No runtime is running: the change is recorded and the view shows it.
+    let changed = daemon
+        .allow_session_network_host(&id, allow("c1", "api.example.com", Some(vec![443, 8443])))
+        .await
+        .unwrap();
+    assert_eq!(changed.revision, 2);
+    let view = daemon.session_network(&id, None, None).await.unwrap();
+    assert_eq!(view.mode, "egress");
+    let session = view
+        .policies
+        .iter()
+        .find(|policy| policy.scope == "session")
+        .unwrap();
+    assert_eq!(
+        (session.revision, session.digest.as_str()),
+        (2, changed.digest.as_str())
+    );
+    assert!(session
+        .rules
+        .iter()
+        .any(|rule| rule.source == "session" && rule.text.contains("api.example.com:443,8443")));
+    let wire = serde_json::to_value(&view).unwrap();
+    let change = wire["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|line| line["event"]["source"] == "session_allow")
+        .unwrap();
+    assert_eq!(change["event"]["change"]["command_id"], "c1");
+    assert_eq!(change["event"]["actor"], "human");
+
+    // A resend is a conflict; invalid hosts, scopes and ports are refused.
+    let duplicate = daemon
+        .allow_session_network_host(&id, allow("c1", "api.example.com", None))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(duplicate, DaemonError::SessionConflict(_)),
+        "{duplicate}"
+    );
+    for (host, ports) in [
+        ("*.example.com", None),
+        ("10.0.0.1", None),
+        ("localhost.", Some(vec![0])),
+        ("", None),
+    ] {
+        let invalid = daemon
+            .allow_session_network_host(&id, allow("c-bad", host, ports))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(invalid, DaemonError::InvalidRequest(_)),
+            "{host}: {invalid}"
+        );
+    }
+    for scope in ["provisioning", "browser", "everything"] {
+        let invalid = daemon
+            .allow_session_network_host(
+                &id,
+                NetworkAllowRequest {
+                    scope: scope.into(),
+                    ..allow("c-scope", "docs.example.com", None)
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(invalid, DaemonError::InvalidRequest(_)),
+            "{scope}: {invalid}"
+        );
+    }
+    let missing = daemon
+        .allow_session_network_host("missing-session", allow("c2", "a.example.com", None))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(missing.contains("not found"), "{missing}");
+
+    // Revoke removes only this Session's allows.
+    let revoked = daemon
+        .revoke_session_network_host(
+            &id,
+            NetworkRevokeRequest {
+                command_id: "c3".into(),
+                scope: "session".into(),
+                host: "api.example.com".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoked.revision, 3);
+    let config_host = daemon
+        .revoke_session_network_host(
+            &id,
+            NetworkRevokeRequest {
+                command_id: "c4".into(),
+                scope: "session".into(),
+                host: "registry.npmjs.org".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(config_host, DaemonError::InvalidRequest(_)),
+        "{config_host}"
+    );
+
+    // After Close and Reopen the decision point replays the record: the
+    // revision continues and old command ids stay used.
+    daemon.close_session(&id).await.unwrap();
+    let closed = daemon
+        .allow_session_network_host(&id, allow("c5", "b.example.com", None))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(closed, DaemonError::SessionConflict(_)),
+        "{closed}"
+    );
+    daemon.reopen_session(&id).await.unwrap();
+    let duplicate = daemon
+        .allow_session_network_host(&id, allow("c3", "b.example.com", None))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(duplicate, DaemonError::SessionConflict(_)),
+        "{duplicate}"
+    );
+    let changed = daemon
+        .allow_session_network_host(&id, allow("c6", "b.example.com", None))
+        .await
+        .unwrap();
+    assert_eq!(changed.revision, 4);
+    daemon.delete_session(&id).await.unwrap();
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn per_session_allows_and_revokes_are_recorded_and_replayed() {
+    const CHILD: &str = "AXOCOATL_TEST_SESSION_NETWORK_EGRESS_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        egress_child_body().await;
+        return;
+    }
+    run_child(
+        CHILD,
+        "bootstrap::session_network_tests::per_session_allows_and_revokes_are_recorded_and_replayed",
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn session_network_view_reads_records_and_releases_them_with_the_session() {
     const CHILD: &str = "AXOCOATL_TEST_SESSION_NETWORK_CHILD";
@@ -140,6 +331,16 @@ async fn session_network_view_reads_records_and_releases_them_with_the_session()
         child_body().await;
         return;
     }
+    run_child(
+        CHILD,
+        "bootstrap::session_network_tests::session_network_view_reads_records_and_releases_them_with_the_session",
+    )
+    .await;
+}
+
+/// Run one test body in a child process with its own data root and a fake
+/// Podman, because bootstrap reads the process environment.
+async fn run_child(child: &str, name: &str) {
     // Bootstrap owns process environment; isolate it from concurrent tests.
     let root = tempfile::tempdir().unwrap();
     let bin = root.path().join("bin");
@@ -163,12 +364,8 @@ esac
     let result = tokio::time::timeout(
         Duration::from_secs(60),
         tokio::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "bootstrap::session_network_tests::session_network_view_reads_records_and_releases_them_with_the_session",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
+            .args(["--exact", name, "--nocapture"])
+            .env(child, "1")
             .env("AXOCOATL_DATA_DIR", root.path().join("data"))
             .env("AXOCOATL_SOCKET_PATH", root.path().join("ipc/daemon.sock"))
             .env("PATH", bin)

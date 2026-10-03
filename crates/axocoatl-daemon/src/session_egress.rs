@@ -378,6 +378,17 @@ impl SessionEgress {
             .history()
             .await
             .map_err(|error| format!("reading the network record: {error:?}"))?;
+        // Command ids already applied, so a resend after a restart is refused.
+        let commands: HashSet<String> = history
+            .iter()
+            .filter_map(|line| match &line.event {
+                NetworkEvent::Policy {
+                    change: Some(change),
+                    ..
+                } => change.command_id.clone(),
+                _ => None,
+            })
+            .collect();
         let mut scopes = vec![EgressScope::Session, EgressScope::Provisioning];
         if config.browser.is_some() {
             scopes.push(EgressScope::Browser);
@@ -455,6 +466,7 @@ impl SessionEgress {
             env_dir,
             state: Mutex::new(State {
                 scopes: states,
+                commands,
                 ..State::default()
             }),
             policy_changes: tokio::sync::Mutex::new(()),
@@ -732,6 +744,7 @@ impl SessionEgress {
                     op,
                     host: host.clone(),
                     ports,
+                    command_id: Some(command_id.to_string()),
                 }),
                 actor: Some(actor.chars().take(128).collect()),
             })

@@ -872,10 +872,44 @@ async fn per_session_allows_apply_to_new_connections_immediately() {
         Some(PolicyChange {
             op: PolicyOp::Allow,
             host: "late.test".into(),
-            ports: vec![443]
+            ports: vec![443],
+            command_id: Some("cmd-1".into()),
         })
     );
     assert_eq!(actor.as_deref(), Some("human"));
+    // A resend of the same command is refused, also after the decision point
+    // is reopened from the record (a daemon restart or a Session reopen).
+    let duplicate = fixture
+        .egress
+        .allow(EgressScope::Session, "late.test", None, "human", "cmd-1")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(duplicate, EgressPolicyError::Conflict(_)),
+        "{duplicate:?}"
+    );
+    let reopened = SessionEgress::open(
+        "ses-1",
+        config(),
+        fixture.record.clone(),
+        fixture.resolver.clone(),
+        None,
+    )
+    .await
+    .unwrap();
+    let duplicate = reopened
+        .allow(EgressScope::Session, "late.test", None, "human", "cmd-1")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(duplicate, EgressPolicyError::Conflict(_)),
+        "{duplicate:?}"
+    );
+    assert!(reopened
+        .policy(EgressScope::Session)
+        .unwrap()
+        .match_name("late.test", 443)
+        .is_some());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

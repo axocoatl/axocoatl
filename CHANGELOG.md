@@ -32,9 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GET /api/sessions/{id}/network` reads it. Reading never creates a record.
 - The bundled execution supervisor gains an egress proxy mode, a loopback/Unix-socket
   bridge mode and a socket probe, which `network: egress` uses.
+- `mcp_servers[].inherit_env: false` starts a stdio MCP server with only `PATH`,
+  `HOME`, `USER`, `LANG`, `LC_*` and `TMPDIR` from the daemon's environment, plus its
+  own `env`, so it does not see provider API keys. The default, `true`, keeps today's
+  behaviour.
+- Under `network: egress`, a person can allow one exact host for one Session, and
+  revoke it, with `POST /api/sessions/{id}/network/allow` and `…/revoke`. The change
+  is recorded in the Session's network record and applies to new connections at once.
 - The configuration parses `web_search.provider: searxng` with a `searxng` block, and
-  new `web_fetch` and `browser` blocks and `mcp_servers[].inherit_env`, for upcoming
-  tools. They are validated but not yet run.
+  new `web_fetch` and `browser` blocks, for upcoming tools. They are validated but not
+  yet run.
 
 ### Changed
 - `sandbox.backend: e2b` now requires `sandbox.network: bridge` when the configuration

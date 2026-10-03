@@ -84,6 +84,9 @@ pub struct PolicyChange {
     pub host: String,
     #[serde(default)]
     pub ports: Vec<u16>,
+    /// The person's command id, so a resend is recognized after a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,6 +371,16 @@ impl NetworkEvent {
                 if conn.is_empty() || conn.len() > 32 =>
             {
                 invalid("conn must be 1-32 bytes")
+            }
+            Self::Policy {
+                change:
+                    Some(PolicyChange {
+                        command_id: Some(command_id),
+                        ..
+                    }),
+                ..
+            } if command_id.is_empty() || command_id.len() > 128 => {
+                invalid("command_id must be 1-128 bytes")
             }
             _ => Ok(()),
         }
@@ -1242,6 +1255,7 @@ mod tests {
                     op: PolicyOp::Allow,
                     host: "api.example.com".into(),
                     ports: vec![443],
+                    command_id: Some("cmd-1".into()),
                 }),
                 actor: Some("human".into()),
             },
