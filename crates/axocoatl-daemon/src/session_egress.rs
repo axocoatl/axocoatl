@@ -289,7 +289,7 @@ pub fn env_file_contents(token: &str) -> String {
 fn hint(reason: &str, host: &str, port: u16) -> String {
     match reason {
         "not_allowed" => format!(
-            "{host}:{port} is not in this Session's egress allowlist. Ask the user to allow it for this Session in the Network panel or to add it under sandbox.egress.allow."
+            "{host}:{port} is not in this Session's egress allowlist. Ask the user to allow it for this Session in Session network or to add it under sandbox.egress.allow."
         ),
         "private_destination" => format!(
             "{host} resolves to a private address. Axocoatl refuses private addresses unless the user lists the range under sandbox.egress.private_destinations."

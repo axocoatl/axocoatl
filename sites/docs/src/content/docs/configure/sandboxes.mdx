@@ -122,12 +122,12 @@ How a Session runs under it:
 - The Session container runs with `--network none`. Its first process is Axocoatl's
   bridge, which serves the proxy on `127.0.0.1:3128`, so the image's own
   `ENTRYPOINT` does not run under `egress`.
-- Each command an Agent runs with `bash`, each approved setup command, readiness
-  provisioning and each terminal you open gets its own proxy credential, in
-  `HTTPS_PROXY`, `HTTP_PROXY`, their lowercase forms, the npm proxy settings,
-  `NO_PROXY` and `NODE_USE_ENV_PROXY=1`. The credential ends when that command,
-  setup step or terminal does. It reaches the process through an environment file
-  that Podman reads, never through a command line.
+- Each `bash` command of an Agent that may change files, each approved setup
+  command, readiness provisioning and each terminal you open gets its own proxy
+  credential, in `HTTPS_PROXY`, `HTTP_PROXY`, their lowercase forms, the npm proxy
+  settings, `NO_PROXY` and `NODE_USE_ENV_PROXY=1`. The credential ends when that
+  command, setup step or terminal does. It reaches the process through an
+  environment file that Podman reads, never through a command line.
 - Read-only helpers, required checks, Axocoatl's own repository captures,
   background tasks and other commands get no credential, so they have no network.
 - Exposed ports still work in Preview. The Session container publishes nothing; its
@@ -150,7 +150,7 @@ Content-Type: application/json
 X-Axocoatl-Egress: denied; reason=not_allowed
 
 {"error":"egress_denied","reason":"not_allowed","host":"example.org","port":443,
- "hint":"example.org:443 is not in this Session's egress allowlist. Ask the user to allow it for this Session in the Network panel or to add it under sandbox.egress.allow."}
+ "hint":"example.org:443 is not in this Session's egress allowlist. Ask the user to allow it for this Session in Session network or to add it under sandbox.egress.allow."}
 ```
 
 A process without a credential gets `407` with reason `no_credential`, and a name
@@ -176,9 +176,9 @@ nothing gets out.
 
 What it costs, measured on one Mac with rootless Podman 5.8: `npm ci` of an Express
 fixture (about 65 packages, empty npm cache) took 1.5 s under `egress` against 0.7 s
-under `bridge`, because each of its 15 connections is decided on your computer before
-it opens. The wall time of an Agent's tool call did not change measurably. Your
-numbers will differ with the registry, the network and the tool.
+under `bridge`; it made 15 connections through the proxy. The wall time of an Agent's
+tool call did not change measurably. Your numbers will differ with the registry, the
+network and the tool.
 
 What egress does not cover:
 

@@ -25,10 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is Axocoatl's bridge, so the image `ENTRYPOINT` does not run. Exposed ports reach
   Preview through a separate `axo-pvw-<session>` container that publishes each port's
   socket on host loopback and never connects out. Ways attempts run with no network
-  under `egress`.
-  `validate`, `doctor` and daemon start warn about wildcard entries, CDN-fronted
-  presets and hosts that accept uploads. See the Sandboxes and Security pages for
-  what it does not cover.
+  under `egress`. `validate`, `doctor` and daemon start warn about wildcard entries,
+  CDN-fronted presets and hosts that accept uploads. See the Sandboxes and Security
+  pages for what it does not cover.
 - Each native Session can keep a network record, an append-only log of egress
   decisions, connection closes, policy changes and web-tool fetches, and
   `GET /api/sessions/{id}/network` reads it. Reading never creates a record.

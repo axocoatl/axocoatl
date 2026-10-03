@@ -258,9 +258,10 @@ validation error. Axocoatl rejects `network: none` and `network: egress` with E2
 because the remote backend cannot prove that policy.
 
 `network: egress` gives Session containers only the hosts listed under
-`sandbox.egress`, through Axocoatl's egress proxy. Only an Agent's `bash`
-commands, approved setup commands, readiness provisioning and terminals get a
-credential for it; read-only helpers and required checks have no network. See
+`sandbox.egress`, through Axocoatl's egress proxy. Only the `bash` commands of an
+Agent that may change files, approved setup commands, readiness provisioning and
+terminals get a credential for it; read-only helpers and required checks have no
+network. See
 [Network egress](/configure/sandboxes/#network-egress) for how it runs and what it
 does not cover.
 
@@ -290,6 +291,7 @@ and `ubuntu`. The `npm`, `crates`, `alpine` and `debian` lists were checked agai
 the live registries with `npm ci`, `cargo fetch` and readiness provisioning; the
 others are not yet verified. If a tool needs a host a preset lacks, the refusal names
 it, and you can list that host yourself.
+
 A `host` is a name, never an IP address; use `cidr` for addresses. A range that is
 not wholly public must lie inside a `private_destinations` entry, and each
 private destination must be wholly private (such as `10.0.0.0/8` or `fd00::/8`).

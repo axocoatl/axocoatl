@@ -789,8 +789,13 @@ async fn supervise(shared: Arc<Shared>, mut current: Generation, with_limits: bo
         reap(&mut current.child).await;
         let _ = remove_container(&shared.spec.container()).await;
         let mut generation = current.number;
-        if shared.stopping.load(Ordering::Acquire) || end == ControlEnd::Shutdown {
+        if end == ControlEnd::Shutdown {
+            // The control loop has already recorded the stop.
             shared.set_status(SidecarPhase::Stopped, generation, None);
+            return;
+        }
+        if shared.stopping.load(Ordering::Acquire) {
+            // `stop` records it once the supervisor has returned.
             return;
         }
         loop {
@@ -831,7 +836,6 @@ async fn supervise(shared: Arc<Shared>, mut current: Generation, with_limits: bo
                 _ = stop.wait_for(|stopping| *stopping) => {}
             }
             if shared.stopping.load(Ordering::Acquire) {
-                shared.set_status(SidecarPhase::Stopped, generation, None);
                 return;
             }
             shared

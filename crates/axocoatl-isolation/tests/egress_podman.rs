@@ -1241,6 +1241,57 @@ async fn a_sidecar_that_keeps_failing_stays_down_once_its_restart_budget_is_spen
             fixture.authority.events().last(),
             Some(Event::Sidecar(SidecarEvent::Stopped { .. }))
         ));
+
+        // A stop while a restart waits out its backoff ends the wait at once
+        // and is recorded.
+        let session = format!("egress-test-{}", uuid::Uuid::new_v4().simple());
+        fixture.sessions.lock().unwrap().push(session.clone());
+        let sidecar = EgressSidecar::start_with_restarts(
+            SidecarSpec {
+                session_id: session.clone(),
+                runtime_authority: None,
+                image: axocoatl_isolation::egress_image::ensure_egress_image(&program)
+                    .await
+                    .unwrap(),
+                network: Some(fixture.network.clone()),
+                max_connections: 8,
+                require_resource_limits: false,
+                labels: vec![fixture.label.clone()],
+            },
+            fixture.authority.clone(),
+            axocoatl_isolation::egress_control::ControlTiming::default(),
+            RestartPolicy {
+                backoff: [Duration::from_secs(30); 3],
+                budget: 5,
+                window: Duration::from_secs(60),
+            },
+        )
+        .await
+        .unwrap();
+        let _ = podman_async(&["kill", &sidecar.container()]).await;
+        for _ in 0..50 {
+            if sidecar.status().phase == SidecarPhase::Restarting {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(sidecar.status().phase, SidecarPhase::Restarting);
+        let started = std::time::Instant::now();
+        sidecar.stop().await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(sidecar.status().phase, SidecarPhase::Stopped);
+        assert!(
+            matches!(
+                fixture.authority.events().last(),
+                Some(Event::Sidecar(SidecarEvent::Stopped { generation: 2 }))
+            ),
+            "{:?}",
+            fixture.authority.events()
+        );
     })
     .await;
 }
