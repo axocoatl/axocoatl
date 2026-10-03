@@ -634,7 +634,7 @@ fn require_private(dir: &SecureDir) -> io::Result<()> {
 fn lock_component(dir: &SecureDir) -> io::Result<()> {
     #[cfg(unix)]
     {
-        dir.try_lock_exclusive()
+        dir.lock_exclusive_waiting(axocoatl_core::LOCK_INHERITANCE_GRACE)
     }
     #[cfg(not(unix))]
     {

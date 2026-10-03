@@ -263,7 +263,7 @@ impl KnowledgeStore {
         // ambient path. Even clones of the supplied capability cannot share a lock.
         let root = root.child("v1")?;
         #[cfg(unix)]
-        root.try_lock_exclusive()?;
+        root.lock_exclusive_waiting(axocoatl_core::LOCK_INHERITANCE_GRACE)?;
         let state = if root.is_file(STATE_FILE)? {
             serde_json::from_slice(&root.read_limited(STATE_FILE, STATE_LIMIT)?)?
         } else {

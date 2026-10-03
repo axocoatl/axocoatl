@@ -262,7 +262,7 @@ impl SessionExecutionStore {
         } else {
             ownership.session_directory(owner.session_id.as_str())?
         };
-        dir.try_lock_exclusive()?;
+        dir.lock_exclusive_waiting(axocoatl_core::LOCK_INHERITANCE_GRACE)?;
         let journal = match dir.read_limited(FILE, MAX_SESSION_BYTES) {
             Ok(bytes) => serde_json::from_slice::<Journal>(&bytes)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

@@ -12,6 +12,9 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -20,6 +23,23 @@ use std::os::unix::ffi::OsStrExt;
 use rustix::fd::OwnedFd;
 #[cfg(unix)]
 use rustix::fs::{self, AtFlags, FileType, FlockOperation, Mode, OFlags};
+
+/// How long a store open waits for a lock that a starting child process may
+/// still hold through an inherited descriptor.
+///
+/// A `flock` lock belongs to the open file description, and a child shares
+/// every description its parent had open from `fork` (or the start of
+/// `posix_spawn`) until `exec` closes the close-on-exec copies. That window is
+/// normally well under a millisecond; this bound leaves room for a loaded
+/// machine while still reporting a lock held by a real owner promptly.
+pub const LOCK_INHERITANCE_GRACE: Duration = Duration::from_millis(250);
+
+/// First and largest pause between lock attempts while waiting out
+/// [`LOCK_INHERITANCE_GRACE`].
+#[cfg(unix)]
+const LOCK_RETRY_FIRST: Duration = Duration::from_millis(1);
+#[cfg(unix)]
+const LOCK_RETRY_MAX: Duration = Duration::from_millis(32);
 
 /// An opened directory used as the authority for descendant persistence.
 ///
@@ -314,10 +334,27 @@ impl SecureDir {
     /// Take a nonblocking exclusive advisory lock on this already-opened
     /// directory inode. The lock survives unlink/replacement of child lock
     /// files and remains held while any clone of this capability is alive.
+    ///
+    /// Use this where the caller polls on purpose. Opening a store should use
+    /// [`SecureDir::lock_exclusive_waiting`] instead.
     #[cfg(unix)]
     pub fn try_lock_exclusive(&self) -> io::Result<()> {
         fs::flock(self.fd.as_ref(), FlockOperation::NonBlockingLockExclusive)
             .map_err(io::Error::from)
+    }
+
+    /// Take the lock of [`SecureDir::try_lock_exclusive`], retrying for up
+    /// to `grace` (normally [`LOCK_INHERITANCE_GRACE`]) while it is held.
+    ///
+    /// A store dropped while another thread starts a process (a terminal, a
+    /// `pre_exec` hook, `posix_spawn`) can find its own lock still held when
+    /// it reopens, because the child shares the locked open file description
+    /// until it execs. Retrying with a short backoff covers that window. A
+    /// lock still held after `grace` has a real owner, and its `WouldBlock`
+    /// error is returned unchanged.
+    #[cfg(unix)]
+    pub fn lock_exclusive_waiting(&self, grace: Duration) -> io::Result<()> {
+        retry_inherited_lock(grace, || self.try_lock_exclusive())
     }
 
     /// Verify that the configured ambient path still resolves to this exact
@@ -1286,6 +1323,42 @@ impl SecureDir {
     }
 }
 
+/// Take a nonblocking exclusive `flock` (`LOCK_EX | LOCK_NB`) on an open lock
+/// file, waiting like [`SecureDir::lock_exclusive_waiting`].
+#[cfg(unix)]
+pub fn lock_file_exclusive_waiting(file: &File, grace: Duration) -> io::Result<()> {
+    retry_inherited_lock(grace, || {
+        fs::flock(file, FlockOperation::NonBlockingLockExclusive).map_err(io::Error::from)
+    })
+}
+
+/// Run `attempt` until it stops reporting `WouldBlock` or `grace` has passed,
+/// pausing 1, 2, 4 … 32 ms between attempts. The last attempt is made at the
+/// deadline, so a lock released within `grace` is always taken.
+#[cfg(unix)]
+fn retry_inherited_lock(
+    grace: Duration,
+    mut attempt: impl FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    let started = Instant::now();
+    let mut pause = LOCK_RETRY_FIRST;
+    loop {
+        match attempt() {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let Some(remaining) = grace
+                    .checked_sub(started.elapsed())
+                    .filter(|remaining| !remaining.is_zero())
+                else {
+                    return Err(error);
+                };
+                std::thread::sleep(pause.min(remaining));
+                pause = (pause * 2).min(LOCK_RETRY_MAX);
+            }
+            result => return result,
+        }
+    }
+}
+
 #[cfg(unix)]
 fn normalize_platform_absolute_prefix(path: &Path) -> io::Result<PathBuf> {
     #[cfg(target_os = "macos")]
@@ -1349,6 +1422,10 @@ fn ensure_regular_path(path: &Path) -> io::Result<()> {
         Err(invalid_path(path, "is not a regular file"))
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "secure_fs_lock_tests.rs"]
+mod lock_tests;
 
 #[cfg(test)]
 mod tests {
