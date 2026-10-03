@@ -286,7 +286,10 @@ unset for Podman's default network. Each allowed name is resolved on your comput
 when a connection asks for it, so an entry must name the host the tool connects to.
 
 Presets are `npm`, `yarn`, `pypi`, `crates`, `go`, `github`, `alpine`, `debian`
-and `ubuntu`. Their host lists are not yet verified against the live registries.
+and `ubuntu`. The `npm`, `crates`, `alpine` and `debian` lists were checked against
+the live registries with `npm ci`, `cargo fetch` and readiness provisioning; the
+others are not yet verified. If a tool needs a host a preset lacks, the refusal names
+it, and you can list that host yourself.
 A `host` is a name, never an IP address; use `cidr` for addresses. A range that is
 not wholly public must lie inside a `private_destinations` entry, and each
 private destination must be wholly private (such as `10.0.0.0/8` or `fd00::/8`).

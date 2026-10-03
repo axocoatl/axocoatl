@@ -169,6 +169,12 @@ it stays stopped, and the bridge answers every proxied request with `502` until 
 Session's runtime is started again. The proxy fails closed: while it is down,
 nothing gets out.
 
+What it costs, measured on one Mac with rootless Podman 5.8: `npm ci` of an Express
+fixture (about 65 packages, empty npm cache) took 1.5 s under `egress` against 0.7 s
+under `bridge`, because each of its 15 connections is decided on your computer before
+it opens. The wall time of an Agent's tool call did not change measurably. Your
+numbers will differ with the registry, the network and the tool.
+
 What egress does not cover:
 
 - The proxy cannot see inside TLS. A listed host that serves many sites, such as a

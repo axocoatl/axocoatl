@@ -1411,3 +1411,315 @@ async fn the_proxy_control_loop_and_decision_point_work_end_to_end() {
     );
     assert_eq!(task.await.unwrap(), egress_control::ControlEnd::Shutdown);
 }
+
+/// Live check and measurement, opt-in with `AXOCOATL_LIVE_EGRESS=1`: `npm ci`
+/// of an Express fixture (about 65 packages) through the `npm` preset, with
+/// Debian readiness provisioning through the distribution presets, timed
+/// against the same install under `bridge`. Every connection the installs
+/// make must be allowed by the presets; a refusal means a preset's host list
+/// is incomplete.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "live: AXOCOATL_LIVE_EGRESS=1 CONTAINER_CONNECTION=axocoatl-ci-pr74; needs the internet"]
+async fn live_npm_ci_through_the_npm_preset_and_debian_provisioning() {
+    use axocoatl_isolation::{SandboxNetwork, SandboxPolicy, SessionSandbox};
+    if std::env::var("AXOCOATL_LIVE_EGRESS").as_deref() != Ok("1") {
+        eprintln!("skipped: set AXOCOATL_LIVE_EGRESS=1");
+        return;
+    }
+    const IMAGE: &str = "docker.io/library/node:20-slim";
+    const RUNS: usize = 5;
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path().canonicalize().unwrap();
+    let private = SecureDir::open(&root_path).unwrap();
+    let installation = private.child("supervisor").unwrap();
+    let workspace = private.child("workspace").unwrap();
+    std::fs::write(
+        workspace.path().join("package.json"),
+        r#"{"name":"egress-fixture","version":"1.0.0","private":true,"dependencies":{"express":"4.21.2"}}"#,
+    )
+    .unwrap();
+    let authority_label = format!(
+        "{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(root_path.to_string_lossy().as_bytes())
+    );
+    let sessions = [
+        format!("egress-live-bridge-{}", std::process::id()),
+        format!("egress-live-egress-{}", std::process::id()),
+    ];
+    let time = |sandbox: Arc<SessionSandbox>, env: Option<std::path::PathBuf>| async move {
+        let container = sandbox.container().to_string();
+        let mut timings = Vec::new();
+        for _ in 0..RUNS {
+            let mut command = tokio::process::Command::new("podman");
+            command.arg("exec");
+            if let Some(env) = &env {
+                command.arg("--env-file").arg(env);
+            }
+            command.arg("-w").arg(sandbox.root()).args([
+                container.as_str(),
+                "sh",
+                "-c",
+                // A fresh cache each run, so every package is downloaded.
+                "rm -rf node_modules/* node_modules/.package-lock.json && npm ci --cache \"$(mktemp -d)\" --no-audit --no-fund --loglevel=error",
+            ]);
+            let started = std::time::Instant::now();
+            let output = command.output().await.unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            timings.push(started.elapsed().as_secs_f64());
+        }
+        timings
+    };
+
+    // Bridge: write the lockfile, then time the installs.
+    let bridge = Arc::new(
+        SessionSandbox::start(
+            &sessions[0],
+            workspace.path(),
+            Some(IMAGE),
+            &[],
+            &["npm install --package-lock-only --no-audit --no-fund --loglevel=error".to_string()],
+            &SandboxPolicy {
+                allow_post_create: true,
+                network: SandboxNetwork::Bridge,
+                runtime_authority: Some(authority_label.clone()),
+                supervisor_installation: Some(installation.clone()),
+                ..SandboxPolicy::default()
+            },
+        )
+        .await
+        .unwrap(),
+    );
+    let bridge_times = time(bridge.clone(), None).await;
+    bridge.stop_checked().await.unwrap();
+
+    // Egress: the npm preset only, names resolved on this computer.
+    let record = Arc::new(FakeRecord::default());
+    let egress = SessionEgress::open(
+        "ses-live",
+        EgressPolicyConfig {
+            session_allow: vec![EgressAllowYaml::Preset("npm".into())],
+            session_private: Vec::new(),
+            browser: None,
+        },
+        record.clone(),
+        Arc::new(SystemResolver),
+        Some(private.child("egress-env").unwrap()),
+    )
+    .await
+    .unwrap();
+    let sandbox = Arc::new(
+        SessionSandbox::start(
+            &sessions[1],
+            workspace.path(),
+            Some(IMAGE),
+            &[],
+            &[],
+            &SandboxPolicy {
+                network: SandboxNetwork::Egress,
+                runtime_authority: Some(authority_label.clone()),
+                supervisor_installation: Some(installation.clone()),
+                egress: Some(axocoatl_isolation::egress::EgressAttachment::new(
+                    egress.clone(),
+                )),
+                ..SandboxPolicy::default()
+            },
+        )
+        .await
+        .unwrap(),
+    );
+    let grant = egress.grant(agent_spec()).await.unwrap();
+    let egress_times = time(sandbox.clone(), grant.env_file.clone()).await;
+    drop(grant);
+    sandbox.stop_checked().await.unwrap();
+    for session in &sessions {
+        SessionSandbox::remove_named_with_dependencies(session)
+            .await
+            .unwrap();
+    }
+
+    let events = record.events();
+    let refused: Vec<String> = events
+        .iter()
+        .filter_map(|event| match event {
+            NetworkEvent::Open {
+                decision: RecordDecision::Deny,
+                host,
+                port,
+                reason,
+                ..
+            } => Some(format!("{host}:{port} {reason:?}")),
+            _ => None,
+        })
+        .collect();
+    let mut allowed: BTreeMap<String, usize> = BTreeMap::new();
+    for event in &events {
+        if let NetworkEvent::Open {
+            decision: RecordDecision::Allow,
+            host,
+            port,
+            ..
+        } = event
+        {
+            *allowed.entry(format!("{host}:{port}")).or_default() += 1;
+        }
+    }
+    let mean = |values: &[f64]| values.iter().sum::<f64>() / values.len() as f64;
+    eprintln!(
+        "live npm ci: bridge {bridge_times:.1?} s (mean {:.1}), egress {egress_times:.1?} s (mean {:.1}), {:+.0}%",
+        mean(&bridge_times),
+        mean(&egress_times),
+        (mean(&egress_times) / mean(&bridge_times) - 1.0) * 100.0
+    );
+    eprintln!("live npm ci: allowed {allowed:?}; refused {refused:?}");
+    assert!(refused.is_empty(), "a preset is missing hosts: {refused:?}");
+    assert!(allowed
+        .keys()
+        .any(|host| host.starts_with("registry.npmjs.org")));
+    assert!(
+        allowed
+            .keys()
+            .any(|host| host.starts_with("deb.debian.org")),
+        "{allowed:?}"
+    );
+}
+
+/// Live, opt-in with `AXOCOATL_LIVE_EGRESS=1`: Alpine readiness provisioning
+/// through the `alpine` preset, and `cargo fetch` of a small crate through
+/// the `crates` preset. Every connection must be allowed by the presets.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "live: AXOCOATL_LIVE_EGRESS=1 CONTAINER_CONNECTION=axocoatl-ci-pr74; needs the internet"]
+async fn live_alpine_provisioning_and_cargo_fetch_through_their_presets() {
+    use axocoatl_isolation::{SandboxNetwork, SandboxPolicy, SessionSandbox};
+    if std::env::var("AXOCOATL_LIVE_EGRESS").as_deref() != Ok("1") {
+        eprintln!("skipped: set AXOCOATL_LIVE_EGRESS=1");
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path().canonicalize().unwrap();
+    let private = SecureDir::open(&root_path).unwrap();
+    let installation = private.child("supervisor").unwrap();
+    let authority_label = format!(
+        "{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(root_path.to_string_lossy().as_bytes())
+    );
+    let mut report = Vec::new();
+    for (name, image, preset, command) in [
+        ("alpine", "docker.io/library/alpine:3.20", "alpine", None),
+        (
+            "crates",
+            "docker.io/library/rust:bookworm",
+            "crates",
+            Some("cargo fetch --quiet"),
+        ),
+    ] {
+        let workspace = private.child(name).unwrap();
+        if name == "crates" {
+            std::fs::create_dir_all(workspace.path().join("src")).unwrap();
+            std::fs::write(workspace.path().join("src/lib.rs"), "").unwrap();
+            std::fs::write(
+                workspace.path().join("Cargo.toml"),
+                "[package]\nname = \"egress-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nitoa = \"1\"\n",
+            )
+            .unwrap();
+        }
+        let record = Arc::new(FakeRecord::default());
+        let egress = SessionEgress::open(
+            format!("ses-live-{name}"),
+            EgressPolicyConfig {
+                session_allow: vec![EgressAllowYaml::Preset(preset.into())],
+                session_private: Vec::new(),
+                browser: None,
+            },
+            record.clone(),
+            Arc::new(SystemResolver),
+            Some(private.child("egress-env").unwrap()),
+        )
+        .await
+        .unwrap();
+        let session = format!("egress-live-{name}-{}", std::process::id());
+        let started = std::time::Instant::now();
+        let sandbox = SessionSandbox::start(
+            &session,
+            workspace.path(),
+            Some(image),
+            &[],
+            &[],
+            &SandboxPolicy {
+                network: SandboxNetwork::Egress,
+                runtime_authority: Some(authority_label.clone()),
+                supervisor_installation: Some(installation.clone()),
+                egress: Some(axocoatl_isolation::egress::EgressAttachment::new(
+                    egress.clone(),
+                )),
+                ..SandboxPolicy::default()
+            },
+        )
+        .await;
+        let ready_in = started.elapsed();
+        let outcome = match sandbox {
+            Ok(sandbox) => {
+                let mut result = Ok(());
+                if let Some(command) = command {
+                    let grant = egress.grant(agent_spec()).await.unwrap();
+                    let output = tokio::process::Command::new("podman")
+                        .arg("exec")
+                        .arg("--env-file")
+                        .arg(grant.env_file.as_ref().unwrap())
+                        .arg("-w")
+                        .arg(sandbox.root())
+                        .args([sandbox.container(), "sh", "-c", command])
+                        .output()
+                        .await
+                        .unwrap();
+                    if !output.status.success() {
+                        result = Err(String::from_utf8_lossy(&output.stderr).into_owned());
+                    }
+                }
+                sandbox.stop_checked().await.unwrap();
+                result
+            }
+            Err(error) => Err(error.to_string()),
+        };
+        SessionSandbox::remove_named_with_dependencies(&session)
+            .await
+            .unwrap();
+        let mut allowed: BTreeMap<String, usize> = BTreeMap::new();
+        let mut refused = Vec::new();
+        for event in record.events() {
+            if let NetworkEvent::Open {
+                decision,
+                host,
+                port,
+                reason,
+                ..
+            } = event
+            {
+                match decision {
+                    RecordDecision::Allow => {
+                        *allowed.entry(format!("{host}:{port}")).or_default() += 1
+                    }
+                    RecordDecision::Deny => refused.push(format!("{host}:{port} {reason:?}")),
+                }
+            }
+        }
+        eprintln!("live {name}: ready in {ready_in:.1?}; allowed {allowed:?}; refused {refused:?}; {outcome:?}");
+        report.push((name, outcome, allowed, refused));
+    }
+    for (name, outcome, allowed, refused) in report {
+        assert!(outcome.is_ok(), "{name}: {outcome:?}");
+        assert!(
+            refused.is_empty(),
+            "{name}: a preset is missing hosts: {refused:?}"
+        );
+        assert!(
+            !allowed.is_empty(),
+            "{name}: nothing went through the proxy"
+        );
+    }
+}
