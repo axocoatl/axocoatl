@@ -188,7 +188,8 @@ it, and **Session network** says so. Keep secrets in environment variables. Read
 [`GET /api/sessions/{id}/network`](/reference/http-api/), or open **Session network**
 from an Agent's details in the Session graph. It shows the policy of each scope
 (the Session's list, provisioning and, with `browser:` configured, the browser's
-declared hosts), allowed and refused counts and each refused connection; a refused
+declared hosts), allowed and refused counts, each refused connection and each
+request on an [egress route](/configure/credentials/); a refused
 host can be allowed for that Session only with **Allow for this Session**, which is
 recorded and applies to new connections at once, in the scope of the refused
 connection. Each activation's details also show its tool calls' network activity.
@@ -206,7 +207,8 @@ cannot ask, and the tool is not offered outside `network: egress`. See
 [Hosts Agents ask for](/reference/http-api/#hosts-agents-ask-for).
 
 To change the list for every Session while the daemon runs, edit `sandbox.egress.allow`
-or `private_destinations` (or `browser.allow` and `browser.private_destinations`) in
+or `private_destinations` (or `browser.allow` and `browser.private_destinations`, or
+the [routes](/configure/credentials/) and `credentials`) in
 the configuration file and run `axocoatl network reload`, or send
 [`POST /api/network/reload`](/reference/http-api/#reload-the-network-allowlists). The
 daemon validates the whole file; an invalid file changes nothing. The command
@@ -234,10 +236,13 @@ network and the tool.
 
 What egress does not cover:
 
-- The proxy cannot see inside TLS. A listed host that serves many sites, such as a
-  CDN, can be used to reach those sites, and a listed host that accepts uploads
-  (`github`, `npm`, `pypi`, `crates`) is a way for data to leave. `validate` and
-  `doctor` warn about both.
+- The proxy cannot see inside TLS to a host listed under `allow`. Such a host that
+  serves many sites, such as a CDN, can be used to reach those sites, and one that
+  accepts uploads (`github`, `npm`, `pypi`, `crates`) is a way for data to leave.
+  `validate` and `doctor` warn about both. For a host listed under
+  [routes](/configure/credentials/), Axocoatl ends TLS on your computer and checks
+  each request's method, path and query, and the server name and `Host` must be the
+  route's host; routes do not read request bodies or WebSocket messages.
 - Traffic from Axocoatl itself is outside the proxy: model providers, MCP servers,
   `web_search` and `web_fetch`, webhooks and Podman image pulls. The web tools run
   on your computer, so `sandbox.egress` does not limit them; their calls are kept in

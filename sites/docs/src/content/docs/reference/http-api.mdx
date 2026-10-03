@@ -388,11 +388,18 @@ activity returns an empty list.
 
 `mode` is `sandbox.network`. Pass `next_after` back as `after` to read on. Each
 event has a `kind`: `policy`, `sidecar`, `bind`, `unbind`, `open`, `close`,
-`web_request`, `web`, `browser`, `proposal` or `limit`. An `open` event names the destination `host` and `port`, its
+`request`, `response`, `web_request`, `web`, `browser`, `proposal` or `limit`. An `open` event names the destination `host` and `port`, its
 `conn_kind` (`connect` for a tunnel or `http`), the `decision` (`allow` or `deny`)
-with its `reason` and `status`, the addresses used, and the tool call (`binding`)
+with its `reason` and `status`, the `rule` that decided (`route#0` for an
+[egress route](/configure/credentials/)), the addresses used, and the tool call (`binding`)
 whose credential it presented. Credentials appear only as 16-hex tags. A `close`
-event adds the bytes sent and received and the duration. `record.full` means new
+event adds the bytes sent and received and the duration, and for a route's
+connection the reason the daemon ended it, if it was not an ordinary close. On a
+route, each HTTP request is a `request` event written before the request is sent
+(`conn`, `seq_in_conn`, `method`, `path` without its query, `host`, the `rule` that
+allowed it, `decision`, `reason`, and the `credential`'s name, never its value), and
+a `response` event says how an allowed one ended (`status`, `up`, `down`, `ms`,
+`outcome`). `record.full` means new
 connections are refused; `gaps` counts places where a sequence number was skipped.
 An `open` or `close` event's `conn` is `g<generation>:<id>`; generations continue
 across proxy restarts and runtime starts, so `conn` is unique in one record. A
@@ -407,7 +414,8 @@ policy: `session` (your `sandbox.egress` list plus this Session's allows),
 `provisioning` (the Alpine, Debian and Ubuntu mirrors) and, when `browser:` is
 configured, `browser` (`browser.allow` plus this Session's browser allows), which only
 the browser's credentials are checked against. Each rule has an `id`, its
-`text` and its `source`. A `policy` event's `source` is `config` (the configuration
+`text` and its `source` (`preset`, `config`, `session`, or `route` for an entry of
+`sandbox.egress.routes` in the `session` policy). A `policy` event's `source` is `config` (the configuration
 the decision point opened with), `config_reload` (a
 [reload](#reload-the-network-allowlists)), `session_allow` or `session_revoke`.
 `proposals` lists the hosts Agents [asked for](#hosts-agents-ask-for), pending ones
@@ -530,15 +538,16 @@ Nothing approves a request by itself, and no Agent can reach these routes.
 
 `POST /api/network/reload` (and [`axocoatl network reload`](/reference/cli/#network-policy))
 reads the configuration file the daemon was started with again and validates all of
-it. Only four settings apply while the daemon runs: `sandbox.egress.allow`,
-`sandbox.egress.private_destinations`, `browser.allow` and
-`browser.private_destinations`.
+it. Only six settings apply while the daemon runs: `sandbox.egress.allow`,
+`sandbox.egress.private_destinations`, `sandbox.egress.routes`, `credentials`,
+`browser.allow` and `browser.private_destinations`.
 
 ```json
 POST /api/network/reload
 
 {"applied": ["sandbox.egress.allow"],
- "unchanged": ["sandbox.egress.private_destinations", "browser.allow", "browser.private_destinations"],
+ "unchanged": ["sandbox.egress.private_destinations", "sandbox.egress.routes", "credentials",
+               "browser.allow", "browser.private_destinations"],
  "restart_required": ["sandbox.egress.max_connections"],
  "revisions": [{"session_id": "ses-…", "scope": "session", "revision": 6, "digest": "…", "closed": 1}],
  "changes": [{"key": "sandbox.egress.allow",
@@ -548,8 +557,10 @@ POST /api/network/reload
 
 - `changes` names, for each list that changed, every entry it gained and lost
   compared with the lists in force before: allow entries as the rules they compile
-  to (a preset as each of its hosts, with its ports), private ranges as ranges. Read
-  it to see exactly what a reload widens.
+  to (a preset as each of its hosts, with its ports), private ranges as ranges, routes
+  as their configuration in JSON and credentials as their name and where they are
+  read (`github: env GITHUB_TOKEN`; there is no value to show). Read it to see
+  exactly what a reload widens.
 
 - New Sessions use the new lists. Each running Session whose policy changed records
   it as a `policy` event with `source` `config_reload` and `actor` `human`, and uses
@@ -557,7 +568,14 @@ POST /api/network/reload
 - Open connections admitted by a rule the new list no longer has, unchanged, are
   closed (`closed` counts them per Session and scope). A rule whose position in the
   list moved gets a new id, so its connections are closed too and reconnect.
-  Removing a private range closes that scope's open connections.
+  Removing a private range closes that scope's open connections. A route that
+  changed in any way (its rules, credential, `for` or other settings) closes the
+  connections it was serving, and a new route closes the plain tunnels already open
+  to its host on its ports.
+- A Session whose runtime started without routes has no trust files for the
+  Session's authority, so its clients refuse the certificates of routes a reload
+  adds until the runtime starts again; see
+  [What the client sees](/configure/credentials/#what-the-client-sees).
 - `restart_required` names every other setting that differs from the configuration
   the daemon started with, such as `sandbox.network`,
   `sandbox.egress.sidecar_network`, `sandbox.egress.max_connections`, adding or
@@ -589,8 +607,9 @@ An activation whose tool calls opened or were refused connections through an egr
 proxy (under `network: egress`, or through the browser's declared hosts), or called
 `web_search` or `web_fetch`, has one evidence item of kind `network`. Its `summary`
 names each destination, such as `registry.npmjs.org:443 allowed ×3 (1.2 MB in);
-evil.test:443 refused (not_allowed)`, and counts web calls; its `details` holds up to 200 of the matching `open`,
-`close` and `web` lines from the [network record](#session-network-record), with
+evil.test:443 refused (not_allowed)`, and counts web calls, followed by the
+requests made on routes; its `details` holds up to 200 of the matching `open`, `close`, `request`, `response` and `web` lines from
+the [network record](#session-network-record), with
 `truncated` set when there were more. Events are joined to the activation through the
 tool call whose credential they presented. Setup, terminal and unattributed events
 appear only in the network record.

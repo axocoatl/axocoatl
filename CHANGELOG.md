@@ -147,11 +147,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call), and a test given an Agent's credential can use it from the browser container.
 - `axocoatl network reload` and `POST /api/network/reload` read the daemon's
   configuration file again, validate it, and apply `sandbox.egress.allow`,
-  `sandbox.egress.private_destinations`, `browser.allow` and
-  `browser.private_destinations` to new and running Sessions: each running Session
-  records its new policy (`source: config_reload`), new connections use it at once,
-  and open connections that no rule allows any more are closed. The report lists
-  every entry each list gains and loses. A running Session whose new policy cannot
+  `sandbox.egress.private_destinations`, `sandbox.egress.routes`, `credentials`,
+  `browser.allow` and `browser.private_destinations` to new and running Sessions:
+  each running Session records its new policy (`source: config_reload`), new
+  connections use it at once, and open connections that no rule allows any more, or
+  whose route changed, are closed. The report lists every entry each list gains and
+  loses. A running Session whose new policy cannot
   be recorded keeps its old one and is listed under `failed`; the command then exits
   with status 1, the route answers `503`, and the next reload, even of the same file,
   tries that Session again. Other changed settings are listed as needing a restart
@@ -170,10 +171,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   building blocks for later Session settings: the egress control protocol moves to
   version 2, and a network record's `open` event can carry the program, its user and
   SHA-256 in a new `peer` field.
-- `sandbox.egress.routes` and `credentials`. A route names one host whose HTTPS
-  traffic the daemon ends itself, with a certificate from a certificate authority
+- `sandbox.egress.routes` and `credentials`, under `network: egress`. A route names
+  one host whose HTTPS traffic the daemon ends itself: the egress proxy answers a
+  `CONNECT` to the route's host and port with a relay that carries the client's TLS
+  bytes to the daemon, which ends TLS with a certificate from a certificate authority
   made for each Session (ECDSA P-256, key kept in memory, 30 days; a 24-hour
-  certificate per host). Each request must come from a process kind the route
+  certificate per host) and connects to the upstream itself, only to the addresses
+  it resolved and checked for the connection. On a route's ports the route decides,
+  whatever `allow` lists: a plain-HTTP request gets `403 tls_required` and a process
+  kind the route does not serve `403 route_not_for_binding`. Each request must come
+  from a process kind the route
   serves, carry the route host as its TLS server name and `Host`, have a canonical
   path (no dot segments, including `..;` path-parameter forms, and no escaped or
   twice-escaped separators), ask for no upgrade, carry no method, URL or host override
@@ -189,15 +196,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   set, and stop a response whose status line, headers, body or trailers carry the
   credential before that part reaches the client. Every route request is written to
   the Session's network record before it is sent (`request`), and how it ended after
-  (`response`); activation evidence lists them. Containers trust the Session's
-  authority through `/etc/axocoatl/ca` and the usual certificate variables.
-  Validation refuses `${...}` and plain values in `credentials` and routes, warns
-  about credentialed routes that allow every path and about stdio MCP servers that
-  inherit `env` credentials, and `axocoatl doctor` reports routes and whether each
-  credential's variable or file is there. See Configure > Credentials and routes.
-  Sessions do not use routes yet: the broker is not connected to the egress proxy, so
-  a route's host is reached only when `allow` or a preset lists it, as an opaque
-  tunnel without the route's rules or credential.
+  (`response`); a relayed connection's `close` says why the daemon ended it (for
+  example `sni_mismatch`). Activation evidence and **Session network** list them.
+  A Session that has routes when its runtime starts gets the authority's certificate
+  in a read-only volume (`axo-ca-<session>`) at `/etc/axocoatl/ca`, and the
+  credentials of the process kinds a route serves set `SSL_CERT_FILE`,
+  `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `PIP_CERT`, `GIT_SSL_CAINFO`,
+  `CARGO_HTTP_CAINFO`, `NODE_EXTRA_CA_CERTS` and `DENO_CERT` to it, plus each route's
+  `env_placeholders`. Validation refuses `${...}` and plain values in `credentials`
+  and routes, warns about credentialed routes that allow every path and about stdio
+  MCP servers that inherit `env` credentials, and `axocoatl doctor` reports routes
+  and whether each credential's variable or file is there. See Configure >
+  Credentials and routes.
 
 ### Changed
 - `web_search.provider` must be `searxng` or the legacy `tavily`; any other non-empty value is

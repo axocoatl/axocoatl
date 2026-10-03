@@ -334,9 +334,9 @@ runtime performs checked deletion.
 ### sandbox.egress.routes
 
 Routes are hosts whose HTTPS traffic Axocoatl ends on your computer, so it can
-check each request and add a credential. See
-[Credentials and routes](/configure/credentials/) for how they work. This build
-validates routes and `credentials`, but Sessions do not use them yet.
+check each request and add a credential. They apply under `network: egress`, and
+`axocoatl network reload` applies changes to them and to `credentials` to running
+Sessions. See [Credentials and routes](/configure/credentials/) for how they work.
 
 ```yaml
 sandbox:
