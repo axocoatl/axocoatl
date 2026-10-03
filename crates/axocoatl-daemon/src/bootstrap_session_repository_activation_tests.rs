@@ -2226,6 +2226,9 @@ mod driver_tests;
 #[path = "bootstrap_session_browser_tests.rs"]
 mod browser_tests;
 
+#[path = "bootstrap_session_browser_egress_tests.rs"]
+mod browser_egress_tests;
+
 #[path = "bootstrap_native_ways_tests.rs"]
 mod ways_tests;
 
