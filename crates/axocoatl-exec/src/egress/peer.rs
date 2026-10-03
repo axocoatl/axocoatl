@@ -4,9 +4,18 @@
 //! `tcp6`) by its address pair, then the process that holds that socket by
 //! scanning `/proc/<pid>/fd`, and reads that process's executable, user,
 //! group and parent chain from `/proc`. It hashes the executable's contents,
-//! caching each file's hash by device, inode, size and modification time.
-//! Reading another user's `/proc/<pid>/fd` and `exe` needs `CAP_SYS_PTRACE`;
-//! without it the identity carries the socket's user and `error: no_access`.
+//! caching each file's hash by device, inode, size, modification time and
+//! change time (which no user can set), and only once the file has been
+//! unchanged for [`HASH_CACHE_SETTLE`]. Reading another user's
+//! `/proc/<pid>/fd` and `exe` needs `CAP_SYS_PTRACE`; without it the identity
+//! carries the socket's user and `error: no_access`.
+//!
+//! A path from `/proc/<pid>/exe` is only the program's path here when that
+//! process shares this process's mount namespace and root: in a private mount
+//! namespace another file can be bound over the path a program runs from. For
+//! a process that does not, the identity leaves out the program's path and
+//! its parents and says `foreign_namespace`; the SHA-256 still comes from the
+//! file that runs. A parent that does not ends the parent chain the same way.
 //!
 //! A program can be made to act for another (for example with `LD_PRELOAD`,
 //! an interpreter, or a descriptor passed to a child), so an identity narrows
@@ -32,6 +41,11 @@ pub const MAX_HASHED_BYTES: u64 = 512 * 1024 * 1024;
 /// Most cached executable hashes.
 #[cfg(target_os = "linux")]
 const MAX_CACHED_HASHES: usize = 256;
+/// A file whose change time is less than this before its hash began is
+/// hashed again next time instead of cached: a later change within the same
+/// clock tick could leave its change time as it was.
+#[cfg(target_os = "linux")]
+pub const HASH_CACHE_SETTLE: Duration = Duration::from_secs(1);
 
 /// The identity of a file's contents, for the hash cache.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -42,6 +56,24 @@ struct FileKey {
     size: u64,
     mtime: i64,
     mtime_nsec: i64,
+    /// Set by the kernel on every write and every change of the times, so a
+    /// file rewritten in place with its modification time put back differs.
+    ctime: i64,
+    ctime_nsec: i64,
+}
+
+/// Whether a file last changed at `ctime`.`ctime_nsec` had settled when its
+/// hash began at `started`, so the hash may be cached.
+#[cfg(target_os = "linux")]
+fn settled(ctime: i64, ctime_nsec: i64, started: std::time::SystemTime) -> bool {
+    let Ok(seconds) = u64::try_from(ctime) else {
+        return true;
+    };
+    let nanos = u32::try_from(ctime_nsec.clamp(0, 999_999_999)).unwrap_or(0);
+    let changed = std::time::UNIX_EPOCH + Duration::new(seconds, nanos);
+    started
+        .duration_since(changed)
+        .is_ok_and(|age| age >= HASH_CACHE_SETTLE)
 }
 
 /// Looks up connection peers; keeps executable hashes between lookups.
@@ -121,14 +153,23 @@ impl PeerLookup {
             }
             Err(reason) => fail(&mut identity, reason),
         }
-        match linux::exe(pid) {
-            Ok(path) => {
+        // The view is checked after the path is read: a process without
+        // privileges here can move into a private mount namespace but never
+        // back, so one still in this view ran its program from this view.
+        let program =
+            linux::exe(pid).and_then(|path| linux::same_view(pid).map(|same| (path, same)));
+        match program {
+            Ok((path, true)) => {
                 let text = path_text(&path);
                 if text.chars().count() > MAX_PEER_PATH_CHARS {
                     fail(&mut identity, "path_too_long");
                 } else {
                     identity.exe = Some(text);
                 }
+            }
+            Ok((_, false)) => {
+                fail(&mut identity, "foreign_namespace");
+                parent = None;
             }
             Err(reason) => fail(&mut identity, reason),
         }
@@ -144,6 +185,14 @@ impl PeerLookup {
             let Ok(path) = linux::exe(ancestor) else {
                 break;
             };
+            match linux::same_view(ancestor) {
+                Ok(true) => {}
+                Ok(false) => {
+                    fail(&mut identity, "foreign_namespace");
+                    break;
+                }
+                Err(_) => break,
+            }
             let text = path_text(&path);
             if text.chars().count() > MAX_PEER_ANCESTOR_CHARS {
                 break;
@@ -164,6 +213,7 @@ impl PeerLookup {
         use std::io::Read;
         use std::os::unix::fs::MetadataExt;
         let mut file = std::fs::File::open(format!("/proc/{pid}/exe")).map_err(linux::reason)?;
+        let started = std::time::SystemTime::now();
         let metadata = file.metadata().map_err(linux::reason)?;
         if metadata.len() > MAX_HASHED_BYTES {
             return Ok(None);
@@ -174,6 +224,8 @@ impl PeerLookup {
             size: metadata.len(),
             mtime: metadata.mtime(),
             mtime_nsec: metadata.mtime_nsec(),
+            ctime: metadata.ctime(),
+            ctime_nsec: metadata.ctime_nsec(),
         };
         if let Some(hash) = self
             .hashes
@@ -198,6 +250,9 @@ impl PeerLookup {
             digest.update(&buffer[..read]);
         }
         let hash = format!("{:x}", digest.finalize());
+        if !settled(key.ctime, key.ctime_nsec, started) {
+            return Ok(Some(hash));
+        }
         let mut hashes = self
             .hashes
             .lock()
@@ -366,6 +421,20 @@ mod linux {
     pub(super) fn exe(pid: u32) -> Result<PathBuf, &'static str> {
         std::fs::read_link(format!("/proc/{pid}/exe")).map_err(reason)
     }
+
+    /// Whether `pid` sees files as this process does: the same mount
+    /// namespace and the same root. Only then is the path its
+    /// `/proc/<pid>/exe` shows the path of that file here.
+    pub(super) fn same_view(pid: u32) -> Result<bool, &'static str> {
+        use std::os::unix::fs::MetadataExt;
+        let own = std::fs::metadata("/proc/self/ns/mnt").map_err(reason)?;
+        let theirs = std::fs::metadata(format!("/proc/{pid}/ns/mnt")).map_err(reason)?;
+        if (own.dev(), own.ino()) != (theirs.dev(), theirs.ino()) {
+            return Ok(false);
+        }
+        let root = std::fs::read_link(format!("/proc/{pid}/root")).map_err(reason)?;
+        Ok(root.as_os_str() == "/")
+    }
 }
 
 #[cfg(test)]
@@ -432,6 +501,28 @@ mod tests {
         );
         assert_eq!(linux::parse_address("XYZ:0C38"), None);
         assert_eq!(linux::parse_address("0100007F"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_a_settled_file_is_cached() {
+        let now = std::time::UNIX_EPOCH + Duration::new(1_800_000_000, 500_000_000);
+        assert!(settled(1_799_999_999, 500_000_000, now));
+        assert!(settled(1_799_999_000, 0, now));
+        assert!(!settled(1_799_999_999, 500_000_001, now));
+        assert!(!settled(1_800_000_000, 0, now));
+        // A change time ahead of the clock is not settled.
+        assert!(!settled(1_800_000_100, 0, now));
+        // Before 1970: long settled.
+        assert!(settled(-1, 0, now));
+    }
+
+    /// This process shares its own view of files.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_process_shares_its_own_view() {
+        assert_eq!(linux::same_view(std::process::id()), Ok(true));
+        assert_eq!(linux::same_view(u32::MAX), Err("not_found"));
     }
 
     /// The test process's own connection: it holds the client socket.

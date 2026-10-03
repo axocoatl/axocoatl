@@ -477,6 +477,35 @@ async fn the_identity_socket_names_the_program_and_refuses_forged_lines() {
             "{peer:?}"
         );
 
+        // A program run from a private mount namespace, with a copy of curl
+        // bound over /usr/bin/git, is not named git: the path and parents
+        // are left out, and the SHA-256 is curl's.
+        let (code, output) = exec(
+            &client,
+            "1000:1000",
+            "cp /usr/bin/curl /tmp/not-git && unshare -Urm sh -c 'mount --bind /tmp/not-git /usr/bin/git && exec /usr/bin/git -sS --max-time 20 -p -x http://127.0.0.1:3128 http://relay.test/namespace'",
+        )
+        .await;
+        assert_eq!(code, 0, "{output}");
+        assert!(output.starts_with("relayed GET /namespace"), "{output}");
+        let peer = fixture
+            .opened()
+            .into_iter()
+            .rev()
+            .find(|open| open.host == "relay.test")
+            .and_then(|open| open.peer)
+            .unwrap();
+        assert_eq!(peer.error.as_deref(), Some("foreign_namespace"), "{peer:?}");
+        assert_eq!(peer.exe, None, "{peer:?}");
+        assert!(peer.ancestors.is_empty(), "{peer:?}");
+        assert_eq!(peer.uid, Some(1000), "{peer:?}");
+        let (_, digest) = exec(&client, "0", "sha256sum /usr/bin/curl").await;
+        assert_eq!(
+            Some(digest.split_whitespace().next().unwrap()),
+            peer.exe_sha256.as_deref(),
+            "{peer:?}"
+        );
+
         // A forged line on the ordinary socket is refused before the
         // daemon hears of it.
         let before = fixture.opened().len();

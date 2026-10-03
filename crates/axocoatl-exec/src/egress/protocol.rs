@@ -90,7 +90,9 @@ pub enum CloseOutcome {
 /// and that file's SHA-256, its user and group, and up to
 /// [`MAX_PEER_ANCESTORS`] parent executables (nearest first). What could not
 /// be found is left out and `error` says why (`no_access`, `not_found`,
-/// `timeout`, `unsupported`, `path_too_long`, `hash_failed`).
+/// `timeout`, `unsupported`, `path_too_long`, `hash_failed`, or
+/// `foreign_namespace` for a process in another mount namespace or under
+/// another root, whose path is left out because it may name another file).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PeerIdentity {

@@ -119,10 +119,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend is E2B or `browser.allow` lists hosts under `network: egress`, and refuses
   `browser_check` for an Agent with `writes: []`.
 - The execution supervisor can relay connections to the daemon, report the program
-  behind each proxied connection and apply a seccomp filter. These are building blocks
-  for later Session settings: the egress control protocol moves to version 2, and a
-  network record's `open` event can carry the program, its user and SHA-256 in a new
-  `peer` field.
+  behind each proxied connection and harden the commands it runs with a seccomp filter
+  and a Landlock domain that keeps them out of processes they did not start. These are
+  building blocks for later Session settings: the egress control protocol moves to
+  version 2, and a network record's `open` event can carry the program, its user and
+  SHA-256 in a new `peer` field.
 
 ### Changed
 - `web_search.provider` must be `searxng` or the legacy `tavily`; any other non-empty value is

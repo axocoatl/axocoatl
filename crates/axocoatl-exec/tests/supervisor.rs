@@ -763,6 +763,74 @@ fn fixture_process() {
             println!("connect={connect} bind={bind}");
             std::process::exit(0);
         }
+        "proc-access" => {
+            // How the kernel answers reads of another process's environment,
+            // memory map and memory through /proc: the process in
+            // `victim-pid`, which this command did not start, and a child of
+            // this command. Both carry the marker in their environment.
+            let victim: u32 = std::fs::read_to_string(directory.join("victim-pid"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let marker = std::fs::read_to_string(directory.join("marker")).unwrap();
+            let answer =
+                |error: std::io::Error| format!("errno-{}", error.raw_os_error().unwrap_or(-1));
+            let environ = |pid: u32| match std::fs::read(format!("/proc/{pid}/environ")) {
+                Ok(bytes) if bytes.windows(marker.len()).any(|w| w == marker.as_bytes()) => {
+                    "marker".to_owned()
+                }
+                Ok(_) => "no-marker".to_owned(),
+                Err(error) => answer(error),
+            };
+            let maps = |pid: u32| match std::fs::read_to_string(format!("/proc/{pid}/maps")) {
+                Ok(_) => "ok".to_owned(),
+                Err(error) => answer(error),
+            };
+            let memory = |pid: u32| -> String {
+                use std::os::unix::fs::FileExt;
+                let file = match std::fs::File::open(format!("/proc/{pid}/mem")) {
+                    Ok(file) => file,
+                    Err(error) => return answer(error),
+                };
+                let Ok(maps) = std::fs::read_to_string(format!("/proc/{pid}/maps")) else {
+                    return "opened-without-maps".to_owned();
+                };
+                let Some(start) = maps.lines().find_map(|line| {
+                    let mut fields = line.split_whitespace();
+                    let span = fields.next()?;
+                    let permissions = fields.next()?;
+                    if !permissions.starts_with('r') {
+                        return None;
+                    }
+                    u64::from_str_radix(span.split('-').next()?, 16).ok()
+                }) else {
+                    return "no-readable-mapping".to_owned();
+                };
+                let mut byte = [0u8; 1];
+                match file.read_at(&mut byte, start) {
+                    Ok(1) => "ok".to_owned(),
+                    Ok(_) => "short".to_owned(),
+                    Err(error) => answer(error),
+                }
+            };
+            // Command::spawn returns after the child's exec, so its
+            // environment is already the one given here.
+            let mut child = Command::new("sleep")
+                .arg("30")
+                .env("AXO_PROC_MARKER", &marker)
+                .spawn()
+                .unwrap();
+            println!(
+                "environ={}\nmaps={}\nmem={}\nchild_environ={}",
+                environ(victim),
+                maps(victim),
+                memory(victim),
+                environ(child.id()),
+            );
+            let _ = child.kill();
+            let _ = child.wait();
+            std::process::exit(0);
+        }
         "syscalls" => {
             // How the kernel answers each call `--serve --harden` filters,
             // plus calls it must leave alone. One `name=result` per line.
@@ -1142,13 +1210,23 @@ fn corrupted_or_truncated_stdin_is_refused_before_ready() {
 
 fn syscall_answers(hardened: bool) -> std::collections::BTreeMap<String, String> {
     let directory = tempfile::tempdir().unwrap();
+    fixture_answers("syscalls", directory.path(), hardened)
+}
+
+/// Run fixture `kind` under the supervisor, with or without `--harden`, and
+/// collect its `name=result` lines.
+fn fixture_answers(
+    kind: &str,
+    directory: &Path,
+    hardened: bool,
+) -> std::collections::BTreeMap<String, String> {
     let mut input = fixture_request(10_000);
-    input.invocation_id = format!("syscalls-{hardened}");
+    input.invocation_id = format!("{kind}-{hardened}");
     input.stdout_bytes = 4096;
     let mut helper = if hardened {
-        Helper::start_hardened(input.clone(), Some(("syscalls", directory.path())))
+        Helper::start_hardened(input.clone(), Some((kind, directory)))
     } else {
-        Helper::start(input.clone(), Some(("syscalls", directory.path())))
+        Helper::start(input.clone(), Some((kind, directory)))
     };
     helper.control(Control::Dispatch);
     let ServerMessage::Finished {
@@ -1166,6 +1244,29 @@ fn syscall_answers(hardened: bool) -> std::collections::BTreeMap<String, String>
         .collect()
 }
 
+/// On a kernel without Landlock, `--serve --harden` refuses to launch
+/// anything (true, and the caller skips its checks); otherwise false.
+fn hardening_refused_without_landlock() -> bool {
+    if landlock_abi() >= 1 {
+        return false;
+    }
+    let mut helper = Helper::start_hardened(shell("true", 5000), None);
+    helper.control(Control::Dispatch);
+    let ServerMessage::Finished {
+        outcome, launched, ..
+    } = helper.finished()
+    else {
+        panic!("terminal")
+    };
+    let ProcessOutcome::LaunchFailed { message } = outcome else {
+        panic!("hardening without Landlock must not launch: {outcome:?}");
+    };
+    assert!(!launched);
+    assert!(message.starts_with("hardening unavailable"), "{message}");
+    eprintln!("Landlock is not available; hardened launches are refused");
+    true
+}
+
 /// `--serve --harden` launches its command under the seccomp denylist: the
 /// listed calls fail with EPERM, clone3 and io_uring with ENOSYS, and
 /// ordinary work (threads, child processes, memfd, Unix sockets) still runs.
@@ -1173,6 +1274,9 @@ fn syscall_answers(hardened: bool) -> std::collections::BTreeMap<String, String>
 /// what refuses it.
 #[test]
 fn hardening_refuses_the_denylist_and_keeps_ordinary_calls() {
+    if hardening_refused_without_landlock() {
+        return;
+    }
     let plain = syscall_answers(false);
     let hardened = syscall_answers(true);
     eprintln!("without --harden: {plain:?}");
@@ -1213,6 +1317,9 @@ fn hardening_refuses_the_denylist_and_keeps_ordinary_calls() {
 /// are skipped and named.
 #[test]
 fn hardened_commands_still_run_ordinary_programs() {
+    if hardening_refused_without_landlock() {
+        return;
+    }
     let mut ran = Vec::new();
     for (program, script) in [
         ("sh", "sh -c true"),
@@ -1291,4 +1398,61 @@ fn hardening_and_a_write_restriction_apply_together() {
             ..
         }
     ));
+}
+
+/// Yama's ptrace scope, 0 when Yama is absent.
+fn yama_ptrace_scope() -> u32 {
+    std::fs::read_to_string("/proc/sys/kernel/yama/ptrace_scope")
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// `--serve --harden` puts its command in a Landlock domain even without a
+/// write restriction, so the command cannot read the environment, memory map
+/// or memory of a process it did not start, even one of the same user (here
+/// a `sleep` started by this test). Its own children stay readable. Without
+/// `--harden` the same command reads the other process's environment.
+#[test]
+fn hardened_commands_cannot_read_other_processes_memory_or_environment() {
+    if hardening_refused_without_landlock() {
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let marker = format!("axo-proc-marker-{}", std::process::id());
+    let mut victim = Command::new("sleep")
+        .arg("30")
+        .env("AXO_PROC_MARKER", &marker)
+        .spawn()
+        .unwrap();
+    std::fs::write(directory.path().join("victim-pid"), victim.id().to_string()).unwrap();
+    std::fs::write(directory.path().join("marker"), &marker).unwrap();
+    let plain = fixture_answers("proc-access", directory.path(), false);
+    let hardened = fixture_answers("proc-access", directory.path(), true);
+    let _ = victim.kill();
+    let _ = victim.wait();
+    eprintln!("without --harden: {plain:?}");
+    eprintln!("with --harden: {hardened:?}");
+    let eacces = format!("errno-{}", libc::EACCES);
+    for name in ["environ", "maps", "mem"] {
+        assert_eq!(hardened.get(name), Some(&eacces), "{name}: {hardened:?}");
+    }
+    assert_eq!(
+        hardened.get("child_environ").map(String::as_str),
+        Some("marker"),
+        "{hardened:?}"
+    );
+    // The same user may read it when nothing restricts the command.
+    assert_eq!(
+        plain.get("environ").map(String::as_str),
+        Some("marker"),
+        "{plain:?}"
+    );
+    if yama_ptrace_scope() == 0 {
+        assert_eq!(
+            plain.get("mem").map(String::as_str),
+            Some("ok"),
+            "{plain:?}"
+        );
+    }
 }

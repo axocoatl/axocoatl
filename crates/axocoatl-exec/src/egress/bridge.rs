@@ -353,34 +353,39 @@ fn connect_and_pump(accepted: Accepted, forward: &Forward, lookup: &PeerLookup) 
             http_errors,
             peer_identity,
             ..
-        } => match UnixStream::connect(target) {
-            Ok(upstream) => {
-                let preamble = if *peer_identity {
-                    identity_line(&accepted, lookup)
-                } else {
-                    Vec::new()
-                };
-                pump(
-                    accepted.fd(),
-                    upstream.as_raw_fd(),
-                    &preamble,
-                    idle,
-                    &never_revoked,
-                );
-            }
-            Err(_) => {
-                if *http_errors {
-                    if let Accepted::Tcp(mut stream) = accepted {
-                        let _ = stream.write_all(&sidecar_unavailable_response());
-                        let _ = stream.shutdown(std::net::Shutdown::Write);
-                        // Let the client read the answer before the close.
-                        let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
-                        let mut sink = [0u8; 1024];
-                        let _ = io::Read::read(&mut stream, &mut sink);
+        } => {
+            // Identify the program before connecting: the proxy waits only
+            // PEER_LINE_TIMEOUT_MS for the line, and that wait must not
+            // include finding the process and hashing its executable.
+            let preamble = if *peer_identity {
+                identity_line(&accepted, lookup)
+            } else {
+                Vec::new()
+            };
+            match UnixStream::connect(target) {
+                Ok(upstream) => {
+                    pump(
+                        accepted.fd(),
+                        upstream.as_raw_fd(),
+                        &preamble,
+                        idle,
+                        &never_revoked,
+                    );
+                }
+                Err(_) => {
+                    if *http_errors {
+                        if let Accepted::Tcp(mut stream) = accepted {
+                            let _ = stream.write_all(&sidecar_unavailable_response());
+                            let _ = stream.shutdown(std::net::Shutdown::Write);
+                            // Let the client read the answer before the close.
+                            let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+                            let mut sink = [0u8; 1024];
+                            let _ = io::Read::read(&mut stream, &mut sink);
+                        }
                     }
                 }
             }
-        },
+        }
         Forward::UnixToTcp { target, .. } => {
             if let Ok(upstream) =
                 TcpStream::connect_timeout(target, Duration::from_millis(CONNECT_TIMEOUT_MS))

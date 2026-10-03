@@ -17,6 +17,14 @@
 //! A call made under another architecture's numbering (32-bit compatibility
 //! calls) kills the process, and on x86_64 every x32 call fails with `EPERM`,
 //! so neither can step around the list.
+//!
+//! The filter cannot refuse reading another process's memory or environment
+//! through `/proc/<pid>/mem` and `environ`: those are file reads. The kernel
+//! guards them with a ptrace access check, which Landlock refuses for any
+//! process outside the caller's domain. So `--harden` always launches the
+//! command in a Landlock domain (its write restriction's, or one that only
+//! refuses creating block devices) and refuses to launch it without Landlock.
+//! Processes the command starts share its domain and stay reachable to it.
 
 use std::io;
 
