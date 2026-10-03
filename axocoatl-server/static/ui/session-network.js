@@ -459,6 +459,7 @@ class AxSessionNetwork extends HTMLElement {
           const parts = [request.rule || 'allowed'];
           parts.push(response ? `${response.status} (${response.outcome})` : 'no response recorded');
           if (request.credential) parts.push(`credential ${request.credential}`);
+          if (response && response.cookies_dropped) parts.push(`${response.cookies_dropped} Set-Cookie removed`);
           result.append(element('span', '', parts.join(' · ')));
         } else {
           result.append(element('code', '', request.reason || 'refused'),

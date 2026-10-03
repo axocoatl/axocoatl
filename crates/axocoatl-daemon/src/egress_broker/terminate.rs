@@ -60,6 +60,25 @@ const HOP_BY_HOP: [&str; 7] = [
     "upgrade",
 ];
 
+/// Response fields that set a cookie. A credentialed route removes them
+/// unless it sets `allow_set_cookie`: a session the host starts for the
+/// credential would reach the container and work without the route.
+const SET_COOKIE_HEADERS: [&str; 2] = ["set-cookie", "set-cookie2"];
+
+/// Remove the cookie-setting fields from `headers`, and say how many there
+/// were.
+fn drop_cookies(headers: &mut HeaderMap) -> u32 {
+    let mut dropped = 0u32;
+    for name in SET_COOKIE_HEADERS {
+        let count = headers.get_all(name).iter().count();
+        if count > 0 {
+            dropped = dropped.saturating_add(u32::try_from(count).unwrap_or(u32::MAX));
+            headers.remove(name);
+        }
+    }
+    dropped
+}
+
 /// Time limits of one relayed connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrokerTimeouts {
@@ -523,7 +542,10 @@ fn asks_upgrade(request: &Request<Incoming>) -> bool {
 
 /// Request headers that servers, frameworks and origin routers read as the
 /// request's method, path or host in place of the request line and `Host`
-/// the route checked. Every `x-forwarded-*` header is refused too.
+/// the route checked. Every `x-forwarded-*` header is refused too. Names are
+/// compared with `_` read as `-`: CGI-style servers (WEBrick, Werkzeug's
+/// development server, PHP's built-in server, and Puma when only one form is
+/// sent) map both spellings to the same `HTTP_*` variable.
 const OVERRIDE_HEADERS: [&str; 10] = [
     "x-http-method-override",
     "x-http-method",
@@ -537,13 +559,23 @@ const OVERRIDE_HEADERS: [&str; 10] = [
     "forwarded",
 ];
 
+/// A header name with each `_` read as `-`, as servers that map both to one
+/// `HTTP_*` variable read it.
+fn dashed(name: &str) -> std::borrow::Cow<'_, str> {
+    if name.contains('_') {
+        std::borrow::Cow::Owned(name.replace('_', "-"))
+    } else {
+        std::borrow::Cow::Borrowed(name)
+    }
+}
+
 /// The first request header that could make the upstream read another
-/// method, path or host, if any.
+/// method, path or host, if any, named as the client sent it.
 fn override_header(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .keys()
-        .map(HeaderName::as_str)
-        .find(|name| OVERRIDE_HEADERS.contains(name) || name.starts_with("x-forwarded-"))
+    headers.keys().map(HeaderName::as_str).find(|name| {
+        let name = dashed(name);
+        OVERRIDE_HEADERS.contains(&name.as_ref()) || name.starts_with("x-forwarded-")
+    })
 }
 
 /// Whether a response body is encoded in a way the scan cannot read.
@@ -645,6 +677,7 @@ impl Connection {
         refusal_response(&refusal, &self.route.host, facts)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn response_event(
         &self,
         seq: u64,
@@ -653,6 +686,7 @@ impl Connection {
         down: u64,
         started: Instant,
         outcome: ResponseOutcome,
+        cookies_dropped: u32,
     ) -> NetworkEvent {
         NetworkEvent::Response {
             conn: self.ctx.conn.clone(),
@@ -662,6 +696,7 @@ impl Connection {
             down,
             ms: started.elapsed().as_millis() as u64,
             outcome,
+            cookies_dropped,
         }
     }
 
@@ -952,12 +987,18 @@ impl Connection {
             {
                 continue;
             }
+            // Compared with `_` read as `-`, like the override headers, so a
+            // server that maps both spellings to one variable cannot read the
+            // client's value in place of the one the route sets.
+            let dashed_name = dashed(lower);
             if credentialed
                 && (name == header::AUTHORIZATION
-                    || Some(name) == inject_name.as_ref()
-                    || name == header::ACCEPT_ENCODING
+                    || inject_name
+                        .as_ref()
+                        .is_some_and(|inject| dashed(inject.as_str()) == dashed_name)
+                    || dashed_name == header::ACCEPT_ENCODING.as_str()
                     || name == header::RANGE
-                    || name == header::IF_RANGE)
+                    || dashed_name == header::IF_RANGE.as_str())
             {
                 continue;
             }
@@ -1010,6 +1051,7 @@ impl Connection {
                 0,
                 started,
                 outcome,
+                0,
             ));
             tracing::info!(session = %self.ctx.session, conn = %self.ctx.conn, host = %route.host, code, "route request failed");
             refusal_response(
@@ -1101,10 +1143,26 @@ impl Connection {
         for name in HOP_BY_HOP {
             head.headers.remove(name);
         }
+        let remove_cookies = credentialed && !route.allow_set_cookie;
+        let cookies_dropped = if remove_cookies {
+            drop_cookies(&mut head.headers)
+        } else {
+            0
+        };
+        if cookies_dropped > 0 {
+            tracing::info!(
+                session = %self.ctx.session,
+                conn = %self.ctx.conn,
+                host = %route.host,
+                cookies_dropped,
+                "removed Set-Cookie from a credentialed route's response"
+            );
+        }
         let status = head.status.as_u16();
         let body = ResponseBody {
             inner: Some(upstream_body),
             scanner,
+            remove_cookies,
             queued: VecDeque::new(),
             down: 0,
             total_down: self.down.clone(),
@@ -1114,6 +1172,7 @@ impl Connection {
                 status,
                 up,
                 started,
+                cookies_dropped,
             }),
         };
         Response::from_parts(head, body.boxed())
@@ -1127,6 +1186,8 @@ struct ResponseReport {
     status: u16,
     up: Arc<AtomicU64>,
     started: Instant,
+    /// Cookie-setting fields removed from the headers and trailers.
+    cookies_dropped: u32,
 }
 
 impl ResponseReport {
@@ -1138,6 +1199,7 @@ impl ResponseReport {
             down,
             self.started,
             outcome,
+            self.cookies_dropped,
         );
         self.connection.recorder.note(event);
     }
@@ -1199,6 +1261,8 @@ impl Body for RequestBody {
 struct ResponseBody {
     inner: Option<Incoming>,
     scanner: Option<ReflectionScanner>,
+    /// Remove cookie-setting fields from the trailers too.
+    remove_cookies: bool,
     queued: VecDeque<Frame<Bytes>>,
     down: u64,
     total_down: Arc<AtomicU64>,
@@ -1304,7 +1368,7 @@ impl Body for ResponseBody {
                             },
                         },
                         Err(frame) => match frame.into_trailers() {
-                            Ok(trailers) => {
+                            Ok(mut trailers) => {
                                 if let Some(scanner) = this.scanner.as_mut() {
                                     if trailers.iter().any(|(name, value)| {
                                         scanner.contains(name.as_str().as_bytes())
@@ -1315,6 +1379,13 @@ impl Body for ResponseBody {
                                     let tail = scanner.finish();
                                     if !tail.is_empty() {
                                         this.queued.push_back(Frame::data(tail));
+                                    }
+                                }
+                                if this.remove_cookies {
+                                    let dropped = drop_cookies(&mut trailers);
+                                    if let Some(report) = this.report.as_mut() {
+                                        report.cookies_dropped =
+                                            report.cookies_dropped.saturating_add(dropped);
                                     }
                                 }
                                 this.queued.push_back(Frame::trailers(trailers));

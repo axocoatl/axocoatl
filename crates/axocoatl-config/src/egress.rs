@@ -380,6 +380,48 @@ fn validate_egress_block(egress: &EgressConfigYaml) -> Result<Vec<ConfigWarning>
     Ok(warnings)
 }
 
+/// The warning for `sandbox.egress` fields that do nothing under `bridge`
+/// or `none`. `allow`, `private_destinations` and `routes` apply only to
+/// `network: egress`. The browser's own proxy also reads `sidecar_network`
+/// and `max_connections` in those modes, and `record_max_events` caps the
+/// Session network record, which web and browser events use, in every mode.
+fn unused_egress_fields(
+    egress: &EgressConfigYaml,
+    browser: bool,
+    network: &str,
+) -> Option<ConfigWarning> {
+    let mut unused = Vec::new();
+    if !egress.allow.is_empty() {
+        unused.push("allow");
+    }
+    if !egress.private_destinations.is_empty() {
+        unused.push("private_destinations");
+    }
+    if !egress.routes.is_empty() {
+        unused.push("routes");
+    }
+    if !browser {
+        if egress.sidecar_network.is_some() {
+            unused.push("sidecar_network");
+        }
+        if egress.max_connections != EgressConfigYaml::default().max_connections {
+            unused.push("max_connections");
+        }
+    }
+    if unused.is_empty() {
+        return None;
+    }
+    Some(ConfigWarning {
+        field: "sandbox.egress".into(),
+        message: format!(
+            "{} ignored because sandbox.network is {network:?}: allow, private_destinations and \
+             routes apply only to network: egress, and sidecar_network and max_connections only \
+             to it and the browser's own proxy",
+            unused.join(", ")
+        ),
+    })
+}
+
 /// Validate `sandbox.egress` and the network cross-field rules.
 pub fn validate_egress(config: &AxocoatlConfig) -> Result<Vec<ConfigWarning>, ConfigError> {
     let sandbox = &config.sandbox;
@@ -387,13 +429,11 @@ pub fn validate_egress(config: &AxocoatlConfig) -> Result<Vec<ConfigWarning>, Co
     if let Some(egress) = &sandbox.egress {
         warnings.extend(validate_egress_block(egress)?);
         if sandbox.network != "egress" {
-            warnings.push(ConfigWarning {
-                field: "sandbox.egress".into(),
-                message: format!(
-                    "ignored because sandbox.network is {:?}; it applies only to network: egress",
-                    sandbox.network
-                ),
-            });
+            warnings.extend(unused_egress_fields(
+                egress,
+                config.browser.is_some(),
+                &sandbox.network,
+            ));
         }
     }
     if sandbox.backend == "e2b" && sandbox.network != "bridge" {
@@ -735,11 +775,41 @@ mod tests {
         assert!(validate_egress(&config).is_err());
         config.sandbox.egress.as_mut().unwrap().sidecar_network = None;
 
+        // Under bridge only the fields that do nothing there are named. The
+        // browser's own proxy reads sidecar_network and max_connections, and
+        // record_max_events caps the record in every mode.
         config.sandbox.network = "bridge".into();
-        let warnings = validate_egress(&config).unwrap();
-        assert!(warnings
-            .iter()
-            .any(|w| w.field == "sandbox.egress" && w.message.contains("ignored")));
+        let ignored = |config: &AxocoatlConfig| -> Vec<String> {
+            validate_egress(config)
+                .unwrap()
+                .into_iter()
+                .filter(|w| w.field == "sandbox.egress" && w.message.contains("ignored"))
+                .map(|w| w.message)
+                .collect()
+        };
+        assert!(ignored(&config).is_empty());
+        config.sandbox.egress.as_mut().unwrap().record_max_events = 2_000;
+        assert!(ignored(&config).is_empty());
+        config.sandbox.egress.as_mut().unwrap().sidecar_network = Some("axo-net".into());
+        config.sandbox.egress.as_mut().unwrap().max_connections = 64;
+        let messages = ignored(&config);
+        assert_eq!(messages.len(), 1);
+        assert!(
+            messages[0].starts_with(
+                "sidecar_network, max_connections ignored because sandbox.network is \"bridge\""
+            ),
+            "{messages:?}"
+        );
+        config.browser = Some(Default::default());
+        assert!(ignored(&config).is_empty());
+        config.sandbox.egress.as_mut().unwrap().allow = vec![host("a.example", None)];
+        let messages = ignored(&config);
+        assert!(messages[0].starts_with("allow ignored"), "{messages:?}");
+        config.browser = None;
+        config.sandbox.egress = Some(EgressConfigYaml {
+            allow: vec![host("a.example", None)],
+            ..EgressConfigYaml::default()
+        });
 
         config.sandbox.backend = "e2b".into();
         assert!(validate_egress(&config).is_ok());

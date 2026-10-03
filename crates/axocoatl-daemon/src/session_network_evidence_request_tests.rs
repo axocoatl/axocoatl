@@ -72,6 +72,7 @@ fn response(seq: u64, conn: &str, n: u64, status: u16, outcome: ResponseOutcome)
             down: 2000,
             ms: 40,
             outcome,
+            cookies_dropped: 0,
         },
     )
 }
@@ -90,6 +91,17 @@ fn route_requests_are_summarized_per_tool_call() {
         response(8, "g1:1", 4, 502, ResponseOutcome::CredentialReflected),
         // A request on a connection the index never saw opened.
         request(9, "g9:9", 1, "GET", "/elsewhere", true),
+        request(10, "g1:1", 5, "GET", "/login", true),
+        {
+            let mut line = response(11, "g1:1", 5, 200, ResponseOutcome::Completed);
+            if let NetworkEvent::Response {
+                cookies_dropped, ..
+            } = &mut line.event
+            {
+                *cookies_dropped = 2;
+            }
+            line
+        },
     ] {
         folded.fold(&event);
     }
@@ -100,10 +112,11 @@ fn route_requests_are_summarized_per_tool_call() {
          github.com GET /acme/app.git/info/refs 200 (credential github); \
          github.com POST /acme/app.git/git-receive-pack 200 (credential github); \
          github.com DELETE /acme/app.git refused (route_denied); \
-         github.com GET /acme/app.git/archive 502 [credential_reflected] (credential github)"
+         github.com GET /acme/app.git/archive 502 [credential_reflected] (credential github); \
+         github.com GET /login 200 (credential github) (2 Set-Cookie removed)"
     );
     // Every request and response line is kept as a detail.
-    assert_eq!(a.details.len(), 8);
+    assert_eq!(a.details.len(), 10);
     assert_eq!(folded.invocations.len(), 1);
 }
 

@@ -397,7 +397,7 @@ fn route_warnings_name_broad_credentials_and_compressed_responses() {
     let config = parse(&with_route(
         "host: a.example, credential: github, inject: {header: X-Api-Key}, \
          rules: [{methods: [GET], path: '/**'}, {methods: [POST], path: /upload/**}], \
-         allow_encoded_responses: true",
+         allow_encoded_responses: true, allow_set_cookie: true",
     ))
     .unwrap();
     let warnings = warnings_of(&config);
@@ -421,6 +421,23 @@ fn route_warnings_name_broad_credentials_and_compressed_responses() {
         ),
         "{warnings:?}"
     );
+    // A host that issues tokens or sessions hands them to the container.
+    assert!(
+        has("sandbox.egress.routes[0].rules[0].path", "token endpoint"),
+        "{warnings:?}"
+    );
+    assert!(
+        has("sandbox.egress.routes[0].allow_set_cookie", "Set-Cookie"),
+        "{warnings:?}"
+    );
+    // Without a credential, cookies pass anyway and nothing is said.
+    let config = parse(&with_route(
+        "host: a.example, access: read-only, allow_set_cookie: true",
+    ))
+    .unwrap();
+    assert!(!warnings_of(&config)
+        .iter()
+        .any(|w| w.contains("allow_set_cookie")));
     // Both presets add the credential to requests for every path.
     for access in ["full", "read-only"] {
         let config = parse(&with_route(&format!(
@@ -512,6 +529,10 @@ fn credentials_name_a_source_never_a_value() {
             "absolute path",
         ),
         ("credentials:\n  github: {file: /a/../b}\n", "'..'"),
+        (
+            "credentials:\n  github: {file: ghp_literal_value}\n",
+            "absolute path",
+        ),
         ("credentials:\n  'has space': {env: A}\n", "credential name"),
     ] {
         let error = parse(yaml).unwrap_err();
@@ -532,6 +553,41 @@ fn credentials_name_a_source_never_a_value() {
     assert!(parse(&format!("credentials:\n{many}"))
         .unwrap_err()
         .contains("at most 64 credentials"));
+}
+
+#[test]
+fn inject_refusals_never_repeat_a_value() {
+    let value = "ghp_literal_value";
+    for (route, field, fragment) in [
+        (
+            format!("host: a.example, credential: github, inject: {{header: Authorization, format: \"{value}\"}}, access: read-only"),
+            "sandbox.egress.routes[0].inject.format",
+            "exactly one {}",
+        ),
+        (
+            format!("host: a.example, credential: github, inject: {{basic: {{username: x}}, format: \"Bearer {value} {{}}\"}}, access: read-only"),
+            "sandbox.egress.routes[0].inject.format",
+            "only to inject.header",
+        ),
+        (
+            format!("host: a.example, credential: github, inject: {{basic: {{username: \"x:{value}\"}}}}, access: read-only"),
+            "sandbox.egress.routes[0].inject.basic.username",
+            "without ':'",
+        ),
+        (
+            format!("host: a.example, credential: github, inject: {{header: X-Api-Key, basic: {{username: {value}}}, format: \"{value} {{}}\"}}, access: read-only"),
+            "sandbox.egress.routes[0].inject",
+            "exactly one of basic and header",
+        ),
+    ] {
+        let error = parse(&with_route(&route)).unwrap_err();
+        assert!(error.contains(field) && error.contains(fragment), "{route}: {error}");
+        assert!(error.contains("not shown") || error.contains("{..}"), "{error}");
+        assert!(
+            !error.contains(value),
+            "the refusal repeats the value: {error}"
+        );
+    }
 }
 
 #[test]

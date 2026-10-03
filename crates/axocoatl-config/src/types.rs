@@ -741,8 +741,11 @@ pub struct SandboxConfigYaml {
     /// Settings for the `e2b` backend. Ignored unless `backend: e2b`.
     #[serde(default)]
     pub e2b: Option<E2bBackendYaml>,
-    /// Egress allowlist for `network: egress`. Ignored, with a warning, for
-    /// other network modes.
+    /// Egress allowlist for `network: egress`. Under other network modes
+    /// `allow`, `private_destinations` and `routes` are ignored with a
+    /// warning; the browser's own proxy still reads `sidecar_network` and
+    /// `max_connections`, and `record_max_events` caps the Session network
+    /// record in every mode.
     #[serde(default)]
     pub egress: Option<EgressConfigYaml>,
     /// Which users run Agents' commands and read-only helpers' processes in
@@ -800,10 +803,12 @@ pub struct EgressConfigYaml {
     /// Private ranges (CIDR) that allowed hosts may resolve to.
     #[serde(default)]
     pub private_destinations: Vec<String>,
-    /// Podman network for the egress sidecar. Defaults to Podman's default.
+    /// Podman network for the egress sidecar, and for the browser's own
+    /// proxy under `bridge` and `none`. Defaults to Podman's default.
     #[serde(default)]
     pub sidecar_network: Option<String>,
-    /// 8-256 connections open at once through the proxy.
+    /// 8-256 connections open at once through the proxy (the browser's own
+    /// proxy too, under `bridge` and `none`).
     #[serde(default = "default_egress_max_connections")]
     pub max_connections: u32,
     /// 1,000-1,000,000 events in one Session's network record.
@@ -874,6 +879,11 @@ pub struct EgressRouteYaml {
     /// credential-reflection check cannot read.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_encoded_responses: bool,
+    /// Pass `Set-Cookie` and `Set-Cookie2` on a credentialed route. They are
+    /// removed by default: a session the host starts for the credential would
+    /// otherwise reach the container and work without the route.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_set_cookie: bool,
     /// Largest request body, in bytes. Defaults to 1 GiB.
     #[serde(default = "default_route_max_request_bytes")]
     pub max_request_bytes: u64,

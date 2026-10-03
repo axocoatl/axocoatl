@@ -1265,13 +1265,24 @@ fn sandbox_network_doctor_line(sandbox: &axocoatl_config::SandboxConfigYaml) -> 
         "none" => "Sandbox network: none (local Session containers have no network)".to_string(),
         "bridge" => "Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)".to_string(),
         "egress" => {
-            let allow = sandbox
-                .egress
-                .as_ref()
-                .map(|egress| axocoatl_config::egress::allow_summary(&egress.allow))
-                .unwrap_or_else(|| "nothing".to_string());
+            let (allow, routes) = sandbox.egress.as_ref().map_or_else(
+                || ("nothing".to_string(), 0),
+                |egress| {
+                    (
+                        axocoatl_config::egress::allow_summary(&egress.allow),
+                        egress.routes.len(),
+                    )
+                },
+            );
+            let routes = match routes {
+                0 => String::new(),
+                1 => ", 1 route host (below)".to_string(),
+                count => format!(", {count} route hosts (below)"),
+            };
             format!(
-                "Sandbox network: egress (Session containers reach only: {allow}; read-only helpers and checks have none)"
+                "Sandbox network: egress (an Agent's commands reach only: {allow}{routes}, and hosts \
+                 allowed for one Session in Session network; readiness provisioning reaches the \
+                 Alpine, Debian and Ubuntu mirrors; read-only helpers and checks have none)"
             )
         }
         other => format!("Sandbox network: {other} (unknown; the daemon refuses it)"),
@@ -3702,8 +3713,21 @@ mod tests {
         let line = sandbox_network_doctor_line(&sandbox);
         assert_eq!(
             line,
-            "Sandbox network: egress (Session containers reach only: npm, pypi, 1 host; \
-             read-only helpers and checks have none)"
+            "Sandbox network: egress (an Agent's commands reach only: npm, pypi, 1 host, and \
+             hosts allowed for one Session in Session network; readiness provisioning reaches \
+             the Alpine, Debian and Ubuntu mirrors; read-only helpers and checks have none)"
+        );
+        // Route hosts are reached whether or not allow lists them.
+        let routed = axocoatl_config::parse_config(
+            "sandbox:\n  network: egress\n  egress:\n    allow: [npm]\n    routes:\n      \
+             - {host: github.com, access: read-only}\n      - {host: gitlab.com, access: read-only}\n",
+            std::path::Path::new("c.yaml"),
+        )
+        .unwrap();
+        let line = sandbox_network_doctor_line(&routed.sandbox);
+        assert!(
+            line.contains("reach only: npm, 2 route hosts (below), and hosts"),
+            "{line}"
         );
     }
 

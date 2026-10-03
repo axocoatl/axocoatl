@@ -13,7 +13,8 @@
 //! 2. It reads HTTP/1.1 requests from a process kind the route serves. Each
 //!    must name the route host in `Host`, have a canonical path, ask for no
 //!    upgrade, carry no header that names another method, path or host (such
-//!    as `X-HTTP-Method-Override` or `X-Forwarded-Host`), and match one of
+//!    as `X-HTTP-Method-Override` or `X-Forwarded-Host`, also spelled with
+//!    `_` in place of `-`), and match one of
 //!    the route's rules ([`rules`]); anything else gets a JSON refusal saying
 //!    why.
 //! 3. It writes a `request` event to the Session's network record and waits
@@ -29,7 +30,12 @@
 //!    trust settings, and streams the response back, refusing compressed
 //!    responses on credentialed routes and stopping any response whose
 //!    status line, headers, body or trailers carry the credential ([`scan`]).
-//!    A `response` event records how it ended.
+//!    A credentialed route also removes `Set-Cookie` and `Set-Cookie2`
+//!    unless it sets `allow_set_cookie`, since a session the host starts for
+//!    the credential would work without the route. The scan finds only the
+//!    credential itself: a token the host issues in a response body, such as
+//!    from a login or `/token` endpoint, reaches the client. A `response`
+//!    event records how it ended and how many cookies were removed.
 //!
 //! [`trust`] has the files and environment that make containers trust the
 //! Session's authority. Wiring the broker to the relay is done where the

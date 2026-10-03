@@ -98,9 +98,27 @@ const RESERVED_HEADERS: &[&str] = &[
 ];
 
 const BROAD_CREDENTIAL_WARNING: &str =
-    "the credential is added to requests for every path on this host; list the paths it is for";
+    "the credential is added to requests for every path on this host, including any login or \
+     token endpoint, and a token or session such an endpoint returns reaches the container and \
+     works without the route; list the paths it is for";
 const ENCODED_WARNING: &str = "compressed responses pass without the check that the credential \
                                is not sent back to the container";
+const SET_COOKIE_WARNING: &str = "Set-Cookie passes to the container, so a session the host \
+                                  starts for the credential works there without the route";
+
+/// A value for [`invalid`] printed as it is, without quotes.
+struct NotShown(String);
+
+impl fmt::Debug for NotShown {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// What a refusal shows in place of a value that may be a pasted credential.
+fn hidden(value: &str) -> NotShown {
+    NotShown(format!("<{} characters, not shown>", value.chars().count()))
+}
 
 fn invalid(
     field: String,
@@ -551,7 +569,7 @@ fn check_credential_source(field: &str, source: &CredentialSourceYaml) -> Result
                 // Not repeated: a value here is likely the credential.
                 return Err(invalid(
                     format!("{field}.env"),
-                    format_args!("<{} characters, not shown>", variable.chars().count()),
+                    hidden(variable),
                     "an environment variable name is 1-128 uppercase letters, digits or '_', not starting with a digit",
                     "Write the variable's name, such as env: GITHUB_TOKEN, not its value.",
                 ));
@@ -560,9 +578,10 @@ fn check_credential_source(field: &str, source: &CredentialSourceYaml) -> Result
         }
         (None, Some(path)) => {
             expand_user_path(path).map_err(|reason| {
+                // Not repeated: a value here may be the credential itself.
                 invalid(
                     format!("{field}.file"),
-                    path,
+                    hidden(path),
                     reason,
                     "Write an absolute path or ~/..., such as ~/.config/axocoatl/credentials/github.",
                 )
@@ -831,6 +850,12 @@ fn check_route(
             message: ENCODED_WARNING.into(),
         });
     }
+    if credentialed && route.allow_set_cookie {
+        warnings.push(ConfigWarning {
+            field: format!("{field}.allow_set_cookie"),
+            message: SET_COOKIE_WARNING.into(),
+        });
+    }
     Ok(host)
 }
 
@@ -838,10 +863,10 @@ fn check_inject(field: &str, inject: &RouteInjectYaml) -> Result<(), ConfigError
     let field = format!("{field}.inject");
     match (&inject.basic, &inject.header) {
         (Some(basic), None) => {
-            if inject.format.is_some() {
+            if let Some(format) = &inject.format {
                 return Err(invalid(
                     format!("{field}.format"),
-                    &inject.format,
+                    hidden(format),
                     "format applies only to inject.header",
                     "Remove format; basic sends username:credential.",
                 ));
@@ -854,7 +879,7 @@ fn check_inject(field: &str, inject: &RouteInjectYaml) -> Result<(), ConfigError
             {
                 return Err(invalid(
                     format!("{field}.basic.username"),
-                    username,
+                    hidden(username),
                     "a username is 1-256 printable ASCII characters without ':'",
                     "For GitHub use x-access-token.",
                 ));
@@ -877,7 +902,7 @@ fn check_inject(field: &str, inject: &RouteInjectYaml) -> Result<(), ConfigError
                 {
                     return Err(invalid(
                         format!("{field}.format"),
-                        format,
+                        hidden(format),
                         "format is printable ASCII, at most 256 characters, with exactly one {} where the credential goes",
                         "For a bearer token write format: \"Bearer {}\".",
                     ));
@@ -887,7 +912,7 @@ fn check_inject(field: &str, inject: &RouteInjectYaml) -> Result<(), ConfigError
         }
         _ => Err(invalid(
             field,
-            inject,
+            "{..}",
             "inject names exactly one of basic and header",
             "Write inject: {header: Authorization, format: \"Bearer {}\"} or inject: {basic: {username: NAME}}.",
         )),

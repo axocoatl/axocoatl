@@ -205,6 +205,10 @@ pub enum ResponseOutcome {
     ClientClosed,
 }
 
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
 /// Longest method a `request` event keeps.
 pub const MAX_RECORDED_METHOD_CHARS: usize = 32;
 /// Longest rule, reason or credential name a `request` event keeps.
@@ -524,6 +528,10 @@ pub enum NetworkEvent {
         down: u64,
         ms: u64,
         outcome: ResponseOutcome,
+        /// `Set-Cookie` and `Set-Cookie2` fields a credentialed route removed
+        /// from the response's headers and trailers before the client got it.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        cookies_dropped: u32,
     },
     /// Written before a web tool's request leaves this computer, so a request
     /// whose result cannot be recorded is still in the record. The `web`

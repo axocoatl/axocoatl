@@ -158,6 +158,23 @@ async fn upstream_handler(
                 .insert(hyper::ext::ReasonPhrase::from_static(b"Fine Thanks"));
             response
         }
+        "/login" => {
+            // A host that starts a session for the credential, and a token
+            // endpoint that mints one: neither carries the credential itself.
+            let mut response = Response::new(full(r#"{"token":"derived-bearer-1"}"#));
+            let headers = response.headers_mut();
+            headers.append(
+                header::SET_COOKIE,
+                HeaderValue::from_static("session=derived-1; Path=/; HttpOnly"),
+            );
+            headers.append(
+                header::SET_COOKIE,
+                HeaderValue::from_static("csrf=derived-2; Path=/"),
+            );
+            headers.append("set-cookie2", HeaderValue::from_static("legacy=derived-3"));
+            headers.append("x-kept", HeaderValue::from_static("yes"));
+            response
+        }
         "/big" => Response::new(full(vec![b'z'; 1024 * 1024])),
         "/upload" => Response::new(full(format!("received {}", body.len()))),
         _ => Response::new(full("ok")),
@@ -305,6 +322,7 @@ rules:
   - {methods: [POST], path: /upload}
   - {methods: [GET], path: /reflect-reason}
   - {methods: [GET], path: /custom-reason}
+  - {methods: [GET], path: /login}
 "#;
 
 fn bearer_route() -> Arc<Route> {
@@ -811,6 +829,142 @@ async fn headers_that_name_another_method_path_or_host_are_refused() {
         for (name, _) in overrides {
             assert!(seen[0].header(&name.to_ascii_lowercase()).is_empty(), "{name}");
         }
+    }
+}
+
+#[tokio::test]
+async fn override_headers_spelled_with_underscores_are_refused() {
+    // Rack/Puma (when only this form is sent), WEBrick, Werkzeug's
+    // development server and PHP's built-in server read `_` as `-`.
+    let overrides = [
+        ("X_HTTP_Method_Override", "DELETE"),
+        ("X-HTTP_Method-Override", "DELETE"),
+        ("X_Forwarded_Host", "other.test"),
+        ("X_Forwarded-For", "203.0.113.7"),
+        ("X_Original_URL", "/admin"),
+        ("X_Host", "other.test"),
+    ];
+    let h = harness(bearer_route()).await;
+    let sink = Arc::new(MemorySink::default());
+    let mut client = h.client(sink.clone()).await;
+    for (name, value) in overrides {
+        let mut request = get("/echo", HOST);
+        request.headers_mut().insert(
+            HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            HeaderValue::from_static(value),
+        );
+        let response = client.sender.send_request(request).await.unwrap();
+        assert_eq!(response.status(), 403, "{name}");
+        let json = refusal_json(response).await;
+        assert_eq!(json["error"], "override_header", "{name}");
+        assert!(
+            json["reason"]
+                .as_str()
+                .unwrap()
+                .contains(&name.to_ascii_lowercase()),
+            "{json}"
+        );
+    }
+    assert!(h.upstream.seen().is_empty());
+    assert_eq!(request_events(&sink).len(), overrides.len());
+    // Other underscore headers still pass.
+    let mut request = get("/echo", HOST);
+    request
+        .headers_mut()
+        .insert("x_request_id", HeaderValue::from_static("abc"));
+    let response = client.sender.send_request(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(h.upstream.seen()[0].header("x_request_id"), vec!["abc"]);
+}
+
+#[tokio::test]
+async fn underscore_spellings_of_headers_the_route_sets_are_removed() {
+    let h = harness(route(&format!(
+        "host: {HOST}\ncredential: test\ninject: {{header: X-Api-Key}}\n{RULES}"
+    )))
+    .await;
+    let sink = Arc::new(MemorySink::default());
+    let mut client = h.client(sink.clone()).await;
+    let mut request = get("/echo", HOST);
+    let headers = request.headers_mut();
+    headers.insert("x_api_key", HeaderValue::from_static("clients-own"));
+    headers.insert("accept_encoding", HeaderValue::from_static("gzip"));
+    headers.insert("if_range", HeaderValue::from_static("\"etag\""));
+    let response = client.sender.send_request(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let seen = &h.upstream.seen()[0];
+    assert_eq!(seen.header("x-api-key"), vec![secret()]);
+    for name in ["x_api_key", "accept_encoding", "if_range"] {
+        assert!(seen.header(name).is_empty(), "{name}: {seen:?}");
+    }
+    assert_eq!(seen.header("accept-encoding"), vec!["identity"]);
+}
+
+#[tokio::test]
+async fn credentialed_routes_remove_set_cookie_unless_allowed() {
+    let h = harness(bearer_route()).await;
+    let sink = Arc::new(MemorySink::default());
+    let mut client = h.client(sink.clone()).await;
+    let response = client
+        .sender
+        .send_request(get("/login", HOST))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(response.headers().get(header::SET_COOKIE).is_none());
+    assert!(response.headers().get("set-cookie2").is_none());
+    assert_eq!(response.headers()["x-kept"], "yes");
+    // A token in the body is not the credential, so it passes: a route
+    // that allows a token endpoint hands that token to the container.
+    assert_eq!(body_text(response).await, r#"{"token":"derived-bearer-1"}"#);
+    assert!(matches!(
+        wait_for_response_event(&sink).await,
+        NetworkEvent::Response {
+            outcome: ResponseOutcome::Completed,
+            cookies_dropped: 3,
+            ..
+        }
+    ));
+
+    // Kept with allow_set_cookie, and on a route without a credential.
+    for kept in [
+        format!(
+            "host: {HOST}\ncredential: test\ninject: {{header: X-Api-Key}}\nallow_set_cookie: true\n{RULES}"
+        ),
+        format!("host: {HOST}\n{RULES}"),
+    ] {
+        let h = harness(route(&kept)).await;
+        let sink = Arc::new(MemorySink::default());
+        let mut client = h.client(sink.clone()).await;
+        let response = client
+            .sender
+            .send_request(get("/login", HOST))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "{kept}");
+        let cookies: Vec<&str> = response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            cookies,
+            ["session=derived-1; Path=/; HttpOnly", "csrf=derived-2; Path=/"],
+            "{kept}"
+        );
+        assert_eq!(response.headers()["set-cookie2"], "legacy=derived-3");
+        drop(body_text(response).await);
+        assert!(
+            matches!(
+                wait_for_response_event(&sink).await,
+                NetworkEvent::Response {
+                    cookies_dropped: 0,
+                    ..
+                }
+            ),
+            "{kept}"
+        );
     }
 }
 

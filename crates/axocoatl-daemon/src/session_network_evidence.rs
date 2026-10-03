@@ -251,6 +251,7 @@ impl Folded {
                 seq_in_conn,
                 status,
                 outcome,
+                cookies_dropped,
                 ..
             } => {
                 let Some((invocation, text, credential)) =
@@ -264,6 +265,9 @@ impl Folded {
                 }
                 if let Some(credential) = credential {
                     summary.push_str(&format!(" (credential {credential})"));
+                }
+                if *cookies_dropped > 0 {
+                    summary.push_str(&format!(" ({cookies_dropped} Set-Cookie removed)"));
                 }
                 let entry = self.invocations.entry(invocation).or_default();
                 entry.request(summary);

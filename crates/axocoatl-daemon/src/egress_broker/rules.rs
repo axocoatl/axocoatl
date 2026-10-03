@@ -229,6 +229,8 @@ pub struct Route {
     pub upstream_roots_id: Option<[u8; 32]>,
     pub env_placeholders: Vec<String>,
     pub allow_encoded_responses: bool,
+    /// Pass `Set-Cookie` and `Set-Cookie2` on a credentialed route.
+    pub allow_set_cookie: bool,
     pub max_request_bytes: u64,
 }
 
@@ -543,6 +545,7 @@ impl Route {
             upstream_roots_id,
             env_placeholders: route.env_placeholders.clone(),
             allow_encoded_responses: route.allow_encoded_responses,
+            allow_set_cookie: route.allow_set_cookie,
             max_request_bytes: route.max_request_bytes,
         })
     }
@@ -599,6 +602,7 @@ impl Route {
             "upstream_ca": self.upstream_roots_id.map(hex::encode),
             "env_placeholders": self.env_placeholders,
             "allow_encoded_responses": self.allow_encoded_responses,
+            "allow_set_cookie": self.allow_set_cookie,
             "max_request_bytes": self.max_request_bytes,
         })
     }

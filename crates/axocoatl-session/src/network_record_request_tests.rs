@@ -29,6 +29,7 @@ fn response() -> NetworkEvent {
         down: 2048,
         ms: 31,
         outcome: ResponseOutcome::Completed,
+        cookies_dropped: 0,
     }
 }
 
@@ -74,6 +75,19 @@ fn request_and_response_have_a_stable_wire_form() {
             "kind": "response", "conn": "g1:7", "seq_in_conn": 1, "status": 200,
             "up": 512, "down": 2048, "ms": 31, "outcome": "completed",
         })
+    );
+    let mut dropped = response();
+    if let NetworkEvent::Response {
+        cookies_dropped, ..
+    } = &mut dropped
+    {
+        *cookies_dropped = 2;
+    }
+    let line = serde_json::to_value(&dropped).unwrap();
+    assert_eq!(line["cookies_dropped"], 2);
+    assert_eq!(
+        serde_json::from_value::<NetworkEvent>(line).unwrap(),
+        dropped
     );
     for outcome in [
         (ResponseOutcome::UpstreamFailed, "upstream_failed"),
