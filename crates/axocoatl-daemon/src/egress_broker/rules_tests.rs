@@ -108,6 +108,13 @@ fn the_rules_table() {
         (&git, "GET", "/acme/app.git/info/refs?service=git-upload-pack%zz", Deny),
         (&git, "GET", "/acme/app.git/info/refs?service=git+upload+pack", Deny),
         (&git, "GET", "/acme/app.git/info/refs?service=GIT-UPLOAD-PACK", Deny),
+        // Some servers also split on ';': a raw ';' matches no rule that
+        // requires a parameter, so a second value cannot hide behind it.
+        (&git, "GET", "/acme/app.git/info/refs?service=git-upload-pack&x=;service=git-receive-pack", Deny),
+        (&git, "GET", "/acme/app.git/info/refs?service=git-upload-pack;service=git-receive-pack", Deny),
+        (&git, "GET", "/acme/app.git/info/refs?x=1;service=git-upload-pack", Deny),
+        (&git, "GET", "/acme/app.git/info/refs?service=git-upload-pack;", Deny),
+        (&git, "GET", "/acme/app.git/info/refs?service=git-upload-pack&x=%3B", Allow(upload)),
         // Methods are case-sensitive and never implied.
         (&git, "get", "/acme/app.git/info/refs?service=git-upload-pack", Deny),
         (&git, "Get", "/acme/app.git/info/refs?service=git-upload-pack", Deny),
@@ -142,6 +149,18 @@ fn the_rules_table() {
         (&git, "POST", "*", Bad),
         (&git, "POST", "/acme/app.git/git receive-pack", Bad),
         (&git, "POST", "/acme/app.git/<script>", Bad),
+        // Servers that drop ';' path parameters read '..;' as '..'.
+        (&git, "POST", "/acme/app.git/..;/other.git/git-receive-pack", Bad),
+        (&git, "POST", "/acme/app.git/..;x=1/git-receive-pack", Bad),
+        (&git, "POST", "/acme/.;/app.git/git-receive-pack", Bad),
+        (&git, "POST", "/acme/;/app.git/git-receive-pack", Bad),
+        (&git, "POST", "/acme/;x/app.git/git-receive-pack", Bad),
+        (&git, "POST", "/acme/..%3B/app.git/git-receive-pack", Bad),
+        (&git, "POST", "/acme/..%3bx/app.git/git-receive-pack", Bad),
+        // Escaped twice: a server that decodes twice reads '/' or '..'.
+        (&git, "POST", "/acme/app.git%252Fgit-receive-pack", Bad),
+        (&git, "POST", "/acme/%252e%252e/acme/app.git/git-receive-pack", Bad),
+        (&git, "POST", "/acme/app.git%255cgit-receive-pack", Bad),
         // One-segment and any-segment globs.
         (&api, "GET", "/repos/widget/issues", Allow("route#1.rules[0]")),
         (&api, "HEAD", "/repos/widget/issues", Allow("route#1.rules[0]")),
@@ -156,6 +175,14 @@ fn the_rules_table() {
         (&api, "GET", "/v2/library/node/manifests/22", Allow("route#1.rules[2]")),
         (&api, "GET", "/v3/library", Deny),
         (&api, "GET", "/v2/../admin", Bad),
+        (&api, "GET", "/v2/..;/..;/admin", Bad),
+        (&api, "GET", "/v2/.;/admin", Bad),
+        (&api, "GET", "/v2/;/admin", Bad),
+        (&api, "GET", "/v2/;", Bad),
+        // A ';' after a real name is an ordinary path character.
+        (&api, "GET", "/v2/acme;v=1/manifests", Allow("route#1.rules[2]")),
+        (&api, "GET", "/v2/100%25", Allow("route#1.rules[2]")),
+        (&api, "GET", "/v2/a%2520b", Allow("route#1.rules[2]")),
         // A trailing slash is a segment of its own.
         (&api, "DELETE", "/items/5/", Allow("route#1.rules[3]")),
         (&api, "DELETE", "/items/5", Deny),
@@ -171,6 +198,8 @@ fn the_rules_table() {
         (&api, "POST", "/files/a", Deny),
         (&api, "GET", "/", Allow("route#1.rules[6]")),
         (&api, "GET", "/?page=2", Allow("route#1.rules[6]")),
+        (&api, "GET", "/?a=1;b=2", Allow("route#1.rules[6]")),
+        (&api, "GET", "/search?q=a;q=b", Deny),
         // Escapes compare in uppercase hex; a literal is not its escape.
         (&api, "GET", "/a%3Ab/x", Allow("route#1.rules[7]")),
         (&api, "GET", "/a%3ab/x", Allow("route#1.rules[7]")),

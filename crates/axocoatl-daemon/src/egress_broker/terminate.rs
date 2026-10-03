@@ -242,6 +242,14 @@ impl SessionBroker {
                 route.label()
             )));
         }
+        if !route.covers_port(ctx.port) {
+            return finish(Some(format!(
+                "route_mismatch: a connection to port {} was given {}, which covers {:?}",
+                ctx.port,
+                route.label(),
+                route.ports
+            )));
+        }
         let key = match self.ca.certified_key(&route.host) {
             Ok(key) => key,
             Err(error) => {
@@ -513,6 +521,31 @@ fn asks_upgrade(request: &Request<Incoming>) -> bool {
         || request.headers().contains_key("http2-settings")
 }
 
+/// Request headers that servers, frameworks and origin routers read as the
+/// request's method, path or host in place of the request line and `Host`
+/// the route checked. Every `x-forwarded-*` header is refused too.
+const OVERRIDE_HEADERS: [&str; 10] = [
+    "x-http-method-override",
+    "x-http-method",
+    "x-method-override",
+    "x-original-method",
+    "x-original-url",
+    "x-original-uri",
+    "x-rewrite-url",
+    "x-original-host",
+    "x-host",
+    "forwarded",
+];
+
+/// The first request header that could make the upstream read another
+/// method, path or host, if any.
+fn override_header(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .keys()
+        .map(HeaderName::as_str)
+        .find(|name| OVERRIDE_HEADERS.contains(name) || name.starts_with("x-forwarded-"))
+}
+
 /// Whether a response body is encoded in a way the scan cannot read.
 fn encoded(headers: &HeaderMap) -> bool {
     let content = headers
@@ -675,23 +708,30 @@ impl Connection {
             close,
         };
 
-        if let Some(binding) = &self.ctx.binding {
-            if !route.allows_binding(binding.kind) {
-                return self.refuse(
-                    &facts,
-                    refusal(
-                        StatusCode::FORBIDDEN,
-                        "route_not_for_binding",
-                        format!(
-                            "{} does not serve {:?} processes",
-                            route.label(),
-                            binding.kind
-                        ),
-                        "Add the process kind to the route's for: list.",
-                        true,
-                    ),
-                );
-            }
+        // A connection without a known process kind is never served.
+        let not_for = match &self.ctx.binding {
+            Some(binding) if route.allows_binding(binding.kind) => None,
+            Some(binding) => Some(format!(
+                "{} does not serve {:?} processes",
+                route.label(),
+                binding.kind
+            )),
+            None => Some(format!(
+                "{} serves only processes of a known kind",
+                route.label()
+            )),
+        };
+        if let Some(reason) = not_for {
+            return self.refuse(
+                &facts,
+                refusal(
+                    StatusCode::FORBIDDEN,
+                    "route_not_for_binding",
+                    reason,
+                    "Add the process kind to the route's for: list.",
+                    true,
+                ),
+            );
         }
         if request.uri().scheme().is_some()
             || request.uri().authority().is_some()
@@ -730,7 +770,7 @@ impl Connection {
                         StatusCode::BAD_REQUEST,
                         "path_not_canonical",
                         not.0,
-                        "Send the path without '.' or '..' segments, '//', '\\' or escaped '/', '\\' or '.'.",
+                        "Send the path without '.' or '..' segments (also before a ';'), '//', '\\' or escaped '/', '\\' or '.'.",
                         true,
                     ),
                 )
@@ -745,6 +785,22 @@ impl Connection {
                     "routes forward HTTP/1.1 requests only".into(),
                     "WebSocket, HTTP/2 and other upgrades are refused on a route.",
                     true,
+                ),
+            );
+        }
+        if let Some(name) = override_header(request.headers()) {
+            return self.refuse(
+                &facts,
+                refusal(
+                    StatusCode::FORBIDDEN,
+                    "override_header",
+                    format!(
+                        "the request carries {name}, which servers can read as another method, \
+                         path or host than the one the route checked"
+                    ),
+                    "Send the method, path and host in the request itself, without X-HTTP-Method-Override, \
+                     X-Original-URL, Forwarded, X-Forwarded-* or similar headers.",
+                    false,
                 ),
             );
         }
@@ -803,6 +859,33 @@ impl Connection {
             }
         };
 
+        // The credential's header and scanner are built before the request is
+        // recorded as allowed, so a credential that cannot be sent is refused
+        // with nothing recorded but the refusal.
+        let injected = match &secret {
+            None => None,
+            Some((credential, secret)) => match injected_value(&credential.inject, secret) {
+                Some(value) => Some((
+                    credential.inject.header_name(),
+                    value,
+                    ReflectionScanner::new(needles(&credential.inject, secret)),
+                )),
+                None => {
+                    return self.refuse(
+                        &facts,
+                        refusal(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "credential_unavailable",
+                            format!("credential {} cannot be sent in a header", credential.name),
+                            "The credential holds characters a header cannot carry.",
+                            false,
+                        ),
+                    );
+                }
+            },
+        };
+        drop(secret);
+
         // Write-ahead: nothing goes upstream before this is recorded.
         let recorded = self
             .recorder
@@ -856,10 +939,8 @@ impl Connection {
             .flat_map(|value| value.split(','))
             .map(|token| token.trim().to_ascii_lowercase())
             .collect();
-        let inject_name = secret
-            .as_ref()
-            .map(|(credential, _)| credential.inject.header_name());
-        let credentialed = secret.is_some();
+        let inject_name = injected.as_ref().map(|(name, _, _)| name.clone());
+        let credentialed = injected.is_some();
         let mut headers = HeaderMap::with_capacity(parts.headers.len() + 2);
         for (name, value) in &parts.headers {
             let lower = name.as_str();
@@ -891,27 +972,14 @@ impl Connection {
             headers.insert(header::HOST, value);
         }
         let mut scanner = None;
-        if let Some((credential, secret)) = &secret {
-            let Some(value) = injected_value(&credential.inject, secret) else {
-                return self.refuse(
-                    &facts,
-                    refusal(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "credential_unavailable",
-                        format!("credential {} cannot be sent in a header", credential.name),
-                        "The credential holds characters a header cannot carry.",
-                        false,
-                    ),
-                );
-            };
-            headers.insert(credential.inject.header_name(), value);
+        if let Some((name, value, needles)) = injected {
+            headers.insert(name, value);
             headers.insert(
                 header::ACCEPT_ENCODING,
                 HeaderValue::from_static("identity"),
             );
-            scanner = ReflectionScanner::new(needles(&credential.inject, secret));
+            scanner = needles;
         }
-        drop(secret);
 
         let up = Arc::new(AtomicU64::new(0));
         let too_large = Arc::new(AtomicBool::new(false));
@@ -1008,9 +1076,14 @@ impl Connection {
             );
         }
         if let Some(scanner) = &scanner {
+            // hyper keeps a reason phrase other than the usual one and writes
+            // it back to the client, so it is searched with the headers.
             let reflected = head.headers.iter().any(|(name, value)| {
                 scanner.contains(name.as_str().as_bytes()) || scanner.contains(value.as_bytes())
-            });
+            }) || head
+                .extensions
+                .get::<hyper::ext::ReasonPhrase>()
+                .is_some_and(|reason| scanner.contains(reason.as_bytes()));
             if reflected {
                 self.stop("credential_reflected");
                 tracing::warn!(session = %self.ctx.session, conn = %self.ctx.conn, host = %route.host, "a route response carried the credential; stopped");

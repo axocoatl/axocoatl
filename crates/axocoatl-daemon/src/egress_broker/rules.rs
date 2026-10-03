@@ -2,12 +2,15 @@
 //! applies, and where its credential is read.
 //!
 //! A request's path must be canonical before any rule sees it: no `.` or
-//! `..` segment, no `//`, no `\`, no escaped `/`, `\` or `.`, no control or
-//! non-ASCII byte, and every `%` a two-digit escape. Rules then match the
-//! method exactly (methods are case-sensitive), the path segment by segment
-//! (`*` one segment, `**` any number), and each required query parameter,
-//! which must appear exactly once with the required value after decoding.
-//! Everything no rule allows is refused.
+//! `..` segment (also before a `;` path parameter), no `//`, no `\`, no
+//! escaped or twice-escaped `/`, `\` or `.`, no control or non-ASCII byte,
+//! and every `%` a two-digit escape. Rules then match the method exactly
+//! (methods are case-sensitive), the path segment by segment (`*` one
+//! segment, `**` any number), and each required query parameter, which must
+//! appear exactly once with the required value after decoding. A query with
+//! a raw `;` matches no rule that requires a parameter, since some servers
+//! split parameters on `;` as well as `&`. Everything no rule allows is
+//! refused.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -248,7 +251,8 @@ pub struct CanonicalPath {
     /// The raw query, without `?`.
     pub query: Option<String>,
     /// Decoded `(name, value)` pairs, or `None` when the query is not
-    /// well-formed (then no rule that requires a parameter matches).
+    /// well-formed: a bad escape, or a raw `;` that some servers read as a
+    /// separator (then no rule that requires a parameter matches).
     pub params: Option<Vec<(String, String)>>,
 }
 
@@ -321,7 +325,14 @@ pub fn canonicalize(target: &str) -> Result<CanonicalPath, NotCanonical> {
             return refuse("the query has a space");
         }
     }
+    // Rack 2, older Python and Go and others also split parameters on ';',
+    // so `a=1&x=;service=b` holds a second `service` for them. A query with
+    // a raw ';' is read as not well-formed: no rule that requires a
+    // parameter matches it.
     let params = query.map_or(Some(Vec::new()), |query| {
+        if query.contains(';') {
+            return None;
+        }
         query
             .split('&')
             .filter(|pair| !pair.is_empty())

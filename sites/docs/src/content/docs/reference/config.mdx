@@ -364,14 +364,16 @@ credential or a credential without `inject`; `inject` with both or neither of
 `basic` and `header`; a `format` without exactly one `{}`; a header Axocoatl or HTTP
 controls (`Host`, `Content-Length`, `Connection`, `Proxy-Authorization`,
 `Accept-Encoding` and the like); methods that are not uppercase, or `CONNECT`;
-paths that do not start with `/` or have `//`, `.` or `..` segments, escaped `/`,
-`\` or `.`, or a `*` inside a segment; both `access` and `rules`, or neither; a
+paths that do not start with `/` or have `//`, `.` or `..` segments (also before a
+`;` parameter, as in `..;`), a segment starting with `;`, escaped or twice-escaped
+`/`, `\` or `.`, or a `*` inside a segment; both `access` and `rules`, or neither; a
 placeholder Axocoatl sets itself (proxy, certificate, `AXOCOATL_*` and basic process
 variables); an `upstream_ca` that is not an owner-only regular file holding a PEM
 certificate; and `max_request_bytes` outside 1 KiB-1 TiB. At most 64 routes, 64 rules
 per route, 16 methods and 16 query parameters per rule. It warns when a credentialed
-route allows every path, when it passes compressed responses, and when a route's
-host is also allowed by `allow` or a preset.
+route allows every path (a `**` rule, `access: read-only` or `access: full`), when it
+passes compressed responses, and when a route's host is also allowed by `allow` or a
+preset.
 
 ## Credentials
 
@@ -388,7 +390,8 @@ a plain value is refused without being repeated, and `${...}` is refused before
 substitution. The daemon reads a value each time a request needs it; a file must
 then be a regular file outside every Workspace, owned by the daemon's user and
 readable only by it. At most 64 credentials; validation warns about one no route
-uses.
+uses, and about each stdio MCP server that inherits the daemon's environment while a
+credential is read from it (`env`), since that server gets the value too.
 
 ## MCP servers
 
@@ -409,7 +412,8 @@ mcp_servers:
 
 Persistent transports are `stdio` and `streamable_http`/`http`. Stdio requires
 `command`; HTTP requires `url`. A stdio server inherits the daemon's whole
-environment by default, including any provider API keys in it. Set
+environment by default, including any provider API keys and any route credential
+read with `{env: ...}`. Set
 `inherit_env: false` to start it with only `PATH`, `HOME`, `USER`, `LANG`, `LC_*`
 and `TMPDIR` (plus `SYSTEMROOT` on Windows) from that environment, then its `env`;
 we recommend it for every stdio server. A server added from Settings inherits the

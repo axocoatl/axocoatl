@@ -1,6 +1,7 @@
 use super::*;
 use crate::egress::network_warnings;
 use crate::parse_config;
+use crate::types::RouteAccessYaml;
 
 fn parse(yaml: &str) -> Result<AxocoatlConfig, String> {
     parse_config(yaml, Path::new("test.yaml")).map_err(|error| error.to_string())
@@ -251,6 +252,30 @@ fn route_validation_table() {
             Err(("routes[0].rules[0].path", "whole segments")),
         ),
         (
+            "host: a.example, rules: [{methods: [GET], path: '/a/..;/b'}]",
+            Err(("routes[0].rules[0].path", "';' parameter")),
+        ),
+        (
+            "host: a.example, rules: [{methods: [GET], path: '/a/.;x=1/b'}]",
+            Err(("routes[0].rules[0].path", "';' parameter")),
+        ),
+        (
+            "host: a.example, rules: [{methods: [GET], path: '/a/;/b'}]",
+            Err(("routes[0].rules[0].path", "starts with ';'")),
+        ),
+        (
+            "host: a.example, rules: [{methods: [GET], path: '/a/..%3b/b'}]",
+            Err(("routes[0].rules[0].path", "';' parameter")),
+        ),
+        (
+            "host: a.example, rules: [{methods: [GET], path: '/a%252Fb'}]",
+            Err(("routes[0].rules[0].path", "twice-escaped")),
+        ),
+        (
+            "host: a.example, rules: [{methods: [GET], path: '/a/v;version=1/b'}]",
+            Ok(()),
+        ),
+        (
             "host: a.example, rules: [{methods: [GET, HEAD], path: '/v2/*/manifests/**'}]",
             Ok(()),
         ),
@@ -394,13 +419,20 @@ fn route_warnings_name_broad_credentials_and_compressed_responses() {
         ),
         "{warnings:?}"
     );
-    let config = parse(&with_route(
-        "host: a.example, credential: github, inject: {header: X-Api-Key}, access: full",
-    ))
-    .unwrap();
-    assert!(warnings_of(&config)
-        .iter()
-        .any(|w| w.starts_with("sandbox.egress.routes[0].access") && w.contains("every path")));
+    // Both presets add the credential to requests for every path.
+    for access in ["full", "read-only"] {
+        let config = parse(&with_route(&format!(
+            "host: a.example, credential: github, inject: {{header: X-Api-Key}}, access: {access}"
+        )))
+        .unwrap();
+        assert!(
+            warnings_of(&config)
+                .iter()
+                .any(|w| w.starts_with("sandbox.egress.routes[0].access")
+                    && w.contains("every path")),
+            "{access}"
+        );
+    }
     // Without a credential a broad route is ordinary L7 filtering.
     let config = parse(&with_route("host: a.example, access: full")).unwrap();
     assert!(!warnings_of(&config)
@@ -415,6 +447,42 @@ fn route_warnings_name_broad_credentials_and_compressed_responses() {
         .iter()
         .any(|w| w
             .contains("api.example.org is also allowed by sandbox.egress.allow (*.example.org)")));
+}
+
+#[test]
+fn stdio_mcp_servers_that_inherit_env_credentials_are_named() {
+    let mcp = "mcp_servers:\n  - {name: inherits, transport: stdio, command: npx}\n  \
+               - {name: clean, transport: stdio, command: npx, inherit_env: false}\n  \
+               - {name: remote, transport: http, url: 'https://mcp.example.com'}\n";
+    let config = parse(&format!(
+        "{mcp}{}",
+        with_route("host: a.example, credential: github, inject: {header: X-Api-Key}, rules: [{methods: [GET], path: /x}]")
+    ))
+    .unwrap();
+    let warnings = warnings_of(&config);
+    let named: Vec<&String> = warnings
+        .iter()
+        .filter(|w| w.starts_with("mcp_servers["))
+        .collect();
+    assert_eq!(named.len(), 1, "{warnings:?}");
+    assert!(
+        named[0].starts_with("mcp_servers[inherits].inherit_env")
+            && named[0].contains("GITHUB_TOKEN")
+            && named[0].contains("inherit_env: false"),
+        "{warnings:?}"
+    );
+    // File credentials are not in the daemon's environment.
+    let config = parse(&format!(
+        "{mcp}credentials:\n  registry: {{file: ~/.config/axocoatl/credentials/registry}}\n"
+    ))
+    .unwrap();
+    assert!(
+        !warnings_of(&config)
+            .iter()
+            .any(|w| w.starts_with("mcp_servers[")),
+        "{:?}",
+        warnings_of(&config)
+    );
 }
 
 #[test]

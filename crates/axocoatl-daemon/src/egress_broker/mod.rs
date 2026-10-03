@@ -10,9 +10,12 @@
 //! 1. It accepts TLS with a certificate for the route host from the
 //!    Session's own authority ([`ca::SessionCa`]), only when the client's
 //!    server name is that host, and only for `http/1.1`.
-//! 2. It reads HTTP/1.1 requests. Each must name the route host in `Host`,
-//!    have a canonical path, ask for no upgrade, and match one of the route's
-//!    rules ([`rules`]); anything else gets a JSON refusal saying why.
+//! 2. It reads HTTP/1.1 requests from a process kind the route serves. Each
+//!    must name the route host in `Host`, have a canonical path, ask for no
+//!    upgrade, carry no header that names another method, path or host (such
+//!    as `X-HTTP-Method-Override` or `X-Forwarded-Host`), and match one of
+//!    the route's rules ([`rules`]); anything else gets a JSON refusal saying
+//!    why.
 //! 3. It writes a `request` event to the Session's network record and waits
 //!    for it before anything goes upstream; a request that cannot be
 //!    recorded is refused.
@@ -24,9 +27,9 @@
 //! 5. It sends the request upstream ([`upstream`]) to an address the
 //!    decision point already resolved, over TLS checked with this computer's
 //!    trust settings, and streams the response back, refusing compressed
-//!    responses on credentialed routes and stopping any response that
-//!    carries the credential ([`scan`]). A `response` event records how it
-//!    ended.
+//!    responses on credentialed routes and stopping any response whose
+//!    status line, headers, body or trailers carry the credential ([`scan`]).
+//!    A `response` event records how it ended.
 //!
 //! [`trust`] has the files and environment that make containers trust the
 //! Session's authority. Wiring the broker to the relay is done where the

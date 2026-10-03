@@ -9,7 +9,7 @@
 //! YAML, before `${VAR}` substitution, so a value cannot reach the config
 //! that way either.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
@@ -19,8 +19,8 @@ use crate::egress::{validate_ports, ConfigWarning, HostPattern};
 use crate::egress_presets::preset;
 use crate::error::ConfigError;
 use crate::types::{
-    AxocoatlConfig, CredentialSourceYaml, EgressAllowYaml, EgressRouteYaml, RouteAccessYaml,
-    RouteForYaml, RouteInjectYaml, RouteRuleYaml,
+    AxocoatlConfig, CredentialSourceYaml, EgressAllowYaml, EgressRouteYaml, RouteForYaml,
+    RouteInjectYaml, RouteRuleYaml,
 };
 
 /// Most routes one config may list.
@@ -281,9 +281,20 @@ pub fn is_path_char(byte: u8) -> bool {
         )
 }
 
+/// Whether two hex digits (already uppercase) escape `/`, `\` or `.`.
+fn escapes_separator_or_dot(high: u8, low: u8) -> bool {
+    matches!((high, low), (b'2', b'F') | (b'5', b'C') | (b'2', b'E'))
+}
+
 /// Check one path segment's characters and percent-escapes and return it with
 /// escapes in uppercase hex. An escaped `/`, `\` or `.` is refused: a server
-/// may decode it into a separator or a dot segment.
+/// may decode it into a separator or a dot segment. So is one escaped twice
+/// (`%252F`), for servers that decode twice.
+///
+/// Servlet containers such as Tomcat drop path parameters (from a `;` to the
+/// end of the segment) before they read dot segments, so `..;x` is `..` to
+/// them. The part before the first `;` (or `%3B`) is therefore checked too: it
+/// cannot be `.` or `..`, and cannot be empty when a parameter follows.
 pub fn canonical_segment(segment: &str) -> Result<String, String> {
     let bytes = segment.as_bytes();
     let mut out = String::with_capacity(segment.len());
@@ -299,8 +310,23 @@ pub fn canonical_segment(segment: &str) -> Result<String, String> {
             }
             let high = high.to_ascii_uppercase();
             let low = low.to_ascii_uppercase();
-            if matches!((high, low), (b'2', b'F') | (b'5', b'C') | (b'2', b'E')) {
+            if escapes_separator_or_dot(high, low) {
                 return Err("an escaped '/', '\\' or '.' (%2F, %5C, %2E) is refused".into());
+            }
+            if (high, low) == (b'2', b'5') {
+                if let (Some(next_high), Some(next_low)) =
+                    (bytes.get(index + 3), bytes.get(index + 4))
+                {
+                    if escapes_separator_or_dot(
+                        next_high.to_ascii_uppercase(),
+                        next_low.to_ascii_uppercase(),
+                    ) {
+                        return Err(
+                            "a twice-escaped '/', '\\' or '.' (%252F, %255C, %252E) is refused"
+                                .into(),
+                        );
+                    }
+                }
             }
             out.push('%');
             out.push(high as char);
@@ -319,6 +345,26 @@ pub fn canonical_segment(segment: &str) -> Result<String, String> {
     }
     if out == "." || out == ".." {
         return Err("'.' and '..' segments are refused".into());
+    }
+    let name_end = [out.find(';'), out.find("%3B")]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(out.len());
+    if name_end < out.len() {
+        let name = &out[..name_end];
+        if name == "." || name == ".." {
+            return Err(
+                "a '.' or '..' segment with a ';' parameter is refused: servers that drop path parameters read it as '.' or '..'"
+                    .into(),
+            );
+        }
+        if name.is_empty() {
+            return Err(
+                "a segment that starts with ';' is refused: servers that drop path parameters read it as an empty segment"
+                    .into(),
+            );
+        }
     }
     Ok(out)
 }
@@ -465,7 +511,37 @@ pub fn validate_credentials(config: &AxocoatlConfig) -> Result<Vec<ConfigWarning
             });
         }
     }
+    warnings.extend(inherited_credential_warnings(config));
     Ok(warnings)
+}
+
+/// A stdio MCP server that inherits the daemon's environment also gets every
+/// credential read from it, and a tool of that server can hand it to an
+/// Agent. One warning per such server.
+fn inherited_credential_warnings(config: &AxocoatlConfig) -> Vec<ConfigWarning> {
+    let variables: BTreeSet<&str> = config
+        .credentials
+        .values()
+        .filter_map(|source| source.env.as_deref())
+        .collect();
+    let variables: Vec<&str> = variables.into_iter().collect();
+    if variables.is_empty() {
+        return Vec::new();
+    }
+    config
+        .mcp_servers
+        .iter()
+        .filter(|server| server.transport == "stdio" && server.inherit_env)
+        .map(|server| ConfigWarning {
+            field: format!("mcp_servers[{}].inherit_env", server.name),
+            message: format!(
+                "this stdio MCP server starts with the daemon's whole environment, including the \
+                 credential variables {}, and its tools can return them to Agents; set \
+                 inherit_env: false, or keep those credentials in files",
+                variables.join(", ")
+            ),
+        })
+        .collect()
 }
 
 fn check_credential_source(field: &str, source: &CredentialSourceYaml) -> Result<(), ConfigError> {
@@ -672,7 +748,8 @@ fn check_route(
                 "Add rules: [{methods: [GET], path: /**}] or access: read-only.",
             ))
         }
-        (Some(RouteAccessYaml::Full), true) if credentialed => warnings.push(ConfigWarning {
+        // `read-only` also adds the credential to a GET of every path.
+        (Some(_), true) if credentialed => warnings.push(ConfigWarning {
             field: format!("{field}.access"),
             message: BROAD_CREDENTIAL_WARNING.into(),
         }),

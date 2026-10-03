@@ -144,6 +144,20 @@ async fn upstream_handler(
                 .insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
             response
         }
+        "/reflect-reason" => {
+            let mut response = Response::new(full("nothing to see"));
+            response
+                .extensions_mut()
+                .insert(hyper::ext::ReasonPhrase::try_from(format!("OK {authorization}")).unwrap());
+            response
+        }
+        "/custom-reason" => {
+            let mut response = Response::new(full("ok"));
+            response
+                .extensions_mut()
+                .insert(hyper::ext::ReasonPhrase::from_static(b"Fine Thanks"));
+            response
+        }
         "/big" => Response::new(full(vec![b'z'; 1024 * 1024])),
         "/upload" => Response::new(full(format!("received {}", body.len()))),
         _ => Response::new(full("ok")),
@@ -289,6 +303,8 @@ rules:
   - {methods: [GET], path: /gzip}
   - {methods: [GET], path: /big}
   - {methods: [POST], path: /upload}
+  - {methods: [GET], path: /reflect-reason}
+  - {methods: [GET], path: /custom-reason}
 "#;
 
 fn bearer_route() -> Arc<Route> {
@@ -308,6 +324,16 @@ fn trusting(ca: &SessionCa) -> Arc<dyn rustls::client::danger::ServerCertVerifie
     .unwrap()
 }
 
+/// `route` with `port` added to its ports: the test upstream listens on a
+/// random port, and the broker serves a connection only on the route's ports.
+fn covering(route: &Route, port: u16) -> Arc<Route> {
+    let mut route = route.clone();
+    if !route.ports.contains(&port) {
+        route.ports.push(port);
+    }
+    Arc::new(route)
+}
+
 async fn harness_with(route: Arc<Route>, local: LocalCheck) -> Harness {
     secret();
     let upstream = start_upstream().await;
@@ -317,12 +343,13 @@ async fn harness_with(route: Arc<Route>, local: LocalCheck) -> Harness {
         Arc::new(connector),
         Arc::new(Vec::new),
     ));
+    let port = upstream.addr.port();
     Harness {
-        port: upstream.addr.port(),
+        port,
         addrs: vec![upstream.addr.ip()],
         upstream,
         broker,
-        route,
+        route: covering(&route, port),
     }
 }
 
@@ -360,9 +387,21 @@ impl Harness {
         Result<tokio_rustls::client::TlsStream<tokio::io::DuplexStream>, std::io::Error>,
         tokio::task::JoinHandle<BrokerOutcome>,
     ) {
+        self.tls_with(self.context(), sink, server_name, alpn).await
+    }
+
+    async fn tls_with(
+        &self,
+        context: RelayContext,
+        sink: Arc<MemorySink>,
+        server_name: &str,
+        alpn: Vec<Vec<u8>>,
+    ) -> (
+        Result<tokio_rustls::client::TlsStream<tokio::io::DuplexStream>, std::io::Error>,
+        tokio::task::JoinHandle<BrokerOutcome>,
+    ) {
         let (client_io, broker_io) = tokio::io::duplex(256 * 1024);
         let broker = self.broker.clone();
-        let context = self.context();
         let served = tokio::spawn(async move { broker.serve(context, broker_io, sink).await });
         let mut roots = rustls::RootCertStore::empty();
         roots.add(self.broker.ca().der().clone()).unwrap();
@@ -379,7 +418,13 @@ impl Harness {
     }
 
     async fn client(&self, sink: Arc<MemorySink>) -> Client {
-        let (tls, served) = self.tls(sink, HOST, vec![b"http/1.1".to_vec()]).await;
+        self.client_with(self.context(), sink).await
+    }
+
+    async fn client_with(&self, context: RelayContext, sink: Arc<MemorySink>) -> Client {
+        let (tls, served) = self
+            .tls_with(context, sink, HOST, vec![b"http/1.1".to_vec()])
+            .await;
         let (sender, connection) =
             hyper::client::conn::http1::handshake(TokioIo::new(tls.unwrap()))
                 .await
@@ -683,6 +728,11 @@ async fn upgrades_and_non_canonical_paths_are_refused() {
         "/%2e%2e/echo",
         "//echo",
         "/echo%2F..%2Fheaders",
+        "/headers/..;/echo",
+        "/headers/.;/echo",
+        "/headers/;/echo",
+        "/headers/..;x=1/echo",
+        "/headers/%252e%252e/echo",
     ] {
         let mut client = h.client(sink.clone()).await;
         let response = client.sender.send_request(get(path, HOST)).await.unwrap();
@@ -690,6 +740,163 @@ async fn upgrades_and_non_canonical_paths_are_refused() {
         assert_eq!(refusal_json(response).await["error"], "path_not_canonical");
     }
     assert!(h.upstream.seen().is_empty());
+}
+
+#[tokio::test]
+async fn headers_that_name_another_method_path_or_host_are_refused() {
+    let overrides = [
+        ("X-HTTP-Method-Override", "DELETE"),
+        ("X-HTTP-Method", "DELETE"),
+        ("X-Method-Override", "DELETE"),
+        ("X-Original-Method", "DELETE"),
+        ("X-Original-URL", "/admin"),
+        ("X-Original-URI", "/admin"),
+        ("X-Rewrite-URL", "/admin"),
+        ("X-Original-Host", "other.test"),
+        ("X-Host", "other.test"),
+        ("X-Forwarded-Host", "other.test"),
+        ("X-Forwarded-Prefix", "/admin"),
+        ("X-Forwarded-For", "203.0.113.7"),
+        ("Forwarded", "host=other.test"),
+    ];
+    // Rules apply on every route, credentialed or not.
+    for route_yaml in [
+        format!(
+            "host: {HOST}\ncredential: test\ninject: {{header: Authorization, format: \"Bearer {{}}\"}}\n{RULES}"
+        ),
+        format!("host: {HOST}\n{RULES}"),
+    ] {
+        let h = harness(route(&route_yaml)).await;
+        let sink = Arc::new(MemorySink::default());
+        let mut client = h.client(sink.clone()).await;
+        for (name, value) in overrides {
+            let mut request = get("/echo", HOST);
+            request
+                .headers_mut()
+                .insert(HeaderName::from_bytes(name.as_bytes()).unwrap(), HeaderValue::from_static(value));
+            let response = client.sender.send_request(request).await.unwrap();
+            assert_eq!(response.status(), 403, "{name}");
+            assert_eq!(
+                response.headers()["x-axocoatl-egress"],
+                "denied; reason=override_header"
+            );
+            let json = refusal_json(response).await;
+            assert_eq!(json["error"], "override_header", "{name}");
+            assert!(
+                json["reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&name.to_ascii_lowercase()),
+                "{json}"
+            );
+        }
+        assert!(h.upstream.seen().is_empty(), "{route_yaml}");
+        let refused = request_events(&sink);
+        assert_eq!(refused.len(), overrides.len());
+        assert!(refused.iter().all(|event| matches!(
+            event,
+            NetworkEvent::Request { decision: Decision::Deny, reason: Some(reason), .. }
+                if reason == "override_header"
+        )));
+        // The connection stays usable, and an ordinary request goes through
+        // without any of them.
+        let response = client
+            .sender
+            .send_request(get("/echo", HOST))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let seen = h.upstream.seen();
+        assert_eq!(seen.len(), 1);
+        for (name, _) in overrides {
+            assert!(seen[0].header(&name.to_ascii_lowercase()).is_empty(), "{name}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_credential_in_the_reason_phrase_is_stopped() {
+    let h = harness(bearer_route()).await;
+    let sink = Arc::new(MemorySink::default());
+    let mut client = h.client(sink.clone()).await;
+    let response = client
+        .sender
+        .send_request(get("/reflect-reason", HOST))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 502);
+    assert!(response
+        .extensions()
+        .get::<hyper::ext::ReasonPhrase>()
+        .is_none_or(|reason| !String::from_utf8_lossy(reason.as_bytes()).contains(secret())));
+    let json = refusal_json(response).await;
+    assert_eq!(json["error"], "credential_reflected");
+    assert!(!json.to_string().contains(secret()));
+    drop(client.sender);
+    assert_eq!(
+        client.served.await.unwrap().error.as_deref(),
+        Some("credential_reflected")
+    );
+    assert!(matches!(
+        wait_for_response_event(&sink).await,
+        NetworkEvent::Response {
+            outcome: ResponseOutcome::CredentialReflected,
+            ..
+        }
+    ));
+    // A reason phrase without the credential still reaches the client.
+    let mut client = h.client(Arc::new(MemorySink::default())).await;
+    let response = client
+        .sender
+        .send_request(get("/custom-reason", HOST))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response
+            .extensions()
+            .get::<hyper::ext::ReasonPhrase>()
+            .map(|reason| reason.as_bytes().to_vec()),
+        Some(b"Fine Thanks".to_vec())
+    );
+}
+
+#[tokio::test]
+async fn a_connection_without_a_process_kind_or_on_another_port_is_refused() {
+    let h = harness(bearer_route()).await;
+    let sink = Arc::new(MemorySink::default());
+    let mut context = h.context();
+    context.binding = None;
+    let mut client = h.client_with(context, sink.clone()).await;
+    let response = client
+        .sender
+        .send_request(get("/echo", HOST))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 403);
+    assert_eq!(
+        refusal_json(response).await["error"],
+        "route_not_for_binding"
+    );
+    assert!(h.upstream.seen().is_empty());
+    assert!(matches!(
+        &request_events(&sink)[0],
+        NetworkEvent::Request { decision: Decision::Deny, reason: Some(reason), credential: None, .. }
+            if reason == "route_not_for_binding"
+    ));
+
+    // A port the route does not cover is never served with it.
+    let (_client_io, broker_io) = tokio::io::duplex(1024);
+    let mut context = h.context();
+    context.port = 1;
+    assert!(!h.route.covers_port(context.port));
+    let outcome = h
+        .broker
+        .serve(context, broker_io, Arc::new(MemorySink::default()))
+        .await;
+    let error = outcome.error.unwrap();
+    assert!(error.starts_with("route_mismatch"), "{error}");
+    assert!(error.contains("port"), "{error}");
 }
 
 #[tokio::test]
@@ -1016,6 +1223,7 @@ async fn unreachable_upstreams_own_addresses_and_missing_credentials_are_answere
     let mut h = harness(bearer_route()).await;
     let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
     h.port = closed.local_addr().unwrap().port();
+    h.route = covering(&h.route, h.port);
     drop(closed);
     let mut client = h.client(Arc::new(MemorySink::default())).await;
     let response = client
@@ -1106,12 +1314,13 @@ async fn an_upstream_ca_is_trusted_through_the_platform_verifier() {
         Arc::new(UpstreamConnector::with_local_check(Arc::new(|_| false))),
         Arc::new(Vec::new),
     ));
+    let port = upstream.addr.port();
     let h = Harness {
-        port: upstream.addr.port(),
+        port,
         addrs: vec![upstream.addr.ip()],
         upstream,
         broker: broker.clone(),
-        route: with_ca,
+        route: covering(&with_ca, port),
     };
     let mut client = h.client(Arc::new(MemorySink::default())).await;
     let response = client
@@ -1123,7 +1332,7 @@ async fn an_upstream_ca_is_trusted_through_the_platform_verifier() {
 
     // Without the upstream's authority the platform verifier refuses it.
     let h = Harness {
-        route: route(&format!("host: {HOST}\n{RULES}")),
+        route: covering(&route(&format!("host: {HOST}\n{RULES}")), h.port),
         ..h
     };
     let mut client = h.client(Arc::new(MemorySink::default())).await;

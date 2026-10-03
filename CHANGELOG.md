@@ -121,21 +121,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sandbox.egress.routes` and `credentials`. A route names one host whose HTTPS
   traffic the daemon ends itself, with a certificate from a certificate authority
   made for each Session (ECDSA P-256, key kept in memory, 30 days; a 24-hour
-  certificate per host). Each request must carry the route host as its TLS server
-  name and `Host`, have a canonical path, ask for no upgrade and match the route's
-  rules (methods, path globs with `*` and `**`, required query parameters) or an
+  certificate per host). Each request must come from a process kind the route
+  serves, carry the route host as its TLS server name and `Host`, have a canonical
+  path (no dot segments, including `..;` path-parameter forms, and no escaped or
+  twice-escaped separators), ask for no upgrade, carry no method, URL or host override
+  header (`X-HTTP-Method-Override`, `X-Original-URL`, `Forwarded`, `X-Forwarded-*` and
+  the like) and match the route's rules (methods, path globs with `*` and `**`,
+  required query parameters, which a raw `;` in the query never satisfies) or an
   `access` preset; anything else gets a JSON refusal naming the missing rule. A route's
   credential comes from an environment variable of the daemon or an owner-only file
   outside every Workspace, is read when a request needs it, and is added as
   `Authorization: Basic` or a named header after the client's own credentials are
   removed; it never enters a container, the egress proxy, the record or the logs.
   Credentialed routes refuse compressed responses unless `allow_encoded_responses` is
-  set, and stop a response that carries the credential before that part reaches the
-  client. Every route request is written to the Session's network record before it
-  is sent (`request`), and how it ended after (`response`); activation evidence lists
-  them. Containers trust the Session's authority through `/etc/axocoatl/ca` and the
-  usual certificate variables. Validation refuses `${...}` and plain values in
-  `credentials` and routes, and `axocoatl doctor` reports routes and whether each
+  set, and stop a response whose status line, headers, body or trailers carry the
+  credential before that part reaches the client. Every route request is written to
+  the Session's network record before it is sent (`request`), and how it ended after
+  (`response`); activation evidence lists them. Containers trust the Session's
+  authority through `/etc/axocoatl/ca` and the usual certificate variables.
+  Validation refuses `${...}` and plain values in `credentials` and routes, warns
+  about credentialed routes that allow every path and about stdio MCP servers that
+  inherit `env` credentials, and `axocoatl doctor` reports routes and whether each
   credential's variable or file is there. See Configure > Credentials and routes.
 
 ### Changed
