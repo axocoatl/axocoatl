@@ -11,11 +11,16 @@ use axocoatl_config::EgressHostYaml;
 use axocoatl_session::control_authority::ExecutionProfile;
 
 /// An in-memory record whose ordinary appends can be made to fail, and
-/// whose lines a test can drop.
+/// whose lines a test can drop. Its next control append can be held until
+/// the test lets it go, and control appends can be made to fail.
 #[derive(Debug, Default)]
 struct Record {
     lines: Mutex<Vec<NetworkLine>>,
     fail: Mutex<Option<RecordFailure>>,
+    fail_control: Mutex<Option<RecordFailure>>,
+    hold_next_control: std::sync::atomic::AtomicBool,
+    held: tokio::sync::Notify,
+    go: tokio::sync::Notify,
 }
 
 impl Record {
@@ -55,6 +60,16 @@ impl EgressRecordSink for Record {
     }
 
     async fn append_control(&self, event: NetworkEvent) -> Result<u64, RecordFailure> {
+        if let Some(failure) = self.fail_control.lock().unwrap().clone() {
+            return Err(failure);
+        }
+        if self
+            .hold_next_control
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.held.notify_one();
+            self.go.notified().await;
+        }
         Ok(self.push(event))
     }
 
@@ -503,6 +518,93 @@ async fn an_approval_without_its_summary_line_is_still_approved_after_a_reopen()
         (view.state, view.revision, view.actor.as_deref()),
         (ProposalState::Approved, Some(2), Some("human"))
     );
+}
+
+/// A person's request that goes away while its decision is being recorded
+/// (the client disconnects, or the daemon cancels the request) does not
+/// interrupt the decision: it is recorded, applied and announced, and the
+/// proposal is not left "being decided".
+#[tokio::test]
+async fn a_decision_whose_request_is_dropped_still_finishes() {
+    use super::tests::wait_for;
+    let record = Arc::new(Record::default());
+    let (egress, _dir) = opened(record.clone()).await;
+    let approved = egress.propose(request("api.test", &[443])).await.unwrap();
+    let rejected = egress.propose(request("cdn.test", &[443])).await.unwrap();
+
+    record
+        .hold_next_control
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    tokio::select! {
+        result = egress.approve_proposal(&approved.view.id, "human", "c-approve") => {
+            panic!("the approval finished while its policy line was held: {result:?}")
+        }
+        () = record.held.notified() => {}
+    }
+    record.go.notify_one();
+    wait_for(|| egress.proposal(&approved.view.id).unwrap().state == ProposalState::Approved).await;
+    assert_eq!(*approved.outcome.borrow(), ProposalState::Approved);
+    assert!(egress
+        .policy(EgressScope::Session)
+        .unwrap()
+        .match_name("api.test", 443)
+        .is_some());
+    assert!(record.events().iter().any(|event| matches!(
+        event,
+        NetworkEvent::Policy { change: Some(change), .. }
+            if change.proposal_id.as_deref() == Some(approved.view.id.as_str())
+    )));
+
+    record
+        .hold_next_control
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    tokio::select! {
+        result = egress.reject_proposal(&rejected.view.id, "human", "c-reject") => {
+            panic!("the rejection finished while its line was held: {result:?}")
+        }
+        () = record.held.notified() => {}
+    }
+    record.go.notify_one();
+    wait_for(|| egress.proposal(&rejected.view.id).unwrap().state == ProposalState::Rejected).await;
+    assert_eq!(*rejected.outcome.borrow(), ProposalState::Rejected);
+}
+
+/// A rejection that cannot be recorded leaves the proposal pending and
+/// decidable, not "being decided".
+#[tokio::test]
+async fn a_decision_that_cannot_be_recorded_leaves_the_proposal_decidable() {
+    let record = Arc::new(Record::default());
+    let (egress, _dir) = opened(record.clone()).await;
+    let proposed = egress.propose(request("api.test", &[443])).await.unwrap();
+    *record.fail_control.lock().unwrap() = Some(RecordFailure::Full);
+    for _ in 0..2 {
+        let error = egress
+            .reject_proposal(&proposed.view.id, "human", "c-1")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, EgressPolicyError::Unavailable(_)),
+            "{error:?}"
+        );
+        let error = egress
+            .approve_proposal(&proposed.view.id, "human", "c-2")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, EgressPolicyError::Unavailable(_)),
+            "{error:?}"
+        );
+        assert_eq!(
+            egress.proposal(&proposed.view.id).unwrap().state,
+            ProposalState::Pending
+        );
+    }
+    *record.fail_control.lock().unwrap() = None;
+    egress
+        .reject_proposal(&proposed.view.id, "human", "c-3")
+        .await
+        .unwrap();
+    assert_eq!(*proposed.outcome.borrow(), ProposalState::Rejected);
 }
 
 /// The decision point the tool asks, and whether its sidecar runs.

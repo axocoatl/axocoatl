@@ -163,6 +163,58 @@ impl Entry {
     }
 }
 
+/// A person's decision on one proposal while it is being recorded. Dropped
+/// before [`Deciding::finish`], because the decision failed, panicked or
+/// was cancelled, it puts the proposal back to pending, so it is never left
+/// "being decided".
+pub struct Deciding<'a> {
+    book: &'a std::sync::Mutex<ProposalBook>,
+    id: String,
+    finished: bool,
+}
+
+impl<'a> Deciding<'a> {
+    /// Start deciding a pending proposal: the guard, its host and its ports.
+    pub fn begin(
+        book: &'a std::sync::Mutex<ProposalBook>,
+        id: &str,
+    ) -> Result<(Self, String, Vec<u16>), EgressPolicyError> {
+        let (host, ports) = book
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .begin_decision(id)?;
+        Ok((
+            Self {
+                book,
+                id: id.to_string(),
+                finished: false,
+            },
+            host,
+            ports,
+        ))
+    }
+
+    /// The decision is recorded: keep it and wake whoever waits on it.
+    pub fn finish(mut self, state: ProposalState, actor: &str, revision: Option<u64>) {
+        self.book
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .finish(&self.id, state, actor, revision);
+        self.finished = true;
+    }
+}
+
+impl Drop for Deciding<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.book
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .abort_decision(&self.id);
+        }
+    }
+}
+
 /// One Session's proposals, oldest first.
 #[derive(Default)]
 pub struct ProposalBook {

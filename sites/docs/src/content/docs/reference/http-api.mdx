@@ -226,7 +226,7 @@ below.
 | GET | `/api/sessions/{id}/network/screenshots/{sha256}` | One screenshot a browser tool kept beside the Session's network record, as `image/jpeg` or `image/png`; 404 when absent |
 | POST | `/api/sessions/{id}/network/proposals/{proposal_id}/approve` | `{command_id}`; approve a host an Agent [asked for](#hosts-agents-ask-for): it is allowed for this Session. Returns `{proposal_id, state, revision, digest}` |
 | POST | `/api/sessions/{id}/network/proposals/{proposal_id}/reject` | `{command_id}`; reject a host an Agent asked for. Returns `{proposal_id, state}` |
-| POST | `/api/network/reload` | Read the daemon's configuration file again and [apply its allowlists](#reload-the-network-allowlists) to new and running Sessions. Returns `{applied, unchanged, restart_required, revisions}` |
+| POST | `/api/network/reload` | Read the daemon's configuration file again and [apply its allowlists](#reload-the-network-allowlists) to new and running Sessions. Returns `{applied, unchanged, restart_required, revisions, changes}`, with `503` and `failed` when a running Session kept its policy |
 | GET | `/api/session-turns/search?q=…&session_id=…` | Literal case-insensitive search; omit Session ID for all |
 | GET | `/api/sessions/{id}/export?format=markdown` | Markdown by default; accepts `markdown`, `md`, or `json` |
 | POST | `/api/sessions/{id}/rewind` | `{keep_through_turn_id?}`; legacy `{keep}` is raw message count |
@@ -540,8 +540,16 @@ POST /api/network/reload
 {"applied": ["sandbox.egress.allow"],
  "unchanged": ["sandbox.egress.private_destinations", "browser.allow", "browser.private_destinations"],
  "restart_required": ["sandbox.egress.max_connections"],
- "revisions": [{"session_id": "ses-…", "scope": "session", "revision": 6, "digest": "…", "closed": 1}]}
+ "revisions": [{"session_id": "ses-…", "scope": "session", "revision": 6, "digest": "…", "closed": 1}],
+ "changes": [{"key": "sandbox.egress.allow",
+              "added": ["registry.npmjs.org:443 (preset npm)"],
+              "removed": ["old.example.com:443 (config)"]}]}
 ```
+
+- `changes` names, for each list that changed, every entry it gained and lost
+  compared with the lists in force before: allow entries as the rules they compile
+  to (a preset as each of its hosts, with its ports), private ranges as ranges. Read
+  it to see exactly what a reload widens.
 
 - New Sessions use the new lists. Each running Session whose policy changed records
   it as a `policy` event with `source` `config_reload` and `actor` `human`, and uses
@@ -555,10 +563,18 @@ POST /api/network/reload
   `sandbox.egress.sidecar_network`, `sandbox.egress.max_connections`, adding or
   removing the `browser` block, Agents or providers. Only key names are reported,
   never values. These are not applied.
-- `failed` lists running Sessions whose new policy could not be recorded; they keep
-  their policy.
+- `failed` lists running Sessions whose new policy could not be recorded, with the
+  `scope` that failed (none when the Session's lists did not compile at all). That
+  scope keeps its old policy, its old lists and the connections they admitted. The
+  answer is then `503` with the same report and an `error`; every other Session uses
+  the new lists. The next reload, even of an unchanged file, applies the lists to
+  each Session that has not taken them yet, so send it again.
 - An invalid file, or a daemon not started from a file, gets `400` with the reason,
   and nothing changes.
+- So does a configuration file inside the Workspace of any of the daemon's Sessions:
+  that Session's Agents can edit it, so it is not applied to every running Session
+  while the daemon runs. Check the file and restart the daemon, or start the daemon
+  from a file outside every Workspace.
 
 ### Turn control plane
 

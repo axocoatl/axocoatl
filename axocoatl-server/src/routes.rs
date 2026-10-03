@@ -2016,21 +2016,56 @@ fn network_reload_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<
     }
 }
 
+/// A reload's report, with `error` set when a running Session could not
+/// take the new lists.
+#[derive(Debug, Serialize)]
+pub struct NetworkReloadAnswer {
+    #[serde(flatten)]
+    pub report: axocoatl_daemon::session_network_reload::NetworkReloadReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// The status and body for a reload that ran: 200, or 503 when a running
+/// Session keeps its policy because its new one could not be recorded. The
+/// lists apply to every other Session either way, and the next reload tries
+/// the failed ones again.
+fn network_reload_answer(
+    report: axocoatl_daemon::session_network_reload::NetworkReloadReport,
+) -> (StatusCode, Json<NetworkReloadAnswer>) {
+    if report.failed.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(NetworkReloadAnswer {
+                report,
+                error: None,
+            }),
+        );
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(NetworkReloadAnswer {
+            report,
+            error: Some(
+                "the Sessions under failed keep their policy because the new one could not be recorded; the other Sessions use the new lists, and a reload again retries these"
+                    .into(),
+            ),
+        }),
+    )
+}
+
 /// POST /api/network/reload — read the daemon's configuration file again
 /// and apply its `sandbox.egress` and `browser` allowlists to new and
 /// running Sessions. Other changed settings are listed, not applied.
 pub async fn reload_network_policy(
     State(state): State<AppState>,
-) -> Result<
-    Json<axocoatl_daemon::session_network_reload::NetworkReloadReport>,
-    (StatusCode, Json<ErrorResponse>),
-> {
+) -> Result<(StatusCode, Json<NetworkReloadAnswer>), (StatusCode, Json<ErrorResponse>)> {
     state
         .read()
         .await
         .reload_network_policy()
         .await
-        .map(Json)
+        .map(network_reload_answer)
         .map_err(network_reload_err)
 }
 
@@ -7615,6 +7650,31 @@ mod tests {
         assert!(body.error.contains("nothing was changed"));
         let (status, _) = network_reload_err(DaemonError::Session("x".into()));
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        // A reload that ran answers with its report, and with 503 and an
+        // error when a running Session kept its policy.
+        use axocoatl_daemon::session_network_reload::{NetworkReloadReport, ReloadFailure};
+        let (status, Json(answer)) = network_reload_answer(NetworkReloadReport {
+            applied: vec!["sandbox.egress.allow".into()],
+            ..Default::default()
+        });
+        assert_eq!(status, StatusCode::OK);
+        let wire = serde_json::to_value(&answer).unwrap();
+        assert_eq!(wire["applied"][0], "sandbox.egress.allow");
+        assert!(wire.get("error").is_none() && wire.get("failed").is_none());
+        let (status, Json(answer)) = network_reload_answer(NetworkReloadReport {
+            applied: vec!["sandbox.egress.allow".into()],
+            failed: vec![ReloadFailure {
+                session_id: "ses-1".into(),
+                scope: Some("session".into()),
+                error: "recording the reloaded session policy failed: Full".into(),
+            }],
+            ..Default::default()
+        });
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let wire = serde_json::to_value(&answer).unwrap();
+        assert!(wire["error"].as_str().unwrap().contains("reload again"));
+        assert_eq!(wire["failed"][0]["scope"], "session");
+        assert_eq!(wire["applied"][0], "sandbox.egress.allow");
         // The decision body is exactly a command id.
         let parsed: axocoatl_daemon::session_network_proposals::NetworkProposalDecisionRequest =
             serde_json::from_str(r#"{"command_id":"c-1"}"#).unwrap();

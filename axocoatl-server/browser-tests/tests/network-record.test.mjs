@@ -292,6 +292,8 @@ test('the reload and proposal routes of the real daemon answer as documented', {
     assert.deepEqual(reload.body.applied, ['sandbox.egress.allow']);
     assert.deepEqual(reload.body.restart_required, []);
     assert.deepEqual(reload.body.revisions, []);
+    assert.deepEqual(reload.body.changes, [{ key: 'sandbox.egress.allow', added: ['registry.npmjs.org:443 (preset npm)'] }]);
+    assert.equal(reload.body.failed, undefined);
 
     await writeFile(configPath, original.replace('  network: none\n', '  network: bridge\n'));
     reload = await post('/api/network/reload');

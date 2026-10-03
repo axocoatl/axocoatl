@@ -138,6 +138,20 @@ the driver on its standard input and revoked when the call ends.
 The Session's own `sandbox.egress` list does not apply to the browser, and
 `browser.allow` does not apply to the Session.
 
+Under `network: egress` the proxy tells the browser and the Session apart only by the
+credential presented, not by the container it came from: the browser container and
+the Session container reach the same proxy. `browser_check` runs the test the model
+wrote with its call's browser credential in the test's environment. While that call
+runs, the test can hand the credential to a process in the Session container, for
+example by sending it to an app on an exposed port, and that process can then reach
+the hosts listed only under `browser.allow`; those connections are recorded under the
+browser call. The other way round, a test given an Agent's credential can reach the
+hosts under `sandbox.egress.allow` from the browser container, recorded under that
+Agent's command. Both take a writer Agent running `browser_check`, which can already
+send requests to the hosts under `browser.allow`. `browser` runs no code the model
+wrote, so its credential stays with the driver. Under `bridge` and `none` the
+browser's proxy is its own and the Session container cannot reach it.
+
 With declared hosts, Chromium finds the proxy on `127.0.0.1:3128` inside the browser
 container, or on the next free port when the Session exposes 3128 itself, so an app on
 3128 is never taken for the proxy.
@@ -154,7 +168,9 @@ Session only. To change `browser.allow` or `browser.private_destinations` for ev
 Session, edit the configuration file and run
 [`axocoatl network reload`](/reference/cli/#network-policy): running Sessions record
 and use the new list at once, and open connections it no longer allows are closed.
-Adding or removing the `browser` block itself needs a restart.
+The command lists each host the list gains and loses. Adding or removing the
+`browser` block itself needs a restart, and a configuration file inside a Session's
+Workspace is not reloaded.
 
 Chromium sends a proxy credential only after the proxy asks for one, so each call's
 first request through the proxy appears in the record as refused with
@@ -196,7 +212,9 @@ declared hosts, nothing else.
 `browser_check` runs the code the model wrote, as the browser container's user. It
 runs alone: other calls in the Session wait for it, and the browser container is
 replaced after it, so no file or process it leaves behind reaches a later call. The
-call's proxy credential is in its environment, which only its own test can read.
+call's proxy credential is in its environment, which only its own test can read;
+under `network: egress` the test can pass it on while the call runs (see
+[Declared hosts](#declared-hosts)).
 
 ## What is recorded
 

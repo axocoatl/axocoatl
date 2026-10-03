@@ -468,8 +468,9 @@ A `browser` block turns on the `browser` and `browser_check` tools for Agents wh
 same entries and rules as `sandbox.egress`, and are reached only through Axocoatl's
 egress proxy. `browser` is refused with `backend: e2b`, and `browser.allow` must be
 empty with `network: none`; under `network: egress` the browser uses the Session's own
-egress proxy, with `allow` as a policy of its own. `axocoatl network reload` applies
-changes to `allow` and `private_destinations` to running Sessions. An Agent that lists `browser` or `browser_check`
+egress proxy, with `allow` as a policy of its own (told apart by credential; see
+[Declared hosts](/configure/browser/#declared-hosts)). `axocoatl network reload`
+applies changes to `allow` and `private_destinations` to running Sessions. An Agent that lists `browser` or `browser_check`
 when no `browser` block is configured is refused when its team is admitted, and so is
 an Agent with `writes: []` that lists `browser_check`.
 

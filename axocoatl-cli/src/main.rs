@@ -446,6 +446,7 @@ async fn main() {
 
 /// `axocoatl network reload`: the running daemon reads its config file
 /// again and applies the egress and browser allowlists to running Sessions.
+/// Exits with status 1 when a running Session could not take them.
 async fn cmd_network_reload() {
     let mut client = session_ipc_client().await;
     match client
@@ -455,6 +456,9 @@ async fn cmd_network_reload() {
         Ok(axocoatl_daemon::ipc::IpcResponse::NetworkReloaded { report }) => {
             for line in network_reload_lines(&report) {
                 println!("{line}");
+            }
+            if !report.failed.is_empty() {
+                std::process::exit(1);
             }
         }
         Ok(axocoatl_daemon::ipc::IpcResponse::Error { message, .. }) => {
@@ -480,7 +484,15 @@ fn network_reload_lines(
         lines.push("✓ The allowlists are unchanged; nothing was applied.".to_string());
     } else {
         lines.push(format!("✓ Applied: {}", report.applied.join(", ")));
-        if report.revisions.is_empty() {
+        for change in &report.changes {
+            for entry in &change.added {
+                lines.push(format!("  + {}: {entry}", change.key));
+            }
+            for entry in &change.removed {
+                lines.push(format!("  - {}: {entry}", change.key));
+            }
+        }
+        if report.revisions.is_empty() && report.failed.is_empty() {
             lines.push("  No running Session's policy changed.".to_string());
         }
         for revision in &report.revisions {
@@ -498,10 +510,21 @@ fn network_reload_lines(
         }
     }
     for failure in &report.failed {
-        lines.push(format!(
-            "✗ Session {} keeps its policy: {}",
-            failure.session_id, failure.error
-        ));
+        lines.push(match &failure.scope {
+            Some(scope) => format!(
+                "✗ Session {} keeps its {scope} policy: {}",
+                failure.session_id, failure.error
+            ),
+            None => format!(
+                "✗ Session {} keeps its policy: {}",
+                failure.session_id, failure.error
+            ),
+        });
+    }
+    if !report.failed.is_empty() {
+        lines.push(
+            "  Run axocoatl network reload again to apply the lists to these Sessions.".to_string(),
+        );
     }
     if !report.restart_required.is_empty() {
         lines.push(format!(
@@ -3698,7 +3721,7 @@ mod tests {
     #[test]
     fn network_reload_parses_and_its_report_reads_plainly() {
         use axocoatl_daemon::session_network_reload::{
-            NetworkReloadReport, ReloadFailure, ScopeRevision,
+            ListChange, NetworkReloadReport, ReloadFailure, ScopeRevision,
         };
         let cli = Cli::try_parse_from(["axocoatl", "network", "reload"]).unwrap();
         assert!(matches!(
@@ -3724,6 +3747,18 @@ mod tests {
         );
         let applied = NetworkReloadReport {
             applied: vec!["sandbox.egress.allow".into(), "browser.allow".into()],
+            changes: vec![
+                ListChange {
+                    key: "sandbox.egress.allow".into(),
+                    added: vec!["b.example:443 (config)".into()],
+                    removed: vec!["a.example:443 (config)".into()],
+                },
+                ListChange {
+                    key: "browser.allow".into(),
+                    added: vec!["fonts.example:443 (config)".into()],
+                    removed: Vec::new(),
+                },
+            ],
             revisions: vec![
                 ScopeRevision {
                     session_id: "ses-1".into(),
@@ -3740,19 +3775,32 @@ mod tests {
                     closed: 0,
                 },
             ],
-            failed: vec![ReloadFailure {
-                session_id: "ses-2".into(),
-                error: "the record is full".into(),
-            }],
+            failed: vec![
+                ReloadFailure {
+                    session_id: "ses-2".into(),
+                    scope: Some("session".into()),
+                    error: "recording the reloaded session policy failed: Full".into(),
+                },
+                ReloadFailure {
+                    session_id: "ses-3".into(),
+                    scope: None,
+                    error: "the lists do not compile".into(),
+                },
+            ],
             ..Default::default()
         };
         assert_eq!(
             network_reload_lines(&applied),
             [
                 "✓ Applied: sandbox.egress.allow, browser.allow",
+                "  + sandbox.egress.allow: b.example:443 (config)",
+                "  - sandbox.egress.allow: a.example:443 (config)",
+                "  + browser.allow: fonts.example:443 (config)",
                 "  Session ses-1: session policy revision 4, 2 open connections closed",
                 "  Session ses-1: browser policy revision 2",
-                "✗ Session ses-2 keeps its policy: the record is full",
+                "✗ Session ses-2 keeps its session policy: recording the reloaded session policy failed: Full",
+                "✗ Session ses-3 keeps its policy: the lists do not compile",
+                "  Run axocoatl network reload again to apply the lists to these Sessions.",
             ]
         );
     }

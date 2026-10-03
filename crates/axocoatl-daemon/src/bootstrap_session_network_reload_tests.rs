@@ -5,6 +5,7 @@
 use super::*;
 use crate::session_network::NetworkAllowRequest;
 use crate::session_network_proposals::{NetworkProposalDecisionRequest, ProposalRequest};
+use crate::session_network_reload::ListChange;
 use axocoatl_session::execution_ownership::DataRootFormatOwnership;
 use axocoatl_session::network_record::{NetworkEvent, PolicySource, ProposalState};
 use std::os::unix::fs::PermissionsExt;
@@ -137,6 +138,22 @@ async fn reload_child_body() {
     let report = daemon.reload_network_policy().await.unwrap();
     assert_eq!(report.applied, ["sandbox.egress.allow", "browser.allow"]);
     assert!(report.restart_required.is_empty(), "{report:?}");
+    // What each list gains and loses is named, entry by entry.
+    assert_eq!(
+        report.changes,
+        [
+            ListChange {
+                key: "sandbox.egress.allow".into(),
+                added: vec!["b.example.com:443 (config)".into()],
+                removed: Vec::new(),
+            },
+            ListChange {
+                key: "browser.allow".into(),
+                added: Vec::new(),
+                removed: vec!["docs.example.com:443 (config)".into()],
+            },
+        ]
+    );
     let mut changed: Vec<(String, String, u64)> = report
         .revisions
         .iter()
@@ -216,6 +233,30 @@ async fn reload_child_body() {
         revision(&daemon.session_network(&running, None, None).await.unwrap()),
         previous
     );
+
+    // A file inside a Session's Workspace, where its Agents can edit it, is
+    // not reloaded while the daemon runs.
+    std::fs::write(
+        &path,
+        yaml("egress", &["c.example.com", "upload.example.com"], &[]),
+    )
+    .unwrap();
+    let inside = native_session(&daemon, dir.path(), "Holds the config").await;
+    let refused = daemon.reload_network_policy().await.unwrap_err();
+    assert!(
+        matches!(&refused, DaemonError::InvalidRequest(message)
+            if message.contains("inside the Workspace") && message.contains(&inside) && message.contains("nothing was changed")),
+        "{refused}"
+    );
+    assert_eq!(daemon.network_policy.current(), before);
+    assert_eq!(
+        revision(&daemon.session_network(&running, None, None).await.unwrap()),
+        previous
+    );
+    daemon.delete_session(&inside).await.unwrap();
+    let report = daemon.reload_network_policy().await.unwrap();
+    assert_eq!(report.applied, ["sandbox.egress.allow"]);
+    assert_eq!(report.changes[0].added, ["upload.example.com:443 (config)"]);
 
     // Proposals: an Agent's request waits; a person decides it.
     let egress = daemon.session_egress(&running).await.unwrap();

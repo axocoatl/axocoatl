@@ -32,9 +32,10 @@ use axocoatl_session::network_record::{
 use crate::session_egress_policy::{validate_session_host, CompiledPolicy, SessionRule};
 use crate::session_network::{PolicyRuleView, PolicyView, SessionNetworkRecords};
 use crate::session_network_proposals::{
-    new_proposal_id, ProposalBook, ProposalRequest, ProposalView, Proposed, MAX_PENDING_PROPOSALS,
+    new_proposal_id, Deciding, ProposalBook, ProposalRequest, ProposalView, Proposed,
+    MAX_PENDING_PROPOSALS,
 };
-use crate::session_network_reload::ScopeReload;
+use crate::session_network_reload::{ConfigReload, ScopeReload, ScopeReloadFailure};
 
 /// How long one name may take to resolve.
 pub const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -292,7 +293,9 @@ struct State {
 /// The policy decision point for one Session.
 pub struct SessionEgress {
     session_id: String,
-    /// Replaced by [`SessionEgress::reload_config`], under `policy_changes`.
+    /// The lists each scope compiles from. [`SessionEgress::reload_config`]
+    /// replaces a scope's once its new policy is recorded, under
+    /// `policy_changes`.
     config: Mutex<EgressPolicyConfig>,
     records: Arc<dyn EgressRecordSink>,
     resolver: Arc<dyn EgressResolver>,
@@ -903,11 +906,38 @@ impl SessionEgress {
     /// for new connections; open connections admitted by a rule the new
     /// policy no longer has, unchanged, are closed. Removing a private range
     /// closes the scope's open connections. This Session's own allows stay.
+    ///
+    /// A scope whose policy could not be recorded keeps its policy and its
+    /// lists ([`SessionEgress::policy_config`]), so a later per-Session allow
+    /// still compiles from them and a later reload tries that scope again.
+    /// The reload runs to its end even when the caller stops waiting.
     pub async fn reload_config(
         &self,
         config: EgressPolicyConfig,
         actor: &str,
-    ) -> Result<Vec<ScopeReload>, EgressPolicyError> {
+    ) -> Result<ConfigReload, EgressPolicyError> {
+        let this = self.strong()?;
+        let actor = actor.to_string();
+        tokio::spawn(async move { this.reload_config_now(config, &actor).await })
+            .await
+            .map_err(|error| {
+                EgressPolicyError::Unavailable(format!("reloading the policy failed: {error}"))
+            })?
+    }
+
+    /// This decision point as an `Arc`, for work that must finish even when
+    /// its caller is dropped.
+    fn strong(&self) -> Result<Arc<SessionEgress>, EgressPolicyError> {
+        self.this.upgrade().ok_or_else(|| {
+            EgressPolicyError::Unavailable("this Session's decision point is closing".into())
+        })
+    }
+
+    async fn reload_config_now(
+        &self,
+        config: EgressPolicyConfig,
+        actor: &str,
+    ) -> Result<ConfigReload, EgressPolicyError> {
         let _serial = self.policy_changes.lock().await;
         let planned = {
             let state = self.state();
@@ -923,14 +953,17 @@ impl SessionEgress {
             }
             planned
         };
-        *self
-            .config
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) = config;
-        let mut reloaded = Vec::new();
+        // A scope whose policy does not change compiles the same from either
+        // list, and a scope this decision point does not have uses neither:
+        // both take the new lists now. A changed scope takes them only once
+        // its policy is recorded and in use.
+        let changing: Vec<EgressScope> = planned.iter().map(|(scope, _, _)| *scope).collect();
+        self.adopt_lists(&config, |scope| !changing.contains(&scope));
+        let mut reload = ConfigReload::default();
         for (scope, revision, policy) in planned {
             let digest = policy.digest().to_string();
-            self.records
+            let recorded = self
+                .records
                 .append_control(NetworkEvent::Policy {
                     scope,
                     revision,
@@ -940,13 +973,18 @@ impl SessionEgress {
                     change: None,
                     actor: Some(actor.chars().take(128).collect()),
                 })
-                .await
-                .map_err(|error| {
-                    EgressPolicyError::Unavailable(format!(
+                .await;
+            if let Err(error) = recorded {
+                tracing::warn!(session = %self.session_id, scope = scope.as_str(), ?error, "recording a reloaded policy failed; the scope keeps its policy");
+                reload.failed.push(ScopeReloadFailure {
+                    scope,
+                    error: format!(
                         "recording the reloaded {} policy failed: {error:?}",
                         scope.as_str()
-                    ))
-                })?;
+                    ),
+                });
+                continue;
+            }
             let (control, revoke_ids) = {
                 let mut state = self.state();
                 let generation = state.control.as_ref().map(ControlHandle::generation);
@@ -977,21 +1015,39 @@ impl SessionEgress {
                 revoke_ids.sort_unstable();
                 (state.control.clone(), revoke_ids)
             };
+            self.adopt_lists(&config, |adopted| adopted == scope);
             let closed = revoke_ids.len();
             if let (Some(control), false) = (control, revoke_ids.is_empty()) {
                 control.revoke(revoke_ids);
             }
-            reloaded.push(ScopeReload {
+            reload.changed.push(ScopeReload {
                 scope,
                 revision,
                 digest,
                 closed,
             });
         }
-        Ok(reloaded)
+        Ok(reload)
     }
 
-    /// The allowlists this decision point compiles from.
+    /// Take the lists of `config` for the scopes `adopt` names (the
+    /// `session` scope's two lists, the `browser` scope's pair).
+    fn adopt_lists(&self, config: &EgressPolicyConfig, adopt: impl Fn(EgressScope) -> bool) {
+        let mut applied = self
+            .config
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if adopt(EgressScope::Session) {
+            applied.session_allow = config.session_allow.clone();
+            applied.session_private = config.session_private.clone();
+        }
+        if adopt(EgressScope::Browser) {
+            applied.browser = config.browser.clone();
+        }
+    }
+
+    /// The allowlists this decision point compiles from: per scope, the
+    /// ones it last recorded a policy for.
     pub fn policy_config(&self) -> EgressPolicyConfig {
         self.config
             .lock()
@@ -1091,14 +1147,32 @@ impl SessionEgress {
     /// A person approves a pending proposal: the ordinary per-Session allow
     /// of its host and ports in the `session` scope, recorded with the
     /// person as actor and the proposal's id, then the proposal's outcome.
+    /// The decision runs to its end even when the caller stops waiting, so
+    /// the record and the proposal never disagree and the proposal is never
+    /// left "being decided".
     pub async fn approve_proposal(
         &self,
         id: &str,
         actor: &str,
         command_id: &str,
     ) -> Result<(u64, String), EgressPolicyError> {
-        let (host, ports) = self.proposal_book().begin_decision(id)?;
-        let changed = self
+        let this = self.strong()?;
+        let (id, actor, command_id) = (id.to_string(), actor.to_string(), command_id.to_string());
+        tokio::spawn(async move { this.approve_proposal_now(&id, &actor, &command_id).await })
+            .await
+            .map_err(|error| {
+                EgressPolicyError::Unavailable(format!("approving the proposal failed: {error}"))
+            })?
+    }
+
+    async fn approve_proposal_now(
+        &self,
+        id: &str,
+        actor: &str,
+        command_id: &str,
+    ) -> Result<(u64, String), EgressPolicyError> {
+        let (deciding, host, ports) = Deciding::begin(&self.proposals, id)?;
+        let (revision, digest) = self
             .change_policy(
                 EgressScope::Session,
                 PolicyOp::Allow,
@@ -1108,16 +1182,8 @@ impl SessionEgress {
                 command_id,
                 Some(id),
             )
-            .await;
-        let (revision, digest) = match changed {
-            Ok(changed) => changed,
-            Err(error) => {
-                self.proposal_book().abort_decision(id);
-                return Err(error);
-            }
-        };
-        self.proposal_book()
-            .finish(id, ProposalState::Approved, actor, Some(revision));
+            .await?;
+        deciding.finish(ProposalState::Approved, actor, Some(revision));
         self.record_decision(
             id,
             ProposalState::Approved,
@@ -1132,7 +1198,24 @@ impl SessionEgress {
     }
 
     /// A person rejects a pending proposal. Nothing about the policy changes.
+    /// Like an approval, it runs to its end even when the caller stops
+    /// waiting.
     pub async fn reject_proposal(
+        &self,
+        id: &str,
+        actor: &str,
+        command_id: &str,
+    ) -> Result<(), EgressPolicyError> {
+        let this = self.strong()?;
+        let (id, actor, command_id) = (id.to_string(), actor.to_string(), command_id.to_string());
+        tokio::spawn(async move { this.reject_proposal_now(&id, &actor, &command_id).await })
+            .await
+            .map_err(|error| {
+                EgressPolicyError::Unavailable(format!("rejecting the proposal failed: {error}"))
+            })?
+    }
+
+    async fn reject_proposal_now(
         &self,
         id: &str,
         actor: &str,
@@ -1143,9 +1226,8 @@ impl SessionEgress {
                 "command_id must be 1-128 characters".into(),
             ));
         }
-        let (host, ports) = self.proposal_book().begin_decision(id)?;
-        let recorded = self
-            .records
+        let (deciding, host, ports) = Deciding::begin(&self.proposals, id)?;
+        self.records
             .append_control(Self::decision_event(
                 id,
                 ProposalState::Rejected,
@@ -1155,15 +1237,11 @@ impl SessionEgress {
                 command_id,
                 None,
             ))
-            .await;
-        if let Err(error) = recorded {
-            self.proposal_book().abort_decision(id);
-            return Err(EgressPolicyError::Unavailable(format!(
-                "recording the rejection failed: {error:?}"
-            )));
-        }
-        self.proposal_book()
-            .finish(id, ProposalState::Rejected, actor, None);
+            .await
+            .map_err(|error| {
+                EgressPolicyError::Unavailable(format!("recording the rejection failed: {error:?}"))
+            })?;
+        deciding.finish(ProposalState::Rejected, actor, None);
         Ok(())
     }
 

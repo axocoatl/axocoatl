@@ -62,7 +62,7 @@ use tokio::sync::Semaphore;
 use crate::session_dispatch::{HostInvocationContext, HostInvocationTool};
 use crate::session_egress::{EgressPolicyConfig, SessionEgress, SessionRecordSink, SystemResolver};
 use crate::session_network::{PolicyView, SessionNetworkRecords, SidecarView};
-use crate::session_network_reload::{ReloadFailure, ScopeRevision};
+use crate::session_network_reload::{reload_points, PointsReload};
 use axocoatl_session::control_authority::ExecutionProfile;
 use axocoatl_session::network_record::EgressScope;
 
@@ -243,15 +243,15 @@ impl BrowserService {
 
     /// Apply reloaded `browser.allow` and `browser.private_destinations`:
     /// later calls use them, and each browser-only decision point (under
-    /// `bridge` and `none`) records and applies them at once. Under
-    /// `egress` the Session's own decision point holds the browser's
-    /// policy and is reloaded with the Session's.
+    /// `bridge` and `none`) that has not applied them records and applies
+    /// them at once. Under `egress` the Session's own decision point holds
+    /// the browser's policy and is reloaded with the Session's.
     pub(crate) async fn reload_declared(
         &self,
         allow: Vec<EgressAllowYaml>,
         private_destinations: Vec<String>,
         actor: &str,
-    ) -> (Vec<ScopeRevision>, Vec<ReloadFailure>) {
+    ) -> PointsReload {
         *self
             .declared
             .lock()
@@ -265,13 +265,18 @@ impl BrowserService {
             .map(|(id, session)| (id.clone(), session.clone()))
             .collect();
         sessions.sort_by(|left, right| left.0.cmp(&right.0));
-        let mut authorities = Vec::new();
+        let config = EgressPolicyConfig {
+            session_allow: Vec::new(),
+            session_private: Vec::new(),
+            browser: Some((allow, private_destinations)),
+        };
+        let mut points = Vec::new();
         for (session_id, session) in sessions {
             if let Some(egress) = session.egress.lock().await.as_ref() {
-                authorities.push((session_id, egress.authority.clone()));
+                points.push((session_id, egress.authority.clone(), config.clone()));
             }
         }
-        reload_browser_only(authorities, &allow, &private_destinations, actor).await
+        reload_points(points, actor).await
     }
 
     async fn session(&self, session_id: &str) -> Arc<BrowserSession> {
@@ -809,38 +814,6 @@ impl BrowserHostTool {
     }
 }
 
-/// Apply reloaded declared hosts to browser-only decision points.
-async fn reload_browser_only(
-    authorities: Vec<(String, Arc<SessionEgress>)>,
-    allow: &[EgressAllowYaml],
-    private_destinations: &[String],
-    actor: &str,
-) -> (Vec<ScopeRevision>, Vec<ReloadFailure>) {
-    let mut revisions = Vec::new();
-    let mut failed = Vec::new();
-    for (session_id, authority) in authorities {
-        let config = EgressPolicyConfig {
-            session_allow: Vec::new(),
-            session_private: Vec::new(),
-            browser: Some((allow.to_vec(), private_destinations.to_vec())),
-        };
-        match authority.reload_config(config, actor).await {
-            Ok(changed) => revisions.extend(changed.into_iter().map(|scope| ScopeRevision {
-                session_id: session_id.clone(),
-                scope: scope.scope.as_str().to_string(),
-                revision: scope.revision,
-                digest: scope.digest,
-                closed: scope.closed,
-            })),
-            Err(error) => failed.push(ReloadFailure {
-                session_id,
-                error: error.to_string(),
-            }),
-        }
-    }
-    (revisions, failed)
-}
-
 /// Why this daemon cannot run the browser tools at all, if it cannot.
 pub(crate) fn browser_refusal(config: &BrowserServiceConfig) -> Option<String> {
     (config.backend != "podman").then(|| {
@@ -1071,10 +1044,10 @@ pub(crate) mod tests {
             host: "docs.test".into(),
             ports: None,
         })];
-        let (revisions, failed) = service
+        let reloaded = service
             .reload_declared(docs.clone(), Vec::new(), "human")
             .await;
-        assert!(revisions.is_empty() && failed.is_empty());
+        assert_eq!(reloaded, PointsReload::default());
         assert!(service.declared_hosts());
         assert_eq!(service.declared(), (docs.clone(), Vec::new()));
 
@@ -1096,14 +1069,19 @@ pub(crate) mod tests {
             host: "fonts.test".into(),
             ports: None,
         })];
-        let (revisions, failed) = reload_browser_only(
-            vec![("ses-1".to_string(), authority.clone())],
-            &fonts,
-            &[],
+        let browser_only = |allow: &[EgressAllowYaml]| EgressPolicyConfig {
+            session_allow: Vec::new(),
+            session_private: Vec::new(),
+            browser: Some((allow.to_vec(), Vec::new())),
+        };
+        let reloaded = reload_points(
+            vec![("ses-1".to_string(), authority.clone(), browser_only(&fonts))],
             "human",
         )
         .await;
-        assert!(failed.is_empty(), "{failed:?}");
+        assert!(reloaded.failed.is_empty(), "{:?}", reloaded.failed);
+        assert_eq!(reloaded.lagging, ["browser.allow"]);
+        let revisions = reloaded.revisions;
         assert_eq!(revisions.len(), 1);
         assert_eq!(
             (
@@ -1127,6 +1105,15 @@ pub(crate) mod tests {
                 ..
             }
         )));
+        // Lists it has applied already leave it alone and record nothing.
+        let lines = record.events().len();
+        let again = reload_points(
+            vec![("ses-1".to_string(), authority.clone(), browser_only(&fonts))],
+            "human",
+        )
+        .await;
+        assert_eq!(again, PointsReload::default());
+        assert_eq!(record.events().len(), lines);
     }
 
     fn context(checkout: Option<SecureDir>) -> HostInvocationContext {

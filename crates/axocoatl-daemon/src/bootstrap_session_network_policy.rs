@@ -12,8 +12,8 @@ use super::*;
 use crate::session_egress::{EgressPolicyConfig, SessionEgress};
 use crate::session_network_proposals::{NetworkProposalDecided, NetworkProposalDecisionRequest};
 use crate::session_network_reload::{
-    applicable_policy, live_changes, restart_required, NetworkReloadReport, ReloadFailure,
-    ScopeRevision,
+    applicable_policy, list_changes, live_changes, reload_points, restart_required,
+    NetworkReloadReport, LIVE_KEYS,
 };
 use axocoatl_session::network_record::{is_proposal_id, ProposalState};
 
@@ -179,8 +179,10 @@ impl AxocoatlDaemon {
     /// validate all of it, and apply its allowlists (`sandbox.egress.allow`,
     /// `sandbox.egress.private_destinations`, `browser.allow`,
     /// `browser.private_destinations`) to new Sessions and to every running
-    /// decision point. Other differences are reported, not applied. An
-    /// invalid file changes nothing.
+    /// decision point that has not applied them, also one an earlier reload
+    /// could not record. Other differences are reported, not applied. An
+    /// invalid file changes nothing, and so does a file inside a Session's
+    /// Workspace, which that Session's Agents can edit.
     pub async fn reload_network_policy(&self) -> Result<NetworkReloadReport, DaemonError> {
         let path = self
             .config_path
@@ -194,6 +196,22 @@ impl AxocoatlDaemon {
                 )
             })?;
         let _serial = self.network_policy.reloads.lock().await;
+        // A writer Agent can edit a file in its Workspace, and a reload would
+        // apply that edit to every running Session at once. Such a file is
+        // read again only when the daemon restarts.
+        for session in self.list_sessions().await {
+            if self
+                .config_in_workspace_warning(&session.working_dir)
+                .is_some()
+            {
+                return Err(DaemonError::InvalidRequest(format!(
+                    "{} is inside the Workspace of Session {} ({}), where its Agents can change it, so it is not reloaded while the daemon runs; nothing was changed. Check the file and restart the daemon, or start the daemon from a configuration file outside every Workspace.",
+                    path.display(),
+                    session.id,
+                    session.working_dir.display()
+                )));
+            }
+        }
         let next = axocoatl_config::load_config(&path).await.map_err(|error| {
             DaemonError::InvalidRequest(format!(
                 "{} is not valid; nothing was changed:\n{error}",
@@ -203,56 +221,53 @@ impl AxocoatlDaemon {
         let started = &self.network_policy.started;
         let current = self.network_policy.current();
         let policy = applicable_policy(started, &current, &next);
-        let (applied, unchanged) = live_changes(&current, &policy);
-        let mut report = NetworkReloadReport {
-            applied,
-            unchanged,
-            restart_required: restart_required(started, &next),
-            revisions: Vec::new(),
-            failed: Vec::new(),
-        };
-        if report.applied.is_empty() {
-            return Ok(report);
-        }
-        for (session_id, egress) in self.egress_points.replace_and_list(policy.clone()).await {
-            match egress
-                .reload_config(policy.clone(), SESSION_NETWORK_ACTOR)
-                .await
-            {
-                Ok(changed) => {
-                    report
-                        .revisions
-                        .extend(changed.into_iter().map(|scope| ScopeRevision {
-                            session_id: session_id.clone(),
-                            scope: scope.scope.as_str().to_string(),
-                            revision: scope.revision,
-                            digest: scope.digest,
-                            closed: scope.closed,
-                        }))
-                }
-                Err(error) => report.failed.push(ReloadFailure {
-                    session_id,
-                    error: error.to_string(),
-                }),
-            }
-        }
+        let (changed, _) = live_changes(&current, &policy);
+        let points = self
+            .egress_points
+            .replace_and_list(policy.clone())
+            .await
+            .into_iter()
+            .map(|(session_id, egress)| (session_id, egress, policy.clone()))
+            .collect();
+        let mut reloaded = reload_points(points, SESSION_NETWORK_ACTOR).await;
         // Under `bridge` and `none` the browser has decision points of its
         // own; under `egress` its policy is a scope of each Session's,
         // reloaded above, and the service only keeps the new lists.
         if let (Some(browser), Some((allow, private))) = (&self.browser_service, &policy.browser) {
-            let (revisions, failed) = browser
-                .reload_declared(allow.clone(), private.clone(), SESSION_NETWORK_ACTOR)
-                .await;
-            report.revisions.extend(revisions);
-            report.failed.extend(failed);
+            reloaded.extend(
+                browser
+                    .reload_declared(allow.clone(), private.clone(), SESSION_NETWORK_ACTOR)
+                    .await,
+            );
         }
-        tracing::info!(
-            applied = ?report.applied,
-            restart_required = ?report.restart_required,
-            changed = report.revisions.len(),
-            failed = report.failed.len(),
-            "reloaded the network allowlists"
-        );
+        let (applied, unchanged): (Vec<String>, Vec<String>) = LIVE_KEYS
+            .iter()
+            .map(|key| (*key).to_string())
+            .partition(|key| changed.contains(key) || reloaded.lagging.contains(key));
+        let report = NetworkReloadReport {
+            applied,
+            unchanged,
+            restart_required: restart_required(started, &next),
+            revisions: reloaded.revisions,
+            failed: reloaded.failed,
+            changes: list_changes(&current, &policy),
+        };
+        if report.failed.is_empty() {
+            tracing::info!(
+                applied = ?report.applied,
+                restart_required = ?report.restart_required,
+                changed = report.revisions.len(),
+                "reloaded the network allowlists"
+            );
+        } else {
+            tracing::warn!(
+                applied = ?report.applied,
+                restart_required = ?report.restart_required,
+                changed = report.revisions.len(),
+                failed = report.failed.len(),
+                "reloaded the network allowlists; some running Sessions keep their policy until a reload succeeds for them"
+            );
+        }
         Ok(report)
     }
 

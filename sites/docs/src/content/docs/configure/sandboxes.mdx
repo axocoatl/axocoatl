@@ -199,11 +199,16 @@ To change the list for every Session while the daemon runs, edit `sandbox.egress
 or `private_destinations` (or `browser.allow` and `browser.private_destinations`) in
 the configuration file and run `axocoatl network reload`, or send
 [`POST /api/network/reload`](/reference/http-api/#reload-the-network-allowlists). The
-daemon validates the whole file; an invalid file changes nothing. Each running
-Session records its new policy and uses it for new connections at once, open
-connections that no rule allows any more are closed, and the Session's own allows
-stay. Other settings, such as `network`, `sidecar_network` and `max_connections`,
-still need a restart; the command lists the ones that changed.
+daemon validates the whole file; an invalid file changes nothing. The command
+lists every entry each list gains and loses, a preset as each of its hosts. Each
+running Session records its new policy and uses it for new connections at once,
+open connections that no rule allows any more are closed, and the Session's own
+allows stay. A Session whose new policy cannot be recorded keeps its old one; the
+command says which and exits with status 1, and running it again retries that
+Session. Other settings, such as `network`, `sidecar_network` and `max_connections`,
+still need a restart; the command lists the ones that changed. A configuration file
+inside a Session's Workspace is never reloaded, because that Session's Agents can
+edit it.
 
 If the proxy's control channel is lost, Axocoatl removes the proxy container and
 starts it again after 1, 5 and then 30 seconds. After five restarts in ten minutes

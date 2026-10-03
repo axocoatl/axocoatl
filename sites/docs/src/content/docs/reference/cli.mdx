@@ -177,12 +177,14 @@ Chromium. It is network access you start, on the host; Agents never trigger it. 
 
 | Command | Purpose |
 | --- | --- |
-| `axocoatl network reload` | Ask the running daemon, over its IPC socket, to read the configuration file it was started with again and apply `sandbox.egress.allow`, `sandbox.egress.private_destinations`, `browser.allow` and `browser.private_destinations` to new and running Sessions. Prints what was applied, each running Session's new policy revision with the open connections it closed, and the settings that need a restart. Exits with status 1 when the daemon is not running, was not started from a file, or the file is invalid; an invalid file changes nothing |
+| `axocoatl network reload` | Ask the running daemon, over its IPC socket, to read the configuration file it was started with again and apply `sandbox.egress.allow`, `sandbox.egress.private_destinations`, `browser.allow` and `browser.private_destinations` to new and running Sessions. Prints what was applied with each entry a list gained (`+`) or lost (`-`), each running Session's new policy revision with the open connections it closed, the Sessions that kept their policy, and the settings that need a restart. Exits with status 1 when the daemon is not running, was not started from a file, the file is invalid or inside a Session's Workspace (these change nothing), or a running Session kept its policy because its new one could not be recorded; running the command again retries those Sessions |
 
 The whole file is validated. Every other difference from the configuration the
 daemon started with, such as `sandbox.network`, `sandbox.egress.sidecar_network`,
 `max_connections`, adding or removing the `browser` block, Agents or providers, is
-listed as `restart_required` and not applied. The same reload is
+listed as `restart_required` and not applied. A configuration file inside the
+Workspace of one of the daemon's Sessions is not reloaded, because that Session's
+Agents can edit it; check it and restart the daemon instead. The same reload is
 [`POST /api/network/reload`](/reference/http-api/#reload-the-network-allowlists). See
 [Network egress](/configure/sandboxes/#network-egress).
 

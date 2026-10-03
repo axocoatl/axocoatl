@@ -121,15 +121,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Session's list: a browser credential is checked only against `browser.allow`, and an
   Agent's only against `sandbox.egress`. Each of those connections is written to the
   Session's network record with the browser call that made it, and a refused one can
-  be allowed for that Session in the `browser` scope.
+  be allowed for that Session in the `browser` scope. The proxy tells the two apart
+  by credential, not by container: while a `browser_check` call runs, its test holds
+  the browser credential and can pass it to a process in the Session container, which
+  then reaches hosts listed only under `browser.allow` (recorded under the browser
+  call), and a test given an Agent's credential can use it from the browser container.
 - `axocoatl network reload` and `POST /api/network/reload` read the daemon's
   configuration file again, validate it, and apply `sandbox.egress.allow`,
   `sandbox.egress.private_destinations`, `browser.allow` and
   `browser.private_destinations` to new and running Sessions: each running Session
   records its new policy (`source: config_reload`), new connections use it at once,
-  and open connections that no rule allows any more are closed. Other changed
-  settings are listed as needing a restart and are not applied; an invalid file
-  changes nothing.
+  and open connections that no rule allows any more are closed. The report lists
+  every entry each list gains and loses. A running Session whose new policy cannot
+  be recorded keeps its old one and is listed under `failed`; the command then exits
+  with status 1, the route answers `503`, and the next reload, even of the same file,
+  tries that Session again. Other changed settings are listed as needing a restart
+  and are not applied; an invalid file changes nothing, and neither does a file
+  inside a Session's Workspace, which its Agents can edit.
 - `request_network_access`: under `network: egress` a writer Agent that lists it can
   ask for one exact host it was refused, with a reason. The request is recorded as a
   `proposal` and waits in **Session network**, where you approve or reject it

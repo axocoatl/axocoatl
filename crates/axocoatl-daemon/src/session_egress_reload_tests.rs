@@ -247,7 +247,11 @@ async fn a_reload_adds_a_host_and_new_connections_use_it_at_once() {
         &["a.test", "b.test"],
         Some(&["docs.test"]),
     ));
-    let reloaded = egress.reload_config(next.clone(), "human").await.unwrap();
+    let reloaded = egress
+        .reload_config(next.clone(), "human")
+        .await
+        .unwrap()
+        .changed;
     assert_eq!(reloaded.len(), 1, "only the session scope changed");
     assert_eq!(
         (reloaded[0].scope, reloaded[0].revision, reloaded[0].closed),
@@ -266,11 +270,10 @@ async fn a_reload_adds_a_host_and_new_connections_use_it_at_once() {
         [(EgressScope::Session, 2, Some("human".to_string()))]
     );
     // The same lists again change nothing and record nothing.
-    assert!(egress
-        .reload_config(next, "human")
-        .await
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        egress.reload_config(next, "human").await.unwrap(),
+        ConfigReload::default()
+    );
     assert_eq!(reloads(&record).len(), 1);
     // A person's allow after the reload compiles against the new lists.
     let (revision, _) = egress
@@ -310,7 +313,8 @@ async fn a_reload_that_removes_a_host_closes_its_open_connections() {
             "human",
         )
         .await
-        .unwrap();
+        .unwrap()
+        .changed;
     assert_eq!(
         (reloaded[0].scope, reloaded[0].revision, reloaded[0].closed),
         (EgressScope::Session, 3, 1)
@@ -372,7 +376,8 @@ async fn a_reload_that_removes_a_host_closes_its_open_connections() {
             "human",
         )
         .await
-        .unwrap();
+        .unwrap()
+        .changed;
     assert_eq!(reloaded[0].closed, 1);
     assert_eq!(sidecar.frame().await, DaemonFrame::Revoke { ids: vec![1] });
 }
@@ -412,7 +417,8 @@ async fn removing_a_private_range_closes_the_scopes_open_connections() {
     let reloaded = egress
         .reload_config(EgressPolicyConfig::from_config(&next), "human")
         .await
-        .unwrap();
+        .unwrap()
+        .changed;
     assert_eq!(reloaded[0].closed, 2);
     assert_eq!(
         sidecar.frame().await,
@@ -489,7 +495,8 @@ async fn reopening_with_the_reloaded_file_reproduces_the_digest() {
     let reloaded = egress
         .reload_config(EgressPolicyConfig::from_config(&next), "human")
         .await
-        .unwrap();
+        .unwrap()
+        .changed;
     assert_eq!(reloaded.len(), 2);
     let views = egress.policy_views();
     let lines = record.events().len();
@@ -579,4 +586,222 @@ async fn a_rule_id_that_a_reload_gave_another_host_does_not_admit_a_connection_i
         "{decision:?}"
     );
     assert!(egress.state().open.is_empty());
+}
+
+/// A record whose `config_reload` policy lines for one scope fail while
+/// `fail` is set.
+#[derive(Debug, Default)]
+struct ScopeFailingRecord {
+    inner: FakeRecord,
+    fail: Mutex<Option<EgressScope>>,
+}
+
+impl ScopeFailingRecord {
+    fn fail(&self, scope: Option<EgressScope>) {
+        *self.fail.lock().unwrap() = scope;
+    }
+}
+
+#[async_trait::async_trait]
+impl EgressRecordSink for ScopeFailingRecord {
+    async fn append(&self, event: NetworkEvent) -> Result<u64, RecordFailure> {
+        self.inner.append(event).await
+    }
+
+    async fn append_control(&self, event: NetworkEvent) -> Result<u64, RecordFailure> {
+        if let NetworkEvent::Policy {
+            scope,
+            source: PolicySource::ConfigReload,
+            ..
+        } = &event
+        {
+            if *self.fail.lock().unwrap() == Some(*scope) {
+                return Err(RecordFailure::Unavailable("disk full".into()));
+            }
+        }
+        self.inner.append_control(event).await
+    }
+
+    async fn history(&self) -> Result<Vec<NetworkLine>, RecordFailure> {
+        self.inner.history().await
+    }
+}
+
+async fn opened_with(
+    config: EgressPolicyConfig,
+    record: Arc<ScopeFailingRecord>,
+) -> (Arc<SessionEgress>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let egress = SessionEgress::open(
+        "ses-1",
+        config,
+        record,
+        resolver(),
+        Some(SecureDir::open(dir.path()).unwrap()),
+    )
+    .await
+    .unwrap();
+    (egress, dir)
+}
+
+/// A scope whose reloaded policy cannot be recorded keeps its policy, its
+/// lists and the connections they admitted. A later per-Session allow does
+/// not slip the unrecorded lists in, and a reload of the same lists tries
+/// that scope again.
+#[tokio::test]
+async fn a_scope_whose_reload_was_not_recorded_keeps_its_lists_until_a_reload_succeeds() {
+    let record = Arc::new(ScopeFailingRecord::default());
+    let started = EgressPolicyConfig::from_config(&daemon_config(
+        &["a.test", "b.test"],
+        Some(&["docs.test"]),
+    ));
+    let (egress, _dir) = opened_with(started.clone(), record.clone()).await;
+    let (mut sidecar, _task) = attach_sidecar(&egress, 3).await;
+    let (_grant, hash) = hash_for(&egress, agent()).await;
+    sidecar.send(sidecar_open(1, "b.test", 443, &hash)).await;
+    assert!(matches!(
+        sidecar.frame().await,
+        DaemonFrame::Allow { id: 1, .. }
+    ));
+
+    // b.test leaves the Session's list and z.test joins the browser's; only
+    // the browser's policy can be recorded.
+    let next = EgressPolicyConfig::from_config(&daemon_config(
+        &["a.test"],
+        Some(&["docs.test", "z.test"]),
+    ));
+    record.fail(Some(EgressScope::Session));
+    let reload = egress.reload_config(next.clone(), "human").await.unwrap();
+    assert_eq!(
+        reload
+            .changed
+            .iter()
+            .map(|scope| scope.scope)
+            .collect::<Vec<_>>(),
+        [EgressScope::Browser]
+    );
+    assert_eq!(reload.failed.len(), 1);
+    assert_eq!(reload.failed[0].scope, EgressScope::Session);
+    assert!(
+        reload.failed[0].error.contains("session"),
+        "{:?}",
+        reload.failed
+    );
+    // The session scope keeps its lists and its open connection; the
+    // browser's took the new ones.
+    let applied = egress.policy_config();
+    assert_eq!(applied.session_allow, started.session_allow);
+    assert_eq!(applied.browser, next.browser);
+    assert!(egress
+        .policy(EgressScope::Session)
+        .unwrap()
+        .match_name("b.test", 443)
+        .is_some());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), sidecar.frame())
+            .await
+            .is_err(),
+        "nothing is revoked"
+    );
+
+    // A person's allow compiles from the lists the scope still has, so it
+    // neither drops b.test nor leaves its connection open under a policy
+    // that no longer lists it.
+    egress
+        .allow(EgressScope::Session, "c.test", None, "human", "c-1")
+        .await
+        .unwrap();
+    let session = egress.policy(EgressScope::Session).unwrap();
+    assert!(session.match_name("b.test", 443).is_some());
+    assert!(session.match_name("c.test", 443).is_some());
+    assert_eq!(egress.policy_config().session_allow, started.session_allow);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), sidecar.frame())
+            .await
+            .is_err(),
+        "the allow revokes nothing"
+    );
+
+    // The same lists again: the session scope is tried again and closes the
+    // connection b.test admitted; the browser's is left alone.
+    record.fail(None);
+    let retry = egress.reload_config(next.clone(), "human").await.unwrap();
+    assert!(retry.failed.is_empty(), "{:?}", retry.failed);
+    assert_eq!(retry.changed.len(), 1);
+    assert_eq!(
+        (retry.changed[0].scope, retry.changed[0].closed),
+        (EgressScope::Session, 1)
+    );
+    assert_eq!(sidecar.frame().await, DaemonFrame::Revoke { ids: vec![1] });
+    assert_eq!(egress.policy_config(), next);
+    let session = egress.policy(EgressScope::Session).unwrap();
+    assert!(session.match_name("b.test", 443).is_none());
+    assert!(
+        session.match_name("c.test", 443).is_some(),
+        "the allow stays"
+    );
+}
+
+/// A daemon reload compares what each decision point has applied with the
+/// new lists: one that an earlier reload could not record is reloaded by
+/// the next reload of the same file, and only it.
+#[tokio::test]
+async fn a_reload_of_the_same_file_retries_the_decision_points_that_failed() {
+    use crate::session_network_reload::{reload_points, PointsReload};
+    let started = EgressPolicyConfig::from_config(&daemon_config(&["a.test"], None));
+    let next = EgressPolicyConfig::from_config(&daemon_config(&["a.test", "b.test"], None));
+    let failing = Arc::new(ScopeFailingRecord::default());
+    let healthy = Arc::new(ScopeFailingRecord::default());
+    let (first, _first_dir) = opened_with(started.clone(), failing.clone()).await;
+    let (second, _second_dir) = opened_with(started.clone(), healthy.clone()).await;
+    let points = || {
+        vec![
+            ("ses-1".to_string(), first.clone(), next.clone()),
+            ("ses-2".to_string(), second.clone(), next.clone()),
+        ]
+    };
+
+    failing.fail(Some(EgressScope::Session));
+    let reloaded = reload_points(points(), "human").await;
+    assert_eq!(reloaded.lagging, ["sandbox.egress.allow"]);
+    assert_eq!(
+        reloaded
+            .revisions
+            .iter()
+            .map(|revision| (revision.session_id.as_str(), revision.scope.as_str()))
+            .collect::<Vec<_>>(),
+        [("ses-2", "session")]
+    );
+    assert_eq!(reloaded.failed.len(), 1);
+    assert_eq!(reloaded.failed[0].session_id, "ses-1");
+    assert_eq!(reloaded.failed[0].scope.as_deref(), Some("session"));
+
+    // Still failing: tried again, still reported.
+    let reloaded = reload_points(points(), "human").await;
+    assert_eq!(reloaded.lagging, ["sandbox.egress.allow"]);
+    assert!(reloaded.revisions.is_empty());
+    assert_eq!(reloaded.failed.len(), 1);
+
+    failing.fail(None);
+    let healthy_lines = healthy.inner.events().len();
+    let reloaded = reload_points(points(), "human").await;
+    assert!(reloaded.failed.is_empty(), "{:?}", reloaded.failed);
+    assert_eq!(
+        reloaded
+            .revisions
+            .iter()
+            .map(|revision| (revision.session_id.as_str(), revision.revision))
+            .collect::<Vec<_>>(),
+        [("ses-1", 2)]
+    );
+    assert_eq!(healthy.inner.events().len(), healthy_lines);
+    assert!(first
+        .policy(EgressScope::Session)
+        .unwrap()
+        .match_name("b.test", 443)
+        .is_some());
+    assert_eq!(
+        reload_points(points(), "human").await,
+        PointsReload::default()
+    );
 }
