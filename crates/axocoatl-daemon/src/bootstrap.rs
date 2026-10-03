@@ -745,6 +745,11 @@ fn attempt_sandbox_network(
 /// Directory under the data root for egress credentials' 0600 env files.
 const EGRESS_ENV_DIR: &str = "egress-env";
 
+/// Shown for a Session whose Workspace contains the daemon's configuration
+/// file: its Agents can read the file, and under `network: egress` send what
+/// it holds to any allowed host that accepts uploads.
+pub const CONFIG_IN_WORKSPACE_WARNING: &str = "Axocoatl's config file is inside this Workspace; Agents can read it. Keep secrets in environment variables.";
+
 /// Who per-Session allows and revokes are recorded as: the person using the
 /// authenticated local API. Agents have no path to these changes.
 const SESSION_NETWORK_ACTOR: &str = "human";
@@ -3573,6 +3578,9 @@ pub struct AxocoatlDaemon {
     /// Under `network: egress`, one decision point per running Session.
     session_egress:
         Arc<tokio::sync::Mutex<HashMap<String, Arc<crate::session_egress::SessionEgress>>>>,
+    /// The configuration file this daemon loaded, canonical, once the CLI
+    /// has said which one it was.
+    config_path: StdMutex<Option<std::path::PathBuf>>,
     /// Recovery-only primary handles used while resolving an Attempt set after
     /// restart. They must never enter the ordinary Ready fast path because
     /// they intentionally skip project setup.
@@ -5332,6 +5340,7 @@ impl AxocoatlDaemon {
             session_sandboxes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             session_network_records,
             session_egress: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            config_path: StdMutex::new(None),
             session_network_evidence: Arc::new(
                 crate::session_network_evidence::NetworkEvidenceIndex::default(),
             ),
@@ -8282,6 +8291,9 @@ impl AxocoatlDaemon {
                         setup_results: Vec::new(),
                     }
                 })?;
+                if let Some(warning) = self.config_in_workspace_warning(&session.working_dir) {
+                    tracing::warn!(session = %session.id, "{warning}");
+                }
                 let egress = if network
                     == axocoatl_isolation::session_sandbox::SandboxNetwork::Egress
                 {
@@ -10755,6 +10767,39 @@ impl AxocoatlDaemon {
         Ok(egress)
     }
 
+    /// Remember which configuration file this daemon loaded, so a Session
+    /// whose Workspace contains it can say so.
+    pub fn set_config_path(&self, path: &std::path::Path) {
+        match std::fs::canonicalize(path) {
+            Ok(canonical) => {
+                *self
+                    .config_path
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()) = Some(canonical);
+            }
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "resolving the configuration file's path failed");
+            }
+        }
+    }
+
+    /// The warning for a Session whose Workspace contains this daemon's
+    /// configuration file, which its Agents can then read.
+    pub(crate) fn config_in_workspace_warning(
+        &self,
+        workspace: &std::path::Path,
+    ) -> Option<&'static str> {
+        let config = self
+            .config_path
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()?;
+        let workspace = std::fs::canonicalize(workspace).ok()?;
+        config
+            .starts_with(&workspace)
+            .then_some(CONFIG_IN_WORKSPACE_WARNING)
+    }
+
     /// Allow one exact host for one Session, at a person's request. The
     /// change is recorded and applies to new connections at once, also while
     /// the Session's runtime is stopped.
@@ -10863,11 +10908,16 @@ impl AxocoatlDaemon {
         after: Option<u64>,
         limit: Option<usize>,
     ) -> Result<crate::session_network::SessionNetworkView, DaemonError> {
-        if self.get_session(session_id).await.is_none() {
+        let Some(session) = self.get_session(session_id).await else {
             return Err(DaemonError::Session(format!(
                 "session '{session_id}' not found"
             )));
-        }
+        };
+        let warnings: Vec<String> = self
+            .config_in_workspace_warning(&session.working_dir)
+            .map(str::to_string)
+            .into_iter()
+            .collect();
         let limit = limit.unwrap_or(crate::session_network::DEFAULT_READ_LIMIT);
         if limit == 0 || limit > axocoatl_session::network_record::MAX_READ_LIMIT {
             return Err(DaemonError::InvalidRequest(format!(
@@ -10917,6 +10967,7 @@ impl AxocoatlDaemon {
             record: page.stats.into(),
             events: page.events,
             next_after: page.next_after,
+            warnings,
         })
     }
 

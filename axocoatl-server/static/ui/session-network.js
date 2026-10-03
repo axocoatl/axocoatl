@@ -16,7 +16,7 @@ const MAX_PAGES = 20;
 const REASONS = {
   not_allowed: 'Not in the allowlist.',
   private_destination: 'Resolves to a private address that is not listed under private_destinations.',
-  forbidden_destination: 'Resolves to a loopback, link-local or other special address, which is never allowed.',
+  forbidden_destination: 'Resolves to a loopback, link-local, host-gateway or other special address, which is never allowed.',
   no_credential: 'The process had no egress credential: a read-only helper, a check or a command started outside a tool call.',
   unknown_credential: 'The credential had already ended with its tool call, setup step or terminal.',
   binding_ended: 'The terminal or tool call the credential belonged to had ended.',
@@ -24,6 +24,9 @@ const REASONS = {
   invalid_host: 'Not a valid host name or IP address.',
   resolve_failed: 'The name did not resolve on this computer.',
 };
+
+/** Scopes a person can widen for one Session. Provisioning's is fixed. */
+const ALLOWABLE_SCOPES = new Set(['session', 'browser']);
 
 const CSS = `
 :host { color: var(--text); }
@@ -92,7 +95,7 @@ export function summarizeNetwork(lines) {
       summary.refused += 1;
       summary.refusedRows.push({
         seq: line.seq, at: line.ts_ms, who: who(event.binding), host: event.host, port: event.port,
-        reason: event.reason || 'refused', scope: event.scope === 'browser' ? 'browser' : 'session',
+        reason: event.reason || 'refused', scope: event.scope || null,
       });
     }
     if (event.kind === 'close') { summary.bytesIn += event.down || 0; summary.bytesOut += event.up || 0; }
@@ -199,6 +202,7 @@ class AxSessionNetwork extends HTMLElement {
     if (view.record?.full) {
       body.append(element('p', 'banner', 'The network record is full, so new connections are refused.'));
     }
+    for (const warning of view.warnings || []) body.append(element('p', 'banner warning', warning));
     const summary = summarizeNetwork(this.#lines);
     const counts = element('div', 'counts');
     counts.append(
@@ -238,7 +242,9 @@ class AxSessionNetwork extends HTMLElement {
         reason.append(element('code', '', row.reason), element('div', 'muted', REASONS[row.reason] || ''));
         tr.append(reason);
         const action = element('td');
-        if (egress && row.reason === 'not_allowed' && !isIpLiteral(row.host)) {
+        if (egress && row.reason === 'not_allowed' && row.scope === 'provisioning') {
+          action.append(element('span', 'muted provisioning-note', 'Provisioning reaches only the distribution mirrors of its presets; it cannot be widened for one Session.'));
+        } else if (egress && row.reason === 'not_allowed' && ALLOWABLE_SCOPES.has(row.scope) && !isIpLiteral(row.host)) {
           const allow = element('button', 'allow', 'Allow for this Session');
           allow.setAttribute('aria-label', `Allow ${row.host}:${row.port} for this Session`);
           allow.disabled = this.#busy;

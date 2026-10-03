@@ -37,7 +37,7 @@ function record(extraRules = []) {
   ];
 }
 
-async function setup({ full = false, sidecar = { state: 'ready', generation: 1, restarts: 0 }, loseFirstAllow = false } = {}) {
+async function setup({ full = false, sidecar = { state: 'ready', generation: 1, restarts: 0 }, loseFirstAllow = false, extra = [], warnings } = {}) {
   const context = await newAuthorizedContext(browser, { viewport: { width: 390, height: 844 }, colorScheme: 'dark', reducedMotion: 'reduce' });
   const page = await context.newPage();
   const calls = [];
@@ -62,10 +62,10 @@ async function setup({ full = false, sidecar = { state: 'ready', generation: 1, 
       if (loseFirstAllow) { loseFirstAllow = false; return route.abort('failed'); }
       return route.fulfill({ json: { revision, digest: 'b'.repeat(64) } });
     }
-    const events = record();
+    const events = record(extra);
     return route.fulfill({
       json: {
-        session_id: 'session', mode: 'egress', sidecar,
+        session_id: 'session', mode: 'egress', sidecar, ...(warnings ? { warnings } : {}),
         policies: [
           { scope: 'provisioning', revision: 1, digest: 'c'.repeat(64), rules: [{ id: 'preset:alpine/dl-cdn.alpinelinux.org', text: 'dl-cdn.alpinelinux.org:80,443 (preset alpine)', source: 'preset' }] },
           { scope: 'session', revision, digest: 'd'.repeat(64), rules: sessionRules.slice() },
@@ -114,6 +114,26 @@ test('the network panel shows mode, counts, policy and refused rows, and allows 
     assert.equal(calls[0].host, 'api.example.com');
     assert.deepEqual(calls[0].ports, [443]);
     assert.match(calls[0].command_id, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a provisioning refusal cannot widen the Session policy, and Session warnings are shown', async () => {
+  const warning = "Axocoatl's config file is inside this Workspace; Agents can read it. Keep secrets in environment variables.";
+  const extra = [line(10, { kind: 'open', conn: 'g1:5', decision: 'deny', reason: 'not_allowed', status: 403, host: 'mirror.example.org', port: 443, conn_kind: 'connect', addrs: [], token: 'fedcba9876543210', binding: { kind: 'provisioning' }, scope: 'provisioning', policy_revision: 1 })];
+  const { context, page, calls, errors } = await setup({ extra, warnings: [warning] });
+  try {
+    const dialog = page.getByRole('dialog', { name: 'Session network', exact: true });
+    await dialog.getByText('4 refused', { exact: true }).waitFor();
+    await dialog.getByRole('cell', { name: 'mirror.example.org:443', exact: true }).waitFor();
+    assert.equal(await dialog.getByRole('button', { name: /Allow mirror\.example\.org/ }).count(), 0);
+    await dialog.getByText('Provisioning reaches only the distribution mirrors of its presets', { exact: false }).waitFor();
+    // The Session's own refusal keeps its button.
+    await dialog.getByRole('button', { name: 'Allow api.example.com:443 for this Session', exact: true }).waitFor();
+    await dialog.getByText(warning, { exact: true }).waitFor();
+    assert.equal(calls.length, 0);
     assert.deepEqual(errors, []);
   } finally {
     await context.close();

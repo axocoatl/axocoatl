@@ -151,6 +151,9 @@ pub enum LimitKind {
     RecordFull,
     MaxConnections,
     RestartBudget,
+    /// Refusals of connections without a valid credential that were counted
+    /// instead of recorded one by one; the detail starts with the count.
+    UnrecordedRefusals,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1328,6 +1331,16 @@ mod tests {
             kinds,
             ["policy", "sidecar", "bind", "unbind", "open", "close", "web", "limit"]
         );
+    }
+
+    #[test]
+    fn unrecorded_refusals_have_their_wire_name() {
+        let line = serde_json::to_string(&NetworkEvent::Limit {
+            what: LimitKind::UnrecordedRefusals,
+            detail: "3 refused".into(),
+        })
+        .unwrap();
+        assert!(line.contains("\"what\":\"unrecorded_refusals\""), "{line}");
     }
 
     #[test]

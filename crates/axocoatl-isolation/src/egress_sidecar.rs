@@ -521,6 +521,56 @@ async fn podman(args: Vec<String>, timeout: Duration) -> Result<(), String> {
     Ok(())
 }
 
+/// Podman's default network, where the sidecar runs unless
+/// `sidecar_network` names another.
+const DEFAULT_NETWORK: &str = "podman";
+
+/// The gateway addresses of the sidecar's network: the host side of its
+/// bridge, which egress must never reach.
+async fn network_gateways(network: Option<&str>) -> Result<Vec<std::net::IpAddr>, String> {
+    let network = network.unwrap_or(DEFAULT_NETWORK);
+    let mut command = Command::new("podman");
+    command.args(["network", "inspect", network]);
+    let output = SessionSandbox::run_bounded_command(command, COMMAND_TIMEOUT)
+        .await
+        .map_err(|error| error.to_string())?;
+    if output.timed_out {
+        return Err(format!("podman network inspect {network} timed out"));
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "podman network inspect {network}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    parse_network_gateways(&output.stdout)
+}
+
+/// `subnets[].gateway` of every network in `podman network inspect` output.
+fn parse_network_gateways(json: &[u8]) -> Result<Vec<std::net::IpAddr>, String> {
+    let networks: Vec<serde_json::Value> = serde_json::from_slice(json)
+        .map_err(|error| format!("unreadable network inspection: {error}"))?;
+    let mut gateways = Vec::new();
+    for network in &networks {
+        let subnets = network
+            .get("subnets")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for subnet in subnets {
+            if let Some(gateway) = subnet.get("gateway").and_then(serde_json::Value::as_str) {
+                let gateway = gateway
+                    .parse()
+                    .map_err(|_| format!("network gateway {gateway:?} is not an address"))?;
+                if !gateways.contains(&gateway) {
+                    gateways.push(gateway);
+                }
+            }
+        }
+    }
+    Ok(gateways)
+}
+
 async fn remove_container(name: &str) -> Result<(), String> {
     podman(
         vec![
@@ -640,6 +690,19 @@ impl EgressSidecar {
     ) -> Result<Self, IsolationError> {
         spec.validate()?;
         let container = spec.container();
+        // The proxy reaches what the sidecar's network reaches, including
+        // the host through that network's gateway: refuse it outright.
+        let gateways = network_gateways(spec.network.as_deref())
+            .await
+            .map_err(|error| {
+                IsolationError::OciSetupFailed(format!(
+                    "inspecting the egress sidecar's network: {error}"
+                ))
+            })?;
+        authority.forbid_destinations(&gateways);
+        // Connection ids restart with each sidecar process; the generation
+        // keeps them apart in a record that outlives this sidecar.
+        let first_generation = authority.first_generation().max(1);
         for (name, role) in [
             (egress_volume_name(&spec.session_id), "egress"),
             (service_volume_name(&spec.session_id), "service-sockets"),
@@ -660,7 +723,7 @@ impl EgressSidecar {
             restarts,
             status: Mutex::new(SidecarStatus {
                 phase: SidecarPhase::Starting,
-                generation: 1,
+                generation: first_generation,
                 restarts: 0,
             }),
             stopping: AtomicBool::new(false),
@@ -672,13 +735,13 @@ impl EgressSidecar {
         shared
             .authority
             .sidecar_event(SidecarEvent::Starting {
-                generation: 1,
+                generation: first_generation,
                 container: Some(container.clone()),
             })
             .await;
         let mut with_limits = true;
         let first = loop {
-            match launch(&shared, 1, with_limits).await {
+            match launch(&shared, first_generation, with_limits).await {
                 Ok(generation) => break generation,
                 Err(error)
                     if with_limits
@@ -695,11 +758,11 @@ impl EgressSidecar {
                     shared
                         .authority
                         .sidecar_event(SidecarEvent::Failed {
-                            generation: 1,
+                            generation: first_generation,
                             detail: error.clone(),
                         })
                         .await;
-                    shared.set_status(SidecarPhase::Failed, 1, None);
+                    shared.set_status(SidecarPhase::Failed, first_generation, None);
                     return Err(IsolationError::OciContainerFailed(format!(
                         "starting the egress proxy {container}: {error}"
                     )));
@@ -825,7 +888,7 @@ async fn supervise(shared: Arc<Shared>, mut current: Generation, with_limits: bo
             let delay = backoff[recent.len().min(backoff.len() - 1)];
             recent.push_back(now);
             restarts += 1;
-            generation += 1;
+            generation = generation.saturating_add(1);
             shared.set_status(SidecarPhase::Restarting, generation, Some(restarts));
             shared
                 .authority
@@ -884,6 +947,23 @@ mod tests {
             require_resource_limits: false,
             labels: Vec::new(),
         }
+    }
+
+    #[test]
+    fn network_gateways_come_from_the_network_subnets_only() {
+        let inspected = br#"[{"name":"podman","subnets":[{"subnet":"10.88.0.0/16","gateway":"10.88.0.1"},
+            {"subnet":"fd00::/64","gateway":"fd00::1"},{"subnet":"10.89.0.0/24"}],
+            "containers":{"abc":{"interfaces":{"eth0":{"subnets":[{"ipnet":"10.88.0.5/16","gateway":"10.88.0.9"}]}}}}}]"#;
+        assert_eq!(
+            parse_network_gateways(inspected).unwrap(),
+            [
+                "10.88.0.1".parse::<std::net::IpAddr>().unwrap(),
+                "fd00::1".parse().unwrap()
+            ]
+        );
+        assert!(parse_network_gateways(br#"[{"subnets":[{"gateway":"x"}]}]"#).is_err());
+        assert!(parse_network_gateways(b"not json").is_err());
+        assert!(parse_network_gateways(b"[{}]").unwrap().is_empty());
     }
 
     #[test]

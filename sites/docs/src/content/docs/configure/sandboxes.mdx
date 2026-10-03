@@ -139,9 +139,11 @@ How a Session runs under it:
   If an image needs another package manager, use an image that already has
   Axocoatl's required commands.
 
-The proxy refuses loopback, link-local and other special addresses, and private
-addresses unless you list a private range under `private_destinations`. A
-refusal is an HTTP answer the tool can show. For example, a host that is not on
+The proxy refuses loopback, link-local and other special addresses, the Podman host
+gateways (`192.168.127.1` and `192.168.127.254` in a Podman machine, `10.88.0.1` on
+Podman's default network, and the gateway of `sidecar_network`) even inside a listed
+range, and private addresses unless you list a private range under
+`private_destinations`. A refusal is an HTTP answer the tool can show. For example, a host that is not on
 the list gets:
 
 ```text
@@ -155,12 +157,24 @@ X-Axocoatl-Egress: denied; reason=not_allowed
 
 A process without a credential gets `407` with reason `no_credential`, and a name
 that resolves to a refused address gets `403` with `private_destination` or
-`forbidden_destination`.
+`forbidden_destination`. When a tool call's credential ends, or a person revokes the
+host, while its connection is being decided, the connection is refused; one already
+open is closed.
 
 Every connection the proxy allows or refuses is written to the Session's network
 record before it opens, with the host, port and the tool call whose credential it
 presented. Bytes and duration are added when it closes. If the record cannot be
-written, the connection is refused. Read the record with
+written, the connection is refused. Refusals of connections without a valid
+credential, which any process in the container can cause, are recorded one by one
+up to 20 at once and then one every 5 seconds; the others are counted in a `limit`
+event once a minute, so they cannot fill the record. The record's cap
+(`record_max_events`) applies to the Session for as long as it exists, across
+runtime restarts. Once it is reached, new connections get `503 record_unavailable`
+until you raise the cap and restart the daemon; setup commands, provisioning and
+terminals still run, without network.
+
+If Axocoatl's config file is inside the Session's Workspace, its Agents can read
+it, and **Session network** says so. Keep secrets in environment variables. Read the record with
 [`GET /api/sessions/{id}/network`](/reference/http-api/), or open **Session network**
 from an Agent's details in the Session graph. It shows the policy, allowed and
 refused counts and each refused connection; a refused host can be allowed for that

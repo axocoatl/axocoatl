@@ -239,6 +239,16 @@ pub trait EgressAuthority: Send + Sync + fmt::Debug {
     /// Use this control channel to revoke connections. Each sidecar
     /// generation attaches its own.
     fn attach_control(&self, _handle: crate::egress_control::ControlHandle) {}
+    /// The generation a newly started sidecar takes. Connection ids restart
+    /// with every sidecar process, so an authority whose record outlives one
+    /// sidecar returns one more than the last generation it recorded, which
+    /// keeps `(generation, id)` unique in that record.
+    fn first_generation(&self) -> u32 {
+        1
+    }
+    /// Never allow these addresses, whatever the policy lists: the gateways
+    /// of the sidecar's network, which lead to the host running Podman.
+    fn forbid_destinations(&self, _addrs: &[IpAddr]) {}
 }
 
 /// What a sandbox needs to run under `network: egress`.

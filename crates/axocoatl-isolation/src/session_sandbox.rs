@@ -1558,7 +1558,9 @@ impl SessionSandbox {
                 "running explicitly-approved project setup command"
             );
             // Under egress each approved command gets its own credential,
-            // which ends when the command does.
+            // which ends when the command does. When none can be granted
+            // (the network record is full or unavailable), the command runs
+            // without one and the proxy refuses its connections.
             let grant = match &self.egress {
                 Some(attachment) => {
                     let mut spec = crate::egress::GrantSpec::new(crate::egress::GrantKind::Setup);
@@ -1566,17 +1568,12 @@ impl SessionSandbox {
                     match attachment.authority.grant(spec).await {
                         Ok(grant) => Some(grant),
                         Err(error) => {
-                            let error = IsolationError::OciSetupFailed(format!(
-                                "granting setup egress: {error}"
-                            ));
-                            let cleanup =
-                                lifecycle.finish(SandboxLifecycleDisposition::Remove).await;
-                            return Err(match cleanup {
-                                Ok(()) => error,
-                                Err(cleanup_error) => IsolationError::OciContainerFailed(format!(
-                                    "{error}; removing the failed setup sandbox also failed: {cleanup_error}"
-                                )),
-                            });
+                            tracing::warn!(
+                                container = %self.container,
+                                %error,
+                                "running a setup command without an egress credential"
+                            );
+                            None
                         }
                     }
                 }
@@ -1972,20 +1969,26 @@ impl SessionSandbox {
         );
         // Under egress the package manager reaches only the distribution
         // mirrors, with a credential that ends when provisioning does.
+        // Without a credential (the network record is full or unavailable)
+        // provisioning still runs, and the proxy refuses its downloads.
         let grant = match egress {
-            Some(attachment) => Some(
-                attachment
-                    .authority
-                    .grant(crate::egress::GrantSpec::new(
-                        crate::egress::GrantKind::Provisioning,
-                    ))
-                    .await
-                    .map_err(|error| {
-                        IsolationError::OciSetupFailed(format!(
-                            "granting provisioning egress: {error}"
-                        ))
-                    })?,
-            ),
+            Some(attachment) => match attachment
+                .authority
+                .grant(crate::egress::GrantSpec::new(
+                    crate::egress::GrantKind::Provisioning,
+                ))
+                .await
+            {
+                Ok(grant) => Some(grant),
+                Err(error) => {
+                    tracing::warn!(
+                        container,
+                        %error,
+                        "provisioning without an egress credential"
+                    );
+                    None
+                }
+            },
             None => None,
         };
         let provision = Self::podman_exec_shell_as_root(
@@ -3143,21 +3146,31 @@ impl SessionSandbox {
         spec.liveness = Some(Arc::new(move || {
             observed.lock().map(|alive| *alive).unwrap_or(false)
         }));
-        let grant = attachment
-            .authority
-            .grant(spec)
-            .await
-            .map_err(|error| format!("granting the terminal egress: {error}"))?;
+        // Without a credential (the network record is full or unavailable)
+        // the terminal still opens, and the proxy refuses its connections.
+        let grant = match attachment.authority.grant(spec).await {
+            Ok(grant) => Some(grant),
+            Err(error) => {
+                tracing::warn!(
+                    container = %self.container,
+                    %error,
+                    "opening a terminal without an egress credential"
+                );
+                None
+            }
+        };
         let term = crate::pty::PtyTerminal::spawn_podman_with_env(
             id,
             self.runtime_target(),
             &self.working_dir,
             command,
             (rows, cols),
-            grant.env_file.as_deref(),
+            grant.as_ref().and_then(|grant| grant.env_file.as_deref()),
             alive,
         )?;
-        term.hold_egress_grant(grant);
+        if let Some(grant) = grant {
+            term.hold_egress_grant(grant);
+        }
         let arc = std::sync::Arc::new(term);
         if let Ok(mut terminals) = self.terminals.lock() {
             terminals.push(arc.clone());
@@ -3169,10 +3182,11 @@ impl SessionSandbox {
     /// Session's service-socket volume, and return where.
     ///
     /// Under egress the container's PID 1 serves them from start. Under
-    /// bridge and none a forwarder runs as root next to the Session's
-    /// processes; it is started on first use and again when a socket is
-    /// missing (code in the container can stop it, which blocks only its own
-    /// app). The probe and the forwarder are the bundled supervisor.
+    /// bridge and none a forwarder runs as the container's user next to the
+    /// Session's processes; it is started on first use and again when a
+    /// socket is missing (code in the container can stop it, which blocks
+    /// only its own app). The probe and the forwarder are the bundled
+    /// supervisor.
     pub async fn ensure_service_sockets(&self) -> Result<ServiceSockets, IsolationError> {
         let sockets = self.service_sockets.clone().ok_or_else(|| {
             IsolationError::OciSetupFailed(
@@ -3221,13 +3235,13 @@ impl SessionSandbox {
         ))
     }
 
-    /// `podman exec -d` of the forwarder for these ports (pure).
+    /// `podman exec -d` of the forwarder for these ports (pure). It runs as
+    /// the container's own user, who owns the socket volume (`U=true`), never
+    /// as root: code in the container controls that directory.
     fn service_forwarder_args(container: &str, ports: &[u16]) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "exec".into(),
             "-d".into(),
-            "--user".into(),
-            "0".into(),
             container.into(),
             SUPERVISOR_CONTAINER_PATH.into(),
             "--bridge".into(),
@@ -6152,14 +6166,14 @@ mod tests {
     }
 
     #[test]
-    fn the_service_forwarder_runs_the_bundled_bridge_as_root_for_each_port() {
+    fn the_service_forwarder_runs_the_bundled_bridge_as_the_container_user_for_each_port() {
+        let args = SessionSandbox::service_forwarder_args("abc123", &[3000, 5173]);
+        assert!(!args.iter().any(|arg| arg == "--user"), "{args:?}");
         assert_eq!(
-            SessionSandbox::service_forwarder_args("abc123", &[3000, 5173]),
+            args,
             [
                 "exec",
                 "-d",
-                "--user",
-                "0",
                 "abc123",
                 "/axocoatl-exec-supervisor",
                 "--bridge",

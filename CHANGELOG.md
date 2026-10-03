@@ -20,14 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through an environment file; read-only helpers, required checks and background
   tasks get none. Names are checked against the list before they resolve, and
   resolve on the host. Loopback, link-local and other special addresses are refused,
-  and private ones unless listed. Every allowed or refused connection is written to
-  the Session's network record before it opens. The Session container's first process
-  is Axocoatl's bridge, so the image `ENTRYPOINT` does not run. Exposed ports reach
-  Preview through a separate `axo-pvw-<session>` container that publishes each port's
-  socket on host loopback and never connects out. Ways attempts run with no network
-  under `egress`. `validate`, `doctor` and daemon start warn about wildcard entries,
-  CDN-fronted presets and hosts that accept uploads. See the Sandboxes and Security
-  pages for what it does not cover.
+  and so are the Podman host gateways (`192.168.127.1` and `192.168.127.254` in a
+  Podman machine, `10.88.0.1`, and the gateway of `sidecar_network`) even inside a
+  listed range; other private addresses are refused unless listed. A credential that
+  ends, or a host that is revoked, while a connection is being decided admits
+  nothing. Every allowed or refused connection is written to the Session's network
+  record before it opens; refusals of connections without a valid credential are
+  recorded up to 20 at once and then one every 5 seconds, and the rest are counted in
+  a `limit` event, so a process in the container cannot fill the record. When the
+  record is full, setup commands, provisioning and terminals still run, without
+  network. The Session container's first process is Axocoatl's bridge, so the image
+  `ENTRYPOINT` does not run. Exposed ports reach Preview through a separate
+  `axo-pvw-<session>` container that publishes each port's socket on host loopback
+  and never connects out. Ways attempts run with no network under `egress`. `validate`, `doctor` and daemon start warn about wildcard entries,
+  CDN-fronted presets, hosts that accept uploads and ranges that contain a Podman host
+  gateway. When Axocoatl's config file is inside a Session's Workspace, **Session
+  network** and `GET /api/sessions/{id}/network` warn that Agents can read it. See the
+  Sandboxes and Security pages for what it does not cover.
 - Each native Session can keep a network record, an append-only log of egress
   decisions, connection closes, policy changes and web-tool fetches, and
   `GET /api/sessions/{id}/network` reads it. Reading never creates a record.

@@ -461,6 +461,10 @@ pub struct SessionNetworkView {
     pub record: RecordSummary,
     pub events: Vec<NetworkLine>,
     pub next_after: Option<u64>,
+    /// Things the person should know about this Session's network, such as
+    /// a configuration file inside its Workspace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Body of `POST /api/sessions/{id}/network/allow`.

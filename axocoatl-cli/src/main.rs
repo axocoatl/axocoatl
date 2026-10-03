@@ -1480,6 +1480,7 @@ async fn cmd_dev(config_path: &std::path::Path) {
     let daemon = match axocoatl_daemon::AxocoatlDaemon::bootstrap(config).await {
         Ok(d) => {
             println!("  Runtime: {} agents spawned", d.agent_count().await);
+            d.set_config_path(config_path);
             d
         }
         Err(e) => {
@@ -1553,6 +1554,8 @@ async fn cmd_serve(config_path: &std::path::Path) {
             std::process::exit(1);
         }
     };
+    // A Session whose Workspace holds this file warns that Agents can read it.
+    daemon.set_config_path(config_path);
 
     println!("Axocoatl server starting on {host}:{port}");
 

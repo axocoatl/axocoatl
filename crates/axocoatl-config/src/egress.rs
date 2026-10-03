@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr};
 
 use axocoatl_core::netaddr::{self, AddrClass, Cidr};
 
@@ -20,6 +21,26 @@ pub const MIN_MAX_CONNECTIONS: u32 = 8;
 pub const MAX_MAX_CONNECTIONS: u32 = 256;
 pub const MIN_RECORD_EVENTS: u32 = 1_000;
 pub const MAX_RECORD_EVENTS: u32 = 1_000_000;
+
+/// Addresses that lead from a Podman container to the computer running
+/// Podman: gvproxy's gateway and host-loopback addresses in a Podman machine,
+/// and the gateway of Podman's default network. `network: egress` refuses
+/// them whatever the policy lists; the gateway of a configured
+/// `sidecar_network` is looked up when the sidecar starts.
+pub const HOST_GATEWAYS: [Ipv4Addr; 3] = [
+    Ipv4Addr::new(192, 168, 127, 1),
+    Ipv4Addr::new(192, 168, 127, 254),
+    Ipv4Addr::new(10, 88, 0, 1),
+];
+
+const GATEWAY_WARNING: &str = "a Podman host gateway, which leads to services on this computer; Axocoatl refuses it whatever this list says";
+
+fn host_gateway_in(range: &Cidr) -> Option<Ipv4Addr> {
+    HOST_GATEWAYS
+        .iter()
+        .copied()
+        .find(|gateway| range.contains(IpAddr::V4(*gateway)))
+}
 
 const WILDCARD_WARNING: &str =
     "a wildcard allows every subdomain, including ones created later by whoever controls the domain";
@@ -184,7 +205,17 @@ pub fn validate_allow_list(
     allow: &[EgressAllowYaml],
     private: &[String],
 ) -> Result<Vec<ConfigWarning>, ConfigError> {
+    let private_entries = private;
     let private = parse_private_destinations(field, private)?;
+    let mut warnings = Vec::new();
+    for (index, (range, entry)) in private.iter().zip(private_entries).enumerate() {
+        if let Some(gateway) = host_gateway_in(range) {
+            warnings.push(ConfigWarning {
+                field: format!("{field}.private_destinations[{index}]"),
+                message: format!("{entry} includes {gateway}, {GATEWAY_WARNING}"),
+            });
+        }
+    }
     if allow.len() > MAX_ALLOW_ENTRIES {
         return Err(invalid(
             format!("{field}.allow"),
@@ -198,7 +229,6 @@ pub fn validate_allow_list(
         .filter(|preset| preset.write_capable)
         .flat_map(|preset| preset.hosts.iter().map(|(host, _)| *host))
         .collect();
-    let mut warnings = Vec::new();
     for (index, entry) in allow.iter().enumerate() {
         let entry_field = format!("{field}.allow[{index}]");
         match entry {
@@ -292,6 +322,12 @@ pub fn validate_allow_list(
                         "List ports 1-65535 once each, such as [443].",
                     )
                 })?;
+                if let Some(gateway) = host_gateway_in(&cidr) {
+                    warnings.push(ConfigWarning {
+                        field: format!("{entry_field}.cidr"),
+                        message: format!("{} includes {gateway}, {GATEWAY_WARNING}", rule.cidr),
+                    });
+                }
             }
         }
     }
@@ -484,6 +520,48 @@ mod tests {
             "- {host: a.example, cidr: 10.0.0.0/8}\n"
         )
         .is_err());
+    }
+
+    #[test]
+    fn ranges_that_include_a_host_gateway_are_named() {
+        let warnings = validate_allow_list(
+            "sandbox.egress",
+            &[
+                cidr("192.168.127.0/24", Some(vec![8080])),
+                cidr("10.20.0.0/16", Some(vec![8000])),
+            ],
+            &[
+                "192.168.0.0/16".into(),
+                "10.0.0.0/8".into(),
+                "172.16.0.0/12".into(),
+            ],
+        )
+        .unwrap();
+        let text: Vec<String> = warnings.iter().map(ToString::to_string).collect();
+        let named = |field: &str, gateway: &str| {
+            text.iter().any(|warning| {
+                warning.starts_with(field)
+                    && warning.contains(gateway)
+                    && warning.contains("Podman host gateway")
+            })
+        };
+        assert!(
+            named("sandbox.egress.private_destinations[0]", "192.168.127.1"),
+            "{text:?}"
+        );
+        assert!(
+            named("sandbox.egress.private_destinations[1]", "10.88.0.1"),
+            "{text:?}"
+        );
+        assert!(
+            named("sandbox.egress.allow[0].cidr", "192.168.127.1"),
+            "{text:?}"
+        );
+        assert!(
+            !text.iter().any(|w| w.contains("private_destinations[2]")),
+            "{text:?}"
+        );
+        assert!(!text.iter().any(|w| w.contains("allow[1]")), "{text:?}");
     }
 
     #[test]

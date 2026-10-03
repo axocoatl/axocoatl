@@ -376,7 +376,8 @@ activity returns an empty list.
   "events": [
     {"v": 1, "seq": 1, "ts_ms": 1790000000000, "event": {"kind": "sidecar", "state": "ready", "generation": 1}}
   ],
-  "next_after": 1
+  "next_after": 1,
+  "warnings": ["Axocoatl's config file is inside this Workspace; Agents can read it. Keep secrets in environment variables."]
 }
 ```
 
@@ -388,6 +389,12 @@ with its `reason` and `status`, the addresses used, and the tool call (`binding`
 whose credential it presented. Credentials appear only as 16-hex tags. A `close`
 event adds the bytes sent and received and the duration. `record.full` means new
 connections are refused; `gaps` counts places where a sequence number was skipped.
+An `open` or `close` event's `conn` is `g<generation>:<id>`; generations continue
+across proxy restarts and runtime starts, so `conn` is unique in one record. A
+`limit` event with `what: "unrecorded_refusals"` counts refusals of connections
+without a valid credential that were not recorded one by one. `warnings` is present
+when the person should know something about the Session, such as Axocoatl's config
+file being inside its Workspace.
 Under `network: egress`, `sidecar` reports the egress proxy of the Session's running
 runtime (`state` is `starting`, `ready`, `restarting`, `failed` or `stopped`, with its
 `generation` and the number of `restarts`), and `policies` lists each scope's compiled

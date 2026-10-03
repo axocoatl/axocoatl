@@ -344,7 +344,9 @@ async fn special_and_private_answers_are_refused_all_or_nothing() {
         (&["127.0.0.1"], "forbidden_destination"),
         (&["::ffff:127.0.0.1"], "forbidden_destination"),
         (&["169.254.169.254"], "forbidden_destination"),
-        (&["192.168.127.254"], "private_destination"),
+        // The Podman machine's host gateway, even though it is private.
+        (&["192.168.127.254"], "forbidden_destination"),
+        (&["192.168.1.1"], "private_destination"),
         (&["93.184.216.34", "10.9.9.9"], "allow"),
         (&["93.184.216.34", "192.168.1.1"], "private_destination"),
         (&["93.184.216.34", "127.0.0.1"], "forbidden_destination"),
@@ -402,7 +404,7 @@ async fn ip_literals_use_only_range_rules_and_never_resolve() {
         ("1.1.1.1", 443, (403, "not_allowed")),
         ("[::ffff:127.0.0.1]", 8080, (403, "forbidden_destination")),
         ("169.254.1.2", 8080, (403, "forbidden_destination")),
-        ("192.168.127.254", 8080, (403, "not_allowed")),
+        ("192.168.127.254", 8080, (403, "forbidden_destination")),
         ("2130706433", 80, (400, "invalid_host")),
         ("0x7f.1", 80, (400, "invalid_host")),
         ("bad_host.test", 443, (400, "invalid_host")),
@@ -588,6 +590,13 @@ async fn record_failure_refuses_new_connections() {
         })
         .count();
     assert_eq!(limits, 1);
+    // Without a credential (a setup step or terminal that could not get one
+    // because the record is full) the answer names the full record.
+    let decision = fixture
+        .egress
+        .decide(open(5, "allowed.test", 443, None))
+        .await;
+    assert_eq!(reason(&decision), (503, "record_unavailable".into()));
     // A refusal stays a refusal even when it cannot be recorded.
     *fixture.record.fail.lock().unwrap() = Some(RecordFailure::Unavailable("disk".into()));
     let decision = fixture
@@ -1236,6 +1245,475 @@ async fn a_lost_channel_records_open_connections_as_interrupted() {
             ..
         } if conn == "g2:5"
     )));
+}
+
+/// Lets a test hold a call until it says go, and tells it when one arrived.
+#[derive(Debug)]
+struct Gate {
+    arrived: tokio::sync::Notify,
+    go: tokio::sync::Semaphore,
+    closed: std::sync::atomic::AtomicBool,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            arrived: tokio::sync::Notify::new(),
+            go: tokio::sync::Semaphore::new(0),
+            closed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+impl Gate {
+    async fn pass(&self) {
+        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            self.arrived.notify_one();
+            self.go.acquire().await.unwrap().forget();
+        }
+    }
+
+    fn close(&self) {
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn open(&self) {
+        self.closed
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.go.add_permits(1);
+    }
+}
+
+/// A resolver whose answers wait at a gate.
+#[derive(Debug)]
+struct GatedResolver {
+    inner: Arc<FakeResolver>,
+    gate: Gate,
+}
+
+#[async_trait::async_trait]
+impl EgressResolver for GatedResolver {
+    async fn resolve(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, String> {
+        self.gate.pass().await;
+        self.inner.resolve(host, port).await
+    }
+}
+
+/// A record whose ordinary appends of allowed opens wait at a gate.
+#[derive(Debug, Default)]
+struct GatedRecord {
+    inner: FakeRecord,
+    gate: Gate,
+}
+
+#[async_trait::async_trait]
+impl EgressRecordSink for GatedRecord {
+    async fn append(&self, event: NetworkEvent) -> Result<u64, RecordFailure> {
+        if matches!(
+            event,
+            NetworkEvent::Open {
+                decision: RecordDecision::Allow,
+                ..
+            }
+        ) {
+            self.gate.pass().await;
+        }
+        self.inner.append(event).await
+    }
+
+    async fn append_control(&self, event: NetworkEvent) -> Result<u64, RecordFailure> {
+        self.inner.append_control(event).await
+    }
+
+    async fn history(&self) -> Result<Vec<NetworkLine>, RecordFailure> {
+        self.inner.history().await
+    }
+}
+
+impl FakeSidecar {
+    /// No frame but pings within `wait`.
+    async fn quiet(&mut self, wait: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            let mut line = Vec::new();
+            match tokio::time::timeout_at(deadline, self.from_daemon.read_until(b'\n', &mut line))
+                .await
+            {
+                Err(_) => return true,
+                Ok(_) => {
+                    let frame = axocoatl_exec::egress::protocol::decode_daemon(&line).unwrap();
+                    if frame != DaemonFrame::Ping {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct GatedFixture {
+    egress: Arc<SessionEgress>,
+    record: Arc<GatedRecord>,
+    resolver: Arc<GatedResolver>,
+    _dir: tempfile::TempDir,
+}
+
+async fn gated_fixture() -> GatedFixture {
+    let dir = tempfile::tempdir().unwrap();
+    let env_dir = SecureDir::open(dir.path()).unwrap();
+    let record = Arc::new(GatedRecord::default());
+    let resolver = Arc::new(GatedResolver {
+        inner: FakeResolver::with(&[
+            ("allowed.test", &["93.184.216.34"]),
+            ("late.test", &["93.184.216.40"]),
+        ]),
+        gate: Gate::default(),
+    });
+    let egress = SessionEgress::open(
+        "ses-1",
+        config(),
+        record.clone(),
+        resolver.clone(),
+        Some(env_dir),
+    )
+    .await
+    .unwrap();
+    GatedFixture {
+        egress,
+        record,
+        resolver,
+        _dir: dir,
+    }
+}
+
+async fn gated_grant(egress: &SessionEgress) -> (EgressGrant, String) {
+    let grant = egress.grant(agent_spec()).await.unwrap();
+    let hash = credential_hash(&token_of(&grant));
+    (grant, hash)
+}
+
+/// A credential that ends, or a rule that is revoked, while a name resolves
+/// admits nothing: the answer is a refusal and no connection is left open.
+#[tokio::test]
+async fn a_credential_or_rule_that_ends_while_a_name_resolves_admits_nothing() {
+    let f = gated_fixture().await;
+    let (mut sidecar, task) = attach_sidecar(&f.egress, 4).await;
+
+    // The tool call settles while its connection's name resolves.
+    let (grant, hash) = gated_grant(&f.egress).await;
+    let tag = grant.token_tag.clone();
+    f.resolver.gate.close();
+    sidecar
+        .send(sidecar_open(1, "allowed.test", 443, &hash))
+        .await;
+    f.resolver.gate.arrived.notified().await;
+    drop(grant);
+    f.resolver.gate.open();
+    match sidecar.frame().await {
+        DaemonFrame::Deny {
+            id: 1,
+            status,
+            reason,
+            ..
+        } => assert_eq!((status, reason.as_str()), (407, "binding_ended")),
+        other => panic!("{other:?}"),
+    }
+    assert!(sidecar.quiet(Duration::from_millis(200)).await);
+    assert!(f.egress.state().open.is_empty());
+    wait_for(|| {
+        f.record
+            .inner
+            .events()
+            .iter()
+            .any(|event| matches!(event, NetworkEvent::Unbind { token, .. } if *token == tag))
+    })
+    .await;
+    let refused = f
+        .record
+        .inner
+        .opens()
+        .into_iter()
+        .find(|event| matches!(event, NetworkEvent::Open { conn, .. } if conn == "g4:1"))
+        .unwrap();
+    assert!(matches!(
+        refused,
+        NetworkEvent::Open {
+            decision: RecordDecision::Deny,
+            status: Some(407),
+            token: Some(ref found),
+            ..
+        } if *found == tag
+    ));
+
+    // The person revokes the host while the name resolves.
+    f.egress
+        .allow(EgressScope::Session, "late.test", None, "human", "c1")
+        .await
+        .unwrap();
+    let (_grant, hash) = gated_grant(&f.egress).await;
+    f.resolver.gate.close();
+    sidecar.send(sidecar_open(2, "late.test", 443, &hash)).await;
+    f.resolver.gate.arrived.notified().await;
+    let (revision, _) = f
+        .egress
+        .revoke(EgressScope::Session, "late.test", "human", "c2")
+        .await
+        .unwrap();
+    f.resolver.gate.open();
+    match sidecar.frame().await {
+        DaemonFrame::Deny {
+            id: 2,
+            status,
+            reason,
+            ..
+        } => assert_eq!((status, reason.as_str()), (403, "not_allowed")),
+        other => panic!("{other:?}"),
+    }
+    assert!(sidecar.quiet(Duration::from_millis(200)).await);
+    assert!(f.egress.state().open.is_empty());
+    assert!(f.record.inner.opens().iter().any(|event| matches!(
+        event,
+        NetworkEvent::Open {
+            conn,
+            decision: RecordDecision::Deny,
+            reason: Some(reason),
+            policy_revision: Some(recorded),
+            ..
+        } if conn == "g4:2" && reason == "not_allowed" && *recorded == revision
+    )));
+    drop(sidecar);
+    task.await.unwrap();
+}
+
+/// Once an allow is registered, a release or a revoke reaches it even
+/// before the answer leaves: the revoke goes out first, and the proxy
+/// refuses the connection when the allow arrives.
+#[tokio::test]
+async fn a_credential_or_rule_that_ends_while_an_allow_is_recorded_is_revoked() {
+    let f = gated_fixture().await;
+    let (mut sidecar, task) = attach_sidecar(&f.egress, 5).await;
+    let (grant, hash) = gated_grant(&f.egress).await;
+    f.record.gate.close();
+    sidecar
+        .send(sidecar_open(1, "allowed.test", 443, &hash))
+        .await;
+    f.record.gate.arrived.notified().await;
+    assert!(f.egress.state().open.contains_key(&(5, 1)));
+    drop(grant);
+    assert_eq!(sidecar.frame().await, DaemonFrame::Revoke { ids: vec![1] });
+    f.record.gate.open();
+    assert!(matches!(
+        sidecar.frame().await,
+        DaemonFrame::Allow { id: 1, .. }
+    ));
+
+    f.egress
+        .allow(EgressScope::Session, "late.test", None, "human", "c1")
+        .await
+        .unwrap();
+    let (_grant, hash) = gated_grant(&f.egress).await;
+    f.record.gate.close();
+    sidecar.send(sidecar_open(2, "late.test", 443, &hash)).await;
+    f.record.gate.arrived.notified().await;
+    f.egress
+        .revoke(EgressScope::Session, "late.test", "human", "c2")
+        .await
+        .unwrap();
+    assert_eq!(sidecar.frame().await, DaemonFrame::Revoke { ids: vec![2] });
+    f.record.gate.open();
+    assert!(matches!(
+        sidecar.frame().await,
+        DaemonFrame::Allow { id: 2, .. }
+    ));
+    drop(sidecar);
+    task.await.unwrap();
+}
+
+/// Any process in the container can ask the proxy without a credential, so
+/// those refusals are recorded one by one only up to a burst and then at a
+/// steady rate; the rest are counted in one `limit` event.
+#[tokio::test(start_paused = true)]
+async fn refusals_without_a_valid_credential_cannot_fill_the_record() {
+    let fixture = fixture().await;
+    let unknown = credential_hash("axe_leftover_from_setup");
+    for id in 0..150 {
+        let auth = (id % 2 == 1).then_some(unknown.as_str());
+        let decision = fixture
+            .egress
+            .decide(open(id, "allowed.test", 443, auth))
+            .await;
+        assert_eq!(decision_status(&decision), 407);
+    }
+    let burst = UNATTRIBUTED_REFUSAL_BURST as usize;
+    assert_eq!(fixture.record.opens().len(), burst);
+    // A refusal with a live credential is always recorded.
+    let (_grant, hash) = granted(&fixture, agent_spec()).await;
+    let decision = fixture
+        .egress
+        .decide(open(200, "evil.test", 443, Some(&hash)))
+        .await;
+    assert_eq!(reason(&decision).1, "not_allowed");
+    assert_eq!(fixture.record.opens().len(), burst + 1);
+    // One more is recorded per interval.
+    tokio::time::sleep(UNATTRIBUTED_REFUSAL_INTERVAL).await;
+    for id in 300..302 {
+        fixture
+            .egress
+            .decide(open(id, "allowed.test", 443, None))
+            .await;
+    }
+    assert_eq!(fixture.record.opens().len(), burst + 2);
+    // The rest are summed up once the summary interval has passed.
+    tokio::time::sleep(UNRECORDED_REFUSALS_INTERVAL).await;
+    let unrecorded = 150 - burst + 1;
+    wait_for(|| {
+        fixture.record.events().iter().any(|event| {
+            matches!(
+                event,
+                NetworkEvent::Limit {
+                    what: LimitKind::UnrecordedRefusals,
+                    detail,
+                } if detail.starts_with(&format!("{unrecorded} connection(s) without a valid credential"))
+            )
+        })
+    })
+    .await;
+    // A stopped runtime sums up what is still uncounted.
+    let before = fixture.record.opens().len();
+    for id in 400..430 {
+        fixture
+            .egress
+            .decide(open(id, "allowed.test", 443, None))
+            .await;
+    }
+    let recorded = fixture.record.opens().len() - before;
+    assert!(recorded < 30, "{recorded}");
+    fixture
+        .egress
+        .sidecar_event(SidecarEvent::Stopped { generation: 1 })
+        .await;
+    let summaries: Vec<String> = fixture
+        .record
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            NetworkEvent::Limit {
+                what: LimitKind::UnrecordedRefusals,
+                detail,
+            } => Some(detail),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(summaries.len(), 2, "{summaries:?}");
+    assert!(
+        summaries[1].starts_with(&format!("{} connection(s)", 30 - recorded)),
+        "{summaries:?}"
+    );
+}
+
+fn decision_status(decision: &Decision) -> u16 {
+    reason(decision).0
+}
+
+#[tokio::test]
+async fn host_gateways_are_refused_even_inside_listed_private_ranges() {
+    let fixture = fixture_with(
+        EgressPolicyConfig {
+            session_allow: vec![
+                cidr("192.168.0.0/16", vec![8080]),
+                cidr("10.0.0.0/8", vec![8080]),
+                host("gw.test", Some(vec![8080])),
+                host("lan.test", Some(vec![8080])),
+            ],
+            session_private: vec!["192.168.0.0/16".into(), "10.0.0.0/8".into()],
+            browser: None,
+        },
+        FakeResolver::with(&[
+            ("gw.test", &["192.168.127.254"]),
+            ("lan.test", &["192.168.1.5"]),
+        ]),
+    )
+    .await;
+    let (_grant, hash) = granted(&fixture, agent_spec()).await;
+    let decide = |id: u64, host: &'static str| {
+        let egress = fixture.egress.clone();
+        let hash = hash.clone();
+        async move { reason(&egress.decide(open(id, host, 8080, Some(&hash))).await) }
+    };
+    let forbidden = (403, "forbidden_destination".to_string());
+    assert_eq!(decide(1, "192.168.127.254").await, forbidden);
+    assert_eq!(decide(2, "192.168.127.1").await, forbidden);
+    assert_eq!(decide(3, "10.88.0.1").await, forbidden);
+    assert_eq!(decide(4, "[::ffff:192.168.127.254]").await, forbidden);
+    assert_eq!(decide(5, "gw.test").await, forbidden);
+    assert_eq!(decide(6, "192.168.1.5").await.0, 200);
+    assert_eq!(decide(7, "lan.test").await.0, 200);
+    // The sidecar's own network adds its gateway.
+    assert_eq!(decide(8, "10.89.0.1").await.0, 200);
+    fixture
+        .egress
+        .forbid_destinations(&["10.89.0.1".parse().unwrap()]);
+    assert_eq!(decide(9, "10.89.0.1").await, forbidden);
+    assert_eq!(decide(10, "10.89.0.2").await.0, 200);
+    let NetworkEvent::Open { addrs, rule, .. } = fixture
+        .record
+        .opens()
+        .into_iter()
+        .find(|event| matches!(event, NetworkEvent::Open { conn, .. } if conn == "g1:5"))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(addrs, ["192.168.127.254"]);
+    assert_eq!(rule.as_deref(), Some("config#2"));
+}
+
+#[tokio::test]
+async fn a_new_sidecar_continues_the_generations_in_the_record() {
+    let fixture = fixture().await;
+    assert_eq!(fixture.egress.first_generation(), 1);
+    fixture
+        .egress
+        .sidecar_event(SidecarEvent::Starting {
+            generation: 1,
+            container: None,
+        })
+        .await;
+    assert_eq!(fixture.egress.first_generation(), 2);
+    let (_grant, hash) = granted(&fixture, agent_spec()).await;
+    fixture
+        .egress
+        .decide(OpenRequest {
+            generation: 3,
+            ..open(1, "allowed.test", 443, Some(&hash))
+        })
+        .await;
+    assert_eq!(fixture.egress.first_generation(), 4);
+    fixture
+        .egress
+        .closed(CloseReport {
+            generation: 5,
+            id: 1,
+            ip: None,
+            up: 0,
+            down: 0,
+            ms: 1,
+            outcome: WireOutcome::Interrupted,
+            error: None,
+        })
+        .await;
+    // A decision point opened from the same record (a daemon restart, or the
+    // Session's runtime starting again) continues after the last one.
+    let reopened = SessionEgress::open(
+        "ses-1",
+        config(),
+        fixture.record.clone(),
+        fixture.resolver.clone(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reopened.first_generation(), 6);
 }
 
 /// The real proxy from `axocoatl-exec`, in-process, behind the real control

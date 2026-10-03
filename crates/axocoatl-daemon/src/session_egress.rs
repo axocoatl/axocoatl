@@ -39,6 +39,15 @@ pub const PROXY_LISTEN: &str = "127.0.0.1:3128";
 /// Proxy user name; the credential is the password.
 pub const PROXY_USER: &str = "axo";
 const NO_PROXY: &str = "localhost,127.0.0.1,::1";
+/// Refusals of connections without a valid credential (`no_credential`,
+/// `unknown_credential`) recorded one by one before the rate below applies.
+/// Any process in the container can make them, so they must not fill the
+/// record.
+pub const UNATTRIBUTED_REFUSAL_BURST: u32 = 20;
+/// After the burst, one such refusal is recorded per interval.
+pub const UNATTRIBUTED_REFUSAL_INTERVAL: Duration = Duration::from_secs(5);
+/// The ones not recorded are counted in one `limit` event per interval.
+pub const UNRECORDED_REFUSALS_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Resolves allowed names on the host.
 #[async_trait::async_trait]
@@ -194,6 +203,54 @@ struct OpenConnection {
     scope: EgressScope,
 }
 
+/// Rate limit for recording refusals of connections without a valid
+/// credential: a burst, then one per interval; the rest are counted.
+struct UnattributedRefusals {
+    tokens: u32,
+    refilled: tokio::time::Instant,
+    unrecorded: u64,
+    summary_scheduled: bool,
+}
+
+impl Default for UnattributedRefusals {
+    fn default() -> Self {
+        Self {
+            tokens: UNATTRIBUTED_REFUSAL_BURST,
+            refilled: tokio::time::Instant::now(),
+            unrecorded: 0,
+            summary_scheduled: false,
+        }
+    }
+}
+
+impl UnattributedRefusals {
+    /// Whether to record this refusal one by one.
+    fn admit(&mut self) -> bool {
+        let now = tokio::time::Instant::now();
+        let interval = UNATTRIBUTED_REFUSAL_INTERVAL.as_millis().max(1);
+        let earned = now.duration_since(self.refilled).as_millis() / interval;
+        if earned > 0 {
+            let earned = u32::try_from(earned).unwrap_or(u32::MAX);
+            self.tokens = self
+                .tokens
+                .saturating_add(earned)
+                .min(UNATTRIBUTED_REFUSAL_BURST);
+            self.refilled = if self.tokens == UNATTRIBUTED_REFUSAL_BURST {
+                now
+            } else {
+                self.refilled + UNATTRIBUTED_REFUSAL_INTERVAL * earned
+            };
+        }
+        if self.tokens > 0 {
+            self.tokens -= 1;
+            true
+        } else {
+            self.unrecorded += 1;
+            false
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
     scopes: HashMap<EgressScope, ScopeState>,
@@ -202,6 +259,11 @@ struct State {
     control: Option<ControlHandle>,
     commands: HashSet<String>,
     record_full_reported: bool,
+    unattributed: UnattributedRefusals,
+    /// Addresses refused whatever the policy lists (host gateways).
+    forbidden: HashSet<IpAddr>,
+    /// The highest sidecar generation in this Session's record.
+    last_generation: u32,
 }
 
 /// The policy decision point for one Session.
@@ -295,7 +357,7 @@ fn hint(reason: &str, host: &str, port: u16) -> String {
             "{host} resolves to a private address. Axocoatl refuses private addresses unless the user lists the range under sandbox.egress.private_destinations."
         ),
         "forbidden_destination" => format!(
-            "{host} resolves to a loopback, link-local or other special address, which Axocoatl never allows."
+            "{host} resolves to a loopback, link-local, host-gateway or other special address, which Axocoatl never allows."
         ),
         "no_credential" => "This process has no egress credential. Under network: egress, read-only helpers, required checks and processes started outside a tool call have no network.".into(),
         "unknown_credential" => "This credential is not valid here; the tool call, setup step or terminal it belonged to has ended.".into(),
@@ -304,6 +366,18 @@ fn hint(reason: &str, host: &str, port: u16) -> String {
         "invalid_host" => format!("{host} is not a valid host name or IP address."),
         "resolve_failed" => format!("{host} could not be resolved."),
         _ => "Axocoatl refused this connection.".into(),
+    }
+}
+
+/// The sidecar generation an event belongs to, if it names one.
+fn recorded_generation(event: &NetworkEvent) -> Option<u32> {
+    match event {
+        NetworkEvent::Sidecar { generation, .. } => Some(*generation),
+        NetworkEvent::Open { conn, .. } | NetworkEvent::Close { conn, .. } => conn
+            .strip_prefix('g')
+            .and_then(|rest| rest.split_once(':'))
+            .and_then(|(generation, _)| generation.parse().ok()),
+        _ => None,
     }
 }
 
@@ -457,6 +531,11 @@ impl SessionEgress {
             );
         }
         let session_id = session_id.into();
+        let last_generation = history
+            .iter()
+            .filter_map(|line| recorded_generation(&line.event))
+            .max()
+            .unwrap_or(0);
         Ok(Arc::new_cyclic(|this| Self {
             session_id,
             config,
@@ -467,6 +546,11 @@ impl SessionEgress {
             state: Mutex::new(State {
                 scopes: states,
                 commands,
+                last_generation,
+                forbidden: axocoatl_config::egress::HOST_GATEWAYS
+                    .iter()
+                    .map(|gateway| IpAddr::V4(*gateway))
+                    .collect(),
                 ..State::default()
             }),
             policy_changes: tokio::sync::Mutex::new(()),
@@ -552,22 +636,83 @@ impl SessionEgress {
     async fn record_open(&self, event: NetworkEvent) -> Result<u64, RecordFailure> {
         let result = self.records.append(event).await;
         if result == Err(RecordFailure::Full) {
-            let report = {
-                let mut state = self.state();
-                !std::mem::replace(&mut state.record_full_reported, true)
-            };
-            if report {
-                let _ = self
-                    .records
-                    .append_control(NetworkEvent::Limit {
-                        what: LimitKind::RecordFull,
-                        detail: "the network record reached its cap; new connections are refused"
-                            .into(),
-                    })
-                    .await;
-            }
+            self.report_record_full().await;
         }
         result
+    }
+
+    /// Say once, in the control headroom, that the record reached its cap.
+    async fn report_record_full(&self) {
+        let report = {
+            let mut state = self.state();
+            !std::mem::replace(&mut state.record_full_reported, true)
+        };
+        if report {
+            let _ = self
+                .records
+                .append_control(NetworkEvent::Limit {
+                    what: LimitKind::RecordFull,
+                    detail: "the network record reached its cap; new connections are refused"
+                        .into(),
+                })
+                .await;
+        }
+    }
+
+    /// Whether to record a refusal of a connection without a valid
+    /// credential one by one. The ones that are not are summed up in a
+    /// `limit` event at most once per [`UNRECORDED_REFUSALS_INTERVAL`].
+    fn admit_unattributed_refusal(&self) -> bool {
+        let schedule = {
+            let mut state = self.state();
+            if state.unattributed.admit() {
+                return true;
+            }
+            !std::mem::replace(&mut state.unattributed.summary_scheduled, true)
+        };
+        if schedule {
+            let this = self.this.clone();
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    runtime.spawn(async move {
+                        tokio::time::sleep(UNRECORDED_REFUSALS_INTERVAL).await;
+                        if let Some(egress) = this.upgrade() {
+                            egress.record_unrecorded_refusals().await;
+                        }
+                    });
+                }
+                Err(_) => self.state().unattributed.summary_scheduled = false,
+            }
+        }
+        false
+    }
+
+    /// Record how many refusals were counted but not recorded one by one.
+    async fn record_unrecorded_refusals(&self) {
+        let count = {
+            let mut state = self.state();
+            state.unattributed.summary_scheduled = false;
+            std::mem::take(&mut state.unattributed.unrecorded)
+        };
+        if count == 0 {
+            return;
+        }
+        let event = NetworkEvent::Limit {
+            what: LimitKind::UnrecordedRefusals,
+            detail: format!(
+                "{count} connection(s) without a valid credential were refused and not recorded one by one; at most {UNATTRIBUTED_REFUSAL_BURST} at once, then one every {} s, are",
+                UNATTRIBUTED_REFUSAL_INTERVAL.as_secs()
+            ),
+        };
+        if let Err(error) = self.records.append(event).await {
+            tracing::warn!(session = %self.session_id, ?error, "recording the unrecorded egress refusals failed");
+        }
+    }
+
+    /// Note a sidecar generation seen in this Session.
+    fn note_generation(&self, generation: u32) {
+        let mut state = self.state();
+        state.last_generation = state.last_generation.max(generation);
     }
 
     /// Remove one binding now: revoke its open connections and delete its env
@@ -825,6 +970,16 @@ impl SessionEgress {
         (caller, None)
     }
 
+    /// Whether `ip` (or the IPv4 address it embeds) is a host gateway.
+    fn is_host_gateway(&self, ip: IpAddr) -> bool {
+        let embedded = match ip {
+            IpAddr::V6(v6) => netaddr::embedded_ipv4(v6).map(IpAddr::V4),
+            IpAddr::V4(_) => None,
+        };
+        let state = self.state();
+        state.forbidden.contains(&ip) || embedded.is_some_and(|v4| state.forbidden.contains(&v4))
+    }
+
     async fn verdict(&self, open: &OpenRequest, scope: EgressScope) -> Verdict {
         let Some((policy, revision)) = self
             .state()
@@ -841,7 +996,7 @@ impl SessionEgress {
         let (rule, addrs) = if let Some(ip) = netaddr::parse_ip_literal(&open.host) {
             // A literal needs no resolution, so a never-allowed address is
             // named as such even when no range lists it.
-            if (self.classify)(ip).is_forbidden() {
+            if (self.classify)(ip).is_forbidden() || self.is_host_gateway(ip) {
                 return Verdict {
                     addrs: vec![ip],
                     ..deny(403, "forbidden_destination")
@@ -870,7 +1025,9 @@ impl SessionEgress {
             (rule, addrs)
         };
         let classes: Vec<AddrClass> = addrs.iter().map(|addr| (self.classify)(*addr)).collect();
-        if classes.iter().any(|class| class.is_forbidden()) {
+        if classes.iter().any(|class| class.is_forbidden())
+            || addrs.iter().any(|addr| self.is_host_gateway(*addr))
+        {
             return Verdict {
                 rule: Some(rule),
                 addrs,
@@ -962,6 +1119,9 @@ impl EgressAuthority for SessionEgress {
             if let (Some(dir), Some(name)) = (&self.env_dir, &env_file) {
                 let _ = dir.remove_file(name);
             }
+            if error == RecordFailure::Full {
+                self.report_record_full().await;
+            }
             return Err(format!("recording the egress binding failed: {error:?}"));
         }
         self.state().bindings.insert(
@@ -989,15 +1149,68 @@ impl EgressAuthority for SessionEgress {
     }
 
     async fn decide(&self, open: OpenRequest) -> Decision {
+        self.note_generation(open.generation);
         let (caller, refusal) = self.caller(open.auth.as_deref());
-        let verdict = match refusal {
-            None => {
-                self.verdict(&open, caller.scope.unwrap_or(EgressScope::Session))
-                    .await
+        let scope = caller.scope.unwrap_or(EgressScope::Session);
+        let mut verdict = match refusal {
+            None => self.verdict(&open, scope).await,
+            // Without a credential nothing can be recorded once the record
+            // is full; say so rather than blame the missing credential (a
+            // setup step or terminal goes ahead without one then).
+            Some((_, "no_credential")) if self.state().record_full_reported => {
+                Verdict::deny(503, "record_unavailable", &open.host, open.port)
             }
             Some((status, reason)) => Verdict::deny(status, reason, &open.host, open.port),
         };
+        let key = (open.generation, open.id);
+        if matches!(verdict.decision, Decision::Allow { .. }) {
+            // The credential may have been released, or the rule revoked,
+            // while the name resolved. Check again and register the
+            // connection in one step under the lock that release and revoke
+            // take, so from here on either of them revokes it. The proxy
+            // holds a revoke that overtakes this answer and refuses the
+            // connection when the answer arrives.
+            let mut state = self.state();
+            let bound = caller
+                .hash
+                .as_ref()
+                .is_some_and(|hash| state.bindings.contains_key(hash));
+            let current = state.scopes.get(&scope).map(|scope_state| {
+                (
+                    scope_state.revision,
+                    verdict.rule.as_ref().is_some_and(|rule| {
+                        scope_state
+                            .policy
+                            .rules()
+                            .iter()
+                            .any(|live| &live.id == rule)
+                    }),
+                )
+            });
+            if !bound {
+                verdict = Verdict::deny(407, "binding_ended", &open.host, open.port);
+            } else if let Some((revision, false)) = current {
+                verdict = Verdict {
+                    revision: Some(revision),
+                    ..Verdict::deny(403, "not_allowed", &open.host, open.port)
+                };
+            } else {
+                state.open.insert(
+                    key,
+                    OpenConnection {
+                        token_hash: caller.hash.clone(),
+                        rule_id: verdict.rule.clone().unwrap_or_default(),
+                        scope,
+                    },
+                );
+            }
+        }
         let allowed = matches!(verdict.decision, Decision::Allow { .. });
+        let unattributed = matches!(verdict.reason, Some("no_credential" | "unknown_credential"));
+        if unattributed && !self.admit_unattributed_refusal() {
+            // Counted, not recorded; a refusal stands either way.
+            return verdict.decision;
+        }
         let path = open
             .path
             .as_ref()
@@ -1032,20 +1245,13 @@ impl EgressAuthority for SessionEgress {
             return verdict.decision;
         }
         if recorded.is_err() {
+            self.state().open.remove(&key);
             return Decision::deny(
                 503,
                 "record_unavailable",
                 hint("record_unavailable", &open.host, open.port),
             );
         }
-        self.state().open.insert(
-            (open.generation, open.id),
-            OpenConnection {
-                token_hash: caller.hash,
-                rule_id: verdict.rule.unwrap_or_default(),
-                scope: caller.scope.unwrap_or(EgressScope::Session),
-            },
-        );
         verdict.decision
     }
 
@@ -1076,6 +1282,14 @@ impl EgressAuthority for SessionEgress {
 
     fn attach_control(&self, handle: ControlHandle) {
         SessionEgress::attach_control(self, handle);
+    }
+
+    fn first_generation(&self) -> u32 {
+        self.state().last_generation.saturating_add(1)
+    }
+
+    fn forbid_destinations(&self, addrs: &[IpAddr]) {
+        self.state().forbidden.extend(addrs.iter().copied());
     }
 
     async fn sidecar_event(&self, event: SidecarEvent) {
@@ -1113,7 +1327,9 @@ impl EgressAuthority for SessionEgress {
             }
             SidecarEvent::Stopped { generation } => (SidecarState::Stopped, generation, None, None),
         };
+        self.note_generation(generation);
         if state == SidecarState::Stopped {
+            self.record_unrecorded_refusals().await;
             self.unbind_all(UnbindReason::SessionStopped).await;
         }
         if matches!(

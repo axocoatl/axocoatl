@@ -83,6 +83,26 @@ async fn child_body() {
     assert_eq!(view.record.max_events, 50_000);
     assert_eq!(view.next_after, None);
     assert!(!daemon.session_network_records.is_open(&id).await);
+    assert!(view.warnings.is_empty());
+
+    // A configuration file inside the Session's Workspace is named, one
+    // elsewhere is not.
+    let elsewhere = tempfile::tempdir().unwrap();
+    for (directory, warned) in [(elsewhere.path(), false), (work.path(), true)] {
+        let config_path = directory.join("axocoatl.yaml");
+        std::fs::write(&config_path, "agents: []\n").unwrap();
+        daemon.set_config_path(&config_path);
+        let view = daemon.session_network(&id, None, None).await.unwrap();
+        let expected: Vec<String> = if warned {
+            vec![CONFIG_IN_WORKSPACE_WARNING.to_string()]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(view.warnings, expected, "{}", config_path.display());
+        let wire = serde_json::to_value(&view).unwrap();
+        assert_eq!(wire.get("warnings").is_some(), warned);
+    }
+    std::fs::remove_file(work.path().join("axocoatl.yaml")).unwrap();
 
     for state in [
         SidecarState::Starting,
