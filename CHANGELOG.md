@@ -118,6 +118,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and refuses them, with the reason, when no `browser` block is configured, the
   backend is E2B or `browser.allow` lists hosts under `network: egress`, and refuses
   `browser_check` for an Agent with `writes: []`.
+- `sandbox.egress.routes` and `credentials`. A route names one host whose HTTPS
+  traffic the daemon ends itself, with a certificate from a certificate authority
+  made for each Session (ECDSA P-256, key kept in memory, 30 days; a 24-hour
+  certificate per host). Each request must carry the route host as its TLS server
+  name and `Host`, have a canonical path, ask for no upgrade and match the route's
+  rules (methods, path globs with `*` and `**`, required query parameters) or an
+  `access` preset; anything else gets a JSON refusal naming the missing rule. A route's
+  credential comes from an environment variable of the daemon or an owner-only file
+  outside every Workspace, is read when a request needs it, and is added as
+  `Authorization: Basic` or a named header after the client's own credentials are
+  removed; it never enters a container, the egress proxy, the record or the logs.
+  Credentialed routes refuse compressed responses unless `allow_encoded_responses` is
+  set, and stop a response that carries the credential before that part reaches the
+  client. Every route request is written to the Session's network record before it
+  is sent (`request`), and how it ended after (`response`); activation evidence lists
+  them. Containers trust the Session's authority through `/etc/axocoatl/ca` and the
+  usual certificate variables. Validation refuses `${...}` and plain values in
+  `credentials` and routes, and `axocoatl doctor` reports routes and whether each
+  credential's variable or file is there. See Configure > Credentials and routes.
 
 ### Changed
 - `web_search.provider` must be `searxng` or the legacy `tavily`; any other non-empty value is

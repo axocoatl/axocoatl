@@ -124,6 +124,15 @@ skills:
 #       - npm                     # registry.npmjs.org
 #       - pypi                    # pypi.org, files.pythonhosted.org
 #       - host: api.example.com   # ports default to [443]
+#     routes:                     # TLS ended on this computer; each request checked
+#       - host: github.com
+#         credential: github      # added by the daemon, never in a container
+#         inject: {basic: {username: x-access-token}}
+#         rules:
+#           - {methods: [GET], path: /acme/app.git/info/refs, query: {service: git-upload-pack}}
+#           - {methods: [POST], path: /acme/app.git/git-upload-pack}
+# credentials:
+#   github: {env: GITHUB_TOKEN}   # read by the daemon when a request needs it
 
 # ─── Web research (optional) ────────────────────────────────────────
 # Agents whose `tools` list web_search or web_fetch can search the web
