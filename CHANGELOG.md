@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Each native Session can keep a network record, an append-only log of egress
   decisions, connection closes, policy changes and web-tool fetches, and
   `GET /api/sessions/{id}/network` reads it. Reading never creates a record.
+- The bundled execution supervisor gains an egress proxy mode, a loopback/Unix-socket
+  bridge mode and a socket probe, and the daemon gains the matching egress decision
+  point: it mints per-process proxy credentials, checks each host against the
+  allowlist before resolving it on the host, refuses loopback, link-local and other
+  special addresses (including IPv4 embedded in IPv6 forms) and unlisted private
+  ones, and writes each decision to the Session's network record before answering.
+  Session start does not use them yet.
 - The configuration parses `web_search.provider: searxng` with a `searxng` block, and
   new `web_fetch` and `browser` blocks and `mcp_servers[].inherit_env`, for upcoming
   tools. They are validated but not yet run.

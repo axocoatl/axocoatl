@@ -1,4 +1,6 @@
 pub mod e2b;
+pub mod egress;
+pub mod egress_control;
 pub mod error;
 pub mod podman;
 pub mod pty;
